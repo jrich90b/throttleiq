@@ -850,6 +850,27 @@ export function buildAccessoryCustomizationReply(textRaw: string | null | undefi
   return "Yes — we can help with that customization. I’ll have our team check the right parts and labor for that bike and follow up with options.";
 }
 
+export function isTakeOffMilwaukeeEightEngineRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  if (!text.trim()) return false;
+  const hasM8 =
+    /\b(?:m[\s-]?8|milwaukee[\s-]?eight)\b/i.test(text) ||
+    /\b(?:114|117)\s*\/\s*(?:114|117)\b/i.test(text);
+  const hasEngine =
+    /\b(engine|motor|crate motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade)\b/i.test(
+      text
+    );
+  const hasSourcingAsk =
+    /\b(let me know|text me|call me|in the market|looking for|need|want|after one|if you get|if anyone)\b/i.test(
+      text
+    );
+  return hasM8 && hasEngine && hasSourcingAsk;
+}
+
+export function buildTakeOffMilwaukeeEightEngineReply(): string {
+  return "Thanks — I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out.";
+}
+
 export function shouldTreatAdfAsWalkInContext(args: {
   leadSource?: string | null;
   priorWalkIn?: boolean | null;

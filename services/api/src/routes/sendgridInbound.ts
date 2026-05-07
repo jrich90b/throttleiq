@@ -84,11 +84,13 @@ import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildTimingAwareWalkInFollowUpLine,
+  buildTakeOffMilwaukeeEightEngineReply,
   buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
+  isTakeOffMilwaukeeEightEngineRequestText,
   isDemoDayEventQuestionText,
   isRideChallengeLeadSignal,
   isTimingOnlyFollowUpTopic,
@@ -3688,7 +3690,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const serviceVinRequest =
     /registration\s+or\s+vin\s+number/i.test(lead.comment ?? "") ||
     /registration\s+or\s+vin\s+number/i.test(lead.inquiry ?? "");
+  const takeOffM8EnginePartsRequest = isTakeOffMilwaukeeEightEngineRequestText(
+    [effectiveInquiry, inquiryRaw, lead.inquiry, lead.comment, event.body].filter(Boolean).join("\n")
+  );
   const partsIntentFromText =
+    takeOffM8EnginePartsRequest ||
     /\b(part number|oem parts?|aftermarket parts?|need (?:a )?part|looking for (?:a )?part|parts?\s+(?:for|department|counter|desk)|do you have (?:it|this|that)?\s*in stock)\b/i.test(
       inquiryText
     ) ||
@@ -3719,12 +3725,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
   if (!leadSource || rule.ruleName === "default") {
-    if (parserBucketCta) {
-      inferredBucket = parserBucketCta.bucket;
-      inferredCta = parserBucketCta.cta;
-    } else if (semanticPartsIntent || partsIntentFromText) {
+    if (semanticPartsIntent || partsIntentFromText) {
       inferredBucket = "parts";
       inferredCta = "parts_request";
+    } else if (parserBucketCta) {
+      inferredBucket = parserBucketCta.bucket;
+      inferredCta = parserBucketCta.cta;
     } else if (semanticApparelIntent || apparelIntentFromText) {
       inferredBucket = "apparel";
       inferredCta = "apparel_request";
@@ -4757,7 +4763,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isPartsLead || isApparelLead) {
     const departmentRole = isPartsLead ? "parts" : "apparel";
     let ack = isPartsLead
-      ? "Thanks — I’ve received your parts request. I’ll have our parts department reach out shortly."
+      ? takeOffM8EnginePartsRequest
+        ? buildTakeOffMilwaukeeEightEngineReply()
+        : "Thanks — I’ve received your parts request. I’ll have our parts department reach out shortly."
       : "Thanks — I’ve received your apparel request. I’ll have our apparel team reach out shortly.";
     ack = await applyInitialAdfPrefix(ack);
     const users = await listUsers();

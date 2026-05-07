@@ -6,6 +6,7 @@ import {
   buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
+  buildTakeOffMilwaukeeEightEngineReply,
   buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
@@ -36,6 +37,7 @@ import {
   isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
+  isTakeOffMilwaukeeEightEngineRequestText,
   isTimingOnlyFollowUpTopic,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -676,6 +678,19 @@ const cases: Case[] = [
       "XL1200X 1LC3 FORTY-EIGHT"
     ]),
     expected: "Forty-Eight"
+  },
+  {
+    id: "takeoff_m8_engine_parts_request_detected",
+    actual: isTakeOffMilwaukeeEightEngineRequestText(
+      "If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one."
+    ),
+    expected: true
+  },
+  {
+    id: "takeoff_m8_engine_parts_reply_mentions_parts_watch",
+    actual: buildTakeOffMilwaukeeEightEngineReply(),
+    expected:
+      "Thanks — I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out."
   }
 ];
 

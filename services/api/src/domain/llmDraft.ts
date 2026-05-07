@@ -5655,6 +5655,7 @@ export async function parseConversationStateWithLLM(args: {
   const voiceExamples = [
     'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
     'input: "Customer: can service call me saturday morning around 10?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: i need parts for my 572 fl. can someone call me saturday around ten?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.96}',
     'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
@@ -5747,7 +5748,11 @@ export async function parseConversationStateWithLLM(args: {
   const partsCue =
     /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/.test(
       textLower
-    );
+    ) ||
+    (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(textLower) &&
+      /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade)\b/.test(
+        textLower
+      ));
   const apparelCue =
     /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
       textLower
@@ -6230,6 +6235,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
     'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
     'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
@@ -6265,6 +6271,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- Never set watch_action from standalone time tokens or media requests. For 'send photos/video' requests, keep watch_action=none and set media_intent accordingly.",
     "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
     "- department_intent=parts for parts/part-number/OEM/brake pads/tires/accessory fitment questions, even if the text says 'in stock' and includes a bike model.",
+    "- department_intent=parts for engine/motor sourcing requests, including take-off Milwaukee-Eight / M-8 114 or 117 engines from customer upgrades.",
     "- department_intent=service for install/repair price questions like headlight bulb to LED, light replacement, wiring/fitment labor.",
     "- Use department_intent=none for general sales messages.",
     "- contact_preference_intent=call_only only when customer explicitly asks for calls only / no texts.",
@@ -6387,7 +6394,11 @@ export async function parseSemanticSlotsWithLLM(args: {
   const hasPartsCue =
     /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|brake pads?|tires?|accessory fitment|fitment)\b/.test(
       textLower
-    );
+    ) ||
+    (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(textLower) &&
+      /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade)\b/.test(
+        textLower
+      ));
   const hasApparelCue =
     /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
       textLower

@@ -204,6 +204,7 @@ import {
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildRideChallengeSignupReply,
+  buildTakeOffMilwaukeeEightEngineReply,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
   getScheduleDayOptionsLabel,
@@ -229,6 +230,7 @@ import {
   isRegenerateSchedulingLanguageText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
+  isTakeOffMilwaukeeEightEngineRequestText,
   inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -33025,7 +33027,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       regenInboundDepartmentIntent === "parts"
-        ? "Thanks — I’ll have our parts department reach out shortly."
+        ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
+          ? buildTakeOffMilwaukeeEightEngineReply()
+          : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
@@ -34999,7 +35003,9 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       inboundDepartmentIntent === "parts"
-        ? "Thanks — I’ll have our parts department reach out shortly."
+        ? isTakeOffMilwaukeeEightEngineRequestText(event.body)
+          ? buildTakeOffMilwaukeeEightEngineReply()
+          : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
