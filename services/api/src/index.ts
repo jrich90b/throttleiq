@@ -6179,6 +6179,7 @@ function getRecentVehicleMentionContext(conv: any): {
   color: string | null;
   condition: "new" | "used" | undefined;
 } {
+  const cadenceContext = resolveCadencePreferredModelContext(conv);
   const messages = [...(conv?.messages ?? [])]
     .filter((m: any) => String(m?.body ?? "").trim() && m?.provider !== "draft_ai")
     .slice(-30)
@@ -6187,14 +6188,28 @@ function getRecentVehicleMentionContext(conv: any): {
     const body = String(message?.body ?? "").trim();
     const model = findMentionedModel(body);
     if (!model || isUnknownCadenceModel(model)) continue;
+    const messageModel = formatModelToken(model);
+    const cadenceModel = cadenceContext.model && !isUnknownCadenceModel(cadenceContext.model)
+      ? formatModelToken(cadenceContext.model)
+      : null;
+    const messageModelKey = normalizeModelText(messageModel);
+    const cadenceModelKey = normalizeModelText(cadenceModel);
+    const modelToUse =
+      cadenceModel &&
+      messageModelKey &&
+      cadenceModelKey &&
+      cadenceModelKey.includes(messageModelKey) &&
+      cadenceModelKey.length > messageModelKey.length
+        ? cadenceModel
+        : messageModel;
+    const bodyYear = extractYearSingle(body);
     return {
-      model: formatModelToken(model),
-      year: extractYearSingle(body) ? String(extractYearSingle(body)) : null,
+      model: modelToUse,
+      year: bodyYear ? String(bodyYear) : cadenceContext.year,
       color: extractColorToken(body),
-      condition: normalizeWatchCondition(body)
+      condition: normalizeWatchCondition(body) ?? cadenceContext.condition
     };
   }
-  const cadenceContext = resolveCadencePreferredModelContext(conv);
   return {
     model: cadenceContext.model,
     year: cadenceContext.year,
@@ -6324,6 +6339,27 @@ async function buildCadenceHeldInventoryOverride(args: {
   const soldItem = status.sold[0];
   const shouldOverrideHeld = !!heldItem && (specificTarget || status.available.length === 0);
   const shouldOverrideSold = !!soldItem && (specificTarget || status.available.length === 0);
+  recordDecisionTrace({
+    scope: "regen",
+    stage: "cadence.held_inventory_override",
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    detail: {
+      model: context.model,
+      year: context.year,
+      color: context.color,
+      condition: context.condition ?? null,
+      activeMatches: matches.length,
+      available: status.available.length,
+      held: status.held.length,
+      sold: status.sold.length,
+      specificTarget,
+      shouldOverrideHeld,
+      shouldOverrideSold,
+      heldLabel: heldItem ? buildInventoryUnitLabel(heldItem, context.model) : null,
+      soldLabel: soldItem ? buildInventoryUnitLabel(soldItem, context.model) : null
+    }
+  });
   if (!shouldOverrideHeld && !shouldOverrideSold) return null;
 
   if (shouldOverrideHeld && heldItem) {
