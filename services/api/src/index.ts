@@ -12344,6 +12344,11 @@ function getPreferredSalespeopleForConv(
     prependUnique(byOwnerName.id);
   }
 
+  for (const sp of salespeople) {
+    const id = String(sp?.id ?? "").trim();
+    if (id && !ordered.includes(id)) ordered.push(id);
+  }
+
   return ordered;
 }
 
