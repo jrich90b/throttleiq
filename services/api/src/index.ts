@@ -6305,20 +6305,61 @@ async function buildCadenceHeldInventoryOverride(args: {
   const holds = await listInventoryHolds();
   const solds = await listInventorySolds();
   const status = classifyInventoryMatches(matches, holds, solds);
-  if (!status.held.length) return null;
-
+  const candidate: MentionedModelCandidate = {
+    model: context.model,
+    year: context.year,
+    body: [context.year, context.model, context.color].filter(Boolean).join(" "),
+    index: 0
+  };
+  if (!status.held.length) {
+    status.held = heldInventoryItemsFromStore(holds, candidate);
+  }
+  if (!status.sold.length) {
+    status.sold = soldInventoryItemsFromStore(solds, candidate);
+  }
+  status.held = filterStatusItemsByContextColor(status.held, context.color);
+  status.sold = filterStatusItemsByContextColor(status.sold, context.color);
+  status.available = filterStatusItemsByContextColor(status.available, context.color);
+  const specificTarget = !!(context.color || context.year);
   const heldItem = status.held[0];
-  ensureInventoryWatchForHeldCadence(conv, {
-    ...heldItem,
-    model: heldItem.model ?? context.model,
-    year: heldItem.year ?? context.year ?? undefined,
-    color: heldItem.color ?? context.color ?? undefined,
-    condition: heldItem.condition ?? context.condition
-  });
+  const soldItem = status.sold[0];
+  const shouldOverrideHeld = !!heldItem && (specificTarget || status.available.length === 0);
+  const shouldOverrideSold = !!soldItem && (specificTarget || status.available.length === 0);
+  if (!shouldOverrideHeld && !shouldOverrideSold) return null;
+
+  if (shouldOverrideHeld && heldItem) {
+    ensureInventoryWatchForHeldCadence(conv, {
+      ...heldItem,
+      model: heldItem.model ?? context.model,
+      year: heldItem.year ?? context.year ?? undefined,
+      color: heldItem.color ?? context.color ?? undefined,
+      condition: heldItem.condition ?? context.condition
+    });
+  }
 
   const firstName = normalizeDisplayCase(args.name || "there");
-  const unitLabel = buildInventoryUnitLabel(heldItem, context.model);
-  return `Hey ${firstName}, quick update — the ${unitLabel} is on hold right now. I can keep an eye on it if it opens back up, or I can try to locate another one for you.`;
+  const item = shouldOverrideSold ? soldItem : heldItem;
+  const unitLabel = buildInventoryUnitLabel(
+    {
+      ...item,
+      year: item?.year ?? context.year ?? undefined,
+      model: item?.model ?? context.model,
+      color: item?.color ?? context.color ?? undefined
+    },
+    context.model
+  );
+  const statusText = shouldOverrideSold
+    ? "has sold"
+    : "is on hold right now";
+  const recentContextText = (conv.messages ?? [])
+    .slice(-8)
+    .map((message: any) => String(message?.body ?? ""))
+    .join("\n");
+  const rideContext = isTestRideConversationContext(conv, recentContextText, recentContextText);
+  const nextStep = rideContext
+    ? "If you want, I can check inventory with you so you can choose another bike to ride."
+    : "If you want, I can check inventory with you so you can choose another bike.";
+  return `Hey ${firstName}, I know you were interested in the ${unitLabel}, but that bike ${statusText}. ${nextStep}`;
 }
 
 function ensureCadenceAnchorMessage(args: {
@@ -8269,6 +8310,28 @@ function heldInventoryItemsFromStore(
       model: hold?.model ?? candidate.model,
       color: hold?.color
     }));
+}
+
+function soldInventoryItemsFromStore(
+  solds: Record<string, unknown> | null | undefined,
+  candidate: MentionedModelCandidate
+): InventoryFeedItem[] {
+  return Object.values(solds ?? {})
+    .filter(sold => holdStoreMatchesCandidate(sold, candidate))
+    .map((sold: any) => ({
+      stockId: sold?.stockId,
+      vin: sold?.vin,
+      year: candidate.year ?? undefined,
+      make: undefined,
+      model: candidate.model,
+      color: extractColorToken(String(sold?.label ?? "")) ?? undefined
+    }));
+}
+
+function filterStatusItemsByContextColor(items: InventoryFeedItem[], color: string | null): InventoryFeedItem[] {
+  if (!color) return items;
+  const colorMatches = items.filter(item => inventoryColorMatchesContext(item, color));
+  return colorMatches.length ? colorMatches : items;
 }
 
 async function buildTestRideInventorySelectionReply(args: {
