@@ -1714,6 +1714,16 @@ export type InventoryStatusParse = {
   confidence?: number;
 };
 
+function inferModelYearFromStockId(stockId: string | null | undefined): number | null {
+  const raw = String(stockId ?? "").trim().toUpperCase();
+  const match = raw.match(/(?:^|[-_\s])(\d{2})$/);
+  if (!match) return null;
+  const suffix = Number(match[1]);
+  if (!Number.isFinite(suffix)) return null;
+  const currentTwoDigitYear = new Date().getFullYear() % 100;
+  return suffix <= currentTwoDigitYear + 1 ? 2000 + suffix : 1900 + suffix;
+}
+
 function isIncomingInventoryFaqQuestion(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
@@ -5938,6 +5948,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "image_reference",
     "none"
   ];
+  const stockId = cleanOptionalString(parsed.stock_id);
+  const year = toYear(parsed.year) ?? inferModelYearFromStockId(stockId);
 
   return {
     targetType: validTargetTypes.includes(targetTypeRaw as NonNullable<InventoryEntityParse["targetType"]>)
@@ -5946,12 +5958,12 @@ export async function parseInventoryEntitiesWithLLM(args: {
     isAvailabilityQuestion: !!parsed.is_availability_question,
     isTestRideContext: !!parsed.is_test_ride_context,
     model: cleanOptionalString(parsed.model),
-    year: toYear(parsed.year),
+    year,
     yearMin: toYear(parsed.year_min),
     yearMax: toYear(parsed.year_max),
     color: cleanOptionalString(parsed.color),
     trim: cleanOptionalString(parsed.trim),
-    stockId: cleanOptionalString(parsed.stock_id),
+    stockId,
     condition:
       parsed.condition === "new" || parsed.condition === "used" || parsed.condition === "unknown"
         ? parsed.condition
