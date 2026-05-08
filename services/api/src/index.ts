@@ -13849,7 +13849,22 @@ function hasPurchaseDeliveryLogisticsParserHint(
 ): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  const activePurchaseDeliveryState =
+    String(getDialogState(conv) ?? "").toLowerCase() === "purchase_delivery" ||
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery";
   if (hasMedia && recentOutboundRequestedMediaProofContext(conv)) return true;
+  if (
+    activePurchaseDeliveryState &&
+    (hasMedia ||
+      isPurchaseDeliveryTimingText(text) ||
+      isMediaProofStatusUpdateText(text) ||
+      isLogisticsProgressUpdateText(text) ||
+      /\b(loan|bank|check|insurance|title|registration|paperwork|document|license|pick(?:ing)? up|pickup|delivery|on my way|headed over|heading over|driving)\b/i.test(
+        text
+      ))
+  ) {
+    return true;
+  }
   if (
     /\b(loan(?:s)? finalized|finalizing loan|bank|certified check|cashier'?s check|insurance|proof of insurance|title|registration|paperwork|documents?|pdf|license|driver'?s? licen[cs]e|take delivery|deliver|delivery|pick(?:ing)? up|pickup|taking it home|on my way|headed over|heading over|driving|start driving)\b/i.test(
       text
@@ -34109,6 +34124,36 @@ if (authToken && signature) {
   if (conv.mode === "human") {
     if (llmOptOut || isOptOut(event.body)) {
       await applySmsOptOut(conv, event);
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    const humanModePurchaseDeliveryLogisticsParse =
+      event.provider === "twilio" &&
+      hasPurchaseDeliveryLogisticsParserHint(
+        conv,
+        event.body ?? "",
+        event.receivedAt,
+        (event.mediaUrls?.length ?? 0) > 0
+      )
+        ? await safeLlmParse("purchase_delivery_logistics_parser_human_mode", () =>
+            parsePurchaseDeliveryLogisticsWithLLM({
+              text: event.body ?? "",
+              history: buildHistory(conv, 12),
+              lead: conv.lead
+            })
+          )
+        : null;
+    if (isPurchaseDeliveryLogisticsParserAccepted(humanModePurchaseDeliveryLogisticsParse)) {
+      applyPurchaseDeliveryLogisticsDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: event.providerMessageId,
+        parsed: humanModePurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
+        scope: "live"
+      });
+      discardPendingDrafts(conv, "purchase_delivery_human_mode");
       saveConversation(conv);
       await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;

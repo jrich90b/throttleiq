@@ -82,6 +82,17 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "1"
   },
   {
+    id: "pickup_time_after_delivery_lineup_context",
+    text: "1-2 o'clock ish",
+    history: [
+      { direction: "out", body: "Thanks for sending that over John, I will get rolling on everything. What time works for you today?" },
+      { direction: "in", body: "Early afternoon ish, wife just has to be home to get kids off the bus" },
+      { direction: "out", body: "Just let me know when you have a better idea of time so I can make sure I have everything lined up before you get here" }
+    ],
+    expectedIntent: "delivery_timing",
+    expectedTimingContains: "1"
+  },
+  {
     id: "trade_appraisal_not_delivery",
     text: "Tuesday between 9:30 and 10:00 works for bringing my trade in",
     history: [
