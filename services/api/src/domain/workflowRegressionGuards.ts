@@ -323,6 +323,32 @@ export function buildHiringManagerInquiryReply(): string {
   return "Thanks for reaching out. I’ll pass your message along and have the hiring manager follow up with you.";
 }
 
+export function isInventoryOnlineCompletenessQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  return (
+    /\b(?:all|everything|entire|full)\b[\s\S]{0,50}\b(?:inventory|bikes?|units?|motorcycles?)\b[\s\S]{0,50}\b(?:online|website|site|web|posted|listed)\b/i.test(
+      text
+    ) ||
+    /\b(?:inventory|bikes?|units?|motorcycles?)\b[\s\S]{0,50}\b(?:all|everything|entire|full)\b[\s\S]{0,50}\b(?:online|website|site|web|posted|listed)\b/i.test(
+      text
+    ) ||
+    /\b(?:inventory|bikes?|units?|motorcycles?)\b[\s\S]{0,50}\b(?:not\s+(?:on|listed\s+on|posted\s+on)\s+(?:the\s+)?(?:website|site|web)|not\s+(?:listed|posted)\s+online)\b/i.test(
+      text
+    ) ||
+    /\b(?:do you|you guys|y'?all|u)\s+(?:have|got)\b[\s\S]{0,60}\b(?:not\s+(?:on|listed\s+on|posted\s+on)\s+(?:the\s+)?(?:website|site|web)|not\s+(?:listed|posted)\s+online)\b/i.test(
+      text
+    )
+  );
+}
+
+export function buildInventoryOnlineCompletenessReply(): string {
+  return "We do have some bikes here that may not be on the website yet. Is there a certain model you’re looking for?";
+}
+
 export function isRideChallengeLeadSignal(args: {
   leadSource?: string | null;
   inquiry?: string | null;

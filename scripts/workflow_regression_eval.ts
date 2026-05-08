@@ -5,6 +5,7 @@ import {
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
   buildHiringManagerInquiryReply,
+  buildInventoryOnlineCompletenessReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildTimingAwareWalkInFollowUpLine,
@@ -26,6 +27,7 @@ import {
   inferAcceptedScheduleDayFromReplyText,
   isIncidentalInfoAcknowledgementText,
   isInventoryBrowseLinkRequestText,
+  isInventoryOnlineCompletenessQuestionText,
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
@@ -410,6 +412,18 @@ const cases: Case[] = [
   {
     id: "hiring_manager_reply_handoff",
     actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
+    expected: true
+  },
+  {
+    id: "inventory_online_completeness_question_detected",
+    actual: isInventoryOnlineCompletenessQuestionText(
+      "Interested in buying a used bike. We completed credit online already. Is all of your inventory posted online?"
+    ),
+    expected: true
+  },
+  {
+    id: "inventory_online_completeness_reply_mentions_unlisted_bikes",
+    actual: /may not be on the website yet/i.test(buildInventoryOnlineCompletenessReply()),
     expected: true
   },
   {

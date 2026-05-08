@@ -89,12 +89,14 @@ import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildTimingAwareWalkInFollowUpLine,
+  buildInventoryOnlineCompletenessReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
+  isInventoryOnlineCompletenessQuestionText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isDemoDayEventQuestionText,
   isRideChallengeLeadSignal,
@@ -4904,6 +4906,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (isCreditLead) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(inquiryText);
     let ack = isPrequalLead
       ? isInitialAdf
         ? "Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options."
@@ -4917,6 +4920,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
     if (isInitialAdf) {
       ack = await applyInitialAdfPrefix(ack);
+    }
+    if (asksIfInventoryIsAllOnline) {
+      ack = `${ack} ${buildInventoryOnlineCompletenessReply()}`;
+      addTodo(
+        conv,
+        "other",
+        "Customer asked whether all inventory is posted online. Check for bikes not listed on the website yet and follow up.",
+        event.providerMessageId
+      );
     }
     addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "credit_app");

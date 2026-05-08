@@ -221,7 +221,9 @@ import {
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
+  buildInventoryOnlineCompletenessReply,
   isDirectInventoryAvailabilityQuestionText,
+  isInventoryOnlineCompletenessQuestionText,
   isInventoryBrowseLinkRequestText,
   isManualOutboundBookingConfirmationText,
   isManualOutboundTentativeScheduleOfferText,
@@ -13041,6 +13043,99 @@ function getRequestedTimeWindow(
   return { start, end };
 }
 
+function parseBookedAppointmentWindowAdjustment(
+  text: string | null | undefined,
+  appointment: any,
+  timeZone: string
+): ReturnType<typeof parseRequestedDayTime> {
+  const raw = String(text ?? "").trim();
+  const whenIso = String(appointment?.whenIso ?? "").trim();
+  if (!raw || !whenIso) return null;
+  const bookedStart = new Date(whenIso);
+  if (!Number.isFinite(bookedStart.getTime())) return null;
+  const match = raw.toLowerCase().match(
+    /\b(?:could\s+we\s+do|can\s+we\s+do|would\s+it\s+work|make\s+it|move\s+(?:it|that|me)\s+to|change\s+(?:it|that|the\s+time)\s+to|around|about|between|from)?\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|to|and|\/)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i
+  );
+  if (!match) return null;
+
+  const baseParts = getLocalDateParts(bookedStart, timeZone);
+  const startRaw = Number(match[1]);
+  const startMinute = Number(match[2] ?? "0");
+  const startMeridiem = String(match[3] ?? "");
+  const endRaw = Number(match[4]);
+  const endMinute = Number(match[5] ?? "0");
+  const endMeridiem = String(match[6] ?? "");
+  if (
+    !Number.isFinite(startRaw) ||
+    !Number.isFinite(endRaw) ||
+    startRaw < 1 ||
+    startRaw > 12 ||
+    endRaw < 1 ||
+    endRaw > 12 ||
+    startMinute < 0 ||
+    startMinute > 59 ||
+    endMinute < 0 ||
+    endMinute > 59
+  ) {
+    return null;
+  }
+
+  const startHour24 = resolveRangeHour24(
+    startRaw,
+    startMeridiem,
+    endRaw,
+    endMeridiem,
+    baseParts.hour,
+    true
+  );
+  const endHour24 = resolveRangeHour24(
+    endRaw,
+    endMeridiem,
+    startRaw,
+    startMeridiem,
+    baseParts.hour,
+    false
+  );
+  const rangeStart = localPartsToUtcDate(timeZone, {
+    year: baseParts.year,
+    month: baseParts.month,
+    day: baseParts.day,
+    hour24: startHour24,
+    minute: startMinute
+  });
+  let rangeEnd = localPartsToUtcDate(timeZone, {
+    year: baseParts.year,
+    month: baseParts.month,
+    day: baseParts.day,
+    hour24: endHour24,
+    minute: endMinute
+  });
+  if (rangeEnd.getTime() <= rangeStart.getTime()) {
+    rangeEnd = new Date(rangeEnd.getTime() + 12 * 60 * 60 * 1000);
+  }
+
+  const bookedMs = bookedStart.getTime();
+  const startsAtOrBeforeBooked = rangeStart.getTime() <= bookedMs + 60_000;
+  const endsAfterBooked = rangeEnd.getTime() > bookedMs + 60_000;
+  const target = startsAtOrBeforeBooked && endsAfterBooked ? rangeEnd : rangeStart;
+  const targetParts = getLocalDateParts(target, timeZone);
+  const dayBase = localPartsToUtcDate(timeZone, {
+    year: targetParts.year,
+    month: targetParts.month,
+    day: targetParts.day,
+    hour24: 12,
+    minute: 0
+  });
+  return {
+    year: targetParts.year,
+    month: targetParts.month,
+    day: targetParts.day,
+    hour24: targetParts.hour,
+    minute: targetParts.minute,
+    dayOfWeek: dayKey(dayBase, timeZone)
+  };
+}
+
 function pickSlotsInsideRequestedWindow(
   slots: any[] | null | undefined,
   text: string | null | undefined,
@@ -13229,6 +13324,83 @@ async function findScheduleSlotsForRequestedWindow(args: {
     }
   }
   return [];
+}
+
+async function findExactBookedAppointmentRescheduleSlot(args: {
+  conv: any;
+  requested: NonNullable<ReturnType<typeof parseRequestedDayTime>>;
+  appointmentType?: string;
+}): Promise<{
+  cfg: Awaited<ReturnType<typeof getSchedulerConfigHot>>;
+  cal: any;
+  exact: any;
+  sp: any;
+  primarySp: any;
+  sourceCalendarId: string;
+  appointmentType: string;
+  durationMinutes: number;
+} | null> {
+  const cfg = await getSchedulerConfigHot();
+  const appointmentType =
+    String(args.appointmentType ?? args.conv?.appointment?.appointmentType ?? "").trim() ||
+    "inventory_visit";
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const durationMinutes =
+    appointmentTypes[appointmentType]?.durationMinutes ??
+    appointmentTypes.inventory_visit?.durationMinutes ??
+    60;
+  const preferredSalespeople = getPreferredSalespeopleForConv(cfg, args.conv);
+  const salespeople = cfg.salespeople ?? [];
+  const primarySalespersonId =
+    String(args.conv?.appointment?.bookedSalespersonId ?? "").trim() || preferredSalespeople[0];
+  const primarySp = salespeople.find((p: any) => p.id === primarySalespersonId);
+  if (!primarySp) return null;
+
+  const sourceCalendarId =
+    String(args.conv?.appointment?.bookedCalendarId ?? "").trim() ||
+    String(args.conv?.appointment?.matchedSlot?.calendarId ?? "").trim() ||
+    primarySp.calendarId;
+  const candidateSalespeople = [
+    primarySalespersonId,
+    ...preferredSalespeople.filter(id => id !== primarySalespersonId)
+  ];
+  const cal = await getAuthedCalendarClient();
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+  for (const spId of candidateSalespeople) {
+    const sp = salespeople.find((p: any) => p.id === spId);
+    if (!sp) continue;
+    const fb = await queryFreeBusy(cal, [sp.calendarId], timeMin, timeMax, cfg.timezone);
+    let busy = (fb.calendars?.[sp.calendarId]?.busy ?? []) as any[];
+    if (args.conv?.appointment?.whenIso && sp.calendarId === sourceCalendarId) {
+      const oldStart = new Date(args.conv.appointment.whenIso);
+      const oldEnd = new Date(oldStart.getTime() + durationMinutes * 60_000);
+      busy = busy.filter(b => !(new Date(String(b?.start ?? "")) < oldEnd && oldStart < new Date(String(b?.end ?? ""))));
+    }
+    const expanded = expandBusyBlocks(busy as any, gapMinutes);
+    const exact = findExactSlotForSalesperson(
+      cfg,
+      sp.id,
+      sp.calendarId,
+      args.requested,
+      durationMinutes,
+      expanded
+    );
+    if (exact) {
+      return {
+        cfg,
+        cal,
+        exact,
+        sp,
+        primarySp,
+        sourceCalendarId,
+        appointmentType,
+        durationMinutes
+      };
+    }
+  }
+  return null;
 }
 
 function hasScheduleTimeSignal(text: string | null | undefined): boolean {
@@ -31539,6 +31711,116 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && regenCustomerAckActionParse) {
     console.log("[llm-customer-ack-action-parse] regen", regenCustomerAckActionParse);
   }
+  const regenBookedAppointmentAdjustmentParserEligible =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !!conv.appointment?.bookedEventId &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    /\b(?:can|could|would|move|change|push|do)\b[\s\S]{0,40}\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|to|and|\/)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i.test(
+      String(event.body ?? "")
+    );
+  const regenBookedAppointmentAdjustmentParse = regenBookedAppointmentAdjustmentParserEligible
+    ? await safeLlmParse("regen_booking_intent_parser_booked_adjustment", () =>
+        parseBookingIntentWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment
+        })
+      )
+    : null;
+  const regenBookedAppointmentAdjustmentConfidence =
+    typeof regenBookedAppointmentAdjustmentParse?.confidence === "number"
+      ? regenBookedAppointmentAdjustmentParse.confidence
+      : 0;
+  const regenBookedAppointmentAdjustmentAccepted =
+    !!regenBookedAppointmentAdjustmentParse?.explicitRequest &&
+    regenBookedAppointmentAdjustmentConfidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
+    (regenBookedAppointmentAdjustmentParse.intent === "reschedule" ||
+      regenBookedAppointmentAdjustmentParse.reference === "last_appointment");
+  const regenBookedAppointmentAdjustmentRequested =
+    parseBookedAppointmentWindowAdjustment(event.body ?? "", conv.appointment, regenTz);
+  if (
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    conv.appointment?.bookedEventId &&
+    regenBookedAppointmentAdjustmentRequested &&
+    (regenBookedAppointmentAdjustmentAccepted || !isFinanceDocsQuestionText(event.body ?? ""))
+  ) {
+    const exactMatch = await findExactBookedAppointmentRescheduleSlot({
+      conv,
+      requested: regenBookedAppointmentAdjustmentRequested,
+      appointmentType: String(conv.appointment?.appointmentType ?? "").trim() || "inventory_visit"
+    }).catch(e => {
+      console.log("[regen] booked appointment adjustment lookup failed", e?.message ?? e);
+      return null;
+    });
+    if (exactMatch) {
+      const when = formatSlotLocal(exactMatch.exact.start, exactMatch.cfg.timezone);
+      const repName = exactMatch.sp?.name ? ` with ${exactMatch.sp.name}` : "";
+      conv.scheduler = conv.scheduler ?? { updatedAt: new Date().toISOString() };
+      conv.scheduler.pendingSlot = {
+        salespersonId: exactMatch.sp.id,
+        salespersonName: exactMatch.sp.name,
+        calendarId: exactMatch.sp.calendarId,
+        start: exactMatch.exact.start,
+        end: exactMatch.exact.end,
+        startLocal: when,
+        endLocal: formatSlotLocal(exactMatch.exact.end, exactMatch.cfg.timezone),
+        appointmentType: exactMatch.appointmentType,
+        reschedule: true
+      };
+      conv.scheduler.updatedAt = new Date().toISOString();
+      conv.appointment.reschedulePending = true;
+      conv.appointment.matchedSlot = {
+        salespersonId: exactMatch.sp.id,
+        salespersonName: exactMatch.sp.name,
+        calendarId: exactMatch.sp.calendarId,
+        start: exactMatch.exact.start,
+        end: exactMatch.exact.end,
+        startLocal: when,
+        endLocal: formatSlotLocal(exactMatch.exact.end, exactMatch.cfg.timezone),
+        appointmentType: exactMatch.appointmentType
+      };
+      conv.appointment.updatedAt = new Date().toISOString();
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "booked_appointment_adjustment_slot_found", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        requested: formatRequestedDayTimePhrase(regenBookedAppointmentAdjustmentRequested, exactMatch.cfg.timezone),
+        salespersonId: exactMatch.sp.id
+      });
+      return respondWithSmsRegeneratedDraft(
+        `I can move you to ${when}${repName}. Want me to lock that in?`,
+        undefined,
+        {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        }
+      );
+    }
+    const cfg = await getSchedulerConfigHot();
+    const requestedLabel = formatRequestedDayTimePhrase(regenBookedAppointmentAdjustmentRequested, cfg.timezone);
+    addTodo(conv, "call", `Check appointment reschedule availability for ${requestedLabel}.`, event.providerMessageId);
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "booked_appointment_adjustment_no_exact_slot", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      requested: requestedLabel
+    });
+    return respondWithSmsRegeneratedDraft(
+      `I’ll check whether we can move that closer to ${requestedLabel} and follow up shortly.`,
+      undefined,
+      {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      }
+    );
+  }
   if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
     const action = regenCustomerAckActionParse?.action;
     if (action === "no_response_needed") {
@@ -33137,7 +33419,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
       (/source:\s*marketplace\s*-\s*prequal/.test(latestInboundBodyLower) ||
         /\bprequal\b|\bpre-qual\b/.test(latestInboundBodyLower));
-    const reply = latestInboundIsPrequalAdf
+    const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(
+      latestInboundBeforeDraft?.body ?? event.body ?? ""
+    );
+    let reply = latestInboundIsPrequalAdf
       ? hasPriorOutbound
         ? firstName
           ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
@@ -33148,6 +33433,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
           : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
         : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
+    if (asksIfInventoryIsAllOnline) {
+      reply = `${reply} ${buildInventoryOnlineCompletenessReply()}`;
+    }
     const hasApprovalTodo = listOpenTodos().some(
       t => t.convId === conv.id && t.reason === "approval" && t.status === "open"
     );
@@ -33158,6 +33446,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         event.body ?? (latestInboundIsPrequalAdf ? "Finance pre-qualification" : "Credit application"),
         event.providerMessageId
       );
+    }
+    if (asksIfInventoryIsAllOnline) {
+      const hasInventoryOnlineTodo = listOpenTodos().some(
+        t =>
+          t.convId === conv.id &&
+          t.status === "open" &&
+          /all inventory is posted online|not listed on the website/i.test(String(t.summary ?? ""))
+      );
+      if (!hasInventoryOnlineTodo) {
+        addTodo(
+          conv,
+          "other",
+          "Customer asked whether all inventory is posted online. Check for bikes not listed on the website yet and follow up.",
+          event.providerMessageId
+        );
+      }
     }
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
@@ -36156,7 +36460,12 @@ if (authToken && signature) {
     const preferredSalespeople = getPreferredSalespeopleForConv(cfg, conv);
     const salespeople = cfg.salespeople ?? [];
     const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
-    requestedReschedule = parseRequestedDayTime(event.body, cfg.timezone);
+    const bookedWindowAdjustment = parseBookedAppointmentWindowAdjustment(
+      event.body,
+      conv.appointment,
+      cfg.timezone
+    );
+    requestedReschedule = bookedWindowAdjustment ?? parseRequestedDayTime(event.body, cfg.timezone);
     if (!requestedReschedule && conv.appointment.whenIso) {
       const token = extractTimeToken(event.body);
       const hasTimeFallbackCue =
@@ -36187,9 +36496,12 @@ if (authToken && signature) {
         }
       }
     }
-    const rescheduleIntent =
+      const rescheduleIntent =
       !isFinanceDocsQuestionText(event.body) &&
-      (reschedulePending || reschedulePhrase || !!requestedReschedule || llmExplicitScheduleIntent);
+      (reschedulePending ||
+        reschedulePhrase ||
+        !!requestedReschedule ||
+        llmExplicitScheduleIntent);
     if (!rescheduleIntent) {
       // fall through
     } else {
@@ -36291,12 +36603,14 @@ if (authToken && signature) {
           return res.status(200).type("text/xml").send(twiml);
         }
 
-        const sameCalendar = exactMatch.sp.id === primarySalespersonId;
+        const sourceCalendarId =
+          String(conv.appointment.bookedCalendarId ?? "").trim() || primarySp.calendarId;
+        const sameCalendar = sourceCalendarId === exactMatch.sp.calendarId;
         let eventId = conv.appointment.bookedEventId;
         if (!sameCalendar) {
           const moved = await moveEvent(
             cal,
-            primarySp.calendarId,
+            sourceCalendarId,
             conv.appointment.bookedEventId,
             exactMatch.sp.calendarId
           );
@@ -36320,6 +36634,8 @@ if (authToken && signature) {
         conv.appointment.bookedEventId = eventObj.id ?? eventId;
         conv.appointment.bookedEventLink = eventObj.htmlLink ?? conv.appointment.bookedEventLink;
         conv.appointment.bookedSalespersonId = exactMatch.sp.id;
+        conv.appointment.bookedSalespersonName = exactMatch.sp.name;
+        conv.appointment.bookedCalendarId = exactMatch.sp.calendarId;
         conv.appointment.reschedulePending = false;
         onAppointmentBooked(conv);
 
