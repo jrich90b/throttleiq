@@ -308,11 +308,14 @@ export function shouldSuppressInitialAvailabilityLineAppend(draftRaw: string | n
 export function isHiringManagerInquiryText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  if (/\b(prequal|pre-qualified|prequalified|credit app|credit application|finance application|approval|hdfs|coa)\b/i.test(text)) {
+    return false;
+  }
   return (
     /\b(hiring manager|manager (?:for|about) (?:hiring|jobs?|careers?|employment)|who (?:is|do i contact).{0,80}(?:hiring|jobs?|careers?|employment))\b/i.test(
       text
     ) ||
-    /\b(apply|application|resume|job opening|job openings|career|careers|employment|hiring)\b/i.test(text)
+    /\b(apply for (?:a )?(?:job|position)|resume|job opening|job openings|career|careers|employment|hiring)\b/i.test(text)
   );
 }
 

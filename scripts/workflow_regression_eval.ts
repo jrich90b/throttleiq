@@ -395,6 +395,18 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "credit_application_not_hiring_manager_inquiry",
+    actual: isHiringManagerInquiryText(
+      "PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application."
+    ),
+    expected: false
+  },
+  {
+    id: "generic_application_not_hiring_without_job_context",
+    actual: isHiringManagerInquiryText("I filled out the application online."),
+    expected: false
+  },
+  {
     id: "hiring_manager_reply_handoff",
     actual: /hiring manager follow up/i.test(buildHiringManagerInquiryReply()),
     expected: true

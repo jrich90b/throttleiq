@@ -4544,6 +4544,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const hiringManagerInquiry =
     isInitialAdf &&
+    !isCreditLead &&
     isHiringManagerInquiryText(
       [
         effectiveInquiry,
