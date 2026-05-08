@@ -355,6 +355,14 @@
     }
   },
   {
+    "id": "none_finance_context_update_1",
+    "text": "Okay. Thank you. The bike would be for my husband but I'm doing the financing, hopefully.",
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
+  },
+  {
     "id": "availability_multiline_inquiry_1",
     "text": "Your inquiry:\nHello,\nDo you have this bike in stock?",
     "expected": {

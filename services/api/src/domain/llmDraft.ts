@@ -4602,6 +4602,10 @@ output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action"
 inbound: "Ok sounds great"
 output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.97}`
     ,
+    `EXAMPLE L2
+inbound: "Okay. Thank you. The bike would be for my husband but I'm doing the financing, hopefully."
+output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_response","clarify_prompt":"","confidence":0.94}`
+    ,
     `EXAMPLE M
 inbound: "Hi Gio, I received all my paperwork yesterday. I am going to the notary/DMV this afternoon."
 output: {"primary_intent":"general","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.93}`
@@ -4658,7 +4662,7 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     "",
     "Rules:",
     "- Use the latest inbound ask as source of truth even if prior turns were different.",
-    "- If inbound is short acknowledgment only, use primary_intent=none and fallback_action=no_response.",
+    "- If inbound is a short acknowledgment or an informational finance/context update with no ask, use primary_intent=none and fallback_action=no_response.",
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
     "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call) or says they are available/free to chat/talk right now.",
     "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
