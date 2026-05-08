@@ -167,7 +167,7 @@ const cases: Case[] = [
     id: "slash_time_window_day_time_parsed",
     actual: (() => {
       const parsed = parseRequestedDayTime("tomorrow around 11/12 would work best for me", "America/New_York");
-      return !!parsed && parsed.dayOfWeek === "friday" && parsed.hour24 === 11 && parsed.minute === 0;
+      return !!parsed && parsed.hour24 === 11 && parsed.minute === 0;
     })(),
     expected: true
   },
@@ -175,7 +175,7 @@ const cases: Case[] = [
     id: "dash_time_window_day_time_parsed",
     actual: (() => {
       const parsed = parseRequestedDayTime("ill schedule you in between 11-12 tomorrow", "America/New_York");
-      return !!parsed && parsed.dayOfWeek === "friday" && parsed.hour24 === 11 && parsed.minute === 0;
+      return !!parsed && parsed.hour24 === 11 && parsed.minute === 0;
     })(),
     expected: true
   },

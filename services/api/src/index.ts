@@ -31440,7 +31440,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (action === "purchase_delivery_update") {
       const reply = buildPurchaseDeliveryTimingReply(
-        customerAckActionRequestedPhrase(regenCustomerAckActionParse) || event.body ?? ""
+        customerAckActionRequestedPhrase(regenCustomerAckActionParse) || (event.body ?? "")
       );
       addTodo(
         conv,
