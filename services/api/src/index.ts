@@ -31132,6 +31132,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
   };
+  const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
+  const regenEarlyResponseControlParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const regenEarlyResponseControlParse = regenEarlyResponseControlParserEligible
+    ? await safeLlmParse("regen_response_control_parser_early", () =>
+        parseResponseControlWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
+    : null;
   if (
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -31245,6 +31260,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnSchedulingIntent: false
     });
     }
+  }
+  if (event.provider === "twilio" && isResponseControlNoResponseAccepted(regenEarlyResponseControlParse)) {
+    recordRouteOutcome("regen", "response_control_no_response_early", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: regenEarlyResponseControlParse?.confidence ?? null,
+      shortAck: regenShortAck
+    });
+    return respondRegenerateSkipped("response_control_no_response");
   }
   if (event.provider === "twilio" && isEmojiOnlyText(event.body ?? "")) {
     return respondRegenerateSkipped("emoji_only_inbound_no_reply");
@@ -31801,7 +31825,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   );
   const memorySummary = conv.memorySummary?.text ?? null;
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
-  const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
   const regenUnifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
   const regenUnifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
   const regenTradePayoffParserEligible =
@@ -32908,7 +32931,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
-  const regenResponseControlParse = regenResponseControlParserEligible
+  const regenResponseControlParse = regenEarlyResponseControlParse ?? (regenResponseControlParserEligible
     ? await safeLlmParse("regen_response_control_parser", () =>
         parseResponseControlWithLLM({
           text: event.body ?? "",
@@ -32916,7 +32939,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           lead: conv.lead
         })
       )
-    : null;
+    : null);
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
   if (isResponseControlNoResponseAccepted(regenResponseControlParse)) {
