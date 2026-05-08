@@ -28,6 +28,7 @@ import {
   summarizeSalespersonNoteWithLLM,
   parseBookingIntentWithLLM,
   parseAppointmentTimingWithLLM,
+  parseCustomerAckActionWithLLM,
   parseManualOutboundAppointmentWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
@@ -59,6 +60,7 @@ import type {
   CadenceRegenerateContextParse,
   AppointmentTimingParse,
   ConversationStateParse,
+  CustomerAckActionParse,
   CustomerDispositionParse,
   EmpathySupportReplyParse,
   WebFallbackReplyParse,
@@ -5162,6 +5164,13 @@ function isAppointmentTimingParserAccepted(parsed: AppointmentTimingParse | null
   return confidence >= min;
 }
 
+function isCustomerAckActionParserAccepted(parsed: CustomerAckActionParse | null): boolean {
+  if (!parsed || parsed.action === "none") return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_CUSTOMER_ACK_ACTION_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
 function isCadenceRegenerateContextParserAccepted(parsed: CadenceRegenerateContextParse | null): boolean {
   if (!parsed) return false;
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
@@ -5170,6 +5179,14 @@ function isCadenceRegenerateContextParserAccepted(parsed: CadenceRegenerateConte
 }
 
 function appointmentTimingRequestedPhrase(parsed: AppointmentTimingParse | null): string {
+  const requested = parsed?.requested ?? {};
+  const day = String(requested.day ?? "").trim();
+  const time = String(requested.timeText ?? "").trim();
+  const normalized = String(parsed?.normalizedText ?? "").trim();
+  return normalized || [day, time].filter(Boolean).join(" ").trim();
+}
+
+function customerAckActionRequestedPhrase(parsed: CustomerAckActionParse | null): string {
   const requested = parsed?.requested ?? {};
   const day = String(requested.day ?? "").trim();
   const time = String(requested.timeText ?? "").trim();
@@ -5206,6 +5223,30 @@ function buildTentativeAppointmentWindowAck(parsed: AppointmentTimingParse | nul
     return `${normalizeDisplayCase(phrase)} can work. Just give me a heads up when you know the exact time so I can have everything lined up.`;
   }
   return "That can work. Just give me a heads up when you know the exact time so I can have everything lined up.";
+}
+
+function buildCustomerAckTentativeLockInReply(parsed: CustomerAckActionParse | null): string {
+  const phrase = customerAckActionRequestedPhrase(parsed);
+  if (phrase) {
+    return `Sounds good — do you want me to lock in ${normalizeDisplayCase(phrase)}?`;
+  }
+  return "Sounds good — do you want me to lock that in?";
+}
+
+function buildCustomerAckAvailableTimesReply(parsed: CustomerAckActionParse | null): string {
+  const phrase = customerAckActionRequestedPhrase(parsed);
+  if (phrase) {
+    return `Sounds good — I’ll check available times for ${normalizeDisplayCase(phrase)} and follow up.`;
+  }
+  return "Sounds good — I’ll check available times and follow up.";
+}
+
+function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null): string {
+  const phrase = customerAckActionRequestedPhrase(parsed);
+  if (phrase) {
+    return `Perfect — I’ll get ${normalizeDisplayCase(phrase)} locked in.`;
+  }
+  return "Perfect — I’ll get that locked in.";
 }
 
 function inventoryStatusParseToAvailabilityHint(
@@ -31292,6 +31333,137 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     }
   }
+  const regenCustomerAckActionParserHint =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    (regenShortAck ||
+      String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      (conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
+      hasPurchaseDeliveryLogisticsParserHint(
+        conv,
+        event.body ?? "",
+        (inbound as any)?.at ?? event.receivedAt,
+        (event.mediaUrls?.length ?? 0) > 0
+      ) ||
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+        String(event.body ?? "")
+      ));
+  const regenCustomerAckActionParse = regenCustomerAckActionParserHint
+    ? await safeLlmParse("regen_customer_ack_action_parser", () =>
+        parseCustomerAckActionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 10),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment,
+          lead: conv.lead
+        })
+      )
+    : null;
+  if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && regenCustomerAckActionParse) {
+    console.log("[llm-customer-ack-action-parse] regen", regenCustomerAckActionParse);
+  }
+  if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
+    const action = regenCustomerAckActionParse?.action;
+    if (action === "no_response_needed") {
+      recordRouteOutcome("regen", "customer_ack_no_response", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondRegenerateSkipped("customer_ack_no_response");
+    }
+    if (action === "accept_tentative_appointment") {
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "customer_ack_tentative_appointment", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondWithSmsRegeneratedDraft(buildCustomerAckTentativeLockInReply(regenCustomerAckActionParse), undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    if (action === "confirm_proposed_appointment" && regenCustomerAckActionParse?.shouldBook) {
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "customer_ack_confirm_proposed_appointment", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null,
+        shouldBook: regenCustomerAckActionParse?.shouldBook ?? false
+      });
+      return respondWithSmsRegeneratedDraft(buildCustomerAckConfirmationReply(regenCustomerAckActionParse), undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    if (action === "ask_for_available_times") {
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "customer_ack_ask_for_available_times", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondWithSmsRegeneratedDraft(buildCustomerAckAvailableTimesReply(regenCustomerAckActionParse), undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    if (action === "provide_arrival_window") {
+      recordRouteOutcome("regen", "customer_ack_arrival_window", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondWithSmsRegeneratedDraft(
+        buildAppointmentArrivalAck({
+          intent: "arrival_update",
+          explicitRequest: true,
+          requested: regenCustomerAckActionParse?.requested,
+          reference: "none",
+          normalizedText: regenCustomerAckActionParse?.normalizedText ?? null,
+          confidence: regenCustomerAckActionParse?.confidence
+        }),
+        undefined,
+        {
+          turnSchedulingIntent: false,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        }
+      );
+    }
+    if (action === "purchase_delivery_update") {
+      const reply = buildPurchaseDeliveryTimingReply(
+        customerAckActionRequestedPhrase(regenCustomerAckActionParse) || event.body ?? ""
+      );
+      addTodo(
+        conv,
+        "note",
+        `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
+        (inbound as any)?.providerMessageId
+      );
+      setDialogState(conv, "purchase_delivery");
+      setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+      stopFollowUpCadence(conv, "purchase_delivery");
+      stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+      recordRouteOutcome("regen", "customer_ack_purchase_delivery_update", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnSchedulingIntent: false,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+  }
   if (event.provider === "twilio" && isResponseControlNoResponseAccepted(regenEarlyResponseControlParse)) {
     recordRouteOutcome("regen", "response_control_no_response_early", {
       convId: conv.id,
@@ -34133,6 +34305,41 @@ if (authToken && signature) {
   }
   const responseControlAccepted = isResponseControlParserAccepted(responseControlParse);
   const responseControlConfident = isResponseControlParserConfidentDecision(responseControlParse);
+  const customerAckActionParserHint =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    (isShortAckText(event.body ?? "") ||
+      isEmojiOnlyText(event.body ?? "") ||
+      String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      (conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
+      hasPurchaseDeliveryLogisticsParserHint(
+        conv,
+        event.body ?? "",
+        event.receivedAt,
+        (event.mediaUrls?.length ?? 0) > 0
+      ) ||
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+        String(event.body ?? "")
+      ));
+  const customerAckActionParse = customerAckActionParserHint
+    ? await safeLlmParse("customer_ack_action_parser", () =>
+        parseCustomerAckActionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 10),
+          lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+          appointment: conv.appointment,
+          lead: conv.lead
+        })
+      )
+    : null;
+  if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && customerAckActionParse) {
+    console.log("[llm-customer-ack-action-parse]", customerAckActionParse);
+  }
+  const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
+  const customerAckNoResponse =
+    customerAckActionAccepted && customerAckActionParse?.action === "no_response_needed";
   const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
   const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
@@ -34154,14 +34361,16 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (llmNoResponse && conv.mode !== "human") {
+  if ((customerAckNoResponse || (llmNoResponse && !customerAckActionAccepted)) && conv.mode !== "human") {
     discardPendingDrafts(conv, "response_control_no_response");
     delete conv.emailDraft;
     saveConversation(conv);
-    recordRouteOutcome("live", "response_control_no_response", {
+    recordRouteOutcome("live", customerAckNoResponse ? "customer_ack_no_response" : "response_control_no_response", {
       convId: conv.id,
       leadKey: conv.leadKey,
-      confidence: responseControlParse?.confidence ?? null
+      confidence: customerAckNoResponse
+        ? (customerAckActionParse?.confidence ?? null)
+        : (responseControlParse?.confidence ?? null)
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
@@ -37576,6 +37785,48 @@ if (authToken && signature) {
     !!bookingParse?.explicitRequest && bookingConfidence > 0 && bookingConfidence < bookingConfidenceMin;
   const appointmentTimingAccepted = isAppointmentTimingParserAccepted(appointmentTimingParse);
   const appointmentTimingIntent = appointmentTimingAccepted ? appointmentTimingParse?.intent : "none";
+  if (
+    event.provider === "twilio" &&
+    customerAckActionAccepted &&
+    !pricingOrPaymentsIntent &&
+    (customerAckActionParse?.action === "accept_tentative_appointment" ||
+      customerAckActionParse?.action === "ask_for_available_times" ||
+      customerAckActionParse?.action === "provide_arrival_window")
+  ) {
+    const action = customerAckActionParse.action;
+    const reply =
+      action === "accept_tentative_appointment"
+        ? buildCustomerAckTentativeLockInReply(customerAckActionParse)
+        : action === "ask_for_available_times"
+          ? buildCustomerAckAvailableTimesReply(customerAckActionParse)
+          : buildAppointmentArrivalAck({
+              intent: "arrival_update",
+              explicitRequest: true,
+              requested: customerAckActionParse.requested,
+              reference: "none",
+              normalizedText: customerAckActionParse.normalizedText ?? null,
+              confidence: customerAckActionParse.confidence
+            });
+    recordRouteOutcome("live", `customer_ack_${action}`, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: customerAckActionParse?.confidence ?? null
+    });
+    setDialogState(conv, action === "provide_arrival_window" ? "schedule_request" : "schedule_request");
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (
     event.provider === "twilio" &&
     appointmentTimingAccepted &&

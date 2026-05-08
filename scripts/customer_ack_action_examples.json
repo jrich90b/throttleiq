@@ -1,0 +1,92 @@
+[
+  {
+    "id": "short_ack_confirms_offered_slot_1",
+    "text": "Sounds perfect",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I have Sat, May 9, 2:00 PM does that work?"
+      }
+    ],
+    "expected": {
+      "action": "confirm_proposed_appointment",
+      "should_reply": true,
+      "should_book": true,
+      "day_contains": "may 9",
+      "time_contains": "2"
+    }
+  },
+  {
+    "id": "ok_after_can_work_needs_lock_in_1",
+    "text": "Ok.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Tuesday between 9:30 and 10:00 can work."
+      }
+    ],
+    "expected": {
+      "action": "accept_tentative_appointment",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "tuesday",
+      "time_contains": "9:30"
+    }
+  },
+  {
+    "id": "customer_asks_dealer_for_times_1",
+    "text": "Good morning saturday would work best. let me know what time works for you.",
+    "expected": {
+      "action": "ask_for_available_times",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "saturday"
+    }
+  },
+  {
+    "id": "purchase_pickup_window_not_trade_schedule_1",
+    "text": "1-2 o'clock ish",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Just let me know when you have a better idea of time so I can make sure I have everything lined up before you get here."
+      }
+    ],
+    "expected": {
+      "action": "purchase_delivery_update",
+      "should_reply": true,
+      "should_book": false,
+      "time_contains": "1"
+    }
+  },
+  {
+    "id": "signoff_no_response_1",
+    "text": "Talk soon!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "You’re welcome — happy to help, talk soon!"
+      }
+    ],
+    "expected": {
+      "action": "no_response_needed",
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
+    "id": "document_proof_ack_not_photo_flow_1",
+    "text": "Like I said. I'm 💯 legit",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed."
+      }
+    ],
+    "expected": {
+      "action": "neutral_ack",
+      "should_reply": false,
+      "should_book": false
+    }
+  }
+]

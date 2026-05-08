@@ -1462,6 +1462,31 @@ export type AppointmentTimingParse = {
   confidence?: number;
 };
 
+export type CustomerAckAction =
+  | "confirm_proposed_appointment"
+  | "accept_tentative_appointment"
+  | "ask_for_available_times"
+  | "provide_arrival_window"
+  | "purchase_delivery_update"
+  | "no_response_needed"
+  | "neutral_ack"
+  | "none";
+
+export type CustomerAckActionParse = {
+  action: CustomerAckAction;
+  explicitAction: boolean;
+  shouldReply: boolean;
+  shouldBook: boolean;
+  requested?: {
+    day?: string | null;
+    timeText?: string | null;
+    timeWindow?: "exact" | "range" | "unknown";
+  };
+  reference?: "last_outbound" | "last_suggested" | "last_appointment" | "none";
+  normalizedText?: string | null;
+  confidence?: number;
+};
+
 export type ManualOutboundAppointmentState =
   | "confirmed_booking"
   | "proposed_time"
@@ -1998,6 +2023,55 @@ const APPOINTMENT_TIMING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       }
     },
     reference: { type: "string", enum: ["last_suggested", "last_appointment", "none"] },
+    normalized_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "action",
+    "explicit_action",
+    "should_reply",
+    "should_book",
+    "requested",
+    "reference",
+    "normalized_text",
+    "confidence"
+  ],
+  properties: {
+    action: {
+      type: "string",
+      enum: [
+        "confirm_proposed_appointment",
+        "accept_tentative_appointment",
+        "ask_for_available_times",
+        "provide_arrival_window",
+        "purchase_delivery_update",
+        "no_response_needed",
+        "neutral_ack",
+        "none"
+      ]
+    },
+    explicit_action: { type: "boolean" },
+    should_reply: { type: "boolean" },
+    should_book: { type: "boolean" },
+    requested: {
+      type: "object",
+      additionalProperties: false,
+      required: ["day", "time_text", "time_window"],
+      properties: {
+        day: { type: "string" },
+        time_text: { type: "string" },
+        time_window: { type: "string", enum: ["exact", "range", "unknown"] }
+      }
+    },
+    reference: {
+      type: "string",
+      enum: ["last_outbound", "last_suggested", "last_appointment", "none"]
+    },
     normalized_text: { type: "string" },
     confidence: { type: "number" }
   }
@@ -3137,6 +3211,148 @@ export async function parseAppointmentTimingWithLLM(args: {
   return {
     intent,
     explicitRequest: !!parsed.explicit_request,
+    requested: { day, timeText, timeWindow },
+    reference,
+    normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
+    confidence
+  };
+}
+
+export async function parseCustomerAckActionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lastSuggestedSlots?: { startLocal?: string | null }[];
+  appointment?: any;
+  lead?: Conversation["lead"];
+}): Promise<CustomerAckActionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CUSTOMER_ACK_ACTION_PARSER_MODEL ||
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CUSTOMER_ACK_ACTION_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_APPOINTMENT_TIMING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  const lastSlots = (args.lastSuggestedSlots ?? [])
+    .map(s => s.startLocal)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(" | ");
+  const lead = args.lead ?? {};
+
+  const examples = [
+    'input: "Customer: Sounds perfect" history: "out: I have Sat, May 9, 2:00 PM does that work?" output: {"action":"confirm_proposed_appointment","explicit_action":true,"should_reply":true,"should_book":true,"requested":{"day":"sat may 9","time_text":"2:00 PM","time_window":"exact"},"reference":"last_outbound","normalized_text":"sat may 9 2:00 PM","confidence":0.96}',
+    'input: "Customer: alright, sounds good man. thank you." history: "out: Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow" output: {"action":"confirm_proposed_appointment","explicit_action":true,"should_reply":false,"should_book":true,"requested":{"day":"tomorrow","time_text":"11-12","time_window":"range"},"reference":"last_outbound","normalized_text":"tomorrow 11-12","confidence":0.94}',
+    'input: "Customer: Ok." history: "out: Tuesday between 9:30 and 10:00 can work." output: {"action":"accept_tentative_appointment","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tuesday","time_text":"9:30-10:00","time_window":"range"},"reference":"last_outbound","normalized_text":"tuesday 9:30-10:00","confidence":0.92}',
+    'input: "Customer: Good morning saturday would work best. let me know what time works for you." output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"saturday","confidence":0.95}',
+    'input: "Customer: tomorrow around 11/12 would work best for me" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tomorrow","time_text":"around 11/12","time_window":"range"},"reference":"none","normalized_text":"tomorrow around 11/12","confidence":0.94}',
+    'input: "Customer: 1-2 o’clock ish" history: "out: What time works for you today?" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"1-2 o’clock-ish","time_window":"range"},"reference":"last_outbound","normalized_text":"1-2 o’clock-ish","confidence":0.93}',
+    'input: "Customer: On my way doing my best to be there by 530" output: {"action":"provide_arrival_window","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.95}',
+    'input: "Customer: Talk soon!" history: "out: You’re welcome — happy to help, talk soon!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.97}',
+    'input: "Customer: Perfect." history: "out: Awesome, glad that works for you!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
+    'input: "Customer: Ok 👍" history: "out: Sounds good. Thanks for letting me know." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
+    'input: "Customer: Thanks, can you send photos?" output: {"action":"none","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.9}'
+  ];
+
+  const prompt = [
+    "You parse a customer acknowledgement/action turn in a dealership text conversation.",
+    "Return only JSON matching the schema.",
+    "",
+    "Action mapping:",
+    "- confirm_proposed_appointment: customer accepts a specific slot/time that the dealer already offered or said they would schedule.",
+    "- accept_tentative_appointment: customer acknowledges a loose 'can work / should work / if that works' proposal, but the dealer still needs permission to lock it in.",
+    "- ask_for_available_times: customer asks the dealer what time works or gives a day/window and wants available options.",
+    "- provide_arrival_window: customer says they are on the way, leaving, driving, or gives a casual ETA.",
+    "- purchase_delivery_update: customer gives arrival/pickup timing in an active purchase/delivery/docs context; do not treat as a trade appraisal or new appointment slot offer.",
+    "- no_response_needed: short acknowledgement/signoff with no question, no requested action, and no appointment confirmation.",
+    "- neutral_ack: acknowledgement that may deserve a brief response but does not book or change state.",
+    "- none: a substantive request that should be routed elsewhere.",
+    "",
+    "Rules:",
+    "- Use recent outbound context. The same 'Ok' can mean no response, appointment confirmation, or tentative acceptance.",
+    "- should_book=true only when the customer confirms a concrete slot/time already offered or staff explicitly said they will schedule it.",
+    "- If the last dealer message only says 'can work' or 'if that works', set accept_tentative_appointment and should_book=false.",
+    "- If the customer asks what time works, do not ask them for a time again; set ask_for_available_times.",
+    "- If the customer is buying/picking up/taking delivery and gives '1-2ish', classify purchase_delivery_update, not trade appraisal scheduling.",
+    "- Do not classify document/media proof acknowledgements as photo requests just because the word 'like' appears.",
+    "- confidence is 0 to 1.",
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      stockId: lead?.vehicle?.stockId ?? null
+    })}`,
+    `Appointment status: ${args.appointment?.status ?? "none"}`,
+    lastSlots ? `Last suggested slots: ${lastSlots}` : "Last suggested slots: (none)",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "customer_ack_action_parser",
+      schema: CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 240,
+      debugTag: "llm-customer-ack-action-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawAction = String(parsed.action ?? "").toLowerCase();
+  const action: CustomerAckActionParse["action"] =
+    rawAction === "confirm_proposed_appointment" ||
+    rawAction === "accept_tentative_appointment" ||
+    rawAction === "ask_for_available_times" ||
+    rawAction === "provide_arrival_window" ||
+    rawAction === "purchase_delivery_update" ||
+    rawAction === "no_response_needed" ||
+    rawAction === "neutral_ack"
+      ? rawAction
+      : "none";
+  const requested = parsed.requested && typeof parsed.requested === "object" ? parsed.requested : {};
+  const day = cleanOptionalString(requested?.day);
+  const timeText = cleanOptionalString(requested?.time_text);
+  const timeWindowRaw = String(requested?.time_window ?? "unknown").toLowerCase();
+  const timeWindow: "exact" | "range" | "unknown" =
+    timeWindowRaw === "exact" || timeWindowRaw === "range" ? timeWindowRaw : "unknown";
+  const referenceRaw = String(parsed.reference ?? "none").toLowerCase();
+  const reference: CustomerAckActionParse["reference"] =
+    referenceRaw === "last_outbound" ||
+    referenceRaw === "last_suggested" ||
+    referenceRaw === "last_appointment"
+      ? referenceRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    action,
+    explicitAction: !!parsed.explicit_action,
+    shouldReply: !!parsed.should_reply,
+    shouldBook: !!parsed.should_book,
     requested: { day, timeText, timeWindow },
     reference,
     normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
