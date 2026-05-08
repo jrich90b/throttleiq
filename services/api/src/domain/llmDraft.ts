@@ -1569,7 +1569,7 @@ export type ResponseControlParse = {
 };
 
 export type PurchaseDeliveryLogisticsParse = {
-  intent: "delivery_progress" | "delivery_timing" | "docs_status" | "none";
+  intent: "delivery_progress" | "delivery_timing" | "docs_status" | "post_sale_item_pickup" | "none";
   explicitRequest: boolean;
   timingText?: string | null;
   confidence?: number;
@@ -2304,7 +2304,7 @@ const PURCHASE_DELIVERY_LOGISTICS_PARSER_JSON_SCHEMA: { [key: string]: unknown }
   properties: {
     intent: {
       type: "string",
-      enum: ["delivery_progress", "delivery_timing", "docs_status", "none"]
+      enum: ["delivery_progress", "delivery_timing", "docs_status", "post_sale_item_pickup", "none"]
     },
     explicit_request: { type: "boolean" },
     timing_text: { type: "string" },
@@ -4442,11 +4442,13 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     "- delivery_progress: customer gives progress/status about finalizing purchase, loan, bank, check, insurance, title, paperwork, or travel toward pickup/delivery.",
     "- delivery_timing: customer gives an arrival or pickup window for an already active purchase/delivery context.",
     "- docs_status: customer sends/mentions paperwork, insurance card, license, title, PDF, check, or proof documents.",
+    "- post_sale_item_pickup: after purchase/delivery, customer mentions someone coming by for leftover/take-off/stock parts or accessories that did not fit during pickup.",
     "- none: shopping, trade appraisal scheduling, test ride scheduling, inventory availability, generic appointment setting, compliments, or unrelated chat.",
     "",
     "Rules:",
     "- This parser is for active purchase/delivery logistics, not ordinary appointments.",
     "- delivery_timing requires recent context that the customer is buying/picking up/taking delivery or sending purchase docs.",
+    "- If the message combines a happy post-sale note with arranging pickup for stock exhaust/parts/accessories, use post_sale_item_pickup, not inventory availability.",
     "- If the customer says they are coming to inspect/appraise a trade or test ride, intent=none.",
     "- timing_text should contain the arrival/pickup timing phrase if present, else empty string.",
     "- explicit_request is true only when the customer asks a question/action; status updates can be false.",
@@ -4463,6 +4465,8 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     'input: "On my way doing my best to be there by 530" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"by 530","confidence":0.97}',
     'input: "Early afternoon ish, wife just has to be home to get kids off the bus" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"early afternoon-ish","confidence":0.93}',
     'input: "1-2 o clock ish" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"1-2 o clock-ish","confidence":0.94}',
+    'input: "Working on having someone come by for the stock exhaust I just couldn\'t fit everything yesterday" output: {"intent":"post_sale_item_pickup","explicit_request":false,"timing_text":"stock exhaust pickup","confidence":0.96}',
+    'input: "Ride home was amazing. I will have my buddy stop in to grab the stock pipes that would not fit" output: {"intent":"post_sale_item_pickup","explicit_request":false,"timing_text":"stock pipes pickup","confidence":0.95}',
     'input: "Can I come in Friday morning to look at it?" output: {"intent":"none","explicit_request":true,"timing_text":"","confidence":0.95}',
     'input: "Tuesday around 11am would work for a test ride" output: {"intent":"none","explicit_request":true,"timing_text":"","confidence":0.97}',
     "",
@@ -4496,7 +4500,8 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
   const intent: PurchaseDeliveryLogisticsParse["intent"] =
     intentRaw === "delivery_progress" ||
     intentRaw === "delivery_timing" ||
-    intentRaw === "docs_status"
+    intentRaw === "docs_status" ||
+    intentRaw === "post_sale_item_pickup"
       ? intentRaw
       : "none";
   const confidence =

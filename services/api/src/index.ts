@@ -13840,6 +13840,19 @@ function buildInboundMediaProofAcknowledgement(): string {
   return "Thanks, got it — I received the image. I’ll review it and let you know if anything else is needed.";
 }
 
+function isPostSaleItemPickupLogisticsText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasItem =
+    /\b(stock\s+(?:exhaust|pipes?|seat|bars?|handlebars?|parts?|take[-\s]?offs?)|take[-\s]?off\s+(?:exhaust|pipes?|parts?)|factory\s+(?:exhaust|pipes?|parts?)|original\s+(?:exhaust|pipes?|parts?)|exhaust|pipes?)\b/.test(
+      t
+    );
+  if (!hasItem) return false;
+  return /\b(come by|stop by|swing by|pick(?:ing)? up|pickup|grab|get|fit|couldn'?t fit|could not fit|wouldn'?t fit|would not fit|left|forgot|send someone|someone come)\b/.test(
+    t
+  );
+}
+
 function getRecentConversationTextForDeliveryContext(
   conv: any,
   currentInboundText: string | null | undefined,
@@ -13910,12 +13923,26 @@ function hasPurchaseDeliveryLogisticsParserHint(
     String(getDialogState(conv) ?? "").toLowerCase() === "purchase_delivery" ||
     String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery";
   if (hasMedia && recentOutboundRequestedMediaProofContext(conv)) return true;
+  const postSaleItemPickup = isPostSaleItemPickupLogisticsText(text);
+  if (postSaleItemPickup) {
+    const recentContext = getRecentConversationTextForDeliveryContext(conv, text, receivedAt);
+    if (
+      activePurchaseDeliveryState ||
+      isPurchaseDeliveryContextText(recentContext) ||
+      /\b(thanks again for coming|ride home|take delivery|delivered|pickup|pick up|loan'?s? finalized|insurance paperwork|everything lined up|before you get here)\b/i.test(
+        recentContext
+      )
+    ) {
+      return true;
+    }
+  }
   if (
     activePurchaseDeliveryState &&
     (hasMedia ||
       isPurchaseDeliveryTimingText(text) ||
       isMediaProofStatusUpdateText(text) ||
       isLogisticsProgressUpdateText(text) ||
+      postSaleItemPickup ||
       /\b(loan|bank|check|insurance|title|registration|paperwork|document|license|pick(?:ing)? up|pickup|delivery|on my way|headed over|heading over|driving)\b/i.test(
         text
       ))
@@ -13956,8 +13983,19 @@ function isPurchaseDeliveryLogisticsParserConfidentNone(
 
 function buildPurchaseDeliveryLogisticsReply(args: {
   text: string | null | undefined;
+  contextText?: string | null | undefined;
   parsed: PurchaseDeliveryLogisticsParse;
 }): string {
+  if (args.parsed.intent === "post_sale_item_pickup") {
+    const text = `${String(args.text ?? "")}\n${String(args.contextText ?? "")}`;
+    const positiveExperience = /\b(thank you|thanks|amazing|smiles?|priceless|great|awesome|love|loved)\b/i.test(
+      text
+    );
+    const prefix = positiveExperience
+      ? "Love hearing that — glad the ride home went great. "
+      : "";
+    return `${prefix}No problem on the stock exhaust; just have them stop by when they can and we’ll get it handled.`;
+  }
   if (args.parsed.intent === "delivery_timing") {
     return buildPurchaseDeliveryTimingReply(args.parsed.timingText || args.text);
   }
@@ -13976,6 +14014,7 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
 }): string {
   const reply = buildPurchaseDeliveryLogisticsReply({
     text: args.text,
+    contextText: getRecentConversationTextForDeliveryContext(args.conv, args.text),
     parsed: args.parsed
   });
   if (args.parsed.intent === "delivery_timing") {
@@ -13985,6 +14024,16 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
       `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(
         args.parsed.timingText || args.text || ""
       )}.`,
+      args.providerMessageId ?? undefined
+    );
+  }
+  if (args.parsed.intent === "post_sale_item_pickup") {
+    addTodo(
+      args.conv,
+      "note",
+      `Customer may send someone to pick up post-sale item: ${
+        args.parsed.timingText || "stock exhaust/parts"
+      }.`,
       args.providerMessageId ?? undefined
     );
   }
@@ -31302,6 +31351,36 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnSchedulingIntent: false
     });
   }
+  if (
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !isPurchaseDeliveryLogisticsParserConfidentNone(regenPurchaseDeliveryLogisticsParse) &&
+    isPostSaleItemPickupLogisticsText(event.body ?? "") &&
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.at ?? event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
+  ) {
+    const reply = applyPurchaseDeliveryLogisticsDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: (inbound as any)?.providerMessageId,
+      parsed: {
+        intent: "post_sale_item_pickup",
+        explicitRequest: false,
+        timingText: "stock exhaust pickup",
+        confidence: 0.79
+      },
+      scope: "regen"
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnFinanceIntent: false,
+      turnAvailabilityIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   if (event.provider === "twilio" && channel === "sms" && shouldAcknowledgeInboundMediaProof(conv, event)) {
     recordRouteOutcome("regen", "media_proof_acknowledgement_fallback", {
       convId: conv.id,
@@ -34757,6 +34836,40 @@ if (authToken && signature) {
       text: event.body ?? "",
       providerMessageId: event.providerMessageId,
       parsed: liveEarlyPurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
+      scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (
+    event.provider === "twilio" &&
+    !isPurchaseDeliveryLogisticsParserConfidentNone(liveEarlyPurchaseDeliveryLogisticsParse) &&
+    isPostSaleItemPickupLogisticsText(event.body ?? "") &&
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
+  ) {
+    const reply = applyPurchaseDeliveryLogisticsDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      parsed: {
+        intent: "post_sale_item_pickup",
+        explicitRequest: false,
+        timingText: "stock exhaust pickup",
+        confidence: 0.79
+      },
       scope: "live"
     });
     if (webhookMode === "suggest") {

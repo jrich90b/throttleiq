@@ -1,7 +1,12 @@
 import "dotenv/config";
 import { parsePurchaseDeliveryLogisticsWithLLM } from "../services/api/src/domain/llmDraft.ts";
 
-type ExpectedIntent = "delivery_progress" | "delivery_timing" | "docs_status" | "none";
+type ExpectedIntent =
+  | "delivery_progress"
+  | "delivery_timing"
+  | "docs_status"
+  | "post_sale_item_pickup"
+  | "none";
 
 type Fixture = {
   id: string;
@@ -91,6 +96,16 @@ const fixtures: Fixture[] = [
     ],
     expectedIntent: "delivery_timing",
     expectedTimingContains: "1"
+  },
+  {
+    id: "post_sale_stock_exhaust_pickup",
+    text: "Working on having someone come by for the stock exhaust I just couldn't fit everything yesterday",
+    history: [
+      { direction: "out", body: "Hi John — this is Joe at American Harley-Davidson. Thanks again for coming to see us for your Street Glide. If you need anything, just let me know." },
+      { direction: "in", body: "Thank you very much, was an amazing experience, and the ride home was nothing but smiles from ear to ear" }
+    ],
+    expectedIntent: "post_sale_item_pickup",
+    expectedTimingContains: "stock"
   },
   {
     id: "trade_appraisal_not_delivery",
