@@ -49,6 +49,15 @@ function looksLikeInventoryPromptDraft(text: string): boolean {
   );
 }
 
+function looksLikeDepartmentHandoffActionDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(parts?|apparel|motorclothes|service)\s+(?:team|department|counter|advisor|writer)\b/.test(t) ||
+    /\b(?:have|ask)\s+(?:our|the)\s+(?:parts?|apparel|motorclothes|service)\b/.test(t)
+  );
+}
+
 function looksLikeSchedulingPromptDraft(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -250,7 +259,12 @@ export function applyDraftStateInvariants(
     };
   }
 
-  if (followUpMode === "manual_handoff" && isDepartmentHandoff(input) && inventoryPrompt) {
+  if (
+    followUpMode === "manual_handoff" &&
+    isDepartmentHandoff(input) &&
+    inventoryPrompt &&
+    !looksLikeDepartmentHandoffActionDraft(draftText)
+  ) {
     return {
       allow: false,
       draftText: "",

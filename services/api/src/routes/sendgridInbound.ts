@@ -4473,7 +4473,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (suppressInitialAutoDraftForTimedCallback) {
       return;
     }
-    if (prefersPhoneOnly) {
+    if (prefersPhoneOnly && systemMode !== "suggest") {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       return;
     }

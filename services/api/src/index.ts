@@ -32684,7 +32684,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const agentName =
       resolveRegenSenderName() ||
       resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
-    const hasPriorOutbound = Array.isArray(conv.messages) && conv.messages.some(m => m.direction === "out");
+    const latestInboundAtMs = Date.parse(String(latestInboundBeforeDraft?.at ?? ""));
+    const hasPriorOutbound =
+      Array.isArray(conv.messages) &&
+      conv.messages.some(m => {
+        if (m.direction !== "out") return false;
+        if (m.provider === "draft_ai") return false;
+        const atMs = Date.parse(String(m.at ?? ""));
+        return Number.isFinite(latestInboundAtMs) && Number.isFinite(atMs) ? atMs < latestInboundAtMs : true;
+      });
     if (latestInboundIsRiderFinanceAdf) {
       const dealerOffersProgram = dealerOffersRiderToRiderFinancing(dealerProfile);
       const reply = buildRiderToRiderFinanceRegenReply({

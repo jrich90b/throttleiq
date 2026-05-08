@@ -51,6 +51,7 @@ import {
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
+import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
 import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
 import { isLogisticsProgressUpdateText } from "../services/api/src/domain/transitionSafety.ts";
 
@@ -703,6 +704,20 @@ const cases: Case[] = [
     actual: buildTakeOffMilwaukeeEightEngineReply(),
     expected:
       "I got your note about looking for a take-off Milwaukee-Eight 114/117. I’ll have our parts team keep an eye out, and if one becomes available from an upgrade we’ll reach out."
+  },
+  {
+    id: "takeoff_m8_parts_handoff_reply_not_blocked_as_inventory_prompt",
+    actual: applyDraftStateInvariants({
+      inboundText:
+        "If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one.",
+      draftText: buildTakeOffMilwaukeeEightEngineReply(),
+      followUpMode: "manual_handoff",
+      followUpReason: "parts_request",
+      dialogState: "parts_handoff",
+      classificationBucket: "parts",
+      classificationCta: "parts_request"
+    }).allow,
+    expected: true
   }
 ];
 

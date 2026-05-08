@@ -1470,6 +1470,15 @@ export function appendOutbound(
       classificationCta: conv.classification?.cta ?? null
     });
     if (!invariant.allow) {
+      console.warn("[conversationStore] draft blocked by invariant", {
+        convId: conv.id,
+        reason: invariant.reason,
+        followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        classificationBucket: conv.classification?.bucket ?? null,
+        classificationCta: conv.classification?.cta ?? null
+      });
       conv.updatedAt = nowIso();
       scheduleSave();
       return;
