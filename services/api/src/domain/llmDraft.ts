@@ -1852,6 +1852,7 @@ export type ConversationStateParse = {
     | "service_request"
     | "parts_request"
     | "apparel_request"
+    | "hiring_manager"
     | "corporate_misroute"
     | "scheduling"
     | "pricing"
@@ -1873,6 +1874,7 @@ export type ConversationStateParse = {
     | "service_request"
     | "parts_request"
     | "apparel_request"
+    | "hiring_manager_inquiry"
     | "none";
   confidence?: number;
 };
@@ -2642,6 +2644,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "service_request",
         "parts_request",
         "apparel_request",
+        "hiring_manager",
         "corporate_misroute",
         "scheduling",
         "pricing",
@@ -2669,7 +2672,14 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     clear_pricing_need_model: { type: "boolean" },
     manual_handoff_reason: {
       type: "string",
-      enum: ["credit_app", "service_request", "parts_request", "apparel_request", "none"]
+      enum: [
+        "credit_app",
+        "service_request",
+        "parts_request",
+        "apparel_request",
+        "hiring_manager_inquiry",
+        "none"
+      ]
     },
     confidence: { type: "number", minimum: 0, maximum: 1 }
   }
@@ -5660,6 +5670,9 @@ export async function parseConversationStateWithLLM(args: {
     'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
     'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: Who is the hiring manager for American Harley Davidson?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.97}',
+    'input: "Customer: I wanted to apply for a job at your dealership. Who should I talk to?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.96}',
+    'input: "Customer: PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application." output: {"state_intent":"finance_docs","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"credit_app","confidence":0.96}',
     'input: "Customer: can service call me saturday morning around 10?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: i need parts for my 572 fl. can someone call me saturday around ten?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.96}',
     'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
@@ -5682,6 +5695,7 @@ export async function parseConversationStateWithLLM(args: {
     "- finance_docs: credit app/docs/lien holder/binder/e-sign flow.",
     "- inventory_watch: watch/notify me when available language.",
     "- service_request / parts_request / apparel_request: department handoff intents.",
+    "- hiring_manager: customer asks about local dealership hiring, job openings, applying for a job, employment, or the hiring manager at this dealership.",
     "- corporate_misroute: customer clearly intends Harley-Davidson Motor Company or another dealership/corporate process (not this dealership workflow).",
     "- scheduling: appointment timing/day/time selection.",
     "- pricing: pricing/payment/apr/down/term questions.",
@@ -5695,6 +5709,8 @@ export async function parseConversationStateWithLLM(args: {
     "- internship_or_careers: internship/careers with HDMC corporate.",
     "- international_support: non-US or country-level corporate support requests.",
     "- IMPORTANT: If the customer asks normal dealership sales/service questions (inventory, pricing, test ride, finance, warranty on this bike), do NOT use corporate_misroute.",
+    "- IMPORTANT: If the customer asks who handles hiring at this dealership, use state_intent=hiring_manager, not corporate_misroute.",
+    "- IMPORTANT: PreQual, prequalified amount, credit app, financing, approval, and HDFS/COA messages are finance_docs, never hiring_manager.",
     "- For corporate-misroute messages, set explicit_request=true even when phrased as a statement (for example: 'just letting you know about another dealership experience').",
     "",
     "Department intent rules:",
@@ -5750,7 +5766,7 @@ export async function parseConversationStateWithLLM(args: {
       textLower
     );
   const partsCue =
-    /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/.test(
+    /\b(parts? department|parts? counter|parts? desk|parts?\s+order|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,28}\bparts?)\b/.test(
       textLower
     ) ||
     (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(textLower) &&
@@ -5761,9 +5777,18 @@ export async function parseConversationStateWithLLM(args: {
     /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
       textLower
     );
+  const financeCue =
+    /\b(prequal|pre[-\s]?qualified|credit app|credit application|finance application|approval|hdfs|coa|lien|binder|e-?sign)\b/.test(
+      textLower
+    );
+  const hiringCue =
+    /\b(hiring manager|hiring|job openings?|jobs?|careers?|career opportunity|employment|apply for (?:a )?(?:job|position)|application for employment|resume)\b/.test(
+      textLower
+    );
   const explicitServiceRequest = serviceCue && hasRequestSignal;
   const explicitPartsRequest = partsCue && hasRequestSignal;
   const explicitApparelRequest = apparelCue && hasRequestSignal;
+  const explicitHiringRequest = hiringCue && !financeCue && hasRequestSignal;
 
   const stateRaw = String(parsed.state_intent ?? "").toLowerCase();
   let stateIntent: ConversationStateParse["stateIntent"] =
@@ -5772,6 +5797,7 @@ export async function parseConversationStateWithLLM(args: {
     stateRaw === "service_request" ||
     stateRaw === "parts_request" ||
     stateRaw === "apparel_request" ||
+    stateRaw === "hiring_manager" ||
     stateRaw === "corporate_misroute" ||
     stateRaw === "scheduling" ||
     stateRaw === "pricing" ||
@@ -5795,7 +5821,8 @@ export async function parseConversationStateWithLLM(args: {
     handoffRaw === "credit_app" ||
     handoffRaw === "service_request" ||
     handoffRaw === "parts_request" ||
-    handoffRaw === "apparel_request"
+    handoffRaw === "apparel_request" ||
+    handoffRaw === "hiring_manager_inquiry"
       ? handoffRaw
       : "none";
   if (departmentIntent === "service" && !explicitServiceRequest) {
@@ -5816,6 +5843,9 @@ export async function parseConversationStateWithLLM(args: {
   if (manualHandoffReason === "apparel_request" && !explicitApparelRequest) {
     manualHandoffReason = "none";
   }
+  if (manualHandoffReason === "hiring_manager_inquiry" && !explicitHiringRequest) {
+    manualHandoffReason = "none";
+  }
   if (stateIntent === "service_request" && !explicitServiceRequest) {
     stateIntent = "general";
   }
@@ -5824,6 +5854,18 @@ export async function parseConversationStateWithLLM(args: {
   }
   if (stateIntent === "apparel_request" && !explicitApparelRequest) {
     stateIntent = "general";
+  }
+  if (stateIntent === "hiring_manager" && !explicitHiringRequest) {
+    stateIntent = financeCue ? "finance_docs" : "general";
+  }
+  if (stateIntent === "general" || stateIntent === "none") {
+    if (departmentIntent === "service" && explicitServiceRequest) {
+      stateIntent = "service_request";
+    } else if (departmentIntent === "parts" && explicitPartsRequest) {
+      stateIntent = "parts_request";
+    } else if (departmentIntent === "apparel" && explicitApparelRequest) {
+      stateIntent = "apparel_request";
+    }
   }
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)

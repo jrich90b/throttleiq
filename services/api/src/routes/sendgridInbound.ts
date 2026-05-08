@@ -52,12 +52,17 @@ import {
   parseRoutingDecisionWithLLM,
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
+  parseConversationStateWithLLM,
   parseJourneyIntentWithLLM,
   parseInventoryStatusWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
-import type { InventoryStatusParse, VehicleFactQuestionParse } from "../domain/llmDraft.js";
+import type {
+  ConversationStateParse,
+  InventoryStatusParse,
+  VehicleFactQuestionParse
+} from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
 import { getSchedulerConfig, getPreferredSalespeople } from "../domain/schedulerConfig.js";
 import { getAuthedCalendarClient, insertEvent, queryFreeBusy } from "../domain/googleCalendar.js";
@@ -100,6 +105,20 @@ import {
   shouldSuppressInitialInventoryPhotoAppend,
   shouldTreatAdfAsWalkInContext
 } from "../domain/workflowRegressionGuards.js";
+
+function isAdfConversationStateParserAccepted(parsed: ConversationStateParse | null): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_CONVERSATION_STATE_CONFIDENCE_MIN ?? 0.74);
+  if (!Number.isFinite(confidence) || confidence < min) return false;
+  return (
+    parsed.stateIntent !== "none" ||
+    parsed.departmentIntent !== "none" ||
+    parsed.manualHandoffReason !== "none" ||
+    parsed.clearInventoryWatchPending ||
+    parsed.clearPricingNeedModel
+  );
+}
 
 function base64UrlDecode(input: string): string | null {
   try {
@@ -3517,6 +3536,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmJourneyIntent,
     llmInventoryEntities,
     llmSemanticSlots,
+    llmConversationState,
     llmResponseControl,
     llmRoutingDecision,
     llmFaqTopic,
@@ -3560,6 +3580,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         inventoryWatch: conv.inventoryWatch,
         inventoryWatchPending: conv.inventoryWatchPending,
         dialogState: String(conv.dialogState?.name ?? "")
+      })
+    ),
+    safeParser("conversation_state", () =>
+      parseConversationStateWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead,
+        followUp: conv.followUp ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        inventoryWatchPending: conv.inventoryWatchPending ?? null
       })
     ),
     safeParser("response_control", () =>
@@ -3646,9 +3676,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const semanticSlotsConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
   const semanticSlotsAccepted = !!llmSemanticSlots && semanticSlotsConfidence >= semanticSlotsConfidenceMin;
   const semanticDepartmentIntent = semanticSlotsAccepted ? llmSemanticSlots?.departmentIntent ?? "none" : "none";
-  const semanticPartsIntent = semanticDepartmentIntent === "parts";
-  const semanticApparelIntent = semanticDepartmentIntent === "apparel";
-  const semanticServiceIntent = semanticDepartmentIntent === "service";
+  const conversationStateAccepted = isAdfConversationStateParserAccepted(llmConversationState);
+  const conversationStateDepartmentIntent = conversationStateAccepted
+    ? llmConversationState?.departmentIntent ?? "none"
+    : "none";
+  const conversationStatePartsIntent =
+    conversationStateDepartmentIntent === "parts" ||
+    (conversationStateAccepted && llmConversationState?.stateIntent === "parts_request");
+  const conversationStateApparelIntent =
+    conversationStateDepartmentIntent === "apparel" ||
+    (conversationStateAccepted && llmConversationState?.stateIntent === "apparel_request");
+  const conversationStateServiceIntent =
+    conversationStateDepartmentIntent === "service" ||
+    (conversationStateAccepted && llmConversationState?.stateIntent === "service_request");
+  const conversationStateHiringManagerIntent =
+    conversationStateAccepted &&
+    llmConversationState?.stateIntent === "hiring_manager" &&
+    llmConversationState.explicitRequest === true;
+  const semanticPartsIntent = semanticDepartmentIntent === "parts" || conversationStatePartsIntent;
+  const semanticApparelIntent = semanticDepartmentIntent === "apparel" || conversationStateApparelIntent;
+  const semanticServiceIntent = semanticDepartmentIntent === "service" || conversationStateServiceIntent;
   const pricingInquiryIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "pricing" &&
@@ -3861,7 +3908,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     forcedTestRide,
     jumpStartExperienceLead,
     routingParserAccepted: routingParserDecision.accepted,
-    routingParserIntentOverride
+    routingParserIntentOverride,
+    conversationStateAccepted,
+    conversationStateIntent: llmConversationState?.stateIntent ?? null,
+    conversationStateDepartmentIntent
   });
   setConversationClassification(conv, {
     bucket: inferredBucket,
@@ -4545,17 +4595,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const hiringManagerInquiry =
     isInitialAdf &&
     !isCreditLead &&
-    isHiringManagerInquiryText(
-      [
-        effectiveInquiry,
-        inquiryRaw,
-        lead.inquiry,
-        lead.comment,
-        event.body
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
+    (conversationStateHiringManagerIntent ||
+      isHiringManagerInquiryText(
+        [
+          effectiveInquiry,
+          inquiryRaw,
+          lead.inquiry,
+          lead.comment,
+          event.body
+        ]
+          .filter(Boolean)
+          .join("\n")
+      ));
   if (hiringManagerInquiry) {
     let ack = buildHiringManagerInquiryReply();
     ack = await applyInitialAdfPrefix(ack);

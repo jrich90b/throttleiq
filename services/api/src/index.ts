@@ -203,6 +203,7 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
+  buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   extractInventoryStockIdMention,
@@ -12124,9 +12125,13 @@ function applyConversationStateReducer(
   conv: any,
   parsed: ConversationStateParse | null,
   text: string
-): { departmentIntent: DepartmentRole | null; corporateMisrouteTopic: CorporateMisrouteTopic | null } {
+): {
+  departmentIntent: DepartmentRole | null;
+  corporateMisrouteTopic: CorporateMisrouteTopic | null;
+  hiringManagerIntent: boolean;
+} {
   if (!isConversationStateParserAccepted(parsed)) {
-    return { departmentIntent: null, corporateMisrouteTopic: null };
+    return { departmentIntent: null, corporateMisrouteTopic: null, hiringManagerIntent: false };
   }
   const state = parsed as ConversationStateParse;
   const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
@@ -12152,6 +12157,10 @@ function applyConversationStateReducer(
     !!departmentManualHandoffReason &&
     hasExplicitDepartmentRequestFromText(normalizedText, departmentManualHandoffReason) &&
     departmentManualHandoffReason === departmentIntentAccepted;
+  const hiringManagerIntentAccepted =
+    state.stateIntent === "hiring_manager" &&
+    state.explicitRequest &&
+    state.manualHandoffReason === "hiring_manager_inquiry";
   if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
     conv.inventoryWatchPending = undefined;
     if (getDialogState(conv) === "inventory_watch_prompted") {
@@ -12169,6 +12178,9 @@ function applyConversationStateReducer(
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
   }
+  if (hiringManagerIntentAccepted) {
+    setDialogState(conv, "callback_handoff");
+  }
   if (
     state.stateIntent === "scheduling" &&
     state.explicitRequest &&
@@ -12178,9 +12190,9 @@ function applyConversationStateReducer(
     setFollowUpMode(conv, "manual_handoff", "manual_appointment");
   }
   if (departmentIntentAccepted) {
-    return { departmentIntent: departmentIntentAccepted, corporateMisrouteTopic };
+    return { departmentIntent: departmentIntentAccepted, corporateMisrouteTopic, hiringManagerIntent: false };
   }
-  return { departmentIntent: null, corporateMisrouteTopic };
+  return { departmentIntent: null, corporateMisrouteTopic, hiringManagerIntent: hiringManagerIntentAccepted };
 }
 
 function resolveValidatedDepartmentIntent(args: {
@@ -12203,7 +12215,7 @@ function resolveValidatedDepartmentIntent(args: {
 function hasConversationStateParserHint(text: string, conv: any): boolean {
   const lower = String(text ?? "").toLowerCase();
   return (
-    /\b(parts?|service|apparel|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment|harley[- ]?davidson motor company|corporate|headquarters|hq|other dealership|another dealership|internship|careers?|invest(or|ing|or relations)|international|outside the us)\b/i.test(
+    /\b(parts?|service|apparel|hiring manager|hiring|job openings?|jobs?|employment|apply for (?:a )?(?:job|position)|resume|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment|harley[- ]?davidson motor company|corporate|headquarters|hq|other dealership|another dealership|internship|careers?|invest(or|ing|or relations)|international|outside the us)\b/i.test(
       lower
     ) ||
     !!conv.inventoryWatchPending ||
@@ -12220,7 +12232,11 @@ async function parseAndReduceConversationState(args: {
   debugLabel: "live" | "regen" | "manual";
 }): Promise<{
   parsed: ConversationStateParse | null;
-  reduced: { departmentIntent: DepartmentRole | null; corporateMisrouteTopic: CorporateMisrouteTopic | null };
+  reduced: {
+    departmentIntent: DepartmentRole | null;
+    corporateMisrouteTopic: CorporateMisrouteTopic | null;
+    hiringManagerIntent: boolean;
+  };
 }> {
   const { conv, text, history, shortAck, debugLabel } = args;
   const parserEligible =
@@ -33055,6 +33071,35 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       text: event.body ?? ""
     });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
+  if (regenReducedConversationState.hiringManagerIntent) {
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "general_inquiry",
+      cta: "contact_us"
+    };
+    const hasHiringTodo = listOpenTodos().some(
+      t =>
+        t.convId === conv.id &&
+        t.reason === "other" &&
+        /hiring manager inquiry/i.test(String(t.summary ?? ""))
+    );
+    if (!hasHiringTodo) {
+      addTodo(
+        conv,
+        "other",
+        `Hiring manager inquiry: ${event.body ?? "Customer asked about hiring."}`,
+        event.providerMessageId
+      );
+    }
+    setFollowUpMode(conv, "manual_handoff", "hiring_manager_inquiry");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply = buildHiringManagerInquiryReply();
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   if (regenInboundDepartmentIntent === "parts" || regenInboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, regenInboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
@@ -35061,6 +35106,42 @@ if (authToken && signature) {
       text: event.body ?? ""
     });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
+  if (reducedConversationState.hiringManagerIntent) {
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "general_inquiry",
+      cta: "contact_us"
+    };
+    const hasHiringTodo = listOpenTodos().some(
+      t =>
+        t.convId === conv.id &&
+        t.reason === "other" &&
+        /hiring manager inquiry/i.test(String(t.summary ?? ""))
+    );
+    if (!hasHiringTodo) {
+      addTodo(
+        conv,
+        "other",
+        `Hiring manager inquiry: ${event.body ?? "Customer asked about hiring."}`,
+        event.providerMessageId
+      );
+    }
+    setFollowUpMode(conv, "manual_handoff", "hiring_manager_inquiry");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply = buildHiringManagerInquiryReply();
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
     const departmentTodoOwner = await resolveDepartmentTodoOwner(
