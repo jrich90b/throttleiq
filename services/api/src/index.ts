@@ -6635,6 +6635,61 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
   return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can send a short list of options that fit what you’re after, or keep an eye out and text you first when a match comes in.`;
 }
 
+async function buildRecentManualTestRideAvailabilityCadenceOverride(args: {
+  conv: any;
+  name: string;
+}): Promise<string | null> {
+  const conv = args.conv;
+  if (!conv) return null;
+  const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
+  if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
+  const isTestRideContext =
+    conv?.classification?.bucket === "test_ride" ||
+    conv?.classification?.cta === "schedule_test_ride" ||
+    isTestRideDialogState(getDialogState(conv));
+  if (!isTestRideContext) return null;
+
+  const recentOutbounds = [...(conv?.messages ?? [])]
+    .reverse()
+    .filter((m: any) => m?.direction === "out" && m?.provider !== "draft_ai" && String(m?.body ?? "").trim())
+    .slice(0, 12);
+  const source = recentOutbounds.find((m: any) => {
+    const body = String(m?.body ?? "");
+    const lower = body.toLowerCase();
+    const hasAvailability =
+      /\b(?:we|i)\s+(?:did\s+)?(?:just\s+)?(?:got|get|have)\b[\s\S]{0,100}\b(?:in[-\s]?stock|available)\b/.test(
+        lower
+      ) ||
+      /\bif\s+we\s+still\s+have\s+it\s+in\s+stock\b/.test(lower);
+    const hasRideContext = /\b(test\s+ride|take\s+(?:it|one)\s+out|take\s+a\s+ride|ready\s+to\s+ride)\b/.test(
+      lower
+    );
+    return hasAvailability && hasRideContext && !!findMentionedModel(body);
+  });
+  if (!source) return null;
+
+  const sourceBody = String(source.body ?? "");
+  const model = findMentionedModel(sourceBody);
+  if (!model || isUnknownCadenceModel(model)) return null;
+  const year = extractYearSingle(sourceBody);
+  const modelLabel = formatModelLabelForFollowUp(year ? String(year) : null, model);
+  const firstName = normalizeDisplayCase(args.name || "there");
+  const matches = await findInventoryMatches({
+    year: year ? String(year) : null,
+    model: canonicalizeWatchModelLabel(model)
+  });
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const status = classifyInventoryMatches(matches, holds, solds);
+  if (status.available.length > 0) {
+    return `Hey ${firstName}, just checking back on the ${modelLabel}. It looks like we still have one available for a test ride — if you want to ride it, text me what day works and I can line it up.`;
+  }
+  if (status.held.length > 0) {
+    return `Hey ${firstName}, quick update on the ${modelLabel}: it looks like it may be on hold right now. I can double-check it or help pick another lighter bike for a test ride.`;
+  }
+  return `Hey ${firstName}, quick update on the ${modelLabel}: I’m not seeing one available right now. I can help pick another lighter bike for a test ride or keep an eye out for one.`;
+}
+
 function getRecentVehicleMentionContext(conv: any): {
   model: string | null;
   year: string | null;
@@ -7689,6 +7744,16 @@ async function buildCadenceRegeneratedDraft(
   }
   if (heldInventoryOverride) {
     return { body: heldInventoryOverride };
+  }
+  const manualTestRideAvailabilityOverride =
+    !leadUnitAvailabilityOverride && !heldInventoryOverride
+      ? await buildRecentManualTestRideAvailabilityCadenceOverride({
+          conv,
+          name: firstName
+        })
+      : null;
+  if (manualTestRideAvailabilityOverride) {
+    return { body: manualTestRideAvailabilityOverride };
   }
 
   const engagedKind = cadence.kind === "engaged" || (!!(conv.engagement?.at || hasAgentContextForCadence));
@@ -20294,6 +20359,13 @@ async function processDueFollowUps() {
         conv,
         name: firstName
       });
+  const manualTestRideAvailabilityOverride =
+    !leadUnitAvailabilityOverride && !heldInventoryOverride
+      ? await buildRecentManualTestRideAvailabilityCadenceOverride({
+          conv,
+          name: firstName
+        })
+      : null;
   let message = FOLLOW_UP_MESSAGES[cadence.stepIndex] ?? FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
     let cadenceNoRepeatFallbacks: string[] = [];
     let mediaUrls: string[] | undefined;
@@ -20545,7 +20617,17 @@ async function processDueFollowUps() {
       message = heldInventoryOverride;
       mediaUrls = undefined;
     }
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && canUseWalkInComment) {
+    if (manualTestRideAvailabilityOverride) {
+      message = manualTestRideAvailabilityOverride;
+      cadenceNoRepeatFallbacks = [manualTestRideAvailabilityOverride];
+      mediaUrls = undefined;
+    }
+    if (
+      !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
+      !manualTestRideAvailabilityOverride &&
+      canUseWalkInComment
+    ) {
       message = buildWalkInCommentFollowUp({
         name: firstName,
         agent: agentName,
@@ -20562,6 +20644,7 @@ async function processDueFollowUps() {
     if (
       !leadUnitAvailabilityOverride &&
       !heldInventoryOverride &&
+      !manualTestRideAvailabilityOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -20571,7 +20654,13 @@ async function processDueFollowUps() {
       message = renderFollowUpTemplate(message, baseCtx);
     }
 
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && cadence.kind !== "long_term") {
+    if (
+      !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
+      !manualTestRideAvailabilityOverride &&
+      !isPostSale &&
+      cadence.kind !== "long_term"
+    ) {
       const promotionOverride = await buildEarlyCadencePromotionOverride({
         conv,
         name: firstName,
@@ -20585,6 +20674,7 @@ async function processDueFollowUps() {
     if (
       !leadUnitAvailabilityOverride &&
       !heldInventoryOverride &&
+      !manualTestRideAvailabilityOverride &&
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
@@ -20612,7 +20702,12 @@ async function processDueFollowUps() {
     }
 
     const allowProactiveSchedule = shouldAllowProactiveScheduleAsk(conv, now);
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && conv.followUpCadence?.scheduleMuted) {
+    if (
+      !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
+      !manualTestRideAvailabilityOverride &&
+      conv.followUpCadence?.scheduleMuted
+    ) {
       const baseCtx = {
         name: firstName,
         agent: agentName,
