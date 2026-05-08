@@ -60,6 +60,28 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "1"
   },
   {
+    id: "loose_pickup_window_active_delivery",
+    text: "Early afternoon ish, wife just has to be home to get kids off the bus",
+    history: [
+      { direction: "out", body: "Thanks for sending that over John, I will get rolling on everything. What time works for you today?" },
+      { direction: "in", body: "Loans finalized just need to send them insurance paperwork" }
+    ],
+    expectedIntent: "delivery_timing",
+    expectedTimingContains: "early afternoon"
+  },
+  {
+    id: "purchase_delivery_not_trade_after_trade_origin",
+    text: "1-2 o'clock ish",
+    history: [
+      { direction: "in", body: "trade-in appraisal request" },
+      { direction: "out", body: "Yes — the 2026 Street Glide is available. Let me know what day and time works for you to stop in!" },
+      { direction: "in", body: "Loans finalized just need to send them insurance paperwork" },
+      { direction: "out", body: "What time works for you today?" }
+    ],
+    expectedIntent: "delivery_timing",
+    expectedTimingContains: "1"
+  },
+  {
     id: "trade_appraisal_not_delivery",
     text: "Tuesday between 9:30 and 10:00 works for bringing my trade in",
     history: [

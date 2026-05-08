@@ -13822,6 +13822,10 @@ function formatPurchaseDeliveryArrivalWindow(text: string | null | undefined): s
 }
 
 function buildPurchaseDeliveryTimingReply(text: string | null | undefined): string {
+  const raw = String(text ?? "");
+  if (/\b(early|mid|late)\s+(morning|afternoon|evening)(?:\s*ish)?\b/i.test(raw)) {
+    return "Sounds good — just give me a heads up when you know what time you’ll be here, and I’ll make sure everything is lined up before you get here.";
+  }
   const arrival = formatPurchaseDeliveryArrivalWindow(text);
   return `Sounds good — ${arrival} works. I’ll make sure everything is lined up before you get here.`;
 }
@@ -13913,6 +13917,9 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
     );
   }
   setDialogState(args.conv, "purchase_delivery");
+  setFollowUpMode(args.conv, "manual_handoff", "purchase_delivery");
+  stopFollowUpCadence(args.conv, "purchase_delivery");
+  stopRelatedCadences(args.conv, "purchase_delivery", { setMode: "manual_handoff" });
   recordRouteOutcome(args.scope, "purchase_delivery_logistics", {
     convId: args.conv.id,
     leadKey: args.conv.leadKey,
@@ -32021,7 +32028,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
       (inbound as any)?.providerMessageId
     );
-    setDialogState(conv, "schedule_request");
+    setDialogState(conv, "purchase_delivery");
+    setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+    stopFollowUpCadence(conv, "purchase_delivery");
+    stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -39474,7 +39484,10 @@ if (authToken && signature) {
       `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
       event.providerMessageId
     );
-    setDialogState(conv, "schedule_request");
+    setDialogState(conv, "purchase_delivery");
+    setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+    stopFollowUpCadence(conv, "purchase_delivery");
+    stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
