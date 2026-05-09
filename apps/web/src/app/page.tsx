@@ -946,6 +946,30 @@ type ConversationDetail = {
       condition?: string;
     };
   };
+  originalLead?: {
+    leadRef?: string;
+    source?: string;
+    name?: string;
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string;
+    preferredContactMethod?: "email" | "sms" | "phone";
+    emailOptIn?: boolean;
+    smsOptIn?: boolean;
+    phoneOptIn?: boolean;
+    vehicle?: {
+      stockId?: string;
+      vin?: string;
+      year?: string;
+      make?: string;
+      model?: string;
+      trim?: string;
+      color?: string;
+      description?: string;
+      condition?: string;
+    };
+  };
   appointment?: {
     status?: string;
     whenText?: string;
@@ -16462,8 +16486,10 @@ export default function Home() {
                   [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ")) ? (
                   <div className="text-lg text-gray-700 mt-1">{selectedConv.leadKey}</div>
                 ) : null}
-                {selectedConv.lead?.leadRef ? (
-                  <div className="text-xs text-gray-500 mt-1">Lead Ref: {selectedConv.lead.leadRef}</div>
+                {(selectedConv.originalLead?.leadRef || selectedConv.lead?.leadRef) ? (
+                  <div className="text-xs text-gray-500 mt-1">
+                    Lead Ref: {selectedConv.originalLead?.leadRef || selectedConv.lead?.leadRef}
+                  </div>
                 ) : null}
                 {headerAppointment ? (
                   <div className="text-xs text-gray-600 mt-1">

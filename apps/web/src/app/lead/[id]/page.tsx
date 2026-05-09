@@ -35,6 +35,7 @@ type Conversation = {
   id: string;
   leadKey: string;
   lead?: LeadProfile;
+  originalLead?: LeadProfile;
   lastInbound?: { body?: string };
 };
 
@@ -84,15 +85,16 @@ export default function LeadDetailsPage() {
   }, [params.id]);
 
   const lead = conv?.lead ?? {};
+  const displayLead = conv?.originalLead ?? lead;
   const leadName = useMemo(() => {
-    const raw = lead?.name?.trim() ?? "";
-    const first = lead?.firstName ?? "";
-    const last = lead?.lastName ?? "";
+    const raw = displayLead?.name?.trim() ?? lead?.name?.trim() ?? "";
+    const first = displayLead?.firstName ?? lead?.firstName ?? "";
+    const last = displayLead?.lastName ?? lead?.lastName ?? "";
     return raw || [first, last].filter(Boolean).join(" ").trim() || conv?.leadKey || "Lead";
-  }, [lead?.name, lead?.firstName, lead?.lastName, conv?.leadKey]);
+  }, [displayLead?.name, displayLead?.firstName, displayLead?.lastName, lead?.name, lead?.firstName, lead?.lastName, conv?.leadKey]);
 
   const inquiryText = lead?.inquiry ?? "";
-  const vehicle = lead?.vehicle ?? {};
+  const vehicle = displayLead?.vehicle ?? lead?.vehicle ?? {};
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -116,12 +118,14 @@ export default function LeadDetailsPage() {
             <div className="border rounded-lg bg-white p-4">
               <div className="text-sm font-medium text-gray-800">Contact</div>
               <div className="mt-2 space-y-1 text-sm text-gray-700">
-                <div>Email: {lead?.email ?? "—"}</div>
-                <div>Phone: {lead?.phone ?? "—"}</div>
-                <div>Street: {lead?.street ?? "—"}</div>
+                <div>Email: {displayLead?.email ?? lead?.email ?? "—"}</div>
+                <div>Phone: {displayLead?.phone ?? lead?.phone ?? "—"}</div>
+                <div>Street: {displayLead?.street ?? lead?.street ?? "—"}</div>
                 <div>
                   City/State/ZIP:{" "}
-                  {[lead?.city, lead?.region, lead?.postal].filter(Boolean).join(", ") || "—"}
+                  {[displayLead?.city ?? lead?.city, displayLead?.region ?? lead?.region, displayLead?.postal ?? lead?.postal]
+                    .filter(Boolean)
+                    .join(", ") || "—"}
                 </div>
               </div>
             </div>
@@ -129,10 +133,17 @@ export default function LeadDetailsPage() {
             <div className="border rounded-lg bg-white p-4">
               <div className="text-sm font-medium text-gray-800">Lead Info</div>
               <div className="mt-2 space-y-1 text-sm text-gray-700">
-                <div>Source: {lead?.source ?? "—"}</div>
-                <div>Lead Ref: {lead?.leadRef ?? "—"}</div>
-                <div>Purchase Timeframe: {lead?.purchaseTimeframe ?? "—"}</div>
-                <div>Motorcycle License: {lead?.hasMotoLicense == null ? "—" : lead?.hasMotoLicense ? "Yes" : "No"}</div>
+                <div>Source: {displayLead?.source ?? lead?.source ?? "—"}</div>
+                <div>Lead Ref: {displayLead?.leadRef ?? lead?.leadRef ?? "—"}</div>
+                <div>Purchase Timeframe: {displayLead?.purchaseTimeframe ?? lead?.purchaseTimeframe ?? "—"}</div>
+                <div>
+                  Motorcycle License:{" "}
+                  {(displayLead?.hasMotoLicense ?? lead?.hasMotoLicense) == null
+                    ? "—"
+                    : (displayLead?.hasMotoLicense ?? lead?.hasMotoLicense)
+                      ? "Yes"
+                      : "No"}
+                </div>
               </div>
             </div>
 

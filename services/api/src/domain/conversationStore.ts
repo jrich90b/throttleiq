@@ -526,6 +526,7 @@ export type Conversation = {
     source?: "manual_takeover";
   };
   lead?: LeadProfile;
+  originalLead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
   dealerRide?: {
@@ -1789,6 +1790,30 @@ export function setMessageFeedback(
 
 export function mergeConversationLead(conv: Conversation, patch: Partial<LeadProfile>): Conversation {
   const existingLead = conv.lead ?? {};
+  const cloneLeadProfile = (lead: Partial<LeadProfile> | undefined): LeadProfile | undefined => {
+    if (!lead) return undefined;
+    return {
+      ...lead,
+      vehicle: lead.vehicle ? { ...lead.vehicle } : undefined,
+      tradeVehicle: lead.tradeVehicle ? { ...lead.tradeVehicle } : undefined
+    };
+  };
+  const hasLeadProfileData = (lead: Partial<LeadProfile> | undefined): boolean => {
+    if (!lead) return false;
+    const {
+      vehicle,
+      tradeVehicle,
+      ...rest
+    } = lead;
+    const hasTopLevel = Object.values(rest).some(v => v != null && String(v).trim?.() !== "");
+    const hasVehicle = !!vehicle && Object.values(vehicle).some(v => v != null && String(v).trim?.() !== "");
+    const hasTradeVehicle =
+      !!tradeVehicle && Object.values(tradeVehicle).some(v => v != null && String(v).trim?.() !== "");
+    return hasTopLevel || hasVehicle || hasTradeVehicle;
+  };
+  if (!conv.originalLead && hasLeadProfileData(existingLead)) {
+    conv.originalLead = cloneLeadProfile(existingLead);
+  }
   const mergedVehicle = patch.vehicle
     ? { ...(existingLead.vehicle ?? {}), ...patch.vehicle }
     : existingLead.vehicle;
