@@ -10844,6 +10844,7 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
   }
 
   const reply = buildAppointmentOutcomeRescheduleReply({
+    conv,
     bookingUrl: rescheduleUrl,
     primaryStatus
   });
@@ -10873,19 +10874,36 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
 }
 
 function buildAppointmentOutcomeRescheduleReply(args: {
+  conv?: any;
   bookingUrl?: string | null;
   primaryStatus?: AppointmentPrimaryOutcome | null;
 }): string {
+  const conv = args.conv;
   const bookingUrl = String(args.bookingUrl ?? "").trim();
   const primaryStatus = args.primaryStatus ?? null;
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  const appointmentType = String(
+    conv?.appointment?.appointmentType ?? conv?.scheduler?.pendingSlot?.appointmentType ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  const appointmentLabel =
+    appointmentType === "test_ride"
+      ? "for the test ride"
+      : appointmentType === "trade_appraisal"
+        ? "for the appraisal"
+        : appointmentType === "inventory_visit"
+          ? "for the appointment"
+          : "for the appointment";
+  const intro = firstName ? `Hey ${firstName}, ` : "";
   if (primaryStatus === "cancelled") {
     return bookingUrl
-      ? `No problem — we can get you rescheduled. Reschedule here: ${bookingUrl}`
-      : "No problem — we can get you rescheduled. What day and time works best?";
+      ? `${intro}I see you were not able to make it in ${appointmentLabel}. No worries — let’s get you back on the schedule. Reschedule here: ${bookingUrl}`
+      : `${intro}I see you were not able to make it in ${appointmentLabel}. No worries — what day and time works best?`;
   }
   return bookingUrl
-    ? `No worries — let’s get you back on the schedule. Reschedule here: ${bookingUrl}`
-    : "No worries — let’s get you back on the schedule. What day and time works best?";
+    ? `${intro}I see you were not able to make it in ${appointmentLabel}. No worries — let’s get you back on the schedule. Reschedule here: ${bookingUrl}`
+    : `${intro}I see you were not able to make it in ${appointmentLabel}. No worries — what day and time works best?`;
 }
 
 type OutcomeUnitInput = {
@@ -32174,6 +32192,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !regenRequestedDayTime &&
     !isRegenerateInboundActionableForRouting(event.body ?? "")
       ? buildAppointmentOutcomeRescheduleReply({
+          conv,
           bookingUrl: buildBookingUrlForLead(dealerProfile?.bookingUrl, conv),
           primaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null
         })
