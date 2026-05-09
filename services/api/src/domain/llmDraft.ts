@@ -1874,6 +1874,7 @@ export type ConversationStateParse = {
   stateIntent:
     | "finance_docs"
     | "inventory_watch"
+    | "used_low_mileage_watch"
     | "service_request"
     | "parts_request"
     | "apparel_request"
@@ -1896,6 +1897,7 @@ export type ConversationStateParse = {
   clearPricingNeedModel: boolean;
   manualHandoffReason:
     | "credit_app"
+    | "used_low_mileage_watch"
     | "service_request"
     | "parts_request"
     | "apparel_request"
@@ -2717,6 +2719,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: [
         "finance_docs",
         "inventory_watch",
+        "used_low_mileage_watch",
         "service_request",
         "parts_request",
         "apparel_request",
@@ -2750,6 +2753,7 @@ const CONVERSATION_STATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "string",
       enum: [
         "credit_app",
+        "used_low_mileage_watch",
         "service_request",
         "parts_request",
         "apparel_request",
@@ -5907,6 +5911,8 @@ export async function parseConversationStateWithLLM(args: {
     'input: "Customer: can service call me saturday morning around 10?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: i need parts for my 572 fl. can someone call me saturday around ten?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.96}',
     'input: "Customer: keep an eye out for a black road glide and text me when one lands" output: {"state_intent":"inventory_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.96}',
+    'input: "Customer: I do not want to waste your time. I am looking for a low mileage used one, not new." output: {"state_intent":"used_low_mileage_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"used_low_mileage_watch","confidence":0.96}',
+    'input: "Customer: I want a pre owned breakout with low miles, not a new one." output: {"state_intent":"used_low_mileage_watch","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"used_low_mileage_watch","confidence":0.97}',
     'input: "Customer: tuesday around 4 works for me" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.94}',
     'input: "Customer: saturday morning works. does 9:30 work for you?" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: how about a tri glide instead. it has to be saturday morning." output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
@@ -5925,6 +5931,7 @@ export async function parseConversationStateWithLLM(args: {
     "Choose a primary state intent:",
     "- finance_docs: credit app/docs/lien holder/binder/e-sign flow.",
     "- inventory_watch: watch/notify me when available language.",
+    "- used_low_mileage_watch: customer is narrowing the search to a used/pre-owned low-mileage bike and explicitly does not want a new one; this should trigger a salesperson handoff to refine or create a watch.",
     "- service_request / parts_request / apparel_request: department handoff intents.",
     "- hiring_manager: customer asks about local dealership hiring, job openings, applying for a job, employment, or the hiring manager at this dealership.",
     "- corporate_misroute: customer clearly intends Harley-Davidson Motor Company or another dealership/corporate process (not this dealership workflow).",
@@ -5952,6 +5959,7 @@ export async function parseConversationStateWithLLM(args: {
     "- clear_pricing_need_model=true when message is not asking pricing anymore and is clearly another workflow.",
     "",
     "manual_handoff_reason rules:",
+    "- used_low_mileage_watch when customer is narrowing to a low-mileage used/pre-owned bike and needs salesperson watch refinement or follow-up.",
     "- credit_app for finance docs flow, department-specific values for department flows, else none.",
     "",
     `Current context: ${JSON.stringify({
@@ -6012,6 +6020,9 @@ export async function parseConversationStateWithLLM(args: {
     /\b(prequal|pre[-\s]?qualified|credit app|credit application|finance application|approval|hdfs|coa|lien|binder|e-?sign)\b/.test(
       textLower
     );
+  const lowMileageUsedCue =
+    /\blow\s*mileage\b|\blow\s*miles\b/.test(textLower) &&
+    (/\bused\b|\bpre[-\s]?owned\b/.test(textLower) || /\bnot\s+new\b/.test(textLower));
   const hiringCue =
     /\b(hiring manager|hiring|job openings?|jobs?|careers?|career opportunity|employment|apply for (?:a )?(?:job|position)|application for employment|resume)\b/.test(
       textLower
@@ -6025,6 +6036,7 @@ export async function parseConversationStateWithLLM(args: {
   let stateIntent: ConversationStateParse["stateIntent"] =
     stateRaw === "finance_docs" ||
     stateRaw === "inventory_watch" ||
+    stateRaw === "used_low_mileage_watch" ||
     stateRaw === "service_request" ||
     stateRaw === "parts_request" ||
     stateRaw === "apparel_request" ||
@@ -6050,6 +6062,7 @@ export async function parseConversationStateWithLLM(args: {
   const handoffRaw = String(parsed.manual_handoff_reason ?? "").toLowerCase();
   let manualHandoffReason: ConversationStateParse["manualHandoffReason"] =
     handoffRaw === "credit_app" ||
+    handoffRaw === "used_low_mileage_watch" ||
     handoffRaw === "service_request" ||
     handoffRaw === "parts_request" ||
     handoffRaw === "apparel_request" ||
@@ -6077,6 +6090,9 @@ export async function parseConversationStateWithLLM(args: {
   if (manualHandoffReason === "hiring_manager_inquiry" && !explicitHiringRequest) {
     manualHandoffReason = "none";
   }
+  if (manualHandoffReason === "used_low_mileage_watch" && !lowMileageUsedCue) {
+    manualHandoffReason = "none";
+  }
   if (stateIntent === "service_request" && !explicitServiceRequest) {
     stateIntent = "general";
   }
@@ -6089,6 +6105,9 @@ export async function parseConversationStateWithLLM(args: {
   if (stateIntent === "hiring_manager" && !explicitHiringRequest) {
     stateIntent = financeCue ? "finance_docs" : "general";
   }
+  if (stateIntent === "used_low_mileage_watch" && !lowMileageUsedCue) {
+    stateIntent = "general";
+  }
   if (stateIntent === "general" || stateIntent === "none") {
     if (departmentIntent === "service" && explicitServiceRequest) {
       stateIntent = "service_request";
@@ -6096,6 +6115,9 @@ export async function parseConversationStateWithLLM(args: {
       stateIntent = "parts_request";
     } else if (departmentIntent === "apparel" && explicitApparelRequest) {
       stateIntent = "apparel_request";
+    } else if (lowMileageUsedCue) {
+      stateIntent = "used_low_mileage_watch";
+      manualHandoffReason = "used_low_mileage_watch";
     }
   }
   const confidence =

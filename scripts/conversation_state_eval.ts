@@ -4,6 +4,7 @@ import { parseConversationStateWithLLM } from "../services/api/src/domain/llmDra
 type StateIntent =
   | "finance_docs"
   | "inventory_watch"
+  | "used_low_mileage_watch"
   | "service_request"
   | "parts_request"
   | "apparel_request"
@@ -70,6 +71,14 @@ const fixtures: Fixture[] = [
     expectedState: "service_request",
     expectedDepartment: "service",
     expectedHandoff: "service_request",
+    expectedExplicit: true
+  },
+  {
+    id: "used_low_mileage_watch_1",
+    text: "I don't want to waste your time as I'm looking for a low mileage used one, not new.",
+    expectedState: "used_low_mileage_watch",
+    expectedDepartment: "none",
+    expectedHandoff: "used_low_mileage_watch",
     expectedExplicit: true
   },
   {

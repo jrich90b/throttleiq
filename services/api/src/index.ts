@@ -4808,7 +4808,15 @@ function applyLowMileageUsedPreferenceDecision(args: {
   scope: "live" | "regen";
 }): string {
   const { reply, todoSummary } = buildLowMileageUsedPreferenceReply(args.conv);
-  addTodo(args.conv, "other", todoSummary, args.providerMessageId ?? undefined);
+  const hasExistingTodo = listOpenTodos().some(
+    todo =>
+      todo.convId === args.conv.id &&
+      todo.reason === "other" &&
+      String(todo.summary ?? "").trim() === todoSummary
+  );
+  if (!hasExistingTodo) {
+    addTodo(args.conv, "other", todoSummary, args.providerMessageId ?? undefined);
+  }
   setFollowUpMode(args.conv, "manual_handoff", "used_low_mileage_watch");
   stopFollowUpCadence(args.conv, "manual_handoff");
   stopRelatedCadences(args.conv, "used_low_mileage_watch", { setMode: "manual_handoff" });
@@ -4817,6 +4825,14 @@ function applyLowMileageUsedPreferenceDecision(args: {
     leadKey: args.conv.leadKey
   });
   return reply;
+}
+
+function hasUsedLowMileageWatchIntent(parsed: ConversationStateParse | null): boolean {
+  return (
+    isConversationStateParserAccepted(parsed) &&
+    parsed?.stateIntent === "used_low_mileage_watch" &&
+    parsed?.explicitRequest === true
+  );
 }
 
 function formatVehicleFactMoney(value: unknown): string | null {
@@ -12421,9 +12437,15 @@ function applyConversationStateReducer(
   departmentIntent: DepartmentRole | null;
   corporateMisrouteTopic: CorporateMisrouteTopic | null;
   hiringManagerIntent: boolean;
+  usedLowMileageWatchIntent: boolean;
 } {
   if (!isConversationStateParserAccepted(parsed)) {
-    return { departmentIntent: null, corporateMisrouteTopic: null, hiringManagerIntent: false };
+    return {
+      departmentIntent: null,
+      corporateMisrouteTopic: null,
+      hiringManagerIntent: false,
+      usedLowMileageWatchIntent: false
+    };
   }
   const state = parsed as ConversationStateParse;
   const corporateMisrouteTopic = getCorporateMisrouteTopic(state);
@@ -12453,6 +12475,10 @@ function applyConversationStateReducer(
     state.stateIntent === "hiring_manager" &&
     state.explicitRequest &&
     state.manualHandoffReason === "hiring_manager_inquiry";
+  const usedLowMileageWatchIntentAccepted =
+    state.stateIntent === "used_low_mileage_watch" &&
+    state.explicitRequest &&
+    state.manualHandoffReason === "used_low_mileage_watch";
   if (state.clearInventoryWatchPending || state.departmentIntent !== "none") {
     conv.inventoryWatchPending = undefined;
     if (getDialogState(conv) === "inventory_watch_prompted") {
@@ -12482,9 +12508,19 @@ function applyConversationStateReducer(
     setFollowUpMode(conv, "manual_handoff", "manual_appointment");
   }
   if (departmentIntentAccepted) {
-    return { departmentIntent: departmentIntentAccepted, corporateMisrouteTopic, hiringManagerIntent: false };
+    return {
+      departmentIntent: departmentIntentAccepted,
+      corporateMisrouteTopic,
+      hiringManagerIntent: false,
+      usedLowMileageWatchIntent: false
+    };
   }
-  return { departmentIntent: null, corporateMisrouteTopic, hiringManagerIntent: hiringManagerIntentAccepted };
+  return {
+    departmentIntent: null,
+    corporateMisrouteTopic,
+    hiringManagerIntent: hiringManagerIntentAccepted,
+    usedLowMileageWatchIntent: usedLowMileageWatchIntentAccepted
+  };
 }
 
 function resolveValidatedDepartmentIntent(args: {
@@ -12507,7 +12543,7 @@ function resolveValidatedDepartmentIntent(args: {
 function hasConversationStateParserHint(text: string, conv: any): boolean {
   const lower = String(text ?? "").toLowerCase();
   return (
-    /\b(parts?|service|apparel|hiring manager|hiring|job openings?|jobs?|employment|apply for (?:a )?(?:job|position)|resume|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment|harley[- ]?davidson motor company|corporate|headquarters|hq|other dealership|another dealership|internship|careers?|invest(or|ing|or relations)|international|outside the us)\b/i.test(
+    /\b(parts?|service|apparel|hiring manager|hiring|job openings?|jobs?|employment|apply for (?:a )?(?:job|position)|resume|credit app|credit application|lien|binder|e-?sign|watch|notify|keep an eye out|price|payment|apr|term|schedule|appointment|harley[- ]?davidson motor company|corporate|headquarters|hq|other dealership|another dealership|internship|careers?|invest(or|ing|or relations)|international|outside the us|low mileage|low miles|pre[-\s]?owned|not new)\b/i.test(
       lower
     ) ||
     !!conv.inventoryWatchPending ||
@@ -12528,6 +12564,7 @@ async function parseAndReduceConversationState(args: {
     departmentIntent: DepartmentRole | null;
     corporateMisrouteTopic: CorporateMisrouteTopic | null;
     hiringManagerIntent: boolean;
+    usedLowMileageWatchIntent: boolean;
   };
 }> {
   const { conv, text, history, shortAck, debugLabel } = args;
@@ -32257,19 +32294,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && isLowMileageUsedPreferenceText(event.body ?? "")) {
-    const reply = applyLowMileageUsedPreferenceDecision({
-      conv,
-      text: event.body ?? "",
-      providerMessageId: (inbound as any)?.providerMessageId,
-      scope: "regen"
-    });
-    if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
-    }
-    return respondWithSmsRegeneratedDraft(reply);
-  }
-
   const regenVehicleFactInbound =
     event.provider === "twilio" && hasVehicleFactQuestionParserHint(event.body ?? "")
       ? pickLatestVehicleFactInboundForRegenerate(conv, inbound)
@@ -33991,6 +34015,32 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(regenReply);
     }
     return respondWithSmsRegeneratedDraft(regenReply);
+  }
+
+  if (regenReducedConversationState.usedLowMileageWatchIntent) {
+    const reply = applyLowMileageUsedPreferenceDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      scope: "regen"
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
+  if (event.provider === "twilio" && isLowMileageUsedPreferenceText(event.body ?? "")) {
+    const reply = applyLowMileageUsedPreferenceDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      scope: "regen"
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   if (isServiceRecordsRequest(event.body)) {
@@ -35997,7 +36047,31 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && isLowMileageUsedPreferenceText(semanticInboundText)) {
+  if (event.provider === "twilio" && reducedConversationState.usedLowMileageWatchIntent) {
+    const reply = applyLowMileageUsedPreferenceDecision({
+      conv,
+      text: semanticInboundText,
+      providerMessageId: event.providerMessageId,
+      scope: "live"
+    });
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (
+    event.provider === "twilio" &&
+    !hasUsedLowMileageWatchIntent(conversationStateParse) &&
+    isLowMileageUsedPreferenceText(semanticInboundText)
+  ) {
     const reply = applyLowMileageUsedPreferenceDecision({
       conv,
       text: semanticInboundText,
