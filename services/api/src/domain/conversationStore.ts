@@ -396,6 +396,7 @@ export type InventoryWatchPending = {
   model?: string;
   year?: number;
   color?: string;
+  trim?: string;
   minPrice?: number;
   maxPrice?: number;
   monthlyBudget?: number;

@@ -15337,7 +15337,9 @@ async function deriveContextNoteWatches(
     const budget = hasExplicitBudget ? textBudget : mergeWatchBudgetPreference(textBudget, semanticBudget);
     const segmentCondition = normalizeWatchCondition(segment);
     const condition = segmentCondition ?? semanticCondition ?? normalizeWatchCondition(conv?.lead?.vehicle?.condition);
+    const finish = extractFinishToken(segment);
     const color = sanitizeColorPhrase(extractColorMention(segment)) ?? semanticColor;
+    const trim = formatWatchTrimLabel(finish);
 
     for (const model of modelSet) {
       const watch: InventoryWatch = {
@@ -15350,6 +15352,7 @@ async function deriveContextNoteWatches(
         make: String(conv?.lead?.vehicle?.make ?? "").trim() || "Harley-Davidson",
         condition: condition ?? undefined,
         color: color ?? undefined,
+        trim,
         minPrice: budget.minPrice,
         maxPrice: budget.maxPrice,
         monthlyBudget: budget.monthlyBudget,
@@ -15361,7 +15364,7 @@ async function deriveContextNoteWatches(
         note: "context_note_watch"
       };
       if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-      else if (watch.year && watch.color) watch.exactness = "exact";
+      else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
       else if (watch.year) watch.exactness = "year_model";
       watches.push(watch);
     }
@@ -16928,7 +16931,7 @@ async function seedInventoryWatchPendingFromReply(
   if (!model) return;
   const year = extractYearSingle(inboundText.toLowerCase());
   const finish = extractFinishToken(inboundText.toLowerCase());
-  const color = combineWatchColorAndFinish(
+  const watchPreference = splitWatchColorAndTrim(
     extractColorToken(inboundText.toLowerCase()),
     finish
   );
@@ -16936,7 +16939,8 @@ async function seedInventoryWatchPendingFromReply(
   conv.inventoryWatchPending = {
     model,
     year: year ?? undefined,
-    color,
+    color: watchPreference.color,
+    trim: watchPreference.trim,
     minPrice: budget.minPrice,
     maxPrice: budget.maxPrice,
     monthlyBudget: budget.monthlyBudget,
@@ -19090,8 +19094,28 @@ function extractColorToken(text: string): string | null {
 function extractFinishToken(text: string): "chrome" | "black" | null {
   const t = text.toLowerCase();
   if (/\bchrome(\s+(trim|finish))?\b/.test(t)) return "chrome";
-  if (/\bblack(ed)?\s*(out|trim|finish)\b/.test(t) || /\bblack\s+trim\b/.test(t)) return "black";
+  if (
+    /\bblack(ed)?\s*(out|trim|finish)\b/.test(t) ||
+    /\bblack\s+trim\b/.test(t) ||
+    /\bblack\s*(?:-| )on\s*(?:-| )black\b/.test(t)
+  ) {
+    return "black";
+  }
   return null;
+}
+
+function formatWatchTrimLabel(finish: "chrome" | "black" | null | undefined): string | undefined {
+  return finish ? `${finish} trim` : undefined;
+}
+
+function splitWatchColorAndTrim(
+  color: string | null | undefined,
+  finish: "chrome" | "black" | null | undefined
+): { color?: string; trim?: string } {
+  return {
+    color: sanitizeColorPhrase(color) ?? undefined,
+    trim: formatWatchTrimLabel(finish)
+  };
 }
 
 function combineWatchColorAndFinish(
@@ -19186,7 +19210,7 @@ function parseInventoryWatchPreference(
 
   const finish = extractFinishToken(t);
   const baseColor = anyColor ? undefined : sanitizeColorPhrase(extractColorToken(t) ?? pending.color);
-  const color = combineWatchColorAndFinish(baseColor, finish);
+  const trim = anyColor ? undefined : formatWatchTrimLabel(finish ?? extractTrimToken(pending.trim ?? pending.color));
   const budgetFromText = extractWatchBudgetPreference(text);
   const range = extractYearRange(t);
   let yearMin: number | undefined;
@@ -19209,7 +19233,8 @@ function parseInventoryWatchPreference(
 
   const watch: InventoryWatch = {
     model: pending.model,
-    color,
+    color: baseColor,
+    trim,
     year,
     yearMin,
     yearMax,
@@ -19235,7 +19260,7 @@ function parseInventoryWatchPreference(
   }
 
   if (watch.yearMin && watch.yearMax) watch.exactness = "model_range";
-  else if (watch.year && watch.color) watch.exactness = "exact";
+  else if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
   else if (watch.year) watch.exactness = "year_model";
 
   const hasYearInfo = !!watch.year || (!!watch.yearMin && !!watch.yearMax);
@@ -19289,7 +19314,15 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
       ? `${watch.yearMin}-${watch.yearMax} `
       : "";
   const cleanColor = sanitizeColorPhrase(watch.color) ?? watch.color;
-  const colorText = cleanColor ? ` in ${cleanColor}` : "";
+  const trimText = watch.trim ? formatColorLabel(watch.trim) : null;
+  const colorText =
+    cleanColor && trimText
+      ? ` in ${cleanColor} with ${trimText}`
+      : cleanColor
+        ? ` in ${cleanColor}`
+        : trimText
+          ? ` with ${trimText}`
+          : "";
   const budgetText = buildWatchBudgetText(watch);
   return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText}${budgetText} and text you as soon as one comes in.`;
 }
@@ -35380,7 +35413,7 @@ if (authToken && signature) {
                 : humanModeInventoryEntityAccepted
                   ? (humanModeInventoryEntityParse?.year ?? extractYearSingle(humanModeTextLower) ?? leadYear)
                   : extractYearSingle(humanModeTextLower) ?? leadYear,
-            color: combineWatchColorAndFinish(
+            ...splitWatchColorAndTrim(
               llmWatchColor ??
                 (humanModeInventoryEntityAccepted
                   ? (humanModeInventoryEntityParse?.color ?? extractColorToken(humanModeTextLower))
@@ -35403,6 +35436,7 @@ if (authToken && signature) {
               model: pending.model,
               year: pending.year,
               color: watchColor,
+              trim: pending.trim,
               minPrice: pending.minPrice,
               maxPrice: pending.maxPrice,
               monthlyBudget: pending.monthlyBudget,
@@ -35412,7 +35446,7 @@ if (authToken && signature) {
               status: "active",
               createdAt: nowIsoValue
             };
-            if (watch.year && watch.color) watch.exactness = "exact";
+            if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
             else if (watch.year) watch.exactness = "year_model";
             pref = { action: "set", watch };
           }
@@ -37583,7 +37617,7 @@ if (authToken && signature) {
           Number.isFinite(llmWatchYear) && llmWatchYear > 0
             ? llmWatchYear
             : inventoryEntityYearHint ?? extractYearSingle(textLower) ?? leadYear,
-        color: combineWatchColorAndFinish(
+        ...splitWatchColorAndTrim(
           llmWatchColor ??
             inventoryEntityColorHint ??
             extractColorToken(textLower) ??
@@ -37609,6 +37643,7 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          trim: pending.trim,
           minPrice: pending.minPrice,
           maxPrice: pending.maxPrice,
           monthlyBudget: pending.monthlyBudget,
@@ -37618,7 +37653,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && watch.color) watch.exactness = "exact";
+        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
         else if (watch.year) watch.exactness = "year_model";
         pref = { action: "set", watch };
       }
@@ -40407,12 +40442,13 @@ if (authToken && signature) {
             const yearFromText = extractYearSingle(textLower);
             if (yearFromText) pending.year = yearFromText;
           }
-          if (!pending.color) {
-            const colorFromText = combineWatchColorAndFinish(
+          if (!pending.color || !pending.trim) {
+            const colorFromText = splitWatchColorAndTrim(
               extractColorToken(textLower),
               extractFinishToken(textLower)
             );
-            if (colorFromText) pending.color = colorFromText;
+            if (colorFromText.color) pending.color = colorFromText.color;
+            if (colorFromText.trim) pending.trim = colorFromText.trim;
           }
           const budgetSeed = resolveWatchBudgetPreferenceForConversation(conv, String(event.body ?? ""));
           if (pending.minPrice == null && budgetSeed.minPrice != null) pending.minPrice = budgetSeed.minPrice;
@@ -40437,6 +40473,7 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          trim: pending.trim,
           minPrice: pending.minPrice,
           maxPrice: pending.maxPrice,
           monthlyBudget: pending.monthlyBudget,
@@ -40446,7 +40483,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && watch.color) watch.exactness = "exact";
+        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
         else if (watch.year) watch.exactness = "year_model";
         pref = { action: "set", watch };
       }
@@ -41317,7 +41354,7 @@ if (authToken && signature) {
       const pending: InventoryWatchPending = {
         model: resolvedModel,
         year: inventoryEntityYearHint ?? extractYearSingle(textLower) ?? semanticWatchYear ?? leadYear,
-        color: combineWatchColorAndFinish(
+        ...splitWatchColorAndTrim(
           inventoryEntityColorHint ??
             extractColorToken(textLower) ??
             semanticWatchColor ??
@@ -41343,6 +41380,7 @@ if (authToken && signature) {
           model: pending.model,
           year: pending.year,
           color: watchColor,
+          trim: pending.trim,
           minPrice: pending.minPrice,
           maxPrice: pending.maxPrice,
           monthlyBudget: pending.monthlyBudget,
@@ -41352,7 +41390,7 @@ if (authToken && signature) {
           status: "active",
           createdAt: new Date().toISOString()
         };
-        if (watch.year && watch.color) watch.exactness = "exact";
+        if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
         else if (watch.year) watch.exactness = "year_model";
         pref = { action: "set", watch };
       }
@@ -42203,7 +42241,7 @@ if (authToken && signature) {
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
-            color: combineWatchColorAndFinish(color, finishFromText),
+            ...splitWatchColorAndTrim(color, finishFromText),
             minPrice: watchBudgetSeed.minPrice,
             maxPrice: watchBudgetSeed.maxPrice,
             monthlyBudget: watchBudgetSeed.monthlyBudget,
@@ -42302,7 +42340,7 @@ if (authToken && signature) {
           conv.inventoryWatchPending = {
             model: model ?? undefined,
             year: year ? Number(year) : undefined,
-            color: combineWatchColorAndFinish(color, finishFromText),
+            ...splitWatchColorAndTrim(color, finishFromText),
             minPrice: watchBudgetSeed.minPrice,
             maxPrice: watchBudgetSeed.maxPrice,
             monthlyBudget: watchBudgetSeed.monthlyBudget,
