@@ -3851,7 +3851,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const forcedPrivatePartyMarketplaceSell =
     /marketplace/i.test(leadSourceLower) &&
     /(contact\s*a\s*dealer|used\s*mkt|dealer\s*portal|h-?d1)/i.test(leadSourceLower) &&
-    !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower);
+    !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower) &&
+    (/(sell|selling|sell\s+my\s+bike|sell\s+your\s+(?:bike|vehicle)|value\s+my\s+trade|trade[-\s]?in)/i.test(
+      leadSourceLower
+    ) ||
+      /\b(?:sell|selling|value\s+my\s+trade|trade[-\s]?in|trade\s+value|appraisal)\b/i.test(inquiryText));
   if (forcedTradeIn) {
     inferredBucket = "trade_in_sell";
     inferredCta = "value_my_trade";
@@ -5591,8 +5595,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const isMarketplaceContactDealerSource =
     /marketplace/i.test(leadSourceLower) &&
     /(contact\s*a\s*dealer|used\s*mkt|dealer\s*portal|h-?d1)/i.test(leadSourceLower);
-  const isPrivatePartyMarketplaceSellLead =
-    isMarketplaceContactDealerSource && !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower);
+  const marketplaceSellSignal =
+    !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower) &&
+    (/(sell|selling|sell\s+my\s+bike|sell\s+your\s+(?:bike|vehicle)|value\s+my\s+trade|trade[-\s]?in)/i.test(
+      leadSourceLower
+    ) ||
+      /\b(?:sell|selling|value\s+my\s+trade|trade[-\s]?in|trade\s+value|appraisal)\b/i.test(inquiryText));
+  const isPrivatePartyMarketplaceSellLead = isMarketplaceContactDealerSource && marketplaceSellSignal;
   const isMarketplaceSell =
     /marketplace/i.test(leadSourceLower) &&
     (/sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);

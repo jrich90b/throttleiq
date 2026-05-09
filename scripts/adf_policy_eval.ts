@@ -3,6 +3,7 @@ import {
   isPriceOnlyInquiryText,
   shouldRouteRoom58PriceHandoff
 } from "../services/api/src/domain/adfPolicy.ts";
+import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 type Case = {
   id: string;
@@ -72,6 +73,14 @@ const cases: Case[] = [
         hasInventoryIdentifiers: false,
         pricingInquiryIntent: false
       })
+  },
+  {
+    id: "marketplace_contact_dealer_routes_inventory_interest",
+    expected: true,
+    run: () => {
+      const rule = resolveLeadRule("Marketplace - Contact a Dealer");
+      return rule.bucket === "inventory_interest" && rule.cta === "check_availability";
+    }
   }
 ];
 

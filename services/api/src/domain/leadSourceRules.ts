@@ -299,6 +299,16 @@ const RULES: LeadRule[] = [
     }
   },
   {
+    name: "marketplace_contact_dealer",
+    match: {
+      equals: ["Marketplace - Contact a Dealer"],
+      prefix: ["Marketplace - Contact a Dealer"]
+    },
+    bucket: "inventory_interest",
+    cta: "check_availability",
+    tone: "short_conversational"
+  },
+  {
     name: "room58_sell_vehicle",
     match: {
       equals: ["Room58 - Sell your vehicle"],
