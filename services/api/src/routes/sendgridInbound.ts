@@ -702,6 +702,16 @@ function normalizeModelForMatch(modelRaw: string, makeRaw?: string | null): stri
   return filtered || base;
 }
 
+function normalizeInventoryColorForMatch(colorRaw?: string | null): string {
+  return String(colorRaw ?? "")
+    .toLowerCase()
+    .replace(/\b[A-Z]?\d{1,4}-\d{2}\b/gi, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(stock|vin|trim|color)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function isGenericLeadModel(modelText: string): boolean {
   const t = modelText.trim().toLowerCase();
   return !t || /^(other|full line|full lineup|null)$/.test(t);
@@ -1241,7 +1251,7 @@ async function getLeadInventoryMatchStatus(
     const modelNorm = normalizeModelForMatch(modelText, conv?.lead?.vehicle?.make ?? "");
     if (!modelNorm) return "unknown";
     const yearText = String(conv?.lead?.vehicle?.year ?? "").trim();
-    const matches = items.filter(item => {
+    let matches = items.filter(item => {
       const itemModel = String(item.model ?? "").trim();
       if (!itemModel) return false;
       const itemModelNorm = normalizeModelForMatch(itemModel, item.make ?? "");
@@ -1250,6 +1260,17 @@ async function getLeadInventoryMatchStatus(
       if (yearText) return String(item.year ?? "").trim() === yearText;
       return true;
     });
+    const leadColorNorm = normalizeInventoryColorForMatch(conv?.lead?.vehicle?.color ?? "");
+    if (leadColorNorm) {
+      const colorMatches = matches.filter(item => {
+        const itemColorNorm = normalizeInventoryColorForMatch(item.color ?? "");
+        return (
+          itemColorNorm &&
+          (itemColorNorm.includes(leadColorNorm) || leadColorNorm.includes(itemColorNorm))
+        );
+      });
+      if (colorMatches.length) matches = colorMatches;
+    }
     if (!matches.length) return "not_found";
     let hasHold = false;
     let hasSold = false;
@@ -1266,8 +1287,9 @@ async function getLeadInventoryMatchStatus(
       return true;
     });
     if (hasAvailable) return "in_stock";
-    if (hasHold) return "on_hold";
-    if (hasSold) return "sold";
+    // Without a stock/VIN match, a model/year match can point at a different unit.
+    // Avoid customer-facing "that unit is on hold/sold" claims from broad matches.
+    if (hasHold || hasSold) return "unknown";
     return "not_found";
   } catch {
     return "unknown";
@@ -2629,7 +2651,7 @@ async function resolveInitialAdfInventoryStatus(
     normalizeVehicleModel(target?.model ?? leadVehicle.model ?? leadVehicle.description ?? "", leadVehicle.make ?? null) ??
     "";
   const targetYear = target?.year ? String(target.year) : String(leadVehicle.year ?? "").trim();
-  const targetColor = String(target?.color ?? "").trim().toLowerCase();
+  const targetColor = normalizeInventoryColorForMatch(target?.color ?? leadVehicle.color ?? "");
   const fallbackLabel = inventoryStatusTargetLabel(conv, parsed);
 
   if (!stockId && !targetModel) {
@@ -2669,9 +2691,10 @@ async function resolveInitialAdfInventoryStatus(
       matches = await findInventoryMatches({ year: null, model: targetModel });
     }
     if (targetColor) {
-      const colorFiltered = matches.filter(item =>
-        String(item.color ?? "").toLowerCase().includes(targetColor)
-      );
+      const colorFiltered = matches.filter(item => {
+        const itemColor = normalizeInventoryColorForMatch(item.color ?? "");
+        return itemColor && (itemColor.includes(targetColor) || targetColor.includes(itemColor));
+      });
       if (colorFiltered.length) matches = colorFiltered;
     }
     if (!matches.length) return { status: "not_found", label: fallbackLabel };
@@ -2692,6 +2715,7 @@ async function resolveInitialAdfInventoryStatus(
       }
       return { status: "in_stock", label: preferredLabel };
     }
+    if (!stockId && (sawHold || sawSold)) return { status: "unknown", label: preferredLabel };
     if (sawHold) return { status: "on_hold", label: preferredLabel };
     if (sawSold) return { status: "sold", label: preferredLabel };
     return { status: "not_found", label: preferredLabel };
