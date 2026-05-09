@@ -10840,12 +10840,10 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
     const profile = await getDealerProfileHot();
     const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
     if (bookingUrl) {
-      const branded = buildBrandedShortLinkForConv(conv, bookingUrl, profile);
-      if (branded) {
-        rescheduleUrl = branded;
-      } else if (!isLeadriderHost(bookingUrl)) {
-        rescheduleUrl = bookingUrl;
-      }
+      // Use the actual booking URL for reschedule replies. The branded /r/:token
+      // redirect route is only guaranteed on the LeadRider API host, not on the
+      // dealer website domain.
+      rescheduleUrl = bookingUrl;
     }
   } catch {
     rescheduleUrl = null;
@@ -36417,12 +36415,10 @@ if (authToken && signature) {
           const profile = await getDealerProfileHot();
           const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
           if (bookingUrl) {
-            const branded = buildBrandedShortLinkForConv(conv, bookingUrl, profile);
-            if (branded) {
-              rescheduleUrl = branded;
-            } else if (!isLeadriderHost(bookingUrl)) {
-              rescheduleUrl = bookingUrl;
-            }
+            // Use the actual booking URL for customer reschedule replies.
+            // Branded short links require dealer-site /r/* proxying, which is
+            // not guaranteed.
+            rescheduleUrl = bookingUrl;
           }
         } catch {
           rescheduleUrl = null;
