@@ -23690,6 +23690,18 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
     const byId = new Map(users.map(u => [u.id, u]));
     const cal = await getAuthedCalendarClient();
     const events: any[] = [];
+    const conversations = getAllConversations();
+    const normalizeLookupKey = (value: unknown) => String(value ?? "").trim().toLowerCase();
+    const convByAppointmentEventId = new Map<string, any>();
+    const convByLeadKey = new Map<string, any>();
+    for (const conv of conversations) {
+      const eventId = normalizeLookupKey(conv?.appointment?.bookedEventId);
+      if (eventId) convByAppointmentEventId.set(eventId, conv);
+      for (const key of [conv?.id, conv?.leadKey, conv?.lead?.phone]) {
+        const normalized = normalizeLookupKey(key);
+        if (normalized && !convByLeadKey.has(normalized)) convByLeadKey.set(normalized, conv);
+      }
+    }
 
     const parseDescription = (desc?: string | null) => {
       const out: Record<string, string> = {};
@@ -23734,6 +23746,14 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
         const lastName = descFields.lastName ?? "";
         const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
         const customerName = parseCustomerName(ev?.summary ?? "");
+        const eventIdKey = normalizeLookupKey(ev?.id);
+        let convForEvent = eventIdKey ? convByAppointmentEventId.get(eventIdKey) : null;
+        if (!convForEvent && descFields.leadKey) {
+          const candidate = convByLeadKey.get(normalizeLookupKey(descFields.leadKey));
+          const candidateEventId = normalizeLookupKey(candidate?.appointment?.bookedEventId);
+          if (!candidateEventId || candidateEventId === eventIdKey) convForEvent = candidate;
+        }
+        const appointmentOutcome = convForEvent?.appointment?.staffNotify?.outcome ?? null;
         events.push({
           id: ev.id,
           calendarId: user.calendarId,
@@ -23746,6 +23766,10 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
           salespersonName: user.name || user.email || user.id,
           fullName,
           customerName,
+          appointmentOutcomeStatus: String(appointmentOutcome?.status ?? "").trim() || null,
+          appointmentOutcomePrimaryStatus: String(appointmentOutcome?.primaryStatus ?? "").trim() || null,
+          appointmentOutcomeSecondaryStatus: String(appointmentOutcome?.secondaryStatus ?? "").trim() || null,
+          appointmentOutcomeNote: String(appointmentOutcome?.note ?? "").trim() || null,
           ...descFields
         });
       }

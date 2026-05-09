@@ -8112,6 +8112,25 @@ export default function Home() {
     return events;
   };
   const getEventTitle = (ev: any) => ev?.fullName || ev?.customerName || ev?.summary || "Busy";
+  const getEventOutcomeLabel = (ev: any) =>
+    formatAppointmentOutcomeDisplay({
+      primary: ev?.appointmentOutcomePrimaryStatus ?? null,
+      secondary: ev?.appointmentOutcomeSecondaryStatus ?? null,
+      legacy: ev?.appointmentOutcomeStatus ?? null
+    });
+  const renderEventTitleWithOutcome = (ev: any, titleClassName = "font-medium") => {
+    const outcomeLabel = getEventOutcomeLabel(ev);
+    return (
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className={`${titleClassName} truncate`}>{getEventTitle(ev)}</span>
+        {outcomeLabel ? (
+          <span className="shrink-0 rounded-full border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-orange-700">
+            {outcomeLabel}
+          </span>
+        ) : null}
+      </div>
+    );
+  };
   const getEventStyle = (ev: any) => {
     if (ev?.readOnly) return undefined;
     const c = getCalendarColor(ev?.colorId);
@@ -13732,7 +13751,7 @@ export default function Home() {
                                         setCalendarEdit({ ...ev, calendarId: ev.calendarId });
                                       }}
                                     >
-                                      <div className="font-medium">{getEventTitle(ev)}</div>
+                                      {renderEventTitleWithOutcome(ev)}
                                       {timeLabel ? <div className="mt-1 opacity-80">{timeLabel}</div> : null}
                                       {detail ? <div className="mt-1 opacity-70 line-clamp-2">{detail}</div> : null}
                                     </button>
@@ -13864,7 +13883,7 @@ export default function Home() {
                                     >
                                       <div className="flex items-start justify-between gap-2">
                                         <div className="min-w-0">
-                                          <div className="font-medium truncate">{getEventTitle(ev)}</div>
+                                          {renderEventTitleWithOutcome(ev)}
                                           <div className="text-[10px] opacity-80 mt-1">{timeLabel}</div>
                                           {detail ? (
                                             <div className="text-[10px] opacity-70 mt-1 truncate">
@@ -13977,7 +13996,7 @@ export default function Home() {
                                                 setCalendarEdit({ ...ev, calendarId: ev.calendarId });
                                               }}
                                             >
-                                              <div className="font-medium">{getEventTitle(ev)}</div>
+                                              {renderEventTitleWithOutcome(ev)}
                                               <div className="opacity-80 mt-0.5">{getEventTimeRangeLabel(ev, tz)}</div>
                                             </div>
                                           ))
@@ -14022,7 +14041,7 @@ export default function Home() {
                                                 setCalendarEdit({ ...ev, calendarId: ev.calendarId });
                                               }}
                                             >
-                                              {getEventTitle(ev)}
+                                              {renderEventTitleWithOutcome(ev)}
                                             </div>
                                           ))
                                         )}
