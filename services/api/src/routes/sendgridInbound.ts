@@ -1318,6 +1318,34 @@ function buildInitialAvailabilityLine(
   return `I’m not seeing a ${modelLabel} in stock right now. If you want to stop in, I can go over options, or I can keep an eye out for you.`;
 }
 
+function buildDealerLeadAppPostRideReply(args: {
+  conv: any;
+  dealerName?: string | null;
+  agentName?: string | null;
+  inventoryStatus: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+}): string {
+  const firstName = normalizeDisplayCase(args.conv?.lead?.firstName);
+  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+  const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+  const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const modelLabel =
+    formatModelLabel(
+      args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
+      args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
+    ) || "that bike";
+  const intro = `${greeting}This is ${agentName} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  if (args.inventoryStatus === "in_stock") {
+    return `${intro} We do have a ${modelLabel} in stock right now. If you want to come back in and compare it or go over options, just text me anytime.`;
+  }
+  if (args.inventoryStatus === "on_hold") {
+    return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
+  }
+  if (args.inventoryStatus === "sold") {
+    return `${intro} That ${modelLabel} is no longer available, but I can help you compare similar options if you want.`;
+  }
+  return `${intro} I can check current availability and go over options with you anytime.`;
+}
+
 function isTestRideSeason(profile: any, now: Date): boolean {
   const enabled = profile?.followUp?.testRideEnabled;
   if (enabled === false) return false;
@@ -4400,6 +4428,62 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       note: "dealer_ride_no_purchase_manual_handoff",
       draft: shouldIncludeDraft ? customerAck : undefined,
       staffSms
+    });
+  }
+  if (isDealerRideEventLead) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Alexandra";
+    const inventoryStatus = await getLeadInventoryMatchStatus(conv);
+    const customerAck = buildDealerLeadAppPostRideReply({
+      conv,
+      dealerName,
+      agentName,
+      inventoryStatus
+    });
+    const shouldSendCustomerReply = shouldSendDealerLeadCustomerReply(conv, event);
+    let mediaUrls: string[] | undefined;
+    if (inventoryStatus === "in_stock") {
+      const mediaPick = await pickLeadInventoryMedia(conv);
+      mediaUrls = mediaPick?.mediaUrls;
+    }
+    if (shouldSendCustomerReply.allow) {
+      const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
+      if (preferredMethod === "email") {
+        setEmailDraft(conv, customerAck);
+      } else if (preferredMethod === "phone") {
+        addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
+      } else {
+        appendOutbound(
+          conv,
+          "dealership",
+          leadKey,
+          customerAck,
+          "draft_ai",
+          undefined,
+          mediaUrls
+        );
+      }
+    } else {
+      addTodo(
+        conv,
+        "note",
+        `Suppressed repeat Dealer Lead App customer auto-reply (${shouldSendCustomerReply.reason}).`
+      );
+    }
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "dealer_ride_post_test_ride_ack",
+      draft: shouldSendCustomerReply.allow ? customerAck : undefined
     });
   }
 

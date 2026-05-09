@@ -8457,6 +8457,110 @@ function formatModelLabel(year?: string | null, model?: string | null): string {
   return `${yr}${clean}`.trim();
 }
 
+async function getLeadInventoryMatchStatusForDealerLeadApp(
+  conv: any
+): Promise<"in_stock" | "on_hold" | "sold" | "not_found" | "unknown"> {
+  try {
+    const modelRaw =
+      conv?.lead?.vehicle?.model ??
+      conv?.lead?.vehicle?.description ??
+      conv?.lead?.vehicleDescription ??
+      "";
+    const modelText = String(modelRaw ?? "").trim();
+    if (isGenericAvailabilityModelLabel(modelText)) return "unknown";
+    const items = await getInventoryFeedHot();
+    if (!items.length) return "unknown";
+    const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+    const getStoredStatus = (stockId?: string | null, vin?: string | null): "on_hold" | "sold" | null => {
+      const soldKey = normalizeInventorySoldKey(stockId, vin);
+      if (soldKey && solds?.[soldKey]) return "sold";
+      const holdKey = normalizeInventoryHoldKey(stockId, vin);
+      if (holdKey && holds?.[holdKey]) return "on_hold";
+      return null;
+    };
+    const leadStock = String(conv?.lead?.vehicle?.stockId ?? "").trim().toLowerCase();
+    const leadVin = String(conv?.lead?.vehicle?.vin ?? "").trim().toLowerCase();
+    if (leadStock || leadVin) {
+      const storedStatus = getStoredStatus(leadStock, leadVin);
+      if (storedStatus) return storedStatus;
+      const direct = items.find(
+        i =>
+          (leadStock && String(i.stockId ?? "").trim().toLowerCase() === leadStock) ||
+          (leadVin && String(i.vin ?? "").trim().toLowerCase() === leadVin)
+      );
+      if (direct) {
+        const directStored = getStoredStatus(direct.stockId, direct.vin);
+        if (directStored) return directStored;
+        return "in_stock";
+      }
+      if (leadStock) {
+        try {
+          const resolved = await resolveInventoryUrlByStock(leadStock);
+          if (resolved.ok) {
+            const resolvedStored = getStoredStatus(leadStock, leadVin);
+            if (resolvedStored) return resolvedStored;
+            return "in_stock";
+          }
+        } catch {}
+      }
+      return "not_found";
+    }
+    const yearText = String(conv?.lead?.vehicle?.year ?? "").trim() || null;
+    const modelForLookup = canonicalizeWatchModelLabel(modelText);
+    if (!modelForLookup) return "unknown";
+    let matches = await findInventoryMatches({ year: yearText, model: modelForLookup });
+    const leadColor = String(conv?.lead?.vehicle?.color ?? "").trim();
+    if (leadColor) {
+      const leadTrim = extractTrimToken(conv?.lead?.vehicle?.trim ?? null);
+      const colorMatches = matches.filter(i => {
+        const itemColor = i.color ?? "";
+        if (colorMatchesExact(itemColor, leadColor, leadTrim) || colorMatchesAlias(itemColor, leadColor, leadTrim)) {
+          return true;
+        }
+        const itemNorm = normalizeColorBase(itemColor, !!leadTrim);
+        const leadNorm = normalizeColorBase(leadColor, !!leadTrim);
+        return !!itemNorm && !!leadNorm && (itemNorm.includes(leadNorm) || leadNorm.includes(itemNorm));
+      });
+      if (colorMatches.length) matches = colorMatches;
+    }
+    if (!matches.length) return "not_found";
+    const status = classifyInventoryMatches(matches, holds, solds);
+    if (status.available.length) return "in_stock";
+    if (status.held.length || status.sold.length) return "unknown";
+    return "not_found";
+  } catch {
+    return "unknown";
+  }
+}
+
+function buildDealerLeadAppPostRideReply(args: {
+  conv: any;
+  dealerName?: string | null;
+  agentName?: string | null;
+  inventoryStatus: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+}): string {
+  const firstName = normalizeDisplayCase(args.conv?.lead?.firstName);
+  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+  const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+  const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const modelLabel =
+    formatModelLabel(
+      args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
+      args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
+    ) || "that bike";
+  const intro = `${greeting}This is ${agentName} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  if (args.inventoryStatus === "in_stock") {
+    return `${intro} We do have a ${modelLabel} in stock right now. If you want to come back in and compare it or go over options, just text me anytime.`;
+  }
+  if (args.inventoryStatus === "on_hold") {
+    return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
+  }
+  if (args.inventoryStatus === "sold") {
+    return `${intro} That ${modelLabel} is no longer available, but I can help you compare similar options if you want.`;
+  }
+  return `${intro} I can check current availability and go over options with you anytime.`;
+}
+
 function isGenericMetaOfferModel(model?: string | null): boolean {
   const normalized = String(model ?? "")
     .toLowerCase()
@@ -32577,6 +32681,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       regenPreRouteDecision.note,
       regenPreRouteDecision.draft ?? DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT
     );
+  }
+  if (regenDealerRideEventLead) {
+    const inventoryStatus = await getLeadInventoryMatchStatusForDealerLeadApp(conv);
+    const reply = buildDealerLeadAppPostRideReply({
+      conv,
+      dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
+      agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+      inventoryStatus
+    });
+    recordRouteOutcome("regen", "dealer_ride_post_test_ride_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      inventoryStatus
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
   }
 
   const history = buildHistory(conv, 60);
