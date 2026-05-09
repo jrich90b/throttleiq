@@ -15306,21 +15306,35 @@ async function deriveContextNoteWatches(
 
   const watches: InventoryWatch[] = [];
   for (const segment of segmentsToUse) {
-    const models = findMentionedModels(segment)
-      .map(m => canonicalizeWatchModelLabel(m))
-      .filter((m): m is string => !!m);
-    const modelSet = new Set<string>(models);
+    const explicitModels = findMentionedModelCandidates(segment)
+      .map(candidate => canonicalizeWatchModelLabel(candidate.model))
+      .filter((m): m is string => !!m)
+      .filter((model, index, list) => list.indexOf(model) === index);
+    const fallbackExplicitModels =
+      explicitModels.length > 0
+        ? explicitModels
+        : findMentionedModels(segment)
+            .map(m => canonicalizeWatchModelLabel(m))
+            .filter((m): m is string => !!m)
+            .filter((model, index, list) => list.indexOf(model) === index);
+    const modelSet = new Set<string>(fallbackExplicitModels);
     if (/\b(?:flhtcutg|tri[-\s]+glide(?:\s+ultra)?|tri\s*glyc(?:eride|erides|erid(?:es)?))\b/i.test(segment)) {
       modelSet.add("Tri Glide");
     }
-    if (semanticModel) modelSet.add(semanticModel);
+    if (!modelSet.size && semanticModel) modelSet.add(semanticModel);
     const fallbackModel = canonicalizeWatchModelLabel(conv?.lead?.vehicle?.model);
     if (!modelSet.size && fallbackModel && parserRequestedWatch) modelSet.add(fallbackModel);
     if (!modelSet.size) continue;
 
-    const yearRange = extractYearRange(segment) ?? semanticYearRange;
-    const singleYear = !yearRange ? extractYearSingle(segment) : null;
-    const budget = mergeWatchBudgetPreference(extractWatchBudgetPreference(segment), semanticBudget);
+    const explicitYearRange = extractYearRange(segment);
+    const explicitSingleYear = !explicitYearRange ? extractYearSingle(segment) : null;
+    const textBudget = extractWatchBudgetPreference(segment);
+    const hasExplicitBudget = hasAnyWatchBudgetPreference(textBudget);
+    const yearRange = explicitYearRange ?? (!explicitSingleYear ? semanticYearRange : null);
+    const singleYear =
+      explicitSingleYear ??
+      (!explicitYearRange && Number.isFinite(semanticYear) && semanticYear > 1900 ? semanticYear : null);
+    const budget = hasExplicitBudget ? textBudget : mergeWatchBudgetPreference(textBudget, semanticBudget);
     const segmentCondition = normalizeWatchCondition(segment);
     const condition = segmentCondition ?? semanticCondition ?? normalizeWatchCondition(conv?.lead?.vehicle?.condition);
     const color = sanitizeColorPhrase(extractColorMention(segment)) ?? semanticColor;

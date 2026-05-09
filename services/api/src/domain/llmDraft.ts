@@ -1939,6 +1939,7 @@ function extractTimePhrase(text: string): string | null {
   if (!source) return null;
 
   const exact =
+    source.match(/\b(?:around|about|between|from)?\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|to|and|\/)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i)?.[0] ??
     source.match(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/i)?.[0] ??
     source.match(/\b\d{1,2}\s*(?:am|pm)\b/i)?.[0] ??
     null;
@@ -1958,7 +1959,8 @@ function inferTimeWindow(value: string | null): "exact" | "range" | "unknown" {
   if (!v) return "unknown";
   if (
     /\b(morning|afternoon|evening|tonight|noon|night)\b/.test(v) ||
-    /\b(after|before|around|between)\b/.test(v)
+    /\b(after|before|around|between)\b/.test(v) ||
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|to|and|\/)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/.test(v)
   ) {
     return "range";
   }
@@ -2921,6 +2923,7 @@ export async function parseBookingIntentWithLLM(args: {
     'input: "Customer: after 4 is best" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"after 4","time_window":"range"},"reference":"last_suggested","normalized_text":"after 4","confidence":0.91}',
     'input: "Customer: Thanks for info. And any appointments later this month same time." output: {"intent":"availability","explicit_request":true,"requested":{"day":"later this month","time_text":"same time","time_window":"range"},"reference":"last_suggested","normalized_text":"later this month same time","confidence":0.92}',
     'input: "Customer: can we move that to saturday morning?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"last_appointment","normalized_text":"saturday morning","confidence":0.94}',
+    'input: "Customer: hey! Could we do 9:30-10" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"9:30-10","time_window":"range"},"reference":"last_appointment","normalized_text":"9:30-10","confidence":0.94}',
     'input: "Customer: can you move me later than that time?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"later","time_window":"range"},"reference":"last_suggested","normalized_text":"later than last suggested","confidence":0.9}',
     'input: "Customer: what openings do you have friday?" output: {"intent":"availability","explicit_request":true,"requested":{"day":"friday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"friday","confidence":0.95}',
     'input: "Customer: Ooh that looks sharp! Friday morning, early afternoon, or anytime Saturday I can come out and take a look" output: {"intent":"schedule","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"friday morning or saturday any time","confidence":0.94}',
@@ -2987,6 +2990,13 @@ export async function parseBookingIntentWithLLM(args: {
     /\b(reschedule|re-?schedule|move (?:my appointment|it|me|that)|change (?:my appointment|the appointment|the time|it|that)|push (?:my appointment|it|that)|different time|another time)\b/i.test(
       messageText
     );
+  const existingAppointmentAdjustmentCue =
+    hasExistingAppointment &&
+    /\b(?:can|could|would)\s+we\s+do\b/i.test(messageText) &&
+    /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|to|and|\/)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i.test(messageText);
+  if (intent === "schedule" && existingAppointmentAdjustmentCue) {
+    intent = "reschedule";
+  }
   if (intent === "reschedule" && !hasExistingAppointment && !explicitRescheduleCue) {
     intent = "schedule";
   }
@@ -6499,6 +6509,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: text me if a 2021-2023 street glide in silver comes in between 15k and 20k" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":2021,"year_max":2023,"color":"silver","condition":"unknown","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: you got any street glides that are used right now? probably thirteen, fourteen maybe. if you wanna jot me down and keep me in mind that would be sweet." output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Looking for a pre owned street glide special or road glide special in the $14,000-$16,000 price range. Likes black on black." output: {"watch_action":"set_watch","watch":{"model":"Street Glide Special","year":"","year_min":0,"year_max":0,"color":"black","condition":"used","min_price":14000,"max_price":16000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
     'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
