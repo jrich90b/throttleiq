@@ -11224,9 +11224,27 @@ function getCallbackReminderLeadMinutes(): number {
   return Math.max(5, Math.min(24 * 60, Math.round(raw)));
 }
 
-function buildCallbackTodoSummary(timeHint?: string | null): string {
+function buildCallbackTodoSummary(timeHint?: string | null, focus?: string | null): string {
   const hint = String(timeHint ?? "").trim();
-  return hint ? `Call requested: ${hint}.` : "Call requested.";
+  const followUpFocus = trimTodoDetail(String(focus ?? "").trim(), 140);
+  if (hint && followUpFocus) return `Call requested: ${hint}. Follow-up: ${followUpFocus}.`;
+  if (hint) return `Call requested: ${hint}.`;
+  if (followUpFocus) return `Call requested. Follow-up: ${followUpFocus}.`;
+  return "Call requested.";
+}
+
+function extractCallbackTodoTimeHint(summary: string): string {
+  const text = String(summary ?? "").trim();
+  if (!text) return "";
+  const match = text.match(/^call requested:\s*(.+?)(?:\.\s*follow-up:|[.]?$)/i);
+  return String(match?.[1] ?? "").trim();
+}
+
+function extractCallbackTodoFocus(summary: string): string {
+  const text = String(summary ?? "").trim();
+  if (!text) return "";
+  const match = text.match(/\bfollow-up:\s*(.+?)[.]?$/i);
+  return trimTodoDetail(String(match?.[1] ?? "").trim(), 140);
 }
 
 function isCustomerReturningCallPhrase(text: string | null | undefined): boolean {
@@ -11346,13 +11364,14 @@ function addOrUpdateCallbackCallTodo(
   args: {
     sourceMessageId?: string;
     callbackTimeHint?: string | null;
+    focus?: string | null;
     parseSourceText?: string | null;
     owner?: { id?: string | null; name?: string | null };
     timezone: string;
   }
 ) {
   const callbackTimeHint = String(args.callbackTimeHint ?? "").trim();
-  const summary = buildCallbackTodoSummary(callbackTimeHint);
+  const summary = buildCallbackTodoSummary(callbackTimeHint, args.focus);
   const parseSource = String(args.parseSourceText ?? "").trim();
   let schedule = buildCallbackTodoSchedule(
     callbackTimeHint || parseSource || "",
@@ -15275,6 +15294,13 @@ async function applyActionStateFromContextNote(
       );
     }
   }
+  const callbackWatchFocus = formatInventoryWatchLabelForFollowUp(newWatches[0] ?? conv.inventoryWatch);
+  const callbackFocus =
+    callbackWatchFocus && /\b(status|follow up|check on|check the status|remind me to follow up)\b/i.test(text)
+      ? `status of ${callbackWatchFocus}`
+      : callbackWatchFocus
+        ? callbackWatchFocus
+        : "";
 
   const walkInOutcome = await safeLlmParse("context_note_walkin_outcome", () =>
     parseWalkInOutcomeWithLLM({
@@ -15298,6 +15324,7 @@ async function applyActionStateFromContextNote(
     const owner = resolveCallbackTodoOwner(conv);
     const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
       callbackTimeHint: followUpWindowHint || scheduleSource,
+      focus: callbackFocus,
       parseSourceText: scheduleSource,
       owner,
       timezone
@@ -19913,6 +19940,18 @@ function formatTodoCallDueAtLabel(dueAtIso: string, timeZone: string): string | 
   return formatSlotLocal(iso, timeZone);
 }
 
+function formatInventoryWatchLabelForFollowUp(watch: InventoryWatch | null | undefined): string {
+  if (!watch) return "";
+  const yearText = watch.year
+    ? `${watch.year} `
+    : watch.yearMin && watch.yearMax
+      ? `${watch.yearMin}-${watch.yearMax} `
+      : "";
+  const modelText = String(watch.model ?? "").trim();
+  const colorText = sanitizeColorPhrase(watch.color) ?? String(watch.color ?? "").trim();
+  return [yearText.trim(), colorText, modelText].filter(Boolean).join(" ").trim();
+}
+
 function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_York"): string {
   const reason = String(todo?.reason ?? "").toLowerCase();
   const summary = String(todo?.summary ?? "");
@@ -19926,7 +19965,8 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
   }
   const focusFromSummary =
     summary.match(/^call customer \(follow-up\):\s*(.+)$/i)?.[1]?.trim() ??
-    summary.match(/^call requested:\s*(.+)$/i)?.[1]?.trim() ??
+    extractCallbackTodoFocus(summary) ??
+    extractCallbackTodoTimeHint(summary) ??
     "";
   if (reason === "approval") return "Business manager follow-up (credit app/prequal).";
   if (reason === "call") {
@@ -20031,14 +20071,12 @@ async function processDueFollowUps() {
     let dueAtIso = String(todo.dueAt ?? "").trim();
     let reminderAtIso = String(todo.reminderAt ?? "").trim();
     if ((!dueAtIso || !reminderAtIso) && /^call requested:/i.test(String(todo.summary ?? ""))) {
-      const rawHint = String(todo.summary ?? "")
-        .match(/^call requested:\s*(.+)$/i)?.[1]
-        ?.trim();
-      const callbackTimeHint = String(rawHint ?? "").replace(/[.]+$/, "").trim();
+      const callbackTimeHint = extractCallbackTodoTimeHint(String(todo.summary ?? ""));
       if (callbackTimeHint) {
         const updated = addOrUpdateCallbackCallTodo(conv, {
           sourceMessageId: todo.sourceMessageId,
           callbackTimeHint,
+          focus: extractCallbackTodoFocus(String(todo.summary ?? "")),
           parseSourceText: callbackTimeHint,
           owner: {
             id: String(todo.ownerId ?? "").trim() || "",
