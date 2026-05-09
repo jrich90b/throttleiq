@@ -4758,6 +4758,10 @@ function resolveVehicleFactQuestionDecision(
 
   const lower = String(text ?? "").toLowerCase().trim();
   if (!lower) return null;
+  const lowMileageUsedPreference =
+    /\blow\s*mileage\b|\blow\s*miles\b/.test(lower) &&
+    (/\bused\b|\bpre[-\s]?owned\b/.test(lower) || /\bnot\s+new\b/.test(lower));
+  if (lowMileageUsedPreference) return null;
   const fallback = (questionType: VehicleFactQuestionDecision["questionType"], requestedFields: string[]) => ({
     questionType,
     requestedFields,
@@ -4778,6 +4782,41 @@ function resolveVehicleFactQuestionDecision(
     return fallback("hold_timing", ["hold_timing"]);
   }
   return null;
+}
+
+function isLowMileageUsedPreferenceText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase().trim();
+  if (!lower) return false;
+  const hasLowMileage = /\blow\s*mileage\b|\blow\s*miles\b/.test(lower);
+  const hasUsedPreference = /\bused\b|\bpre[-\s]?owned\b/.test(lower) || /\bnot\s+new\b/.test(lower);
+  return hasLowMileage && hasUsedPreference;
+}
+
+function buildLowMileageUsedPreferenceReply(conv: Conversation): { reply: string; todoSummary: string } {
+  const model = extractVehicleModelFromContext(conv);
+  const modelText = model && model !== "that bike" ? ` ${model}` : "";
+  return {
+    reply: `Got it — no worries. I understand you’re looking for a low-mileage used${modelText}, not a new one. I’ll have the team keep an eye out for the right one and follow up if we get one in.`,
+    todoSummary: `Customer wants a low-mileage used${modelText}; update/create watch and follow up if the right one comes in.`
+  };
+}
+
+function applyLowMileageUsedPreferenceDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+}): string {
+  const { reply, todoSummary } = buildLowMileageUsedPreferenceReply(args.conv);
+  addTodo(args.conv, "other", todoSummary, args.providerMessageId ?? undefined);
+  setFollowUpMode(args.conv, "manual_handoff", "used_low_mileage_watch");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "used_low_mileage_watch", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "used_low_mileage_watch_handoff", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey
+  });
+  return reply;
 }
 
 function formatVehicleFactMoney(value: unknown): string | null {
@@ -32218,6 +32257,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio" && isLowMileageUsedPreferenceText(event.body ?? "")) {
+    const reply = applyLowMileageUsedPreferenceDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: (inbound as any)?.providerMessageId,
+      scope: "regen"
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
+
   const regenVehicleFactInbound =
     event.provider === "twilio" && hasVehicleFactQuestionParserHint(event.body ?? "")
       ? pickLatestVehicleFactInboundForRegenerate(conv, inbound)
@@ -35943,6 +35995,26 @@ if (authToken && signature) {
       )}</Message>\n</Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+  }
+
+  if (event.provider === "twilio" && isLowMileageUsedPreferenceText(semanticInboundText)) {
+    const reply = applyLowMileageUsedPreferenceDecision({
+      conv,
+      text: semanticInboundText,
+      providerMessageId: event.providerMessageId,
+      scope: "live"
+    });
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasVehicleFactQuestionParserHint(semanticInboundText)) {
