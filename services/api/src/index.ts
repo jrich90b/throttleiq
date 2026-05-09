@@ -8550,7 +8550,7 @@ function buildDealerLeadAppPostRideReply(args: {
     ) || "that bike";
   const intro = `${greeting}This is ${agentName} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return `${intro} We do have a ${modelLabel} in stock right now. If you want to come back in and compare it or go over options, just text me anytime.`;
+    return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
@@ -8558,7 +8558,7 @@ function buildDealerLeadAppPostRideReply(args: {
   if (args.inventoryStatus === "sold") {
     return `${intro} That ${modelLabel} is no longer available, but I can help you compare similar options if you want.`;
   }
-  return `${intro} I can check current availability and go over options with you anytime.`;
+  return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
 }
 
 function isGenericMetaOfferModel(model?: string | null): boolean {
