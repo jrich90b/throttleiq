@@ -10838,25 +10838,15 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
   let rescheduleUrl: string | null = null;
   try {
     const profile = await getDealerProfileHot();
-    const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
-    if (bookingUrl) {
-      // Use the actual booking URL for reschedule replies. The branded /r/:token
-      // redirect route is only guaranteed on the LeadRider API host, not on the
-      // dealer website domain.
-      rescheduleUrl = bookingUrl;
-    }
+    rescheduleUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
   } catch {
     rescheduleUrl = null;
   }
 
-  const reply =
-    primaryStatus === "cancelled"
-      ? rescheduleUrl
-        ? `No problem — we can get you rescheduled. Reschedule here: ${rescheduleUrl}`
-        : "No problem — we can get you rescheduled. What day and time works best?"
-      : rescheduleUrl
-        ? `No worries — let’s get you back on the schedule. Reschedule here: ${rescheduleUrl}`
-        : "No worries — let’s get you back on the schedule. What day and time works best?";
+  const reply = buildAppointmentOutcomeRescheduleReply({
+    bookingUrl: rescheduleUrl,
+    primaryStatus
+  });
 
   if (
     isRecentDuplicateOutbound(conv, toNumber, reply, {
@@ -10880,6 +10870,22 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
     secondaryStatus
   });
   return { queued: true, reply };
+}
+
+function buildAppointmentOutcomeRescheduleReply(args: {
+  bookingUrl?: string | null;
+  primaryStatus?: AppointmentPrimaryOutcome | null;
+}): string {
+  const bookingUrl = String(args.bookingUrl ?? "").trim();
+  const primaryStatus = args.primaryStatus ?? null;
+  if (primaryStatus === "cancelled") {
+    return bookingUrl
+      ? `No problem — we can get you rescheduled. Reschedule here: ${bookingUrl}`
+      : "No problem — we can get you rescheduled. What day and time works best?";
+  }
+  return bookingUrl
+    ? `No worries — let’s get you back on the schedule. Reschedule here: ${bookingUrl}`
+    : "No worries — let’s get you back on the schedule. What day and time works best?";
 }
 
 type OutcomeUnitInput = {
@@ -32160,6 +32166,33 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerProfile = await getDealerProfileHot();
+  const regenRequestedDayTime = parseRequestedDayTime(event.body ?? "", regenTz);
+  const regenAppointmentOutcomeRescheduleReply =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    conv.appointment?.reschedulePending === true &&
+    !regenRequestedDayTime &&
+    !isRegenerateInboundActionableForRouting(event.body ?? "")
+      ? buildAppointmentOutcomeRescheduleReply({
+          bookingUrl: buildBookingUrlForLead(dealerProfile?.bookingUrl, conv),
+          primaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null
+        })
+      : null;
+  if (regenAppointmentOutcomeRescheduleReply) {
+    logRegenDecisionTrace("appointment_outcome_reschedule_regen", {
+      primaryStatus: conv.appointment?.staffNotify?.outcome?.primaryStatus ?? null,
+      reschedulePending: conv.appointment?.reschedulePending === true
+    });
+    recordRouteOutcome("regen", "appointment_outcome_reschedule_regenerated", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return respondWithSmsRegeneratedDraft(regenAppointmentOutcomeRescheduleReply, undefined, {
+      turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
   if (event.provider === "sendgrid_adf" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
     const adfVehicleFactParse =
       process.env.LLM_ENABLED === "1" &&
