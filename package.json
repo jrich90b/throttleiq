@@ -47,6 +47,7 @@
     "orchestrator_regression:eval": "npx tsx scripts/orchestrator_regression_eval.ts",
     "route_state:eval": "npx tsx scripts/route_state_reducer_eval.ts",
     "workflow_regression:eval": "npx tsx scripts/workflow_regression_eval.ts",
+    "chat_simulation:sweep": "npx tsx scripts/chat_simulation_sweep.ts",
     "finance_language_fuzz:eval": "npx tsx scripts/finance_language_fuzz_eval.ts",
     "tone_quality:eval": "npx tsx scripts/tone_quality_eval.ts",
     "tone_quality:fixture_eval": "npx tsx scripts/tone_quality_fixture_eval.ts",
