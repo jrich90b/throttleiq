@@ -88,6 +88,10 @@ import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
+  buildInternationalShippingUnavailableReply,
+  shouldDeclineInternationalShipping
+} from "../domain/internationalShippingPolicy.js";
+import {
   buildTimingAwareWalkInFollowUpLine,
   buildInventoryOnlineCompletenessReply,
   buildTakeOffMilwaukeeEightEngineReply,
@@ -6524,6 +6528,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const testRideInSeason = isTestRideSeason(dealerProfile, requestedRideDate ?? new Date());
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
   let suppressAvailabilityAppend = false;
+  let handledInternationalShippingInquiry = false;
+  if (
+    isInitialAdf &&
+    shouldDeclineInternationalShipping(dealerProfile, `${effectiveInquiry}\n${event.body}`)
+  ) {
+    draft = buildInternationalShippingUnavailableReply(dealerProfile);
+    suppressAvailabilityAppend = true;
+    handledInternationalShippingInquiry = true;
+    closeConversation(conv, "international");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
   if (isInitialAdf && inquiryDayPart) {
     const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
     if (initialAvailability === "in_stock") {
@@ -6773,6 +6788,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     } else {
       draft = `That time is already taken, but ${draft.charAt(0).toLowerCase()}${draft.slice(1)}`;
     }
+  }
+  if (handledInternationalShippingInquiry) {
+    draft = buildInternationalShippingUnavailableReply(dealerProfile);
+    suppressAvailabilityAppend = true;
   }
 
   draft = await applyInitialAdfPrefix(draft);

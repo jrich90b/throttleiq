@@ -72,5 +72,11 @@
       9,
       10
     ]
+  },
+  "policies": {
+    "internationalShipping": {
+      "enabled": false,
+      "disabledResponse": "Thanks for reaching out. We don't ship internationally, but I appreciate you checking with us."
+    }
   }
 }

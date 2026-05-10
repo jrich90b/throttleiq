@@ -23,6 +23,11 @@ import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
+import {
+  buildInternationalShippingUnavailableReply,
+  isInternationalShippingInquiry,
+  shouldDeclineInternationalShipping
+} from "./internationalShippingPolicy.js";
 import { getAllModels, isModelInRecentYears } from "./modelsByYear.js";
 import { isWebFallbackEnabled, searchGoogleCse } from "./webFallback.js";
 import type { FinanceDocsState, LeadProfile, TradePayoffState } from "./conversationStore.js";
@@ -2291,13 +2296,20 @@ export async function orchestrateInbound(
   }
 
   const internationalBuyer = detectInternationalBuyer(event.body, event.from);
-  if (internationalBuyer) {
+  const dealerProfileForInternational =
+    internationalBuyer || isInternationalShippingInquiry(event.body)
+      ? await getDealerProfileWithAgentName()
+      : null;
+  if (
+    internationalBuyer ||
+    shouldDeclineInternationalShipping(dealerProfileForInternational, event.body)
+  ) {
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const ack =
       `Hi, this is ${agentName} at ${dealerName}. ` +
-      "Thanks for reaching out. We can only sell to customers in the United States.";
+      buildInternationalShippingUnavailableReply(dealerProfile);
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",

@@ -1,6 +1,7 @@
 import type { InboundMessageEvent } from "../services/api/src/domain/types.ts";
 
 process.env.OPENAI_API_KEY ||= "test";
+process.env.DEALER_PROFILE_PATH ||= "services/api/data/dealer_profile.json";
 
 const { orchestrateInbound } = await import("../services/api/src/domain/orchestrator.ts");
 
@@ -180,6 +181,33 @@ const cases: Case[] = [
     ctx: {},
     expectedIncludes: ["credit app", "online"],
     expectedExcludes: ["How can I help?", "in stock"]
+  },
+  {
+    id: "initial_adf_international_shipping_policy_decline",
+    event: {
+      channel: "sms",
+      provider: "sendgrid_adf",
+      from: "+15049927647",
+      to: "+17166927200",
+      body: "Good afternoon, very nice motorcycle. I live in Honduras. Do you ship internationally?",
+      providerMessageId: "orchestrator-regression-9",
+      receivedAt: now
+    },
+    ctx: {
+      leadSource: "Room58 - Request details",
+      lead: {
+        firstName: "Pedro",
+        source: "Room58 - Request details",
+        vehicle: {
+          year: "2024",
+          make: "Harley-Davidson",
+          model: "Road Glide",
+          condition: "used"
+        }
+      } as any
+    },
+    expectedIncludes: ["don't ship internationally", "checking"],
+    expectedExcludes: ["wanted to learn more", "pricing", "availability"]
   }
 ];
 

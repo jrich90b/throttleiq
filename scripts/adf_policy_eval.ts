@@ -3,6 +3,10 @@ import {
   isPriceOnlyInquiryText,
   shouldRouteRoom58PriceHandoff
 } from "../services/api/src/domain/adfPolicy.ts";
+import {
+  isInternationalShippingInquiry,
+  shouldDeclineInternationalShipping
+} from "../services/api/src/domain/internationalShippingPolicy.ts";
 import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 type Case = {
@@ -81,6 +85,32 @@ const cases: Case[] = [
       const rule = resolveLeadRule("Marketplace - Contact a Dealer");
       return rule.bucket === "inventory_interest" && rule.cta === "check_availability";
     }
+  },
+  {
+    id: "international_shipping_question_detected",
+    expected: true,
+    run: () =>
+      isInternationalShippingInquiry(
+        "Good afternoon, very nice motorcycle. I live in Honduras. Do you ship internationally?"
+      )
+  },
+  {
+    id: "dealer_disabled_international_shipping_declines",
+    expected: true,
+    run: () =>
+      shouldDeclineInternationalShipping(
+        { policies: { internationalShipping: { enabled: false } } },
+        "I live in Honduras. Do you ship internationally?"
+      )
+  },
+  {
+    id: "dealer_enabled_international_shipping_does_not_decline",
+    expected: false,
+    run: () =>
+      shouldDeclineInternationalShipping(
+        { policies: { internationalShipping: { enabled: true } } },
+        "I live in Honduras. Do you ship internationally?"
+      )
   }
 ];
 

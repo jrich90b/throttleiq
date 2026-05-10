@@ -96,6 +96,10 @@ import {
   searchGoogleCse
 } from "./domain/webFallback.js";
 import { buildOffersLine, resolveOffersUrl } from "./domain/offers.js";
+import {
+  buildInternationalShippingUnavailableReply,
+  shouldDeclineInternationalShipping
+} from "./domain/internationalShippingPolicy.js";
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
@@ -34836,6 +34840,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   });
   if (lienHolderFallback) {
     reply = lienHolderFallback;
+  }
+  if (shouldDeclineInternationalShipping(dealerProfile, String(event.body ?? ""))) {
+    reply = buildInternationalShippingUnavailableReply(dealerProfile);
+    closeConversation(conv, "international");
+    stopFollowUpCadence(conv, "manual_handoff");
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
     if (!regenIsWalkInLead) {
