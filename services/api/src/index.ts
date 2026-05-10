@@ -26185,6 +26185,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   const task = markTodoDone(convId, todoId);
   const conv = getConversation(convId);
   if (conv) {
+    let appointmentOutcomeMarkedSold = false;
     const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
     const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
     const appointmentSecondaryOutcome = String(req.body?.appointmentSecondaryOutcome ?? "").trim();
@@ -26224,6 +26225,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           appointmentOutcomeNote || undefined
         );
       } else if (appointmentOutcomeStatus === "sold") {
+        const cfg = await getSchedulerConfigHot();
         const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
         const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
         const leadVehicle = conv?.lead?.vehicle ?? {};
@@ -26242,6 +26244,9 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         conv.closedAt = nowIsoValue;
         conv.closedReason = "sold";
         markOpenTodosDoneForConversation(conv.id);
+        setFollowUpMode(conv, "active", "post_sale");
+        startPostSaleCadence(conv, nowIsoValue, cfg.timezone);
+        appointmentOutcomeMarkedSold = true;
       } else if (appointmentOutcomeStatus === "hold") {
         setFollowUpMode(conv, "paused_indefinite", "appointment_hold");
         stopFollowUpCadence(conv, "appointment_hold");
@@ -26264,7 +26269,9 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
     }
     const resolution = String(req.body?.resolution ?? "resume").trim();
     const nowIso = new Date().toISOString();
-    if (resolution === "resume") {
+    if (appointmentOutcomeMarkedSold) {
+      // Sold appointment outcomes have already moved into the post-sale cadence.
+    } else if (resolution === "resume") {
       setFollowUpMode(conv, "active", "todo_done");
     } else if (resolution === "dismiss") {
       // No follow-up changes; just close the todo.

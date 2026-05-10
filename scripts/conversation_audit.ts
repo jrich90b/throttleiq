@@ -118,6 +118,11 @@ function run() {
     const cadenceStatus = String(conv?.followUpCadence?.status ?? "");
     const cadenceStopReason = String(conv?.followUpCadence?.stopReason ?? "");
     const dialogState = String(conv?.dialogState?.name ?? "none");
+    const soldLead = String(conv?.closedReason ?? "") === "sold" || !!conv?.sale?.soldAt;
+
+    if (soldLead && (cadenceKind !== "post_sale" || cadenceStatus !== "active")) {
+      issuePush(issues, "sold_without_active_post_sale_cadence");
+    }
 
     if (
       followUpMode === "manual_handoff" &&
