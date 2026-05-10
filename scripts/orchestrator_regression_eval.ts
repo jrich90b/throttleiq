@@ -104,6 +104,82 @@ const cases: Case[] = [
     },
     expectedIncludes: ["2002 Road King Classic", "exact pricing"],
     expectedExcludes: ["monthly payment", "how much down", "60, 72, or 84"]
+  },
+  {
+    id: "orchestrator_fallback_hiring_inquiry_handoff",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17165550101",
+      to: "+17166927200",
+      body: "Where do I send a resume?",
+      providerMessageId: "orchestrator-regression-4",
+      receivedAt: now
+    },
+    ctx: {},
+    expectedIncludes: ["hiring manager", "follow up"],
+    expectedExcludes: ["How can I help?", "in stock"]
+  },
+  {
+    id: "orchestrator_fallback_parts_handoff",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17165550102",
+      to: "+17166927200",
+      body: "Can parts order drag specialties for my Road King?",
+      providerMessageId: "orchestrator-regression-5",
+      receivedAt: now
+    },
+    ctx: {},
+    expectedIncludes: ["parts department", "reach out"],
+    expectedExcludes: ["How can I help?", "in stock"]
+  },
+  {
+    id: "orchestrator_fallback_service_records_handoff",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17165550103",
+      to: "+17166927200",
+      body: "Do you have my service records?",
+      providerMessageId: "orchestrator-regression-6",
+      receivedAt: now
+    },
+    ctx: {},
+    expectedIncludes: ["service records", "follow up"],
+    expectedExcludes: ["How can I help?", "in stock"]
+  },
+  {
+    id: "stateful_short_ack_no_draft",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17165550104",
+      to: "+17166927200",
+      body: "Ok sounds good",
+      providerMessageId: "orchestrator-regression-7",
+      receivedAt: now
+    },
+    ctx: {
+      followUp: { mode: "manual_handoff", reason: "manual_appointment" }
+    },
+    expectedIncludes: ["__EMPTY_DRAFT__"]
+  },
+  {
+    id: "orchestrator_credit_app_request_gets_link_or_instruction",
+    event: {
+      channel: "sms",
+      provider: "twilio",
+      from: "+17165550105",
+      to: "+17166927200",
+      body: "Can I fill out a credit app?",
+      providerMessageId: "orchestrator-regression-8",
+      receivedAt: now
+    },
+    ctx: {},
+    expectedIncludes: ["credit app", "online"],
+    expectedExcludes: ["How can I help?", "in stock"]
   }
 ];
 
@@ -113,8 +189,14 @@ const failures: Array<{ id: string; got: string; reason: string }> = [];
 for (const c of cases) {
   const result = await orchestrateInbound(c.event, [], c.ctx);
   const got = String(result.draft ?? "");
+  const normalizedExpectedIncludes = c.expectedIncludes.includes("__EMPTY_DRAFT__")
+    ? c.expectedIncludes.filter(fragment => fragment !== "__EMPTY_DRAFT__")
+    : c.expectedIncludes;
   const lower = got.toLowerCase();
-  const missing = c.expectedIncludes.filter(fragment => !lower.includes(fragment.toLowerCase()));
+  const missing = normalizedExpectedIncludes.filter(fragment => !lower.includes(fragment.toLowerCase()));
+  if (c.expectedIncludes.includes("__EMPTY_DRAFT__") && got !== "") {
+    missing.push("__EMPTY_DRAFT__");
+  }
   const presentExcluded = (c.expectedExcludes ?? []).filter(fragment => lower.includes(fragment.toLowerCase()));
   if (!missing.length && !presentExcluded.length) {
     passed += 1;

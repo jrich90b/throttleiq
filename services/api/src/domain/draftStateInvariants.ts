@@ -263,6 +263,7 @@ export function applyDraftStateInvariants(
     followUpMode === "manual_handoff" &&
     isDepartmentHandoff(input) &&
     inventoryPrompt &&
+    !availabilitySignal &&
     !looksLikeDepartmentHandoffActionDraft(draftText)
   ) {
     return {

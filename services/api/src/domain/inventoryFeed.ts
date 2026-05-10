@@ -1,4 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { dataPath } from "./dataDir.js";
 
 export type InventoryFeedItem = {
   stockId?: string;
@@ -16,6 +19,7 @@ export type InventoryFeedItem = {
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const INVENTORY_FETCH_TIMEOUT_MS = Number(process.env.INVENTORY_FETCH_TIMEOUT_MS ?? 8000);
 let cache: { items: InventoryFeedItem[]; loadedAt: number } | null = null;
+let snapshotCache: { items: InventoryFeedItem[]; loadedAt: number } | null = null;
 
 function getFeedUrl(): string | null {
   const url = process.env.INVENTORY_XML_URL?.trim();
@@ -83,6 +87,34 @@ function parseFeed(xml: string): InventoryFeedItem[] {
     price: extractPrice(it),
     images: extractImageUrls(it)
   }));
+}
+
+async function loadInventorySnapshotFeedItems(): Promise<InventoryFeedItem[]> {
+  const now = Date.now();
+  if (snapshotCache && now - snapshotCache.loadedAt < CACHE_TTL_MS) return snapshotCache.items;
+  const candidates = [
+    dataPath("inventory_snapshot.json"),
+    path.resolve(process.cwd(), "services/api/data/inventory_snapshot.json"),
+    path.resolve(process.cwd(), "data/inventory_snapshot.json")
+  ];
+  for (const filePath of [...new Set(candidates)]) {
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as { items?: InventoryFeedItem[] };
+      const items = Array.isArray(parsed?.items) ? parsed.items : [];
+      snapshotCache = { items, loadedAt: now };
+      return items;
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") {
+        console.warn("[inventory-feed] snapshot load failed", {
+          path: filePath,
+          message: err?.message ?? String(err)
+        });
+      }
+    }
+  }
+  snapshotCache = { items: [], loadedAt: now };
+  return [];
 }
 
 function extractImageUrls(item: Record<string, any>): string[] {
@@ -224,7 +256,7 @@ export async function getInventoryFeed(opts?: { bypassCache?: boolean }): Promis
       timeoutMs: INVENTORY_FETCH_TIMEOUT_MS,
       url
     });
-    return staleItems;
+    return staleItems.length ? staleItems : await loadInventorySnapshotFeedItems();
   } finally {
     clearTimeout(timer);
   }
@@ -237,23 +269,30 @@ export async function findInventoryPrice(opts: {
   model?: string | null;
 }): Promise<{ price?: number | null; item?: InventoryFeedItem } | null> {
   const items = await getInventoryFeed();
-  if (!items.length) return null;
-  const stock = opts.stockId?.trim().toLowerCase();
-  const vin = opts.vin?.trim().toLowerCase();
-  if (stock) {
-    const item = items.find(i => i.stockId?.toLowerCase() === stock);
-    if (item) return { price: item.price ?? null, item };
-  }
-  if (vin) {
-    const item = items.find(i => i.vin?.toLowerCase() === vin);
-    if (item) return { price: item.price ?? null, item };
-  }
-  const year = opts.year?.trim();
-  const model = opts.model?.trim() ?? null;
-  if (year && model) {
-    const item = items.find(i => i.year === year && modelMatches(i.model, model));
-    if (item) return { price: item.price ?? null, item };
-  }
+  const findMatch = (haystack: InventoryFeedItem[]) => {
+    if (!haystack.length) return null;
+    const stock = opts.stockId?.trim().toLowerCase();
+    const vin = opts.vin?.trim().toLowerCase();
+    if (stock) {
+      const item = haystack.find(i => i.stockId?.toLowerCase() === stock);
+      if (item) return { price: item.price ?? null, item };
+    }
+    if (vin) {
+      const item = haystack.find(i => i.vin?.toLowerCase() === vin);
+      if (item) return { price: item.price ?? null, item };
+    }
+    const year = opts.year?.trim();
+    const model = opts.model?.trim() ?? null;
+    if (year && model) {
+      const item = haystack.find(i => i.year === year && modelMatches(i.model, model));
+      if (item) return { price: item.price ?? null, item };
+    }
+    return null;
+  };
+  const liveMatch = findMatch(items);
+  if (liveMatch) return liveMatch;
+  const snapshotMatch = findMatch(await loadInventorySnapshotFeedItems());
+  if (snapshotMatch) return snapshotMatch;
   return null;
 }
 

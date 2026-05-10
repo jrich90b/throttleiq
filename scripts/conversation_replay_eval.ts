@@ -68,6 +68,20 @@ const cases: Case[] = [
     }
   },
   {
+    id: "service_handoff_allows_explicit_availability_answer",
+    expectedAllow: true,
+    input: {
+      inboundText: "Is it still available?",
+      draftText: "Yes — the Street Glide is available. What day and time works best to stop in and take a look?",
+      followUpMode: "manual_handoff",
+      followUpReason: "service_request",
+      dialogState: "service_handoff",
+      classificationBucket: "service",
+      classificationCta: "service_request",
+      turnAvailabilityIntent: true
+    }
+  },
+  {
     id: "pricing_down_payment_followup_is_allowed",
     expectedAllow: true,
     input: {

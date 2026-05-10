@@ -30,7 +30,9 @@ import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationSto
 import {
   extractInventoryStockIdMention,
   inferAcceptedScheduleDayFromReplyText,
-  isStockNumberInventoryInterestText
+  isStockNumberInventoryInterestText,
+  buildHiringManagerInquiryReply,
+  buildTakeOffMilwaukeeEightEngineReply
 } from "./workflowRegressionGuards.js";
 import { getSchedulerConfig, dayKey, getPreferredSalespeople } from "./schedulerConfig.js";
 import { getAuthedCalendarClient, queryFreeBusy } from "./googleCalendar.js";
@@ -206,6 +208,7 @@ function hasStrongIntentSignal(text: string): boolean {
     /(test ride|ride it|demo|ride up|take a ride|check it out|look at (it|the)|see (it|the)|come (in|by|up|down)|stop by|swing by|visit|drive (up|down))/i.test(t) ||
     /(call me|give me a call|call back|callback|please call)/.test(t) ||
     /(appointment|schedule|book|set up|come in|stop in|visit)/.test(t) ||
+    /(service|service records?|warranty work|oil change|inspection|maintenance|repair|parts?|part number|hiring|job openings?|resume|employment)/.test(t) ||
     /(hours|open|close|location|address|where are you)/.test(t)
   );
 }
@@ -541,6 +544,42 @@ function detectFinanceRequest(text: string): boolean {
       !/\b(job|career|careers|hiring|position|positions|opening|openings|employment|resume|cv|recruit|recruiter|hr)\b/.test(
         t
       ))
+  );
+}
+
+function detectHiringManagerFallbackRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  if (detectFinanceRequest(t)) return false;
+  return (
+    /\b(hiring manager|hiring|job openings?|jobs?|careers?|career opportunity|employment|apply for (?:a )?(?:job|position)|application for employment|resume)\b/.test(
+      t
+    ) ||
+    /\b(?:applied|submitted)\s+(?:online|an application)\b[\s\S]{0,80}\b(?:who|hiring|job|position|resume|manager|handles?)\b/.test(
+      t
+    )
+  );
+}
+
+function detectPartsFallbackRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(parts? department|parts? counter|parts? desk|parts?\s+order|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,36}\bparts?)\b/.test(
+      t
+    ) ||
+    (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(t) &&
+      /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade|looking for|market for)\b/.test(
+        t
+      ))
+  );
+}
+
+function detectServiceFallbackRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detail)\b/.test(
+    t
   );
 }
 
@@ -2078,6 +2117,20 @@ export async function orchestrateInbound(
       }
     }
     if (smallTalk) {
+      const statefulContext =
+        ctx?.followUp?.mode === "manual_handoff" ||
+        /^(inventory_watch|manual_appointment|service_request|parts_request|apparel_request|hiring_manager_inquiry)$/.test(
+          String(ctx?.followUp?.reason ?? "")
+        );
+      if (statefulContext) {
+        return finalize({
+          intent: "GENERAL",
+          stage: "ENGAGED",
+          shouldRespond: false,
+          draft: "",
+          smallTalk: true
+        });
+      }
       const draft = pickSmallTalkReply(rawText);
       return finalize({
         intent: "GENERAL",
@@ -2602,6 +2655,41 @@ export async function orchestrateInbound(
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
   const financeRequest =
     detectFinanceRequest(event.body) || detectFinanceApplyFollowUp(event.body, history ?? []);
+  if (detectHiringManagerFallbackRequest(event.body)) {
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: buildHiringManagerInquiryReply(),
+      handoff: { required: true, reason: "other", ack: buildHiringManagerInquiryReply() }
+    });
+  }
+  if (detectPartsFallbackRequest(event.body)) {
+    const draft = /\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/i.test(
+      event.body
+    )
+      ? buildTakeOffMilwaukeeEightEngineReply()
+      : "Thanks — I’ll have our parts department reach out shortly.";
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft,
+      handoff: { required: true, reason: "other", ack: draft }
+    });
+  }
+  if (detectServiceFallbackRequest(event.body) && !financeRequest) {
+    const draft = /\bservice records?\b/i.test(event.body)
+      ? "Thanks for the details — I’ll have the team check service records and follow up."
+      : "We’ve received your service request and will have the service department reach out.";
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft,
+      handoff: { required: true, reason: "other", ack: draft }
+    });
+  }
   const explicitTradeRequest = detectTradeRequest(event.body);
   const availabilityAskedMulti =
     availabilityIntentHint ||
@@ -2618,6 +2706,11 @@ export async function orchestrateInbound(
     ((pricingIntent || pricingIntentHint) && !specialsQuestion) ||
     detectPaymentPressure(event.body) ||
     detectPaymentFollowUp(event.body, history ?? []);
+  const explicitFinanceActionRequest =
+    financeRequest &&
+    /\b(credit app|credit application|finance app|financing application|apply for (?:credit|financing)|fill out (?:a )?(?:credit|finance|financing) app)\b/i.test(
+      event.body
+    );
   const recentInboundAskedDown = [...(history ?? [])]
     .reverse()
     .filter(msg => msg.direction === "in" && String(msg.body ?? "").trim().length > 0)
@@ -2700,7 +2793,12 @@ export async function orchestrateInbound(
   const pricingTermsOnly = /(price|pricing|msrp|cost|how much|what's the price|what is the price|out the door|\botd\b|total price)/i.test(
     String(event.body ?? "")
   );
-  if (financeRequest && !specialsQuestion && !pricingTermsOnly && !wantsPayments) {
+  if (
+    financeRequest &&
+    !specialsQuestion &&
+    !pricingTermsOnly &&
+    (!wantsPayments || explicitFinanceActionRequest)
+  ) {
     const dealerProfile = await getDealerProfileWithAgentName();
     const hasCoSignerDetails = /\b(co[-\s]?sign(?:er)?|cosign(?:er)?)\b/i.test(
       String(event.body ?? "")
