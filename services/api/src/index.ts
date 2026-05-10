@@ -12523,6 +12523,36 @@ function applyConversationStateReducer(
   };
 }
 
+function applyHiringManagerInquiryDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+}): string {
+  args.conv.classification = {
+    ...(args.conv.classification ?? {}),
+    bucket: "general_inquiry",
+    cta: "contact_us"
+  };
+  const hasHiringTodo = listOpenTodos().some(
+    t =>
+      t.convId === args.conv.id &&
+      t.reason === "other" &&
+      /hiring manager inquiry/i.test(String(t.summary ?? ""))
+  );
+  if (!hasHiringTodo) {
+    addTodo(
+      args.conv,
+      "other",
+      `Hiring manager inquiry: ${args.text ?? "Customer asked about hiring."}`,
+      args.providerMessageId ?? undefined
+    );
+  }
+  setFollowUpMode(args.conv, "manual_handoff", "hiring_manager_inquiry");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "manual_handoff", { setMode: "manual_handoff" });
+  return buildHiringManagerInquiryReply();
+}
+
 function resolveValidatedDepartmentIntent(args: {
   parserIntent: DepartmentRole | null;
   semanticIntent: DepartmentRole | null;
@@ -34105,29 +34135,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (regenReducedConversationState.hiringManagerIntent) {
-    conv.classification = {
-      ...(conv.classification ?? {}),
-      bucket: "general_inquiry",
-      cta: "contact_us"
-    };
-    const hasHiringTodo = listOpenTodos().some(
-      t =>
-        t.convId === conv.id &&
-        t.reason === "other" &&
-        /hiring manager inquiry/i.test(String(t.summary ?? ""))
-    );
-    if (!hasHiringTodo) {
-      addTodo(
-        conv,
-        "other",
-        `Hiring manager inquiry: ${event.body ?? "Customer asked about hiring."}`,
-        event.providerMessageId
-      );
-    }
-    setFollowUpMode(conv, "manual_handoff", "hiring_manager_inquiry");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply = buildHiringManagerInquiryReply();
+    const reply = applyHiringManagerInquiryDecision({
+      conv,
+      text: event.body,
+      providerMessageId: event.providerMessageId
+    });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -36256,29 +36268,11 @@ if (authToken && signature) {
     });
   await maybeRestoreSalesLeadOwnerFromPreference(conv);
   if (reducedConversationState.hiringManagerIntent) {
-    conv.classification = {
-      ...(conv.classification ?? {}),
-      bucket: "general_inquiry",
-      cta: "contact_us"
-    };
-    const hasHiringTodo = listOpenTodos().some(
-      t =>
-        t.convId === conv.id &&
-        t.reason === "other" &&
-        /hiring manager inquiry/i.test(String(t.summary ?? ""))
-    );
-    if (!hasHiringTodo) {
-      addTodo(
-        conv,
-        "other",
-        `Hiring manager inquiry: ${event.body ?? "Customer asked about hiring."}`,
-        event.providerMessageId
-      );
-    }
-    setFollowUpMode(conv, "manual_handoff", "hiring_manager_inquiry");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply = buildHiringManagerInquiryReply();
+    const reply = applyHiringManagerInquiryDecision({
+      conv,
+      text: event.body,
+      providerMessageId: event.providerMessageId
+    });
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

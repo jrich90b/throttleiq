@@ -42,6 +42,30 @@ const fixtures: Fixture[] = [
     expectedExplicit: true
   },
   {
+    id: "hiring_are_you_hiring_1",
+    text: "Are you hiring?",
+    expectedState: "hiring_manager",
+    expectedDepartment: "none",
+    expectedHandoff: "hiring_manager_inquiry",
+    expectedExplicit: true
+  },
+  {
+    id: "hiring_resume_destination_1",
+    text: "Where do I send a resume?",
+    expectedState: "hiring_manager",
+    expectedDepartment: "none",
+    expectedHandoff: "hiring_manager_inquiry",
+    expectedExplicit: true
+  },
+  {
+    id: "hiring_applied_online_owner_1",
+    text: "I applied online, who handles that?",
+    expectedState: "hiring_manager",
+    expectedDepartment: "none",
+    expectedHandoff: "hiring_manager_inquiry",
+    expectedExplicit: true
+  },
+  {
     id: "prequal_not_hiring_1",
     text: "PreQual: N, PreQualified Amount; $0 Please note non-prequalified customers can still be considered for approval with a completed credit application.",
     expectedState: "finance_docs",

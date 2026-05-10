@@ -3747,6 +3747,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     conversationStateAccepted &&
     llmConversationState?.stateIntent === "hiring_manager" &&
     llmConversationState.explicitRequest === true;
+  const conversationStateAcceptedNonHiringIntent =
+    conversationStateAccepted &&
+    llmConversationState?.stateIntent !== "hiring_manager" &&
+    llmConversationState?.manualHandoffReason !== "hiring_manager_inquiry";
   const semanticPartsIntent = semanticDepartmentIntent === "parts" || conversationStatePartsIntent;
   const semanticApparelIntent = semanticDepartmentIntent === "apparel" || conversationStateApparelIntent;
   const semanticServiceIntent = semanticDepartmentIntent === "service" || conversationStateServiceIntent;
@@ -4710,17 +4714,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isInitialAdf &&
     !isCreditLead &&
     (conversationStateHiringManagerIntent ||
-      isHiringManagerInquiryText(
-        [
-          effectiveInquiry,
-          inquiryRaw,
-          lead.inquiry,
-          lead.comment,
-          event.body
-        ]
-          .filter(Boolean)
-          .join("\n")
-      ));
+      (!conversationStateAcceptedNonHiringIntent &&
+        isHiringManagerInquiryText(
+          [
+            effectiveInquiry,
+            inquiryRaw,
+            lead.inquiry,
+            lead.comment,
+            event.body
+          ]
+            .filter(Boolean)
+            .join("\n")
+        )));
   if (hiringManagerInquiry) {
     let ack = buildHiringManagerInquiryReply();
     ack = await applyInitialAdfPrefix(ack);
