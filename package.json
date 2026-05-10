@@ -52,6 +52,7 @@
     "tone_quality:eval": "npx tsx scripts/tone_quality_eval.ts",
     "tone_quality:fixture_eval": "npx tsx scripts/tone_quality_fixture_eval.ts",
     "web_text_widget:eval": "npx tsx scripts/web_text_widget_eval.ts",
+    "post_sale_cadence:backfill": "npx tsx scripts/backfill_post_sale_cadence.ts",
     "walkin_outcome:eval": "LLM_ENABLED=1 LLM_WALKIN_OUTCOME_PARSER_ENABLED=1 npx tsx scripts/walkin_outcome_eval.ts",
     "conversation:audit": "npx tsx scripts/conversation_audit.ts",
     "export:changed_messages": "npx tsx scripts/export_changed_messages.ts",
