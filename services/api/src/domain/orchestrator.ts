@@ -2302,7 +2302,9 @@ export async function orchestrateInbound(
       : null;
   if (
     internationalBuyer ||
-    shouldDeclineInternationalShipping(dealerProfileForInternational, event.body)
+    shouldDeclineInternationalShipping(dealerProfileForInternational, event.body, {
+      vehicleCondition: ctx?.lead?.vehicle?.condition
+    })
   ) {
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");

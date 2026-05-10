@@ -34841,7 +34841,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (lienHolderFallback) {
     reply = lienHolderFallback;
   }
-  if (shouldDeclineInternationalShipping(dealerProfile, String(event.body ?? ""))) {
+  if (
+    shouldDeclineInternationalShipping(dealerProfile, String(event.body ?? ""), {
+      vehicleCondition: conv.lead?.vehicle?.condition
+    })
+  ) {
     reply = buildInternationalShippingUnavailableReply(dealerProfile);
     closeConversation(conv, "international");
     stopFollowUpCadence(conv, "manual_handoff");

@@ -2957,6 +2957,9 @@ export default function Home() {
     offersUrl: "",
     lienHolderResponse: "",
     riderToRiderFinancingEnabled: false,
+    internationalNewVehicleExportEnabled: false,
+    internationalUsedVehicleExportEnabled: false,
+    internationalShippingDisabledResponse: "",
     phone: "",
     website: "",
     addressLine1: "",
@@ -6389,6 +6392,19 @@ export default function Home() {
             profile?.policies?.riderToRiderFinancingEnabled === true ||
             profile?.policies?.riderToRiderFinanceEnabled === true ||
             profile?.policies?.offersRiderToRiderFinancing === true,
+          internationalNewVehicleExportEnabled:
+            profile?.policies?.internationalShipping?.newVehicleExportEnabled === true ||
+            profile?.policies?.internationalShipping?.newVehiclesEnabled === true ||
+            profile?.policies?.internationalShipping?.exportNewVehicles === true,
+          internationalUsedVehicleExportEnabled:
+            profile?.policies?.internationalShipping?.usedVehicleExportEnabled === true ||
+            profile?.policies?.internationalShipping?.usedVehiclesEnabled === true ||
+            profile?.policies?.internationalShipping?.exportUsedVehicles === true,
+          internationalShippingDisabledResponse:
+            profile?.policies?.internationalShipping?.disabledResponse ??
+            profile?.policies?.internationalShipping?.unavailableResponse ??
+            profile?.policies?.internationalShipping?.response ??
+            "",
           phone: profile.phone ?? "",
           website: profile.website ?? "",
           addressLine1: profile.address?.line1 ?? "",
@@ -10051,7 +10067,16 @@ export default function Home() {
         policies: {
           ...existingPolicies,
           lienHolderResponse: dealerProfileForm.lienHolderResponse.trim(),
-          riderToRiderFinancingEnabled: !!dealerProfileForm.riderToRiderFinancingEnabled
+          riderToRiderFinancingEnabled: !!dealerProfileForm.riderToRiderFinancingEnabled,
+          internationalShipping: {
+            ...((existingPolicies as any)?.internationalShipping ?? {}),
+            enabled:
+              !!dealerProfileForm.internationalNewVehicleExportEnabled ||
+              !!dealerProfileForm.internationalUsedVehicleExportEnabled,
+            newVehicleExportEnabled: !!dealerProfileForm.internationalNewVehicleExportEnabled,
+            usedVehicleExportEnabled: !!dealerProfileForm.internationalUsedVehicleExportEnabled,
+            disabledResponse: dealerProfileForm.internationalShippingDisabledResponse.trim()
+          }
         },
         phone: dealerProfileForm.phone.trim(),
         website: dealerProfileForm.website.trim(),
@@ -14425,6 +14450,53 @@ export default function Home() {
                   </label>
                   <div className="text-xs text-slate-600">
                     Controls replies for &quot;Marketplace - Rider to Rider Finance Inquiry&quot; and regenerate behavior.
+                  </div>
+                </div>
+                <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
+                  <div className="text-sm font-semibold">International Export Policy</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!!dealerProfileForm.internationalNewVehicleExportEnabled}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            internationalNewVehicleExportEnabled: e.target.checked
+                          })
+                        }
+                      />
+                      Export new motorcycles internationally
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={!!dealerProfileForm.internationalUsedVehicleExportEnabled}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            internationalUsedVehicleExportEnabled: e.target.checked
+                          })
+                        }
+                      />
+                      Export used motorcycles internationally
+                    </label>
+                  </div>
+                  <label className="space-y-1 block">
+                    <div className="text-xs text-slate-600">Response when export is not available</div>
+                    <textarea
+                      className="border rounded px-3 py-2 text-sm w-full min-h-[70px]"
+                      value={dealerProfileForm.internationalShippingDisabledResponse}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          internationalShippingDisabledResponse: e.target.value
+                        })
+                      }
+                    />
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    Used when a lead asks about international shipping/export. If neither option is checked, the assistant declines international shipping.
                   </div>
                 </div>
                 <div className="border rounded-lg p-3 space-y-3">

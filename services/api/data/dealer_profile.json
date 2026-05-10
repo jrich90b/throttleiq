@@ -76,6 +76,8 @@
   "policies": {
     "internationalShipping": {
       "enabled": false,
+      "newVehicleExportEnabled": false,
+      "usedVehicleExportEnabled": false,
       "disabledResponse": "Thanks for reaching out. We don't ship internationally, but I appreciate you checking with us."
     }
   }

@@ -111,6 +111,42 @@ const cases: Case[] = [
         { policies: { internationalShipping: { enabled: true } } },
         "I live in Honduras. Do you ship internationally?"
       )
+  },
+  {
+    id: "new_vehicle_export_disabled_declines_new",
+    expected: true,
+    run: () =>
+      shouldDeclineInternationalShipping(
+        {
+          policies: {
+            internationalShipping: {
+              enabled: true,
+              newVehicleExportEnabled: false,
+              usedVehicleExportEnabled: true
+            }
+          }
+        },
+        "I live in Honduras. Do you ship internationally?",
+        { vehicleCondition: "new" }
+      )
+  },
+  {
+    id: "used_vehicle_export_enabled_allows_used",
+    expected: false,
+    run: () =>
+      shouldDeclineInternationalShipping(
+        {
+          policies: {
+            internationalShipping: {
+              enabled: true,
+              newVehicleExportEnabled: false,
+              usedVehicleExportEnabled: true
+            }
+          }
+        },
+        "I live in Honduras. Do you ship internationally?",
+        { vehicleCondition: "used" }
+      )
   }
 ];
 

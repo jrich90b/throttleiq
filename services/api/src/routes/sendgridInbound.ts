@@ -6531,7 +6531,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let handledInternationalShippingInquiry = false;
   if (
     isInitialAdf &&
-    shouldDeclineInternationalShipping(dealerProfile, `${effectiveInquiry}\n${event.body}`)
+    shouldDeclineInternationalShipping(dealerProfile, `${effectiveInquiry}\n${event.body}`, {
+      vehicleCondition: conv.lead?.vehicle?.condition
+    })
   ) {
     draft = buildInternationalShippingUnavailableReply(dealerProfile);
     suppressAvailabilityAppend = true;
