@@ -22,7 +22,7 @@ export type LeadIntent =
 
 export type InboundMessageEvent = {
   channel: Channel;
-  provider: "twilio" | "sendgrid_adf" | "sendgrid" | "debug" | "voice_transcript";
+  provider: "twilio" | "sendgrid_adf" | "sendgrid" | "debug" | "voice_transcript" | "web_widget";
   from: string;
   to: string;
   body: string;

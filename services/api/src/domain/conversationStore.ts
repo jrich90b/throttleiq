@@ -20,6 +20,7 @@ export type MessageProvider =
   | "sendgrid"
   | "draft_ai"
   | "human"
+  | "web_widget"
   | "voice_call"
   | "voice_transcript"
   | "voice_summary";

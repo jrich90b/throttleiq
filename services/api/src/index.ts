@@ -100,6 +100,13 @@ import {
   buildInternationalShippingUnavailableReply,
   shouldDeclineInternationalShipping
 } from "./domain/internationalShippingPolicy.js";
+import {
+  buildWebTextWidgetInboundBody,
+  normalizeWebTextWidgetDepartment,
+  webTextWidgetClassification,
+  webTextWidgetDepartmentLabel,
+  webTextWidgetTodoReason
+} from "./domain/webTextWidget.js";
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
@@ -311,6 +318,7 @@ import {
   addAgentContextNote,
   clearAgentContext,
   getActiveAgentContextText,
+  setConversationClassification,
   setConversationSoftTag,
   type Conversation,
   type InventoryWatch,
@@ -2090,6 +2098,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/marketing") ||
     pathname.startsWith("/public/inventory") ||
+    pathname.startsWith("/public/widget") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/debug/inbound") ||
@@ -3725,6 +3734,138 @@ app.get("/public/inventory", async (_req, res) => {
   } catch (err: any) {
     console.warn("public inventory list failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: "Failed to load inventory" });
+  }
+});
+
+const WEB_TEXT_WIDGET_RATE_LIMIT_MS = Number(process.env.WEB_TEXT_WIDGET_RATE_LIMIT_MS ?? 30_000);
+const webTextWidgetRecentSubmissions = new Map<string, number>();
+
+function isWebTextWidgetRateLimited(key: string): boolean {
+  const now = Date.now();
+  for (const [k, ts] of webTextWidgetRecentSubmissions) {
+    if (now - ts > WEB_TEXT_WIDGET_RATE_LIMIT_MS * 4) webTextWidgetRecentSubmissions.delete(k);
+  }
+  const previous = webTextWidgetRecentSubmissions.get(key);
+  if (previous && now - previous < WEB_TEXT_WIDGET_RATE_LIMIT_MS) return true;
+  webTextWidgetRecentSubmissions.set(key, now);
+  return false;
+}
+
+function webTextWidgetEmbedScript(): string {
+  return `(function(){
+  if (window.__throttleIqTextWidgetLoaded) return;
+  window.__throttleIqTextWidgetLoaded = true;
+  var script = document.currentScript || document.querySelector('script[src*="/public/widget/text-us.js"]');
+  var apiBase = script && script.getAttribute('data-api-base') ? script.getAttribute('data-api-base').replace(/\\/$/, '') : (script && script.src ? new URL(script.src).origin : window.location.origin);
+  var brandColor = script && script.getAttribute('data-color') || '#f47b20';
+  var dealerName = script && script.getAttribute('data-dealer-name') || document.title || 'the dealership';
+  var departments = [{key:'sales',label:'Sales'},{key:'service',label:'Service'},{key:'parts',label:'Parts'},{key:'apparel',label:'Motor Clothes'}];
+  var state = { open:false, screen:'departments', department:null, label:'' };
+  var css = '.tiq-widget-root{position:fixed;z-index:2147483000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#242424}.tiq-text-button{position:fixed;left:18px;bottom:18px;border:0;border-radius:999px;background:'+brandColor+';color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.28);padding:14px 22px;font-size:18px;font-weight:700;display:flex;gap:12px;align-items:center;cursor:pointer}.tiq-panel{position:fixed;inset:0;background:#f7f7f7;color:#555;display:flex;flex-direction:column}.tiq-header{height:86px;background:'+brandColor+';color:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;font-weight:700}.tiq-title{font-size:22px;line-height:1.2}.tiq-sub{font-size:15px;opacity:.75;font-weight:500}.tiq-close,.tiq-back{margin-left:auto;background:transparent;border:0;color:#fff;font-size:44px;line-height:1;cursor:pointer;opacity:.8}.tiq-back{margin-left:0;font-size:42px}.tiq-body{padding:22px 18px;max-width:520px;width:100%;box-sizing:border-box}.tiq-card{background:#fff;border:1px solid #ccc;border-radius:10px;padding:8px 22px}.tiq-dept{width:100%;border:0;border-bottom:1px solid #ddd;background:#fff;color:#2e80f6;text-align:left;font-size:22px;padding:18px 0;cursor:pointer}.tiq-dept:last-child{border-bottom:0}.tiq-help{font-size:21px;line-height:1.45;margin:4px 0 22px;color:#555}.tiq-field{width:100%;border:0;border-bottom:1px solid #ddd;font-size:21px;padding:18px 0;color:#333;box-sizing:border-box;outline:none}.tiq-message{height:150px;resize:none}.tiq-send{margin-top:22px;width:100%;border:0;border-radius:10px;padding:16px;font-size:22px;font-weight:700;background:#ddd;color:#888}.tiq-send.tiq-ready{background:'+brandColor+';color:#fff;cursor:pointer}.tiq-consent{font-size:13px;line-height:1.45;color:#777;margin-top:16px}.tiq-error{font-size:14px;color:#b91c1c;margin-top:12px}.tiq-success{font-size:20px;line-height:1.45;color:#333;background:#fff;border:1px solid #ddd;border-radius:10px;padding:18px}.tiq-honey{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}@media(min-width:700px){.tiq-panel{inset:auto;right:18px;bottom:86px;width:390px;height:620px;border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.25);overflow:hidden}.tiq-header{height:76px}.tiq-title{font-size:20px}.tiq-body{padding:20px}.tiq-text-button{left:auto;right:18px}}';
+  var style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
+  var root = document.createElement('div'); root.className = 'tiq-widget-root'; document.body.appendChild(root);
+  function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function render(){
+    if(!state.open){root.innerHTML='<button class="tiq-text-button" type="button" aria-label="Text us"><span style="font-size:22px">&#9632;</span><span>Text Us</span></button>';root.querySelector('button').onclick=function(){state.open=true;state.screen='departments';render();};return;}
+    if(state.screen==='sent'){root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><div class="tiq-title">Message sent</div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><div class="tiq-success">Thanks. We received your message and will respond by text.</div></div></div>';root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};return;}
+    if(state.screen==='form'){root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><button class="tiq-back" type="button" aria-label="Back">&lsaquo;</button><div><div class="tiq-sub">Send a text to</div><div class="tiq-title">'+escapeHtml(state.label)+'</div></div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><p class="tiq-help">Add your details and a short message, we\\'ll respond with a text.</p><form><div class="tiq-card"><input class="tiq-field" name="name" autocomplete="name" placeholder="Name" /><input class="tiq-field" name="phone" autocomplete="tel" inputmode="tel" placeholder="Mobile Number" /><textarea class="tiq-field tiq-message" name="message" placeholder="Message"></textarea><input class="tiq-honey" name="company" tabindex="-1" autocomplete="off" /></div><button class="tiq-send" type="submit" disabled>Send</button><div class="tiq-consent">By hitting "Send" you authorize '+escapeHtml(dealerName)+' to send text messages to the mobile number provided. Message and data rates may apply. Reply STOP to opt out.</div><div class="tiq-error" hidden></div></form></div></div>';var form=root.querySelector('form'),send=root.querySelector('.tiq-send'),err=root.querySelector('.tiq-error');root.querySelector('.tiq-back').onclick=function(){state.screen='departments';render();};root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};function ready(){var fd=new FormData(form);var ok=String(fd.get('name')||'').trim()&&String(fd.get('phone')||'').trim()&&String(fd.get('message')||'').trim();send.disabled=!ok;send.classList.toggle('tiq-ready',!!ok);}form.addEventListener('input',ready);form.onsubmit=function(e){e.preventDefault();if(send.disabled)return;send.disabled=true;send.textContent='Sending...';err.hidden=true;var fd=new FormData(form);fetch(apiBase+'/public/widget/text-us',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({department:state.department,name:fd.get('name'),phone:fd.get('phone'),message:fd.get('message'),company:fd.get('company'),pageUrl:window.location.href,pageTitle:document.title,consent:true})}).then(function(r){return r.json().then(function(j){if(!r.ok||!j.ok)throw new Error(j.error||'Unable to send');state.screen='sent';render();});}).catch(function(ex){err.textContent=ex.message||'Unable to send right now.';err.hidden=false;send.disabled=false;send.textContent='Send';ready();});};return;}
+    root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><div style="font-size:28px">&#128101;</div><div class="tiq-title">Choose a department</div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><div class="tiq-card">'+departments.map(function(d){return '<button class="tiq-dept" type="button" data-dept="'+d.key+'">'+d.label+'</button>';}).join('')+'</div></div></div>';root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};Array.prototype.forEach.call(root.querySelectorAll('.tiq-dept'),function(btn){btn.onclick=function(){state.department=btn.getAttribute('data-dept');state.label=btn.textContent;state.screen='form';render();};});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',render);else render();
+})();`;
+}
+
+app.get("/public/widget/text-us.js", (_req, res) => {
+  res
+    .status(200)
+    .type("application/javascript")
+    .setHeader("Cache-Control", "public, max-age=300")
+    .send(webTextWidgetEmbedScript());
+});
+
+app.post("/public/widget/text-us", async (req, res) => {
+  try {
+    if (String(req.body?.company ?? "").trim()) return res.json({ ok: true });
+    const department = normalizeWebTextWidgetDepartment(req.body?.department);
+    if (!department) return res.status(400).json({ ok: false, error: "Choose a department." });
+    const name = String(req.body?.name ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+    const phoneRaw = String(req.body?.phone ?? "").trim();
+    const message = String(req.body?.message ?? "").replace(/\s+/g, " ").trim().slice(0, 1200);
+    const pageUrl = String(req.body?.pageUrl ?? "").trim().slice(0, 500);
+    const pageTitle = String(req.body?.pageTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+    const consent = req.body?.consent === true || String(req.body?.consent ?? "").toLowerCase() === "true";
+    if (!name) return res.status(400).json({ ok: false, error: "Enter your name." });
+    if (!phoneRaw) return res.status(400).json({ ok: false, error: "Enter your mobile number." });
+    if (!message) return res.status(400).json({ ok: false, error: "Enter a message." });
+    if (!consent) return res.status(400).json({ ok: false, error: "Text consent is required." });
+    const phone = normalizePhone(phoneRaw);
+    if (phone.replace(/\D/g, "").length < 10) {
+      return res.status(400).json({ ok: false, error: "Enter a valid mobile number." });
+    }
+    const ip = String(req.ip ?? req.header("x-forwarded-for") ?? "").split(",")[0].trim();
+    if (isWebTextWidgetRateLimited(`${ip}:${phone}`)) {
+      return res.status(429).json({ ok: false, error: "Please wait a moment before sending again." });
+    }
+    const now = new Date().toISOString();
+    const conv = upsertConversationByLeadKey(phone, "suggest");
+    const [firstName, ...restName] = name.split(" ").filter(Boolean);
+    const lastName = restName.join(" ") || undefined;
+    mergeConversationLead(conv, {
+      firstName: firstName || undefined,
+      lastName,
+      name,
+      phone,
+      inquiry: message,
+      source: "Website Text Widget",
+      preferredContactMethod: "text",
+      smsOptIn: true
+    } as any);
+    const classification = webTextWidgetClassification(department);
+    setConversationClassification(conv, classification as any);
+    setConversationSoftTag(conv, "web_text_widget_department", {
+      value: department,
+      source: "web_text_widget",
+      confidence: 1,
+      meta: {
+        label: webTextWidgetDepartmentLabel(department),
+        pageUrl: pageUrl || null,
+        pageTitle: pageTitle || null
+      }
+    });
+    const event: InboundMessageEvent = {
+      channel: "sms",
+      provider: "web_widget",
+      from: phone,
+      to: "web_text_widget",
+      body: buildWebTextWidgetInboundBody({ department, name, message, pageUrl, pageTitle }),
+      providerMessageId: `web_widget_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      receivedAt: now
+    };
+    appendInbound(conv, event);
+    const todoReason = webTextWidgetTodoReason(department);
+    if (todoReason) {
+      addTodo(conv, todoReason, `${webTextWidgetDepartmentLabel(department)} website text: ${message}`, event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", `${todoReason}_request`);
+      if (todoReason === "service") setDialogState(conv, "service_handoff");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+    upsertContact({
+      leadKey: phone,
+      conversationId: conv.id,
+      firstName: firstName || undefined,
+      lastName,
+      name,
+      phone,
+      leadSource: "Website Text Widget",
+      inquiry: message,
+      lastInboundAt: now
+    });
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, conversationId: conv.id, department });
+  } catch (err: any) {
+    console.warn("[web text widget] failed", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "Unable to send right now." });
   }
 });
 
