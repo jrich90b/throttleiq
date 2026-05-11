@@ -5,12 +5,14 @@ type Case = {
   expected: {
     provider: string | null;
     creditAdf: boolean;
+    dlaPostDemoRideAdf?: boolean;
     dlaNoPurchaseAdf: boolean;
     bodyIncludes?: string;
   };
   run: () => {
     provider: string | null;
     creditAdf: boolean;
+    dlaPostDemoRideAdf?: boolean;
     dlaNoPurchaseAdf: boolean;
     body?: string;
   };
@@ -51,6 +53,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -90,6 +93,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -124,6 +128,50 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
+      };
+    }
+  },
+  {
+    id: "keeps_dla_post_demo_adf_as_regen_source",
+    expected: {
+      provider: "sendgrid_adf",
+      creditAdf: false,
+      dlaPostDemoRideAdf: true,
+      dlaNoPurchaseAdf: false,
+      bodyIncludes: "Demo Bikes Ridden"
+    },
+    run: () => {
+      const picked = pickRegenerateInbound({
+        latestDraftAt: "2026-05-11T16:27:09.000Z",
+        messages: [
+          {
+            direction: "in",
+            provider: "twilio",
+            body: "Thanks",
+            at: "2026-05-11T16:25:00.000Z"
+          },
+          {
+            direction: "in",
+            provider: "sendgrid_adf",
+            body:
+              "WEB LEAD (ADF)\nLead App - Type: Y\nSalesPerson: GIOVANNI BOCCABELLA\nWhich model of motorcycle are you interested in?\n2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED Email Opt-In:Yes",
+            at: "2026-05-11T16:26:00.000Z"
+          },
+          {
+            direction: "out",
+            provider: "draft_ai",
+            body: "Draft body",
+            at: "2026-05-11T16:27:09.000Z"
+          }
+        ]
+      });
+      return {
+        provider: picked.inbound?.provider ?? null,
+        creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -156,6 +204,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -198,6 +247,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -245,6 +295,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -292,6 +343,7 @@ const cases: Case[] = [
       return {
         provider: picked.inbound?.provider ?? null,
         creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
         dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
         body: picked.inbound?.body ?? ""
       };
@@ -305,6 +357,8 @@ for (const c of cases) {
   const ok =
     actual.provider === c.expected.provider &&
     actual.creditAdf === c.expected.creditAdf &&
+    (c.expected.dlaPostDemoRideAdf == null ||
+      actual.dlaPostDemoRideAdf === c.expected.dlaPostDemoRideAdf) &&
     actual.dlaNoPurchaseAdf === c.expected.dlaNoPurchaseAdf &&
     (!c.expected.bodyIncludes || String(actual.body ?? "").includes(c.expected.bodyIncludes));
   if (ok) passed += 1;

@@ -1,3 +1,5 @@
+import { isDealerLeadAppPostDemoRideAdfText } from "./workflowRegressionGuards.js";
+
 type ConversationMessageLike = {
   direction?: "in" | "out" | string;
   provider?: string | null;
@@ -19,6 +21,7 @@ export type RegenerateInboundPick = {
   latestInboundBeforeDraft: ConversationMessageLike | null;
   latestInboundIsCreditAdf: boolean;
   latestInboundIsRiderToRiderFinanceAdf: boolean;
+  latestInboundIsDlaPostDemoRideAdf: boolean;
   latestInboundIsDlaNoPurchaseAdf: boolean;
 };
 
@@ -130,6 +133,9 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
   const latestInboundIsRiderToRiderFinanceAdf =
     latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
     isRiderToRiderFinanceAdfBody(latestInboundBodyLower);
+  const latestInboundIsDlaPostDemoRideAdf =
+    latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
+    isDealerLeadAppPostDemoRideAdfText(latestInboundBeforeDraft.body);
   const latestInboundIsDlaNoPurchaseAdf =
     latestInboundBeforeDraft?.provider === "sendgrid_adf" &&
     isDlaNoPurchaseAdfBody(latestInboundBodyLower);
@@ -137,7 +143,10 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     (args.preferLatestAdf && latestInboundBeforeDraft?.provider === "sendgrid_adf"
       ? latestInboundBeforeDraft
       : null) ??
-    (latestInboundIsCreditAdf || latestInboundIsRiderToRiderFinanceAdf || latestInboundIsDlaNoPurchaseAdf
+    (latestInboundIsCreditAdf ||
+      latestInboundIsRiderToRiderFinanceAdf ||
+      latestInboundIsDlaPostDemoRideAdf ||
+      latestInboundIsDlaNoPurchaseAdf
       ? latestInboundBeforeDraft
       : null) ??
     inboundMessages.find(m => m.provider !== "sendgrid_adf" && m.body && isBeforeDraft(m) && !isSkippableRegenerateInbound(m)) ??
@@ -180,6 +189,7 @@ export function pickRegenerateInbound(args: PickArgs): RegenerateInboundPick {
     latestInboundBeforeDraft,
     latestInboundIsCreditAdf,
     latestInboundIsRiderToRiderFinanceAdf,
+    latestInboundIsDlaPostDemoRideAdf,
     latestInboundIsDlaNoPurchaseAdf
   };
 }
