@@ -408,6 +408,12 @@ export function isDemoDayEventQuestionText(textRaw: string | null | undefined): 
   );
 }
 
+export function isDealerLeadAppPostDemoRideAdfText(textRaw: string | null | undefined): boolean {
+  return /\b(?:event name:\s*dealer test ride|demo bikes ridden|dealer lead app|lead app\s*-\s*type:\s*y)\b/i.test(
+    String(textRaw ?? "")
+  );
+}
+
 export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
   const match = String(textRaw ?? "").match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
   return match?.[0] ? match[0].toUpperCase() : null;

@@ -102,6 +102,7 @@ import {
   isHiringManagerInquiryText,
   isInventoryOnlineCompletenessQuestionText,
   isTakeOffMilwaukeeEightEngineRequestText,
+  isDealerLeadAppPostDemoRideAdfText,
   isDemoDayEventQuestionText,
   isRideChallengeLeadSignal,
   isTimingOnlyFollowUpTopic,
@@ -630,7 +631,7 @@ function ensureDealerRideOutcomeToken(conv: any): string {
 }
 
 function isDealerLeadAppAdfBody(body: string | null | undefined): boolean {
-  return /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(String(body ?? ""));
+  return isDealerLeadAppPostDemoRideAdfText(body);
 }
 
 function getDlaAutoReplyRepeatMinDays(): number {
@@ -4230,13 +4231,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
 
   const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
+  const rawAdfBody = String(event.body ?? "");
   const isDealerRideEventFromParser =
     marketingEventIntentFromParser &&
-    /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry);
+    (isDealerLeadAppPostDemoRideAdfText(effectiveInquiry) ||
+      isDealerLeadAppPostDemoRideAdfText(rawAdfBody));
   const isDealerRideEventLead =
     event.provider === "sendgrid_adf" &&
     (leadSourceLower.includes("dealer lead app") ||
-      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(effectiveInquiry) ||
+      isDealerLeadAppPostDemoRideAdfText(effectiveInquiry) ||
+      isDealerLeadAppPostDemoRideAdfText(rawAdfBody) ||
       isDealerRideEventFromParser);
   if (isDealerRideEventLead) {
     const appt = conv.appointment;

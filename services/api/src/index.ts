@@ -232,6 +232,7 @@ import {
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
+  isDealerLeadAppPostDemoRideAdfText,
   buildInventoryOnlineCompletenessReply,
   isDirectInventoryAvailabilityQuestionText,
   isInventoryOnlineCompletenessQuestionText,
@@ -32989,7 +32990,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenDealerRideEventLead =
     regenLooksLikeAdf &&
     (/source:\s*dealer lead app/i.test(String(event.body ?? "")) ||
-      /event name:\s*dealer test ride|demo bikes ridden|dealer lead app/i.test(String(event.body ?? "")));
+      isDealerLeadAppPostDemoRideAdfText(event.body));
   const regenNoPurchaseNow =
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||

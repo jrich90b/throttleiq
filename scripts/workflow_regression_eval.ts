@@ -18,6 +18,7 @@ import {
   isAudioDemoStatusQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
+  isDealerLeadAppPostDemoRideAdfText,
   isDemoDayEventQuestionText,
   isDirectInventoryAvailabilityQuestionText,
   isFactoryOrderTimingQuestionText,
@@ -482,6 +483,13 @@ const cases: Case[] = [
   {
     id: "demo_day_question_with_question_mark_detected",
     actual: isDemoDayEventQuestionText("Do you guys have demo days from Harley?"),
+    expected: true
+  },
+  {
+    id: "dealer_lead_app_post_demo_raw_body_detected",
+    actual: isDealerLeadAppPostDemoRideAdfText(
+      "Lead App - Type: Y\nSalesPerson: GIOVANNI BOCCABELLA\nWhich model of motorcycle are you interested in?\n2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED Email Opt-In:Yes"
+    ),
     expected: true
   },
   {
