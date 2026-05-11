@@ -263,13 +263,24 @@ input[type="reset"],
 
 /* Action menus are intentionally light surfaces; force form controls there
    to dark text on white for contrast/readability. */
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] input,
 .lr-app-theme .lr-app-sidebar-panel [data-actions-menu] select,
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] textarea,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] input,
 .lr-app-theme .lr-app-main-panel [data-actions-menu] select,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] textarea,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] input,
 .lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] select,
-.lr-campaign-theme .lr-app-main-panel [data-actions-menu] select {
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] textarea,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] input,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] select,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] textarea {
   background: #ffffff !important;
-  border-color: #cbd5e1 !important;
-  color: #0f172a !important;
+  border-color: #334155 !important;
+  color: #020617 !important;
+  -webkit-text-fill-color: #020617 !important;
+  caret-color: #020617 !important;
+  opacity: 1 !important;
 }
 
 .lr-app-theme .lr-app-sidebar-panel [data-actions-menu] select option,
@@ -282,6 +293,18 @@ input[type="reset"],
 .lr-campaign-theme .lr-app-main-panel [data-actions-menu] select optgroup {
   background: #ffffff !important;
   color: #0f172a !important;
+}
+
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] input::placeholder,
+.lr-app-theme .lr-app-sidebar-panel [data-actions-menu] textarea::placeholder,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] input::placeholder,
+.lr-app-theme .lr-app-main-panel [data-actions-menu] textarea::placeholder,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] input::placeholder,
+.lr-campaign-theme .lr-app-sidebar-panel [data-actions-menu] textarea::placeholder,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] input::placeholder,
+.lr-campaign-theme .lr-app-main-panel [data-actions-menu] textarea::placeholder {
+  color: #475569 !important;
+  opacity: 1 !important;
 }
 
 .lr-app-theme .lr-app-sidebar-panel input::placeholder,

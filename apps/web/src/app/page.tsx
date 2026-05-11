@@ -16819,7 +16819,7 @@ export default function Home() {
               </div>
             ) : null}
             {agentContextOpen ? (
-            <div className="mt-3 border rounded-lg bg-slate-50 px-3 py-3">
+            <div className="mt-3 border rounded-lg bg-slate-50 px-3 py-3" data-actions-menu>
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-slate-800">Agent Context (Internal)</div>
                 {(() => {
