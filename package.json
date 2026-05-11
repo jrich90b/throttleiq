@@ -23,7 +23,7 @@
     "faq_topic:eval": "LLM_ENABLED=1 LLM_FAQ_TOPIC_PARSER_ENABLED=1 npx tsx scripts/dealership_faq_topic_eval.ts",
     "inventory_entity:eval": "LLM_ENABLED=1 LLM_INVENTORY_ENTITY_PARSER_ENABLED=1 npx tsx scripts/inventory_entity_eval.ts",
     "inventory_status:eval": "LLM_ENABLED=1 LLM_INVENTORY_STATUS_PARSER_ENABLED=1 npx tsx scripts/inventory_status_eval.ts",
-    "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 npx tsx scripts/appointment_timing_eval.ts",
+    "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 node -r dotenv/config ./node_modules/.bin/tsx scripts/appointment_timing_eval.ts",
     "customer_ack_action:eval": "LLM_ENABLED=1 LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED=1 npx tsx scripts/customer_ack_action_eval.ts",
     "manual_outbound_appointment:eval": "LLM_ENABLED=1 LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED=1 npx tsx scripts/manual_outbound_appointment_eval.ts",
     "cadence_regenerate_context:eval": "LLM_ENABLED=1 LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED=1 npx tsx scripts/cadence_regenerate_context_eval.ts",
