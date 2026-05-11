@@ -11021,6 +11021,35 @@ function getOutcomeStaffNotifyTarget(conv: any): any {
   return conv.dealerRide.staffNotify;
 }
 
+function markOutcomeRelatedTodosDone(conv: any, opts?: { includeFinance?: boolean }): number {
+  const convId = String(conv?.id ?? "").trim();
+  if (!convId) return 0;
+  let count = markOpenTodosDoneForConversationByClass(convId, ["appointment"]);
+  const includeFinance = !!opts?.includeFinance;
+  for (const todo of listOpenTodos()) {
+    if (todo.convId !== convId || todo.status !== "open") continue;
+    const text = `${todo.reason ?? ""} ${todo.summary ?? ""} ${todo.sourceMessageId ?? ""}`.toLowerCase();
+    const isOutcomeTodo =
+      /\bdealer ride outcome needed\b/.test(text) ||
+      /\bdealer ride follow-up needed\b/.test(text) ||
+      /\bconfirm dealer ride outcome\b/.test(text) ||
+      /\brecord outcome\b/.test(text) ||
+      /\boutcome prompt\b/.test(text) ||
+      /\bappointment follow-up pending finance outcome\b/.test(text) ||
+      /\bsalesperson sms (?:sent|failed)\b/.test(text) ||
+      /\bdealer ride outcome by\b/.test(text) ||
+      (includeFinance &&
+        (/\bfinance outcome needed\b/.test(text) ||
+          /\bbusiness manager outcome prompt\b/.test(text) ||
+          /\bfinance outcome (?:marked|parsed|update)\b/.test(text) ||
+          /\bpublic_finance_outcome:/.test(text)));
+    if (!isOutcomeTodo) continue;
+    const marked = markTodoDone(convId, todo.id);
+    if (marked) count += 1;
+  }
+  return count;
+}
+
 async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
   const nowIso = new Date().toISOString();
   const cfg = await getSchedulerConfigHot();
@@ -12126,6 +12155,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
       const notifyState = ((conv as any).financeOutcomeNotify = (conv as any).financeOutcomeNotify ?? {});
       notifyState.updatedAt = nowIso();
       notifyState.outcomePromptResolvedAt = nowIso();
+      markOutcomeRelatedTodosDone(conv, { includeFinance: true });
       saveConversation(conv);
       await flushConversationStore();
       return {
@@ -12248,6 +12278,7 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
   }
   outcomeTarget.contextUsedAt = nowIsoValue;
   addTodo(conv, "note", `Dealer ride outcome by ${staff.name ?? staff.email ?? "staff"}: ${parsed.outcome}.`);
+  markOutcomeRelatedTodosDone(conv);
   saveConversation(conv);
   await flushConversationStore();
   return { handled: true, replyBody: confirmation };
@@ -24050,6 +24081,7 @@ app.post("/public/appointment/outcome", async (req, res) => {
     );
     notifyState.outcomePromptRespondedAt = nowIso;
     notifyState.updatedAt = nowIso;
+    markOutcomeRelatedTodosDone(conv, { includeFinance: true });
     saveConversation(conv);
     await flushConversationStore();
     return res.send("Thanks — finance outcome was saved.");
@@ -24115,9 +24147,9 @@ app.post("/public/appointment/outcome", async (req, res) => {
     secondaryStatus: normalizedOutcome.secondaryStatus,
     source: "public_outcome_form"
   });
-  if (conv?.id) {
-    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
-  }
+  markOutcomeRelatedTodosDone(conv, {
+    includeFinance: outcome === "financing_declined" || outcome === "financing_needs_info"
+  });
   if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
   saveConversation(conv);
   await flushConversationStore();
