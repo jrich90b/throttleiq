@@ -11122,7 +11122,7 @@ export default function Home() {
               {getSectionSubTitle()}
             </p>
             {section === "inbox" ? (
-              <p className="text-xs text-[var(--palette-graphite)] mt-0.5">
+              <p className="text-xs text-slate-300 mt-0.5">
                 {getInboxViewCountLabel()}
               </p>
             ) : null}
