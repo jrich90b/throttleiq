@@ -1,9 +1,39 @@
 import type { InboundMessageEvent } from "../services/api/src/domain/types.ts";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
 process.env.OPENAI_API_KEY ||= "test";
 process.env.DEALER_PROFILE_PATH ||= "services/api/data/dealer_profile.json";
+const now = new Date().toISOString();
+const evalDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "throttleiq-orchestrator-eval-"));
+await fs.cp("services/api/data", evalDataDir, { recursive: true });
+await fs.writeFile(
+  path.join(evalDataDir, "inventory_holds.json"),
+  JSON.stringify(
+    {
+      holds: {
+        "u111-22": {
+          id: "u111-22",
+          stockId: "U111-22",
+          vin: "1HD4LE211NB407069",
+          label: "2022 Iron 883",
+          createdAt: now,
+          updatedAt: now
+        }
+      }
+    },
+    null,
+    2
+  )
+);
+process.env.DATA_DIR = evalDataDir;
 
-const { orchestrateInbound } = await import("../services/api/src/domain/orchestrator.ts");
+const {
+  orchestrateInbound,
+  evaluateTestRideInventoryGate,
+  buildBlockedTestRideInventoryDraft
+} = await import("../services/api/src/domain/orchestrator.ts");
 
 type Case = {
   id: string;
@@ -12,8 +42,6 @@ type Case = {
   expectedIncludes: string[];
   expectedExcludes?: string[];
 };
-
-const now = new Date().toISOString();
 
 const cases: Case[] = [
   {
@@ -213,6 +241,44 @@ const cases: Case[] = [
 
 let passed = 0;
 const failures: Array<{ id: string; got: string; reason: string }> = [];
+
+const heldInventoryGate = await evaluateTestRideInventoryGate({
+  lead: {
+    vehicle: {
+      year: "2022",
+      make: "Harley-Davidson",
+      model: "Iron 883",
+      condition: "used"
+    }
+  } as any,
+  dealerProfile: { website: "https://americanharley-davidson.com" }
+});
+const heldInventoryDraft = buildBlockedTestRideInventoryDraft(heldInventoryGate);
+const heldInventoryLower = heldInventoryDraft.toLowerCase();
+const heldInventoryMissing = ["2022 Iron 883", "currently on hold"].filter(
+  fragment => !heldInventoryLower.includes(fragment.toLowerCase())
+);
+const heldInventoryBlocked = ["not seeing", "bike we don’t have", "bike we don't have"].filter(fragment =>
+  heldInventoryLower.includes(fragment.toLowerCase())
+);
+if (!heldInventoryMissing.length && !heldInventoryBlocked.length) {
+  passed += 1;
+  console.log(`PASS initial_adf_test_ride_held_inventory_says_on_hold draft=${JSON.stringify(heldInventoryDraft)}`);
+} else {
+  failures.push({
+    id: "initial_adf_test_ride_held_inventory_says_on_hold",
+    got: heldInventoryDraft,
+    reason: [
+      heldInventoryMissing.length ? `missing ${heldInventoryMissing.map(v => JSON.stringify(v)).join(", ")}` : "",
+      heldInventoryBlocked.length ? `included blocked ${heldInventoryBlocked.map(v => JSON.stringify(v)).join(", ")}` : ""
+    ]
+      .filter(Boolean)
+      .join("; ")
+  });
+  console.log(
+    `FAIL initial_adf_test_ride_held_inventory_says_on_hold ${failures[failures.length - 1].reason} draft=${JSON.stringify(heldInventoryDraft)}`
+  );
+}
 
 for (const c of cases) {
   const result = await orchestrateInbound(c.event, [], c.ctx);
