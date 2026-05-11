@@ -6844,6 +6844,12 @@ export default function Home() {
                 : section === "settings"
                   ? "Configure dealer & scheduling"
                   : `${suppressions.length} suppressed`;
+  const getInboxViewCountLabel = () =>
+    view === "inbox"
+      ? `Open: ${filteredConversations.length}`
+      : view === "campaigns"
+        ? `Campaign leads: ${filteredConversations.length}`
+        : `Archived: ${filteredConversations.length}`;
 
   useEffect(() => {
     if (!selectedId) setMobilePanel("list");
@@ -11115,6 +11121,11 @@ export default function Home() {
             <p className="text-xs text-gray-600 mt-1">
               {getSectionSubTitle()}
             </p>
+            {section === "inbox" ? (
+              <p className="text-xs text-[var(--palette-graphite)] mt-0.5">
+                {getInboxViewCountLabel()}
+              </p>
+            ) : null}
           </div>
           {section !== "contacts" ? (
             <div className="border border-[var(--border)] rounded-lg p-2 bg-[var(--surface-2)]">

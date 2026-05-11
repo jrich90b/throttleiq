@@ -154,13 +154,6 @@ export function InboxSection(props: any) {
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <div className="text-xs text-[var(--palette-graphite)]">
-            {view === "inbox"
-              ? `Open: ${filteredConversations.length}`
-              : view === "campaigns"
-                ? `Campaign leads: ${filteredConversations.length}`
-                : `Archived: ${filteredConversations.length}`}
-          </div>
           <button
             className="h-9 w-9 inline-flex items-center justify-center border-2 border-[var(--accent)] text-[var(--accent)] rounded hover:bg-[var(--surface-2)]"
             onClick={openCompose}
