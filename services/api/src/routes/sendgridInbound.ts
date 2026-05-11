@@ -3517,6 +3517,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     effectiveInquiry = sanitizedTradeInquiry || "trade-in appraisal request";
   }
   lead.inquiry = effectiveInquiry;
+  conv.lead = {
+    ...(conv.lead ?? {}),
+    inquiry: effectiveInquiry || undefined
+  };
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
     [

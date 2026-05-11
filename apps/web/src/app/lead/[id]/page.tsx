@@ -85,7 +85,11 @@ export default function LeadDetailsPage() {
   }, [params.id]);
 
   const lead = conv?.lead ?? {};
-  const displayLead = conv?.originalLead ?? lead;
+  const originalLead = conv?.originalLead;
+  const displayLead = lead;
+  const hasOriginalLead =
+    !!originalLead &&
+    JSON.stringify(originalLead) !== JSON.stringify(lead);
   const leadName = useMemo(() => {
     const raw = displayLead?.name?.trim() ?? lead?.name?.trim() ?? "";
     const first = displayLead?.firstName ?? lead?.firstName ?? "";
@@ -163,6 +167,26 @@ export default function LeadDetailsPage() {
               <div className="border rounded-lg bg-white p-4">
                 <div className="text-sm font-medium text-gray-800">Inquiry</div>
                 <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">{inquiryText}</div>
+              </div>
+            ) : null}
+
+            {hasOriginalLead ? (
+              <div className="border rounded-lg bg-white p-4">
+                <div className="text-sm font-medium text-gray-800">Original Lead Snapshot</div>
+                <div className="mt-2 space-y-1 text-sm text-gray-700">
+                  <div>Source: {originalLead?.source ?? "—"}</div>
+                  <div>Lead Ref: {originalLead?.leadRef ?? "—"}</div>
+                  <div>
+                    Vehicle:{" "}
+                    {[
+                      originalLead?.vehicle?.year,
+                      originalLead?.vehicle?.model ?? originalLead?.vehicle?.description,
+                      originalLead?.vehicle?.color
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || "—"}
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>

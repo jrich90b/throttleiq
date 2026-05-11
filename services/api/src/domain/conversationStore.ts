@@ -337,6 +337,7 @@ export type LeadProfile = {
   hasMotoLicense?: boolean;
   sellOption?: "cash" | "trade" | "either";
   sellOptionUpdatedAt?: string;
+  inquiry?: string;
   sourceId?: number;
   walkIn?: boolean;
   walkInComment?: string;
