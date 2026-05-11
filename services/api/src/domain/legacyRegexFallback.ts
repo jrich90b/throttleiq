@@ -142,7 +142,6 @@ export function detectSoftVisitIntent(text: string): boolean {
   const hasDayPart = /\b(morning|afternoon|evening|tonight|tonite)\b/i.test(t);
   const hasTime = /\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i.test(t);
   if (hasTime) return false;
-  if (isExplicitScheduleIntent(t)) return false;
   const hardConstraint =
     /\b(can'?t|cannot|can not|won'?t|unable|not able|have to work|working|stuck at work|something came up)\b/i;
   const rescheduleLike =
@@ -155,8 +154,10 @@ export function detectSoftVisitIntent(text: string): boolean {
     /\b(might|maybe|probably|try|trying|hope|hoping|plan|planning|if i can|if i could|if possible|sometime|some time|soon|eventually|later|in a few|in a couple|a couple (days|weeks)|next week|next month|this week|this weekend|weekend)\b/i;
   const dayToken =
     /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week|this weekend|weekend|next month)\b/i;
+  const ordinalDate = /\b(?:the\s*)?\d{1,2}(?:st|nd|rd|th)\b/i;
+  if (isExplicitScheduleIntent(t) && !softQualifier.test(t)) return false;
   if (hasDayPart && dayToken.test(t)) return false;
-  return visitVerb.test(t) && (softQualifier.test(t) || dayToken.test(t));
+  return visitVerb.test(t) && (softQualifier.test(t) || dayToken.test(t) || ordinalDate.test(t));
 }
 
 export function detectSchedulingSignals(text: string) {

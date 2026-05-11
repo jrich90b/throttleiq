@@ -601,6 +601,10 @@ export type Conversation = {
     requestedAt: string;
     cooldownUntil?: string;
     lastAskAt?: string;
+    reminderAt?: string;
+    windowStart?: { year: number; month: number; day: number; dayOfWeek: string };
+    windowEnd?: { year: number; month: number; day: number; dayOfWeek: string };
+    windowLabel?: string;
   };
   pickup?: {
     stage?: "need_town" | "need_street" | "need_time" | "ready";

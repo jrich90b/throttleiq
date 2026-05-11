@@ -5427,6 +5427,105 @@ function buildTentativeAppointmentWindowAck(parsed: AppointmentTimingParse | nul
   return "That can work. Just give me a heads up when you know the exact time so I can have everything lined up.";
 }
 
+function formatSoftVisitWindowDate(parts: { year: number; month: number; day: number }, timeZone: string): string {
+  const d = localPartsToUtcDate(timeZone, {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour24: 12,
+    minute: 0
+  });
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric"
+  }).format(d);
+}
+
+function resolveSoftVisitWindow(
+  text: string,
+  timeZone: string
+): {
+  startDate: { year: number; month: number; day: number; dayOfWeek: string };
+  endDate?: { year: number; month: number; day: number; dayOfWeek: string };
+  label: string;
+  reminderAt: string;
+} | null {
+  const source = String(text ?? "").trim();
+  if (!source) return null;
+  const parsedDates: Array<{ year: number; month: number; day: number; dayOfWeek: string }> = [];
+  const ordinalMatches = Array.from(source.matchAll(/\b(?:the\s*)?(\d{1,2})(?:st|nd|rd|th)\b/gi));
+  for (const match of ordinalMatches.slice(0, 2)) {
+    const day = Number(match[1]);
+    if (!Number.isFinite(day)) continue;
+    const parsed = parseRequestedDateOnly(`the ${day}th`, timeZone);
+    if (parsed && !parsedDates.some(d => d.year === parsed.year && d.month === parsed.month && d.day === parsed.day)) {
+      parsedDates.push(parsed);
+    }
+  }
+  if (!parsedDates.length) {
+    const parsed = parseRequestedDateOnly(source, timeZone);
+    if (parsed) parsedDates.push(parsed);
+  }
+  if (!parsedDates.length) return null;
+  parsedDates.sort((a, b) => {
+    const aTime = Date.UTC(a.year, a.month - 1, a.day);
+    const bTime = Date.UTC(b.year, b.month - 1, b.day);
+    return aTime - bTime;
+  });
+  const startDate = parsedDates[0];
+  const endDate = parsedDates[1];
+  const startLabel = formatSoftVisitWindowDate(startDate, timeZone);
+  const endLabel = endDate ? formatSoftVisitWindowDate(endDate, timeZone) : "";
+  const label = endLabel && endLabel !== startLabel ? `${startLabel} or ${endLabel}` : startLabel;
+  const reminderBase = new Date(Date.UTC(startDate.year, startDate.month - 1, startDate.day, 12, 0));
+  reminderBase.setUTCDate(reminderBase.getUTCDate() - 1);
+  const reminderAt = localPartsToUtcDate(timeZone, {
+    year: reminderBase.getUTCFullYear(),
+    month: reminderBase.getUTCMonth() + 1,
+    day: reminderBase.getUTCDate(),
+    hour24: 10,
+    minute: 30
+  }).toISOString();
+  return { startDate, endDate, label, reminderAt };
+}
+
+async function applySoftVisitCadenceWindow(conv: any, text: string, timeZone: string): Promise<boolean> {
+  const window = resolveSoftVisitWindow(text, timeZone);
+  const now = nowIso();
+  conv.scheduleSoft = {
+    ...(conv.scheduleSoft ?? {}),
+    requestedAt: conv.scheduleSoft?.requestedAt ?? now,
+    cooldownUntil: window?.reminderAt ?? conv.scheduleSoft?.cooldownUntil ?? new Date(Date.now() + SOFT_SCHEDULE_COOLDOWN_MS).toISOString(),
+    reminderAt: window?.reminderAt,
+    windowStart: window?.startDate,
+    windowEnd: window?.endDate,
+    windowLabel: window?.label
+  };
+  if (!window) return false;
+  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+    startFollowUpCadence(conv, now, timeZone);
+  }
+  if (conv.followUpCadence?.status === "active") {
+    conv.followUpCadence.pausedUntil = window.reminderAt;
+    conv.followUpCadence.pauseReason = "soft_visit_window";
+    conv.followUpCadence.nextDueAt = window.reminderAt;
+    conv.followUpCadence.scheduleInviteCount = 0;
+    conv.followUpCadence.scheduleMuted = false;
+  }
+  if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+    setFollowUpMode(conv, "active", "soft_visit_window");
+  }
+  return true;
+}
+
+function buildSoftVisitScheduleInvite(conv: any, firstName: string): string | null {
+  const label = String(conv?.scheduleSoft?.windowLabel ?? "").trim();
+  if (!label) return null;
+  const greeting = firstName ? `Hey ${firstName}, ` : "";
+  return `${greeting}just checking in — are you still thinking of stopping by ${label}? If so, what time works best so I can line it up?`;
+}
+
 function buildCustomerAckTentativeLockInReply(parsed: CustomerAckActionParse | null): string {
   const phrase = customerAckActionRequestedPhrase(parsed);
   if (phrase) {
@@ -7989,6 +8088,11 @@ async function buildCadenceRegeneratedDraft(
     } else if (message.includes("{")) {
       message = renderFollowUpTemplate(message, baseCtx);
     }
+    const softVisitInvite = allowProactiveSchedule ? buildSoftVisitScheduleInvite(conv, firstName) : null;
+    if (softVisitInvite) {
+      message = softVisitInvite;
+      if (conv.scheduleSoft) conv.scheduleSoft.lastAskAt = nowIso();
+    }
     if (conv.scheduleSoft && !allowProactiveSchedule) {
       message = stripSchedulingPromptFromFollowUp(message);
     }
@@ -8080,6 +8184,11 @@ async function buildCadenceRegeneratedDraft(
     message = appendCadenceOffersLine(message, cadenceOffersLine);
   }
 
+  const softVisitInvite = allowProactiveSchedule ? buildSoftVisitScheduleInvite(conv, firstName) : null;
+  if (softVisitInvite) {
+    message = softVisitInvite;
+    if (conv.scheduleSoft) conv.scheduleSoft.lastAskAt = nowIso();
+  }
   if (conv.scheduleSoft && !allowProactiveSchedule) {
     message = stripSchedulingPromptFromFollowUp(message);
   }
@@ -21358,6 +21467,11 @@ async function processDueFollowUps() {
       const messageIdx = (conv.followUpCadence.scheduleInviteCount ?? 0) % pool.length;
       message = renderFollowUpTemplate(pool[messageIdx], baseCtx);
     } else {
+      const softVisitInvite = allowProactiveSchedule ? buildSoftVisitScheduleInvite(conv, firstName) : null;
+      if (softVisitInvite) {
+        message = softVisitInvite;
+        if (conv.scheduleSoft) conv.scheduleSoft.lastAskAt = nowIso();
+      }
       if (conv.scheduleSoft && !allowProactiveSchedule) {
         message = stripSchedulingPromptFromFollowUp(message);
       }
@@ -33278,6 +33392,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       leadKey: conv.leadKey,
       confidence: regenAppointmentTimingParse?.confidence ?? null
     });
+    if (regenAppointmentTimingIntent === "tentative_time_window") {
+      const cfg = await getSchedulerConfigHot();
+      await applySoftVisitCadenceWindow(
+        conv,
+        `${event.body ?? ""} ${appointmentTimingRequestedPhrase(regenAppointmentTimingParse)}`,
+        cfg.timezone
+      );
+    }
     setDialogState(conv, "schedule_request");
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
@@ -38948,6 +39070,14 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       confidence: appointmentTimingParse?.confidence ?? null
     });
+    if (appointmentTimingIntent === "tentative_time_window") {
+      const cfg = await getSchedulerConfigHot();
+      await applySoftVisitCadenceWindow(
+        conv,
+        `${event.body ?? ""} ${appointmentTimingRequestedPhrase(appointmentTimingParse)}`,
+        cfg.timezone
+      );
+    }
     setDialogState(conv, "schedule_request");
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
@@ -39038,10 +39168,14 @@ if (authToken && signature) {
   }
   const softVisitIntent = schedulingSignalsBase.softVisit === true;
   if (event.provider === "twilio" && softVisitIntent) {
-    conv.scheduleSoft = {
-      requestedAt: nowIso(),
-      cooldownUntil: new Date(Date.now() + SOFT_SCHEDULE_COOLDOWN_MS).toISOString()
-    };
+    const cfg = await getSchedulerConfigHot();
+    const appliedWindow = await applySoftVisitCadenceWindow(conv, event.body ?? "", cfg.timezone);
+    if (!appliedWindow) {
+      conv.scheduleSoft = {
+        requestedAt: nowIso(),
+        cooldownUntil: new Date(Date.now() + SOFT_SCHEDULE_COOLDOWN_MS).toISOString()
+      };
+    }
     if (getDialogState(conv) === "none") {
       setDialogState(conv, "schedule_soft");
     }

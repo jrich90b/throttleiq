@@ -202,6 +202,16 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "soft_visit_date_range_detected_without_schedule_request",
+    actual: (() => {
+      const signals = detectSchedulingSignals(
+        "Cool. Ill try to stop by the 15th or 16th. Never know because of my work schedule. Thanks"
+      );
+      return signals.softVisit === true && signals.hasDayOnlyRequest === false && signals.explicit === false;
+    })(),
+    expected: true
+  },
+  {
     id: "thanks_for_info_is_not_specs_request",
     actual: isIncidentalInfoAcknowledgementText("Thanks for info. And any appointments later this month same time."),
     expected: true

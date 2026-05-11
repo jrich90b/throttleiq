@@ -68,6 +68,15 @@
     }
   },
   {
+    "id": "tentative_soft_visit_15_or_16_work_schedule_1",
+    "text": "Cool. Ill try to stop by the 15th or 16th. Never know because of my work schedule. Thanks",
+    "expected": {
+      "intent": "tentative_time_window",
+      "explicit_request": true,
+      "day_contains": "15th"
+    }
+  },
+  {
     "id": "ask_dealer_for_time_saturday_1",
     "text": "Good morning saturday would work best. let me know what time works for you.",
     "expected": {
