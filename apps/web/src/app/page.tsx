@@ -16846,7 +16846,7 @@ export default function Home() {
               </div>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 <textarea
-                  className="md:col-span-3 border rounded px-3 py-2 text-sm"
+                  className="md:col-span-3 border border-slate-400 rounded px-3 py-2 text-sm bg-white text-slate-950 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-500"
                   rows={3}
                   placeholder="Internal guidance note for agent (never sent verbatim)."
                   value={agentContextText}
@@ -16883,7 +16883,7 @@ export default function Home() {
                 <label className="text-xs text-slate-600">
                   Scope
                   <select
-                    className="mt-1 w-full border rounded px-2 py-2 text-sm bg-white"
+                    className="mt-1 w-full border border-slate-400 rounded px-2 py-2 text-sm bg-white text-slate-950 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-500"
                     value={agentContextMode}
                     onChange={e =>
                       setAgentContextMode(e.target.value === "next_reply" ? "next_reply" : "persistent")
@@ -16897,7 +16897,7 @@ export default function Home() {
                   Expires At (optional)
                   <input
                     type="datetime-local"
-                    className="mt-1 w-full border rounded px-2 py-2 text-sm"
+                    className="mt-1 w-full border border-slate-400 rounded px-2 py-2 text-sm bg-white text-slate-950 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-500"
                     value={agentContextExpiresAt}
                     onChange={e => setAgentContextExpiresAt(e.target.value)}
                   />
