@@ -10365,6 +10365,63 @@ function inferExtensionFromMedia(contentType: string | null, sourceUrl: string):
   return "bin";
 }
 
+function contentTypeFromMediaPath(sourceUrl: string): string {
+  const ext = (() => {
+    try {
+      return path.extname(new URL(sourceUrl, "https://local").pathname).replace(".", "").toLowerCase();
+    } catch {
+      return path.extname(sourceUrl).replace(".", "").toLowerCase();
+    }
+  })();
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  if (ext === "heic") return "image/heic";
+  if (ext === "heif") return "image/heif";
+  if (ext === "bmp") return "image/bmp";
+  if (ext === "svg") return "image/svg+xml";
+  if (ext === "pdf") return "application/pdf";
+  if (ext === "mp4") return "video/mp4";
+  if (ext === "mov") return "video/quicktime";
+  if (ext === "mpeg" || ext === "mpg") return "video/mpeg";
+  if (ext === "mp3") return "audio/mpeg";
+  if (ext === "wav") return "audio/wav";
+  return "application/octet-stream";
+}
+
+function fileNameFromMediaUrl(sourceUrl: string, fallback: string): string {
+  try {
+    const parsed = new URL(sourceUrl, "https://local");
+    const name = decodeURIComponent(parsed.pathname.split("/").pop() || "");
+    return name.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function resolveUploadedMediaPath(sourceUrl: string): string | null {
+  let pathname = "";
+  try {
+    pathname = new URL(sourceUrl, "https://local").pathname;
+  } catch {
+    pathname = sourceUrl;
+  }
+  if (!pathname.startsWith("/uploads/")) return null;
+  const uploadsRoot = path.resolve(getDataDir(), "uploads");
+  const rel = pathname.replace(/^\/uploads\//, "");
+  const abs = path.resolve(uploadsRoot, rel);
+  if (abs !== uploadsRoot && !abs.startsWith(`${uploadsRoot}${path.sep}`)) return null;
+  return abs;
+}
+
+function shouldAuthenticateTwilioMediaUrl(sourceUrl: string): boolean {
+  const parsed = parseHttpUrl(sourceUrl);
+  if (!parsed) return false;
+  const host = String(parsed.hostname ?? "").toLowerCase();
+  return host === "twilio.com" || host.endsWith(".twilio.com");
+}
+
 function inferExtensionFromBytes(buf: Buffer): string | null {
   if (!buf || buf.length < 4) return null;
   // JPEG SOI
@@ -24994,6 +25051,82 @@ app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
   if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
   saveConversation(conv);
   return res.json({ ok: true, conversation: conv, message: msg });
+});
+
+app.get("/conversations/:id/messages/:messageId/media/:mediaIndex", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  const messageId = String(req.params.messageId ?? "").trim();
+  const mediaIndex = Number.parseInt(String(req.params.mediaIndex ?? ""), 10);
+  if (!messageId || !Number.isFinite(mediaIndex) || mediaIndex < 0) {
+    return res.status(400).json({ ok: false, error: "invalid media request" });
+  }
+
+  const msg = (conv.messages ?? []).find(m => String(m.id ?? "") === messageId);
+  if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
+  const mediaUrls = Array.isArray(msg.mediaUrls) ? msg.mediaUrls : [];
+  const sourceUrl = String(mediaUrls[mediaIndex] ?? "").trim();
+  if (!sourceUrl) return res.status(404).json({ ok: false, error: "media not found" });
+
+  const download = String(req.query.download ?? "") === "1";
+  const fallbackName = `attachment-${mediaIndex + 1}`;
+  const fileName = fileNameFromMediaUrl(sourceUrl, fallbackName);
+  const disposition = `${download ? "attachment" : "inline"}; filename="${fileName.replace(/"/g, "")}"`;
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Disposition", disposition);
+
+  const uploadedPath = resolveUploadedMediaPath(sourceUrl);
+  if (uploadedPath) {
+    try {
+      const stat = await fs.promises.stat(uploadedPath);
+      if (!stat.isFile()) return res.status(404).json({ ok: false, error: "media not found" });
+      res.setHeader("Content-Type", contentTypeFromMediaPath(sourceUrl));
+      res.setHeader("Content-Length", String(stat.size));
+      return fs.createReadStream(uploadedPath).pipe(res);
+    } catch {
+      return res.status(404).json({ ok: false, error: "media not found" });
+    }
+  }
+
+  const parsed = parseHttpUrl(sourceUrl);
+  if (!parsed) {
+    return res.status(400).json({ ok: false, error: "unsupported media url" });
+  }
+
+  const accountSid = String(process.env.TWILIO_ACCOUNT_SID ?? "").trim();
+  const authToken = String(process.env.TWILIO_AUTH_TOKEN ?? "").trim();
+  const authHeader =
+    shouldAuthenticateTwilioMediaUrl(sourceUrl) && accountSid && authToken
+      ? `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`
+      : "";
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(sourceUrl, authHeader ? { headers: { Authorization: authHeader } } : undefined);
+    if (!upstream.ok && authHeader) {
+      upstream = await fetch(sourceUrl);
+    }
+  } catch (err: any) {
+    console.warn("[conversations media proxy] fetch failed", { sourceUrl, err: err?.message ?? err });
+    return res.status(502).json({ ok: false, error: "media fetch failed" });
+  }
+
+  if (!upstream.ok) {
+    console.warn("[conversations media proxy] upstream failed", { sourceUrl, status: upstream.status });
+    return res.status(upstream.status === 404 ? 404 : 502).json({ ok: false, error: "media unavailable" });
+  }
+
+  const contentType = upstream.headers.get("content-type") || contentTypeFromMediaPath(sourceUrl);
+  const contentLength = upstream.headers.get("content-length");
+  res.setHeader("Content-Type", contentType);
+  if (contentLength) res.setHeader("Content-Length", contentLength);
+  const buffer = Buffer.from(await upstream.arrayBuffer());
+  return res.send(buffer);
 });
 
 app.post("/conversations/:id/agent-context", async (req, res) => {

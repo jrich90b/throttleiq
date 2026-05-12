@@ -316,8 +316,8 @@ function injectBookingUrl(body: string, url: string) {
   return `${body}\n\nYou can book an appointment here: ${url}`;
 }
 
-function getMediaUrlInfo(url: string): { isImage: boolean; isPdf: boolean; fileName: string } {
-  const fallback = { isImage: false, isPdf: false, fileName: "attachment" };
+function getMediaUrlInfo(url: string): { isImage: boolean; isVideo: boolean; isPdf: boolean; fileName: string } {
+  const fallback = { isImage: false, isVideo: false, isPdf: false, fileName: "attachment" };
   if (!url) return fallback;
   try {
     const parsed = new URL(url, "https://local");
@@ -325,11 +325,19 @@ function getMediaUrlInfo(url: string): { isImage: boolean; isPdf: boolean; fileN
     const fileName = decodeURIComponent(pathName.split("/").pop() || "attachment");
     const ext = (fileName.split(".").pop() || "").toLowerCase();
     const isImage = ["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "svg"].includes(ext);
+    const isVideo = ["mp4", "mov", "m4v", "webm", "mpeg", "mpg"].includes(ext);
     const isPdf = ext === "pdf";
-    return { isImage, isPdf, fileName };
+    return { isImage, isVideo, isPdf, fileName };
   } catch {
     return fallback;
   }
+}
+
+function buildConversationMediaUrl(conversationId: string, messageId: string, mediaIndex: number, download = false): string {
+  const base = `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(
+    messageId
+  )}/media/${encodeURIComponent(String(mediaIndex))}`;
+  return download ? `${base}?download=1` : base;
 }
 
 function escapeHtml(text: string): string {
@@ -18407,30 +18415,71 @@ export default function Home() {
                         <div
                           className={`mt-2 flex flex-wrap gap-2 ${m.direction === "in" ? "" : "justify-end"}`}
                         >
-                          {m.mediaUrls.map(url => {
+                          {m.mediaUrls.map((url, mediaIndex) => {
                             const media = getMediaUrlInfo(url);
+                            const previewUrl = buildConversationMediaUrl(selectedConv.id, m.id, mediaIndex);
+                            const downloadUrl = buildConversationMediaUrl(selectedConv.id, m.id, mediaIndex, true);
                             if (media.isImage) {
                               return (
-                                <img
-                                  key={url}
-                                  src={url}
-                                  alt="MMS image attachment"
-                                  className="max-w-[240px] rounded border"
-                                  loading="lazy"
-                                />
+                                <div key={`${url}-${mediaIndex}`} className="max-w-[240px]">
+                                  <a href={previewUrl} target="_blank" rel="noreferrer" title={media.fileName}>
+                                    <img
+                                      src={previewUrl}
+                                      alt="MMS image attachment"
+                                      className="max-w-[240px] rounded border bg-white"
+                                      loading="lazy"
+                                    />
+                                  </a>
+                                  <div className={`mt-1 flex gap-2 text-xs ${m.direction === "in" ? "" : "justify-end"}`}>
+                                    <a className="text-blue-700 underline" href={previewUrl} target="_blank" rel="noreferrer">
+                                      Open
+                                    </a>
+                                    <a className="text-blue-700 underline" href={downloadUrl}>
+                                      Download
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            if (media.isVideo) {
+                              return (
+                                <div key={`${url}-${mediaIndex}`} className="max-w-[280px]">
+                                  <video
+                                    src={previewUrl}
+                                    className="max-w-[280px] rounded border bg-black"
+                                    controls
+                                    preload="metadata"
+                                  />
+                                  <div className={`mt-1 flex gap-2 text-xs ${m.direction === "in" ? "" : "justify-end"}`}>
+                                    <a className="text-blue-700 underline" href={previewUrl} target="_blank" rel="noreferrer">
+                                      Open
+                                    </a>
+                                    <a className="text-blue-700 underline" href={downloadUrl}>
+                                      Download
+                                    </a>
+                                  </div>
+                                </div>
                               );
                             }
                             return (
-                              <a
-                                key={url}
-                                href={url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-xs rounded border px-2 py-1 bg-white hover:bg-gray-50 text-blue-700 underline"
-                                title={media.fileName}
-                              >
-                                {media.isPdf ? "Open PDF attachment" : "Open attachment"}
-                              </a>
+                              <div key={`${url}-${mediaIndex}`} className="flex gap-2">
+                                <a
+                                  href={previewUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs rounded border px-2 py-1 bg-white hover:bg-gray-50 text-blue-700 underline"
+                                  title={media.fileName}
+                                >
+                                  {media.isPdf ? "Open PDF" : "Open attachment"}
+                                </a>
+                                <a
+                                  href={downloadUrl}
+                                  className="text-xs rounded border px-2 py-1 bg-white hover:bg-gray-50 text-blue-700 underline"
+                                  title={media.fileName}
+                                >
+                                  Download
+                                </a>
+                              </div>
                             );
                           })}
                         </div>
