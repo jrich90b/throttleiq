@@ -13,6 +13,11 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
+  initializeLangfuse,
+  shutdownLangfuse,
+  withLangfuseObservation
+} from "./observability/langfuse.js";
+import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   classifyBlendedChatterWithLLM,
@@ -401,6 +406,7 @@ if (!process.env.DATA_DIR) {
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
+initializeLangfuse();
 app.use(cors());
 app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
 
@@ -2001,6 +2007,68 @@ async function safeDealerWeatherStatus(
   }
 }
 
+function langfuseHash(value: unknown): string | undefined {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  return crypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
+function shouldIncludeLangfuseMessageText(): boolean {
+  return String(process.env.LANGFUSE_INCLUDE_MESSAGE_TEXT ?? "").trim() === "1";
+}
+
+function buildLangfuseOrchestratorInput(
+  event: InboundMessageEvent,
+  history: { direction: "in" | "out"; body: string }[],
+  ctx: Parameters<typeof orchestrateInbound>[2]
+): Record<string, unknown> {
+  const includeText = shouldIncludeLangfuseMessageText();
+  return {
+    provider: event.provider,
+    channel: event.channel,
+    fromHash: langfuseHash(event.from),
+    toHash: langfuseHash(event.to),
+    body: includeText ? event.body : undefined,
+    bodyLength: String(event.body ?? "").length,
+    mediaCount: event.mediaUrls?.length ?? 0,
+    providerMessageId: event.providerMessageId ? langfuseHash(event.providerMessageId) : undefined,
+    historyLength: history.length,
+    history: includeText ? history.slice(-8) : undefined,
+    leadSource: ctx?.leadSource ?? undefined,
+    bucket: ctx?.bucket ?? undefined,
+    cta: ctx?.cta ?? undefined,
+    hasAppointment: !!ctx?.appointment,
+    hasFollowUp: !!ctx?.followUp,
+    hasHold: !!ctx?.hold,
+    hasSale: !!ctx?.sale,
+    hasInventoryWatch: !!ctx?.inventoryWatch || !!ctx?.inventoryWatches,
+    primaryIntentHint: ctx?.primaryIntentHint ?? undefined,
+    availabilityIntentHint: ctx?.availabilityIntentHint ?? undefined,
+    schedulingIntentHint: ctx?.schedulingIntentHint ?? undefined,
+    pricingIntentHint: ctx?.pricingIntentHint ?? undefined,
+    financeIntentHint: ctx?.financeIntentHint ?? undefined
+  };
+}
+
+function buildLangfuseOrchestratorOutput(result: OrchestratorResult): Record<string, unknown> {
+  return {
+    intent: result.intent,
+    stage: result.stage,
+    shouldRespond: result.shouldRespond,
+    draft: shouldIncludeLangfuseMessageText() ? result.draft : undefined,
+    draftLength: String(result.draft ?? "").length,
+    autoCloseReason: result.autoClose?.reason,
+    handoffReason: result.handoff?.reason,
+    handoffRequired: result.handoff?.required,
+    smallTalk: result.smallTalk,
+    pricingAttempted: result.pricingAttempted,
+    paymentsAnswered: result.paymentsAnswered,
+    suggestedSlotsCount: result.suggestedSlots?.length ?? 0,
+    requestedAppointmentType: result.requestedAppointmentType,
+    debugFlow: result.debugFlow
+  };
+}
+
 async function safeOrchestrateInbound(
   label: string,
   event: InboundMessageEvent,
@@ -2008,12 +2076,29 @@ async function safeOrchestrateInbound(
   ctx: Parameters<typeof orchestrateInbound>[2],
   timeoutMs: number = DEFAULT_ORCHESTRATOR_TIMEOUT_MS
 ): Promise<OrchestratorResult> {
-  try {
-    return await withTimeout(orchestrateInbound(event, history, ctx), timeoutMs, `orchestrator.${label}`);
-  } catch (err: any) {
-    console.warn(`[orchestrator] ${label} failed:`, err?.message ?? err);
-    return buildOrchestratorFailureFallback(event, ctx);
-  }
+  return withLangfuseObservation(
+    `orchestrator.${label}`,
+    {
+      input: buildLangfuseOrchestratorInput(event, history, ctx),
+      metadata: {
+        label,
+        routePolicyMode: getRoutePolicyMode(),
+        llmEnabled: process.env.LLM_ENABLED === "1",
+        textIncluded: shouldIncludeLangfuseMessageText()
+      },
+      tags: ["orchestrator", event.provider, event.channel],
+      sessionId: langfuseHash(event.from),
+      output: buildLangfuseOrchestratorOutput
+    },
+    async () => {
+      try {
+        return await withTimeout(orchestrateInbound(event, history, ctx), timeoutMs, `orchestrator.${label}`);
+      } catch (err: any) {
+        console.warn(`[orchestrator] ${label} failed:`, err?.message ?? err);
+        return buildOrchestratorFailureFallback(event, ctx);
+      }
+    }
+  );
 }
 
 type HotCacheEntry<T> = {
@@ -45040,7 +45125,7 @@ function escapeXml(s: string): string {
 }
 
 const port = Number.parseInt(process.env.PORT ?? "3001", 10);
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`✅ API listening on http://localhost:${port}`);
   console.log("   - GET    /health");
   console.log("   - GET    /settings");
@@ -45082,4 +45167,23 @@ app.listen(port, () => {
     const interval = setInterval(runKeepalive, keepaliveMinutes * 60 * 1000);
     (interval as any).unref?.();
   }
+});
+
+async function shutdown(signal: string) {
+  console.log(`[shutdown] received ${signal}`);
+  server.close(async () => {
+    try {
+      await shutdownLangfuse();
+    } catch (err: any) {
+      console.warn("[langfuse] shutdown failed:", err?.message ?? err);
+    }
+    process.exit(0);
+  });
+}
+
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
 });
