@@ -30,3 +30,20 @@ export function shouldRouteRoom58PriceHandoff(args: {
   const candidates = extractAdfInquiryCandidates(args.inquiryRaw);
   return candidates.some(isPriceOnlyInquiryText);
 }
+
+export function shouldForceInitialTestRideSourceScheduleCopy(args: {
+  isInitialAdf: boolean;
+  inferredBucket?: string | null;
+  inferredCta?: string | null;
+  leadSourceLower?: string | null;
+  draft?: string | null;
+}): boolean {
+  if (!args.isInitialAdf) return false;
+  const source = String(args.leadSourceLower ?? "");
+  const sourceIsTestRide = /\b(?:online\s+)?test\s+ride\b|\bdemo\s+ride\b|\bbook\s+test\s+ride\b/i.test(source);
+  const classificationIsTestRide =
+    args.inferredBucket === "test_ride" || args.inferredCta === "schedule_test_ride";
+  if (!sourceIsTestRide && !classificationIsTestRide) return false;
+  const draft = String(args.draft ?? "");
+  return !/\b(test ride|demo ride|line up|schedule|book|appointment)\b/i.test(draft);
+}

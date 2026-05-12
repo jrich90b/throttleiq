@@ -1,6 +1,7 @@
 import {
   extractAdfInquiryCandidates,
   isPriceOnlyInquiryText,
+  shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../services/api/src/domain/adfPolicy.ts";
 import {
@@ -147,6 +148,42 @@ const cases: Case[] = [
         "I live in Honduras. Do you ship internationally?",
         { vehicleCondition: "used" }
       )
+  },
+  {
+    id: "source_only_test_ride_forces_schedule_copy",
+    expected: true,
+    run: () =>
+      shouldForceInitialTestRideSourceScheduleCopy({
+        isInitialAdf: true,
+        inferredBucket: "test_ride",
+        inferredCta: "schedule_test_ride",
+        leadSourceLower: "hd.com online test ride request",
+        draft: "Hi Glenn — This is Alexandra at American Harley-Davidson. Thanks for reaching out. How can I help?"
+      })
+  },
+  {
+    id: "existing_test_ride_copy_not_overwritten",
+    expected: false,
+    run: () =>
+      shouldForceInitialTestRideSourceScheduleCopy({
+        isInitialAdf: true,
+        inferredBucket: "test_ride",
+        inferredCta: "schedule_test_ride",
+        leadSourceLower: "hd.com online test ride request",
+        draft: "Thanks — I saw you’re interested in a test ride. What day works best for you?"
+      })
+  },
+  {
+    id: "non_initial_test_ride_source_not_forced",
+    expected: false,
+    run: () =>
+      shouldForceInitialTestRideSourceScheduleCopy({
+        isInitialAdf: false,
+        inferredBucket: "test_ride",
+        inferredCta: "schedule_test_ride",
+        leadSourceLower: "hd.com online test ride request",
+        draft: "Thanks for reaching out. How can I help?"
+      })
   }
 ];
 

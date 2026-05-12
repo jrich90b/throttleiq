@@ -81,7 +81,11 @@ import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
 import { getAllModels, isModelInRecentYearsForMake } from "../domain/modelsByYear.js";
-import { isPriceOnlyInquiryText, shouldRouteRoom58PriceHandoff } from "../domain/adfPolicy.js";
+import {
+  isPriceOnlyInquiryText,
+  shouldForceInitialTestRideSourceScheduleCopy,
+  shouldRouteRoom58PriceHandoff
+} from "../domain/adfPolicy.js";
 import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
@@ -6628,6 +6632,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       addTodo(conv, "other", statusReply.todoSummary ?? event.body, event.providerMessageId);
       setFollowUpMode(conv, "manual_handoff", statusReply.followUpReason ?? "inventory_status");
       stopFollowUpCadence(conv, "manual_handoff");
+    }
+  }
+  if (
+    shouldForceInitialTestRideSourceScheduleCopy({
+      isInitialAdf,
+      inferredBucket,
+      inferredCta,
+      leadSourceLower,
+      draft
+    }) &&
+    !initialAdfVehicleFactDecision &&
+    !initialAdfInventoryStatusAccepted
+  ) {
+    const modelLabel = formatModelLabel(
+      conv.lead?.vehicle?.year ?? null,
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+    );
+    const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+    if (initialAvailability === "on_hold") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "That unit is currently on hold, so I don’t want to book you on a bike that may not be available. If it frees up, I can line it up, or I can help pick another in-stock bike.";
+      suppressAvailabilityAppend = true;
+    } else if (initialAvailability === "sold") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "That unit is no longer available, but I can help pick a similar in-stock bike to ride.";
+      suppressAvailabilityAppend = true;
+    } else if (initialAvailability === "not_found") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "I’m not seeing that exact bike available right now, but I can help pick an in-stock bike to ride.";
+      suppressAvailabilityAppend = true;
+    } else {
+      draft = `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
     }
   }
   const isPurchaseIntentLead =
