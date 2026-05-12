@@ -83,7 +83,10 @@ import type {
 } from "./domain/llmDraft.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./domain/types.js";
 import { sendgridInboundMiddleware, handleSendgridInbound } from "./routes/sendgridInbound.js";
-import { isPriceOnlyInquiryText } from "./domain/adfPolicy.js";
+import {
+  isPriceOnlyInquiryText,
+  shouldForceInitialTestRideSourceScheduleCopy
+} from "./domain/adfPolicy.js";
 import { resolveInventoryUrlByStock } from "./domain/inventoryUrlResolver.js";
 import { checkInventorySalePendingByUrl } from "./domain/inventoryChecker.js";
 import { getDealerProfile, saveDealerProfile } from "./domain/dealerProfile.js";
@@ -35370,6 +35373,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     reply = buildInternationalShippingUnavailableReply(dealerProfile);
     closeConversation(conv, "international");
     stopFollowUpCadence(conv, "manual_handoff");
+  }
+  if (
+    event.provider === "sendgrid_adf" &&
+    shouldForceInitialTestRideSourceScheduleCopy({
+      isInitialAdf: true,
+      inferredBucket: conv.classification?.bucket ?? null,
+      inferredCta: conv.classification?.cta ?? null,
+      leadSourceLower: String(conv.lead?.source ?? "").toLowerCase(),
+      draft: reply
+    })
+  ) {
+    const modelLabel = formatModelLabel(
+      conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+    );
+    const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+    reply = `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
     if (!regenIsWalkInLead) {
