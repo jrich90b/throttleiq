@@ -227,6 +227,7 @@ import {
   buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
+  buildUnlistedInventoryHandoffReply,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
   getScheduleDayOptionsLabel,
@@ -240,6 +241,7 @@ import {
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
+  isUnlistedInventoryQuestionText,
   isDealerLeadAppPostDemoRideAdfText,
   buildInventoryOnlineCompletenessReply,
   isDirectInventoryAvailabilityQuestionText,
@@ -5706,23 +5708,33 @@ async function maybeHandleInventoryStatusParserRoute(args: {
       args.parsedAvailability ?? inventoryStatusParseToAvailabilityHint(args.parsedStatus),
       args.conv
     );
-    const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+    const unlistedInventoryRequest = isUnlistedInventoryQuestionText(args.text ?? "");
+    const reply = unlistedInventoryRequest
+      ? buildUnlistedInventoryHandoffReply(modelLabel)
+      : buildFactoryOrderTimingHandoffReply(modelLabel);
     addTodo(
       args.conv,
       "other",
-      modelLabel
-        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
-        : "Check factory/inbound timing and follow up.",
+      unlistedInventoryRequest
+        ? modelLabel
+          ? `Check unlisted/back-room inventory for ${modelLabel} that fits the customer's budget and follow up.`
+          : "Check unlisted/back-room inventory that fits the customer's budget and follow up."
+        : modelLabel
+          ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+          : "Check factory/inbound timing and follow up.",
       args.providerMessageId ?? undefined
     );
     setDialogState(args.conv, "inventory_answered");
-    setFollowUpMode(args.conv, "manual_handoff", "factory_order_timing");
+    setFollowUpMode(args.conv, "manual_handoff", unlistedInventoryRequest ? "unlisted_inventory_check" : "factory_order_timing");
     stopFollowUpCadence(args.conv, "manual_handoff");
-    stopRelatedCadences(args.conv, "factory_order_timing", { setMode: "manual_handoff" });
+    stopRelatedCadences(args.conv, unlistedInventoryRequest ? "unlisted_inventory_check" : "factory_order_timing", {
+      setMode: "manual_handoff"
+    });
     recordRouteOutcome(args.scope, "inventory_status_factory_or_incoming", {
       convId: args.conv.id,
       leadKey: args.conv.leadKey,
       intent,
+      unlistedInventoryRequest,
       modelLabel: modelLabel || null,
       confidence: args.parsedStatus?.confidence ?? null
     });
@@ -5794,6 +5806,7 @@ function hasFactoryOrderTimingParserHint(text: string | null | undefined): boole
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
   return (
+    isUnlistedInventoryQuestionText(lower) ||
     isFactoryOrderTimingQuestionText(lower) ||
     /\b(coming in|incoming|on order|factory|from the factory|get one|locate one|order one|how long|eta|when can you get)\b/i.test(
       lower
@@ -5820,7 +5833,8 @@ async function maybeHandleFactoryOrderTimingFaq(args: {
   if (!parserAccepted) {
     const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0;
     const min = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.72);
-    if (parsed && parsed.topic !== "factory_order_timing" && confidence >= min) {
+    const unlistedInventoryRequest = isUnlistedInventoryQuestionText(args.text ?? "");
+    if (parsed && parsed.topic !== "factory_order_timing" && confidence >= min && !unlistedInventoryRequest) {
       return null;
     }
     if (!isFactoryOrderTimingQuestionText(args.text ?? "")) return null;
@@ -5831,22 +5845,32 @@ async function maybeHandleFactoryOrderTimingFaq(args: {
     args.parsedAvailability ?? null,
     args.conv
   );
-  const reply = buildFactoryOrderTimingHandoffReply(modelLabel);
+  const unlistedInventoryRequest = isUnlistedInventoryQuestionText(args.text ?? "");
+  const reply = unlistedInventoryRequest
+    ? buildUnlistedInventoryHandoffReply(modelLabel)
+    : buildFactoryOrderTimingHandoffReply(modelLabel);
   addTodo(
     args.conv,
     "other",
-    modelLabel
-      ? `Check factory/inbound timing for ${modelLabel} and follow up.`
-      : "Check factory/inbound timing and follow up.",
+    unlistedInventoryRequest
+      ? modelLabel
+        ? `Check unlisted/back-room inventory for ${modelLabel} that fits the customer's budget and follow up.`
+        : "Check unlisted/back-room inventory that fits the customer's budget and follow up."
+      : modelLabel
+        ? `Check factory/inbound timing for ${modelLabel} and follow up.`
+        : "Check factory/inbound timing and follow up.",
     args.providerMessageId ?? undefined
   );
   setDialogState(args.conv, "inventory_answered");
-  setFollowUpMode(args.conv, "manual_handoff", "factory_order_timing");
+  setFollowUpMode(args.conv, "manual_handoff", unlistedInventoryRequest ? "unlisted_inventory_check" : "factory_order_timing");
   stopFollowUpCadence(args.conv, "manual_handoff");
-  stopRelatedCadences(args.conv, "factory_order_timing", { setMode: "manual_handoff" });
+  stopRelatedCadences(args.conv, unlistedInventoryRequest ? "unlisted_inventory_check" : "factory_order_timing", {
+    setMode: "manual_handoff"
+  });
   recordRouteOutcome(args.scope, "factory_order_timing_handoff", {
     convId: args.conv.id,
     leadKey: args.conv.leadKey,
+    unlistedInventoryRequest,
     modelLabel: modelLabel || null,
     confidence: parsed?.confidence ?? null,
     parserTopic: parsed?.topic ?? null

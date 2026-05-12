@@ -8,6 +8,7 @@ import {
   buildInventoryOnlineCompletenessReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
+  buildUnlistedInventoryHandoffReply,
   buildTimingAwareWalkInFollowUpLine,
   catalogModelMentionMatchesText,
   cleanCatalogModelNameForDisplay,
@@ -29,6 +30,7 @@ import {
   isIncidentalInfoAcknowledgementText,
   isInventoryBrowseLinkRequestText,
   isInventoryOnlineCompletenessQuestionText,
+  isUnlistedInventoryQuestionText,
   isHiringManagerInquiryText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
@@ -648,6 +650,18 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "unlisted_back_room_inventory_routes_to_turnover",
+    actual: isUnlistedInventoryQuestionText(
+      "Hey Gio.. is there anything in the back that we looked at that would fit my budget?"
+    ),
+    expected: true
+  },
+  {
+    id: "unlisted_not_posted_inventory_routes_to_turnover",
+    actual: isFactoryOrderTimingQuestionText("Do you have anything not posted online yet around my budget?"),
+    expected: true
+  },
+  {
     id: "customer_coming_in_does_not_route_to_turnover",
     actual: isFactoryOrderTimingQuestionText("I am coming in tomorrow to look at the Street Bob."),
     expected: false
@@ -661,6 +675,11 @@ const cases: Case[] = [
     id: "incoming_inventory_reply_no_hold_claim",
     actual: buildFactoryOrderTimingHandoffReply("Street Bob"),
     expected: "I’ll check on the status of the Street Bob and follow up with you."
+  },
+  {
+    id: "unlisted_inventory_reply_promises_check",
+    actual: buildUnlistedInventoryHandoffReply(),
+    expected: "I’ll take a look for anything not listed yet that fits your budget and follow up with you."
   },
   {
     id: "incoming_inventory_different_model_does_not_carry_lead_year",

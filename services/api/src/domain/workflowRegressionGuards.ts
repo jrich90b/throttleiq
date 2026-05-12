@@ -711,6 +711,7 @@ export function buildTimingAwareWalkInFollowUpLine(args: {
 export function isFactoryOrderTimingQuestionText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
+  if (isUnlistedInventoryQuestionText(text)) return true;
   const asksIncomingAvailability =
     /\b(?:do you|do u|you guys|are you|will you|can you)\b[\s\S]{0,100}\b(?:have|get|gettin'?g|receive|order)\b[\s\S]{0,100}\b(?:coming in|incoming|inbound|on order|arriv(?:e|es|ing))\b/.test(
       text
@@ -739,6 +740,37 @@ export function isFactoryOrderTimingQuestionText(textRaw: string | null | undefi
     /\bcome\s+in\b/.test(text) ||
     /\barriv(?:e|es|ed|ing|al)\b/.test(text)
   );
+}
+
+export function isUnlistedInventoryQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/\b(?:i'?m|i am|i’ll|i will|we'?re|we are)\s+(?:coming|going)\s+back\b/.test(text)) return false;
+  return (
+    /\b(?:anything|something|any|bikes?|units?|inventory|models?)\b[\s\S]{0,80}\b(?:in the back|out back|back room|backroom)\b/.test(
+      text
+    ) ||
+    /\b(?:in the back|out back|back room|backroom)\b[\s\S]{0,80}\b(?:anything|something|any|bikes?|units?|inventory|models?|budget|price|payment|fit)\b/.test(
+      text
+    ) ||
+    /\b(?:anything|something|any|bikes?|units?|inventory|models?)\b[\s\S]{0,80}\b(?:not\s+(?:listed|posted|online)|not\s+(?:on|up on)\s+(?:the\s+)?(?:website|site|web)|haven'?t\s+(?:listed|posted)|isn'?t\s+(?:listed|posted|online))\b/.test(
+      text
+    ) ||
+    /\b(?:not\s+(?:listed|posted|online)|not\s+(?:on|up on)\s+(?:the\s+)?(?:website|site|web)|haven'?t\s+(?:listed|posted)|isn'?t\s+(?:listed|posted|online))\b[\s\S]{0,80}\b(?:anything|something|any|bikes?|units?|inventory|models?|budget|price|payment|fit)\b/.test(
+      text
+    )
+  );
+}
+
+export function buildUnlistedInventoryHandoffReply(modelLabel?: string | null): string {
+  const model = String(modelLabel ?? "").replace(/\s+/g, " ").trim();
+  if (model) {
+    return `I’ll take a look for anything not listed yet that fits what you’re after on the ${model} and follow up with you.`;
+  }
+  return "I’ll take a look for anything not listed yet that fits your budget and follow up with you.";
 }
 
 export function buildFactoryOrderTimingHandoffReply(modelLabel?: string | null): string {

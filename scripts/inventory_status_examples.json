@@ -59,6 +59,22 @@
     }
   },
   {
+    "id": "unlisted_back_room_budget_1",
+    "text": "Hey Gio.. is there anything in the back that we looked at that would fit my budget?",
+    "expected": {
+      "intent": "incoming_status_question",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "unlisted_not_posted_online_1",
+    "text": "Do you have anything not posted online yet around my budget?",
+    "expected": {
+      "intent": "incoming_status_question",
+      "explicit_request": true
+    }
+  },
+  {
     "id": "factory_eta_nightster_1",
     "text": "how long would it take to get a 2026 nightster in",
     "expected": {
