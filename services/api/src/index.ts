@@ -7261,11 +7261,11 @@ async function buildRecentManualTestRideAvailabilityCadenceOverride(args: {
   });
   const unavailableSource = recentOutbounds.find((m: any) => {
     const body = String(m?.body ?? "");
-    const lower = body.toLowerCase();
+    const lower = body.toLowerCase().replace(/[’‘]/g, "'");
     const saysUnavailable =
       /\b(?:i(?:'m| am)?|we(?:'re| are)?)\s+not\s+seeing\b[\s\S]{0,120}\b(?:in\s+stock|available)\b/.test(lower) ||
-      /\b(?:do\s+not|don't|don’t)\s+(?:have|see)\b[\s\S]{0,120}\b(?:in\s+stock|available)\b/.test(lower) ||
-      /\b(?:not|isn['’]?t|is\s+not)\s+(?:in\s+stock|available)\b/.test(lower);
+      /\b(?:do\s+not|don't)\s+(?:have|see)\b[\s\S]{0,120}\b(?:in\s+stock|available)\b/.test(lower) ||
+      /\b(?:not|isn't|is\s+not)\s+(?:in\s+stock|available)\b/.test(lower);
     const hasAlternateRideStep =
       /\b(?:pick|choose)\s+(?:an?|another)\s+in[-\s]?stock\s+bike\b/.test(lower) ||
       /\bline\s+up\s+(?:the\s+)?test\s+ride\b/.test(lower) ||
