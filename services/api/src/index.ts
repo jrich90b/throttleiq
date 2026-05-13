@@ -24664,8 +24664,20 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
         calendarId: user.calendarId || byId.get(user.id)?.calendarId
       });
     }
-    const cal = await getAuthedCalendarClient();
+    let cal: any;
+    try {
+      cal = await getAuthedCalendarClient();
+    } catch (err: any) {
+      console.log("[calendar] google auth unavailable:", err?.message ?? err);
+      return res.json({
+        ok: false,
+        events: [],
+        calendarAuthRequired: true,
+        error: "Google Calendar needs to be reconnected."
+      });
+    }
     const events: any[] = [];
+    const calendarErrors: any[] = [];
     const conversations = getAllConversations();
     const normalizeLookupKey = (value: unknown) => String(value ?? "").trim().toLowerCase();
     const convByAppointmentEventId = new Map<string, any>();
@@ -24711,7 +24723,35 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
     for (const userId of userIds) {
       const user = byId.get(userId);
       if (!user?.calendarId) continue;
-      const items = await listEvents(cal, user.calendarId, start, end, timeZone);
+      let items: any[] = [];
+      try {
+        items = await listEvents(cal, user.calendarId, start, end, timeZone);
+      } catch (err: any) {
+        const code = err?.code ?? err?.response?.status ?? null;
+        const message = String(err?.message ?? "Failed to load calendar events");
+        console.log("[calendar] failed to load calendar events:", {
+          userId,
+          calendarId: user.calendarId,
+          code,
+          message
+        });
+        if (code === 400 && /invalid_grant|invalid credentials|invalid token/i.test(message)) {
+          return res.json({
+            ok: false,
+            events,
+            calendarAuthRequired: true,
+            error: "Google Calendar needs to be reconnected."
+          });
+        }
+        calendarErrors.push({
+          userId,
+          salespersonName: user.name || user.email || user.id,
+          calendarId: user.calendarId,
+          code,
+          error: code === 404 ? "Calendar not found or not shared with the connected Google account." : message
+        });
+        continue;
+      }
       for (const ev of items) {
         if (ev?.status === "cancelled") continue;
         const startIso = ev?.start?.dateTime ?? ev?.start?.date ?? null;
@@ -24751,7 +24791,7 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
       }
     }
 
-    return res.json({ ok: true, events });
+    return res.json({ ok: true, events, calendarErrors });
   } catch (err: any) {
     console.log("[calendar] failed to load events:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to load events" });

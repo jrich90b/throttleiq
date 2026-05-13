@@ -3036,6 +3036,7 @@ export default function Home() {
   const [calendarDate, setCalendarDate] = useState<Date>(new Date());
   const [calendarEvents, setCalendarEvents] = useState<any[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarLoadError, setCalendarLoadError] = useState<string | null>(null);
   const [calendarSalespeople, setCalendarSalespeople] = useState<string[]>([]);
   const [calendarFilterOpen, setCalendarFilterOpen] = useState(false);
   const [calendarEdit, setCalendarEdit] = useState<any | null>(null);
@@ -6573,8 +6574,20 @@ export default function Home() {
         }
         const resp = await fetch(`/api/calendar/events?${params.toString()}`, { cache: "no-store" });
         const json = await resp.json();
+        if (json?.calendarAuthRequired) {
+          setGoogleStatus({ connected: false, reason: "calendar_auth_required", error: json?.error });
+        }
+        const calendarErrors = Array.isArray(json?.calendarErrors) ? json.calendarErrors : [];
+        setCalendarLoadError(
+          json?.calendarAuthRequired
+            ? null
+            : calendarErrors.length
+              ? `Some calendars could not be loaded: ${calendarErrors.map((e: any) => e.salespersonName || e.calendarId).join(", ")}`
+              : null
+        );
         setCalendarEvents(buildCalendarEvents(json));
       } catch {
+        setCalendarLoadError("Calendar events could not be loaded.");
         setCalendarEvents([]);
       } finally {
         setCalendarLoading(false);
@@ -13687,10 +13700,18 @@ export default function Home() {
 
             {googleStatus && !googleStatus.connected ? (
               <div className="mt-3 mb-2 rounded border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 text-sm">
-                Google Calendar is not connected
-                {googleStatus.reason ? ` (${googleStatus.reason})` : ""}.{" "}
+                {googleStatus.error || "Google Calendar is not connected"}
+                {googleStatus.reason && !googleStatus.error ? ` (${googleStatus.reason})` : ""}.{" "}
                 <a className="underline" href="/integrations/google/start">
                   Reconnect
+                </a>
+              </div>
+            ) : null}
+            {calendarLoadError ? (
+              <div className="mt-3 mb-2 rounded border border-amber-200 bg-amber-50 text-amber-900 px-3 py-2 text-sm">
+                {calendarLoadError}{" "}
+                <a className="underline" href="/integrations/google/start">
+                  Reconnect Google Calendar
                 </a>
               </div>
             ) : null}
