@@ -4831,6 +4831,9 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,
     `EXAMPLE D
 inbound: "Can you run it for 72 months?"
 output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"confidence":0.97}`,
+    `EXAMPLE D2
+inbound: "What is the longest term I can go with on the loan?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"confidence":0.98}`,
     `EXAMPLE E
 inbound: "I don't want to put anything down."
 output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.96}`,
@@ -4848,7 +4851,16 @@ inbound: "Can I come in Wednesday at 1?"
 output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Before I come in, what do I need to bring for financing?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.94}`
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.94}`,
+    `EXAMPLE K
+inbound: "I'm already approved through my credit union."
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.96}`,
+    `EXAMPLE L
+inbound: "I can put down 5000"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.94}`,
+    `EXAMPLE M
+inbound: "How much to switch my headlight bulb to LED?"
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.95}`
   ];
   const prompt = [
     "You parse dealership inbound intent for pricing/payments routing.",
@@ -4860,9 +4872,12 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false
     "- none: no clear pricing or payment ask.",
     "",
     "Rules:",
-    "- If user asks 'how much down', '$300/month', 'monthly', 'APR', or term => payments.",
+    "- If user asks 'how much down', '$300/month', 'monthly', 'APR', longest/max loan term, or term => payments.",
+    "- In payment context, a customer-provided down-payment number is an explicit payments turn.",
+    "- A statement that the customer is already approved through their own bank/credit union is not a pricing/payments request by itself.",
     "- Do not classify scheduling/appointment messages as pricing/payments.",
     "- If mixed but payment structure is present, prefer payments.",
+    "- Service, parts, apparel, or install-labor price questions are none for this sales pricing parser.",
     "- explicit_request=true only when they clearly ask a question or request numbers.",
     "- confidence is 0..1.",
     "",

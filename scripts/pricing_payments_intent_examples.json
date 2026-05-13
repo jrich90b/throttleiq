@@ -72,6 +72,15 @@
     }
   },
   {
+    "id": "payments_longest_loan_term_customer_typo",
+    "text": "Hey G, question whats the longest I term I can go with in the loan? Term*",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_apr_or_term": true
+    }
+  },
+  {
     "id": "payments_apr_question",
     "text": "What APR can I get with good credit?",
     "expected": {

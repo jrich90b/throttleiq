@@ -75,6 +75,7 @@ import type {
   InventoryStatusParse,
   JourneyIntentParse,
   ManualOutboundAppointmentParse,
+  PricingPaymentsIntentParse,
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
   TradePayoffParse,
@@ -4946,6 +4947,81 @@ function applyCompositeSalesInquiryDecision(args: {
     accessoryItems: args.decision.accessoryItems
   });
   return reply;
+}
+
+function isPricingPaymentsIntentParserAccepted(parsed: PricingPaymentsIntentParse | null): boolean {
+  if (!parsed || parsed.intent === "none" || !parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_PRICING_PAYMENTS_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function hasLoanTermFinanceQuestionFallbackHint(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  const hasQuestionCue =
+    /\?/.test(raw) ||
+    /\b(what(?:'s| is|s)?|how\s+long|how\s+many|can\s+i|could\s+i|would\s+i)\b/.test(lower);
+  const hasTermCue =
+    /\b(longest|max(?:imum)?|highest|most|far(?:thest)?|go\s+with|term|terms?|months?|mos?)\b/.test(lower);
+  const hasFinanceCue = /\b(loan|finance|financing|payment|payments?|apr|rate|term|terms?|months?|mos?)\b/.test(lower);
+  return hasQuestionCue && hasTermCue && hasFinanceCue;
+}
+
+type FinanceTermQuestionDecision = {
+  source: "parser" | "fallback";
+  confidence: number;
+};
+
+function resolveFinanceTermQuestionDecision(
+  text: string | null | undefined,
+  parsed: PricingPaymentsIntentParse | null
+): FinanceTermQuestionDecision | null {
+  if (isPricingPaymentsIntentParserAccepted(parsed) && parsed?.intent === "payments" && parsed.asksAprOrTerm) {
+    return { source: "parser", confidence: parsed.confidence ?? 1 };
+  }
+  if (hasLoanTermFinanceQuestionFallbackHint(text)) {
+    return { source: "fallback", confidence: 0 };
+  }
+  return null;
+}
+
+function buildFinanceTermQuestionReply(conv: Conversation): string {
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  const prefix = firstName ? `Good question, ${firstName} — ` : "Good question — ";
+  const hasCreditAppContext =
+    Array.isArray(conv.messages) &&
+    conv.messages.some(m => /\b(online credit application|credit application|pre-qualification|prequal)\b/i.test(String(m.body ?? "")));
+  const context = hasCreditAppContext ? " for your application" : "";
+  return `${prefix}I’ll have our finance team confirm the longest available term and options${context}, then reach out shortly.`;
+}
+
+function applyFinanceTermQuestionDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  decision: FinanceTermQuestionDecision;
+  scope: "live" | "regen";
+}): string {
+  addTodo(
+    args.conv,
+    "payments",
+    `Finance team: confirm longest available loan term/options. Customer asked: ${String(args.text ?? "").trim()}`,
+    args.providerMessageId ?? undefined
+  );
+  setDialogState(args.conv, "payments_handoff");
+  setFollowUpMode(args.conv, "manual_handoff", "finance_term_question");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "finance_term_question", { setMode: "manual_handoff" });
+  markPricingEscalated(args.conv);
+  recordRouteOutcome(args.scope, "finance_term_question", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    source: args.decision.source,
+    confidence: args.decision.confidence
+  });
+  return buildFinanceTermQuestionReply(args.conv);
 }
 
 function isAccessoryRequestParserAccepted(parsed: AccessoryRequestParse | null): boolean {
@@ -33126,6 +33202,33 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  if (event.provider === "twilio") {
+    const pricingPaymentsParse = await safeLlmParse("regen_pricing_payments_parser", () =>
+      parsePricingPaymentsIntentWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const financeTermDecision = resolveFinanceTermQuestionDecision(event.body ?? "", pricingPaymentsParse);
+    if (financeTermDecision) {
+      const reply = applyFinanceTermQuestionDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: (inbound as any)?.providerMessageId,
+        decision: financeTermDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
+  }
+
   if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
     const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
@@ -39174,6 +39277,30 @@ if (authToken && signature) {
     llmExplicitScheduleIntent || scheduleFromDialogAct;
   paymentOrPricingNoSchedule = false;
   const pricingOrPaymentsIntent = parserOnlyPricingIntent;
+  const financeTermQuestionDecision = resolveFinanceTermQuestionDecision(
+    event.body ?? "",
+    pricingPaymentsParse
+  );
+  if (event.provider === "twilio" && financeTermQuestionDecision) {
+    const reply = applyFinanceTermQuestionDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      decision: financeTermQuestionDecision,
+      scope: "live"
+    });
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const inventoryStatusResolution =
     event.provider === "twilio" && !pricingSignal && !explicitScheduleSignal
       ? await maybeHandleInventoryStatusParserRoute({
