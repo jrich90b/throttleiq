@@ -88,6 +88,14 @@ const cases: Case[] = [
     }
   },
   {
+    id: "marketplace_sell_my_bike_routes_trade_sell",
+    expected: true,
+    run: () => {
+      const rule = resolveLeadRule("Marketplace - Sell My Bike");
+      return rule.bucket === "trade_in_sell" && rule.cta === "sell_my_bike";
+    }
+  },
+  {
     id: "international_shipping_question_detected",
     expected: true,
     run: () =>

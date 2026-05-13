@@ -309,6 +309,16 @@ const RULES: LeadRule[] = [
     tone: "short_conversational"
   },
   {
+    name: "marketplace_sell_my_bike",
+    match: {
+      equals: ["Marketplace - Sell My Bike"],
+      prefix: ["Marketplace - Sell My Bike"]
+    },
+    bucket: "trade_in_sell",
+    cta: "sell_my_bike",
+    tone: "short_conversational"
+  },
+  {
     name: "room58_sell_vehicle",
     match: {
       equals: ["Room58 - Sell your vehicle"],
