@@ -35696,7 +35696,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
     );
     const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
-    reply = `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
+    const unavailableTestRideReply = await buildRecentManualTestRideAvailabilityCadenceOverride({
+      conv,
+      name: normalizeDisplayCase(conv.lead?.firstName) || "there"
+    });
+    reply =
+      unavailableTestRideReply ??
+      `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
     if (!regenIsWalkInLead) {
