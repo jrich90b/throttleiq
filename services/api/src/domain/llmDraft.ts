@@ -2811,7 +2811,9 @@ async function requestStructuredJson(args: {
   debug?: boolean;
 }): Promise<any | null> {
   const parseObject = (raw: string): any | null => {
-    const parsed = safeParseJson(raw);
+    const trimmed = raw.trim();
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1]?.trim();
+    const parsed = safeParseJson(fenced ?? trimmed);
     return parsed && typeof parsed === "object" ? parsed : null;
   };
 

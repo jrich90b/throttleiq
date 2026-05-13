@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCompositeSalesInquiryWithLLM } from "../services/api/src/domain/llmDraft.ts";
+import { config as dotenvConfig } from "dotenv";
 
 type Example = {
   id: string;
@@ -19,7 +19,14 @@ type Example = {
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataPath = process.argv[2] ?? path.join(__dirname, "composite_sales_inquiry_examples.json");
+const repoRoot = path.resolve(__dirname, "..");
+dotenvConfig({ path: path.join(repoRoot, ".env") });
+dotenvConfig({ path: path.join(repoRoot, "services/api/.env"), override: true });
+if (process.argv.includes("--debug")) {
+  process.env.LLM_COMPOSITE_SALES_INQUIRY_PARSER_DEBUG = "1";
+}
+const dataArg = process.argv.slice(2).find(arg => !arg.startsWith("--"));
+const dataPath = dataArg ?? path.join(__dirname, "composite_sales_inquiry_examples.json");
 
 const apiKey = process.env.OPENAI_API_KEY ?? "";
 if (!apiKey || apiKey.trim() === "..." || apiKey.trim().length < 20) {
@@ -31,6 +38,8 @@ if (process.env.LLM_ENABLED !== "1" || process.env.LLM_COMPOSITE_SALES_INQUIRY_P
   console.error("LLM_ENABLED=1 and LLM_COMPOSITE_SALES_INQUIRY_PARSER_ENABLED!=0 are required for this eval.");
   process.exit(1);
 }
+
+const { parseCompositeSalesInquiryWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
 
 const raw = await fs.readFile(dataPath, "utf8");
 const examples = JSON.parse(raw) as Example[];
