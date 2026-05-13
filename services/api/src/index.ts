@@ -7259,14 +7259,30 @@ async function buildRecentManualTestRideAvailabilityCadenceOverride(args: {
     );
     return hasAvailability && hasRideContext && !!findMentionedModel(body);
   });
-  if (!source) return null;
+  const unavailableSource = recentOutbounds.find((m: any) => {
+    const body = String(m?.body ?? "");
+    const lower = body.toLowerCase();
+    const saysUnavailable =
+      /\b(?:i(?:'m| am)?|we(?:'re| are)?)\s+not\s+seeing\b[\s\S]{0,120}\b(?:in\s+stock|available)\b/.test(lower) ||
+      /\b(?:do\s+not|don't|don’t)\s+(?:have|see)\b[\s\S]{0,120}\b(?:in\s+stock|available)\b/.test(lower) ||
+      /\b(?:not|isn['’]?t|is\s+not)\s+(?:in\s+stock|available)\b/.test(lower);
+    const hasAlternateRideStep =
+      /\b(?:pick|choose)\s+(?:an?|another)\s+in[-\s]?stock\s+bike\b/.test(lower) ||
+      /\bline\s+up\s+(?:the\s+)?test\s+ride\b/.test(lower) ||
+      /\bfor\s+a\s+test\s+ride\b/.test(lower);
+    return saysUnavailable && hasAlternateRideStep && !!findMentionedModel(body);
+  });
+  if (!source && !unavailableSource) return null;
 
-  const sourceBody = String(source.body ?? "");
+  const sourceBody = String((unavailableSource ?? source)?.body ?? "");
   const model = findMentionedModel(sourceBody);
   if (!model || isUnknownCadenceModel(model)) return null;
   const year = extractYearSingle(sourceBody);
   const modelLabel = formatModelLabelForFollowUp(year ? String(year) : null, model);
   const firstName = normalizeDisplayCase(args.name || "there");
+  if (unavailableSource) {
+    return `Hey ${firstName}, just checking back on the ${modelLabel}. Since that one is not in stock right now, I can help pick another in-stock bike for a test ride, or keep an eye out for that model and text you if one comes in.`;
+  }
   const matches = await findInventoryMatches({
     year: year ? String(year) : null,
     model: canonicalizeWatchModelLabel(model)
