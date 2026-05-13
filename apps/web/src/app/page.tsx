@@ -6490,10 +6490,27 @@ export default function Home() {
     setDealerProfileForm(prev => (prev.bookingUrl ? prev : { ...prev, bookingUrl: url }));
   }, [dealerProfileForm.bookingToken, dealerProfileForm.bookingUrl]);
 
-  const calendarUsers = useMemo(
-    () => (usersList ?? []).filter((u: any) => !!u.calendarId),
-    [usersList]
-  );
+  const calendarUsers = useMemo(() => {
+    const byId = new Map<string, any>();
+    for (const sp of schedulerConfig?.salespeople ?? []) {
+      if (!sp?.id || !sp?.calendarId) continue;
+      byId.set(sp.id, {
+        id: sp.id,
+        name: sp.name,
+        calendarId: sp.calendarId,
+        role: "salesperson"
+      });
+    }
+    for (const user of usersList ?? []) {
+      if (!user?.id || !user?.calendarId) continue;
+      byId.set(user.id, {
+        ...byId.get(user.id),
+        ...user,
+        calendarId: user.calendarId
+      });
+    }
+    return Array.from(byId.values());
+  }, [schedulerConfig?.salespeople, usersList]);
 
   useEffect(() => {
     if (section !== "calendar") return;

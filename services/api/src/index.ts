@@ -24641,7 +24641,26 @@ app.get("/calendar/events", requirePermission("canEditAppointments"), async (req
     }
 
     const users = await listUsers();
-    const byId = new Map(users.map(u => [u.id, u]));
+    const cfg = await getSchedulerConfigHot();
+    const schedulerSalespeople = cfg.salespeople ?? [];
+    const byId = new Map<string, any>();
+    for (const sp of schedulerSalespeople) {
+      if (!sp?.id || !sp?.calendarId) continue;
+      byId.set(sp.id, {
+        id: sp.id,
+        name: sp.name,
+        calendarId: sp.calendarId,
+        role: "salesperson"
+      });
+    }
+    for (const user of users) {
+      if (!user?.id) continue;
+      byId.set(user.id, {
+        ...byId.get(user.id),
+        ...user,
+        calendarId: user.calendarId || byId.get(user.id)?.calendarId
+      });
+    }
     const cal = await getAuthedCalendarClient();
     const events: any[] = [];
     const conversations = getAllConversations();
