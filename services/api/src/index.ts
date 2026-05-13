@@ -32228,7 +32228,7 @@ app.post("/conversations/:id/send", async (req, res) => {
         outboundSendTimeoutMs,
         "email send"
       );
-      const outboundProvider = manualTakeover && !draftId ? "human" : "sendgrid";
+      const outboundProvider = "sendgrid";
       const fin = finalizeDraftAsSent(conv, draftId, signed, outboundProvider);
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
