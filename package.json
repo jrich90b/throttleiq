@@ -20,6 +20,7 @@
     "accessory_request:eval": "LLM_ENABLED=1 LLM_ACCESSORY_REQUEST_PARSER_ENABLED=1 npx tsx scripts/accessory_request_eval.ts",
     "vehicle_fact:eval": "LLM_ENABLED=1 LLM_VEHICLE_FACT_PARSER_ENABLED=1 npx tsx scripts/vehicle_fact_question_eval.ts",
     "vehicle_info:eval": "LLM_ENABLED=1 LLM_VEHICLE_INFO_PARSER_ENABLED=1 npx tsx scripts/vehicle_info_request_eval.ts",
+    "composite_sales_inquiry:eval": "LLM_ENABLED=1 LLM_COMPOSITE_SALES_INQUIRY_PARSER_ENABLED=1 npx tsx scripts/composite_sales_inquiry_eval.ts",
     "faq_topic:eval": "LLM_ENABLED=1 LLM_FAQ_TOPIC_PARSER_ENABLED=1 npx tsx scripts/dealership_faq_topic_eval.ts",
     "inventory_entity:eval": "LLM_ENABLED=1 LLM_INVENTORY_ENTITY_PARSER_ENABLED=1 npx tsx scripts/inventory_entity_eval.ts",
     "inventory_status:eval": "LLM_ENABLED=1 LLM_INVENTORY_STATUS_PARSER_ENABLED=1 npx tsx scripts/inventory_status_eval.ts",

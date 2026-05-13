@@ -1653,6 +1653,17 @@ export type VehicleInfoRequestParse = {
   confidence?: number;
 };
 
+export type CompositeSalesInquiryParse = {
+  explicitRequest: boolean;
+  asksOutTheDoorPrice: boolean;
+  asksAccessoryQuote: boolean;
+  accessoryItems: string[];
+  hasFitOrWeightConcern: boolean;
+  hasFinancingConcern: boolean;
+  hasGeneralChatter: boolean;
+  confidence?: number;
+};
+
 export type EmpathySupportReplyParse = {
   reply: string;
   confidence?: number;
@@ -2234,6 +2245,31 @@ const VEHICLE_INFO_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       type: "string",
       enum: ["full", "highlights", "unknown"]
     },
+    confidence: { type: "number" }
+  }
+};
+
+const COMPOSITE_SALES_INQUIRY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "explicit_request",
+    "asks_out_the_door_price",
+    "asks_accessory_quote",
+    "accessory_items",
+    "has_fit_or_weight_concern",
+    "has_financing_concern",
+    "has_general_chatter",
+    "confidence"
+  ],
+  properties: {
+    explicit_request: { type: "boolean" },
+    asks_out_the_door_price: { type: "boolean" },
+    asks_accessory_quote: { type: "boolean" },
+    accessory_items: { type: "array", items: { type: "string" } },
+    has_fit_or_weight_concern: { type: "boolean" },
+    has_financing_concern: { type: "boolean" },
+    has_general_chatter: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -3956,6 +3992,115 @@ output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unk
     explicitRequest: !!parsed.explicit_request,
     focus,
     format,
+    confidence
+  };
+}
+
+export async function parseCompositeSalesInquiryWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<CompositeSalesInquiryParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_COMPOSITE_SALES_INQUIRY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_COMPOSITE_SALES_INQUIRY_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_COMPOSITE_SALES_INQUIRY_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_COMPOSITE_SALES_INQUIRY_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Saw the Breakout on your floor at the Friday Mother's Day affair. What would it cost out the door? What would it cost with front and rear case guards. looks very interesting to me. Could I handle the weight? Maybe. Could I handle the financing? Maybe but still looks interesting."
+output: {"explicit_request":true,"asks_out_the_door_price":true,"asks_accessory_quote":true,"accessory_items":["front and rear case guards"],"has_fit_or_weight_concern":true,"has_financing_concern":true,"has_general_chatter":true,"confidence":0.98}`,
+    `EXAMPLE B
+inbound: "What is the out the door number with heated grips and a backrest? Also not sure if it is too heavy for me."
+output: {"explicit_request":true,"asks_out_the_door_price":true,"asks_accessory_quote":true,"accessory_items":["heated grips","backrest"],"has_fit_or_weight_concern":true,"has_financing_concern":false,"has_general_chatter":false,"confidence":0.97}`,
+    `EXAMPLE C
+inbound: "Can you get me a payment estimate?"
+output: {"explicit_request":true,"asks_out_the_door_price":false,"asks_accessory_quote":false,"accessory_items":[],"has_fit_or_weight_concern":false,"has_financing_concern":true,"has_general_chatter":false,"confidence":0.96}`,
+    `EXAMPLE D
+inbound: "What would it cost with pipes and a sissy bar?"
+output: {"explicit_request":true,"asks_out_the_door_price":false,"asks_accessory_quote":true,"accessory_items":["pipes","sissy bar"],"has_fit_or_weight_concern":false,"has_financing_concern":false,"has_general_chatter":false,"confidence":0.96}`,
+    `EXAMPLE E
+inbound: "What is the out the door price?"
+output: {"explicit_request":true,"asks_out_the_door_price":true,"asks_accessory_quote":false,"accessory_items":[],"has_fit_or_weight_concern":false,"has_financing_concern":false,"has_general_chatter":false,"confidence":0.96}`,
+    `EXAMPLE F
+inbound: "Looks interesting, maybe."
+output: {"explicit_request":false,"asks_out_the_door_price":false,"asks_accessory_quote":false,"accessory_items":[],"has_fit_or_weight_concern":false,"has_financing_concern":false,"has_general_chatter":true,"confidence":0.95}`
+  ];
+  const prompt = [
+    "You are a strict parser for multi-intent sales inquiries at a Harley-Davidson dealership.",
+    "Return only JSON matching the schema.",
+    "",
+    "Detect whether the customer combined several sales questions in one message.",
+    "Fields:",
+    "- asks_out_the_door_price: exact OTD/all-in/final cost question, including tax/fees.",
+    "- asks_accessory_quote: asks what the bike would cost with accessories, parts, labor, add-ons, guards, bars, grips, seat, pipes, etc.",
+    "- accessory_items: normalized accessory item phrases explicitly mentioned.",
+    "- has_fit_or_weight_concern: asks or worries about weight, handling, seat height, fit, comfort, balance, or whether they can handle the bike.",
+    "- has_financing_concern: asks or worries about financing, payments, approval, affordability, APR, term, down payment, or whether they can handle the financing.",
+    "- has_general_chatter: includes non-actionable commentary or soft interest alongside the questions.",
+    "- explicit_request: true only when at least one actionable question/request is present.",
+    "",
+    "Rules:",
+    "- This parser may return true for a single intent, but it is mainly used when two or more fields are true.",
+    "- Do not invent accessory items from the lead; only extract items in the customer message.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "composite_sales_inquiry_parser",
+      schema: COMPOSITE_SALES_INQUIRY_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 260,
+      debugTag: "llm-composite-sales-inquiry-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  const accessoryItems = Array.isArray(parsed.accessory_items)
+    ? parsed.accessory_items.map((item: unknown) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    explicitRequest: !!parsed.explicit_request,
+    asksOutTheDoorPrice: !!parsed.asks_out_the_door_price,
+    asksAccessoryQuote: !!parsed.asks_accessory_quote,
+    accessoryItems,
+    hasFitOrWeightConcern: !!parsed.has_fit_or_weight_concern,
+    hasFinancingConcern: !!parsed.has_financing_concern,
+    hasGeneralChatter: !!parsed.has_general_chatter,
     confidence
   };
 }

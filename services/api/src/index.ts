@@ -27,6 +27,7 @@ import {
   generateWebFallbackReplyWithLLM,
   classifyCadenceContextWithLLM,
   parseCadenceRegenerateContextWithLLM,
+  parseCompositeSalesInquiryWithLLM,
   classifyEmpathyNeedWithLLM,
   classifyComplimentWithLLM,
   parseAffectWithLLM,
@@ -64,6 +65,7 @@ import type {
   AccessoryRequestParse,
   CadenceRegenerateContextParse,
   AppointmentTimingParse,
+  CompositeSalesInquiryParse,
   ConversationStateParse,
   CustomerAckActionParse,
   CustomerDispositionParse,
@@ -4767,6 +4769,180 @@ function extractFallbackAccessoryItem(text: string | null | undefined): string {
   if (/\bfairing\b/i.test(raw)) return "fairing";
   if (/\b(pipe|pipes|exhaust)\b/i.test(raw)) return "pipes";
   return "";
+}
+
+type CompositeSalesInquiryDecision = {
+  asksOutTheDoorPrice: boolean;
+  asksAccessoryQuote: boolean;
+  accessoryItems: string[];
+  hasFitOrWeightConcern: boolean;
+  hasFinancingConcern: boolean;
+  confidence: number;
+  source: "parser" | "fallback";
+};
+
+function countCompositeSalesSignals(value: {
+  asksOutTheDoorPrice?: boolean;
+  asksAccessoryQuote?: boolean;
+  hasFitOrWeightConcern?: boolean;
+  hasFinancingConcern?: boolean;
+}): number {
+  return [
+    value.asksOutTheDoorPrice,
+    value.asksAccessoryQuote,
+    value.hasFitOrWeightConcern,
+    value.hasFinancingConcern
+  ].filter(Boolean).length;
+}
+
+function hasCompositeSalesInquiryParserHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const price = /\b(out\s*[- ]?\s*the\s*[- ]?\s*door|otd|all[-\s]?in|final (?:price|number|total)|cost|price)\b/.test(lower);
+  const accessory = /\b(case guards?|engine guards?|crash bars?|handlebars?|heated grips?|seat|backrest|sissy bar|pipes?|exhaust|windshield|tour[-\s]?pak|luggage|accessor(?:y|ies)|add(?:ed)?|install(?:ed)?)\b/.test(lower);
+  const fit = /\b(weight|heavy|handle it|handle the weight|too big|too heavy|fit me|seat height|balance|comfortable|comfort)\b/.test(lower);
+  const finance = /\b(financ(?:e|ing)|payment|payments|monthly|afford|approval|apr|term|down payment|budget)\b/.test(lower);
+  return countCompositeSalesSignals({
+    asksOutTheDoorPrice: price,
+    asksAccessoryQuote: accessory,
+    hasFitOrWeightConcern: fit,
+    hasFinancingConcern: finance
+  }) >= 2;
+}
+
+function extractCompositeAccessoryItemsFallback(text: string | null | undefined): string[] {
+  const raw = String(text ?? "");
+  const items: string[] = [];
+  const add = (item: string) => {
+    if (!items.includes(item)) items.push(item);
+  };
+  if (/\bfront\s+and\s+rear\s+case\s+guards?\b/i.test(raw)) add("front and rear case guards");
+  else if (/\bcase\s+guards?\b/i.test(raw)) add("case guards");
+  if (/\bengine\s+guards?\b|\bcrash\s+bars?\b/i.test(raw)) add("engine guards");
+  const accessory = extractFallbackAccessoryItem(raw);
+  if (accessory && !/\bcase guards?|engine guards?\b/i.test(accessory)) add(accessory);
+  return items;
+}
+
+function resolveCompositeSalesInquiryDecision(
+  text: string | null | undefined,
+  parsed: CompositeSalesInquiryParse | null
+): CompositeSalesInquiryDecision | null {
+  const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_COMPOSITE_SALES_INQUIRY_CONFIDENCE_MIN ?? 0.74);
+  if (
+    parsed &&
+    parsed.explicitRequest &&
+    confidence >= min &&
+    countCompositeSalesSignals(parsed) >= 2
+  ) {
+    return {
+      asksOutTheDoorPrice: parsed.asksOutTheDoorPrice,
+      asksAccessoryQuote: parsed.asksAccessoryQuote,
+      accessoryItems: parsed.accessoryItems,
+      hasFitOrWeightConcern: parsed.hasFitOrWeightConcern,
+      hasFinancingConcern: parsed.hasFinancingConcern,
+      confidence,
+      source: "parser"
+    };
+  }
+  if (parsed && confidence >= min && (!parsed.explicitRequest || countCompositeSalesSignals(parsed) < 2)) {
+    return null;
+  }
+
+  const lower = String(text ?? "").toLowerCase();
+  const fallback = {
+    asksOutTheDoorPrice: /\b(out\s*[- ]?\s*the\s*[- ]?\s*door|otd|all[-\s]?in|final (?:price|number|total))\b/.test(lower),
+    asksAccessoryQuote: /\b(?:cost|price|quote|how much)\b[\s\S]{0,80}\b(?:with|add(?:ed)?|install(?:ed)?)\b[\s\S]{0,80}\b(?:case guards?|engine guards?|crash bars?|handlebars?|heated grips?|seat|backrest|sissy bar|pipes?|exhaust|windshield|tour[-\s]?pak|luggage|accessor(?:y|ies))\b/.test(lower),
+    hasFitOrWeightConcern: /\b(could i handle|can i handle|handle the weight|weight|too heavy|too big|fit me|seat height|balance)\b/.test(lower),
+    hasFinancingConcern: /\b(could i handle the financ|can i handle the financ|financ(?:e|ing)|payment|monthly|afford|approval|apr|term|down payment|budget)\b/.test(lower)
+  };
+  if (countCompositeSalesSignals(fallback) < 2) return null;
+  return {
+    ...fallback,
+    accessoryItems: extractCompositeAccessoryItemsFallback(text),
+    confidence: 0,
+    source: "fallback"
+  };
+}
+
+function buildCompositeSalesInquiryReply(args: {
+  conv: Conversation;
+  decision: CompositeSalesInquiryDecision;
+}): string {
+  const vehicle = args.conv.lead?.vehicle ?? {};
+  const year = String(vehicle.year ?? "").trim();
+  const model =
+    normalizeDisplayCase(vehicle.model ?? vehicle.description ?? "") ||
+    "the bike";
+  const bikeLabel = [year, model && model !== "the bike" ? model : ""].filter(Boolean).join(" ").trim() || "the bike";
+  const parts: string[] = [];
+  if (args.decision.asksOutTheDoorPrice && args.decision.asksAccessoryQuote) {
+    const accessoryLabel = args.decision.accessoryItems.length
+      ? args.decision.accessoryItems.join(" and ")
+      : "those accessories";
+    parts.push(`I’ll have our team confirm the out-the-door number on the ${bikeLabel} and what it would look like with ${accessoryLabel}.`);
+  } else if (args.decision.asksOutTheDoorPrice) {
+    parts.push(`I’ll have our team confirm the out-the-door number on the ${bikeLabel} and follow up with exact numbers.`);
+  } else if (args.decision.asksAccessoryQuote) {
+    const accessoryLabel = args.decision.accessoryItems.length
+      ? args.decision.accessoryItems.join(" and ")
+      : "those accessories";
+    parts.push(`I’ll have our team check parts and labor for ${accessoryLabel} on the ${bikeLabel} and follow up with options.`);
+  }
+  if (args.decision.hasFitOrWeightConcern) {
+    parts.push("On the weight and fit, the best way is to have you sit on it and go over balance and comfort in person.");
+  }
+  if (args.decision.hasFinancingConcern) {
+    parts.push("For financing, I can help estimate payments too. About how much down were you thinking?");
+  }
+  return parts.join(" ").trim() || `I’ll have our team check the details on the ${bikeLabel} and follow up.`;
+}
+
+function applyCompositeSalesInquiryDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  decision: CompositeSalesInquiryDecision;
+  scope: "live" | "regen";
+}): string {
+  const reply = buildCompositeSalesInquiryReply({ conv: args.conv, decision: args.decision });
+  const accessoryLabel = args.decision.accessoryItems.length
+    ? ` with ${args.decision.accessoryItems.join(" and ")}`
+    : "";
+  if (args.decision.asksOutTheDoorPrice || args.decision.asksAccessoryQuote) {
+    addTodo(
+      args.conv,
+      "pricing",
+      `Confirm out-the-door/accessory quote${accessoryLabel}. Customer asked: ${String(args.text ?? "").trim()}`,
+      args.providerMessageId ?? undefined
+    );
+    markPricingEscalated(args.conv);
+  }
+  if (args.decision.hasFitOrWeightConcern) {
+    addTodo(
+      args.conv,
+      "other",
+      `Review fit/weight comfort concern with customer. Customer asked: ${String(args.text ?? "").trim()}`,
+      args.providerMessageId ?? undefined
+    );
+  }
+  setDialogState(args.conv, "pricing_init");
+  setFollowUpMode(args.conv, "manual_handoff", "composite_sales_inquiry");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "composite_sales_inquiry", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "composite_sales_inquiry", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    source: args.decision.source,
+    confidence: args.decision.confidence,
+    asksOutTheDoorPrice: args.decision.asksOutTheDoorPrice,
+    asksAccessoryQuote: args.decision.asksAccessoryQuote,
+    hasFitOrWeightConcern: args.decision.hasFitOrWeightConcern,
+    hasFinancingConcern: args.decision.hasFinancingConcern,
+    accessoryItems: args.decision.accessoryItems
+  });
+  return reply;
 }
 
 function isAccessoryRequestParserAccepted(parsed: AccessoryRequestParse | null): boolean {
@@ -32843,6 +33019,35 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(inventoryBrowse.reply);
   }
 
+  if (
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
+    hasCompositeSalesInquiryParserHint(event.body ?? "")
+  ) {
+    const compositeParse = await safeLlmParse("regen_composite_sales_inquiry_parser", () =>
+      parseCompositeSalesInquiryWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const compositeDecision = resolveCompositeSalesInquiryDecision(event.body ?? "", compositeParse);
+    if (compositeDecision) {
+      const reply = applyCompositeSalesInquiryDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: (inbound as any)?.providerMessageId,
+        decision: compositeDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: true
+      });
+    }
+  }
+
   if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
     const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
@@ -36603,6 +36808,37 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (event.provider === "twilio" && !semanticShortAck && hasCompositeSalesInquiryParserHint(semanticInboundText)) {
+    const compositeParse = await safeLlmParse("composite_sales_inquiry_parser", () =>
+      parseCompositeSalesInquiryWithLLM({
+        text: semanticInboundText,
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const compositeDecision = resolveCompositeSalesInquiryDecision(semanticInboundText, compositeParse);
+    if (compositeDecision) {
+      const reply = applyCompositeSalesInquiryDecision({
+        conv,
+        text: semanticInboundText,
+        providerMessageId: event.providerMessageId,
+        decision: compositeDecision,
+        scope: "live"
+      });
+      const mode = webhookMode;
+      if (mode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasAccessoryRequestParserHint(semanticInboundText)) {

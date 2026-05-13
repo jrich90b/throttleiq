@@ -1,0 +1,43 @@
+[
+  {
+    "id": "breakout_otd_accessory_fit_finance_1",
+    "text": "Saw the Breakout on your floor at the Friday Mothers Day affair. What would it cost out he door? What would it cost with front and rear case guards. looks very interesting to me. Could I handle the weight? Maybe. Could I handle the financing? Maybe but still looks interesting.",
+    "lead": {
+      "vehicle": {
+        "year": "2026",
+        "model": "Breakout"
+      }
+    },
+    "expected": {
+      "explicit_request": true,
+      "asks_out_the_door_price": true,
+      "asks_accessory_quote": true,
+      "accessory_item_contains": "case guards",
+      "has_fit_or_weight_concern": true,
+      "has_financing_concern": true
+    }
+  },
+  {
+    "id": "otd_with_backrest_fit_1",
+    "text": "What is the out the door number with a backrest? Not sure if it would be too heavy for me.",
+    "expected": {
+      "explicit_request": true,
+      "asks_out_the_door_price": true,
+      "asks_accessory_quote": true,
+      "accessory_item_contains": "backrest",
+      "has_fit_or_weight_concern": true,
+      "has_financing_concern": false
+    }
+  },
+  {
+    "id": "payment_only_not_composite_1",
+    "text": "Can you get me a payment estimate?",
+    "expected": {
+      "explicit_request": true,
+      "asks_out_the_door_price": false,
+      "asks_accessory_quote": false,
+      "has_fit_or_weight_concern": false,
+      "has_financing_concern": true
+    }
+  }
+]

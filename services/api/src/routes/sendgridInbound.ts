@@ -53,12 +53,14 @@ import {
   parseResponseControlWithLLM,
   parseBookingIntentWithLLM,
   parseConversationStateWithLLM,
+  parseCompositeSalesInquiryWithLLM,
   parseJourneyIntentWithLLM,
   parseInventoryStatusWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
 import type {
+  CompositeSalesInquiryParse,
   ConversationStateParse,
   InventoryStatusParse,
   VehicleFactQuestionParse
@@ -2560,6 +2562,135 @@ function cleanVehicleColorForReply(raw?: string | null): string | null {
   return cleaned ? normalizeDisplayCase(cleaned) : null;
 }
 
+type CompositeSalesInquiryDecision = {
+  asksOutTheDoorPrice: boolean;
+  asksAccessoryQuote: boolean;
+  accessoryItems: string[];
+  hasFitOrWeightConcern: boolean;
+  hasFinancingConcern: boolean;
+  confidence: number;
+  source: "parser" | "fallback";
+};
+
+function countCompositeSalesSignals(value: {
+  asksOutTheDoorPrice?: boolean;
+  asksAccessoryQuote?: boolean;
+  hasFitOrWeightConcern?: boolean;
+  hasFinancingConcern?: boolean;
+}): number {
+  return [
+    value.asksOutTheDoorPrice,
+    value.asksAccessoryQuote,
+    value.hasFitOrWeightConcern,
+    value.hasFinancingConcern
+  ].filter(Boolean).length;
+}
+
+function extractCompositeAccessoryItemsFallback(text: string | null | undefined): string[] {
+  const raw = String(text ?? "");
+  const items: string[] = [];
+  const add = (item: string) => {
+    if (!items.includes(item)) items.push(item);
+  };
+  if (/\bfront\s+and\s+rear\s+case\s+guards?\b/i.test(raw)) add("front and rear case guards");
+  else if (/\bcase\s+guards?\b/i.test(raw)) add("case guards");
+  if (/\bengine\s+guards?\b|\bcrash\s+bars?\b/i.test(raw)) add("engine guards");
+  if (/\bhandle\s*bars?|handlebars?|handbars?|bars?\b/i.test(raw)) add("handlebars");
+  if (/\bheated\s+(?:handle\s*)?grips?\b/i.test(raw)) add("heated grips");
+  if (/\bseat|seats\b/i.test(raw)) add("seat");
+  if (/\bbackrest\b/i.test(raw)) add("backrest");
+  if (/\bsissy\s+bar\b/i.test(raw)) add("sissy bar");
+  if (/\bpipe|pipes|exhaust\b/i.test(raw)) add("pipes");
+  return items;
+}
+
+function hasCompositeSalesInquiryParserHint(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const price = /\b(out\s*[- ]?\s*the\s*[- ]?\s*door|otd|all[-\s]?in|final (?:price|number|total)|cost|price)\b/.test(lower);
+  const accessory = /\b(case guards?|engine guards?|crash bars?|handlebars?|heated grips?|seat|backrest|sissy bar|pipes?|exhaust|windshield|tour[-\s]?pak|luggage|accessor(?:y|ies)|add(?:ed)?|install(?:ed)?)\b/.test(lower);
+  const fit = /\b(weight|heavy|handle it|handle the weight|too big|too heavy|fit me|seat height|balance|comfortable|comfort)\b/.test(lower);
+  const finance = /\b(financ(?:e|ing)|payment|payments|monthly|afford|approval|apr|term|down payment|budget)\b/.test(lower);
+  return countCompositeSalesSignals({
+    asksOutTheDoorPrice: price,
+    asksAccessoryQuote: accessory,
+    hasFitOrWeightConcern: fit,
+    hasFinancingConcern: finance
+  }) >= 2;
+}
+
+function resolveCompositeSalesInquiryDecision(
+  text: string | null | undefined,
+  parsed: CompositeSalesInquiryParse | null
+): CompositeSalesInquiryDecision | null {
+  const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_COMPOSITE_SALES_INQUIRY_CONFIDENCE_MIN ?? 0.74);
+  if (
+    parsed &&
+    parsed.explicitRequest &&
+    confidence >= min &&
+    countCompositeSalesSignals(parsed) >= 2
+  ) {
+    return {
+      asksOutTheDoorPrice: parsed.asksOutTheDoorPrice,
+      asksAccessoryQuote: parsed.asksAccessoryQuote,
+      accessoryItems: parsed.accessoryItems,
+      hasFitOrWeightConcern: parsed.hasFitOrWeightConcern,
+      hasFinancingConcern: parsed.hasFinancingConcern,
+      confidence,
+      source: "parser"
+    };
+  }
+  if (parsed && confidence >= min && (!parsed.explicitRequest || countCompositeSalesSignals(parsed) < 2)) {
+    return null;
+  }
+
+  const lower = String(text ?? "").toLowerCase();
+  const fallback = {
+    asksOutTheDoorPrice: /\b(out\s*[- ]?\s*the\s*[- ]?\s*door|otd|all[-\s]?in|final (?:price|number|total))\b/.test(lower),
+    asksAccessoryQuote: /\b(?:cost|price|quote|how much)\b[\s\S]{0,80}\b(?:with|add(?:ed)?|install(?:ed)?)\b[\s\S]{0,80}\b(?:case guards?|engine guards?|crash bars?|handlebars?|heated grips?|seat|backrest|sissy bar|pipes?|exhaust|windshield|tour[-\s]?pak|luggage|accessor(?:y|ies))\b/.test(lower),
+    hasFitOrWeightConcern: /\b(could i handle|can i handle|handle the weight|weight|too heavy|too big|fit me|seat height|balance)\b/.test(lower),
+    hasFinancingConcern: /\b(could i handle the financ|can i handle the financ|financ(?:e|ing)|payment|monthly|afford|approval|apr|term|down payment|budget)\b/.test(lower)
+  };
+  if (countCompositeSalesSignals(fallback) < 2) return null;
+  return {
+    ...fallback,
+    accessoryItems: extractCompositeAccessoryItemsFallback(text),
+    confidence: 0,
+    source: "fallback"
+  };
+}
+
+function buildCompositeSalesInquiryReply(conv: any, decision: CompositeSalesInquiryDecision): string {
+  const vehicle = conv?.lead?.vehicle ?? {};
+  const year = String(vehicle.year ?? "").trim();
+  const model =
+    normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null) ||
+    "the bike";
+  const bikeLabel = [year, model && model !== "the bike" ? model : ""].filter(Boolean).join(" ").trim() || "the bike";
+  const parts: string[] = [];
+  if (decision.asksOutTheDoorPrice && decision.asksAccessoryQuote) {
+    const accessoryLabel = decision.accessoryItems.length
+      ? decision.accessoryItems.join(" and ")
+      : "those accessories";
+    parts.push(`I’ll have our team confirm the out-the-door number on the ${bikeLabel} and what it would look like with ${accessoryLabel}.`);
+  } else if (decision.asksOutTheDoorPrice) {
+    parts.push(`I’ll have our team confirm the out-the-door number on the ${bikeLabel} and follow up with exact numbers.`);
+  } else if (decision.asksAccessoryQuote) {
+    const accessoryLabel = decision.accessoryItems.length
+      ? decision.accessoryItems.join(" and ")
+      : "those accessories";
+    parts.push(`I’ll have our team check parts and labor for ${accessoryLabel} on the ${bikeLabel} and follow up with options.`);
+  }
+  if (decision.hasFitOrWeightConcern) {
+    parts.push("On the weight and fit, the best way is to have you sit on it and go over balance and comfort in person.");
+  }
+  if (decision.hasFinancingConcern) {
+    parts.push("For financing, I can help estimate payments too. About how much down were you thinking?");
+  }
+  return parts.join(" ").trim() || `I’ll have our team check the details on the ${bikeLabel} and follow up.`;
+}
+
 function buildInitialAdfVehicleFactReply(args: {
   conv: any;
   decision: AdfVehicleFactDecision;
@@ -3608,6 +3739,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmRoutingDecision,
     llmFaqTopic,
     llmWalkInOutcome,
+    llmCompositeSalesInquiry,
     llmVehicleFact,
     llmInventoryStatus
   ] = await Promise.all([
@@ -3688,6 +3820,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ),
     safeParser("walkin_outcome", () =>
       parseWalkInOutcomeWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("composite_sales_inquiry", () =>
+      parseCompositeSalesInquiryWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
         lead: conv.lead
@@ -6578,7 +6717,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "We’re not scheduling test rides right now, but I’m happy to help with pricing or set one up when we reopen. " +
       "If you want to stop by to check it out, just let me know.";
   }
-  const initialAdfVehicleFactDecision = isInitialAdf
+  const initialCompositeSalesInquiryDecision =
+    isInitialAdf && hasCompositeSalesInquiryParserHint(effectiveInquiry)
+      ? resolveCompositeSalesInquiryDecision(effectiveInquiry, llmCompositeSalesInquiry)
+      : null;
+  if (initialCompositeSalesInquiryDecision) {
+    draft = buildCompositeSalesInquiryReply(conv, initialCompositeSalesInquiryDecision);
+    suppressAvailabilityAppend = true;
+    const accessoryLabel = initialCompositeSalesInquiryDecision.accessoryItems.length
+      ? ` with ${initialCompositeSalesInquiryDecision.accessoryItems.join(" and ")}`
+      : "";
+    if (
+      initialCompositeSalesInquiryDecision.asksOutTheDoorPrice ||
+      initialCompositeSalesInquiryDecision.asksAccessoryQuote
+    ) {
+      addTodo(
+        conv,
+        "pricing",
+        `Confirm out-the-door/accessory quote${accessoryLabel}. Customer asked: ${effectiveInquiry}`,
+        event.providerMessageId
+      );
+      markPricingEscalated(conv);
+    }
+    if (initialCompositeSalesInquiryDecision.hasFitOrWeightConcern) {
+      addTodo(
+        conv,
+        "other",
+        `Review fit/weight comfort concern with customer. Customer asked: ${effectiveInquiry}`,
+        event.providerMessageId
+      );
+    }
+    setDialogState("pricing_init");
+    setFollowUpMode(conv, "manual_handoff", "composite_sales_inquiry");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
+  const initialAdfVehicleFactDecision = isInitialAdf && !initialCompositeSalesInquiryDecision
     ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
     : null;
   const skipInitialAdfVehicleFactForTrade =
@@ -6615,6 +6788,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   const initialAdfInventoryStatusAccepted =
     isInitialAdf &&
+    !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !isDepartmentLead &&
     isInitialAdfInventoryStatusParserAccepted(llmInventoryStatus);
@@ -6642,6 +6816,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       leadSourceLower,
       draft
     }) &&
+    !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfInventoryStatusAccepted
   ) {
@@ -6675,6 +6850,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isSellLead &&
     !isCreditLead &&
     !isWalkInLead &&
+    !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfInventoryStatusAccepted &&
     !pricingInquiryIntent &&
@@ -6711,6 +6887,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (
     isInitialAdf &&
+    !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfInventoryStatusAccepted &&
     pricingInquiryIntent &&
