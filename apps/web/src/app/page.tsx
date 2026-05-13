@@ -10387,7 +10387,7 @@ export default function Home() {
       if (!resp.ok) return;
       const cfg = json?.config ?? {};
       setSchedulerConfig(cfg);
-      if (section === "calendar" && Array.isArray(cfg.salespeople)) {
+      if (section === "calendar" && Array.isArray(cfg.salespeople) && cfg.salespeople.length > 0) {
         setCalendarSalespeople(cfg.salespeople.map((s: any) => s.id));
       }
     } catch {

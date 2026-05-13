@@ -2677,6 +2677,9 @@ async function syncSchedulerSalespeopleFromUsers() {
       name: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.name || u.email || u.id,
       calendarId: u.calendarId!
     }));
+  // Do not wipe the scheduler if a user add/update temporarily yields no eligible
+  // scheduler rows. Preserve the current config rather than clearing calendars/time blocks.
+  if (!salespeople.length) return;
   const preferredExisting = (cfg.preferredSalespeople ?? []).filter(id => salespeople.some(s => s.id === id));
   const preferredSalespeople = preferredExisting.length ? preferredExisting : salespeople.map(s => s.id);
   await saveSchedulerConfig({ ...(cfg as any), salespeople, preferredSalespeople });
