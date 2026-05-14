@@ -15437,6 +15437,19 @@ export default function Home() {
                                       }
                                     />
                                   </div>
+                                  <div>
+                                    <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
+                                    <input
+                                      className="border rounded px-2 py-1 text-sm w-full"
+                                      placeholder="Extension / dial digits"
+                                      value={user.extension ?? ""}
+                                      onChange={e =>
+                                        setUsersList(prev =>
+                                          prev.map(u => (u.id === user.id ? { ...u, extension: e.target.value } : u))
+                                        )
+                                      }
+                                    />
+                                  </div>
                                   <div className="md:col-span-2 border-t pt-2 text-sm font-medium">
                                     Email Signature
                                   </div>
@@ -15456,19 +15469,6 @@ export default function Home() {
                                       }
                                     />
                                   </label>
-                                  <div>
-                                    <div className="text-xs text-gray-500 mb-1">Extension / dial digits</div>
-                                    <input
-                                      className="border rounded px-2 py-1 text-sm w-full"
-                                      placeholder="Extension / dial digits"
-                                      value={user.extension ?? ""}
-                                      onChange={e =>
-                                        setUsersList(prev =>
-                                          prev.map(u => (u.id === user.id ? { ...u, extension: e.target.value } : u))
-                                        )
-                                      }
-                                    />
-                                  </div>
                                   <div className="md:col-span-2 border-t pt-2 text-sm font-medium">Security</div>
                                   <label className="md:col-span-2 space-y-1">
                                     <div className="text-xs text-gray-600">Set new password</div>
