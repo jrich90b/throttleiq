@@ -25407,6 +25407,7 @@ app.get("/analytics/kpi", async (req, res) => {
   const appointmentSetter = String(req.query?.appointmentSetter ?? "all")
     .trim()
     .toLowerCase();
+  const callOwnerId = String(req.query?.callOwnerId ?? ownerId ?? "all").trim();
   const from = String(req.query?.from ?? "").trim();
   const to = String(req.query?.to ?? "").trim();
 
@@ -25422,6 +25423,7 @@ app.get("/analytics/kpi", async (req, res) => {
         | "online_only"
         | "include_walkins"
         | "walkin_only",
+      callOwnerId: callOwnerId || "all",
       appointmentSetter: (appointmentSetter || "all") as
         | "all"
         | "ai_sms"
@@ -36053,7 +36055,7 @@ app.post("/conversations/:id/call", async (req, res) => {
       from,
       url: voiceUrl
     });
-    appendOutbound(
+    const callMessage = appendOutbound(
       conv,
       "system",
       conv.leadKey,
@@ -36061,6 +36063,11 @@ app.post("/conversations/:id/call", async (req, res) => {
       "voice_call",
       call.sid
     );
+    if (callMessage) {
+      callMessage.actorUserId = ownerId || undefined;
+      callMessage.actorUserName = ownerNameRaw || agentName || undefined;
+      callMessage.callMethod = agentDigits ? "extension" : "cell";
+    }
     const callTodos = listOpenTodos().filter(t => t.convId === conv.id && t.reason === "call");
     for (const todo of callTodos) {
       markTodoDone(conv.id, todo.id);

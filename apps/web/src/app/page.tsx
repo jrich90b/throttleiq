@@ -3262,6 +3262,7 @@ export default function Home() {
       const params = new URLSearchParams();
       params.set("source", kpiSourceFilter || "all");
       params.set("ownerId", kpiOwnerFilter || "all");
+      params.set("callOwnerId", kpiOwnerFilter || "all");
       params.set("leadType", kpiLeadTypeFilter || "all");
       params.set("leadScope", kpiLeadScopeFilter || "online_only");
       params.set("appointmentSetter", kpiAppointmentSetterFilter || "all");

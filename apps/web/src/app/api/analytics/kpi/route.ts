@@ -8,6 +8,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const source = url.searchParams.get("source") ?? "all";
   const ownerId = url.searchParams.get("ownerId") ?? "all";
+  const callOwnerId = url.searchParams.get("callOwnerId") ?? ownerId;
   const leadType = url.searchParams.get("leadType") ?? "all";
   const leadScope = url.searchParams.get("leadScope") ?? "online_only";
   const appointmentSetter = url.searchParams.get("appointmentSetter") ?? "all";
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
   const upstream = new URL(`${base}/analytics/kpi`);
   upstream.searchParams.set("source", source);
   upstream.searchParams.set("ownerId", ownerId);
+  upstream.searchParams.set("callOwnerId", callOwnerId);
   upstream.searchParams.set("leadType", leadType);
   upstream.searchParams.set("leadScope", leadScope);
   upstream.searchParams.set("appointmentSetter", appointmentSetter);

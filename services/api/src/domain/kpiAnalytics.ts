@@ -25,6 +25,7 @@ export type KpiFilters = {
   to?: string;
   source?: string;
   ownerId?: string;
+  callOwnerId?: string;
   leadType?: LeadTypeFilter;
   leadScope?: LeadScopeFilter;
   appointmentSetter?: AppointmentSetterFilter;
@@ -104,6 +105,8 @@ export type KpiCallDetailRow = {
   ownerName: string;
   firstInboundAt: string | null;
   firstCallAt: string | null;
+  callOwnerId: string;
+  callOwnerName: string;
   timeToCallMinutes: number | null;
 };
 
@@ -139,6 +142,8 @@ type LeadStatsRow = {
   ownerName: string;
   firstInboundAt: string | null;
   firstCallAt: string | null;
+  callOwnerId: string;
+  callOwnerName: string;
   motorcycle: string;
   createdAtMs: number;
   excludeFromResponseTiming: boolean;
@@ -356,16 +361,51 @@ function firstOutboundResponse(messages: Message[], inboundAtMs: number | null):
   return best;
 }
 
-function firstCallAttempt(messages: Message[], inboundAtMs: number | null): number | null {
-  let best: number | null = null;
-  for (const m of messages) {
+type CallAttempt = {
+  atMs: number;
+  ownerId: string;
+  ownerName: string;
+};
+
+function messageActor(message: Message, conv: Conversation): { ownerId: string; ownerName: string } {
+  const msg = message as any;
+  const actorId = String(msg.actorUserId ?? msg.userId ?? "").trim();
+  const actorName = String(msg.actorUserName ?? msg.userName ?? "").trim();
+  if (actorId || actorName) {
+    return {
+      ownerId: actorId,
+      ownerName: actorName
+    };
+  }
+  return {
+    ownerId: String(conv.leadOwner?.id ?? "").trim(),
+    ownerName: String(conv.leadOwner?.name ?? "").trim()
+  };
+}
+
+function firstCallAttempt(
+  conv: Conversation,
+  inboundAtMs: number | null,
+  callOwnerIdFilter?: string | null
+): CallAttempt | null {
+  let best: CallAttempt | null = null;
+  const ownerFilter = String(callOwnerIdFilter ?? "all").trim();
+  for (const m of conv.messages ?? []) {
     if (m.direction !== "out") continue;
     const provider = String(m.provider ?? "").toLowerCase();
     if (provider !== "voice_call") continue;
     const ms = toMs(m.at);
     if (ms == null) continue;
     if (inboundAtMs != null && ms < inboundAtMs) continue;
-    if (best == null || ms < best) best = ms;
+    const actor = messageActor(m, conv);
+    if (ownerFilter && ownerFilter !== "all" && actor.ownerId !== ownerFilter) continue;
+    if (best == null || ms < best.atMs) {
+      best = {
+        atMs: ms,
+        ownerId: actor.ownerId,
+        ownerName: actor.ownerName
+      };
+    }
   }
   return best;
 }
@@ -548,10 +588,11 @@ function leadMatchesFilters(
   return true;
 }
 
-function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow {
+function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewOptions): LeadStatsRow {
   const inboundAt = firstInbound(conv.messages);
   const outboundAt = firstOutboundResponse(conv.messages, inboundAt);
-  const callAt = firstCallAttempt(conv.messages, inboundAt);
+  const callAttempt = firstCallAttempt(conv, inboundAt, filters.callOwnerId ?? "all");
+  const callAt = callAttempt?.atMs ?? null;
   const createdAt = toMs(conv.createdAt);
   const soldAt = toMs(conv.sale?.soldAt) ?? (conv.closedReason === "sold" ? toMs(conv.closedAt) : null);
   const closedAt = toMs(conv.closedAt);
@@ -585,6 +626,8 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
     ownerName: String(conv.leadOwner?.name ?? "").trim(),
     firstInboundAt: inboundAt != null ? new Date(inboundAt).toISOString() : null,
     firstCallAt: callAt != null ? new Date(callAt).toISOString() : null,
+    callOwnerId: callAttempt?.ownerId ?? "",
+    callOwnerName: callAttempt?.ownerName ?? "",
     motorcycle: motorcycleLabel(conv),
     createdAtMs: createdAt ?? Date.now(),
     excludeFromResponseTiming,
@@ -620,7 +663,7 @@ export function buildKpiOverview(
 
   const scoped = conversations
     .filter(conv => leadMatchesFilters(conv, filters, fromBoundMs, toBoundMs))
-    .map(conv => toLeadStats(conv, opts));
+    .map(conv => toLeadStats(conv, filters, opts));
 
   const leadVolume = scoped.length;
   const responseTimes = scoped
@@ -763,10 +806,12 @@ export function buildKpiOverview(
       leadName: row.leadName,
       leadPhone: row.leadPhone,
       source: row.source,
-      ownerId: row.ownerId,
-      ownerName: row.ownerName,
+      ownerId: row.callOwnerId || row.ownerId,
+      ownerName: row.callOwnerName || row.ownerName,
       firstInboundAt: row.firstInboundAt,
       firstCallAt: row.firstCallAt,
+      callOwnerId: row.callOwnerId || row.ownerId,
+      callOwnerName: row.callOwnerName || row.ownerName,
       timeToCallMinutes: row.timeToCallMinutes
     }))
     .sort((a, b) => {

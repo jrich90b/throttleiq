@@ -463,6 +463,9 @@ export type Message = {
   at: string; // ISO
   provider?: MessageProvider;
   providerMessageId?: string; // e.g., Twilio SID for sent messages
+  actorUserId?: string;
+  actorUserName?: string;
+  callMethod?: "cell" | "extension";
   draftStatus?: "pending" | "stale";
   feedback?: MessageFeedback;
 };
@@ -1537,7 +1540,7 @@ export function appendOutbound(
   if (outboundAsksForShortList(stateSignalBody)) {
     markPendingShortListPrompt(conv, `outbound_${provider}`);
   }
-  conv.messages.push({
+  const message: Message = {
     id: makeId("msg"),
     direction: "out",
     from,
@@ -1547,7 +1550,8 @@ export function appendOutbound(
     at: nowIso(),
     provider,
     providerMessageId
-  });
+  };
+  conv.messages.push(message);
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
     trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
     trackTradePayoffFromOutbound(conv, stateSignalBody);
@@ -1555,6 +1559,7 @@ export function appendOutbound(
   consumeAgentContextIfNeeded(conv, "outbound_sent");
   conv.updatedAt = nowIso();
   scheduleSave();
+  return message;
 }
 
 export function setAgentContext(
