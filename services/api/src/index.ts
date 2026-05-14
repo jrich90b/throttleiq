@@ -31600,6 +31600,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     : draft?.mediaUrls && draft.mediaUrls.length
       ? draft.mediaUrls
       : undefined;
+  const emojiOnlyManualSms = isEmojiOnlyText(smsBody) && !(mediaUrls && mediaUrls.length);
   if (!body && !(mediaUrls && mediaUrls.length)) {
     return res.status(400).json({ ok: false, error: "Missing body or media" });
   }
@@ -31653,6 +31654,33 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
     if (conv.followUpCadence.kind === "post_sale") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
+  };
+  const reconcileManualSmsSendState = async (args: {
+    hadOutbound: boolean;
+    delivered: boolean;
+    sourceMessageId?: string | null;
+  }) => {
+    if (!emojiOnlyManualSms) {
+      applyManualOutboundStateHints(smsBody, { channel: "sms" });
+      await reconcileManualOutboundState(smsBody, {
+        channel: "sms",
+        delivered: args.delivered,
+        sourceMessageId: args.sourceMessageId ?? null
+      });
+    }
+    finalizeManualSendDraftState();
+    if (!emojiOnlyManualSms && !args.hadOutbound) {
+      await maybeStartCadence(conv, new Date().toISOString());
+    }
+    if (!emojiOnlyManualSms) {
+      applyManualCadenceAdvance(args.hadOutbound);
+      pauseCadenceAfterManualOutbound();
+      if (manualTakeover && !draftId) {
+        claimLeadOwnerFromActor();
+        setConversationMode(conv.id, "human");
+      }
+      markAppointmentAcknowledged(conv);
+    }
   };
   const finalizeManualSendDraftState = (opts?: { clearEmailDraft?: boolean; preserveSmsDrafts?: boolean }) => {
     if (!opts?.preserveSmsDrafts) {
@@ -32507,19 +32535,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", conv.leadKey, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(smsBody, { channel: "sms" });
-    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
-    finalizeManualSendDraftState();
-    if (!hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
-    }
-    applyManualCadenceAdvance(hadOutbound);
-    pauseCadenceAfterManualOutbound();
-    if (manualTakeover && !draftId) {
-      claimLeadOwnerFromActor();
-      setConversationMode(conv.id, "human");
-    }
-    markAppointmentAcknowledged(conv);
+    await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
     queueTlpLog();
     return res.status(400).json({
@@ -32547,19 +32563,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(smsBody, { channel: "sms" });
-    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
-    finalizeManualSendDraftState();
-    if (!hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
-    }
-    applyManualCadenceAdvance(hadOutbound);
-    pauseCadenceAfterManualOutbound();
-    if (manualTakeover && !draftId) {
-      claimLeadOwnerFromActor();
-      setConversationMode(conv.id, "human");
-    }
-    markAppointmentAcknowledged(conv);
+    await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
     queueTlpLog();
     return res.status(500).json({
@@ -32596,23 +32600,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, from, to, smsBody, "twilio", msg.sid, mediaUrls);
     }
-    applyManualOutboundStateHints(smsBody, { channel: "sms" });
-    await reconcileManualOutboundState(smsBody, {
-      channel: "sms",
-      delivered: true,
-      sourceMessageId: msg.sid ?? null
-    });
-    finalizeManualSendDraftState();
-    if (!hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
-    }
-    applyManualCadenceAdvance(hadOutbound);
-    pauseCadenceAfterManualOutbound();
-    if (manualTakeover && !draftId) {
-      claimLeadOwnerFromActor();
-      setConversationMode(conv.id, "human");
-    }
-    markAppointmentAcknowledged(conv);
+    await reconcileManualSmsSendState({ hadOutbound, delivered: true, sourceMessageId: msg.sid ?? null });
     queueTuningLog(msg.sid);
     queueTlpLog();
 
@@ -32629,19 +32617,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     if (!fin.usedDraft) {
       appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
     }
-    applyManualOutboundStateHints(smsBody, { channel: "sms" });
-    await reconcileManualOutboundState(smsBody, { channel: "sms", delivered: false });
-    finalizeManualSendDraftState();
-    if (!hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
-    }
-    applyManualCadenceAdvance(hadOutbound);
-    pauseCadenceAfterManualOutbound();
-    if (manualTakeover && !draftId) {
-      claimLeadOwnerFromActor();
-      setConversationMode(conv.id, "human");
-    }
-    markAppointmentAcknowledged(conv);
+    await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
 
     return res.status(502).json({
