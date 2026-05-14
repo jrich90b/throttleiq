@@ -5756,6 +5756,17 @@ function customerAckActionRequestedPhrase(parsed: CustomerAckActionParse | null)
   return normalized || [day, time].filter(Boolean).join(" ").trim();
 }
 
+function customerAckActionSchedulePhrase(parsed: CustomerAckActionParse | null): string {
+  const requested = parsed?.requested ?? {};
+  const day = String(requested.day ?? "").trim();
+  const time = String(requested.timeText ?? "").trim();
+  const normalized = String(parsed?.normalizedText ?? "").trim();
+  if (day && /\b(?:free|available)?\s*all\s+day\b/i.test(normalized)) {
+    return `all day on ${day}`;
+  }
+  return [day, time].filter(Boolean).join(" ").trim() || normalized;
+}
+
 function isManualOutboundAppointmentParserAccepted(parsed: ManualOutboundAppointmentParse | null): boolean {
   if (!parsed || !parsed.explicitState || parsed.state === "none") return false;
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
@@ -5895,7 +5906,7 @@ function buildCustomerAckTentativeLockInReply(parsed: CustomerAckActionParse | n
 }
 
 function buildCustomerAckAvailableTimesReply(parsed: CustomerAckActionParse | null): string {
-  const phrase = customerAckActionRequestedPhrase(parsed);
+  const phrase = customerAckActionSchedulePhrase(parsed);
   if (phrase) {
     return `Sounds good — I’ll check available times for ${normalizeDisplayCase(phrase)} and follow up.`;
   }
@@ -14213,7 +14224,10 @@ function extractRequestedScheduleWindowClauses(textRaw: string | null | undefine
     for (let i = 0; i < matches.length; i += 1) {
       const start = matches[i].index ?? 0;
       const end = i + 1 < matches.length ? matches[i + 1].index ?? sentence.length : sentence.length;
-      const clause = sentence.slice(start, end).replace(/\bor\s*$/i, "").trim();
+      const rawClause = sentence.slice(start, end).replace(/\bor\s*$/i, "").trim();
+      const dayLabel = String(matches[i][0] ?? "").trim();
+      const sentenceHasAllDay = /\b(?:free|available)?\s*all\s+day\b/i.test(sentence);
+      const clause = sentenceHasAllDay && dayLabel ? `${dayLabel} any time` : rawClause;
       if (!clause) continue;
       if (!hasScheduleTimeSignal(clause)) continue;
       if (!hasRequestedScheduleWindowText(clause)) continue;
@@ -14236,7 +14250,18 @@ async function findScheduleSlotsForRequestedWindowClauses(args: {
   const seen = new Set<string>();
   const slots: any[] = [];
   for (const clause of clauses) {
-    const requested = parseRequestedDayTime(clause, cfg.timezone || "America/New_York");
+    const timezone = cfg.timezone || "America/New_York";
+    let requested = parseRequestedDayTime(clause, timezone);
+    if (!requested && resolveRequestedScheduleWindowMode(clause) === "any_time") {
+      const dateOnly = parseRequestedDateOnly(clause, timezone);
+      if (dateOnly) {
+        requested = {
+          ...dateOnly,
+          hour24: 9,
+          minute: 0
+        };
+      }
+    }
     if (!requested) continue;
     const found = await findScheduleSlotsForRequestedWindow({
       conv: args.conv,
@@ -14488,7 +14513,12 @@ async function findExactBookedAppointmentRescheduleSlot(args: {
 function hasScheduleTimeSignal(text: string | null | undefined): boolean {
   const t = String(text ?? "").trim();
   if (!t) return false;
-  return !!extractTimeToken(t) || /\b(morning|afternoon|evening|after\s+\d{1,2}|before\s+\d{1,2})\b/i.test(t);
+  return (
+    !!extractTimeToken(t) ||
+    /\b(morning|afternoon|evening|after\s+\d{1,2}|before\s+\d{1,2}|any\s*time|anytime|all\s+day)\b/i.test(
+      t
+    )
+  );
 }
 
 function getFreshRememberedScheduleTimeText(conv: any, maxAgeHours = 72): string | null {

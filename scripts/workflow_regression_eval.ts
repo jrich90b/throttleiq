@@ -317,6 +317,11 @@ const cases: Case[] = [
     expected: "any_time"
   },
   {
+    id: "free_all_day_routes_as_any_time",
+    actual: resolveRequestedScheduleWindowMode("I'm free all day on Saturday"),
+    expected: "any_time"
+  },
+  {
     id: "afternoon_window_detected",
     actual: resolveRequestedScheduleWindowMode("Friday afternoon or Saturday morning works for me"),
     expected: "window"

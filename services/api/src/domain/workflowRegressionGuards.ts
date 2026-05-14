@@ -1001,6 +1001,7 @@ export function resolveRequestedScheduleWindowMode(textRaw: string | null | unde
   if (hasAfter) return "after";
   if (/\bbefore\b/.test(text)) return "before";
   if (/\b(between|from|around|about|morning|afternoon|evening)\b/.test(text)) return "window";
+  if (/\b(?:free|available)?\s*all\s+day\b/.test(text)) return "any_time";
   if (/\b(any\s*time|anytime)\b/.test(text)) return "any_time";
   return "none";
 }
