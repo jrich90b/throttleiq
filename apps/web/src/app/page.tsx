@@ -3260,9 +3260,13 @@ export default function Home() {
     setKpiError(null);
     try {
       const params = new URLSearchParams();
+      const callOwnerFilter =
+        kpiCallOwnerFilter && kpiCallOwnerFilter !== "all"
+          ? kpiCallOwnerFilter
+          : kpiOwnerFilter || "all";
       params.set("source", kpiSourceFilter || "all");
       params.set("ownerId", kpiOwnerFilter || "all");
-      params.set("callOwnerId", kpiOwnerFilter || "all");
+      params.set("callOwnerId", callOwnerFilter);
       params.set("leadType", kpiLeadTypeFilter || "all");
       params.set("leadScope", kpiLeadScopeFilter || "online_only");
       params.set("appointmentSetter", kpiAppointmentSetterFilter || "all");
@@ -6968,6 +6972,7 @@ export default function Home() {
     kpiLeadScopeFilter,
     kpiAppointmentSetterFilter,
     kpiOwnerFilter,
+    kpiCallOwnerFilter,
     kpiFrom,
     kpiTo
   ]);
