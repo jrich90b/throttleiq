@@ -4205,19 +4205,32 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
 
+  const callbackInquiryText = inquiryText.replace(
+    /\bpreferred\s+(?:contact\s+method|method\s+of\s+contact)\s*[:\-]?\s*(?:phone|email|sms|text)\b[-\s]*/gi,
+    " "
+  );
+  const callbackCueInInquiry =
+    /\b(call|callback|call me|give me a call|reach out|reach me|phone me|call us)\b/i.test(
+      callbackInquiryText
+    );
   const callOnlyRequested = isCallOnlyText(inquiryText);
   const callbackRequestedByLeadHeuristic =
-    /\b(call|callback|call me|give me a call|reach out|reach me|phone me|call us)\b/i.test(inquiryText) &&
+    callbackCueInInquiry &&
     (/\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|morning|afternoon|evening|tonight)\b/i.test(
-      inquiryText
+      callbackInquiryText
     ) ||
-      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b)\b/i.test(inquiryText) ||
-      /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)\b/i.test(inquiryText));
+      /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b)\b/i.test(callbackInquiryText) ||
+      /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)\b/i.test(callbackInquiryText));
+  const callbackIntentFromExplicitLeadText =
+    callbackIntentFromParser &&
+    (callbackCueInInquiry ||
+      !!String(callbackTimeFromParser ?? "").trim() ||
+      !!String(lead.preferredTime ?? "").trim());
   const callbackRequestedInLead =
-    callbackIntentFromParser ||
+    callbackIntentFromExplicitLeadText ||
     callbackRequestedByLeadHeuristic ||
     !!String(lead.preferredTime ?? "").trim();
-  const callbackTimeHintFromText = extractCallbackTimeHintFromText(inquiryText);
+  const callbackTimeHintFromText = extractCallbackTimeHintFromText(callbackInquiryText);
   const callbackTimeHint =
     callbackTimeFromParser ||
     String(lead.preferredTime ?? "").trim() ||
