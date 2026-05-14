@@ -1548,6 +1548,21 @@ export type CustomerDispositionParse = {
   confidence?: number;
 };
 
+export type FirstTimeRiderGuidanceParse = {
+  intent:
+    | "first_time_rider"
+    | "no_motorcycle_endorsement"
+    | "beginner_bike_advice"
+    | "rider_course_info"
+    | "none";
+  explicitRequest: boolean;
+  hasEndorsement?: boolean | null;
+  asksTestRide?: boolean;
+  asksBeginnerBike?: boolean;
+  asksRiderCourse?: boolean;
+  confidence?: number;
+};
+
 export type TradePayoffParse = {
   payoffStatus: "unknown" | "no_lien" | "has_lien";
   needsLienHolderInfo: boolean;
@@ -2292,6 +2307,38 @@ const CUSTOMER_DISPOSITION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     },
     explicit_disposition: { type: "boolean" },
     timeframe_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "intent",
+    "explicit_request",
+    "endorsement_status",
+    "asks_test_ride",
+    "asks_beginner_bike",
+    "asks_rider_course",
+    "confidence"
+  ],
+  properties: {
+    intent: {
+      type: "string",
+      enum: [
+        "first_time_rider",
+        "no_motorcycle_endorsement",
+        "beginner_bike_advice",
+        "rider_course_info",
+        "none"
+      ]
+    },
+    explicit_request: { type: "boolean" },
+    endorsement_status: { type: "string", enum: ["yes", "no", "unknown"] },
+    asks_test_ride: { type: "boolean" },
+    asks_beginner_bike: { type: "boolean" },
+    asks_rider_course: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -4221,6 +4268,124 @@ output: {"disposition":"keep_current_bike","explicit_disposition":true,"timefram
     disposition,
     explicitDisposition,
     timeframeText,
+    confidence
+  };
+}
+
+export async function parseFirstTimeRiderGuidanceWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<FirstTimeRiderGuidanceParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FIRST_TIME_RIDER_GUIDANCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FIRST_TIME_RIDER_GUIDANCE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FIRST_TIME_RIDER_GUIDANCE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FIRST_TIME_RIDER_GUIDANCE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "This would be my first bike. What do you recommend?"
+output: {"intent":"first_time_rider","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,
+    `EXAMPLE B
+inbound: "I've never ridden before but can I test ride the Nightster?"
+output: {"intent":"first_time_rider","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":true,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.98}`,
+    `EXAMPLE C
+inbound: "I don't have my motorcycle license yet. Can I ride it?"
+output: {"intent":"no_motorcycle_endorsement","explicit_request":true,"endorsement_status":"no","asks_test_ride":true,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.98}`,
+    `EXAMPLE D
+inbound: "Do you know where I can take the rider course?"
+output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.96}`,
+    `EXAMPLE E
+inbound: "I have my endorsement but I'm a new rider and want something manageable."
+output: {"intent":"beginner_bike_advice","explicit_request":true,"endorsement_status":"yes","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,
+    `EXAMPLE F
+inbound: "I used to ride years ago and want to get back into it."
+output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":false,"confidence":0.82}`
+  ];
+
+  const prompt = [
+    "You are a strict parser for first-time motorcycle rider guidance at a Harley-Davidson dealership.",
+    "Return only JSON matching the schema.",
+    "",
+    "Intent rules:",
+    "- first_time_rider: customer says this is their first bike, first motorcycle, first time riding, or they have never ridden.",
+    "- no_motorcycle_endorsement: customer says they do not have a motorcycle license, motorcycle endorsement, permit, or are not licensed yet.",
+    "- beginner_bike_advice: customer asks for a good beginner/first bike, manageable bike, easy bike, low seat/weight, or rider fit advice.",
+    "- rider_course_info: customer asks about learning to ride, riding school, MSF, Riding Academy, or a course.",
+    "- none: message is not about first-time rider guidance.",
+    "",
+    "Fields:",
+    "- explicit_request true when the customer is asking for guidance, a test ride, a course, or next step related to being new.",
+    '- endorsement_status is "yes" only when they clearly say they have a motorcycle endorsement/license, "no" only when they clearly do not, otherwise "unknown".',
+    "- asks_test_ride true when they ask to test ride/demo/ride the bike.",
+    "- asks_beginner_bike true when they ask for beginner/first-bike/manageable fit advice.",
+    "- asks_rider_course true when they ask about training/course/school/academy.",
+    "- Do not classify returning riders as first-time riders unless they explicitly say they are new or never rode.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null,
+      hasMotoLicense: lead?.hasMotoLicense ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "first_time_rider_guidance_parser",
+      schema: FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-first-time-rider-guidance-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
+  const intent: FirstTimeRiderGuidanceParse["intent"] =
+    rawIntent === "first_time_rider" ||
+    rawIntent === "no_motorcycle_endorsement" ||
+    rawIntent === "beginner_bike_advice" ||
+    rawIntent === "rider_course_info"
+      ? rawIntent
+      : "none";
+  const endorsementStatus = String(parsed.endorsement_status ?? "unknown").toLowerCase();
+  const hasEndorsement = endorsementStatus === "yes" ? true : endorsementStatus === "no" ? false : null;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    hasEndorsement,
+    asksTestRide: !!parsed.asks_test_ride,
+    asksBeginnerBike: !!parsed.asks_beginner_bike,
+    asksRiderCourse: !!parsed.asks_rider_course,
     confidence
   };
 }
@@ -7372,6 +7537,11 @@ TEST RIDE REQUIREMENTS (strict):
   - long sleeve shirt,
   - over-the-ankle boots.
 - If appointment.status is "confirmed" (or appointment.bookedEventId exists), do NOT ask to schedule a test ride; just offer to answer other questions.
+- If the customer says they are a first-time rider, never ridden, new rider, or not licensed/endorsed yet:
+  - Do NOT push directly into a normal test-ride schedule.
+  - Ask whether they already have a motorcycle endorsement unless they clearly said they do or do not.
+  - If they do not have an endorsement, say test rides require an endorsement and offer to help them sit on bikes / discuss beginner-friendly options.
+  - Keep it supportive and low-pressure.
 
 FOLLOW-UP MODE (strict):
 - If followUp.mode is "holding_inventory":

@@ -47,6 +47,7 @@ import {
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
+  parseFirstTimeRiderGuidanceWithLLM,
   parseResponseControlWithLLM,
   parsePurchaseDeliveryLogisticsWithLLM,
   parseSalespersonMentionWithLLM,
@@ -69,6 +70,7 @@ import type {
   ConversationStateParse,
   CustomerAckActionParse,
   CustomerDispositionParse,
+  FirstTimeRiderGuidanceParse,
   EmpathySupportReplyParse,
   WebFallbackReplyParse,
   InventoryEntityParse,
@@ -190,6 +192,7 @@ import {
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
   isDispositionParserAccepted,
+  isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
   isResponseControlNoResponseAccepted
@@ -17533,6 +17536,117 @@ function buildCustomerDispositionReply(text: string): string {
   return buildFriendlyReachOutClose(hasBikeCompliment);
 }
 
+function hasFirstTimeRiderGuidanceParserHint(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(first\s+(?:bike|motorcycle|harley|time\s+riding|time\s+rider)|new\s+rider|beginner\s+(?:bike|rider)|never\s+(?:ridden|rode|been\s+on)|haven['’]?t\s+(?:ridden|rode))\b/.test(
+      t
+    ) ||
+    /\b(no|don['’]?t\s+have|do\s+not\s+have|without)\s+(?:a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    ) ||
+    /\b(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\s+(?:yet|first)\b/.test(t) ||
+    /\b(msf|riding academy|rider academy|learn to ride|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+      t
+    ) ||
+    /\b(good|best|better|recommend|manageable|easy|starter)\b[\s\S]{0,80}\b(first|beginner|new rider|new to riding|learn)\b/.test(
+      t
+    )
+  );
+}
+
+function parseFirstTimeRiderGuidanceFallback(text: string): FirstTimeRiderGuidanceParse | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!hasFirstTimeRiderGuidanceParserHint(t)) return null;
+  const noEndorsement =
+    /\b(no|don['’]?t\s+have|do\s+not\s+have|without)\s+(?:a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    );
+  const hasEndorsement =
+    /\b(i\s+have|got|already\s+have)\s+(?:my\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    );
+  const asksRiderCourse =
+    /\b(msf|riding academy|rider academy|learn to ride|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+      t
+    );
+  const asksBeginnerBike =
+    /\b(first\s+(?:bike|motorcycle|harley)|beginner\s+(?:bike|rider)|new\s+rider|starter|manageable|easy)\b/.test(
+      t
+    );
+  const asksTestRide = /\b(test ride|demo ride|ride it|take it for a ride|try it)\b/.test(t);
+  const intent: FirstTimeRiderGuidanceParse["intent"] = noEndorsement
+    ? "no_motorcycle_endorsement"
+    : asksRiderCourse
+      ? "rider_course_info"
+      : asksBeginnerBike
+        ? "beginner_bike_advice"
+        : "first_time_rider";
+  return {
+    intent,
+    explicitRequest: asksTestRide || asksRiderCourse || asksBeginnerBike || /\?/.test(text),
+    hasEndorsement: noEndorsement ? false : hasEndorsement ? true : null,
+    asksTestRide,
+    asksBeginnerBike,
+    asksRiderCourse,
+    confidence: 0.76
+  };
+}
+
+function resolveFirstTimeRiderGuidanceDecision(
+  text: string,
+  parsed: FirstTimeRiderGuidanceParse | null
+): FirstTimeRiderGuidanceParse | null {
+  if (isFirstTimeRiderGuidanceParserAccepted(parsed)) return parsed;
+  return parseFirstTimeRiderGuidanceFallback(text);
+}
+
+function buildFirstTimeRiderGuidanceReply(args: {
+  parsed: FirstTimeRiderGuidanceParse;
+  dealerProfile: any;
+}): string {
+  const parsed = args.parsed;
+  const policies = args.dealerProfile?.policies ?? {};
+  const firstTimePolicy =
+    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
+      ? policies.firstTimeRider
+      : {};
+  const requiresEndorsement =
+    firstTimePolicy.requiresMotorcycleEndorsementForTestRide !== false &&
+    firstTimePolicy.testRideRequiresEndorsement !== false;
+  const courseName =
+    String(firstTimePolicy.riderCourseName ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
+    "a motorcycle safety course";
+  const courseUrl =
+    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
+
+  if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
+    return `Good question. ${courseText} is the best place to start, and once you’re ready I can help match you with something manageable.`;
+  }
+  if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
+    const requirement = requiresEndorsement
+      ? "For test rides, we do need a motorcycle endorsement."
+      : "Before a test ride, I’d still want to make sure the bike is a safe fit for your experience.";
+    return `${requirement} We can still help you sit on a few bikes and talk through beginner-friendly options. If you’re still getting started, ${courseText} is a good next step.`;
+  }
+  if (parsed.hasEndorsement === true) {
+    return "That makes sense. Since you have your endorsement, I’d still start by making sure the bike feels manageable: seat height, weight, and comfort. What kind of riding are you hoping to do?";
+  }
+  if (parsed.asksTestRide) {
+    return "That’s exciting. For a first ride, I’d want to make sure we match you with something comfortable and manageable before setting up a test ride. Do you already have your motorcycle endorsement?";
+  }
+  return "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence. Do you already have your motorcycle endorsement, or are you still getting started?";
+}
+
+function applyFirstTimeRiderGuidanceState(conv: any) {
+  setDialogState(conv, "first_time_rider");
+  setFollowUpMode(conv, "active", "first_time_rider_guidance");
+}
+
 function buildAffordabilityRideConfidenceObjectionReply(): string {
   return (
     "Totally understand. We can keep it low-pressure: first make sure the numbers are comfortable, " +
@@ -33984,6 +34098,47 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenTextLower = String(event.body ?? "").toLowerCase();
+  const regenFirstTimeRiderParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FIRST_TIME_RIDER_GUIDANCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck &&
+    hasFirstTimeRiderGuidanceParserHint(event.body ?? "");
+  const regenFirstTimeRiderParse = regenFirstTimeRiderParserEligible
+    ? await safeLlmParse("regen_first_time_rider_guidance_parser", () =>
+        parseFirstTimeRiderGuidanceWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
+    : null;
+  const regenFirstTimeRiderDecision = !regenShortAck
+    ? resolveFirstTimeRiderGuidanceDecision(event.body ?? "", regenFirstTimeRiderParse)
+    : null;
+  if (regenFirstTimeRiderDecision) {
+    const profile = await getDealerProfileHot();
+    applyFirstTimeRiderGuidanceState(conv);
+    const reply = buildFirstTimeRiderGuidanceReply({
+      parsed: regenFirstTimeRiderDecision,
+      dealerProfile: profile
+    });
+    recordRouteOutcome("regen", "first_time_rider_guidance", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      intent: regenFirstTimeRiderDecision.intent,
+      confidence: regenFirstTimeRiderDecision.confidence ?? null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnFinanceIntent: false,
+      turnAvailabilityIntent: false
+    });
+  }
   const regenInventoryEntityParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -36914,6 +37069,49 @@ if (authToken && signature) {
   const semanticInboundText = String(event.body ?? "");
   const semanticTextLower = semanticInboundText.toLowerCase();
   const semanticShortAck = isShortAckText(semanticInboundText) || isEmojiOnlyText(semanticInboundText);
+  const firstTimeRiderParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FIRST_TIME_RIDER_GUIDANCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !semanticShortAck &&
+    hasFirstTimeRiderGuidanceParserHint(semanticInboundText);
+  const firstTimeRiderParse = firstTimeRiderParserEligible
+    ? await safeLlmParse("first_time_rider_guidance_parser", () =>
+        parseFirstTimeRiderGuidanceWithLLM({
+          text: semanticInboundText,
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
+    : null;
+  const firstTimeRiderDecision = !semanticShortAck
+    ? resolveFirstTimeRiderGuidanceDecision(semanticInboundText, firstTimeRiderParse)
+    : null;
+  if (firstTimeRiderDecision) {
+    const dealerProfile = await getDealerProfileHot();
+    applyFirstTimeRiderGuidanceState(conv);
+    const reply = buildFirstTimeRiderGuidanceReply({
+      parsed: firstTimeRiderDecision,
+      dealerProfile
+    });
+    recordRouteOutcome("live", "first_time_rider_guidance", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      intent: firstTimeRiderDecision.intent,
+      confidence: firstTimeRiderDecision.confidence ?? null
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const unifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
   const unifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
   const semanticSlotParserEligible =
