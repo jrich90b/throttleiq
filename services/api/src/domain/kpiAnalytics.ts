@@ -19,6 +19,17 @@ type BusinessHoursConfig = {
   businessHours: Record<string, { open: string | null; close: string | null }>;
 };
 const FALLBACK_TIMEZONE = "America/New_York";
+const SHOWED_APPOINTMENT_OUTCOME_STATUSES = new Set([
+  "showed_up",
+  "sold",
+  "hold",
+  "financing_declined",
+  "financing_needs_info",
+  "bought_elsewhere",
+  "lost",
+  "follow_up",
+  "other"
+]);
 
 export type KpiFilters = {
   from?: string;
@@ -613,8 +624,13 @@ function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewO
   const appointmentStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
   const appointmentConfirmed = appointmentStatus === "confirmed";
   const appointmentSetter = inferAppointmentSetter(conv);
-  const attendanceStatus = String(conv.appointment?.staffNotify?.outcome?.status ?? "").trim().toLowerCase();
-  const appointmentShowed = attendanceStatus === "showed_up" || appointmentStatus === "showed_up";
+  const appointmentOutcome = conv.appointment?.staffNotify?.outcome;
+  const attendanceStatus = String(appointmentOutcome?.status ?? "").trim().toLowerCase();
+  const primaryStatus = String(appointmentOutcome?.primaryStatus ?? "").trim().toLowerCase();
+  const appointmentShowed =
+    appointmentStatus === "showed_up" ||
+    primaryStatus === "showed" ||
+    SHOWED_APPOINTMENT_OUTCOME_STATUSES.has(attendanceStatus);
 
   return {
     convId: String(conv.id ?? ""),
