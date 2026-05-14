@@ -3164,6 +3164,11 @@ export default function Home() {
 
   const kpiCallOwnerOptions = useMemo(() => {
     const byId = new Map<string, string>();
+    kpiOwnerOptions.forEach(owner => {
+      const id = String(owner.id ?? "").trim();
+      if (!id) return;
+      byId.set(id, String(owner.name ?? "").trim() || id);
+    });
     (kpiOverview?.callDetails ?? []).forEach(row => {
       const id = String(row.ownerId ?? "").trim();
       if (!id) return;
@@ -3173,7 +3178,7 @@ export default function Home() {
     return Array.from(byId.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [kpiOverview?.callDetails]);
+  }, [kpiOverview?.callDetails, kpiOwnerOptions]);
 
   const kpiVisibleCallDetails = useMemo(() => {
     const ownerFilter = String(kpiCallOwnerFilter ?? "all").trim();
