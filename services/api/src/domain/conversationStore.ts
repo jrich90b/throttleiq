@@ -3181,6 +3181,45 @@ function parseDayToken(t: string): string | null {
 function parseExactTime(text: string): { hour24: number; minute: number; timeText: string } | null {
   const t = text.toLowerCase();
   const trimmed = t.trim();
+  const approxWithMinutes =
+    t.match(
+      /\b(?:around|about|approx(?:imately)?|close\s+to|near)?\s*(\d{1,2})([:.])(\d{2})\s*(am|pm)?(?:\s*[-\s]?ish)?\b/
+    ) ??
+    t.match(
+      /\b(?:around|about|approx(?:imately)?|close\s+to|near)\s*(\d{3,4})\s*(am|pm)?(?:\s*[-\s]?ish)?\b/
+    ) ??
+    trimmed.match(/^(\d{3,4})\s*(am|pm)?(?:\s*[-\s]?ish)?$/);
+  if (/(around|about|approx|approximately|close\s+to|near|ish)\b/.test(t) && approxWithMinutes) {
+    let hourRaw: number;
+    let minute: number;
+    let meridiem: string | undefined;
+    if (approxWithMinutes[3] != null) {
+      hourRaw = Number(approxWithMinutes[1]);
+      minute = Number(approxWithMinutes[3] ?? "0");
+      meridiem = approxWithMinutes[4];
+    } else {
+      const digits = String(approxWithMinutes[1] ?? "");
+      const numeric = Number(digits);
+      if (!approxWithMinutes[2] && digits.length === 4 && Number.isFinite(numeric) && numeric >= 1900 && numeric <= 2099) {
+        return null;
+      }
+      const split = digits.length === 3 ? 1 : 2;
+      hourRaw = Number(digits.slice(0, split));
+      minute = Number(digits.slice(split));
+      meridiem = approxWithMinutes[2];
+    }
+    if (minute < 0 || minute > 59) return null;
+    if (hourRaw < 0 || hourRaw > 23) return null;
+    if (meridiem && (hourRaw < 1 || hourRaw > 12)) return null;
+    let hour24 = hourRaw;
+    if (meridiem) {
+      if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
+      if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+    } else if (hourRaw <= 12 && hourRaw !== 12) {
+      hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+    }
+    return { hour24, minute, timeText: approxWithMinutes[0] };
+  }
   if (/(around|approx|approximately|ish)\b/.test(t)) return null;
   if (/\bnoon\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
 

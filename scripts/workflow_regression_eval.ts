@@ -144,6 +144,22 @@ const cases: Case[] = [
     expected: 16
   },
   {
+    id: "approx_compact_315_keeps_minutes",
+    actual: (() => {
+      const parsed = parseRequestedDayTime("Friday around 315-ish", "America/New_York");
+      return !!parsed && parsed.hour24 === 15 && parsed.minute === 15;
+    })(),
+    expected: true
+  },
+  {
+    id: "approx_colon_315_keeps_minutes",
+    actual: (() => {
+      const parsed = parseRequestedDayTime("Friday around 3:15-ish", "America/New_York");
+      return !!parsed && parsed.hour24 === 15 && parsed.minute === 15;
+    })(),
+    expected: true
+  },
+  {
     id: "blocks_unverified_photo_helped_personalization",
     actual: isBlockedCadencePersonalizationLineText("Hope the Citrus Heat photo helped you picture the CVO."),
     expected: true
