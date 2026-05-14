@@ -14196,6 +14196,69 @@ function buildRequestedDaySlotReply(slots: any[]): string | null {
   return null;
 }
 
+function extractRequestedScheduleWindowClauses(textRaw: string | null | undefined): string[] {
+  const text = String(textRaw ?? "").trim();
+  if (!text) return [];
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+  const sourceSentences = sentences.length ? sentences : [text];
+  const dayRe =
+    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/gi;
+  const clauses: string[] = [];
+  for (const sentence of sourceSentences) {
+    const matches = Array.from(sentence.matchAll(dayRe));
+    if (!matches.length) continue;
+    for (let i = 0; i < matches.length; i += 1) {
+      const start = matches[i].index ?? 0;
+      const end = i + 1 < matches.length ? matches[i + 1].index ?? sentence.length : sentence.length;
+      const clause = sentence.slice(start, end).replace(/\bor\s*$/i, "").trim();
+      if (!clause) continue;
+      if (!hasScheduleTimeSignal(clause)) continue;
+      if (!hasRequestedScheduleWindowText(clause)) continue;
+      if (!clauses.some(existing => existing.toLowerCase() === clause.toLowerCase())) {
+        clauses.push(clause);
+      }
+    }
+  }
+  return clauses;
+}
+
+async function findScheduleSlotsForRequestedWindowClauses(args: {
+  conv: any;
+  text: string | null | undefined;
+  appointmentType: string;
+}): Promise<any[]> {
+  const clauses = extractRequestedScheduleWindowClauses(args.text);
+  if (!clauses.length) return [];
+  const cfg = await getSchedulerConfigHot();
+  const seen = new Set<string>();
+  const slots: any[] = [];
+  for (const clause of clauses) {
+    const requested = parseRequestedDayTime(clause, cfg.timezone || "America/New_York");
+    if (!requested) continue;
+    const found = await findScheduleSlotsForRequestedWindow({
+      conv: args.conv,
+      requested,
+      text: clause,
+      appointmentType: args.appointmentType
+    }).catch(e => {
+      console.log("[scheduler] requested window clause lookup failed", e?.message ?? e);
+      return [];
+    });
+    for (const slot of found) {
+      const key = `${slot.start}|${slot.salespersonId ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      slots.push(slot);
+    }
+  }
+  return slots
+    .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+    .slice(0, 2);
+}
+
 function hasRequestedScheduleWindowText(text: string | null | undefined): boolean {
   return resolveRequestedScheduleWindowMode(text) !== "none";
 }
@@ -33157,6 +33220,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
     if (action === "ask_for_available_times") {
+      const appointmentType = inferAppointmentTypeFromConv(conv);
+      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+        conv,
+        text: event.body,
+        appointmentType
+      });
+      const windowReply = buildRequestedDaySlotReply(windowSlots);
+      if (windowReply) {
+        setLastSuggestedSlots(conv, windowSlots);
+        setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+        recordRouteOutcome("regen", "customer_ack_available_times_window_slots", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          confidence: regenCustomerAckActionParse?.confidence ?? null,
+          slotCount: windowSlots.length
+        });
+        return respondWithSmsRegeneratedDraft(`Sounds good. ${windowReply}`, undefined, {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        });
+      }
       setDialogState(conv, "schedule_request");
       recordRouteOutcome("regen", "customer_ack_ask_for_available_times", {
         convId: conv.id,
@@ -39852,6 +39937,39 @@ if (authToken && signature) {
       customerAckActionParse?.action === "provide_arrival_window")
   ) {
     const action = customerAckActionParse.action;
+    if (action === "ask_for_available_times") {
+      const appointmentType = inferAppointmentTypeFromConv(conv);
+      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+        conv,
+        text: event.body,
+        appointmentType
+      });
+      const windowReply = buildRequestedDaySlotReply(windowSlots);
+      if (windowReply) {
+        setLastSuggestedSlots(conv, windowSlots);
+        setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+        recordRouteOutcome("live", "customer_ack_available_times_window_slots", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          confidence: customerAckActionParse?.confidence ?? null,
+          slotCount: windowSlots.length
+        });
+        const reply = `Sounds good. ${windowReply}`;
+        const systemMode = webhookMode;
+        if (systemMode === "suggest") {
+          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+          saveConversation(conv);
+          await flushConversationStore();
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        appendOutbound(conv, event.to, event.from, reply, "twilio");
+        saveConversation(conv);
+        await flushConversationStore();
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    }
     const reply =
       action === "accept_tentative_appointment"
         ? buildCustomerAckTentativeLockInReply(customerAckActionParse)
