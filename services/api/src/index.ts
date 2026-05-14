@@ -6133,7 +6133,30 @@ async function maybeHandleFactoryOrderTimingFaq(args: {
   return reply;
 }
 
+function setAppointmentBookedBy(
+  conv: Conversation,
+  bookedBy: NonNullable<Conversation["appointment"]>["bookedBy"]
+) {
+  if (!conv.appointment || !bookedBy) return;
+  conv.appointment.bookedBy = {
+    actor: bookedBy.actor,
+    channel: bookedBy.channel,
+    userId: bookedBy.userId ?? undefined,
+    userName: bookedBy.userName ?? undefined,
+    sourceMessageId: bookedBy.sourceMessageId ?? undefined,
+    inferred: bookedBy.inferred === true ? true : undefined
+  };
+}
+
 function onAppointmentBooked(conv: any) {
+  if (conv?.appointment && !conv.appointment.bookedBy) {
+    const confirmedBy = String(conv.appointment.confirmedBy ?? "").toLowerCase();
+    if (confirmedBy === "salesperson") {
+      conv.appointment.bookedBy = { actor: "human", channel: "manual", inferred: true };
+    } else if (confirmedBy === "customer") {
+      conv.appointment.bookedBy = { actor: "ai", channel: "sms", inferred: true };
+    }
+  }
   if (conv?.closedReason === "sold" || conv?.sale?.soldAt || conv?.followUpCadence?.kind === "post_sale") {
     return;
   }
@@ -6746,6 +6769,11 @@ async function applyPostCallSummaryActions(opts: {
         appointmentType: requestedAppointmentType
       };
       conv.appointment.updatedAt = new Date().toISOString();
+      setAppointmentBookedBy(conv, {
+        actor: "human",
+        channel: "phone",
+        sourceMessageId: sourceMessageId ? String(sourceMessageId) : undefined
+      });
       setPreferredSalespersonForConv(conv, exactMatch.sp, "voice_transcript_booking");
       onAppointmentBooked(conv);
     } catch (err: any) {
@@ -23568,6 +23596,7 @@ app.post("/scheduler/book", async (req, res) => {
       conv.appointment.bookedEventId = event.id ?? null;
       conv.appointment.bookedEventLink = event.htmlLink ?? null;
       conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+      setAppointmentBookedBy(conv, { actor: "customer", channel: "public_booking" });
       onAppointmentBooked(conv);
     }
   }
@@ -23795,6 +23824,7 @@ app.post("/public/booking/book", async (req, res) => {
   conv.appointment.bookedEventId = event.id ?? null;
   conv.appointment.bookedEventLink = event.htmlLink ?? null;
   conv.appointment.bookedSalespersonId = chosenSp.id ?? null;
+  setAppointmentBookedBy(conv, { actor: "customer", channel: "public_booking" });
   onAppointmentBooked(conv);
 
   return res.json({
@@ -25359,6 +25389,9 @@ app.get("/analytics/kpi", async (req, res) => {
   const leadScope = String(req.query?.leadScope ?? "include_walkins")
     .trim()
     .toLowerCase();
+  const appointmentSetter = String(req.query?.appointmentSetter ?? "all")
+    .trim()
+    .toLowerCase();
   const from = String(req.query?.from ?? "").trim();
   const to = String(req.query?.to ?? "").trim();
 
@@ -25374,6 +25407,15 @@ app.get("/analytics/kpi", async (req, res) => {
         | "online_only"
         | "include_walkins"
         | "walkin_only",
+      appointmentSetter: (appointmentSetter || "all") as
+        | "all"
+        | "ai_sms"
+        | "human_sms"
+        | "human_email"
+        | "human_phone"
+        | "human_manual"
+        | "customer_public_booking"
+        | "unknown",
       from: from || undefined,
       to: to || undefined
     },
@@ -26047,6 +26089,12 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
     conv.appointment.bookedEventId = event.id ?? null;
     conv.appointment.bookedEventLink = event.htmlLink ?? null;
     conv.appointment.bookedSalespersonId = salesperson.id ?? null;
+    setAppointmentBookedBy(conv, {
+      actor: "human",
+      channel: "manual",
+      userId: String((req as any).user?.id ?? "").trim() || undefined,
+      userName: String((req as any).user?.name ?? (req as any).user?.email ?? "").trim() || undefined
+    });
     conv.appointment.matchedSlot = {
       salespersonId: salesperson.id,
       salespersonName: salesperson.name,
@@ -31564,7 +31612,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     appendManualOutboundDepartmentSoftTags(conv, outboundBody, opts);
     return;
   };
-  const maybeBookManualOutboundAppointmentEvent = async (): Promise<boolean> => {
+  const maybeBookManualOutboundAppointmentEvent = async (opts?: {
+    channel?: "sms" | "email" | null;
+    sourceMessageId?: string | null;
+  }): Promise<boolean> => {
     const appt = conv.appointment;
     if (!appt) return false;
     if (String(appt.bookedEventId ?? "").trim()) return false;
@@ -31692,6 +31743,11 @@ app.post("/conversations/:id/send", async (req, res) => {
           "manual_outbound_schedule_confirmed"
         );
       }
+      setAppointmentBookedBy(conv, {
+        actor: "human",
+        channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",
+        sourceMessageId: opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined
+      });
       onAppointmentBooked(conv);
       recordRouteOutcome("live", "manual_outbound_schedule_event_booked", {
         convId: conv.id,
@@ -31959,6 +32015,11 @@ app.post("/conversations/:id/send", async (req, res) => {
       conv.appointment.confirmedBy = "salesperson";
       conv.appointment.updatedAt = nowIso();
       conv.appointment.acknowledged = true;
+      setAppointmentBookedBy(conv, {
+        actor: "human",
+        channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",
+        sourceMessageId: opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined
+      });
       didSetAppointment = true;
     }
 
@@ -32021,12 +32082,17 @@ app.post("/conversations/:id/send", async (req, res) => {
       conv.appointment.sourceMessageId =
         opts?.sourceMessageId ? String(opts.sourceMessageId) : conv.appointment.sourceMessageId;
       conv.appointment.acknowledged = true;
+      setAppointmentBookedBy(conv, {
+        actor: "human",
+        channel: opts?.channel === "email" ? "email" : opts?.channel === "sms" ? "sms" : "manual",
+        sourceMessageId: opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined
+      });
       setRequestedTime(conv, {
         day: String(bookingParse?.requested?.day ?? "").trim() || undefined,
         timeText: normalizedText || text
       });
       setDialogState(conv, "schedule_booked");
-      const booked = await maybeBookManualOutboundAppointmentEvent();
+      const booked = await maybeBookManualOutboundAppointmentEvent(opts);
       if (!booked || !String(conv.appointment?.bookedEventId ?? "").trim()) {
         conv.appointment.status = "none";
         conv.appointment.whenIso = null;
@@ -32071,7 +32137,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     if (didSetAppointment) {
       setDialogState(conv, "schedule_booked");
-      const booked = await maybeBookManualOutboundAppointmentEvent();
+      const booked = await maybeBookManualOutboundAppointmentEvent(opts);
       if (!booked || !String(conv.appointment?.bookedEventId ?? "").trim()) {
         const appt = conv.appointment;
         if (!appt) return;

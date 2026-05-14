@@ -1453,6 +1453,15 @@ function contactDisplayName(c: ContactItem): string {
 
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
 type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
+type KpiAppointmentSetter =
+  | "all"
+  | "ai_sms"
+  | "human_sms"
+  | "human_email"
+  | "human_phone"
+  | "human_manual"
+  | "customer_public_booking"
+  | "unknown";
 
 type KpiOverview = {
   applied: {
@@ -1462,6 +1471,7 @@ type KpiOverview = {
     ownerId: string;
     leadType: KpiLeadType;
     leadScope: KpiLeadScope;
+    appointmentSetter: KpiAppointmentSetter;
   };
   totals: {
     leadVolume: number;
@@ -1495,6 +1505,15 @@ type KpiOverview = {
     appointmentRatePct: number;
     appointmentShowRatePct: number;
     callRatePct: number;
+    soldCloseRatePct: number;
+  }>;
+  byAppointmentSetter: Array<{
+    key: string;
+    label: string;
+    appointmentCount: number;
+    appointmentShowedCount: number;
+    appointmentShowRatePct: number;
+    soldCount: number;
     soldCloseRatePct: number;
   }>;
   topMotorcycles: Array<{
@@ -2461,6 +2480,7 @@ export default function Home() {
   const [kpiSourceFilter, setKpiSourceFilter] = useState("all");
   const [kpiLeadTypeFilter, setKpiLeadTypeFilter] = useState<KpiLeadType>("all");
   const [kpiLeadScopeFilter, setKpiLeadScopeFilter] = useState<KpiLeadScope>("online_only");
+  const [kpiAppointmentSetterFilter, setKpiAppointmentSetterFilter] = useState<KpiAppointmentSetter>("all");
   const [kpiOwnerFilter, setKpiOwnerFilter] = useState("all");
   const [kpiCallOwnerFilter, setKpiCallOwnerFilter] = useState("all");
   const [kpiFrom, setKpiFrom] = useState<string>("");
@@ -3225,6 +3245,7 @@ export default function Home() {
       params.set("ownerId", kpiOwnerFilter || "all");
       params.set("leadType", kpiLeadTypeFilter || "all");
       params.set("leadScope", kpiLeadScopeFilter || "online_only");
+      params.set("appointmentSetter", kpiAppointmentSetterFilter || "all");
       if (kpiFrom) params.set("from", `${kpiFrom}T00:00:00.000Z`);
       if (kpiTo) params.set("to", `${kpiTo}T23:59:59.999Z`);
       const resp = await fetch(`/api/analytics/kpi?${params.toString()}`, { cache: "no-store" });
@@ -6926,7 +6947,17 @@ export default function Home() {
   useEffect(() => {
     if (!isManager || section !== "kpi") return;
     void loadKpiOverview();
-  }, [section, isManager, kpiSourceFilter, kpiLeadTypeFilter, kpiLeadScopeFilter, kpiOwnerFilter, kpiFrom, kpiTo]);
+  }, [
+    section,
+    isManager,
+    kpiSourceFilter,
+    kpiLeadTypeFilter,
+    kpiLeadScopeFilter,
+    kpiAppointmentSetterFilter,
+    kpiOwnerFilter,
+    kpiFrom,
+    kpiTo
+  ]);
 
   useEffect(() => {
     if (!isManager || section !== "campaigns") return;
@@ -11560,6 +11591,20 @@ export default function Home() {
                 </option>
               ))}
             </select>
+            <select
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={kpiAppointmentSetterFilter}
+              onChange={e => setKpiAppointmentSetterFilter((e.target.value as KpiAppointmentSetter) || "all")}
+            >
+              <option value="all">All appointment setters</option>
+              <option value="ai_sms">AI by SMS</option>
+              <option value="human_sms">Human by SMS</option>
+              <option value="human_email">Human by email</option>
+              <option value="human_phone">Human by phone</option>
+              <option value="human_manual">Human/manual</option>
+              <option value="customer_public_booking">Customer self-booked</option>
+              <option value="unknown">Unknown</option>
+            </select>
             <button
               className="w-full px-3 py-2 border rounded text-sm hover:bg-[var(--surface-2)]"
               onClick={() => {
@@ -13435,6 +13480,39 @@ export default function Home() {
                     <div className="text-lg font-semibold mt-1">
                       {kpiOverview.totals.closeRate120dPct.toFixed(2)}%
                     </div>
+                  </div>
+                </div>
+
+                <div className="border rounded-lg bg-white overflow-hidden">
+                  <div className="px-4 py-3 border-b text-sm font-semibold">Appointments By Setter</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left px-3 py-2">Setter</th>
+                          <th className="text-right px-3 py-2">Appointments</th>
+                          <th className="text-right px-3 py-2">Show %</th>
+                          <th className="text-right px-3 py-2">Sold %</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {kpiOverview.byAppointmentSetter.map(row => (
+                          <tr key={`kpi-appointment-setter-${row.key}`} className="border-t">
+                            <td className="px-3 py-2">{row.label}</td>
+                            <td className="px-3 py-2 text-right">{row.appointmentCount}</td>
+                            <td className="px-3 py-2 text-right">{row.appointmentShowRatePct.toFixed(2)}%</td>
+                            <td className="px-3 py-2 text-right">{row.soldCloseRatePct.toFixed(2)}%</td>
+                          </tr>
+                        ))}
+                        {kpiOverview.byAppointmentSetter.length === 0 ? (
+                          <tr>
+                            <td className="px-3 py-3 text-gray-500" colSpan={4}>
+                              No appointment rows for selected filters.
+                            </td>
+                          </tr>
+                        ) : null}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 

@@ -4,6 +4,15 @@ import { localPartsToUtcDate } from "./schedulerEngine.js";
 
 type LeadTypeFilter = "all" | "new" | "used" | "walk_in";
 type LeadScopeFilter = "online_only" | "include_walkins" | "walkin_only";
+type AppointmentSetterFilter =
+  | "all"
+  | "ai_sms"
+  | "human_sms"
+  | "human_email"
+  | "human_phone"
+  | "human_manual"
+  | "customer_public_booking"
+  | "unknown";
 
 type BusinessHoursConfig = {
   timezone: string;
@@ -18,6 +27,7 @@ export type KpiFilters = {
   ownerId?: string;
   leadType?: LeadTypeFilter;
   leadScope?: LeadScopeFilter;
+  appointmentSetter?: AppointmentSetterFilter;
 };
 
 export type KpiTotals = {
@@ -53,6 +63,16 @@ export type KpiSourceRow = {
   appointmentRatePct: number;
   appointmentShowRatePct: number;
   callRatePct: number;
+  soldCloseRatePct: number;
+};
+
+export type KpiAppointmentSetterRow = {
+  key: string;
+  label: string;
+  appointmentCount: number;
+  appointmentShowedCount: number;
+  appointmentShowRatePct: number;
+  soldCount: number;
   soldCloseRatePct: number;
 };
 
@@ -95,9 +115,11 @@ export type KpiOverview = {
     ownerId: string;
     leadType: LeadTypeFilter;
     leadScope: LeadScopeFilter;
+    appointmentSetter: AppointmentSetterFilter;
   };
   totals: KpiTotals;
   bySource: KpiSourceRow[];
+  byAppointmentSetter: KpiAppointmentSetterRow[];
   topMotorcycles: KpiBikeRow[];
   trend: KpiTrendRow[];
   callDetails: KpiCallDetailRow[];
@@ -125,6 +147,8 @@ type LeadStatsRow = {
   called: boolean;
   timeToCallMinutes: number | null;
   appointment: boolean;
+  appointmentSetterKey: string;
+  appointmentSetterLabel: string;
   appointmentShowed: boolean;
   closed: boolean;
   sold: boolean;
@@ -406,6 +430,83 @@ function leadDisplayName(conv: Conversation): string {
   return String(conv.leadKey ?? conv.id ?? "Unknown lead").trim();
 }
 
+function appointmentSetterLabel(key: string): string {
+  switch (key) {
+    case "ai_sms":
+      return "AI by SMS";
+    case "human_sms":
+      return "Human by SMS";
+    case "human_email":
+      return "Human by email";
+    case "human_phone":
+      return "Human by phone";
+    case "human_manual":
+      return "Human/manual";
+    case "customer_public_booking":
+      return "Customer self-booked";
+    default:
+      return "Unknown";
+  }
+}
+
+function appointmentSetterFromParts(actor: string, channel: string): string {
+  if (actor === "ai") return "ai_sms";
+  if (actor === "human") {
+    if (channel === "sms") return "human_sms";
+    if (channel === "email") return "human_email";
+    if (channel === "phone") return "human_phone";
+    return "human_manual";
+  }
+  if (actor === "customer" && channel === "public_booking") return "customer_public_booking";
+  return "unknown";
+}
+
+function messageMatchesSourceId(message: Message, sourceId: string): boolean {
+  const msg = message as any;
+  return (
+    String(msg.id ?? "").trim() === sourceId ||
+    String(msg.providerMessageId ?? "").trim() === sourceId ||
+    String(msg.messageId ?? "").trim() === sourceId
+  );
+}
+
+function inferAppointmentSetter(conv: Conversation): { key: string; label: string } {
+  const appointment = conv.appointment as any;
+  const bookedBy = appointment?.bookedBy;
+  if (bookedBy?.actor || bookedBy?.channel) {
+    const key = appointmentSetterFromParts(
+      String(bookedBy.actor ?? "").trim().toLowerCase(),
+      String(bookedBy.channel ?? "").trim().toLowerCase()
+    );
+    return { key, label: appointmentSetterLabel(key) };
+  }
+
+  const sourceId = String(appointment?.sourceMessageId ?? "").trim();
+  const sourceMessage = sourceId ? (conv.messages ?? []).find(m => messageMatchesSourceId(m, sourceId)) : null;
+  const provider = String(sourceMessage?.provider ?? "").trim().toLowerCase();
+  if (provider === "voice_call" || provider === "voice_transcript" || provider === "voice_summary") {
+    return { key: "human_phone", label: appointmentSetterLabel("human_phone") };
+  }
+  const confirmedBy = String(appointment?.confirmedBy ?? "").trim().toLowerCase();
+  if (confirmedBy === "salesperson") {
+    if (provider === "sendgrid" || provider === "email" || provider === "manual_email") {
+      return { key: "human_email", label: appointmentSetterLabel("human_email") };
+    }
+    if (provider === "twilio" || provider === "sms" || provider === "manual_sms") {
+      return { key: "human_sms", label: appointmentSetterLabel("human_sms") };
+    }
+    return { key: "human_manual", label: appointmentSetterLabel("human_manual") };
+  }
+  if (confirmedBy === "customer") return { key: "ai_sms", label: appointmentSetterLabel("ai_sms") };
+  if (provider === "sendgrid" || provider === "email" || provider === "manual_email") {
+    return { key: "human_email", label: appointmentSetterLabel("human_email") };
+  }
+  if (provider === "twilio" || provider === "sms" || provider === "manual_sms") {
+    return { key: "human_sms", label: appointmentSetterLabel("human_sms") };
+  }
+  return { key: "unknown", label: appointmentSetterLabel("unknown") };
+}
+
 function leadMatchesFilters(
   conv: Conversation,
   filters: KpiFilters,
@@ -436,6 +537,14 @@ function leadMatchesFilters(
   if (leadType === "new" && normalizeCondition(conv) !== "new") return false;
   if (leadType === "used" && normalizeCondition(conv) !== "used") return false;
 
+  const appointmentSetter = (String(filters.appointmentSetter ?? "all").trim().toLowerCase() ||
+    "all") as AppointmentSetterFilter;
+  if (appointmentSetter !== "all") {
+    const appointmentStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
+    if (appointmentStatus !== "confirmed") return false;
+    if (inferAppointmentSetter(conv).key !== appointmentSetter) return false;
+  }
+
   return true;
 }
 
@@ -462,6 +571,7 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
     createdAt != null && soldAt != null ? Math.max(0, (soldAt - createdAt) / (1000 * 60 * 60 * 24)) : null;
   const appointmentStatus = String(conv.appointment?.status ?? "").trim().toLowerCase();
   const appointmentConfirmed = appointmentStatus === "confirmed";
+  const appointmentSetter = inferAppointmentSetter(conv);
   const attendanceStatus = String(conv.appointment?.staffNotify?.outcome?.status ?? "").trim().toLowerCase();
   const appointmentShowed = attendanceStatus === "showed_up" || appointmentStatus === "showed_up";
 
@@ -483,6 +593,8 @@ function toLeadStats(conv: Conversation, opts: KpiOverviewOptions): LeadStatsRow
     called: callAt != null,
     timeToCallMinutes: callMinutes != null ? Number(callMinutes.toFixed(2)) : null,
     appointment: appointmentConfirmed,
+    appointmentSetterKey: appointmentSetter.key,
+    appointmentSetterLabel: appointmentSetter.label,
     appointmentShowed,
     closed,
     sold,
@@ -575,6 +687,28 @@ export function buildKpiOverview(
     })
     .sort((a, b) => b.leadCount - a.leadCount || a.source.localeCompare(b.source));
 
+  const setterMap = new Map<string, LeadStatsRow[]>();
+  for (const row of scoped.filter(r => r.appointment)) {
+    if (!setterMap.has(row.appointmentSetterKey)) setterMap.set(row.appointmentSetterKey, []);
+    setterMap.get(row.appointmentSetterKey)?.push(row);
+  }
+  const byAppointmentSetter: KpiAppointmentSetterRow[] = Array.from(setterMap.entries())
+    .map(([key, rows]) => {
+      const appointments = rows.length;
+      const showed = rows.filter(r => r.appointmentShowed).length;
+      const sold = rows.filter(r => r.sold).length;
+      return {
+        key,
+        label: rows[0]?.appointmentSetterLabel || appointmentSetterLabel(key),
+        appointmentCount: appointments,
+        appointmentShowedCount: showed,
+        appointmentShowRatePct: clampPct(showed, appointments),
+        soldCount: sold,
+        soldCloseRatePct: clampPct(sold, appointments)
+      };
+    })
+    .sort((a, b) => b.appointmentCount - a.appointmentCount || a.label.localeCompare(b.label));
+
   const bikeMap = new Map<string, { count: number; newCount: number; usedCount: number }>();
   for (const row of scoped) {
     const key = row.motorcycle;
@@ -650,10 +784,13 @@ export function buildKpiOverview(
       leadType: (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter,
       leadScope:
         (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
-          "include_walkins") as LeadScopeFilter
+          "include_walkins") as LeadScopeFilter,
+      appointmentSetter:
+        (String(filters.appointmentSetter ?? "all").trim().toLowerCase() || "all") as AppointmentSetterFilter
     },
     totals,
     bySource,
+    byAppointmentSetter,
     topMotorcycles,
     trend,
     callDetails

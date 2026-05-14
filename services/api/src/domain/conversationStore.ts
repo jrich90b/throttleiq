@@ -40,6 +40,23 @@ export type LeadOwner = {
 };
 
 export type AppointmentStatus = "none" | "proposed" | "confirmed";
+export type AppointmentBookedByActor = "ai" | "human" | "customer" | "unknown";
+export type AppointmentBookedByChannel =
+  | "sms"
+  | "email"
+  | "phone"
+  | "manual"
+  | "public_booking"
+  | "unknown";
+
+export type AppointmentBookedBy = {
+  actor: AppointmentBookedByActor;
+  channel: AppointmentBookedByChannel;
+  userId?: string | null;
+  userName?: string | null;
+  sourceMessageId?: string | null;
+  inferred?: boolean;
+};
 
 export type AppointmentMemory = {
   status: AppointmentStatus;
@@ -54,6 +71,7 @@ export type AppointmentMemory = {
   bookedSalespersonId?: string | null;
   bookedSalespersonName?: string | null;
   bookedCalendarId?: string | null;
+  bookedBy?: AppointmentBookedBy;
   whenLocal?: string | null;
   appointmentType?: string | null;
   reschedulePending?: boolean;
