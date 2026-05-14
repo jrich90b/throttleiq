@@ -5,6 +5,7 @@ export function TaskInboxSection(props: any) {
     todoQuery,
     setTodoQuery,
     isManager,
+    canFilterOwners,
     todoLeadOwnerFilter,
     setTodoLeadOwnerFilter,
     managerLeadOwnerOptions,
@@ -55,7 +56,7 @@ export function TaskInboxSection(props: any) {
           onChange={e => setTodoQuery(e.target.value)}
         />
         <div className="flex flex-col gap-2 md:flex-row">
-          {isManager ? (
+          {canFilterOwners ? (
             <select
               className="w-full md:w-44 border rounded px-3 py-2 text-sm bg-white"
               value={todoLeadOwnerFilter}

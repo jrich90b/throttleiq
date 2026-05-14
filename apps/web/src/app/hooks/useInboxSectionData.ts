@@ -12,7 +12,7 @@ type UseInboxSectionDataArgs = {
   inboxQuery: string;
   inboxOwnerFilter: string;
   inboxDealFilter: InboxDealFilter;
-  isManager: boolean;
+  canFilterOwners: boolean;
   canonicalizeOwnerName: (rawName: string, ownerId?: string | null) => string;
   inferOwnerDepartment: (
     ownerNameRaw: string,
@@ -41,7 +41,7 @@ export function useInboxSectionData({
   inboxQuery,
   inboxOwnerFilter,
   inboxDealFilter,
-  isManager,
+  canFilterOwners,
   canonicalizeOwnerName,
   inferOwnerDepartment,
   inferTodoDepartment,
@@ -111,7 +111,7 @@ export function useInboxSectionData({
       if (inboxDealFilter === "sold" && !isSoldDealConversation(c)) return false;
       if (inboxDealFilter === "hold" && !isConversationOnHold(c)) return false;
 
-      if (isManager && inboxOwnerFilter !== "all") {
+      if (canFilterOwners && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
           String(c.leadOwner?.name ?? c.leadOwner?.id ?? "").trim(),
           c.leadOwner?.id
@@ -164,7 +164,7 @@ export function useInboxSectionData({
   }, [
     visibleConversations,
     inboxQuery,
-    isManager,
+    canFilterOwners,
     inboxOwnerFilter,
     inboxDealFilter,
     inboxDepartmentTeamsByConv,

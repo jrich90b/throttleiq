@@ -9,6 +9,8 @@ export type UserPermissions = {
   canEditAppointments: boolean;
   canToggleHumanOverride: boolean;
   canAccessTodos: boolean;
+  canViewAllLeads: boolean;
+  canViewAllTasks: boolean;
   canAccessSuppressions: boolean;
 };
 
@@ -17,6 +19,8 @@ function basePermissions(): UserPermissions {
     canEditAppointments: false,
     canToggleHumanOverride: false,
     canAccessTodos: false,
+    canViewAllLeads: false,
+    canViewAllTasks: false,
     canAccessSuppressions: false
   };
 }
@@ -27,6 +31,8 @@ function defaultPermissionsForRole(role: UserRole): UserPermissions {
       canEditAppointments: true,
       canToggleHumanOverride: true,
       canAccessTodos: true,
+      canViewAllLeads: true,
+      canViewAllTasks: true,
       canAccessSuppressions: true
     };
   }
@@ -35,6 +41,8 @@ function defaultPermissionsForRole(role: UserRole): UserPermissions {
       canEditAppointments: false,
       canToggleHumanOverride: false,
       canAccessTodos: true,
+      canViewAllLeads: false,
+      canViewAllTasks: false,
       canAccessSuppressions: false
     };
   }
@@ -163,19 +171,26 @@ export async function createUser(input: {
   }
   const now = new Date().toISOString();
   const roleDefaults = defaultPermissionsForRole(input.role);
+  const requestedPermissions = {
+    ...roleDefaults,
+    ...(input.permissions ?? {})
+  };
+  if (requestedPermissions.canViewAllTasks) requestedPermissions.canAccessTodos = true;
   const perms: UserPermissions =
     input.role === "manager"
       ? roleDefaults
       : input.role === "service" || input.role === "parts" || input.role === "apparel"
         ? {
             ...roleDefaults,
-            ...(input.permissions ?? {}),
+            ...requestedPermissions,
             canEditAppointments: false,
             canToggleHumanOverride: false,
             canAccessSuppressions: false,
+            canViewAllLeads: false,
+            canViewAllTasks: false,
             canAccessTodos: true
           }
-        : { ...roleDefaults, ...(input.permissions ?? {}) };
+        : requestedPermissions;
   const includeInSchedule =
     input.role === "service" || input.role === "parts" || input.role === "apparel"
       ? false
@@ -231,20 +246,27 @@ export async function updateUser(
   }
   const nextRole = patch.role ?? existing.role;
   const roleDefaults = defaultPermissionsForRole(nextRole);
+  const requestedPermissions = {
+    ...roleDefaults,
+    ...(existing.permissions ?? roleDefaults),
+    ...(patch.permissions ?? {})
+  };
+  if (requestedPermissions.canViewAllTasks) requestedPermissions.canAccessTodos = true;
   const nextPerms: UserPermissions =
     nextRole === "manager"
       ? roleDefaults
       : nextRole === "service" || nextRole === "parts" || nextRole === "apparel"
         ? {
             ...roleDefaults,
-            ...(existing.permissions ?? roleDefaults),
-            ...(patch.permissions ?? {}),
+            ...requestedPermissions,
             canEditAppointments: false,
             canToggleHumanOverride: false,
             canAccessSuppressions: false,
+            canViewAllLeads: false,
+            canViewAllTasks: false,
             canAccessTodos: true
           }
-        : { ...roleDefaults, ...(existing.permissions ?? roleDefaults), ...(patch.permissions ?? {}) };
+        : requestedPermissions;
   const includeInSchedule =
     nextRole === "service" || nextRole === "parts" || nextRole === "apparel"
       ? false

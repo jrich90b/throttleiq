@@ -7,7 +7,7 @@ type TodoLike = any;
 type UseTaskInboxDataArgs = {
   todos: TodoLike[];
   todoQuery: string;
-  isManager: boolean;
+  canFilterOwners: boolean;
   todoLeadOwnerFilter: string;
   todoTaskTypeFilter: "all" | TodoInboxSection;
   canonicalizeOwnerName: (rawName: string, ownerId?: string | null) => string;
@@ -22,7 +22,7 @@ type UseTaskInboxDataArgs = {
 export function useTaskInboxData({
   todos,
   todoQuery,
-  isManager,
+  canFilterOwners,
   todoLeadOwnerFilter,
   todoTaskTypeFilter,
   canonicalizeOwnerName,
@@ -47,7 +47,7 @@ export function useTaskInboxData({
       const todoTeamBase = todoDept ?? "sales";
       const todoTeam = todoTeamBase === "sales" && inferredDeptOwner ? inferredDeptOwner : todoTeamBase;
 
-      if (isManager && todoLeadOwnerFilter !== "all") {
+      if (canFilterOwners && todoLeadOwnerFilter !== "all") {
         if (todoLeadOwnerFilter === "team:unassigned") {
           if (todoTeam === "sales") {
             if (leadOwner) return false;
@@ -70,7 +70,7 @@ export function useTaskInboxData({
   }, [
     todos,
     todoQuery,
-    isManager,
+    canFilterOwners,
     todoLeadOwnerFilter,
     todoTaskTypeFilter,
     canonicalizeOwnerName,

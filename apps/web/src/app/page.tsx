@@ -1070,14 +1070,26 @@ function buildSoldLeadRefOptions(conv?: ConversationDetail | null): LeadRefOptio
 }
 
 function normalizeUserRow(user: any) {
+  const normalized = {
+    ...user,
+    permissions: {
+      canEditAppointments: false,
+      canToggleHumanOverride: false,
+      canAccessTodos: false,
+      canViewAllLeads: false,
+      canViewAllTasks: false,
+      canAccessSuppressions: false,
+      ...(user?.permissions ?? {})
+    }
+  };
   const first = String(user?.firstName ?? "").trim();
   const last = String(user?.lastName ?? "").trim();
-  if (first || last) return { ...user };
+  if (first || last) return normalized;
   const name = String(user?.name ?? "").trim();
-  if (!name) return { ...user };
+  if (!name) return normalized;
   const parts = name.split(/\s+/).filter(Boolean);
   return {
-    ...user,
+    ...normalized,
     firstName: parts[0] ?? "",
     lastName: parts.slice(1).join(" ")
   };
@@ -2963,6 +2975,8 @@ export default function Home() {
       canEditAppointments: false,
       canToggleHumanOverride: false,
       canAccessTodos: false,
+      canViewAllLeads: false,
+      canViewAllTasks: false,
       canAccessSuppressions: false
     }
   });
@@ -4601,7 +4615,7 @@ export default function Home() {
         return;
       }
       setNeedsBootstrap(false);
-      setAuthUser(authJson?.user ?? null);
+      setAuthUser(authJson?.user ? normalizeUserRow(authJson.user) : null);
 
       const [s, c, contactsResp, contactListsResp, modelsResp, usersResp] = await Promise.all([
         fetch("/api/settings", { cache: "no-store" }),
@@ -6856,6 +6870,8 @@ export default function Home() {
   }, [selectedContactListId, selectedContact?.id, selectedContactList?.contactIds?.join("|")]);
 
   const isManager = authUser?.role === "manager";
+  const canViewAllLeads = isManager || !!authUser?.permissions?.canViewAllLeads;
+  const canViewAllTasks = isManager || !!authUser?.permissions?.canViewAllTasks;
   const isDepartmentUser =
     authUser?.role === "service" || authUser?.role === "parts" || authUser?.role === "apparel";
   const isConversationSection =
@@ -7254,7 +7270,7 @@ export default function Home() {
   } = useTaskInboxData({
     todos,
     todoQuery,
-    isManager,
+    canFilterOwners: canViewAllTasks,
     todoLeadOwnerFilter,
     todoTaskTypeFilter,
     canonicalizeOwnerName,
@@ -8083,7 +8099,7 @@ export default function Home() {
     inboxQuery,
     inboxOwnerFilter,
     inboxDealFilter,
-    isManager,
+    canFilterOwners: canViewAllLeads,
     canonicalizeOwnerName,
     inferOwnerDepartment,
     inferTodoDepartment,
@@ -10481,6 +10497,8 @@ export default function Home() {
           canEditAppointments: false,
           canToggleHumanOverride: false,
           canAccessTodos: false,
+          canViewAllLeads: false,
+          canViewAllTasks: false,
           canAccessSuppressions: false
         }
       });
@@ -10548,7 +10566,7 @@ export default function Home() {
       });
       const json = await resp.json();
       if (!resp.ok) throw new Error(json?.error ?? "Login failed");
-      setAuthUser(json?.user ?? null);
+      setAuthUser(json?.user ? normalizeUserRow(json.user) : null);
       setLoginForm({ email: "", password: "", name: "" });
       await load();
     } catch (err: any) {
@@ -11644,6 +11662,7 @@ export default function Home() {
             inboxQuery={inboxQuery}
             setInboxQuery={setInboxQuery}
             isManager={isManager}
+            canFilterOwners={canViewAllLeads}
             inboxOwnerFilter={inboxOwnerFilter}
             setInboxOwnerFilter={setInboxOwnerFilter}
             managerLeadOwnerOptions={managerLeadOwnerOptions}
@@ -11712,6 +11731,7 @@ export default function Home() {
             todoQuery={todoQuery}
             setTodoQuery={setTodoQuery}
             isManager={isManager}
+            canFilterOwners={canViewAllTasks}
             todoLeadOwnerFilter={todoLeadOwnerFilter}
             setTodoLeadOwnerFilter={setTodoLeadOwnerFilter}
             managerLeadOwnerOptions={managerLeadOwnerOptions}
@@ -15535,6 +15555,53 @@ export default function Home() {
                                     <label className="flex items-center gap-2">
                                       <input
                                         type="checkbox"
+                                        checked={!!user.permissions?.canViewAllLeads}
+                                        onChange={e =>
+                                          setUsersList(prev =>
+                                            prev.map(u =>
+                                              u.id === user.id
+                                                ? {
+                                                    ...u,
+                                                    permissions: {
+                                                      ...(u.permissions ?? {}),
+                                                      canViewAllLeads: e.target.checked
+                                                    }
+                                                  }
+                                                : u
+                                            )
+                                          )
+                                        }
+                                      />
+                                      View all leads
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!user.permissions?.canViewAllTasks}
+                                        onChange={e =>
+                                          setUsersList(prev =>
+                                            prev.map(u =>
+                                              u.id === user.id
+                                                ? {
+                                                    ...u,
+                                                    permissions: {
+                                                      ...(u.permissions ?? {}),
+                                                      canViewAllTasks: e.target.checked,
+                                                      canAccessTodos: e.target.checked
+                                                        ? true
+                                                        : !!u.permissions?.canAccessTodos
+                                                    }
+                                                  }
+                                                : u
+                                            )
+                                          )
+                                        }
+                                      />
+                                      View all tasks
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
                                         checked={!!user.permissions?.canAccessSuppressions}
                                         onChange={e =>
                                           setUsersList(prev =>
@@ -15818,6 +15885,38 @@ export default function Home() {
                                     }
                                   />
                                   To‑Do inbox
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canViewAllLeads}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: { ...userForm.permissions, canViewAllLeads: e.target.checked }
+                                      })
+                                    }
+                                  />
+                                  View all leads
+                                </label>
+                                <label className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!userForm.permissions?.canViewAllTasks}
+                                    onChange={e =>
+                                      setUserForm({
+                                        ...userForm,
+                                        permissions: {
+                                          ...userForm.permissions,
+                                          canViewAllTasks: e.target.checked,
+                                          canAccessTodos: e.target.checked
+                                            ? true
+                                            : userForm.permissions.canAccessTodos
+                                        }
+                                      })
+                                    }
+                                  />
+                                  View all tasks
                                 </label>
                                 <label className="flex items-center gap-2">
                                   <input

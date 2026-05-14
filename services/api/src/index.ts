@@ -2234,10 +2234,19 @@ function requireManager(req: any, res: any, next: any) {
   return next();
 }
 
-function requirePermission(key: "canEditAppointments" | "canToggleHumanOverride" | "canAccessTodos" | "canAccessSuppressions") {
+function requirePermission(
+  key:
+    | "canEditAppointments"
+    | "canToggleHumanOverride"
+    | "canAccessTodos"
+    | "canViewAllLeads"
+    | "canViewAllTasks"
+    | "canAccessSuppressions"
+) {
   return (req: any, res: any, next: any) => {
     if (AUTH_DISABLED) return next();
     if (req.user?.role === "manager") return next();
+    if (key === "canAccessTodos" && req.user?.permissions?.canViewAllTasks) return next();
     if (req.user?.permissions?.[key]) return next();
     return res.status(403).json({ ok: false, error: "forbidden" });
   };
@@ -2632,6 +2641,11 @@ function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
   const role = String(user?.role ?? "").toLowerCase();
   if (role === "manager") return true;
+  if (user?.permissions?.canViewAllLeads) return true;
+  if (user?.permissions?.canViewAllTasks) {
+    const convId = String(conv?.id ?? "").trim();
+    if (convId && listOpenTodos().some(todo => todo.convId === convId && todo.status === "open")) return true;
+  }
   const requesterId = String(user?.id ?? "").trim();
   const ownerId = String(conv?.leadOwner?.id ?? "").trim();
   const requesterName = String(user?.name ?? "").trim().toLowerCase();
@@ -21038,6 +21052,7 @@ function canUserAccessTodoTask(
 ): boolean {
   const role = String(user?.role ?? "").toLowerCase();
   if (role === "manager") return true;
+  if (user?.permissions?.canViewAllTasks) return true;
 
   const requesterId = String(user?.id ?? "").trim();
   const todoOwnerId = String(todo?.ownerId ?? "").trim();

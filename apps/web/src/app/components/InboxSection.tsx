@@ -9,6 +9,7 @@ export function InboxSection(props: any) {
     inboxQuery,
     setInboxQuery,
     isManager,
+    canFilterOwners,
     inboxOwnerFilter,
     setInboxOwnerFilter,
     managerLeadOwnerOptions,
@@ -186,7 +187,7 @@ export function InboxSection(props: any) {
           value={inboxQuery}
           onChange={e => setInboxQuery(e.target.value)}
         />
-        {isManager ? (
+        {canFilterOwners ? (
           <select
             className="w-28 self-start border rounded px-3 py-2 text-sm bg-white md:w-28"
             value={inboxOwnerFilter}
