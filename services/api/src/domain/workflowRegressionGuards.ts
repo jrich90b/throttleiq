@@ -1011,14 +1011,17 @@ export function buildHumanModeSchedulingDraft(args: {
   requestedDay?: string | null;
   requestedTime?: string | null;
   requestedLabel?: string | null;
+  bookingUrl?: string | null;
 }): string {
   const intent = String(args.intent ?? "").trim().toLowerCase();
   const day = String(args.requestedDay ?? "").trim();
   const time = String(args.requestedTime ?? "").trim();
   const requestedLabel = String(args.requestedLabel ?? "").trim();
+  const bookingUrl = String(args.bookingUrl ?? "").trim();
   const isReschedule = intent === "reschedule";
 
   if (isReschedule) {
+    if (!day && !time && bookingUrl) return `No worries — you can reschedule here: ${bookingUrl}`;
     if (day && !time) return `No worries — what time works best on ${day} to reschedule?`;
     if (requestedLabel || time) return "No worries — I’ll check that reschedule time and follow up.";
     return "No worries — what day and time works best to reschedule?";
@@ -1032,4 +1035,15 @@ export function buildHumanModeSchedulingDraft(args: {
   if (day && !time) return `Sounds good — what time on ${day} works best?`;
   if (requestedLabel || time) return "Sounds good — I’ll check that time and follow up.";
   return "Sounds good — what day and time works best?";
+}
+
+export function buildAppointmentRescheduleBookingLinkReply(args: {
+  bookingUrl?: string | null;
+  firstName?: string | null;
+}): string {
+  const bookingUrl = String(args.bookingUrl ?? "").trim();
+  const firstName = String(args.firstName ?? "").trim();
+  const intro = firstName ? `No problem, ${firstName} — ` : "No problem — ";
+  if (bookingUrl) return `${intro}you can reschedule here: ${bookingUrl}`;
+  return `${intro}what day and time works best to reschedule?`;
 }

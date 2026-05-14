@@ -3,6 +3,7 @@ import {
   allowNoResponseSmallTalkAck,
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
+  buildAppointmentRescheduleBookingLinkReply,
   buildFactoryOrderTimingHandoffReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
@@ -113,6 +114,19 @@ const cases: Case[] = [
     id: "human_mode_reschedule_without_time_asks_for_day_time",
     actual: buildHumanModeSchedulingDraft({ intent: "reschedule" }),
     expected: "No worries — what day and time works best to reschedule?"
+  },
+  {
+    id: "human_mode_reschedule_without_time_uses_booking_link",
+    actual: buildHumanModeSchedulingDraft({ intent: "reschedule", bookingUrl: "https://dealer.example/book" }),
+    expected: "No worries — you can reschedule here: https://dealer.example/book"
+  },
+  {
+    id: "customer_reschedule_link_reply_uses_first_name",
+    actual: buildAppointmentRescheduleBookingLinkReply({
+      firstName: "Alex",
+      bookingUrl: "https://dealer.example/book"
+    }),
+    expected: "No problem, Alex — you can reschedule here: https://dealer.example/book"
   },
   {
     id: "human_mode_reschedule_day_only_asks_for_time",

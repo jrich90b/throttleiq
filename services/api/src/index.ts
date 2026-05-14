@@ -229,6 +229,7 @@ import {
   allowNoResponseSmallTalkAck,
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
+  buildAppointmentRescheduleBookingLinkReply,
   buildFactoryOrderTimingHandoffReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
@@ -33193,6 +33194,56 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && regenCustomerAckActionParse) {
     console.log("[llm-customer-ack-action-parse] regen", regenCustomerAckActionParse);
   }
+  const regenExplicitBookedAppointmentReschedule =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !!conv.appointment?.bookedEventId &&
+    /\b(reschedule|re-?schedule|need to reschedule|have to reschedule|can't make|cant make|cannot make|won't make|wont make)\b/i.test(
+      String(event.body ?? "")
+    );
+  if (regenExplicitBookedAppointmentReschedule) {
+    const regenBookingParse = await safeLlmParse("regen_booking_intent_parser_explicit_reschedule", () =>
+      parseBookingIntentWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 8),
+        lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+        appointment: conv.appointment
+      })
+    );
+    const confidence = typeof regenBookingParse?.confidence === "number" ? regenBookingParse.confidence : 0;
+    const accepted =
+      !!regenBookingParse?.explicitRequest &&
+      confidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
+      regenBookingParse.intent === "reschedule";
+    const requestedDay = String(regenBookingParse?.requested?.day ?? "").trim();
+    const requestedTime = String(regenBookingParse?.requested?.timeText ?? "").trim();
+    if (accepted && !requestedDay && !requestedTime) {
+      const profile = await getDealerProfileHot();
+      const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+      conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+      conv.appointment.reschedulePending = true;
+      conv.appointment.updatedAt = new Date().toISOString();
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "booked_appointment_reschedule_link", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence,
+        hasBookingUrl: !!bookingUrl
+      });
+      return respondWithSmsRegeneratedDraft(
+        buildAppointmentRescheduleBookingLinkReply({
+          bookingUrl,
+          firstName: conv.lead?.firstName ?? null
+        }),
+        undefined,
+        {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        }
+      );
+    }
+  }
   const regenBookedAppointmentAdjustmentParserEligible =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -36703,7 +36754,13 @@ if (authToken && signature) {
           intent: humanBookingParse.intent,
           requestedDay: humanBookingParse.requested?.day ?? null,
           requestedTime: humanBookingParse.requested?.timeText ?? null,
-          requestedLabel
+          requestedLabel,
+          bookingUrl:
+            humanBookingParse.intent === "reschedule" &&
+            !String(humanBookingParse.requested?.day ?? "").trim() &&
+            !String(humanBookingParse.requested?.timeText ?? "").trim()
+              ? buildBookingUrlForLead((await getDealerProfileHot())?.bookingUrl, conv)
+              : null
         });
         if (draft) {
           appendOutbound(conv, event.to, event.from, draft, "draft_ai");
@@ -38320,7 +38377,12 @@ if (authToken && signature) {
     } else {
       const requested = requestedReschedule;
     if (!requested) {
-      const ask = "Absolutely — what day and time works for you?";
+      const profile = await getDealerProfileHot().catch(() => null);
+      const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+      const ask = buildAppointmentRescheduleBookingLinkReply({
+        bookingUrl,
+        firstName: conv.lead?.firstName ?? null
+      });
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
       const systemMode = webhookMode;
