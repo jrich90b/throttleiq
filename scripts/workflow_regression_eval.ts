@@ -4,6 +4,7 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
+  buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildInventoryOnlineCompletenessReply,
   buildRideChallengeSignupReply,
@@ -107,6 +108,16 @@ const cases: Case[] = [
     id: "manual_outbound_schedule_you_in_between_window_confirms",
     actual: isManualOutboundBookingConfirmationText("Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow"),
     expected: true
+  },
+  {
+    id: "human_mode_reschedule_without_time_asks_for_day_time",
+    actual: buildHumanModeSchedulingDraft({ intent: "reschedule" }),
+    expected: "No worries — what day and time works best to reschedule?"
+  },
+  {
+    id: "human_mode_reschedule_day_only_asks_for_time",
+    actual: buildHumanModeSchedulingDraft({ intent: "reschedule", requestedDay: "Saturday" }),
+    expected: "No worries — what time works best on Saturday to reschedule?"
   },
   {
     id: "available_to_chat_now_routes_as_callback_fallback",

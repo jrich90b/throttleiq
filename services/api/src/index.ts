@@ -230,6 +230,7 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildFactoryOrderTimingHandoffReply,
+  buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
@@ -36698,6 +36699,20 @@ if (authToken && signature) {
           confidence: bookingConfidence,
           dueAt: todo?.dueAt ?? null
         });
+        const draft = buildHumanModeSchedulingDraft({
+          intent: humanBookingParse.intent,
+          requestedDay: humanBookingParse.requested?.day ?? null,
+          requestedTime: humanBookingParse.requested?.timeText ?? null,
+          requestedLabel
+        });
+        if (draft) {
+          appendOutbound(conv, event.to, event.from, draft, "draft_ai");
+          recordRouteOutcome("live", "human_mode_schedule_draft_created", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            intent: humanBookingParse.intent
+          });
+        }
       }
     }
     const humanModeWatchParserEligible =

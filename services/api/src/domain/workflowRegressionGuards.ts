@@ -1005,3 +1005,31 @@ export function resolveRequestedScheduleWindowMode(textRaw: string | null | unde
   if (/\b(any\s*time|anytime)\b/.test(text)) return "any_time";
   return "none";
 }
+
+export function buildHumanModeSchedulingDraft(args: {
+  intent?: string | null;
+  requestedDay?: string | null;
+  requestedTime?: string | null;
+  requestedLabel?: string | null;
+}): string {
+  const intent = String(args.intent ?? "").trim().toLowerCase();
+  const day = String(args.requestedDay ?? "").trim();
+  const time = String(args.requestedTime ?? "").trim();
+  const requestedLabel = String(args.requestedLabel ?? "").trim();
+  const isReschedule = intent === "reschedule";
+
+  if (isReschedule) {
+    if (day && !time) return `No worries — what time works best on ${day} to reschedule?`;
+    if (requestedLabel || time) return "No worries — I’ll check that reschedule time and follow up.";
+    return "No worries — what day and time works best to reschedule?";
+  }
+
+  if (intent === "availability") {
+    if (day) return `I can help with that — what time on ${day} works best?`;
+    return "I can help with that — what day works best?";
+  }
+
+  if (day && !time) return `Sounds good — what time on ${day} works best?`;
+  if (requestedLabel || time) return "Sounds good — I’ll check that time and follow up.";
+  return "Sounds good — what day and time works best?";
+}
