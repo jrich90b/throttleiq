@@ -6285,16 +6285,7 @@ export default function Home() {
         }
         if (!conv) return;
         setSelectedConv(conv);
-        if (!authUser.phone && !authUser.extension) return;
-        if (authUser.phone && authUser.extension) {
-          setCallPickerOpen(true);
-          return;
-        }
-        if (authUser.extension && !authUser.phone) {
-          await startCall("extension", conv);
-          return;
-        }
-        await startCall("cell", conv);
+        await openCallPickerOrStart(conv);
       } finally {
         setPendingDeepLinkCallId(null);
         deepLinkCallInFlightRef.current = false;
@@ -9213,24 +9204,47 @@ export default function Home() {
     }
   }
 
-  async function openCallFromTodo(todo: TodoItem) {
+  async function getFreshCallUser() {
+    try {
+      const resp = await fetch("/api/auth/me", { cache: "no-store" });
+      const data = await resp.json().catch(() => null);
+      if (resp.ok && data?.user) {
+        const normalized = normalizeUserRow(data.user);
+        setAuthUser(normalized);
+        return normalized;
+      }
+    } catch {
+      // Keep the current auth snapshot if refresh fails.
+    }
+    return authUser;
+  }
+
+  async function openCallPickerOrStart(convOverride?: ConversationDetail | null) {
     if (callBusy) return;
-    if (!authUser?.phone && !authUser?.extension) {
+    const callUser = await getFreshCallUser();
+    const hasPhone = !!String(callUser?.phone ?? "").trim();
+    const hasExtension = !!String(callUser?.extension ?? "").trim();
+    if (!hasPhone && !hasExtension) {
       window.alert("No phone or extension configured for your user.");
       return;
     }
-    openConversation(todo.convId);
-    const conv = await fetchConversationDetail(todo.convId);
-    if (conv) setSelectedConv(conv);
-    if (authUser?.phone && authUser?.extension) {
+    if (hasPhone && hasExtension) {
       setCallPickerOpen(true);
       return;
     }
-    if (authUser?.extension && !authUser?.phone) {
-      await startCall("extension", conv ?? selectedConv);
+    if (hasExtension) {
+      await startCall("extension", convOverride ?? selectedConv);
       return;
     }
-    await startCall("cell", conv ?? selectedConv);
+    await startCall("cell", convOverride ?? selectedConv);
+  }
+
+  async function openCallFromTodo(todo: TodoItem) {
+    if (callBusy) return;
+    openConversation(todo.convId);
+    const conv = await fetchConversationDetail(todo.convId);
+    if (conv) setSelectedConv(conv);
+    await openCallPickerOrStart(conv ?? selectedConv);
   }
 
   function openManualAppointment() {
@@ -16946,15 +16960,7 @@ export default function Home() {
                     <button
                       className={`px-2 py-1 border rounded text-sm cursor-pointer shrink-0 ${callBusy ? "opacity-60" : "hover:bg-gray-50"}`}
                       onClick={() => {
-                        if (authUser?.phone && authUser?.extension) {
-                          setCallPickerOpen(true);
-                          return;
-                        }
-                        if (authUser?.extension && !authUser?.phone) {
-                          startCall("extension");
-                          return;
-                        }
-                        startCall("cell");
+                        void openCallPickerOrStart();
                       }}
                       disabled={callBusy}
                       title="Call customer"
