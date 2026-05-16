@@ -41,6 +41,11 @@ export function useTaskInboxData({
       const leadKey = String(t.leadKey ?? "").toLowerCase();
       const leadOwnerCanonical = canonicalizeOwnerName(String(t.leadOwnerName ?? "").trim());
       const leadOwner = String(leadOwnerCanonical ?? "").trim();
+      const taskOwnerCanonical = canonicalizeOwnerName(
+        String(t.ownerDisplayName ?? t.ownerName ?? "").trim(),
+        String(t.ownerId ?? "").trim()
+      );
+      const taskOwner = String(taskOwnerCanonical ?? "").trim();
       const departmentOwner = String(t.departmentOwnerName ?? "").trim();
       const todoDept = inferTodoDepartment(t);
       const inferredDeptOwner = inferOwnerDepartment(leadOwner);
@@ -57,7 +62,9 @@ export function useTaskInboxData({
         } else if (todoLeadOwnerFilter.startsWith("team:")) {
           if (todoTeam !== todoLeadOwnerFilter.slice(5)) return false;
         } else if (ownerNameFilter) {
-          if (leadOwner.toLowerCase() !== ownerNameFilter) return false;
+          const ownerMatches =
+            leadOwner.toLowerCase() === ownerNameFilter || taskOwner.toLowerCase() === ownerNameFilter;
+          if (!ownerMatches) return false;
         } else {
           return false;
         }
