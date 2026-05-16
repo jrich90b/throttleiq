@@ -641,76 +641,6 @@ function isDealerLeadAppAdfBody(body: string | null | undefined): boolean {
   return isDealerLeadAppPostDemoRideAdfText(body);
 }
 
-function cleanDealerLeadAppOutcomeValue(raw?: string | null): string {
-  return String(raw ?? "")
-    .replace(/\s+/g, " ")
-    .replace(/\s*-\s*$/g, "")
-    .trim();
-}
-
-function extractDealerLeadAppOutcomeField(source: string, labelPattern: string): string {
-  const text = String(source ?? "");
-  const sameLine = text.match(
-    new RegExp(
-      `${labelPattern}\\s*:\\s*([\\s\\S]*?)(?=\\s*-?\\s*(?:Lead App\\s*-\\s*Type|SalesPerson|How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?|Demo Bikes Ridden|Email Opt\\s*-\\s*In|Brand of Bike Owned)\\s*:|\\s*-?\\s*(?:How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?)|[\\n\\r]|$)`,
-      "i"
-    )
-  )?.[1] ?? "";
-  if (sameLine.trim()) return cleanDealerLeadAppOutcomeValue(sameLine);
-  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const labelRe = new RegExp(`${labelPattern}\\s*:?\\s*$`, "i");
-  const fieldLabelRe = /(?:^|\s)(?:Lead App|SalesPerson|Demo Bikes Ridden|Email Opt-In|How many years|Do you expect|Which model|Event Name|Source|Ref|Name|Email|Phone|Vehicle|Inquiry)\s*[:?-]/i;
-  for (let i = 0; i < lines.length - 1; i += 1) {
-    if (!labelRe.test(lines[i])) continue;
-    const next = cleanDealerLeadAppOutcomeValue(lines[i + 1]);
-    if (next && !fieldLabelRe.test(next)) return next;
-  }
-  return "";
-}
-
-function dedupeDealerLeadAppSalesperson(raw: string): string {
-  const value = cleanDealerLeadAppOutcomeValue(raw);
-  const parts = value.split(/\s*-\s*/).map(part => part.trim()).filter(Boolean);
-  if (parts.length === 2 && parts[0].toLowerCase() === parts[1].toLowerCase()) {
-    return parts[0];
-  }
-  return value;
-}
-
-function buildDealerLeadAppDemoRideOutcomeNote(args: {
-  body?: string | null;
-  inquiry?: string | null;
-  lead?: any;
-}): string {
-  const source = [args.body, args.inquiry].filter(Boolean).join("\n");
-  const salesperson = dedupeDealerLeadAppSalesperson(extractDealerLeadAppOutcomeField(source, "SalesPerson"));
-  const leadAppType = extractDealerLeadAppOutcomeField(source, "Lead App\\s*-\\s*Type");
-  const demoBike = extractDealerLeadAppOutcomeField(source, "Demo Bikes Ridden");
-  const emailOptIn = extractDealerLeadAppOutcomeField(source, "Email Opt\\s*-\\s*In");
-  const interestedModel = cleanDealerLeadAppOutcomeValue(
-    source.match(/Which model of motorcycle are you interested in\?\s*([\s\S]*?)(?:\s+Demo Bikes Ridden\s*:|\n\s*Demo Bikes Ridden\s*:|$)/i)?.[1]
-  );
-  const purchaseIntent = cleanDealerLeadAppOutcomeValue(
-    source.match(/Do you expect to make a motorcycle purchase in the near future\?\s*([\s\S]*?)(?:\s+Which model of motorcycle are you interested in\?|\n\s*Which model of motorcycle are you interested in\?|$)/i)?.[1]
-  );
-  const leadVehicle = [
-    args.lead?.vehicle?.year,
-    args.lead?.vehicle?.make,
-    args.lead?.vehicle?.model
-  ].filter(Boolean).join(" ").trim();
-  const lines = [
-    "Auto-marked showed up from Dealer Lead App demo-ride submission.",
-    salesperson ? `Salesperson on DLA form: ${salesperson}` : "",
-    leadAppType ? `Lead App Type: ${leadAppType}` : "",
-    interestedModel ? `Interested model: ${interestedModel}` : "",
-    demoBike ? `Demo bike ridden: ${demoBike}` : "",
-    purchaseIntent ? `Purchase intent: ${purchaseIntent}` : "",
-    emailOptIn ? `Email opt-in: ${emailOptIn}` : "",
-    leadVehicle ? `Lead vehicle: ${leadVehicle}` : ""
-  ].filter(Boolean);
-  return lines.join("\n");
-}
-
 function getDlaAutoReplyRepeatMinDays(): number {
   const raw = Number(process.env.DLA_AUTO_REPLY_REPEAT_MIN_DAYS ?? 183);
   if (!Number.isFinite(raw) || raw <= 0) return 183;
@@ -4478,18 +4408,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (isBookedTestRide) {
       const nowIso = new Date().toISOString();
       appt.staffNotify = appt.staffNotify ?? {};
-      if (!appt.staffNotify.outcome) {
-        appt.staffNotify.outcome = {
-          status: "showed_up",
-          note: buildDealerLeadAppDemoRideOutcomeNote({
-            body: rawAdfBody,
-            inquiry: effectiveInquiry,
-            lead
-          }),
-          updatedAt: nowIso
-        };
-      }
-      appt.staffNotify.followUpSentAt = appt.staffNotify.followUpSentAt ?? nowIso;
       appt.attendanceQuestionedAt = appt.attendanceQuestionedAt ?? nowIso;
       const openAttendance = listOpenQuestions().filter(
         q => q.convId === conv.id && q.status === "open" && q.type === "attendance"
@@ -4532,7 +4450,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const leadSummary = [
         `Dealer ride outcome needed for ${customerName}.`,
         "DLA confirms they rode a demo bike.",
-        `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+        "Please include what actually happened. Example: showed, liked it, needs numbers, follow up Tuesday.",
+        `Reply: OUTCOME ${token} SOLD <stock/vin> <context> | HOLD <stock/vin> <context> | FOLLOWUP <context> | LOST <reason>.`,
         outcomeLink ? `Update form: ${outcomeLink}` : null
       ]
         .filter(Boolean)
@@ -4604,7 +4523,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const leadSummary = [
       `Dealer ride outcome needed for ${customerName}.`,
       'DLA says "not interested in purchasing at this time".',
-      `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+      "Please include what actually happened or what they said.",
+      `Reply: OUTCOME ${token} SOLD <stock/vin> <context> | HOLD <stock/vin> <context> | FOLLOWUP <context> | LOST <reason>.`,
       outcomeLink ? `Update form: ${outcomeLink}` : null
     ]
       .filter(Boolean)

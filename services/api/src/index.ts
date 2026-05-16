@@ -12820,6 +12820,21 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
 
   const nowIsoValue = new Date().toISOString();
   const note = cleanedText || body;
+  const outcomeContextRemainder = note
+    .replace(/\b(?:showed[_\s-]?up|showed|no[_\s-]?show|sold|hold|follow[_\s-]?up|followup|lost)\b/gi, " ")
+    .replace(/\b(?:stock|vin)\b/gi, " ")
+    .replace(/\b[A-HJ-NPR-Z0-9]{13,17}\b/gi, " ")
+    .replace(/\b[A-Z]{0,4}\d[A-Z0-9-]{1,10}\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const outcomeContextWordCount = outcomeContextRemainder.split(/\s+/).filter(Boolean).length;
+  if (outcomeContextRemainder.length < 8 || outcomeContextWordCount < 2) {
+    return {
+      handled: true,
+      replyBody:
+        `Please include what actually happened. Example: OUTCOME ${token} FOLLOWUP customer rode it, liked it, wants numbers, follow up Tuesday.`
+    };
+  }
   const unit = readOutcomeUnitFromText(cleanedText || body, parsed);
   let confirmation = "Outcome saved.";
 
@@ -24479,8 +24494,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
           </div>
           <div class="muted"><button type="button" id="unit-clear">Clear unit</button></div>
         </div>
-        <label>Notes (optional)</label>
-        <textarea name="note" id="note-field" placeholder="Add any context for the agent…"></textarea>
+        <label>What actually happened?</label>
+        <textarea name="note" id="note-field" required placeholder="Example: customer rode it, liked it, wants numbers, follow up Tuesday."></textarea>
         <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
         <button type="button" class="rec-btn" id="rec-btn">🎤 Record note</button>
         <div class="muted" id="rec-status"></div>
@@ -24777,6 +24792,12 @@ app.get("/public/appointment/outcome", async (req, res) => {
             const status = selectedSecondaryOutcome();
             const requiresUnit = status === "sold" || status === "hold";
             const hasId = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").trim();
+            const note = noteEl ? String(noteEl.value || "").trim() : "";
+            if (!note) {
+              e.preventDefault();
+              alert("Please add what actually happened before saving the outcome.");
+              return;
+            }
             if (requiresUnit && !hasId) {
               e.preventDefault();
               alert("Please enter a Stock # or VIN for Sold/Hold.");
@@ -24972,6 +24993,9 @@ app.post("/public/appointment/outcome", async (req, res) => {
   });
   if (!normalizedOutcome.ok || !normalizedOutcome.legacyStatus) {
     return res.status(400).send("Invalid outcome");
+  }
+  if (!note) {
+    return res.status(400).send("Please add what actually happened before saving the outcome.");
   }
   const outcome = normalizedOutcome.legacyStatus;
 
@@ -34369,7 +34393,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const leadSummary = [
         `Dealer ride outcome needed for ${customerName}.`,
         "DLA confirms they rode a demo bike.",
-        `Reply: OUTCOME ${token} SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`,
+        "Please include what actually happened. Example: showed, liked it, needs numbers, follow up Tuesday.",
+        `Reply: OUTCOME ${token} SOLD <stock/vin> <context> | HOLD <stock/vin> <context> | FOLLOWUP <context> | LOST <reason>.`,
         outcomeLink ? `Update form: ${outcomeLink}` : null
       ]
         .filter(Boolean)
