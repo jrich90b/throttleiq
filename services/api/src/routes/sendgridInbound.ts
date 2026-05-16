@@ -644,14 +644,18 @@ function isDealerLeadAppAdfBody(body: string | null | undefined): boolean {
 function cleanDealerLeadAppOutcomeValue(raw?: string | null): string {
   return String(raw ?? "")
     .replace(/\s+/g, " ")
-    .replace(/\s+-\s*$/g, "")
-    .replace(/\s*-\s*/g, " - ")
+    .replace(/\s*-\s*$/g, "")
     .trim();
 }
 
 function extractDealerLeadAppOutcomeField(source: string, labelPattern: string): string {
   const text = String(source ?? "");
-  const sameLine = text.match(new RegExp(`${labelPattern}\\s*:\\s*([^\\n\\r]+)`, "i"))?.[1] ?? "";
+  const sameLine = text.match(
+    new RegExp(
+      `${labelPattern}\\s*:\\s*([\\s\\S]*?)(?=\\s+(?:Lead App\\s*-\\s*Type|SalesPerson|How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?|Demo Bikes Ridden|Email Opt\\s*-\\s*In|Brand of Bike Owned)\\s*:|\\s+(?:How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?)|[\\n\\r]|$)`,
+      "i"
+    )
+  )?.[1] ?? "";
   if (sameLine.trim()) return cleanDealerLeadAppOutcomeValue(sameLine);
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const labelRe = new RegExp(`${labelPattern}\\s*:?\\s*$`, "i");
@@ -664,13 +668,22 @@ function extractDealerLeadAppOutcomeField(source: string, labelPattern: string):
   return "";
 }
 
+function dedupeDealerLeadAppSalesperson(raw: string): string {
+  const value = cleanDealerLeadAppOutcomeValue(raw);
+  const parts = value.split(/\s*-\s*/).map(part => part.trim()).filter(Boolean);
+  if (parts.length === 2 && parts[0].toLowerCase() === parts[1].toLowerCase()) {
+    return parts[0];
+  }
+  return value;
+}
+
 function buildDealerLeadAppDemoRideOutcomeNote(args: {
   body?: string | null;
   inquiry?: string | null;
   lead?: any;
 }): string {
   const source = [args.body, args.inquiry].filter(Boolean).join("\n");
-  const salesperson = extractDealerLeadAppOutcomeField(source, "SalesPerson");
+  const salesperson = dedupeDealerLeadAppSalesperson(extractDealerLeadAppOutcomeField(source, "SalesPerson"));
   const leadAppType = extractDealerLeadAppOutcomeField(source, "Lead App\\s*-\\s*Type");
   const demoBike = extractDealerLeadAppOutcomeField(source, "Demo Bikes Ridden");
   const emailOptIn = extractDealerLeadAppOutcomeField(source, "Email Opt\\s*-\\s*In");
