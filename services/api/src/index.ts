@@ -32310,6 +32310,11 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     const hasAppointmentContext = manualOutboundHasAppointmentContext;
     const hasBookedEvent = String(conv.appointment?.bookedEventId ?? "").trim().length > 0;
+    const existingAppointmentWhenMs = new Date(String(conv.appointment?.whenIso ?? "")).getTime();
+    const existingBookedAppointmentIsPast =
+      hasBookedEvent &&
+      Number.isFinite(existingAppointmentWhenMs) &&
+      existingAppointmentWhenMs < Date.now() - 60 * 60_000;
     const explicitRescheduleCue =
       parserRescheduleCue ||
       /\b(reschedule|re-?schedule|change (?:the )?time|move (?:it|me)?|another time|different time|push (?:it )?back|later time|earlier time)\b/i.test(
@@ -32351,11 +32356,34 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
 
     const looksAppointmentLike = hasScheduleKeyword || hasDayToken || hasTimeToken || hasAppointmentContext;
+    const pendingAppointmentRequestTodo = listOpenTodos()
+      .filter(
+        todo =>
+          todo.convId === conv.id &&
+          todo.status === "open" &&
+          todo.taskClass === "appointment" &&
+          /^Appointment requested\./i.test(String(todo.summary ?? ""))
+      )
+      .sort(
+        (a, b) =>
+          new Date(String(b.createdAt ?? "")).getTime() -
+          new Date(String(a.createdAt ?? "")).getTime()
+      )[0];
+    const pendingAppointmentRequestText = String(pendingAppointmentRequestTodo?.summary ?? "")
+      .match(/\bRequested(?: time)?:\s*(.+?)(?:\.|$)/i)?.[1]
+      ?.trim() ?? "";
+    const confirmsPendingAppointmentRequest =
+      !!pendingAppointmentRequestText &&
+      existingBookedAppointmentIsPast &&
+      /\b(yes|yep|yeah|yup|sure|ok|okay|perfect|sounds good|that should work|that works|should work|works for me)\b/i.test(
+        lower
+      ) &&
+      !/\?/.test(text);
 
     // Hard dedupe guard for manual outbound confirmations:
     // if an appointment event is already booked, do not mutate/rebook from
     // "see you then / that works" type follow-up texts.
-    if (hasBookedEvent && looksAppointmentLike && !explicitRescheduleCue) {
+    if (hasBookedEvent && looksAppointmentLike && !explicitRescheduleCue && !confirmsPendingAppointmentRequest) {
       recordRouteOutcome("live", "manual_outbound_schedule_noop_existing_booking", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -32440,6 +32468,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       : "";
     const manualOutboundRequested = explicitBookingStatement
       ? parseRequestedDayTime(text, schedulerTimezone)
+      : confirmsPendingAppointmentRequest
+        ? parseRequestedDayTime(pendingAppointmentRequestText, schedulerTimezone)
       : null;
     const normalizedText = String(
       parserRequestedText ||
@@ -32456,12 +32486,20 @@ app.post("/conversations/:id/send", async (req, res) => {
       !didSetAppointment &&
       !!requested &&
       !hasCallCue &&
-      (bookingAccepted || explicitBookingStatement);
+      (bookingAccepted || explicitBookingStatement || confirmsPendingAppointmentRequest);
 
     if (shouldInferManualAppointment && requested) {
       const whenUtc = localPartsToUtcDate(schedulerTimezone, requested).toISOString();
       const whenText = formatSlotLocal(whenUtc, schedulerTimezone);
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: nowIso() };
+      if (confirmsPendingAppointmentRequest && existingBookedAppointmentIsPast) {
+        conv.appointment.bookedEventId = null;
+        conv.appointment.bookedEventLink = null;
+        conv.appointment.bookedSalespersonId = null;
+        conv.appointment.bookedSalespersonName = null;
+        conv.appointment.bookedCalendarId = null;
+        conv.appointment.matchedSlot = undefined;
+      }
       conv.appointment.status = "confirmed";
       conv.appointment.whenIso = whenUtc;
       conv.appointment.whenText = whenText;

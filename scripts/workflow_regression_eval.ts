@@ -341,6 +341,14 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "tomorrow_noonish_parses_as_noon",
+    actual: (() => {
+      const parsed = parseRequestedDayTime("tomorrow noonish", "America/New_York");
+      return !!parsed && parsed.hour24 === 12 && parsed.minute === 0;
+    })(),
+    expected: true
+  },
+  {
     id: "close_to_compact_time_day_time_detected",
     actual: detectSchedulingSignals("Am I able to ride a road glide today? I can take lunch close to 430.").hasDayTime,
     expected: true

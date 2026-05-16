@@ -3221,8 +3221,8 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
     }
     return { hour24, minute, timeText: approxWithMinutes[0] };
   }
+  if (/\bnoon(?:ish)?\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
   if (/(around|approx|approximately|ish)\b/.test(t)) return null;
-  if (/\bnoon\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
 
   // Prefer explicit time tokens so dates like 3/11/2026 don't get parsed as "3".
   const m = t.match(/\b(\d{1,2})([:.])(\d{2})\s*(am|pm)?\b/);
