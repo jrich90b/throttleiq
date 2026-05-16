@@ -55,6 +55,7 @@ import {
   shouldIgnoreAdfModelMismatchForTradeContext,
   shouldSuppressInitialAvailabilityLineAppend,
   shouldSuppressInitialInventoryPhotoAppend,
+  shouldSuppressVoiceCallbackTodoForAppointment,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
@@ -145,6 +146,33 @@ const cases: Case[] = [
     actual: isImmediateChatCallbackAvailabilityText(
       "I'm available to chat by text right now, please don't call."
     ),
+    expected: false
+  },
+  {
+    id: "voice_callback_suppressed_when_call_books_appointment",
+    actual: shouldSuppressVoiceCallbackTodoForAppointment({
+      callbackRequested: true,
+      bookingIntentAccepted: true,
+      bookingIntent: "schedule",
+      requestedDay: "tomorrow",
+      requestedTime: "10",
+      requestedWindow: "exact",
+      sourceText:
+        "Customer will stop by around ten in the morning for staff to inspect the bike and discuss an offer."
+    }),
+    expected: true
+  },
+  {
+    id: "voice_callback_kept_when_separate_callback_request",
+    actual: shouldSuppressVoiceCallbackTodoForAppointment({
+      callbackRequested: true,
+      bookingIntentAccepted: true,
+      bookingIntent: "schedule",
+      requestedDay: "tomorrow",
+      requestedTime: "10",
+      requestedWindow: "exact",
+      sourceText: "Customer will stop by around ten. Customer also asked: please call me later."
+    }),
     expected: false
   },
   {

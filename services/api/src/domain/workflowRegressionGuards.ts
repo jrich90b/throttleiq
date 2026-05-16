@@ -1047,3 +1047,34 @@ export function buildAppointmentRescheduleBookingLinkReply(args: {
   if (bookingUrl) return `${intro}you can reschedule here: ${bookingUrl}`;
   return `${intro}what day and time works best to reschedule?`;
 }
+
+export function shouldSuppressVoiceCallbackTodoForAppointment(args: {
+  callbackRequested?: boolean;
+  bookingIntentAccepted?: boolean;
+  bookingIntent?: string | null;
+  requestedDay?: string | null;
+  requestedTime?: string | null;
+  requestedWindow?: string | null;
+  parserSchedulingIntent?: boolean;
+  effectiveTestRideIntent?: boolean;
+  sourceText?: string | null;
+}): boolean {
+  if (!args.callbackRequested) return false;
+  const day = String(args.requestedDay ?? "").trim();
+  const time = String(args.requestedTime ?? "").trim();
+  const window = String(args.requestedWindow ?? "").trim().toLowerCase();
+  const hasUsableAppointmentTime = !!day && !!time && (window === "exact" || window === "range");
+  if (!hasUsableAppointmentTime) return false;
+  const bookingIntent = String(args.bookingIntent ?? "").trim().toLowerCase();
+  const schedulingIntent =
+    (args.bookingIntentAccepted && (bookingIntent === "schedule" || bookingIntent === "reschedule")) ||
+    args.parserSchedulingIntent ||
+    args.effectiveTestRideIntent;
+  if (!schedulingIntent) return false;
+  const source = String(args.sourceText ?? "").toLowerCase();
+  const explicitSeparateCallback =
+    /\b(call me back|give me a call|can you call me|could you call me|please call me|reach me|call after|call at|call later|follow up with me)\b/.test(
+      source
+    ) || /\b(when|what)\s+(time|day)\s+(can|should)\s+you\s+call\b/.test(source);
+  return !explicitSeparateCallback;
+}

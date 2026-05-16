@@ -273,7 +273,8 @@ import {
   shouldClearPickupStateForSchedulingReply,
   shouldCarryLeadYearForRequestedModel,
   shouldRebaseWeekdayReplyToPriorNextWeek,
-  shouldSuppressInitialInventoryPhotoAppend
+  shouldSuppressInitialInventoryPhotoAppend,
+  shouldSuppressVoiceCallbackTodoForAppointment
 } from "./domain/workflowRegressionGuards.js";
 
 import {
@@ -6506,12 +6507,53 @@ async function applyPostCallSummaryActions(opts: {
     setDialogState(conv, "test_ride_init");
   }
 
+  const bookingRequestedDayForCallbackGuard = String(bookingParse?.requested?.day ?? "").trim();
+  const bookingRequestedTimeForCallbackGuard = String(bookingParse?.requested?.timeText ?? "").trim();
+  const bookingRequestedWindowForCallbackGuard = String(bookingParse?.requested?.timeWindow ?? "")
+    .trim()
+    .toLowerCase();
+  const voiceAgentCommittedSlotForCallbackGuard =
+    !bookingRequestedDayForCallbackGuard ||
+    !bookingRequestedTimeForCallbackGuard ||
+    bookingRequestedWindowForCallbackGuard !== "exact"
+      ? inferVoiceAgentCommittedSlot(transcriptTurns, bookingRequestedDayForCallbackGuard)
+      : null;
+  const resolvedBookingDayForCallbackGuard =
+    bookingRequestedDayForCallbackGuard || voiceAgentCommittedSlotForCallbackGuard?.day || "";
+  const resolvedBookingTimeForCallbackGuard =
+    bookingRequestedTimeForCallbackGuard || voiceAgentCommittedSlotForCallbackGuard?.timeText || "";
+  const resolvedBookingWindowForCallbackGuard =
+    bookingRequestedWindowForCallbackGuard === "exact" || bookingRequestedWindowForCallbackGuard === "range"
+      ? bookingRequestedWindowForCallbackGuard
+      : voiceAgentCommittedSlotForCallbackGuard
+        ? "exact"
+        : bookingRequestedWindowForCallbackGuard;
   const callbackSourceText = `${customerText}\n${summaryText}`.trim();
   const isReturnCallContext = isCustomerReturningCallPhrase(callbackSourceText);
   const futureCallbackAsk = hasExplicitFutureCallbackAsk(callbackSourceText);
   const callbackRequested =
     llmCallbackRequested && !(isReturnCallContext && !futureCallbackAsk);
-  if (callbackRequested) {
+  const suppressCallbackForVoiceAppointment = shouldSuppressVoiceCallbackTodoForAppointment({
+    callbackRequested,
+    bookingIntentAccepted,
+    bookingIntent: bookingParse?.intent ?? null,
+    requestedDay: resolvedBookingDayForCallbackGuard,
+    requestedTime: resolvedBookingTimeForCallbackGuard,
+    requestedWindow: resolvedBookingWindowForCallbackGuard,
+    parserSchedulingIntent,
+    effectiveTestRideIntent,
+    sourceText: callbackSourceText
+  });
+  if (suppressCallbackForVoiceAppointment) {
+    recordRouteOutcome("live", "voice_callback_todo_suppressed_for_appointment", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      bookingIntent: bookingParse?.intent ?? null,
+      requestedDay: resolvedBookingDayForCallbackGuard,
+      requestedTime: resolvedBookingTimeForCallbackGuard,
+      callbackConfidence: intentConfidence
+    });
+  } else if (callbackRequested) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
     const owner = resolveCallbackTodoOwner(conv);
@@ -6625,14 +6667,14 @@ async function applyPostCallSummaryActions(opts: {
         .toLowerCase();
       // Voice transcripts can contain mixed speaker labels and business-hours chatter.
       // Only auto-book on calls when parser captured an explicit customer day+time.
-      let resolvedBookingDay = bookingRequestedDay;
-      let resolvedBookingTime = bookingRequestedTime;
-      let resolvedBookingWindow = bookingRequestedWindow;
+      let resolvedBookingDay = resolvedBookingDayForCallbackGuard || bookingRequestedDay;
+      let resolvedBookingTime = resolvedBookingTimeForCallbackGuard || bookingRequestedTime;
+      let resolvedBookingWindow = resolvedBookingWindowForCallbackGuard || bookingRequestedWindow;
       let hasExplicitDay = resolvedBookingDay.length > 0;
       let hasExplicitTime = resolvedBookingTime.length > 0;
       let hasExactWindow = resolvedBookingWindow === "exact";
       if (!hasExplicitDay || !hasExplicitTime || !hasExactWindow) {
-        const fallback = inferVoiceAgentCommittedSlot(transcriptTurns, bookingRequestedDay);
+        const fallback = voiceAgentCommittedSlotForCallbackGuard ?? inferVoiceAgentCommittedSlot(transcriptTurns, bookingRequestedDay);
         if (fallback) {
           resolvedBookingDay = resolvedBookingDay || fallback.day;
           resolvedBookingTime = fallback.timeText;
