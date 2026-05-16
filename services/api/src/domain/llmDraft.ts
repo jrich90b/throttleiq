@@ -1623,6 +1623,7 @@ export type PricingPaymentsIntentParse = {
   asksMonthlyTarget: boolean;
   asksDownPayment: boolean;
   asksAprOrTerm: boolean;
+  asksExternalApprovalTransfer: boolean;
   confidence?: number;
 };
 
@@ -2451,6 +2452,7 @@ const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "asks_monthly_target",
     "asks_down_payment",
     "asks_apr_or_term",
+    "asks_external_approval_transfer",
     "confidence"
   ],
   properties: {
@@ -2462,6 +2464,7 @@ const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     asks_monthly_target: { type: "boolean" },
     asks_down_payment: { type: "boolean" },
     asks_apr_or_term: { type: "boolean" },
+    asks_external_approval_transfer: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -4987,46 +4990,52 @@ export async function parsePricingPaymentsIntentWithLLM(args: {
   const examples = [
     `EXAMPLE A
 inbound: "What would payments be on this bike?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
     `EXAMPLE B
 inbound: "I want to stay under $500/month."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.98}`,
     `EXAMPLE C
 inbound: "I have $2,500 down and want under $500/mo."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.98}`,
     `EXAMPLE D
 inbound: "Can you run it for 72 months?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"confidence":0.97}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"confidence":0.97}`,
     `EXAMPLE D2
 inbound: "What is the longest term I can go with on the loan?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"confidence":0.98}`,
     `EXAMPLE E
 inbound: "I don't want to put anything down."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.96}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
     `EXAMPLE F
 inbound: "Any deals or finance specials right now?"
-output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.95}`,
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.95}`,
     `EXAMPLE G
 inbound: "What is your best out-the-door price?"
-output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
     `EXAMPLE H
 inbound: "Do you have any black street glides in stock?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.96}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
     `EXAMPLE I
 inbound: "Can I come in Wednesday at 1?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.97}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Before I come in, what do I need to bring for financing?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.94}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.94}`,
     `EXAMPLE K
 inbound: "I'm already approved through my credit union."
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.96}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
     `EXAMPLE L
 inbound: "I can put down 5000"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"confidence":0.94}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.94}`,
     `EXAMPLE M
 inbound: "How much to switch my headlight bulb to LED?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"confidence":0.95}`
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.95}`,
+    `EXAMPLE N
+inbound: "If financing approved at Buffalo Harley is it good at your store?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`,
+    `EXAMPLE O
+inbound: "I got approved at another Harley dealer. Does that transfer to you?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`
   ];
   const prompt = [
     "You parse dealership inbound intent for pricing/payments routing.",
@@ -5039,6 +5048,7 @@ output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"a
     "",
     "Rules:",
     "- If user asks 'how much down', '$300/month', 'monthly', 'APR', longest/max loan term, or term => payments.",
+    "- If user asks whether a financing approval from another Harley-Davidson dealer/store transfers or is good at this store, choose payments and asks_external_approval_transfer=true.",
     "- In payment context, a customer-provided down-payment number is an explicit payments turn.",
     "- A statement that the customer is already approved through their own bank/credit union is not a pricing/payments request by itself.",
     "- Do not classify scheduling/appointment messages as pricing/payments.",
@@ -5088,6 +5098,7 @@ output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"a
     asksMonthlyTarget: !!parsed.asks_monthly_target,
     asksDownPayment: !!parsed.asks_down_payment,
     asksAprOrTerm: !!parsed.asks_apr_or_term,
+    asksExternalApprovalTransfer: !!parsed.asks_external_approval_transfer,
     confidence
   };
 }

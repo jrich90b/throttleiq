@@ -1103,3 +1103,31 @@ export function buildMarketplaceSellMyBikeReviewReply(args: {
     "I’ll review the info and photos, then follow up with next steps."
   );
 }
+
+export function isExternalDealerApprovalTransferQuestionText(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  const hasApproval = /\b(approved|approval|financ(?:e|ing)|credit\s*app(?:lication)?|pre[-\s]?qual(?:ified)?)\b/.test(
+    lower
+  );
+  const hasOtherDealer =
+    /\b(another|other|different)\s+(?:harley|harly|h-?d|dealer|store|dealership)\b/.test(lower) ||
+    /\b(?:at|through|from)\s+[a-z0-9' -]{2,40}\s+(?:harley|harly|h-?d|dealer|store|dealership)\b/.test(lower);
+  const hasTransferAsk =
+    /\b(transfer|carry\s*over|good|valid|work|accepted?|honou?red?|count)\b/.test(lower) ||
+    /\b(is|does|will|would|can)\b[\s\S]{0,80}\b(your|this|the)\s+(?:store|dealer|dealership)\b/.test(lower);
+  return hasApproval && hasOtherDealer && hasTransferAsk;
+}
+
+export function buildExternalDealerApprovalTransferReply(creditAppUrl?: string | null): string {
+  const url = String(creditAppUrl ?? "").trim();
+  const base =
+    "Yes — if that approval was through Harley-Davidson Financial Services, it can be used at our store. " +
+    "We do still need you to complete a separate application for our dealership because Harley-Davidson does not transfer the application over to us. " +
+    "It will not be another credit inquiry.";
+  if (!url) {
+    return `${base} I can send you the link to complete our store application.`;
+  }
+  return `${base}\n\n${url}`;
+}

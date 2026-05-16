@@ -17,6 +17,7 @@ type Example = {
     asks_monthly_target?: boolean;
     asks_down_payment?: boolean;
     asks_apr_or_term?: boolean;
+    asks_external_approval_transfer?: boolean;
   };
 };
 
@@ -42,11 +43,13 @@ let explicitOk = 0;
 let monthlyOk = 0;
 let downOk = 0;
 let aprTermOk = 0;
+let externalApprovalOk = 0;
 let total = 0;
 let nullCount = 0;
 let monthlyAsserts = 0;
 let downAsserts = 0;
 let aprTermAsserts = 0;
+let externalApprovalAsserts = 0;
 
 const mismatches: string[] = [];
 
@@ -94,7 +97,15 @@ for (const ex of examples) {
     if (aprTermMatch) aprTermOk += 1;
   }
 
-  if (!intentMatch || !explicitMatch || !monthlyMatch || !downMatch || !aprTermMatch) {
+  let externalApprovalMatch = true;
+  if (typeof ex.expected.asks_external_approval_transfer === "boolean") {
+    externalApprovalAsserts += 1;
+    externalApprovalMatch =
+      result.asksExternalApprovalTransfer === ex.expected.asks_external_approval_transfer;
+    if (externalApprovalMatch) externalApprovalOk += 1;
+  }
+
+  if (!intentMatch || !explicitMatch || !monthlyMatch || !downMatch || !aprTermMatch || !externalApprovalMatch) {
     mismatches.push(
       [
         `[${ex.id}]`,
@@ -110,11 +121,15 @@ for (const ex of examples) {
         typeof ex.expected.asks_apr_or_term === "boolean"
           ? `expected asks_apr_or_term=${ex.expected.asks_apr_or_term}`
           : "",
+        typeof ex.expected.asks_external_approval_transfer === "boolean"
+          ? `expected asks_external_approval_transfer=${ex.expected.asks_external_approval_transfer}`
+          : "",
         `got intent=${result.intent}`,
         `got explicit=${result.explicitRequest}`,
         `got asks_monthly_target=${result.asksMonthlyTarget}`,
         `got asks_down_payment=${result.asksDownPayment}`,
         `got asks_apr_or_term=${result.asksAprOrTerm}`,
+        `got asks_external_approval_transfer=${result.asksExternalApprovalTransfer}`,
         `got confidence=${String(result.confidence ?? null)}`
       ]
         .filter(Boolean)
@@ -136,6 +151,11 @@ if (downAsserts > 0) {
 if (aprTermAsserts > 0) {
   console.log(`asks_apr_or_term match: ${aprTermOk}/${aprTermAsserts} (${pct(aprTermOk, aprTermAsserts)}%)`);
 }
+if (externalApprovalAsserts > 0) {
+  console.log(
+    `asks_external_approval_transfer match: ${externalApprovalOk}/${externalApprovalAsserts} (${pct(externalApprovalOk, externalApprovalAsserts)}%)`
+  );
+}
 console.log(`Null parses: ${nullCount}/${total}`);
 console.log("");
 
@@ -145,4 +165,3 @@ if (mismatches.length) {
 } else {
   console.log("All checks passed.");
 }
-

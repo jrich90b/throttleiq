@@ -230,6 +230,7 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildAppointmentRescheduleBookingLinkReply,
+  buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
@@ -246,6 +247,7 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isDemoDayEventQuestionText,
+  isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
@@ -4994,6 +4996,45 @@ type FinanceTermQuestionDecision = {
   source: "parser" | "fallback";
   confidence: number;
 };
+
+type ExternalDealerApprovalTransferDecision = {
+  source: "parser" | "fallback";
+  confidence: number;
+};
+
+function resolveExternalDealerApprovalTransferDecision(
+  text: string | null | undefined,
+  parsed: PricingPaymentsIntentParse | null
+): ExternalDealerApprovalTransferDecision | null {
+  if (
+    isPricingPaymentsIntentParserAccepted(parsed) &&
+    parsed?.intent === "payments" &&
+    parsed.asksExternalApprovalTransfer
+  ) {
+    return { source: "parser", confidence: parsed.confidence ?? 1 };
+  }
+  if (isExternalDealerApprovalTransferQuestionText(text)) {
+    return { source: "fallback", confidence: 0 };
+  }
+  return null;
+}
+
+function applyExternalDealerApprovalTransferDecision(args: {
+  conv: Conversation;
+  creditAppUrl?: string | null;
+  decision: ExternalDealerApprovalTransferDecision;
+  scope: "live" | "regen";
+}): string {
+  setDialogState(args.conv, "payments_handoff");
+  setFollowUpMode(args.conv, "active", "external_approval_transfer");
+  recordRouteOutcome(args.scope, "external_dealer_approval_transfer", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    source: args.decision.source,
+    confidence: args.decision.confidence
+  });
+  return buildExternalDealerApprovalTransferReply(args.creditAppUrl);
+}
 
 function resolveFinanceTermQuestionDecision(
   text: string | null | undefined,
@@ -33638,6 +33679,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         lead: conv.lead
       })
     );
+    const externalApprovalTransferDecision = resolveExternalDealerApprovalTransferDecision(
+      event.body ?? "",
+      pricingPaymentsParse
+    );
+    if (externalApprovalTransferDecision) {
+      const dealerProfile = await getDealerProfileHot();
+      const reply = applyExternalDealerApprovalTransferDecision({
+        conv,
+        creditAppUrl: dealerProfile?.creditAppUrl,
+        decision: externalApprovalTransferDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
     const financeTermDecision = resolveFinanceTermQuestionDecision(event.body ?? "", pricingPaymentsParse);
     if (financeTermDecision) {
       const reply = applyFinanceTermQuestionDecision({
@@ -39819,6 +39880,29 @@ if (authToken && signature) {
     llmExplicitScheduleIntent || scheduleFromDialogAct;
   paymentOrPricingNoSchedule = false;
   const pricingOrPaymentsIntent = parserOnlyPricingIntent;
+  const externalDealerApprovalTransferDecision = resolveExternalDealerApprovalTransferDecision(
+    event.body ?? "",
+    pricingPaymentsParse
+  );
+  if (event.provider === "twilio" && externalDealerApprovalTransferDecision) {
+    const dealerProfile = await getDealerProfileHot();
+    const reply = applyExternalDealerApprovalTransferDecision({
+      conv,
+      creditAppUrl: dealerProfile?.creditAppUrl,
+      decision: externalDealerApprovalTransferDecision,
+      scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const financeTermQuestionDecision = resolveFinanceTermQuestionDecision(
     event.body ?? "",
     pricingPaymentsParse

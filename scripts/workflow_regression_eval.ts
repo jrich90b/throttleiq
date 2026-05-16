@@ -4,6 +4,7 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildAppointmentRescheduleBookingLinkReply,
+  buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
@@ -25,6 +26,7 @@ import {
   isDealerLeadAppPostDemoRideAdfText,
   isDemoDayEventQuestionText,
   isDirectInventoryAvailabilityQuestionText,
+  isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
@@ -196,6 +198,24 @@ const cases: Case[] = [
     }),
     expected:
       "Thanks — I received the sell-my-bike details for 2018 Street Bob. This is Alexandra at American Harley-Davidson. I’ll review the info and photos, then follow up with next steps."
+  },
+  {
+    id: "external_dealer_approval_transfer_detects_buffalo_harley",
+    actual: isExternalDealerApprovalTransferQuestionText(
+      "If financing approved at buffalo harly is it go at your store ?"
+    ),
+    expected: true
+  },
+  {
+    id: "external_dealer_approval_transfer_ignores_credit_union_statement",
+    actual: isExternalDealerApprovalTransferQuestionText("I'm already approved through my credit union."),
+    expected: false
+  },
+  {
+    id: "external_dealer_approval_transfer_reply_professional",
+    actual: buildExternalDealerApprovalTransferReply("https://credit.example/app"),
+    expected:
+      "Yes — if that approval was through Harley-Davidson Financial Services, it can be used at our store. We do still need you to complete a separate application for our dealership because Harley-Davidson does not transfer the application over to us. It will not be another credit inquiry.\n\nhttps://credit.example/app"
   },
   {
     id: "multi_day_schedule_options_preserve_friday_or_saturday",

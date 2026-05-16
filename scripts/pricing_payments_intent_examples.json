@@ -242,5 +242,23 @@
       "explicit_request": true,
       "asks_apr_or_term": true
     }
+  },
+  {
+    "id": "payments_external_harley_approval_transfer",
+    "text": "If financing approved at buffalo harly is it go at your store ?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_external_approval_transfer": true
+    }
+  },
+  {
+    "id": "payments_external_dealer_approval_transfer",
+    "text": "I got approved at another Harley dealer. Does that transfer to you?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_external_approval_transfer": true
+    }
   }
 ]
