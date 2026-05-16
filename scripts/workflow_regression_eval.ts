@@ -38,6 +38,7 @@ import {
   isInventoryOnlineCompletenessQuestionText,
   isUnlistedInventoryQuestionText,
   isHiringManagerInquiryText,
+  isIncidentalTravelTimingContextNoteText,
   isRideChallengeLeadSignal,
   isManualOutboundBookingConfirmationText,
   isManualOutboundTentativeScheduleOfferText,
@@ -212,6 +213,13 @@ const cases: Case[] = [
     id: "customer_will_call_right_back_not_salesperson_callback",
     actual: isCustomerReturningCallText(
       "Customer: Do you mind if I give you a call right back? Summary: Customer will call back later."
+    ),
+    expected: true
+  },
+  {
+    id: "incidental_trip_timing_does_not_create_callback_reminder",
+    actual: isIncidentalTravelTimingContextNoteText(
+      "Would like to take sometime to go over finances and might want the trike street glide limited in the brilliant red. Going on a trip end of the month. Definitely interested in the bike."
     ),
     expected: true
   },

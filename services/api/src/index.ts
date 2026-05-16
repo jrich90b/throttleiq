@@ -263,6 +263,7 @@ import {
   isManualOutboundTentativeScheduleOfferText,
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
+  isIncidentalTravelTimingContextNoteText,
   isPurchaseDeliveryContextText,
   isPurchaseDeliveryTimingText,
   isRideChallengeLeadSignal,
@@ -16537,7 +16538,11 @@ async function applyActionStateFromContextNote(
     : "";
   const fallbackFollowUpWindow = hasLikelyFollowUpCue(text) ? text : "";
   const scheduleSource = followUpWindowHint || fallbackFollowUpWindow;
-  if (scheduleSource && !isVisitPlanContextNoteText(scheduleSource)) {
+  if (
+    scheduleSource &&
+    !isVisitPlanContextNoteText(scheduleSource) &&
+    !isIncidentalTravelTimingContextNoteText(text)
+  ) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
     const owner = resolveCallbackTodoOwner(conv);

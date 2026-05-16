@@ -6119,7 +6119,10 @@ comment: "Thank for coming in and tell him it was nice working with him. I will 
 output: {"state":"deal_finalizing","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.95}`,
     `EXAMPLE P
 comment: "Stopped in, really liked the dark billiard and gray 2026 Street Glide. Would also like to watch for a 2024-2025 pre-owned street glide. Reach follow up on 5/23/26. (Step 2)"
-output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","confidence":0.88}`
+output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"5/23/26","confidence":0.88}`,
+    `EXAMPLE Q
+comment: "Would like to take some time to go over finances. Going on a trip end of the month. Definitely interested in the bike."
+output: {"state":"decision_pending","explicit_state":true,"test_ride_requested":false,"weather_sensitive":false,"follow_up_window_text":"","confidence":0.9}`
   ];
   const prompt = [
     "You parse walk-in salesperson comments from dealership ADF leads.",
@@ -6154,6 +6157,7 @@ output: {"state":"none","explicit_state":false,"test_ride_requested":false,"weat
     "- If deposit and pending state both appear, prefer deposit_left.",
     "- If finalizing language appears without explicit sold/delivered, choose deal_finalizing.",
     "- Phrases like 'left $X deposit' and high pipeline notes such as '(step 6)' usually indicate deposit_left unless sold/delivered is explicit.",
+    "- Do not set follow_up_window_text for incidental customer availability/travel timing (for example 'going on a trip end of month') unless the note explicitly asks to call, text, reach out, or follow up at that time.",
     "- If uncertain, return state=none, explicit_state=false, low confidence.",
     "",
     ...examples,

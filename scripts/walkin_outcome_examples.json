@@ -196,7 +196,8 @@
       "test_ride_requested": false,
       "weather_sensitive": false,
       "follow_up_window_text_any_contains": [
-        "this week"
+        "this week",
+        "after approval"
       ]
     }
   },
@@ -206,6 +207,19 @@
     "expected": {
       "state": "none",
       "explicit_state": false,
+      "test_ride_requested": false,
+      "weather_sensitive": false,
+      "follow_up_window_text_any": [
+        ""
+      ]
+    }
+  },
+  {
+    "id": "incidental_trip_timing_no_followup_window",
+    "text": "Would like to take sometime to go over finances and might want the trike street glide limited in the brilliant red. Going on a trip end of the month. Definitely interested in the bike.",
+    "expected": {
+      "state": "decision_pending",
+      "explicit_state": true,
       "test_ride_requested": false,
       "weather_sensitive": false,
       "follow_up_window_text_any": [

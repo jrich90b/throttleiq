@@ -1126,6 +1126,24 @@ export function isVisitPlanContextNoteText(textRaw: string | null | undefined): 
   );
 }
 
+export function isIncidentalTravelTimingContextNoteText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const hasTravelTiming =
+    /\b(?:going|go(?:es)?|leav(?:e|ing)|away|out of town|on vacation|vacation|trip|travel(?:ing)?)\b[\s\S]{0,80}\b(?:end of (?:the )?month|next month|this month|next week|this week|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/.test(
+      text
+    ) ||
+    /\b(?:end of (?:the )?month|next month|this month|next week|this week|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b[\s\S]{0,80}\b(?:trip|travel(?:ing)?|vacation|out of town|away)\b/.test(
+      text
+    );
+  if (!hasTravelTiming) return false;
+  const explicitFollowUp =
+    /\b(?:follow up|follow-up|check in|check-in|circle back|touch base|reach out|reconnect|call (?:him|her|them|me|customer)|text (?:him|her|them|me|customer)|remind)\b/.test(
+      text
+    );
+  return !explicitFollowUp;
+}
+
 export function isCustomerReturningCallText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!text) return false;
