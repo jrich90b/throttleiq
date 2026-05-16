@@ -6226,6 +6226,25 @@ function setAppointmentBookedBy(
   };
 }
 
+function closeAppointmentRelatedCallbackReminders(conv: any): number {
+  const convId = String(conv?.id ?? "").trim();
+  if (!convId) return 0;
+  let count = 0;
+  for (const todo of listOpenTodos()) {
+    if (todo.convId !== convId || todo.status !== "open") continue;
+    const taskClass = String(todo.taskClass ?? inferTodoTaskClass(todo.reason, todo.summary, todo))
+      .trim()
+      .toLowerCase();
+    if (taskClass !== "reminder") continue;
+    const reason = String(todo.reason ?? "").trim().toLowerCase();
+    const summary = String(todo.summary ?? "").trim();
+    if (reason !== "call" || !/^call requested:/i.test(summary)) continue;
+    const marked = markTodoDone(convId, todo.id);
+    if (marked) count += 1;
+  }
+  return count;
+}
+
 function onAppointmentBooked(conv: any) {
   if (conv?.appointment && !conv.appointment.bookedBy) {
     const confirmedBy = String(conv.appointment.confirmedBy ?? "").toLowerCase();
@@ -6242,6 +6261,7 @@ function onAppointmentBooked(conv: any) {
   stopRelatedCadences(conv, "appointment_booked");
   if (conv?.id) {
     markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+    closeAppointmentRelatedCallbackReminders(conv);
   }
   const apptWhenIso = String(conv?.appointment?.whenIso ?? "").trim();
   const apptWhenText = String(conv?.appointment?.whenText ?? "").trim();
