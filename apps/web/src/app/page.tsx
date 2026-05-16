@@ -8927,15 +8927,20 @@ export default function Home() {
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ clearSmsDraft: true, clearEmailDraft: true })
+              body: JSON.stringify({
+                clearSmsDraft: messageFilter === "sms",
+                clearEmailDraft: false
+              })
             }
           );
         } catch {
           // best-effort cleanup only
         }
-        setSendBody("");
-        setSendBodySource("system");
-        setLastDraftId(null);
+        if (messageFilter === "sms") {
+          setSendBody("");
+          setSendBodySource("system");
+          setLastDraftId(null);
+        }
         const skipMsg = String(data?.draft ?? data?.note ?? "").trim();
         setSaveToast(skipMsg || "No customer reply needed.");
       }

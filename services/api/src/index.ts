@@ -233,6 +233,7 @@ import {
   buildFactoryOrderTimingHandoffReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
+  buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildUnlistedInventoryHandoffReply,
@@ -32978,7 +32979,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       leadKey: conv.leadKey
     });
     discardPendingDrafts(conv, note);
-    delete conv.emailDraft;
     saveConversation(conv);
     return res.json({
       ok: true,
@@ -33046,6 +33046,52 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
   };
   const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
+  const regenMarketplaceSellMyBikeLead =
+    event.provider === "sendgrid_adf" &&
+    /marketplace/i.test([conv.lead?.source, event.body].filter(Boolean).join(" ")) &&
+    /sell\s+my\s+bike|sell\s+your\s+(?:bike|vehicle)/i.test(
+      [conv.lead?.source, event.body].filter(Boolean).join(" ")
+    ) &&
+    !/(prequal|credit|coa|finance|apply)/i.test([conv.lead?.source, event.body].filter(Boolean).join(" "));
+  if (regenMarketplaceSellMyBikeLead) {
+    const modelLabel = normalizeDisplayCase(
+      conv.lead?.tradeVehicle?.model ??
+        conv.lead?.tradeVehicle?.description ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        ""
+    );
+    const sellYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const bikeLabel = [sellYear, modelLabel && modelLabel !== "that bike" ? modelLabel : ""]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || "your bike";
+    const reply = buildMarketplaceSellMyBikeReviewReply({
+      bikeLabel,
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      isInitialAdf: false
+    });
+    addTodo(
+      conv,
+      "other",
+      `Review sell-my-bike submission for ${bikeLabel} and follow up with next steps.`,
+      (inbound as any)?.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "sell_my_bike_review");
+    stopFollowUpCadence(conv, "manual_handoff");
+    recordRouteOutcome("regen", "marketplace_sell_my_bike_review", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
   const regenEarlyResponseControlParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
