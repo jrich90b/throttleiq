@@ -1481,6 +1481,13 @@ async function waitForVisitSubmitProcessed(page: Page): Promise<void> {
   }
   await page.waitForTimeout(1500);
 
+  const logFormStillVisible = await page
+    .locator("#SEC_Comments, #TLPLOG_comments, #TLPLOG_submitBtn")
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (!logFormStillVisible) return;
+
   const stillVisible = await findVisitSubmitControl(page);
   const validationVisible = await page
     .locator("text=/required|invalid|please select|please enter|missing/i")
