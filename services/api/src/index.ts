@@ -21411,6 +21411,16 @@ function canUserAccessTodoTask(
   return false;
 }
 
+function hasRecordedAppointmentOutcome(conv: any): boolean {
+  const outcome = conv?.appointment?.staffNotify?.outcome;
+  if (!outcome || typeof outcome !== "object") return false;
+  return Boolean(
+    String(outcome.status ?? "").trim() ||
+      String(outcome.primaryStatus ?? "").trim() ||
+      String(outcome.secondaryStatus ?? "").trim()
+  );
+}
+
 async function processDueFollowUps() {
   const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
@@ -27090,8 +27100,9 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
     const staleTodos = openTodos.filter(t => {
       const taskConv = getConversation(t.convId);
       if (!taskConv) return true;
-      if (taskConv.status !== "closed") return false;
       const taskClass = String(t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)).trim().toLowerCase();
+      if (taskClass === "appointment" && hasRecordedAppointmentOutcome(taskConv)) return true;
+      if (taskConv.status !== "closed") return false;
       return taskClass === "followup" || taskClass === "appointment";
     });
     if (staleTodos.length) {
