@@ -34270,13 +34270,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         .filter(Boolean)
         .join("\n");
       const sent = await sendInternalSms(ownerPhone, leadSummary);
-      addTodo(
-        conv,
-        "note",
-        sent
-          ? `Salesperson SMS sent to ${ownerName}.`
-          : `Salesperson SMS failed for ${ownerName}: send_failed.`
-      );
+      if (!sent) {
+        addTodo(conv, "note", `Salesperson SMS failed for ${ownerName}: send_failed.`);
+      }
       if (sent) {
         conv.dealerRide.staffNotify.followUpSentAt =
           conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();

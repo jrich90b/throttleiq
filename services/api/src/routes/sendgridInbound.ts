@@ -4464,13 +4464,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         .filter(Boolean)
         .join("\n");
       const staffSms = await sendInternalSalespersonSms(ownerPhone, leadSummary);
-      addTodo(
-        conv,
-        "note",
-        staffSms.sent
-          ? `Salesperson SMS sent to ${ownerName}${staffSms.sid ? ` (SID ${staffSms.sid})` : ""}.`
-          : `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`
-      );
+      if (!staffSms.sent) {
+        addTodo(conv, "note", `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`);
+      }
       if (appt) {
         appt.staffNotify = appt.staffNotify ?? {};
         appt.staffNotify.followUpSentAt = appt.staffNotify.followUpSentAt ?? new Date().toISOString();
@@ -4540,13 +4536,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       .filter(Boolean)
       .join("\n");
     const staffSms = await sendInternalSalespersonSms(pickUserPhone(owner), leadSummary);
-    addTodo(
-      conv,
-      "note",
-      staffSms.sent
-        ? `Salesperson SMS sent to ${ownerName}${staffSms.sid ? ` (SID ${staffSms.sid})` : ""}.`
-        : `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`
-    );
+    if (!staffSms.sent) {
+      addTodo(conv, "note", `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`);
+    }
     if (staffSms.sent) {
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
