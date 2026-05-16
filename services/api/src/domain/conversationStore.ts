@@ -250,7 +250,7 @@ export function inferTodoTaskClass(
     !hasDepartmentSignals &&
     reason !== "note" &&
     hasAppointmentLanguage &&
-    hasAppointmentTimeSignal;
+    (hasAppointmentTimeSignal || /\b(?:appointment\s+)?reschedule requested\b/i.test(summaryRaw));
   if (reason === "call") {
     const hasCadenceFollowUpSignals =
       /^call customer \(follow-up\):/i.test(summaryRaw) ||

@@ -62,7 +62,7 @@ import {
   shouldSuppressVoiceCallbackTodoForAppointment,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
-import { parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
+import { inferTodoTaskClass, parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
 import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
 import { isLogisticsProgressUpdateText } from "../services/api/src/domain/transitionSafety.ts";
@@ -124,6 +124,11 @@ const cases: Case[] = [
     id: "human_mode_reschedule_without_time_uses_booking_link",
     actual: buildHumanModeSchedulingDraft({ intent: "reschedule", bookingUrl: "https://dealer.example/book" }),
     expected: "No worries — you can reschedule here: https://dealer.example/book"
+  },
+  {
+    id: "reschedule_requested_todo_classifies_as_appointment_without_time",
+    actual: inferTodoTaskClass("call", "Appointment reschedule requested."),
+    expected: "appointment"
   },
   {
     id: "customer_reschedule_link_reply_uses_first_name",
