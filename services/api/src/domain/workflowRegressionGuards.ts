@@ -121,6 +121,28 @@ export function isImmediateChatCallbackAvailabilityText(textRaw: string | null |
   return availableNow && chatSignal;
 }
 
+export function isBusinessHoursQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  const hasQuestionShape =
+    /[?]/.test(String(textRaw ?? "")) ||
+    /\b(what|when|how late|how long|until|til|till|thru|through)\b/.test(text);
+  const hasHoursWord = /\bhours?\b/.test(text);
+  const hasOpenClose =
+    /\bopen\b/.test(text) || /\bclos(?:e|ed|es|ing)\b/.test(text);
+  const hasCloseTimePhrase =
+    /\b(?:open|there)\s+(?:until|til|till|thru|through)\s+(?:when|what time|how late)\b/.test(text) ||
+    /\b(?:until|til|till)\s+(?:when|what time|how late)\b/.test(text) ||
+    /\bhow late\b[\s\S]{0,40}\b(?:open|there)\b/.test(text) ||
+    /\bwhat time\b[\s\S]{0,40}\b(?:open|close|closed|closing)\b/.test(text) ||
+    /\bwhen\b[\s\S]{0,40}\b(?:open|close|closed|closing)\b/.test(text);
+  const hasOpeningHoursPhrase = /\b(opening hours|closing time|business hours|store hours)\b/.test(text);
+  return hasOpeningHoursPhrase || hasCloseTimePhrase || (hasHoursWord && hasQuestionShape) || (hasOpenClose && hasQuestionShape);
+}
+
 export function getScheduleDayOptionsLabel(textRaw: string | null | undefined): string | null {
   const text = String(textRaw ?? "");
   if (!text.trim()) return null;

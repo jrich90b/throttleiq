@@ -35,6 +35,7 @@ import { parsePreferredDateTime, parseRequestedDayTime } from "./conversationSto
 import {
   extractInventoryStockIdMention,
   inferAcceptedScheduleDayFromReplyText,
+  isBusinessHoursQuestionText,
   isStockNumberInventoryInterestText,
   buildHiringManagerInquiryReply,
   buildTakeOffMilwaukeeEightEngineReply
@@ -432,8 +433,7 @@ function detectHoursRequest(text: string): boolean {
   const t = text.toLowerCase();
   const hasDay = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t);
   return (
-    /\bhours?\b/.test(t) ||
-    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/.test(t) ||
+    isBusinessHoursQuestionText(t) ||
     (hasDay &&
       /(how about|what about|can you do|could you do|can't do|cant do|can't make|cant make)/.test(t))
   );

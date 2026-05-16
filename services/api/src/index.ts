@@ -244,6 +244,7 @@ import {
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
+  isBusinessHoursQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isDemoDayEventQuestionText,
@@ -41537,10 +41538,7 @@ if (authToken && signature) {
   const currentModel = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   const unknownModel = !currentModel || /other|full line/i.test(currentModel);
   const hoursQuestion =
-    /\bhours?\b/.test(textLower) ||
-    /(what time.*open|what time.*close|when.*open|when.*close|opening hours|closing time)/.test(
-      textLower
-    );
+    isBusinessHoursQuestionText(textLower);
 
   if (event.provider === "twilio" && hoursQuestion) {
     const cfg = await getSchedulerConfigHot();

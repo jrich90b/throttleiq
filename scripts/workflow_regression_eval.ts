@@ -21,6 +21,7 @@ import {
   hasRideChallengeSignupAcknowledgement,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
+  isBusinessHoursQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isDealerLeadAppPostDemoRideAdfText,
@@ -149,6 +150,21 @@ const cases: Case[] = [
     actual: isImmediateChatCallbackAvailabilityText(
       "I'm available to chat by text right now, please don't call."
     ),
+    expected: false
+  },
+  {
+    id: "open_till_when_detected_as_hours_question",
+    actual: isBusinessHoursQuestionText("Like to see tomorrow. You open till when"),
+    expected: true
+  },
+  {
+    id: "open_until_what_time_detected_as_hours_question",
+    actual: isBusinessHoursQuestionText("Are you open until what time tomorrow?"),
+    expected: true
+  },
+  {
+    id: "open_to_options_not_hours_question",
+    actual: isBusinessHoursQuestionText("I am open to either color tomorrow"),
     expected: false
   },
   {
