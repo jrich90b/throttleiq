@@ -22852,18 +22852,37 @@ async function processStaffAppointmentNotifications() {
       continue;
     }
 
-    if (appt.staffNotify.followUpSentAt) continue;
+    const reminderHoursRaw = Number(process.env.STAFF_APPOINTMENT_OUTCOME_REMINDER_HOURS ?? 24);
+    const reminderHours = Number.isFinite(reminderHoursRaw) ? Math.max(1, reminderHoursRaw) : 24;
+    const maxRemindersRaw = Number(process.env.STAFF_APPOINTMENT_OUTCOME_REMINDER_MAX ?? 3);
+    const maxReminders = Number.isFinite(maxRemindersRaw) ? Math.max(1, Math.floor(maxRemindersRaw)) : 3;
+    const priorFollowUpSentAt = String(appt.staffNotify.followUpSentAt ?? "").trim();
+    const priorFollowUpMs = priorFollowUpSentAt ? Date.parse(priorFollowUpSentAt) : NaN;
+    const reminderCountRaw = Number(appt.staffNotify.outcomeReminderCount ?? (priorFollowUpSentAt ? 1 : 0));
+    const reminderCount = Number.isFinite(reminderCountRaw) ? Math.max(0, Math.floor(reminderCountRaw)) : 0;
+    const isRepeatReminder = !!priorFollowUpSentAt;
+    if (isRepeatReminder) {
+      if (reminderCount >= maxReminders) continue;
+      if (!Number.isFinite(priorFollowUpMs)) continue;
+      const nextReminderAt = priorFollowUpMs + reminderHours * 60 * 60 * 1000;
+      if (now.getTime() < nextReminderAt) continue;
+    }
 
     const followText = link
       ? [
-          `Did ${customerName} show for the ${whenLocal} appointment?`,
+          isRepeatReminder
+            ? `Reminder: please record the outcome for ${customerName}'s ${whenLocal} appointment.`
+            : `Did ${customerName} show for the ${whenLocal} appointment?`,
           `Update: ${link}`,
           `Reply: OUTCOME ${token} SHOWED_UP | NO_SHOW | SOLD <stock/vin> | HOLD <stock/vin> <when> | FOLLOWUP <when> | LOST <reason>.`
         ].join("\n")
-      : `Did ${customerName} show for the ${whenLocal} appointment?`;
+      : isRepeatReminder
+        ? `Reminder: please record the outcome for ${customerName}'s ${whenLocal} appointment.`
+        : `Did ${customerName} show for the ${whenLocal} appointment?`;
     const followSent = await sendInternalSms(toNumber, followText);
     if (followSent) {
       appt.staffNotify.followUpSentAt = new Date().toISOString();
+      appt.staffNotify.outcomeReminderCount = reminderCount + 1;
       changed = true;
     }
   }
