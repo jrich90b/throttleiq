@@ -941,12 +941,35 @@ async function bestEffortSelect(
       }, normalizedTarget);
     }
 
+    if (tag === "input" || tag === "textarea") {
+      await field.click({ force: true });
+      await field.fill(text).catch(async () => {
+        await field.evaluate((el: any, value) => {
+          el.value = value;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }, text);
+      });
+      const menuOption = page
+        .locator("li, div[role='option'], span, a")
+        .filter({ hasText: new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") })
+        .first();
+      const optionVisible = await menuOption.isVisible({ timeout: 1500 }).catch(() => false);
+      if (optionVisible) {
+        await menuOption.click({ force: true });
+      } else {
+        await field.press("Tab").catch(() => {});
+      }
+      return true;
+    }
+
     await field.click({ force: true });
     const menuOption = page
       .locator("li, div[role='option'], span, a")
       .filter({ hasText: new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") })
       .first();
-    await menuOption.waitFor({ state: "visible", timeout: SHORT_TIMEOUT_MS });
+    const optionVisible = await menuOption.isVisible({ timeout: 1500 }).catch(() => false);
+    if (!optionVisible) return false;
     await menuOption.click({ force: true });
     return true;
   });
