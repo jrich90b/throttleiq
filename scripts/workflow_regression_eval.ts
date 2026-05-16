@@ -50,6 +50,7 @@ import {
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isTimingOnlyFollowUpTopic,
+  isCustomerReturningCallText,
   isVisitPlanContextNoteText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -204,6 +205,13 @@ const cases: Case[] = [
     id: "visit_plan_context_note_does_not_create_callback_reminder",
     actual: isVisitPlanContextNoteText(
       "Customer asked to be called when more info is available and agreed to come by tomorrow after 3:30; Scott will text the customer and follow up."
+    ),
+    expected: true
+  },
+  {
+    id: "customer_will_call_right_back_not_salesperson_callback",
+    actual: isCustomerReturningCallText(
+      "Customer: Do you mind if I give you a call right back? Summary: Customer will call back later."
     ),
     expected: true
   },

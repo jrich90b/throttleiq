@@ -270,6 +270,7 @@ import {
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
+  isCustomerReturningCallText,
   isVisitPlanContextNoteText,
   inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
@@ -12279,6 +12280,7 @@ function isCustomerReturningCallPhrase(text: string | null | undefined): boolean
   const source = String(text ?? "").trim().toLowerCase();
   if (!source) return false;
   return (
+    isCustomerReturningCallText(source) ||
     /\b(returning|returned)\s+your\s+call\b/.test(source) ||
     /\bcall(?:ing)?\s+you\s+back\b/.test(source) ||
     /\b(?:i(?:'m| am)\s+)?trying\s+to\s+give\s+you\s+(?:a\s+)?call\s*back\b/.test(source) ||

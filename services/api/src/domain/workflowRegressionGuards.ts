@@ -1126,6 +1126,19 @@ export function isVisitPlanContextNoteText(textRaw: string | null | undefined): 
   );
 }
 
+export function isCustomerReturningCallText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return (
+    /\b(?:customer\s+)?(?:will|would|is going to|gonna|going to|plans? to)\s+call\s+(?:us|you|back)\b/.test(
+      text
+    ) ||
+    /\bdo you mind if i give you a call (?:right )?back\b/.test(text) ||
+    /\bi(?:'ll| will| can)?\s*give you a call (?:right )?back\b/.test(text) ||
+    /\bi(?:'ll| will| can)?\s*call (?:you |us )?(?:right )?back\b/.test(text)
+  );
+}
+
 export function buildMarketplaceSellMyBikeReviewReply(args: {
   bikeLabel?: string | null;
   firstName?: string | null;
