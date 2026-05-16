@@ -270,6 +270,7 @@ import {
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
+  isVisitPlanContextNoteText,
   inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
@@ -16534,7 +16535,7 @@ async function applyActionStateFromContextNote(
     : "";
   const fallbackFollowUpWindow = hasLikelyFollowUpCue(text) ? text : "";
   const scheduleSource = followUpWindowHint || fallbackFollowUpWindow;
-  if (scheduleSource) {
+  if (scheduleSource && !isVisitPlanContextNoteText(scheduleSource)) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
     const owner = resolveCallbackTodoOwner(conv);

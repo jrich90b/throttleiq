@@ -50,6 +50,7 @@ import {
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isTimingOnlyFollowUpTopic,
+  isVisitPlanContextNoteText,
   pickCatalogModelLabelFromText,
   resolveRequestedScheduleWindowMode,
   selectRequestedAvailabilityModelMentions,
@@ -198,6 +199,13 @@ const cases: Case[] = [
       sourceText: "Customer will stop by around ten. Customer also asked: please call me later."
     }),
     expected: false
+  },
+  {
+    id: "visit_plan_context_note_does_not_create_callback_reminder",
+    actual: isVisitPlanContextNoteText(
+      "Customer asked to be called when more info is available and agreed to come by tomorrow after 3:30; Scott will text the customer and follow up."
+    ),
+    expected: true
   },
   {
     id: "marketplace_sell_my_bike_followup_review_reply",

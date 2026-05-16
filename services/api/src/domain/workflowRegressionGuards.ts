@@ -1111,6 +1111,21 @@ export function shouldSuppressVoiceCallbackTodoForAppointment(args: {
   return !explicitSeparateCallback;
 }
 
+export function isVisitPlanContextNoteText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const hasVisitPlan =
+    /\b(?:agreed|planning|plans?|scheduled|set|confirmed|look forward)\b[\s\S]{0,80}\b(?:come|stop|swing|meet|meeting|seeing)\b/.test(
+      text
+    ) ||
+    /\b(?:come|stop|swing)\s+(?:in|by|down|through)\b/.test(text) ||
+    /\b(?:meeting|seeing)\s+(?:you|him|her|them|customer)\b/.test(text);
+  if (!hasVisitPlan) return false;
+  return /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|next week|this week|morning|afternoon|evening|noon|\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/.test(
+    text
+  );
+}
+
 export function buildMarketplaceSellMyBikeReviewReply(args: {
   bikeLabel?: string | null;
   firstName?: string | null;
