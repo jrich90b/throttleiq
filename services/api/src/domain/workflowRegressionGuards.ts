@@ -317,6 +317,8 @@ export function shouldSuppressInitialAvailabilityLineAppend(draftRaw: string | n
   if (!draft.trim()) return false;
   return (
     /\bwhich model\b|\bwhat model\b|\btrim or color\b/i.test(draft) ||
+    /\binterested in a test ride\b[\s\S]{0,120}\bwhat day works best\b/i.test(draft) ||
+    /\btest ride\b[\s\S]{0,120}\bwhat day works best\b/i.test(draft) ||
     /\bi (?:just )?saw you wanted to learn more\b|\binterested in checking it out\b/i.test(draft) ||
     /\b(payment|monthly|apr|down payment|down|budget|finance|financing|credit app|credit application|term)\b/i.test(
       draft

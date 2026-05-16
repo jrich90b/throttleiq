@@ -459,6 +459,13 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "suppresses_duplicate_availability_append_after_test_ride_copy",
+    actual: shouldSuppressInitialAvailabilityLineAppend(
+      "Hi Angelo — This is Alexandra at American Harley-Davidson. Thanks — I saw you’re interested in a test ride on the 2026 Street Glide. What day works best for you?"
+    ),
+    expected: true
+  },
+  {
     id: "new_test_ride_adf_overrides_prior_walkin_context",
     actual: shouldTreatAdfAsWalkInContext({
       leadSource: "HD.com Online Test Ride Request",
