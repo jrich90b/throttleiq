@@ -950,6 +950,14 @@ export function shouldTreatAdfAsWalkInContext(args: {
   if (!args.priorWalkIn) return false;
   const source = String(args.leadSource ?? "").toLowerCase();
   if (/\b(test ride|book test ride|online test ride request)\b/i.test(source)) return false;
+  if (
+    /\b(marketplace|trade accelerator|value my trade|sell my bike|sell your bike|sell your vehicle)\b/i.test(
+      source
+    ) &&
+    /\b(sell my bike|sell your bike|sell your vehicle|value my trade|trade accelerator)\b/i.test(source)
+  ) {
+    return false;
+  }
   return true;
 }
 

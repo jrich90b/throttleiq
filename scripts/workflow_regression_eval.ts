@@ -454,6 +454,28 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "new_sell_my_bike_adf_overrides_prior_walkin_context",
+    actual: shouldTreatAdfAsWalkInContext({
+      leadSource: "Marketplace - Sell My Bike",
+      priorWalkIn: true,
+      explicitWalkInLeadSource: false,
+      trafficLogPayloadHint: false,
+      walkInSignalHint: false
+    }),
+    expected: false
+  },
+  {
+    id: "new_value_my_trade_adf_overrides_prior_walkin_context",
+    actual: shouldTreatAdfAsWalkInContext({
+      leadSource: "Marketplace - Value My Trade",
+      priorWalkIn: true,
+      explicitWalkInLeadSource: false,
+      trafficLogPayloadHint: false,
+      walkInSignalHint: false
+    }),
+    expected: false
+  },
+  {
     id: "prior_walkin_context_stays_sticky_for_generic_adf",
     actual: shouldTreatAdfAsWalkInContext({
       leadSource: "Traffic Log Pro",

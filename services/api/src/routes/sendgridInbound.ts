@@ -5272,6 +5272,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "sell_my_bike_review");
     stopFollowUpCadence(conv, "manual_handoff");
     queueInitialDraftForPreferredContact(ack);
+    saveConversation(conv);
+    await flushConversationStore();
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6108,6 +6110,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
+    saveConversation(conv);
+    await flushConversationStore();
     return res.status(200).json({
       ok: true,
       parsed: true,
