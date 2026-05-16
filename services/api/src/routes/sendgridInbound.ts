@@ -652,7 +652,7 @@ function extractDealerLeadAppOutcomeField(source: string, labelPattern: string):
   const text = String(source ?? "");
   const sameLine = text.match(
     new RegExp(
-      `${labelPattern}\\s*:\\s*([\\s\\S]*?)(?=\\s+(?:Lead App\\s*-\\s*Type|SalesPerson|How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?|Demo Bikes Ridden|Email Opt\\s*-\\s*In|Brand of Bike Owned)\\s*:|\\s+(?:How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?)|[\\n\\r]|$)`,
+      `${labelPattern}\\s*:\\s*([\\s\\S]*?)(?=\\s*-?\\s*(?:Lead App\\s*-\\s*Type|SalesPerson|How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?|Demo Bikes Ridden|Email Opt\\s*-\\s*In|Brand of Bike Owned)\\s*:|\\s*-?\\s*(?:How many years have you owned|Do you expect to make|Which model of motorcycle are you interested in\\?)|[\\n\\r]|$)`,
       "i"
     )
   )?.[1] ?? "";
