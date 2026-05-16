@@ -14730,6 +14730,43 @@ function extractDayRequest(text: string): string | null {
   return null;
 }
 
+async function buildBusinessHoursQuestionReply(text: string): Promise<string> {
+  const cfg = await getSchedulerConfigHot();
+  const dealerProfile = await getDealerProfileHot();
+  const country = dealerProfile?.address?.country ?? null;
+  const textLower = String(text ?? "").toLowerCase();
+  const directDayRequest = extractDayRequest(textLower);
+  const wantsToday = /\btoday\b/.test(textLower);
+  const wantsTomorrow = /\btomorrow\b/.test(textLower);
+  const wantsTonight = /\b(tonight|tonite)\b/.test(textLower);
+  let dayRequest = directDayRequest;
+  if (!dayRequest && (wantsToday || wantsTonight)) {
+    dayRequest = dayKey(new Date(), cfg.timezone);
+  } else if (!dayRequest && wantsTomorrow) {
+    const nextDay = new Date();
+    nextDay.setDate(nextDay.getDate() + 1);
+    dayRequest = dayKey(nextDay, cfg.timezone);
+  }
+  const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
+  if (dayRequest) {
+    const dayHours = cfg.businessHours?.[dayRequest];
+    const dayLabel =
+      wantsTonight || wantsToday
+        ? "today"
+        : wantsTomorrow
+          ? "tomorrow"
+          : dayRequest.replace(/^\w/, c => c.toUpperCase());
+    if (dayHours?.open && dayHours?.close) {
+      const open = formatTime12h(dayHours.open);
+      const close = formatTime12h(dayHours.close);
+      return `Our hours on ${dayLabel} are ${open}–${close}.`;
+    }
+    return `We’re closed on ${dayLabel}.`;
+  }
+  if (hoursLine) return `Our hours this week are ${hoursLine}.`;
+  return "Our hours vary by day. What day are you thinking?";
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -34849,6 +34886,31 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     );
   }
   const regenAppointmentTimingAcceptedForRouting = isAppointmentTimingParserAccepted(regenAppointmentTimingParse);
+  if (event.provider === "twilio" && isBusinessHoursQuestionText(event.body ?? "")) {
+    const reply = await buildBusinessHoursQuestionReply(event.body ?? "");
+    const isSalesLead =
+      !!conv.lead?.vehicle?.model ||
+      !!conv.lead?.vehicle?.year ||
+      !!conv.lead?.tradeVehicle?.model ||
+      !!conv.lead?.tradeVehicle?.description ||
+      (conv.classification?.bucket &&
+        !["service", "other"].includes(String(conv.classification.bucket)));
+    const canInviteSchedule =
+      isSalesLead &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "holding_inventory";
+    const withScheduleInvite = canInviteSchedule
+      ? `${reply} If you’re thinking about coming in, what time works best? I can put you down on the schedule.`
+      : reply;
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(withScheduleInvite);
+    }
+    return respondWithSmsRegeneratedDraft(withScheduleInvite, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
   if (
     event.provider === "twilio" &&
     regenAppointmentTimingAcceptedForRouting &&
@@ -41541,47 +41603,7 @@ if (authToken && signature) {
     isBusinessHoursQuestionText(textLower);
 
   if (event.provider === "twilio" && hoursQuestion) {
-    const cfg = await getSchedulerConfigHot();
-    const dealerProfile = await getDealerProfileHot();
-    const country = dealerProfile?.address?.country ?? null;
-    const directDayRequest = extractDayRequest(textLower);
-    const wantsToday = /\btoday\b/.test(textLower);
-    const wantsTomorrow = /\btomorrow\b/.test(textLower);
-    const wantsTonight = /\b(tonight|tonite)\b/.test(textLower);
-    let dayRequest = directDayRequest;
-    if (!dayRequest && (wantsToday || wantsTonight)) {
-      dayRequest = dayKey(new Date(), cfg.timezone);
-    } else if (!dayRequest && wantsTomorrow) {
-      const nextDay = new Date();
-      nextDay.setDate(nextDay.getDate() + 1);
-      dayRequest = dayKey(nextDay, cfg.timezone);
-    }
-    const hoursLine = formatBusinessHoursForReply(cfg.businessHours, country);
-    let reply = "Our hours vary by day. What day are you thinking?";
-    if (dayRequest) {
-      const dayHours = cfg.businessHours?.[dayRequest];
-      if (dayHours?.open && dayHours?.close) {
-        const open = formatTime12h(dayHours.open);
-        const close = formatTime12h(dayHours.close);
-        const dayLabel =
-          wantsTonight || wantsToday
-            ? "today"
-            : wantsTomorrow
-              ? "tomorrow"
-              : dayRequest.replace(/^\w/, c => c.toUpperCase());
-        reply = `Our hours on ${dayLabel} are ${open}–${close}.`;
-      } else {
-        const dayLabel =
-          wantsTonight || wantsToday
-            ? "today"
-            : wantsTomorrow
-              ? "tomorrow"
-              : dayRequest.replace(/^\w/, c => c.toUpperCase());
-        reply = `We’re closed on ${dayLabel}.`;
-      }
-    } else if (hoursLine) {
-      reply = `Our hours this week are ${hoursLine}.`;
-    }
+    let reply = await buildBusinessHoursQuestionReply(textLower);
     const confirmBike =
       /\b(that'?s (it|the one|the bike)|that one|yep|yup|yes)\b/i.test(textLower);
     const contextModel = conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? null;
