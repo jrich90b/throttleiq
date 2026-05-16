@@ -310,6 +310,7 @@ import {
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
+  inferTodoTaskClass,
   listOpenTodos,
   addInternalQuestion,
   listOpenQuestions,
@@ -27076,7 +27077,9 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
     const staleTodos = openTodos.filter(t => {
       const taskConv = getConversation(t.convId);
       if (!taskConv) return true;
-      return taskConv.status === "closed";
+      if (taskConv.status !== "closed") return false;
+      const taskClass = String(t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)).trim().toLowerCase();
+      return taskClass === "followup" || taskClass === "appointment";
     });
     if (staleTodos.length) {
       for (const stale of staleTodos) {
@@ -27271,7 +27274,8 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
     undefined,
     owner,
     schedule,
-    taskClass
+    taskClass,
+    { allowSoldLead: true }
   );
   if (!task) {
     return res.status(200).json({

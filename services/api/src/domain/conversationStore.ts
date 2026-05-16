@@ -3676,13 +3676,14 @@ export function addTodo(
   sourceMessageId?: string,
   owner?: { id?: string | null; name?: string | null },
   schedule?: TodoScheduleOptions,
-  taskClass?: TodoTaskClass
+  taskClass?: TodoTaskClass,
+  options?: { allowSoldLead?: boolean }
 ): TodoTask | null {
   const soldContext =
     conv?.closedReason === "sold" ||
     !!conv?.sale?.soldAt ||
     conv?.followUpCadence?.kind === "post_sale";
-  if (soldContext && reason !== "call") {
+  if (soldContext && reason !== "call" && options?.allowSoldLead !== true) {
     return null;
   }
   const ownerIdRaw = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
