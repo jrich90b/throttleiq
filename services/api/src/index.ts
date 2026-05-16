@@ -13534,10 +13534,15 @@ function resolveSalespersonByName(
 
 function resolveSalespersonForUser(
   cfg: Awaited<ReturnType<typeof getSchedulerConfig>>,
-  user: { name?: string | null; email?: string | null; calendarId?: string | null } | null
+  user: { id?: string | null; name?: string | null; email?: string | null; calendarId?: string | null } | null
 ) {
   if (!user) return null;
   const salespeople = cfg.salespeople ?? [];
+  const userId = String(user.id ?? "").trim();
+  if (userId) {
+    const byId = salespeople.find(sp => sp.id === userId);
+    if (byId) return { id: byId.id, name: byId.name, calendarId: byId.calendarId };
+  }
   if (user.calendarId) {
     const byCal = salespeople.find(sp => sp.calendarId === user.calendarId);
     if (byCal) return { id: byCal.id, name: byCal.name, calendarId: byCal.calendarId };
@@ -32038,7 +32043,11 @@ app.post("/conversations/:id/send", async (req, res) => {
           : null;
 
       if (!chosenSlot) {
-        const prefIds = getPreferredSalespeopleForConv(cfg, conv);
+        const confirmingSalesperson = resolveSalespersonForUser(cfg, user);
+        const prefIds = [
+          String(confirmingSalesperson?.id ?? "").trim(),
+          ...getPreferredSalespeopleForConv(cfg, conv)
+        ].filter((id, index, arr) => id && arr.indexOf(id) === index);
         const salespeople = cfg.salespeople ?? [];
         const startIso = start.toISOString();
         const endIso = fallbackEnd.toISOString();
