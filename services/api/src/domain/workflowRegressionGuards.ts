@@ -1078,3 +1078,28 @@ export function shouldSuppressVoiceCallbackTodoForAppointment(args: {
     ) || /\b(when|what)\s+(time|day)\s+(can|should)\s+you\s+call\b/.test(source);
   return !explicitSeparateCallback;
 }
+
+export function buildMarketplaceSellMyBikeReviewReply(args: {
+  bikeLabel?: string | null;
+  firstName?: string | null;
+  isInitialAdf?: boolean;
+  agentName?: string | null;
+  dealerName?: string | null;
+}): string {
+  const bikeLabel = String(args.bikeLabel ?? "").trim() || "your bike";
+  const firstName = String(args.firstName ?? "").trim();
+  if (args.isInitialAdf) {
+    const agentName = String(args.agentName ?? "").trim() || "Brooke";
+    const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+    return (
+      `Thanks — I received the sell-my-bike details for ${bikeLabel}. ` +
+      `This is ${agentName} at ${dealerName}. ` +
+      "I’ll review the info and photos, then follow up with next steps."
+    );
+  }
+  const intro = firstName ? `Thanks ${firstName} — ` : "Thanks — ";
+  return (
+    `${intro}I received the updated sell-my-bike details for ${bikeLabel}. ` +
+    "I’ll review the info and photos, then follow up with next steps."
+  );
+}

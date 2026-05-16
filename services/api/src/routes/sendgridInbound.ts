@@ -102,6 +102,7 @@ import {
   buildInventoryOnlineCompletenessReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildHiringManagerInquiryReply,
+  buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
@@ -5232,6 +5233,58 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       intent: "GENERAL",
       stage: "ENGAGED",
       draft: ack
+    });
+  }
+
+  const earlyMarketplaceSellMyBikeLead =
+    /marketplace/i.test(leadSourceLower) &&
+    /sell\s+my\s+bike|sell\s+your\s+(?:bike|vehicle)/i.test(leadSourceLower) &&
+    !/(prequal|credit|coa|finance|apply)/i.test(leadSourceLower);
+  if (earlyMarketplaceSellMyBikeLead) {
+    const profile = await getDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const modelLabel = normalizeVehicleModel(
+      conv.lead?.tradeVehicle?.model ??
+        conv.lead?.tradeVehicle?.description ??
+        conv.lead?.vehicle?.model ??
+        conv.lead?.vehicle?.description ??
+        "",
+      conv.lead?.tradeVehicle?.make ?? conv.lead?.vehicle?.make ?? null
+    );
+    const sellYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const bikeLabel = [sellYear, modelLabel].filter(Boolean).join(" ").trim() || "your bike";
+    const ackCore = buildMarketplaceSellMyBikeReviewReply({
+      bikeLabel,
+      firstName,
+      isInitialAdf,
+      agentName,
+      dealerName
+    });
+    const ack = await applyInitialAdfPrefix(ackCore.replace(/\s+/g, " ").trim());
+    addTodo(
+      conv,
+      "other",
+      `Review sell-my-bike submission for ${bikeLabel} and follow up with next steps.`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "sell_my_bike_review");
+    stopFollowUpCadence(conv, "manual_handoff");
+    queueInitialDraftForPreferredContact(ack);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: "trade_in_sell",
+      cta: "sell_my_bike",
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      note: "marketplace_sell_my_bike_review"
     });
   }
 

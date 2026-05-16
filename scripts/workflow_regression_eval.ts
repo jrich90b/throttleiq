@@ -8,6 +8,7 @@ import {
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildInventoryOnlineCompletenessReply,
+  buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildUnlistedInventoryHandoffReply,
@@ -174,6 +175,27 @@ const cases: Case[] = [
       sourceText: "Customer will stop by around ten. Customer also asked: please call me later."
     }),
     expected: false
+  },
+  {
+    id: "marketplace_sell_my_bike_followup_review_reply",
+    actual: buildMarketplaceSellMyBikeReviewReply({
+      firstName: "Zuhair",
+      bikeLabel: "2018 Street Bob",
+      isInitialAdf: false
+    }),
+    expected:
+      "Thanks Zuhair — I received the updated sell-my-bike details for 2018 Street Bob. I’ll review the info and photos, then follow up with next steps."
+  },
+  {
+    id: "marketplace_sell_my_bike_initial_review_reply",
+    actual: buildMarketplaceSellMyBikeReviewReply({
+      bikeLabel: "2018 Street Bob",
+      isInitialAdf: true,
+      agentName: "Alexandra",
+      dealerName: "American Harley-Davidson"
+    }),
+    expected:
+      "Thanks — I received the sell-my-bike details for 2018 Street Bob. This is Alexandra at American Harley-Davidson. I’ll review the info and photos, then follow up with next steps."
   },
   {
     id: "multi_day_schedule_options_preserve_friday_or_saturday",

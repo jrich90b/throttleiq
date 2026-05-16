@@ -1544,6 +1544,28 @@ function priorModelYear(year?: string | null): string | null {
   return String(n - 1);
 }
 
+function normalizeInventoryGateText(value?: string | null): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function holdStoreMatchesRequestedBike(
+  hold: { label?: string | null; stockId?: string | null; vin?: string | null } | undefined,
+  requested: { year?: string | null; model?: string | null }
+): boolean {
+  if (!hold) return false;
+  const requestedModel = normalizeInventoryGateText(requested.model);
+  if (!requestedModel) return false;
+  const requestedYear = String(requested.year ?? "").trim();
+  const label = normalizeInventoryGateText(hold.label);
+  if (!label) return false;
+  if (requestedYear && !label.split(" ").includes(requestedYear)) return false;
+  return label.includes(requestedModel);
+}
+
 function formatInventoryBikeLabel(item: InventoryFeedItem, fallbackModel: string): string {
   const year = String(item.year ?? "").trim();
   const model = normalizeModelLabel(item.model ?? fallbackModel);
@@ -1593,6 +1615,9 @@ export async function evaluateTestRideInventoryGate(args: {
         const holdKey = normalizeInventoryHoldKey(m.stockId, m.vin);
         return !!(holdKey && holds?.[holdKey]);
       });
+      const heldStoreMatches = Object.values(holds ?? {}).filter(hold =>
+        holdStoreMatchesRequestedBike(hold, { year, model: rawModel })
+      );
       const alternateYear = priorModelYear(year);
       const rawAlternateMatches = alternateYear
         ? await findInventoryMatches({ year: alternateYear, model: rawModel })
@@ -1625,11 +1650,16 @@ export async function evaluateTestRideInventoryGate(args: {
             onHold: !!(holdKey && holds?.[holdKey]),
             sold: !!(soldKey && solds?.[soldKey])
           };
-        })
+        }),
+        heldStoreMatches: heldStoreMatches.slice(0, 5).map(hold => ({
+          label: hold.label,
+          stockId: hold.stockId,
+          vin: hold.vin
+        }))
       });
       return {
         canOfferTestRide: false,
-        reason: heldExactMatches.length ? "on_hold" : "not_in_stock",
+        reason: heldExactMatches.length || heldStoreMatches.length ? "on_hold" : "not_in_stock",
         bikeLabel,
         availableCount: 0,
         inventoryBrowseUrl,
