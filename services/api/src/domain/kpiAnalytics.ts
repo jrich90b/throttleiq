@@ -451,19 +451,24 @@ function leadCycleAtMs(conv: Conversation, lead: Conversation["lead"]): number |
 }
 
 function activeKpiLeadCycle(conv: Conversation): { lead: Conversation["lead"]; atMs: number | null } {
-  const primaryLead = conv.lead;
-  const latestLead = conv.latestLead;
+  const primaryLead = conv.originalLead ?? conv.lead;
+  const candidateLeads = [conv.lead, conv.latestLead].filter(Boolean) as NonNullable<Conversation["lead"]>[];
   const primaryRef = String(primaryLead?.leadRef ?? "").trim();
-  const latestRef = String(latestLead?.leadRef ?? "").trim();
   const primaryAtMs = leadCycleAtMs(conv, primaryLead);
+  let newestCycle: { lead: Conversation["lead"]; atMs: number | null } | null = null;
 
-  if (latestLead && latestRef && latestRef !== primaryRef) {
-    const latestAtMs = leadCycleAtMs(conv, latestLead);
-    if (latestAtMs != null && primaryAtMs != null && latestAtMs - primaryAtMs > KPI_LEAD_CYCLE_WINDOW_MS) {
-      return { lead: latestLead, atMs: latestAtMs };
+  for (const lead of candidateLeads) {
+    const leadRef = String(lead?.leadRef ?? "").trim();
+    if (!leadRef || leadRef === primaryRef) continue;
+    const atMs = leadCycleAtMs(conv, lead);
+    if (atMs == null || primaryAtMs == null) continue;
+    if (atMs - primaryAtMs <= KPI_LEAD_CYCLE_WINDOW_MS) continue;
+    if (newestCycle?.atMs == null || atMs > newestCycle.atMs) {
+      newestCycle = { lead, atMs };
     }
   }
 
+  if (newestCycle) return newestCycle;
   return { lead: primaryLead, atMs: primaryAtMs };
 }
 
@@ -532,6 +537,7 @@ function isStandaloneDlaTestRideLead(conv: Conversation): boolean {
 
 function isExcludedFromOnlineKpiBucket(conv: Conversation): boolean {
   if (isStandaloneDlaTestRideLead(conv)) return true;
+  if (isWalkIn(conv)) return true;
   if (startsWithWebLeadAdf(conv)) return false;
   return isWalkInKpiBucket(conv);
 }
