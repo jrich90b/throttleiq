@@ -452,6 +452,16 @@ function isWalkInKpiBucket(conv: Conversation): boolean {
   return isWalkIn(conv) || isDlaTestRideLead(conv);
 }
 
+function startsWithWebLeadAdf(conv: Conversation): boolean {
+  const firstInbound = (conv.messages ?? []).find(m => m.direction === "in");
+  return String(firstInbound?.provider ?? "").trim().toLowerCase() === "sendgrid_adf";
+}
+
+function isWalkInOnlyKpiBucket(conv: Conversation): boolean {
+  if (startsWithWebLeadAdf(conv)) return false;
+  return isWalkInKpiBucket(conv);
+}
+
 function normalizeCondition(conv: Conversation): "new" | "used" | "unknown" {
   const raw = String(conv.lead?.vehicle?.condition ?? "").trim().toLowerCase();
   if (raw === "new") return "new";
@@ -582,9 +592,9 @@ function leadMatchesFilters(
   const leadType = (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter;
   const leadScope = (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
     "include_walkins") as LeadScopeFilter;
-  if (leadScope === "online_only" && isWalkInKpiBucket(conv)) return false;
-  if (leadScope === "walkin_only" && !isWalkInKpiBucket(conv)) return false;
-  if (leadType === "walk_in" && !isWalkInKpiBucket(conv)) return false;
+  if (leadScope === "online_only" && isWalkInOnlyKpiBucket(conv)) return false;
+  if (leadScope === "walkin_only" && !isWalkInOnlyKpiBucket(conv)) return false;
+  if (leadType === "walk_in" && !isWalkInOnlyKpiBucket(conv)) return false;
   if (leadType === "new" && normalizeCondition(conv) !== "new") return false;
   if (leadType === "used" && normalizeCondition(conv) !== "used") return false;
 
@@ -609,7 +619,7 @@ function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewO
   const closedAt = toMs(conv.closedAt);
   const sold = soldAt != null;
   const closed = String(conv.status ?? "").toLowerCase() === "closed";
-  const excludeFromResponseTiming = isWalkInKpiBucket(conv);
+  const excludeFromResponseTiming = isWalkInOnlyKpiBucket(conv);
 
   const responseMinutes =
     inboundAt != null && outboundAt != null

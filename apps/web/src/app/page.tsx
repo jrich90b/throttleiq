@@ -11628,7 +11628,7 @@ export default function Home() {
                 setKpiLeadScopeFilter((e.target.value as KpiLeadScope) || "online_only")
               }
             >
-              <option value="online_only">Online</option>
+              <option value="online_only">Online / Web ADF</option>
               <option value="walkin_only">Walk-in</option>
               <option value="include_walkins">All</option>
             </select>
@@ -13437,7 +13437,7 @@ export default function Home() {
                     ? "Walk-ins only"
                     : kpiLeadScopeFilter === "include_walkins"
                       ? "Online + walk-ins"
-                      : "Online leads only"}
+                      : "Online / Web ADF leads"}
                 </p>
               </div>
               <button
