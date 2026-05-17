@@ -542,6 +542,114 @@ function isExcludedFromOnlineKpiBucket(conv: Conversation): boolean {
   return isWalkInKpiBucket(conv);
 }
 
+function hasMotorcycleVehicleSignal(conv: Conversation): boolean {
+  const lead = activeKpiLeadCycle(conv).lead;
+  const vehicle = lead?.vehicle;
+  const condition = String(vehicle?.condition ?? "").trim().toLowerCase();
+  const vehicleText = [
+    vehicle?.stockId,
+    vehicle?.vin,
+    vehicle?.year,
+    vehicle?.make,
+    vehicle?.model,
+    vehicle?.trim,
+    vehicle?.description,
+    conv.sale?.stockId,
+    conv.sale?.vin,
+    conv.sale?.label
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (condition === "new" || condition === "used" || condition === "preowned" || condition === "pre-owned") {
+    return true;
+  }
+  return /\b(harley|motorcycle|bike|road glide|street glide|low rider|softail|sportster|heritage|breakout|cvo|trike|flh|fltr|fx|xl|rh)\b/i.test(
+    vehicleText
+  );
+}
+
+function isFinanceOrPrequalLead(conv: Conversation): boolean {
+  const lead = activeKpiLeadCycle(conv).lead;
+  const source = String(lead?.source ?? "").trim().toLowerCase();
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const haystack = [source, cta, bucket, lead?.inquiry].filter(Boolean).join(" ").toLowerCase();
+  return (
+    bucket === "finance_prequal" ||
+    cta === "prequalify" ||
+    cta === "hdfs_coa" ||
+    /\b(pre[-\s]?qual|prequalified|credit app|credit application|coa online|hdfs|finance application|financing application)\b/.test(
+      haystack
+    )
+  );
+}
+
+function isNonSalesKpiLead(conv: Conversation): boolean {
+  const lead = activeKpiLeadCycle(conv).lead;
+  const source = String(lead?.source ?? "").trim().toLowerCase();
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const inquiryText = [lead?.inquiry, lead?.walkInComment]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (["service", "parts", "apparel"].includes(bucket)) return true;
+  if (["service_request", "parts_request", "parts_inquiry", "apparel_request", "apparel_inquiry"].includes(cta)) {
+    return true;
+  }
+  if (/\b(service|parts?|apparel|motorclothes|clothing|eagle\s*rider)\b/.test(source)) return true;
+  if (/\b(ride challenge|meta promo|national event rsvp|event rsvp|contact us)\b/.test(source)) return true;
+  if (
+    /\b(oil change|inspection|maintenance|repair|warranty|part number|order parts?|helmet|jacket|hoodie|t-?shirt|gloves?|boots?|riding gear)\b/.test(
+      inquiryText
+    ) &&
+    !/\b(test ride|buy|purchase|price|pricing|payment|finance|trade|in stock|available|quote|road glide|street glide|softail|sportster|trike)\b/.test(
+      inquiryText
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isMotorcycleSalesKpiLead(conv: Conversation): boolean {
+  if (isFinanceOrPrequalLead(conv)) return true;
+  if (isNonSalesKpiLead(conv)) return false;
+
+  const bucket = String(conv.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv.classification?.cta ?? "").trim().toLowerCase();
+  const source = String(activeKpiLeadCycle(conv).lead?.source ?? "").trim().toLowerCase();
+  const hasMotorcycle = hasMotorcycleVehicleSignal(conv);
+  const salesBuckets = new Set(["inventory_interest", "test_ride", "pricing_payments", "trade_in_sell"]);
+  const salesCtas = new Set([
+    "check_availability",
+    "request_a_quote",
+    "schedule_test_ride",
+    "book_appointment",
+    "schedule_appointment",
+    "value_my_trade",
+    "sell_my_bike",
+    "hdfs_coa"
+  ]);
+
+  if (salesBuckets.has(bucket) || salesCtas.has(cta)) return true;
+  if ((conv.sale?.soldAt || conv.closedReason === "sold") && hasMotorcycle) return true;
+  if (isWalkInKpiBucket(conv) && (hasMotorcycle || String(conv.appointment?.status ?? "") === "confirmed")) {
+    return true;
+  }
+  if (
+    hasMotorcycle &&
+    /\b(hd\.com|hdfs|room58|marketplace|autodealers|dealer lead app|traffic log pro|walk\s*[- ]?in|trade accelerator|kenect)\b/.test(
+      source
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function normalizeCondition(conv: Conversation): "new" | "used" | "unknown" {
   const raw = String(activeKpiLeadCycle(conv).lead?.vehicle?.condition ?? "").trim().toLowerCase();
   if (raw === "new") return "new";
@@ -659,6 +767,7 @@ function leadMatchesFilters(
   const createdMs = activeKpiLeadCycle(conv).atMs;
   if (createdMs == null) return false;
   if (createdMs < fromBoundMs || createdMs > toBoundMs) return false;
+  if (!isMotorcycleSalesKpiLead(conv)) return false;
 
   const sourceFilter = String(filters.source ?? "all").trim().toLowerCase();
   if (sourceFilter && sourceFilter !== "all") {
