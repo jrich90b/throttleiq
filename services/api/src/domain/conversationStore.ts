@@ -2010,22 +2010,57 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;
+const DISPLAY_LEAD_ORIGIN_WINDOW_DAYS = 120;
+const DISPLAY_LEAD_ORIGIN_WINDOW_MS = DISPLAY_LEAD_ORIGIN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
 function extractAdfSourceLine(body: string): string {
   const match = String(body ?? "").match(/(?:^|\n)\s*source:\s*([^\n\r]+)/i);
   return String(match?.[1] ?? "").trim();
 }
 
-export function inferWalkIn(conv: Conversation): boolean {
-  if (conv.lead?.walkIn) return true;
-  if (String(conv.dialogState?.name ?? "") === "walk_in_active") return true;
-  const firstAdfBody =
+function extractAdfLeadRefLine(body: string): string {
+  const text = String(body ?? "");
+  return (
+    text.match(/(?:^|\n)\s*Ref:\s*([^\n\r]+)/i)?.[1]?.trim() ||
+    text.match(/(?:^|\n)\s*Lead\s*Ref:\s*([^\n\r]+)/i)?.[1]?.trim() ||
+    ""
+  );
+}
+
+function firstAdfMessage(conv: Conversation): Message | null {
+  return (
     conv.messages.find(
       m =>
         m.direction === "in" &&
         m.provider === "sendgrid_adf" &&
         typeof m.body === "string"
-    )?.body ?? "";
+    ) ?? null
+  );
+}
+
+function adfMessageForLeadRef(conv: Conversation, leadRef: string): Message | null {
+  const ref = String(leadRef ?? "").trim();
+  if (!ref) return null;
+  return (
+    conv.messages.find(
+      m =>
+        m.direction === "in" &&
+        m.provider === "sendgrid_adf" &&
+        typeof m.body === "string" &&
+        extractAdfLeadRefLine(m.body) === ref
+    ) ?? null
+  );
+}
+
+function adfMessageAtMs(message: Message | null | undefined): number | null {
+  const atMs = Date.parse(String(message?.at ?? ""));
+  return Number.isFinite(atMs) ? atMs : null;
+}
+
+export function inferWalkIn(conv: Conversation): boolean {
+  if (conv.lead?.walkIn) return true;
+  if (String(conv.dialogState?.name ?? "") === "walk_in_active") return true;
+  const firstAdfBody = firstAdfMessage(conv)?.body ?? "";
   const firstAdfSource = extractAdfSourceLine(firstAdfBody);
   const firstAdfSourceSignalsWalkIn = WALK_IN_SOURCE_RE.test(firstAdfSource);
   const firstAdfSourceLocksNonWalkIn = !!firstAdfSource && !firstAdfSourceSignalsWalkIn;
@@ -2041,6 +2076,44 @@ export function inferWalkIn(conv: Conversation): boolean {
     WALK_IN_SOURCE_RE.test(legacyLeadSource) ||
     WALK_IN_SOURCE_RE.test(firstAdfSource);
   return sourceMatch;
+}
+
+export function inferDisplayWalkIn(conv: Conversation): boolean {
+  const firstAdf = firstAdfMessage(conv);
+  const firstAdfSource = extractAdfSourceLine(firstAdf?.body ?? "");
+  const firstAdfSourceSignalsWalkIn = WALK_IN_SOURCE_RE.test(firstAdfSource);
+  const firstAdfSourceLocksNonWalkIn = !!firstAdfSource && !firstAdfSourceSignalsWalkIn;
+
+  if (firstAdfSourceLocksNonWalkIn) {
+    const currentSource = String(conv.lead?.source ?? (conv as any)?.leadSource ?? "");
+    const currentSourceSignalsWalkIn = WALK_IN_SOURCE_RE.test(currentSource);
+    const currentLeadRef = String(conv.lead?.leadRef ?? "").trim();
+    const currentAdf =
+      adfMessageForLeadRef(conv, currentLeadRef) ??
+      [...(conv.messages ?? [])]
+        .reverse()
+        .find(
+          m =>
+            m.direction === "in" &&
+            m.provider === "sendgrid_adf" &&
+            typeof m.body === "string" &&
+            WALK_IN_SOURCE_RE.test(extractAdfSourceLine(m.body))
+        ) ??
+      null;
+    const firstAtMs = adfMessageAtMs(firstAdf);
+    const currentAtMs = adfMessageAtMs(currentAdf);
+
+    if (
+      currentSourceSignalsWalkIn &&
+      firstAtMs != null &&
+      currentAtMs != null &&
+      currentAtMs - firstAtMs <= DISPLAY_LEAD_ORIGIN_WINDOW_MS
+    ) {
+      return false;
+    }
+  }
+
+  return inferWalkIn(conv);
 }
 
 function isConversationOnHoldForHot(conv: Conversation): boolean {
@@ -2477,7 +2550,7 @@ export function listConversations() {
         null;
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
-      const inferredWalkIn = inferWalkIn(c);
+      const inferredWalkIn = inferDisplayWalkIn(c);
       const hasInboundTwilio = c.messages.some(
         m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "twilio"
       );

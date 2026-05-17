@@ -139,6 +139,7 @@ import {
   FOLLOW_UP_DAY_OFFSETS,
   LONG_TERM_DAY_OFFSETS,
   POST_SALE_DAY_OFFSETS,
+  inferDisplayWalkIn,
   inferWalkIn,
   startPostSaleCadence
 } from "./domain/conversationStore.js";
@@ -25918,7 +25919,7 @@ app.get("/conversations/:id", async (req, res) => {
   }
   const emailDraft = conv.emailDraft ?? null;
   const leadSource = conv.lead?.source ?? null;
-  const walkIn = inferWalkIn(conv) ? true : null;
+  const walkIn = inferDisplayWalkIn(conv) ? true : null;
   res.json({
     ok: true,
     systemMode: getSystemMode(),
