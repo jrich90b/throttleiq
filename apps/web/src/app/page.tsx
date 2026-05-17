@@ -13457,7 +13457,7 @@ export default function Home() {
               <div className="text-sm text-gray-500">No KPI data available for the selected filters.</div>
             ) : (
               <>
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
                   <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
                     <div className="absolute right-4 top-4 h-12 w-16 skew-x-[-18deg] border-r-2 border-t-2 border-emerald-300/50" />
                     <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Response coverage</div>
@@ -13472,6 +13472,14 @@ export default function Home() {
                     <div className="mt-2 text-4xl font-semibold leading-none">{kpiOverview.totals.appointmentCount}</div>
                     <div className="mt-3 inline-flex rounded-full bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-200">
                       {kpiPct(kpiOverview.totals.appointmentRatePct)} appointment rate
+                    </div>
+                  </div>
+                  <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
+                    <div className="absolute right-4 top-4 h-12 w-16 skew-x-[-18deg] border-r-2 border-t-2 border-emerald-300/50" />
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Appointment kept rate</div>
+                    <div className="mt-2 text-4xl font-semibold leading-none">{kpiPct(kpiOverview.totals.appointmentShowRatePct)}</div>
+                    <div className="mt-3 inline-flex rounded-full bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                      {kpiOverview.totals.appointmentShowedCount} kept of {kpiOverview.totals.appointmentCount} booked
                     </div>
                   </div>
                   <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
