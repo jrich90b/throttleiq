@@ -457,7 +457,21 @@ function startsWithWebLeadAdf(conv: Conversation): boolean {
   return String(firstInbound?.provider ?? "").trim().toLowerCase() === "sendgrid_adf";
 }
 
+function hasPriorLeadAssociation(conv: Conversation): boolean {
+  const originalLeadRef = String(conv.originalLead?.leadRef ?? "").trim();
+  const currentLeadRef = String(conv.lead?.leadRef ?? "").trim();
+  if (originalLeadRef && (!currentLeadRef || originalLeadRef !== currentLeadRef)) return true;
+
+  const originalSource = String(conv.originalLead?.source ?? "").trim();
+  return !!originalSource && originalSource.toLowerCase() !== String(conv.lead?.source ?? "").trim().toLowerCase();
+}
+
+function isStandaloneDlaTestRideLead(conv: Conversation): boolean {
+  return isDlaTestRideLead(conv) && !hasPriorLeadAssociation(conv);
+}
+
 function isExcludedFromOnlineKpiBucket(conv: Conversation): boolean {
+  if (isStandaloneDlaTestRideLead(conv)) return true;
   if (startsWithWebLeadAdf(conv)) return false;
   return isWalkInKpiBucket(conv);
 }
