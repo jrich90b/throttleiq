@@ -19,6 +19,8 @@ type BusinessHoursConfig = {
   businessHours: Record<string, { open: string | null; close: string | null }>;
 };
 const FALLBACK_TIMEZONE = "America/New_York";
+const KPI_LEAD_CYCLE_WINDOW_DAYS = 120;
+const KPI_LEAD_CYCLE_WINDOW_MS = KPI_LEAD_CYCLE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const SHOWED_APPOINTMENT_OUTCOME_STATUSES = new Set([
   "showed_up",
   "sold",
@@ -421,28 +423,78 @@ function firstCallAttempt(
   return best;
 }
 
+function leadRefFromAdfBody(body: string): string {
+  const text = String(body ?? "");
+  return (
+    text.match(/(?:^|\n)\s*Ref:\s*([^\n]+)/i)?.[1]?.trim() ||
+    text.match(/(?:^|\n)\s*Lead\s*Ref:\s*([^\n]+)/i)?.[1]?.trim() ||
+    ""
+  );
+}
+
+function adfMessageAtForLeadRef(conv: Conversation, leadRef: string): number | null {
+  const ref = String(leadRef ?? "").trim();
+  if (!ref) return null;
+  for (const message of conv.messages ?? []) {
+    if (message.direction !== "in") continue;
+    if (String(message.provider ?? "").trim().toLowerCase() !== "sendgrid_adf") continue;
+    if (leadRefFromAdfBody(message.body) !== ref) continue;
+    const atMs = toMs(message.at);
+    if (atMs != null) return atMs;
+  }
+  return null;
+}
+
+function leadCycleAtMs(conv: Conversation, lead: Conversation["lead"]): number | null {
+  const leadRef = String(lead?.leadRef ?? "").trim();
+  return adfMessageAtForLeadRef(conv, leadRef) ?? toMs(conv.createdAt);
+}
+
+function activeKpiLeadCycle(conv: Conversation): { lead: Conversation["lead"]; atMs: number | null } {
+  const primaryLead = conv.lead;
+  const latestLead = conv.latestLead;
+  const primaryRef = String(primaryLead?.leadRef ?? "").trim();
+  const latestRef = String(latestLead?.leadRef ?? "").trim();
+  const primaryAtMs = leadCycleAtMs(conv, primaryLead);
+
+  if (latestLead && latestRef && latestRef !== primaryRef) {
+    const latestAtMs = leadCycleAtMs(conv, latestLead);
+    if (latestAtMs != null && primaryAtMs != null && latestAtMs - primaryAtMs > KPI_LEAD_CYCLE_WINDOW_MS) {
+      return { lead: latestLead, atMs: latestAtMs };
+    }
+  }
+
+  return { lead: primaryLead, atMs: primaryAtMs };
+}
+
 function sourceLabel(conv: Conversation): string {
-  const src = String(conv.lead?.source ?? "").trim();
+  const src = String(activeKpiLeadCycle(conv).lead?.source ?? "").trim();
   return src || "Unknown";
 }
 
 function isWalkIn(conv: Conversation): boolean {
-  if (conv.lead?.walkIn) return true;
-  return /traffic log pro/i.test(String(conv.lead?.source ?? ""));
+  const lead = activeKpiLeadCycle(conv).lead;
+  if (lead?.walkIn) return true;
+  return /traffic log pro/i.test(String(lead?.source ?? ""));
 }
 
 function isDlaTestRideLead(conv: Conversation): boolean {
-  const leadSource = String(conv.lead?.source ?? "").toLowerCase();
+  const lead = activeKpiLeadCycle(conv).lead;
+  const leadSource = String(lead?.source ?? "").toLowerCase();
   if (!leadSource.includes("dealer lead app")) return false;
 
   const bucket = String(conv.classification?.bucket ?? "").toLowerCase();
   if (bucket === "test_ride") return true;
 
-  const walkInComment = String(conv.lead?.walkInComment ?? "");
+  const walkInComment = String(lead?.walkInComment ?? "");
   if (/\b(dealer test ride|demo bikes ridden|test ride|demo ride)\b/i.test(walkInComment)) return true;
 
+  const leadRef = String(lead?.leadRef ?? "").trim();
   const firstAdfInbound = (conv.messages ?? []).find(
-    m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "sendgrid_adf"
+    m =>
+      m.direction === "in" &&
+      String(m.provider ?? "").toLowerCase() === "sendgrid_adf" &&
+      (!leadRef || leadRefFromAdfBody(m.body) === leadRef)
   );
   const adfBody = String(firstAdfInbound?.body ?? "");
   return /\b(dealer test ride|demo bikes ridden|test ride|demo ride)\b/i.test(adfBody);
@@ -453,8 +505,13 @@ function isWalkInKpiBucket(conv: Conversation): boolean {
 }
 
 function startsWithWebLeadAdf(conv: Conversation): boolean {
-  const firstInbound = (conv.messages ?? []).find(m => m.direction === "in");
-  return String(firstInbound?.provider ?? "").trim().toLowerCase() === "sendgrid_adf";
+  const active = activeKpiLeadCycle(conv);
+  const leadRef = String(active.lead?.leadRef ?? "").trim();
+  if (!leadRef) {
+    const firstInbound = (conv.messages ?? []).find(m => m.direction === "in");
+    return String(firstInbound?.provider ?? "").trim().toLowerCase() === "sendgrid_adf";
+  }
+  return adfMessageAtForLeadRef(conv, leadRef) != null;
 }
 
 function hasPriorLeadAssociation(conv: Conversation): boolean {
@@ -467,7 +524,10 @@ function hasPriorLeadAssociation(conv: Conversation): boolean {
 }
 
 function isStandaloneDlaTestRideLead(conv: Conversation): boolean {
-  return isDlaTestRideLead(conv) && !hasPriorLeadAssociation(conv);
+  const activeRef = String(activeKpiLeadCycle(conv).lead?.leadRef ?? "").trim();
+  const primaryRef = String(conv.lead?.leadRef ?? "").trim();
+  const activeIsNewCycle = !!activeRef && !!primaryRef && activeRef !== primaryRef;
+  return isDlaTestRideLead(conv) && (activeIsNewCycle || !hasPriorLeadAssociation(conv));
 }
 
 function isExcludedFromOnlineKpiBucket(conv: Conversation): boolean {
@@ -477,18 +537,19 @@ function isExcludedFromOnlineKpiBucket(conv: Conversation): boolean {
 }
 
 function normalizeCondition(conv: Conversation): "new" | "used" | "unknown" {
-  const raw = String(conv.lead?.vehicle?.condition ?? "").trim().toLowerCase();
+  const raw = String(activeKpiLeadCycle(conv).lead?.vehicle?.condition ?? "").trim().toLowerCase();
   if (raw === "new") return "new";
   if (raw === "used" || raw === "preowned" || raw === "pre-owned") return "used";
   return "unknown";
 }
 
 function motorcycleLabel(conv: Conversation): string {
-  const year = String(conv.lead?.vehicle?.year ?? "").trim();
-  const make = String(conv.lead?.vehicle?.make ?? "").trim();
-  const model = String(conv.lead?.vehicle?.model ?? "").trim();
-  const trim = String(conv.lead?.vehicle?.trim ?? "").trim();
-  const description = String(conv.lead?.vehicle?.description ?? "").trim();
+  const lead = activeKpiLeadCycle(conv).lead;
+  const year = String(lead?.vehicle?.year ?? "").trim();
+  const make = String(lead?.vehicle?.make ?? "").trim();
+  const model = String(lead?.vehicle?.model ?? "").trim();
+  const trim = String(lead?.vehicle?.trim ?? "").trim();
+  const description = String(lead?.vehicle?.description ?? "").trim();
   const core = [year, make, model, trim].filter(Boolean).join(" ").trim();
   if (core) return core.replace(/\s+/g, " ");
   if (description) return description.replace(/\s+/g, " ");
@@ -496,11 +557,12 @@ function motorcycleLabel(conv: Conversation): string {
 }
 
 function leadDisplayName(conv: Conversation): string {
-  const first = String(conv.lead?.firstName ?? "").trim();
-  const last = String(conv.lead?.lastName ?? "").trim();
+  const lead = activeKpiLeadCycle(conv).lead;
+  const first = String(lead?.firstName ?? "").trim();
+  const last = String(lead?.lastName ?? "").trim();
   const combined = [first, last].filter(Boolean).join(" ").trim();
   if (combined) return combined;
-  const fallback = String((conv.lead as any)?.name ?? "").trim();
+  const fallback = String((lead as any)?.name ?? "").trim();
   if (fallback) return fallback;
   return String(conv.leadKey ?? conv.id ?? "Unknown lead").trim();
 }
@@ -588,7 +650,7 @@ function leadMatchesFilters(
   fromBoundMs: number,
   toBoundMs: number
 ): boolean {
-  const createdMs = toMs(conv.createdAt);
+  const createdMs = activeKpiLeadCycle(conv).atMs;
   if (createdMs == null) return false;
   if (createdMs < fromBoundMs || createdMs > toBoundMs) return false;
 
@@ -624,11 +686,13 @@ function leadMatchesFilters(
 }
 
 function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewOptions): LeadStatsRow {
+  const activeCycle = activeKpiLeadCycle(conv);
+  const activeLead = activeCycle.lead;
   const inboundAt = firstInbound(conv.messages);
   const outboundAt = firstOutboundResponse(conv.messages, inboundAt);
   const callAttempt = firstCallAttempt(conv, inboundAt, filters.callOwnerId ?? "all");
   const callAt = callAttempt?.atMs ?? null;
-  const createdAt = toMs(conv.createdAt);
+  const createdAt = activeCycle.atMs;
   const soldAt = toMs(conv.sale?.soldAt) ?? (conv.closedReason === "sold" ? toMs(conv.closedAt) : null);
   const closedAt = toMs(conv.closedAt);
   const sold = soldAt != null;
@@ -660,7 +724,7 @@ function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewO
     convId: String(conv.id ?? ""),
     leadKey: String(conv.leadKey ?? conv.id ?? ""),
     leadName: leadDisplayName(conv),
-    leadPhone: String(conv.lead?.phone ?? "").trim(),
+    leadPhone: String(activeLead?.phone ?? conv.lead?.phone ?? "").trim(),
     source: sourceLabel(conv),
     ownerId: String(conv.leadOwner?.id ?? "").trim(),
     ownerName: String(conv.leadOwner?.name ?? "").trim(),
