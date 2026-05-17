@@ -73,6 +73,9 @@ export type KpiTotals = {
 export type KpiSourceRow = {
   source: string;
   leadCount: number;
+  appointmentCount: number;
+  appointmentShowedCount: number;
+  soldCount: number;
   responseRatePct: number;
   appointmentRatePct: number;
   appointmentShowRatePct: number;
@@ -942,6 +945,9 @@ export function buildKpiOverview(
       return {
         source,
         leadCount: total,
+        appointmentCount: appointments,
+        appointmentShowedCount: appointmentsShowed,
+        soldCount: sold,
         responseRatePct: clampPct(responded, total),
         appointmentRatePct: clampPct(appointments, total),
         appointmentShowRatePct: clampPct(appointmentsShowed, appointments),

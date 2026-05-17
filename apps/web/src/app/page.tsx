@@ -1513,6 +1513,9 @@ type KpiOverview = {
   bySource: Array<{
     source: string;
     leadCount: number;
+    appointmentCount: number;
+    appointmentShowedCount: number;
+    soldCount: number;
     responseRatePct: number;
     appointmentRatePct: number;
     appointmentShowRatePct: number;
@@ -1574,6 +1577,12 @@ function kpiMinutes(value: number | null | undefined): string {
 function kpiWidth(value: number | null | undefined, max: number): string {
   if (!max || max <= 0) return "0%";
   const pct = Math.max(4, Math.min(100, ((value ?? 0) / max) * 100));
+  return `${pct}%`;
+}
+
+function kpiExactWidth(value: number | null | undefined, max: number): string {
+  if (!max || max <= 0 || !value) return "0%";
+  const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return `${pct}%`;
 }
 
@@ -13640,29 +13649,47 @@ export default function Home() {
                         <div className="mt-1 text-2xl font-semibold">Top channels</div>
                       </div>
                       <div className="rounded-full bg-emerald-400/15 px-3 py-1 text-xs font-semibold text-emerald-200">
-                        Sold + booked
+                        Leads to outcomes
                       </div>
                     </div>
-                    <div className="mt-5 space-y-3">
-                      {kpiOverview.bySource.slice(0, 5).map(row => (
-                        <div key={`kpi-source-bar-${row.source}`} className="grid grid-cols-[140px_1fr_54px] items-center gap-3 text-sm">
-                          <span className="truncate text-slate-300" title={row.source}>
-                            {row.source}
-                          </span>
-                          <div className="h-3 overflow-hidden rounded-full bg-white/10">
-                            <div
-                              className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-100"
-                              style={{ width: `${Math.max(4, Math.min(100, row.appointmentRatePct + row.soldCloseRatePct))}%` }}
-                            />
+                    <div className="mt-5 space-y-4">
+                      {kpiOverview.bySource.slice(0, 5).map(row => {
+                        const bookedPct = Math.min(100, Math.max(0, row.appointmentRatePct));
+                        const keptPct = Math.min(100, Math.max(0, row.appointmentShowRatePct));
+                        const soldPct = Math.min(100, Math.max(0, row.soldCloseRatePct));
+                        return (
+                          <div key={`kpi-source-bar-${row.source}`} className="space-y-1.5">
+                            <div className="grid grid-cols-[1fr_auto] items-baseline gap-3 text-sm">
+                              <span className="truncate font-semibold text-slate-200" title={row.source}>
+                                {row.source}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {row.leadCount} leads
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+                              <div className="relative h-4 overflow-hidden rounded-full bg-white/10">
+                                <div className="absolute inset-y-0 left-0 rounded-full bg-blue-400/80" style={{ width: kpiExactWidth(row.appointmentCount, row.leadCount) }} />
+                                <div className="absolute inset-y-0 left-0 rounded-full bg-emerald-300/90" style={{ width: kpiExactWidth(row.appointmentShowedCount, row.leadCount) }} />
+                                <div className="absolute inset-y-0 left-0 rounded-full bg-amber-300" style={{ width: kpiExactWidth(row.soldCount, row.leadCount) }} />
+                              </div>
+                              <span className="w-24 text-right text-xs font-semibold text-white">
+                                {row.appointmentCount} booked / {row.appointmentShowedCount} kept / {row.soldCount} sold
+                              </span>
+                            </div>
+                            <div className="flex gap-3 text-[11px] text-slate-400">
+                              <span>{kpiPct(bookedPct)} booked</span>
+                              <span>{kpiPct(keptPct)} kept</span>
+                              <span>{kpiPct(soldPct)} close</span>
+                            </div>
                           </div>
-                          <strong className="text-right text-white">{kpiPct(row.appointmentRatePct)}</strong>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                    <div className="mt-5 flex min-h-10 overflow-hidden rounded-lg text-xs font-bold text-[#0d1119]">
-                      <span className="grid flex-[1.1] place-items-center bg-emerald-400">Sold</span>
-                      <span className="grid flex-1 place-items-center bg-emerald-200">Showed</span>
-                      <span className="grid flex-[.7] place-items-center bg-amber-300">Follow-up</span>
+                    <div className="mt-5 flex flex-wrap gap-3 text-xs text-slate-300">
+                      <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-400" />Booked</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />Kept</span>
+                      <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-amber-300" />Sold</span>
                     </div>
                   </div>
                 </div>
