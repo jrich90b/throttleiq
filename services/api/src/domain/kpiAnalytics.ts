@@ -95,6 +95,8 @@ export type KpiTrendRow = {
   leadCount: number;
   respondedCount: number;
   responseRatePct: number;
+  avgFirstResponseMinutes: number | null;
+  medianFirstResponseMinutes: number | null;
   appointmentCount: number;
   appointmentShowedCount: number;
   callCount: number;
@@ -1000,6 +1002,10 @@ export function buildKpiOverview(
     .map(([day, rows]) => {
       const leadCount = rows.length;
       const respondedCount = rows.filter(r => r.responded).length;
+      const responseTimes = rows
+        .filter(r => !r.excludeFromResponseTiming)
+        .map(r => r.responseMinutes)
+        .filter((v): v is number => v != null);
       const appointmentCount = rows.filter(r => r.appointment).length;
       const appointmentShowedCount = rows.filter(r => r.appointment && r.appointmentShowed).length;
       const callCount = rows.filter(r => r.called).length;
@@ -1009,6 +1015,8 @@ export function buildKpiOverview(
         leadCount,
         respondedCount,
         responseRatePct: clampPct(respondedCount, leadCount),
+        avgFirstResponseMinutes: avg(responseTimes),
+        medianFirstResponseMinutes: median(responseTimes),
         appointmentCount,
         appointmentShowedCount,
         callCount,

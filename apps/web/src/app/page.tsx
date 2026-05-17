@@ -1539,6 +1539,8 @@ type KpiOverview = {
     leadCount: number;
     respondedCount: number;
     responseRatePct: number;
+    avgFirstResponseMinutes: number | null;
+    medianFirstResponseMinutes: number | null;
     appointmentCount: number;
     appointmentShowedCount: number;
     callCount: number;
@@ -13535,31 +13537,74 @@ export default function Home() {
                         Avg {kpiMinutes(kpiOverview.totals.avgFirstResponseMinutes)}
                       </div>
                     </div>
-                    <svg className="mt-4 h-44 w-full" viewBox="0 0 360 180" role="img" aria-label="First response trend">
-                      <path d="M20 40H340M20 90H340M20 140H340" fill="none" stroke="rgba(255,255,255,.09)" />
-                      <path
-                        d="M28 44 C82 72, 104 106, 158 96 S246 122, 332 142"
-                        fill="none"
-                        stroke="rgba(110,231,183,.16)"
-                        strokeLinecap="round"
-                        strokeWidth="16"
-                      />
-                      <path
-                        d="M28 44 C82 72, 104 106, 158 96 S246 122, 332 142"
-                        fill="none"
-                        stroke="#8ee2aa"
-                        strokeLinecap="round"
-                        strokeWidth="4"
-                      />
-                      <circle cx="28" cy="44" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
-                      <circle cx="158" cy="96" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
-                      <circle cx="332" cy="142" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
-                    </svg>
-                    <div className="flex justify-between text-xs text-slate-400">
-                      <span>Slower</span>
-                      <span>Faster</span>
-                      <span>Best</span>
-                    </div>
+                    {(() => {
+                      const points = kpiOverview.trend
+                        .filter(row => row.medianFirstResponseMinutes != null)
+                        .map(row => ({
+                          day: row.day,
+                          minutes: Number(row.medianFirstResponseMinutes ?? 0)
+                        }));
+                      const chartWidth = 420;
+                      const chartHeight = 210;
+                      const left = 48;
+                      const right = 18;
+                      const top = 18;
+                      const bottom = 42;
+                      const plotWidth = chartWidth - left - right;
+                      const plotHeight = chartHeight - top - bottom;
+                      const maxMinutes = Math.max(10, ...points.map(point => point.minutes));
+                      const yMax = Math.ceil(maxMinutes / 10) * 10;
+                      const xFor = (index: number) =>
+                        points.length <= 1 ? left + plotWidth / 2 : left + (index / (points.length - 1)) * plotWidth;
+                      const yFor = (minutes: number) => top + plotHeight - (Math.min(minutes, yMax) / yMax) * plotHeight;
+                      const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${xFor(index)} ${yFor(point.minutes)}`).join(" ");
+                      const firstDay = points[0]?.day ? new Date(`${points[0].day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+                      const lastDay = points.at(-1)?.day
+                        ? new Date(`${points.at(-1)?.day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+                        : "";
+
+                      if (points.length === 0) {
+                        return <div className="mt-5 rounded-lg border border-white/10 bg-white/5 p-5 text-sm text-slate-300">No daily response-speed data for this filter.</div>;
+                      }
+
+                      return (
+                        <div className="mt-4">
+                          <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                            <span>Daily median response time</span>
+                            <span>Lower is better</span>
+                          </div>
+                          <svg className="h-52 w-full" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily median first response time in minutes">
+                            {[0, 0.5, 1].map(tick => {
+                              const y = top + plotHeight * tick;
+                              const value = Math.round(yMax * (1 - tick));
+                              return (
+                                <g key={`speed-tick-${tick}`}>
+                                  <path d={`M${left} ${y}H${chartWidth - right}`} fill="none" stroke="rgba(255,255,255,.1)" />
+                                  <text x={left - 8} y={y + 4} textAnchor="end" className="fill-slate-400 text-[10px]">
+                                    {value}m
+                                  </text>
+                                </g>
+                              );
+                            })}
+                            <path d={`M${left} ${top}V${top + plotHeight}H${chartWidth - right}`} fill="none" stroke="rgba(255,255,255,.22)" />
+                            <path d={path} fill="none" stroke="rgba(110,231,183,.18)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="12" />
+                            <path d={path} fill="none" stroke="#8ee2aa" strokeLinecap="round" strokeLinejoin="round" strokeWidth="4" />
+                            {points.map((point, index) => (
+                              <circle key={`speed-point-${point.day}`} cx={xFor(index)} cy={yFor(point.minutes)} r="4" fill="#c6ffd7" stroke="#0e1420" strokeWidth="3" />
+                            ))}
+                            <text x={left} y={chartHeight - 14} textAnchor="start" className="fill-slate-400 text-[10px]">
+                              {firstDay}
+                            </text>
+                            <text x={chartWidth - right} y={chartHeight - 14} textAnchor="end" className="fill-slate-400 text-[10px]">
+                              {lastDay}
+                            </text>
+                            <text x={(left + chartWidth - right) / 2} y={chartHeight - 14} textAnchor="middle" className="fill-slate-500 text-[10px]">
+                              Selected range
+                            </text>
+                          </svg>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div className="rounded-lg border border-emerald-400/15 bg-[#0e1420] p-4 text-white shadow-lg">
