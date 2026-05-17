@@ -11621,17 +11621,20 @@ export default function Home() {
                 90d
               </button>
             </div>
-            <select
-              className="w-full border rounded px-3 py-2 text-sm"
-              value={kpiLeadScopeFilter}
-              onChange={e =>
-                setKpiLeadScopeFilter((e.target.value as KpiLeadScope) || "online_only")
-              }
-            >
-              <option value="online_only">Online / Web ADF</option>
-              <option value="walkin_only">Walk-in</option>
-              <option value="include_walkins">All</option>
-            </select>
+            <div>
+              <div className="text-xs text-gray-600 mb-1">Lead origin</div>
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={kpiLeadScopeFilter}
+                onChange={e =>
+                  setKpiLeadScopeFilter((e.target.value as KpiLeadScope) || "online_only")
+                }
+              >
+                <option value="online_only">Online / Web ADF</option>
+                <option value="walkin_only">Walk-in / DLA</option>
+                <option value="include_walkins">All origins</option>
+              </select>
+            </div>
             <select
               className="w-full border rounded px-3 py-2 text-sm"
               value={kpiSourceFilter}
