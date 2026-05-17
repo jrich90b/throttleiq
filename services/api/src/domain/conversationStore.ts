@@ -552,6 +552,7 @@ export type Conversation = {
   };
   lead?: LeadProfile;
   originalLead?: LeadProfile;
+  latestLead?: LeadProfile;
   classification?: { bucket?: string; cta?: string; channel?: string; ruleName?: string };
   appointment?: AppointmentMemory;
   dealerRide?: {
@@ -1821,6 +1822,7 @@ export function setMessageFeedback(
 
 export function mergeConversationLead(conv: Conversation, patch: Partial<LeadProfile>): Conversation {
   const existingLead = conv.lead ?? {};
+  const normalizeLeadRef = (value: unknown): string => String(value ?? "").trim();
   const cloneLeadProfile = (lead: Partial<LeadProfile> | undefined): LeadProfile | undefined => {
     if (!lead) return undefined;
     return {
@@ -1845,6 +1847,34 @@ export function mergeConversationLead(conv: Conversation, patch: Partial<LeadPro
   if (!conv.originalLead && hasLeadProfileData(existingLead)) {
     conv.originalLead = cloneLeadProfile(existingLead);
   }
+  const existingLeadRef = normalizeLeadRef(existingLead.leadRef);
+  const patchLeadRef = normalizeLeadRef(patch.leadRef);
+  const shouldKeepPrimaryLead =
+    hasLeadProfileData(existingLead) &&
+    !!existingLeadRef &&
+    !!patchLeadRef &&
+    existingLeadRef !== patchLeadRef;
+
+  if (shouldKeepPrimaryLead) {
+    const existingLatestLead =
+      normalizeLeadRef(conv.latestLead?.leadRef) === patchLeadRef ? (conv.latestLead ?? {}) : {};
+    const mergedLatestVehicle = patch.vehicle
+      ? { ...(existingLatestLead.vehicle ?? {}), ...patch.vehicle }
+      : existingLatestLead.vehicle;
+    const mergedLatestTradeVehicle = patch.tradeVehicle
+      ? { ...(existingLatestLead.tradeVehicle ?? {}), ...patch.tradeVehicle }
+      : existingLatestLead.tradeVehicle;
+    conv.latestLead = {
+      ...existingLatestLead,
+      ...patch,
+      vehicle: mergedLatestVehicle,
+      tradeVehicle: mergedLatestTradeVehicle
+    };
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return conv;
+  }
+
   const mergedVehicle = patch.vehicle
     ? { ...(existingLead.vehicle ?? {}), ...patch.vehicle }
     : existingLead.vehicle;

@@ -3566,17 +3566,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     },
     tradeVehicle: lead.tradeVehicle
   });
+  const normalizedIncomingLeadRef = String(leadRef ?? "").trim();
+  const incomingLeadProfile =
+    normalizedIncomingLeadRef &&
+    String(conv.latestLead?.leadRef ?? "").trim() === normalizedIncomingLeadRef &&
+    String(conv.lead?.leadRef ?? "").trim() !== normalizedIncomingLeadRef
+      ? conv.latestLead
+      : conv.lead;
   const stockId = lead.stockId?.trim() || undefined;
-  conv.lead = conv.lead ?? {};
-  conv.lead.vehicle = conv.lead.vehicle ?? {};
-  if (stockId) conv.lead.vehicle.stockId = stockId;
+  if (!incomingLeadProfile) {
+    conv.lead = conv.lead ?? {};
+  }
+  const adfLeadProfile = incomingLeadProfile ?? conv.lead!;
+  adfLeadProfile.vehicle = adfLeadProfile.vehicle ?? {};
+  if (stockId) adfLeadProfile.vehicle.stockId = stockId;
   const parsedCondition = normalizeVehicleCondition(lead.vehicleCondition);
   if (parsedCondition) {
-    conv.lead.vehicle.condition = parsedCondition;
+    adfLeadProfile.vehicle.condition = parsedCondition;
   } else if (stockId) {
-    conv.lead.vehicle.condition = /^u/i.test(stockId) ? "used" : "new";
+    adfLeadProfile.vehicle.condition = /^u/i.test(stockId) ? "used" : "new";
   } else {
-    conv.lead.vehicle.condition = "new_model_interest";
+    adfLeadProfile.vehicle.condition = "new_model_interest";
   }
   const nonSalesPromotionLead = isRideChallengeLeadSignal({
     leadSource,
@@ -3584,21 +3594,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     journeyText
   });
   const shouldNormalizeLegacyNewCondition =
-    conv.lead.vehicle.condition === "new" &&
+    adfLeadProfile.vehicle.condition === "new" &&
     !nonSalesPromotionLead &&
     (isStrictSalesTradeBucket(rule.bucket) ||
-      !!String(conv.lead.vehicle.stockId ?? "").trim() ||
-      !!String(conv.lead.vehicle.vin ?? "").trim() ||
-      !!String(conv.lead.vehicle.model ?? "").trim());
+      !!String(adfLeadProfile.vehicle.stockId ?? "").trim() ||
+      !!String(adfLeadProfile.vehicle.vin ?? "").trim() ||
+      !!String(adfLeadProfile.vehicle.model ?? "").trim());
   if (shouldNormalizeLegacyNewCondition) {
     const normalizedLeadCondition = await normalizeLegacyNewLeadCondition({
       condition: "new",
-      year: conv.lead.vehicle.year,
-      model: conv.lead.vehicle.model,
-      make: conv.lead.vehicle.make
+      year: adfLeadProfile.vehicle.year,
+      model: adfLeadProfile.vehicle.model,
+      make: adfLeadProfile.vehicle.make
     });
     if (normalizedLeadCondition && normalizedLeadCondition !== "new") {
-      conv.lead.vehicle.condition = normalizedLeadCondition;
+      adfLeadProfile.vehicle.condition = normalizedLeadCondition;
     }
   }
 
@@ -3622,7 +3632,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     model: model ?? meta.model,
     trim: lead.vehicleTrim,
     color: lead.vehicleColor,
-    condition: conv.lead?.vehicle?.condition ?? parsedCondition ?? undefined,
+    condition: adfLeadProfile.vehicle?.condition ?? parsedCondition ?? undefined,
     inquiry: lead.inquiry,
     lastAdfAt: new Date().toISOString()
   });
@@ -3654,10 +3664,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     effectiveInquiry = sanitizedTradeInquiry || "trade-in appraisal request";
   }
   lead.inquiry = effectiveInquiry;
-  conv.lead = {
-    ...(conv.lead ?? {}),
-    inquiry: effectiveInquiry || undefined
-  };
+  adfLeadProfile.inquiry = effectiveInquiry || undefined;
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
     [

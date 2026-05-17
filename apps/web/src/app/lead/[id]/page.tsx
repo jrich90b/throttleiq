@@ -36,6 +36,7 @@ type Conversation = {
   leadKey: string;
   lead?: LeadProfile;
   originalLead?: LeadProfile;
+  latestLead?: LeadProfile;
   lastInbound?: { body?: string };
 };
 
@@ -86,10 +87,14 @@ export default function LeadDetailsPage() {
 
   const lead = conv?.lead ?? {};
   const originalLead = conv?.originalLead;
+  const latestLead = conv?.latestLead;
   const displayLead = lead;
   const hasOriginalLead =
     !!originalLead &&
     JSON.stringify(originalLead) !== JSON.stringify(lead);
+  const hasLatestLead =
+    !!latestLead &&
+    JSON.stringify(latestLead) !== JSON.stringify(lead);
   const leadName = useMemo(() => {
     const raw = displayLead?.name?.trim() ?? lead?.name?.trim() ?? "";
     const first = displayLead?.firstName ?? lead?.firstName ?? "";
@@ -186,6 +191,27 @@ export default function LeadDetailsPage() {
                       .filter(Boolean)
                       .join(" ") || "—"}
                   </div>
+                </div>
+              </div>
+            ) : null}
+
+            {hasLatestLead ? (
+              <div className="border rounded-lg bg-white p-4">
+                <div className="text-sm font-medium text-gray-800">Latest ADF Update</div>
+                <div className="mt-2 space-y-1 text-sm text-gray-700">
+                  <div>Source: {latestLead?.source ?? "—"}</div>
+                  <div>Lead Ref: {latestLead?.leadRef ?? "—"}</div>
+                  <div>
+                    Vehicle:{" "}
+                    {[
+                      latestLead?.vehicle?.year,
+                      latestLead?.vehicle?.model ?? latestLead?.vehicle?.description,
+                      latestLead?.vehicle?.color
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || "—"}
+                  </div>
+                  {latestLead?.purchaseTimeframe ? <div>Purchase Timeframe: {latestLead.purchaseTimeframe}</div> : null}
                 </div>
               </div>
             ) : null}
