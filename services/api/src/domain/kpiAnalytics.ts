@@ -607,8 +607,8 @@ function leadMatchesFilters(
   const leadScope = (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
     "include_walkins") as LeadScopeFilter;
   if (leadScope === "online_only" && isExcludedFromOnlineKpiBucket(conv)) return false;
-  if (leadScope === "walkin_only" && !isWalkInKpiBucket(conv)) return false;
-  if (leadType === "walk_in" && !isWalkInKpiBucket(conv)) return false;
+  if (leadScope === "walkin_only" && !isExcludedFromOnlineKpiBucket(conv)) return false;
+  if (leadType === "walk_in" && !isExcludedFromOnlineKpiBucket(conv)) return false;
   if (leadType === "new" && normalizeCondition(conv) !== "new") return false;
   if (leadType === "used" && normalizeCondition(conv) !== "used") return false;
 
@@ -633,7 +633,7 @@ function toLeadStats(conv: Conversation, filters: KpiFilters, opts: KpiOverviewO
   const closedAt = toMs(conv.closedAt);
   const sold = soldAt != null;
   const closed = String(conv.status ?? "").toLowerCase() === "closed";
-  const excludeFromResponseTiming = isWalkInKpiBucket(conv);
+  const excludeFromResponseTiming = isExcludedFromOnlineKpiBucket(conv);
 
   const responseMinutes =
     inboundAt != null && outboundAt != null

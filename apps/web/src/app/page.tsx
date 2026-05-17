@@ -11631,7 +11631,7 @@ export default function Home() {
                 }
               >
                 <option value="online_only">Online / Web ADF</option>
-                <option value="walkin_only">Walk-in / DLA</option>
+                <option value="walkin_only">Walk-in / standalone DLA</option>
                 <option value="include_walkins">All origins</option>
               </select>
             </div>
