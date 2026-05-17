@@ -1558,6 +1558,23 @@ type KpiOverview = {
   }>;
 };
 
+function kpiPct(value: number | null | undefined): string {
+  return `${Number(value ?? 0).toFixed(1)}%`;
+}
+
+function kpiMinutes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "N/A";
+  if (value < 60) return `${value}m`;
+  const hours = value / 60;
+  return `${hours.toFixed(hours >= 10 ? 0 : 1)}h`;
+}
+
+function kpiWidth(value: number | null | undefined, max: number): string {
+  if (!max || max <= 0) return "0%";
+  const pct = Math.max(4, Math.min(100, ((value ?? 0) / max) * 100));
+  return `${pct}%`;
+}
+
 type CampaignBuildMode = "design_from_scratch" | "web_search_design";
 type CampaignChannel = "sms" | "email" | "both";
 type CampaignAssetTarget =
@@ -13437,100 +13454,175 @@ export default function Home() {
               <div className="text-sm text-gray-500">No KPI data available for the selected filters.</div>
             ) : (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Lead Volume</div>
-                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.leadVolume}</div>
-                  </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">% Responded</div>
-                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.responseRatePct.toFixed(2)}%</div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {kpiOverview.totals.respondedCount} responded
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                  <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
+                    <div className="absolute right-4 top-4 h-12 w-16 skew-x-[-18deg] border-r-2 border-t-2 border-emerald-300/50" />
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Response coverage</div>
+                    <div className="mt-2 text-4xl font-semibold leading-none">{kpiPct(kpiOverview.totals.responseRatePct)}</div>
+                    <div className="mt-3 inline-flex rounded-full bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                      {kpiOverview.totals.respondedCount} of {kpiOverview.totals.leadVolume} leads responded
                     </div>
                   </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Avg First Response</div>
-                    <div className="text-2xl font-semibold mt-1">
-                      {kpiOverview.totals.avgFirstResponseMinutes != null
-                        ? `${kpiOverview.totals.avgFirstResponseMinutes}m`
-                        : "N/A"}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Median:{" "}
-                      {kpiOverview.totals.medianFirstResponseMinutes != null
-                        ? `${kpiOverview.totals.medianFirstResponseMinutes}m`
-                        : "N/A"}
+                  <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
+                    <div className="absolute right-4 top-4 h-12 w-16 skew-x-[-18deg] border-r-2 border-t-2 border-emerald-300/50" />
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Appointments booked</div>
+                    <div className="mt-2 text-4xl font-semibold leading-none">{kpiOverview.totals.appointmentCount}</div>
+                    <div className="mt-3 inline-flex rounded-full bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                      {kpiPct(kpiOverview.totals.appointmentRatePct)} appointment rate
                     </div>
                   </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Appointment Rate</div>
-                    <div className="text-2xl font-semibold mt-1">
-                      {kpiOverview.totals.appointmentRatePct.toFixed(2)}%
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {kpiOverview.totals.appointmentCount} appointments
+                  <div className="relative overflow-hidden rounded-lg border border-emerald-400/20 bg-[#111827] p-4 text-white shadow-lg">
+                    <div className="absolute right-4 top-4 h-12 w-16 skew-x-[-18deg] border-r-2 border-t-2 border-emerald-300/50" />
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Sold close rate</div>
+                    <div className="mt-2 text-4xl font-semibold leading-none">{kpiPct(kpiOverview.totals.soldCloseRatePct)}</div>
+                    <div className="mt-3 inline-flex rounded-full bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                      {kpiOverview.totals.soldCount} sold units
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Call Rate</div>
-                    <div className="text-2xl font-semibold mt-1">{kpiOverview.totals.callRatePct.toFixed(2)}%</div>
-                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.callCount} called</div>
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="rounded-lg border border-emerald-400/15 bg-[#0e1420] p-4 text-white shadow-lg">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">Lead funnel</div>
+                        <div className="mt-1 text-2xl font-semibold">{kpiOverview.totals.leadVolume} leads</div>
+                      </div>
+                      <div className="rounded-full bg-emerald-400/15 px-3 py-1 text-xs font-semibold text-emerald-200">
+                        {kpiPct(kpiOverview.totals.responseRatePct)} responded
+                      </div>
+                    </div>
+                    <div className="mt-5 space-y-3">
+                      {[
+                        ["Leads", kpiOverview.totals.leadVolume],
+                        ["Responded", kpiOverview.totals.respondedCount],
+                        ["Called", kpiOverview.totals.callCount],
+                        ["Appointments", kpiOverview.totals.appointmentCount],
+                        ["Sold", kpiOverview.totals.soldCount]
+                      ].map(([label, value]) => (
+                        <div key={`kpi-funnel-${label}`} className="grid grid-cols-[100px_1fr_48px] items-center gap-3 text-sm">
+                          <span className="text-slate-300">{label}</span>
+                          <div className="h-3 overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-100"
+                              style={{ width: kpiWidth(Number(value), kpiOverview.totals.leadVolume) }}
+                            />
+                          </div>
+                          <strong className="text-right text-white">{value}</strong>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Time To Call</div>
-                    <div className="text-2xl font-semibold mt-1">
-                      {kpiOverview.totals.avgTimeToCallMinutes != null
-                        ? `${kpiOverview.totals.avgTimeToCallMinutes}m`
-                        : "N/A"}
+
+                  <div className="rounded-lg border border-emerald-400/15 bg-[#0e1420] p-4 text-white shadow-lg">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">Speed to lead</div>
+                        <div className="mt-1 text-2xl font-semibold">{kpiMinutes(kpiOverview.totals.medianFirstResponseMinutes)} median</div>
+                      </div>
+                      <div className="rounded-full bg-blue-400/15 px-3 py-1 text-xs font-semibold text-blue-200">
+                        Avg {kpiMinutes(kpiOverview.totals.avgFirstResponseMinutes)}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Median:{" "}
-                      {kpiOverview.totals.medianTimeToCallMinutes != null
-                        ? `${kpiOverview.totals.medianTimeToCallMinutes}m`
-                        : "N/A"}
+                    <svg className="mt-4 h-44 w-full" viewBox="0 0 360 180" role="img" aria-label="First response trend">
+                      <path d="M20 40H340M20 90H340M20 140H340" fill="none" stroke="rgba(255,255,255,.09)" />
+                      <path
+                        d="M28 44 C82 72, 104 106, 158 96 S246 122, 332 142"
+                        fill="none"
+                        stroke="rgba(110,231,183,.16)"
+                        strokeLinecap="round"
+                        strokeWidth="16"
+                      />
+                      <path
+                        d="M28 44 C82 72, 104 106, 158 96 S246 122, 332 142"
+                        fill="none"
+                        stroke="#8ee2aa"
+                        strokeLinecap="round"
+                        strokeWidth="4"
+                      />
+                      <circle cx="28" cy="44" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
+                      <circle cx="158" cy="96" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
+                      <circle cx="332" cy="142" r="5" fill="#c6ffd7" stroke="#0e1420" strokeWidth="4" />
+                    </svg>
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>Slower</span>
+                      <span>Faster</span>
+                      <span>Best</span>
                     </div>
                   </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Appointment Show Rate</div>
-                    <div className="text-2xl font-semibold mt-1">
-                      {kpiOverview.totals.appointmentShowRatePct.toFixed(2)}%
+
+                  <div className="rounded-lg border border-emerald-400/15 bg-[#0e1420] p-4 text-white shadow-lg">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">Appointments by setter</div>
+                        <div className="mt-1 text-2xl font-semibold">{kpiOverview.totals.appointmentCount} booked</div>
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {kpiOverview.totals.appointmentShowedCount} showed up
+                    <div className="mt-5 grid min-h-[170px] grid-cols-2 gap-3 sm:grid-cols-4">
+                      {kpiOverview.byAppointmentSetter.slice(0, 4).map(row => {
+                        const maxAppointments = Math.max(...kpiOverview.byAppointmentSetter.map(item => item.appointmentCount), 1);
+                        return (
+                          <div key={`kpi-setter-bar-${row.key}`} className="grid items-end justify-items-center gap-2">
+                            <strong>{row.appointmentCount}</strong>
+                            <div className="flex h-28 w-full items-end overflow-hidden rounded-lg bg-white/10">
+                              <div
+                                className="w-full rounded-lg bg-gradient-to-t from-emerald-500 to-emerald-100"
+                                style={{ height: kpiWidth(row.appointmentCount, maxAppointments) }}
+                              />
+                            </div>
+                            <span className="min-h-8 text-center text-xs text-slate-300">{row.label}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">Sold Close Rate</div>
-                    <div className="text-2xl font-semibold mt-1">
-                      {kpiOverview.totals.soldCloseRatePct.toFixed(2)}%
+
+                  <div className="rounded-lg border border-emerald-400/15 bg-[#0e1420] p-4 text-white shadow-lg">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-300">Source performance</div>
+                        <div className="mt-1 text-2xl font-semibold">Top channels</div>
+                      </div>
+                      <div className="rounded-full bg-emerald-400/15 px-3 py-1 text-xs font-semibold text-emerald-200">
+                        Sold + booked
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">{kpiOverview.totals.soldCount} sold</div>
+                    <div className="mt-5 space-y-3">
+                      {kpiOverview.bySource.slice(0, 5).map(row => (
+                        <div key={`kpi-source-bar-${row.source}`} className="grid grid-cols-[140px_1fr_54px] items-center gap-3 text-sm">
+                          <span className="truncate text-slate-300" title={row.source}>
+                            {row.source}
+                          </span>
+                          <div className="h-3 overflow-hidden rounded-full bg-white/10">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-100"
+                              style={{ width: `${Math.max(4, Math.min(100, row.appointmentRatePct + row.soldCloseRatePct))}%` }}
+                            />
+                          </div>
+                          <strong className="text-right text-white">{kpiPct(row.appointmentRatePct)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-5 flex min-h-10 overflow-hidden rounded-lg text-xs font-bold text-[#0d1119]">
+                      <span className="grid flex-[1.1] place-items-center bg-emerald-400">Sold</span>
+                      <span className="grid flex-1 place-items-center bg-emerald-200">Showed</span>
+                      <span className="grid flex-[.7] place-items-center bg-amber-300">Follow-up</span>
+                    </div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">30d Close</div>
-                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate30dPct.toFixed(2)}%</div>
-                  </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">60d Close</div>
-                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate60dPct.toFixed(2)}%</div>
-                  </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">90d Close</div>
-                    <div className="text-lg font-semibold mt-1">{kpiOverview.totals.closeRate90dPct.toFixed(2)}%</div>
-                  </div>
-                  <div className="border rounded-lg p-3 bg-white">
-                    <div className="text-xs text-gray-500">120d Close</div>
-                    <div className="text-lg font-semibold mt-1">
-                      {kpiOverview.totals.closeRate120dPct.toFixed(2)}%
+                  {[
+                    ["30d Close", kpiOverview.totals.closeRate30dPct],
+                    ["60d Close", kpiOverview.totals.closeRate60dPct],
+                    ["90d Close", kpiOverview.totals.closeRate90dPct],
+                    ["120d Close", kpiOverview.totals.closeRate120dPct]
+                  ].map(([label, value]) => (
+                    <div key={`kpi-close-${label}`} className="rounded-lg border border-emerald-400/15 bg-[#111827] p-3 text-white">
+                      <div className="text-xs text-slate-400">{label}</div>
+                      <div className="mt-1 text-lg font-semibold">{kpiPct(Number(value))}</div>
                     </div>
-                  </div>
+                  ))}
                 </div>
 
                 <div className="border rounded-lg bg-white overflow-hidden">
