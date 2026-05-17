@@ -13220,6 +13220,20 @@ function isVoiceProvider(msg: { provider?: string } | null | undefined): boolean
   );
 }
 
+function isManualFinanceHandoff(conv: any): boolean {
+  const mode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
+  const reason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  const bucket = String(conv?.classification?.bucket ?? "").trim().toLowerCase();
+  const cta = String(conv?.classification?.cta ?? "").trim().toLowerCase();
+  return (
+    mode === "manual_handoff" &&
+    (/(credit|finance|prequal|approval|payment)/.test(reason) ||
+      bucket === "finance_prequal" ||
+      cta === "prequalify" ||
+      cta === "hdfs_coa")
+  );
+}
+
 function getNonVoiceMessages(conv: any) {
   return (conv?.messages ?? []).filter((m: any) => !isVoiceProvider(m));
 }
@@ -46293,10 +46307,32 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
               addTodo(conv, "call", label, recordingSid || bodyCallSid || callbackCallSid || undefined);
             }
           } else {
-            recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
-              convId: conv.id,
-              leadKey: conv.leadKey
-            });
+            if (isManualFinanceHandoff(conv)) {
+              const existing = listOpenTodos().some(
+                t =>
+                  t.convId === conv.id &&
+                  t.status === "open" &&
+                  (t.taskClass === "followup" || t.reason === "call")
+              );
+              if (!existing) {
+                const cfg = await getSchedulerConfigHot();
+                const schedule = buildDefaultCallbackFallbackSchedule(cfg.timezone || "America/New_York");
+                addTodo(
+                  conv,
+                  "call",
+                  "Call customer (follow-up): no contact after finance/prequal voicemail. Review next steps and keep the lead moving.",
+                  recordingSid || bodyCallSid || callbackCallSid || undefined,
+                  undefined,
+                  schedule,
+                  "followup"
+                );
+              }
+            } else {
+              recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
+                convId: conv.id,
+                leadKey: conv.leadKey
+              });
+            }
           }
           pauseFollowUpCadence(
             conv,
