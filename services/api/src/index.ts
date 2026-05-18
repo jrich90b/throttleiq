@@ -24649,6 +24649,15 @@ app.get("/public/appointment/outcome", async (req, res) => {
       select, textarea { width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box; }
       textarea { min-height: 90px; }
       .muted { color: #666; font-size: 12px; margin-top: 6px; }
+      .rec-btn { margin-top: 8px; }
+      .status { margin-top: 10px; font-size: 13px; }
+      .status.error { color: #b91c1c; }
+      .status.ok { color: #166534; }
+      @media (max-width: 520px) {
+        body { padding: 16px; }
+        .card { padding: 14px; }
+        button { width: 100%; margin-right: 0; margin-top: 10px; }
+      }
     </style>
   </head>
   <body>
@@ -24657,7 +24666,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
     ${currentStatus ? `<div class="row">Current status: ${escapeHtml(currentStatus)}</div>` : ""}
 
     <div class="card">
-      <form method="POST" action="/public/appointment/outcome">
+      <form id="finance-outcome-form" method="POST" action="/public/appointment/outcome">
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
         <label>Outcome</label>
         <select name="financeOutcome" required>
@@ -24667,11 +24676,127 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <option value="pending">Still pending</option>
         </select>
         <label>Notes (optional)</label>
-        <textarea name="note" placeholder="Add any finance context for the team..."></textarea>
+        <textarea name="note" id="finance-note-field" placeholder="Add any finance context for the team..."></textarea>
+        <div class="muted">Tap the microphone to add a quick voice note.</div>
+        <button type="button" class="rec-btn" id="finance-rec-btn">🎤 Tap to talk</button>
+        <div class="muted" id="finance-rec-status"></div>
         <div class="muted">This updates the conversation and stops the staff outcome prompt when a final outcome is selected.</div>
         <button type="submit">Submit outcome</button>
       </form>
     </div>
+    <script>
+      (function() {
+        const token = "${escapeHtml(token)}";
+        const recBtn = document.getElementById("finance-rec-btn");
+        const statusEl = document.getElementById("finance-rec-status");
+        const noteEl = document.getElementById("finance-note-field");
+        if (!recBtn || !statusEl || !noteEl) return;
+
+        let recorder = null;
+        let chunks = [];
+        let stream = null;
+        let recorderMimeType = "";
+
+        function pickRecorderMimeType() {
+          if (typeof MediaRecorder === "undefined") return "";
+          if (typeof MediaRecorder.isTypeSupported !== "function") return "";
+          const candidates = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/mp4",
+            "audio/mpeg"
+          ];
+          for (const candidate of candidates) {
+            try {
+              if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+            } catch {}
+          }
+          return "";
+        }
+
+        function appendTranscript(transcript) {
+          const clean = String(transcript || "").trim();
+          if (!clean) return;
+          const current = String(noteEl.value || "").trim();
+          noteEl.value = current ? current + "\\n" + clean : clean;
+        }
+
+        async function stopRecording() {
+          if (!recorder) return;
+          recorder.stop();
+        }
+
+        async function startRecording() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+            statusEl.textContent = "Recording not supported on this browser. Use keyboard dictation instead.";
+            return;
+          }
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          } catch (err) {
+            statusEl.textContent = "Microphone access is blocked. Allow mic permission and try again.";
+            return;
+          }
+          recorderMimeType = pickRecorderMimeType();
+          try {
+            recorder = recorderMimeType
+              ? new MediaRecorder(stream, { mimeType: recorderMimeType })
+              : new MediaRecorder(stream);
+          } catch (err) {
+            statusEl.textContent = "Recording is not supported on this browser/device.";
+            if (stream) {
+              stream.getTracks().forEach(t => t.stop());
+              stream = null;
+            }
+            return;
+          }
+          chunks = [];
+          recorder.ondataavailable = e => {
+            if (e.data) chunks.push(e.data);
+          };
+          recorder.onstop = async () => {
+            try {
+              statusEl.textContent = "Transcribing...";
+              const blob = new Blob(chunks, { type: recorderMimeType || recorder.mimeType || "audio/webm" });
+              const fd = new FormData();
+              fd.append("token", token);
+              fd.append("audio", blob, "finance-note.webm");
+              const resp = await fetch("/public/appointment/outcome/transcribe", { method: "POST", body: fd });
+              const json = await resp.json().catch(() => null);
+              if (json && json.ok) {
+                appendTranscript(json.transcript);
+                statusEl.textContent = "Transcribed. Review the note, choose the outcome, then submit.";
+              } else {
+                statusEl.textContent = (json && json.error) ? json.error : "Transcription failed.";
+              }
+            } catch (e) {
+              statusEl.textContent = "Transcription failed.";
+            } finally {
+              if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+              }
+              recorder = null;
+              recBtn.dataset.recording = "0";
+              recBtn.textContent = "🎤 Tap to talk";
+            }
+          };
+          recorder.start();
+          recBtn.dataset.recording = "1";
+          recBtn.textContent = "⏺ Stop recording";
+          statusEl.textContent = "Recording... tap again to stop.";
+        }
+
+        recBtn.addEventListener("click", () => {
+          const recording = recBtn.dataset.recording === "1";
+          if (recording) {
+            void stopRecording();
+          } else {
+            void startRecording();
+          }
+        });
+      })();
+    </script>
   </body>
 </html>`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -25456,6 +25581,9 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
 
   const transcript = await transcribeAudioBuffer(file.buffer, file.mimetype);
   if (!transcript) return res.status(500).json({ ok: false, error: "Transcription failed" });
+  if (isFinanceOutcomeTokenForConversation(conv, token)) {
+    return res.json({ ok: true, transcript });
+  }
 
   const fallbackStatusRaw =
     conv.appointment?.staffNotify?.outcome?.status ??
