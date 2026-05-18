@@ -25684,6 +25684,25 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
   return res.json({ ok: true, transcript, status, primaryStatus, secondaryStatus });
 });
 
+app.post(
+  "/conversations/:id/appointment/outcome/transcribe",
+  requirePermission("canEditAppointments"),
+  upload.single("audio"),
+  async (req, res) => {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+    const user = (req as any).user ?? null;
+    if (!canUserAccessConversation(user, conv)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+    const file = (req as any).file;
+    if (!file?.buffer) return res.status(400).json({ ok: false, error: "Missing audio" });
+    const transcript = await transcribeAudioBuffer(file.buffer, file.mimetype);
+    if (!transcript) return res.status(500).json({ ok: false, error: "Transcription failed" });
+    return res.json({ ok: true, transcript });
+  }
+);
+
 
 app.get("/scheduler/calendars", async (_req, res) => {
   const cal = await getAuthedCalendarClient();

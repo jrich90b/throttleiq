@@ -3174,6 +3174,13 @@ export default function Home() {
   const [appointmentOutcomeNote, setAppointmentOutcomeNote] = useState("");
   const [appointmentOutcomeSaving, setAppointmentOutcomeSaving] = useState(false);
   const [appointmentOutcomeError, setAppointmentOutcomeError] = useState<string | null>(null);
+  const [appointmentVoiceSupported, setAppointmentVoiceSupported] = useState(false);
+  const [appointmentVoiceTarget, setAppointmentVoiceTarget] = useState<"header" | "close" | null>(null);
+  const [appointmentVoiceStatus, setAppointmentVoiceStatus] = useState("");
+  const appointmentVoiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const appointmentVoiceStreamRef = useRef<MediaStream | null>(null);
+  const appointmentVoiceChunksRef = useRef<Blob[]>([]);
+  const appointmentVoiceMimeTypeRef = useRef("");
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
   const [reportIssueTarget, setReportIssueTarget] = useState<TodoItem | null>(null);
   const [reportIssueConversation, setReportIssueConversation] = useState<ConversationDetail | null>(null);
@@ -4857,6 +4864,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    setAppointmentVoiceSupported(
+      typeof window !== "undefined" &&
+        typeof MediaRecorder !== "undefined" &&
+        !!navigator.mediaDevices?.getUserMedia
+    );
+  }, []);
+
+  useEffect(() => {
     if (agentContextOpen || !agentContextSpeechListening) return;
     try {
       agentContextSpeechRef.current?.stop();
@@ -4865,9 +4880,29 @@ export default function Home() {
   }, [agentContextOpen, agentContextSpeechListening]);
 
   useEffect(() => {
+    if (appointmentCloseOpen || appointmentOutcomeOpen || !appointmentVoiceTarget) return;
+    try {
+      appointmentVoiceRecorderRef.current?.stop();
+    } catch {}
+    setAppointmentVoiceTarget(null);
+  }, [appointmentCloseOpen, appointmentOutcomeOpen, appointmentVoiceTarget]);
+
+  useEffect(() => {
+    if (appointmentCloseOpen || appointmentOutcomeOpen) {
+      setAppointmentVoiceStatus("");
+    }
+  }, [appointmentCloseOpen, appointmentOutcomeOpen]);
+
+  useEffect(() => {
     return () => {
       try {
         agentContextSpeechRef.current?.abort();
+      } catch {}
+      try {
+        appointmentVoiceRecorderRef.current?.stop();
+      } catch {}
+      try {
+        appointmentVoiceStreamRef.current?.getTracks().forEach(track => track.stop());
       } catch {}
     };
   }, []);
@@ -9469,6 +9504,7 @@ export default function Home() {
     setAppointmentOutcomeSecondary(options.some(opt => opt.value === secondary) ? secondary : options[0]?.value ?? "needs_follow_up");
     setAppointmentOutcomeNote(existing?.note ?? "");
     setAppointmentOutcomeError(null);
+    setAppointmentVoiceStatus("");
     setAppointmentOutcomeOpen(true);
   }
 
@@ -9504,6 +9540,128 @@ export default function Home() {
       setAppointmentOutcomeSaving(false);
     }
   }
+
+  function pickAppointmentVoiceMimeType() {
+    if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/mpeg"];
+    for (const candidate of candidates) {
+      try {
+        if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+      } catch {}
+    }
+    return "";
+  }
+
+  function appendAppointmentVoiceTranscript(target: "header" | "close", transcript: string) {
+    const clean = String(transcript ?? "").trim();
+    if (!clean) return;
+    if (target === "close") {
+      setAppointmentCloseNote(prev => {
+        const current = String(prev ?? "").trim();
+        return current ? `${current}\n${clean}` : clean;
+      });
+      return;
+    }
+    setAppointmentOutcomeNote(prev => {
+      const current = String(prev ?? "").trim();
+      return current ? `${current}\n${clean}` : clean;
+    });
+  }
+
+  const stopAppointmentVoiceRecording = useCallback(() => {
+    try {
+      appointmentVoiceRecorderRef.current?.stop();
+    } catch {}
+  }, []);
+
+  const startAppointmentVoiceRecording = useCallback(
+    async (target: "header" | "close") => {
+      if (appointmentVoiceTarget) return;
+      const convId = target === "close" ? String(appointmentCloseTarget?.convId ?? "") : String(selectedConv?.id ?? "");
+      if (!convId) {
+        setAppointmentVoiceStatus("Open the conversation first to use the voice note.");
+        return;
+      }
+      if (
+        typeof MediaRecorder === "undefined" ||
+        !navigator.mediaDevices?.getUserMedia
+      ) {
+        setAppointmentVoiceSupported(false);
+        setAppointmentVoiceStatus("Voice note is not supported on this browser.");
+        return;
+      }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        setAppointmentVoiceStatus("Microphone access is blocked. Allow microphone permission and try again.");
+        return;
+      }
+      const mimeType = pickAppointmentVoiceMimeType();
+      let recorder: MediaRecorder;
+      try {
+        recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      } catch {
+        stream.getTracks().forEach(track => track.stop());
+        setAppointmentVoiceStatus("Voice note is not supported on this browser.");
+        return;
+      }
+      appointmentVoiceChunksRef.current = [];
+      appointmentVoiceStreamRef.current = stream;
+      appointmentVoiceRecorderRef.current = recorder;
+      appointmentVoiceMimeTypeRef.current = mimeType;
+      recorder.ondataavailable = event => {
+        if (event.data) appointmentVoiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        try {
+          setAppointmentVoiceStatus("Transcribing...");
+          const blob = new Blob(appointmentVoiceChunksRef.current, {
+            type: appointmentVoiceMimeTypeRef.current || recorder.mimeType || "audio/webm"
+          });
+          const fd = new FormData();
+          fd.append("audio", blob, "appointment-note.webm");
+          const resp = await fetch(
+            `/api/conversations/${encodeURIComponent(convId)}/appointment/outcome/transcribe`,
+            { method: "POST", body: fd }
+          );
+          const json = await resp.json().catch(() => null);
+          if (!resp.ok || json?.ok === false) {
+            throw new Error(json?.error ?? "Transcription failed.");
+          }
+          appendAppointmentVoiceTranscript(target, String(json?.transcript ?? ""));
+          setAppointmentVoiceStatus("Transcribed. Review the note, then save.");
+        } catch (err: any) {
+          setAppointmentVoiceStatus(err?.message ?? "Transcription failed.");
+        } finally {
+          appointmentVoiceStreamRef.current?.getTracks().forEach(track => track.stop());
+          appointmentVoiceStreamRef.current = null;
+          appointmentVoiceRecorderRef.current = null;
+          appointmentVoiceChunksRef.current = [];
+          setAppointmentVoiceTarget(null);
+        }
+      };
+      try {
+        recorder.start();
+        setAppointmentVoiceTarget(target);
+        setAppointmentVoiceStatus("Recording... tap again to stop.");
+      } catch {
+        stream.getTracks().forEach(track => track.stop());
+        appointmentVoiceRecorderRef.current = null;
+        appointmentVoiceStreamRef.current = null;
+        setAppointmentVoiceStatus("Could not start voice note. Try again.");
+      }
+    },
+    [
+      appointmentClosePrimaryOutcome,
+      appointmentCloseSecondaryOutcome,
+      appointmentCloseTarget,
+      appointmentOutcomePrimary,
+      appointmentOutcomeSecondary,
+      appointmentVoiceTarget,
+      selectedConv?.id
+    ]
+  );
 
   async function clearContactPreference() {
     if (!selectedConv) return;
@@ -12517,6 +12675,37 @@ export default function Home() {
                     placeholder="Add any context from the visit."
                   />
                 </label>
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    className={`w-full px-3 py-2 border rounded text-sm ${
+                      appointmentVoiceTarget === "close"
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                        : "bg-white text-gray-900"
+                    }`}
+                    disabled={
+                      appointmentCloseSaving ||
+                      (!!appointmentVoiceTarget && appointmentVoiceTarget !== "close") ||
+                      !appointmentVoiceSupported
+                    }
+                    onClick={() => {
+                      if (appointmentVoiceTarget === "close") {
+                        stopAppointmentVoiceRecording();
+                        return;
+                      }
+                      void startAppointmentVoiceRecording("close");
+                    }}
+                  >
+                    {appointmentVoiceTarget === "close" ? "🎙️ Recording... tap to stop" : "🎤 Tap to talk"}
+                  </button>
+                  <div className="text-[11px] text-gray-500">
+                    {appointmentVoiceSupported
+                      ? appointmentVoiceTarget === "close" || !appointmentVoiceTarget
+                        ? appointmentVoiceStatus || "Tap to record a quick outcome note."
+                        : "Finish the other voice note first."
+                      : "Voice note is not supported on this browser."}
+                  </div>
+                </div>
               </div>
               <div className="mt-4 flex justify-end gap-2">
                 <button
@@ -12612,6 +12801,37 @@ export default function Home() {
                     placeholder="Add any context from the visit."
                   />
                 </label>
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    className={`w-full px-3 py-2 border rounded text-sm ${
+                      appointmentVoiceTarget === "header"
+                        ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                        : "bg-white text-gray-900"
+                    }`}
+                    disabled={
+                      appointmentOutcomeSaving ||
+                      (!!appointmentVoiceTarget && appointmentVoiceTarget !== "header") ||
+                      !appointmentVoiceSupported
+                    }
+                    onClick={() => {
+                      if (appointmentVoiceTarget === "header") {
+                        stopAppointmentVoiceRecording();
+                        return;
+                      }
+                      void startAppointmentVoiceRecording("header");
+                    }}
+                  >
+                    {appointmentVoiceTarget === "header" ? "🎙️ Recording... tap to stop" : "🎤 Tap to talk"}
+                  </button>
+                  <div className="text-[11px] text-gray-500">
+                    {appointmentVoiceSupported
+                      ? appointmentVoiceTarget === "header" || !appointmentVoiceTarget
+                        ? appointmentVoiceStatus || "Tap to record a quick outcome note."
+                        : "Finish the other voice note first."
+                      : "Voice note is not supported on this browser."}
+                  </div>
+                </div>
               </div>
               <div className="mt-4 flex justify-end gap-2">
                 <button
