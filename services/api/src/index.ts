@@ -26725,6 +26725,115 @@ app.post("/conversations/:id/appointment", requirePermission("canEditAppointment
   }
 });
 
+app.post("/conversations/:id/appointment/outcome", requirePermission("canEditAppointments"), async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+    if (!conv.appointment) {
+      return res.status(400).json({ ok: false, error: "No appointment found" });
+    }
+
+    const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
+    const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
+    const appointmentSecondaryOutcome = String(req.body?.appointmentSecondaryOutcome ?? "").trim();
+    const appointmentOutcomeNote = String(req.body?.appointmentOutcomeNote ?? "").trim();
+    const normalizedOutcome = normalizeAppointmentOutcomeInput({
+      legacyOutcome: appointmentOutcome,
+      primaryOutcome: appointmentPrimaryOutcome,
+      secondaryOutcome: appointmentSecondaryOutcome
+    });
+    if (!normalizedOutcome.ok || !normalizedOutcome.legacyStatus) {
+      return res.status(400).json({ ok: false, error: "invalid_appointment_outcome" });
+    }
+
+    const nowIso = new Date().toISOString();
+    const appointmentOutcomeStatus = normalizedOutcome.legacyStatus;
+    let appointmentOutcomeMarkedSold = false;
+    if (appointmentOutcomeStatus === "financing_declined") {
+      const cfg = await getSchedulerConfigHot();
+      conv.followUp = {
+        mode: "active",
+        reason: "financing_declined",
+        updatedAt: nowIso
+      };
+      conv.followUpCadence = {
+        status: "active",
+        anchorAt: nowIso,
+        nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
+        stepIndex: 0,
+        kind: "long_term"
+      };
+      await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
+    } else if (appointmentOutcomeStatus === "financing_needs_info") {
+      setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
+      stopFollowUpCadence(conv, "manual_handoff");
+      await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", appointmentOutcomeNote || undefined);
+    } else if (appointmentOutcomeStatus === "sold") {
+      const cfg = await getSchedulerConfigHot();
+      const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
+      const soldByName = String(conv.appointment?.bookedSalespersonName ?? conv.leadOwner?.name ?? "").trim();
+      const leadVehicle = conv?.lead?.vehicle ?? {};
+      const label =
+        [leadVehicle?.year, leadVehicle?.make, leadVehicle?.model].filter(Boolean).join(" ").trim() || undefined;
+      conv.sale = {
+        soldAt: nowIso,
+        soldById: soldById || undefined,
+        soldByName: soldByName || undefined,
+        stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
+        vin: String(leadVehicle?.vin ?? "").trim() || undefined,
+        label,
+        note: appointmentOutcomeNote || undefined
+      };
+      conv.status = "closed";
+      conv.closedAt = nowIso;
+      conv.closedReason = "sold";
+      markOpenTodosDoneForConversation(conv.id);
+      setFollowUpMode(conv, "active", "post_sale");
+      startPostSaleCadence(conv, nowIso, cfg.timezone);
+      appointmentOutcomeMarkedSold = true;
+    } else if (appointmentOutcomeStatus === "hold") {
+      setFollowUpMode(conv, "paused_indefinite", "appointment_hold");
+      stopFollowUpCadence(conv, "appointment_hold");
+    }
+
+    conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
+    conv.appointment.staffNotify.outcome = {
+      status: appointmentOutcomeStatus as any,
+      primaryStatus: normalizedOutcome.primaryStatus,
+      secondaryStatus: normalizedOutcome.secondaryStatus,
+      note: appointmentOutcomeNote || undefined,
+      updatedAt: nowIso
+    };
+    if (appointmentOutcomeNote) {
+      try {
+        await applyActionStateFromContextNote(conv, appointmentOutcomeNote, "Appointment outcome");
+      } catch (err: any) {
+        console.log("[appointment-outcome-note-actions] failed:", err?.message ?? err);
+      }
+    }
+    await maybeQueueAppointmentOutcomeRescheduleDraft({
+      conv,
+      primaryStatus: normalizedOutcome.primaryStatus,
+      secondaryStatus: normalizedOutcome.secondaryStatus,
+      source: "conversation_header"
+    });
+    markOutcomeRelatedTodosDone(conv, {
+      includeFinance: appointmentOutcomeStatus === "financing_declined" || appointmentOutcomeStatus === "financing_needs_info"
+    });
+    if (!appointmentOutcomeMarkedSold) {
+      conv.updatedAt = nowIso;
+    }
+    conv.appointment.updatedAt = nowIso;
+    saveConversation(conv);
+    await flushConversationStore();
+
+    return res.json({ ok: true, conversation: conv });
+  } catch (err: any) {
+    console.log("[appointment-outcome] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to save appointment outcome" });
+  }
+});
+
 app.post("/conversations/:id/followup-action", async (req, res) => {
   try {
     const conv = getConversation(req.params.id);

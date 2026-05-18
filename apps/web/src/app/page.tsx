@@ -3152,6 +3152,14 @@ export default function Home() {
   const [appointmentCloseSecondaryOutcome, setAppointmentCloseSecondaryOutcome] = useState("needs_follow_up");
   const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
+  const [appointmentOutcomeOpen, setAppointmentOutcomeOpen] = useState(false);
+  const [appointmentOutcomePrimary, setAppointmentOutcomePrimary] = useState<"showed" | "did_not_show" | "cancelled">(
+    "showed"
+  );
+  const [appointmentOutcomeSecondary, setAppointmentOutcomeSecondary] = useState("needs_follow_up");
+  const [appointmentOutcomeNote, setAppointmentOutcomeNote] = useState("");
+  const [appointmentOutcomeSaving, setAppointmentOutcomeSaving] = useState(false);
+  const [appointmentOutcomeError, setAppointmentOutcomeError] = useState<string | null>(null);
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
   const [reportIssueTarget, setReportIssueTarget] = useState<TodoItem | null>(null);
   const [reportIssueConversation, setReportIssueConversation] = useState<ConversationDetail | null>(null);
@@ -7511,7 +7519,7 @@ export default function Home() {
     const whenIso = String(appt.whenIso ?? "").trim();
     if (!whenIso) return null;
     const when = new Date(whenIso);
-    if (Number.isNaN(when.getTime()) || when.getTime() < Date.now()) return null;
+    if (Number.isNaN(when.getTime())) return null;
     const whenText = when.toLocaleString("en-US", {
       weekday: "short",
       month: "short",
@@ -7521,6 +7529,7 @@ export default function Home() {
     });
     return {
       whenText,
+      isPast: when.getTime() < Date.now(),
       bookedEventLink: appt.bookedEventLink ?? null
     };
   }, [
@@ -9427,6 +9436,58 @@ export default function Home() {
       setManualApptError(err?.message ?? "Failed to set appointment");
     } finally {
       setManualApptSaving(false);
+    }
+  }
+
+  function openAppointmentOutcomeModal() {
+    if (!selectedConv?.appointment) return;
+    const existing = selectedConv.appointment.staffNotify?.outcome;
+    const primary =
+      normalizeAppointmentPrimaryValue(existing?.primaryStatus ?? existing?.status) ??
+      mapLegacyAppointmentOutcomeToPair(existing?.status)?.primary ??
+      "showed";
+    const secondary =
+      normalizeAppointmentSecondaryValue(existing?.secondaryStatus) ??
+      mapLegacyAppointmentOutcomeToPair(existing?.status)?.secondary ??
+      "needs_follow_up";
+    const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[primary] ?? [];
+    setAppointmentOutcomePrimary(primary);
+    setAppointmentOutcomeSecondary(options.some(opt => opt.value === secondary) ? secondary : options[0]?.value ?? "needs_follow_up");
+    setAppointmentOutcomeNote(existing?.note ?? "");
+    setAppointmentOutcomeError(null);
+    setAppointmentOutcomeOpen(true);
+  }
+
+  async function saveAppointmentOutcomeFromHeader() {
+    if (!selectedConv) return;
+    setAppointmentOutcomeSaving(true);
+    setAppointmentOutcomeError(null);
+    try {
+      const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/appointment/outcome`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appointmentPrimaryOutcome: appointmentOutcomePrimary,
+          appointmentSecondaryOutcome: appointmentOutcomeSecondary,
+          appointmentOutcomeNote
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to save appointment outcome");
+      }
+      if (data?.conversation) {
+        setSelectedConv(data.conversation);
+      } else {
+        await loadConversation(selectedConv.id);
+      }
+      await load();
+      setAppointmentOutcomeOpen(false);
+      setSaveToast("Appointment outcome saved.");
+    } catch (err: any) {
+      setAppointmentOutcomeError(err?.message ?? "Failed to save appointment outcome");
+    } finally {
+      setAppointmentOutcomeSaving(false);
     }
   }
 
@@ -12477,6 +12538,83 @@ export default function Home() {
                   }}
                 >
                   {appointmentCloseSaving ? "Saving..." : "Save & Close"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {appointmentOutcomeOpen && selectedConv?.appointment ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white rounded-lg shadow-lg w-full max-w-md p-4">
+              <div className="text-sm font-medium">Appointment Outcome</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Save what happened with this appointment without going back to the task inbox.
+              </div>
+              {appointmentOutcomeError ? (
+                <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {appointmentOutcomeError}
+                </div>
+              ) : null}
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <label className="text-xs text-gray-600">
+                  Attendance
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={appointmentOutcomePrimary}
+                    onChange={e => {
+                      const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
+                      setAppointmentOutcomePrimary(nextPrimary);
+                      const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
+                      const hasCurrent = options.some(opt => opt.value === appointmentOutcomeSecondary);
+                      if (!hasCurrent) setAppointmentOutcomeSecondary(options[0]?.value ?? "needs_follow_up");
+                    }}
+                  >
+                    <option value="showed">Showed</option>
+                    <option value="did_not_show">Did not show</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+                <label className="text-xs text-gray-600">
+                  Disposition
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={appointmentOutcomeSecondary}
+                    onChange={e => setAppointmentOutcomeSecondary(e.target.value)}
+                  >
+                    {(APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[appointmentOutcomePrimary] ?? []).map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-gray-600">
+                  Note (optional)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[72px]"
+                    value={appointmentOutcomeNote}
+                    onChange={e => setAppointmentOutcomeNote(e.target.value)}
+                    placeholder="Add any context from the visit."
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  disabled={appointmentOutcomeSaving}
+                  onClick={() => setAppointmentOutcomeOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white"
+                  disabled={appointmentOutcomeSaving}
+                  onClick={() => {
+                    void saveAppointmentOutcomeFromHeader();
+                  }}
+                >
+                  {appointmentOutcomeSaving ? "Saving..." : "Save Outcome"}
                 </button>
               </div>
             </div>
@@ -17172,22 +17310,41 @@ export default function Home() {
                   </div>
                 ) : null}
                 {headerAppointment ? (
-                  <div className="text-xs text-gray-600 mt-1">
-                    Appointment: {headerAppointment.whenText}
-                    {appointmentSalespersonName ? ` • ${appointmentSalespersonName}` : ""}
-                    {headerAppointment.bookedEventLink ? (
-                      <>
-                        {" "}
-                        •{" "}
-                        <a
-                          className="underline"
-                          href={headerAppointment.bookedEventLink}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Calendar
-                        </a>
-                      </>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                    <span>
+                      Appointment: {headerAppointment.whenText}
+                      {appointmentSalespersonName ? ` • ${appointmentSalespersonName}` : ""}
+                      {headerAppointment.bookedEventLink ? (
+                        <>
+                          {" "}
+                          •{" "}
+                          <a
+                            className="underline"
+                            href={headerAppointment.bookedEventLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Calendar
+                          </a>
+                        </>
+                      ) : null}
+                    </span>
+                    {(authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
+                      <button
+                        type="button"
+                        className={`rounded border px-2 py-0.5 text-[11px] font-semibold ${
+                          headerAppointment.isPast && !selectedConv.appointment?.staffNotify?.outcome
+                            ? "border-amber-300 bg-amber-50 text-amber-800"
+                            : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                        onClick={openAppointmentOutcomeModal}
+                      >
+                        {selectedConv.appointment?.staffNotify?.outcome
+                          ? "Update outcome"
+                          : headerAppointment.isPast
+                            ? "Outcome needed"
+                            : "Add outcome"}
+                      </button>
                     ) : null}
                   </div>
                 ) : null}
