@@ -47038,6 +47038,14 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             }
           } else {
             if (isManualFinanceHandoff(conv)) {
+              const cfg = await getSchedulerConfigHot();
+              const timezone = cfg.timezone || "America/New_York";
+              const cadenceStatus = String(conv.followUpCadence?.status ?? "").trim().toLowerCase();
+              if (!conv.followUpCadence || cadenceStatus === "stopped" || cadenceStatus === "completed") {
+                conv.followUpCadence = undefined;
+                startFollowUpCadence(conv, nowIso(), timezone);
+              }
+              setFollowUpMode(conv, "active", "finance_no_contact");
               const existing = listOpenTodos().some(
                 t =>
                   t.convId === conv.id &&
@@ -47045,8 +47053,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                   (t.taskClass === "followup" || t.reason === "call")
               );
               if (!existing) {
-                const cfg = await getSchedulerConfigHot();
-                const schedule = buildDefaultCallbackFallbackSchedule(cfg.timezone || "America/New_York");
+                const schedule = buildDefaultCallbackFallbackSchedule(timezone);
                 addTodo(
                   conv,
                   "call",
