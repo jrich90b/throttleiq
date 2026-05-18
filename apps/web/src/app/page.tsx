@@ -3151,6 +3151,7 @@ export default function Home() {
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
   const [reportIssueTarget, setReportIssueTarget] = useState<TodoItem | null>(null);
+  const [reportIssueConversation, setReportIssueConversation] = useState<ConversationDetail | null>(null);
   const [reportIssueType, setReportIssueType] = useState("task_inbox");
   const [reportIssueNote, setReportIssueNote] = useState("");
   const [reportIssueSaving, setReportIssueSaving] = useState(false);
@@ -8495,7 +8496,17 @@ export default function Home() {
 
   async function reportTodoIssue(todo?: TodoItem) {
     setReportIssueTarget(todo ?? null);
+    setReportIssueConversation(null);
     setReportIssueType("task_inbox");
+    setReportIssueNote("");
+    setReportIssueError(null);
+    setReportIssueOpen(true);
+  }
+
+  function reportConversationIssue(conv: ConversationDetail) {
+    setReportIssueTarget(null);
+    setReportIssueConversation(conv);
+    setReportIssueType("routing");
     setReportIssueNote("");
     setReportIssueError(null);
     setReportIssueOpen(true);
@@ -8509,6 +8520,8 @@ export default function Home() {
     }
     const type = reportIssueType.trim().toLowerCase() || "task_inbox";
     const todo = reportIssueTarget;
+    const conv = reportIssueConversation;
+    const leadName = conv?.lead?.name || [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ");
     setReportIssueSaving(true);
     setReportIssueError(null);
     try {
@@ -8520,12 +8533,14 @@ export default function Home() {
           severity: type === "integration" ? "error" : "warning",
           title: todo
             ? `Task Inbox issue: ${todo.reason || "task"} for ${todo.leadName || todo.leadKey}`
+            : conv
+              ? `Conversation issue: ${leadName || conv.leadKey || conv.id}`
             : `Task Inbox issue: ${type}`,
           note,
-          convId: todo?.convId,
+          convId: todo?.convId ?? conv?.id,
           taskId: todo?.id,
           pageUrl: typeof window !== "undefined" ? window.location.href : undefined,
-          section: "todos",
+          section: todo ? "todos" : "conversation",
           createTicket: true
         })
       });
@@ -8536,6 +8551,7 @@ export default function Home() {
       }
       setReportIssueOpen(false);
       setReportIssueTarget(null);
+      setReportIssueConversation(null);
       setReportIssueNote("");
       setSaveToast(
         data?.anomaly?.external?.incidentResult?.linearIssueId
@@ -11087,6 +11103,20 @@ export default function Home() {
                 <div className="mt-1 line-clamp-2">{reportIssueTarget.summary || reportIssueTarget.reason}</div>
               </div>
             ) : null}
+            {!reportIssueTarget && reportIssueConversation ? (
+              <div className="mt-3 rounded border border-slate-700 bg-slate-950/60 p-2 text-xs text-slate-300">
+                <div className="font-medium text-slate-100">
+                  {reportIssueConversation.lead?.name ||
+                    [reportIssueConversation.lead?.firstName, reportIssueConversation.lead?.lastName]
+                      .filter(Boolean)
+                      .join(" ") ||
+                    reportIssueConversation.leadKey}
+                </div>
+                <div className="mt-1">
+                  Lead Ref: {reportIssueConversation.originalLead?.leadRef || reportIssueConversation.lead?.leadRef || "N/A"}
+                </div>
+              </div>
+            ) : null}
             <label className="mt-3 block text-xs font-medium text-slate-300" htmlFor="report-issue-type">
               Issue type
             </label>
@@ -11124,6 +11154,7 @@ export default function Home() {
                 onClick={() => {
                   setReportIssueOpen(false);
                   setReportIssueTarget(null);
+                  setReportIssueConversation(null);
                   setReportIssueNote("");
                   setReportIssueError(null);
                 }}
@@ -17326,6 +17357,15 @@ export default function Home() {
                     title="Open internal agent context"
                   >
                     Context
+                  </button>
+                ) : null}
+                {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
+                  <button
+                    className="px-2 py-1 border rounded text-sm shrink-0 text-red-700 bg-red-50 hover:bg-red-100"
+                    onClick={() => reportConversationIssue(selectedConv)}
+                    title="Report a routing, draft, cadence, or UI problem for this conversation"
+                  >
+                    Report issue
                   </button>
                 ) : null}
                 {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
