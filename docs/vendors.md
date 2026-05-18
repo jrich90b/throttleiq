@@ -15,8 +15,8 @@ Use `support@leadrider.ai` as the primary customer/support identity. Use `integr
 
 ## Production and Delivery
 
-- Hosting: current API host, planned Vercel for web/landing
-- Vercel: `LeadRider` team created under `integrations@leadrider.ai` on Pro Trial May 18, 2026; payment method not yet added
+- Hosting: current API host plus Vercel for web/landing
+- Vercel: `LeadRider` team created under `integrations@leadrider.ai` on Pro Trial May 18, 2026; project `leadrider-web` deployed at `https://leadrider-web.vercel.app`; payment method not yet added
 - Error tracking: Sentry org `leadrider` under `integrations@leadrider.ai`; Express/API project created May 18, 2026
 - Incident alerts: Slack workspace `Leadrider` (`leadrider.slack.com`) created under `integrations@leadrider.ai` on Free plan May 18, 2026; `#incidents` channel and `LeadRider Incidents` Slack app/webhook created May 18, 2026; webhook rotated after setup and production test passed
 - Issue tracker: Linear workspace `LeadRider` (`linear.app/leadrider`), team key `LEA`, team ID `a7f65092-379e-47fc-bdda-561c74d98ac6`, owner `integrations@leadrider.ai`; incident pipeline API key created May 18, 2026
@@ -36,5 +36,5 @@ Use `support@leadrider.ai` as the primary customer/support identity. Use `integr
 2. Sentry organization/project
 3. Slack incident channel and incoming webhook - done May 18, 2026
 4. Linear workspace/team and API key - done May 18, 2026
-5. Vercel team/project for web and landing
+5. Vercel team/project for web and landing - done May 18, 2026
 6. Production environment variables and incident test

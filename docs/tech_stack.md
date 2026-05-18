@@ -16,7 +16,7 @@ Email DNS currently includes Google MX, SPF, DKIM, and DMARC records.
 
 - API: current Node/Express service in `services/api`
 - Web app: Next.js app in `apps/web`
-- Planned web hosting: Vercel
+- Web hosting: Vercel project `leadrider-web` at `https://leadrider-web.vercel.app`
 - Runtime data: `DATA_DIR`
 
 ## Observability and Ops
