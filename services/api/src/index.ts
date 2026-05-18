@@ -25007,7 +25007,6 @@ app.get("/public/appointment/outcome", async (req, res) => {
           unitSection.style.display = show ? "block" : "none";
           if (!show) {
             clearUnitInputs();
-            if (unitResults) unitResults.innerHTML = "";
           }
         }
         let showAllOnLoad = false;
