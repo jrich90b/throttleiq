@@ -3149,6 +3149,12 @@ export default function Home() {
   const [appointmentCloseSecondaryOutcome, setAppointmentCloseSecondaryOutcome] = useState("needs_follow_up");
   const [appointmentCloseNote, setAppointmentCloseNote] = useState("");
   const [appointmentCloseSaving, setAppointmentCloseSaving] = useState(false);
+  const [reportIssueOpen, setReportIssueOpen] = useState(false);
+  const [reportIssueTarget, setReportIssueTarget] = useState<TodoItem | null>(null);
+  const [reportIssueType, setReportIssueType] = useState("task_inbox");
+  const [reportIssueNote, setReportIssueNote] = useState("");
+  const [reportIssueSaving, setReportIssueSaving] = useState(false);
+  const [reportIssueError, setReportIssueError] = useState<string | null>(null);
   const [saveToast, setSaveToast] = useState<string | null>(null);
   const [crmLogToast, setCrmLogToast] = useState<{
     status: "running" | "success" | "error" | "info";
@@ -8488,42 +8494,59 @@ export default function Home() {
   }
 
   async function reportTodoIssue(todo?: TodoItem) {
-    const issueTypeInput = window.prompt(
-      "What kind of issue is this? Use routing, task_inbox, cadence, inventory, integration, ui, tone, or other.",
-      "task_inbox"
-    );
-    if (issueTypeInput === null) return;
-    const noteInput = window.prompt("What went wrong? Add the detail the daily loop should review.");
-    if (noteInput === null) return;
-    const note = noteInput.trim();
+    setReportIssueTarget(todo ?? null);
+    setReportIssueType("task_inbox");
+    setReportIssueNote("");
+    setReportIssueError(null);
+    setReportIssueOpen(true);
+  }
+
+  async function submitReportedIssue() {
+    const note = reportIssueNote.trim();
     if (!note) {
-      window.alert("Please describe what went wrong.");
+      setReportIssueError("Please describe what went wrong.");
       return;
     }
-    const type = issueTypeInput.trim().toLowerCase() || "task_inbox";
-    const resp = await fetch("/api/ops/anomalies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type,
-        severity: type === "integration" ? "error" : "warning",
-        title: todo
-          ? `Task Inbox issue: ${todo.reason || "task"} for ${todo.leadName || todo.leadKey}`
-          : `Task Inbox issue: ${type}`,
-        note,
-        convId: todo?.convId,
-        taskId: todo?.id,
-        pageUrl: typeof window !== "undefined" ? window.location.href : undefined,
-        section: "todos",
-        createTicket: true
-      })
-    });
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || data?.ok === false) {
-      window.alert(data?.error ?? "Failed to report issue");
-      return;
+    const type = reportIssueType.trim().toLowerCase() || "task_inbox";
+    const todo = reportIssueTarget;
+    setReportIssueSaving(true);
+    setReportIssueError(null);
+    try {
+      const resp = await fetch("/api/ops/anomalies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type,
+          severity: type === "integration" ? "error" : "warning",
+          title: todo
+            ? `Task Inbox issue: ${todo.reason || "task"} for ${todo.leadName || todo.leadKey}`
+            : `Task Inbox issue: ${type}`,
+          note,
+          convId: todo?.convId,
+          taskId: todo?.id,
+          pageUrl: typeof window !== "undefined" ? window.location.href : undefined,
+          section: "todos",
+          createTicket: true
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        setReportIssueError(data?.error ?? "Failed to report issue");
+        return;
+      }
+      setReportIssueOpen(false);
+      setReportIssueTarget(null);
+      setReportIssueNote("");
+      setSaveToast(
+        data?.anomaly?.external?.incidentResult?.linearIssueId
+          ? "Issue reported and ticket created."
+          : "Issue reported."
+      );
+    } catch (err: any) {
+      setReportIssueError(err?.message ?? "Failed to report issue");
+    } finally {
+      setReportIssueSaving(false);
     }
-    setSaveToast(data?.anomaly?.external?.incidentResult?.linearIssueId ? "Issue reported and ticket created." : "Issue reported.");
   }
 
   async function markQuestionDone(q: QuestionItem) {
@@ -11047,6 +11070,78 @@ export default function Home() {
           className={`fixed ${crmLogToast ? "top-16" : "top-4"} right-4 z-[60] px-3 py-2 rounded border bg-white text-sm shadow`}
         >
           {saveToast}
+        </div>
+      ) : null}
+      {reportIssueOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-lg border border-slate-700 bg-[#101522] p-4 text-slate-100 shadow-xl">
+            <div className="text-base font-semibold">Report issue</div>
+            <div className="mt-1 text-xs text-slate-400">
+              This creates an internal review item for routing, tasks, cadence, integrations, tone, or UI problems.
+            </div>
+            {reportIssueTarget ? (
+              <div className="mt-3 rounded border border-slate-700 bg-slate-950/60 p-2 text-xs text-slate-300">
+                <div className="font-medium text-slate-100">
+                  {reportIssueTarget.leadName || reportIssueTarget.leadKey || "Selected task"}
+                </div>
+                <div className="mt-1 line-clamp-2">{reportIssueTarget.summary || reportIssueTarget.reason}</div>
+              </div>
+            ) : null}
+            <label className="mt-3 block text-xs font-medium text-slate-300" htmlFor="report-issue-type">
+              Issue type
+            </label>
+            <select
+              id="report-issue-type"
+              className="mt-1 w-full rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              value={reportIssueType}
+              onChange={e => setReportIssueType(e.target.value)}
+            >
+              <option value="routing">Routing</option>
+              <option value="task_inbox">Task inbox</option>
+              <option value="cadence">Cadence</option>
+              <option value="inventory">Inventory</option>
+              <option value="integration">Integration</option>
+              <option value="ui">UI</option>
+              <option value="tone">Tone</option>
+              <option value="other">Other</option>
+            </select>
+            <label className="mt-3 block text-xs font-medium text-slate-300" htmlFor="report-issue-note">
+              What went wrong?
+            </label>
+            <textarea
+              id="report-issue-note"
+              className="mt-1 min-h-28 w-full rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+              value={reportIssueNote}
+              onChange={e => setReportIssueNote(e.target.value)}
+              placeholder="Describe what the daily loop should review."
+            />
+            {reportIssueError ? <div className="mt-2 text-xs text-red-300">{reportIssueError}</div> : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded border border-slate-600 px-3 py-2 text-sm text-slate-100"
+                type="button"
+                disabled={reportIssueSaving}
+                onClick={() => {
+                  setReportIssueOpen(false);
+                  setReportIssueTarget(null);
+                  setReportIssueNote("");
+                  setReportIssueError(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded border border-red-500 bg-red-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
+                type="button"
+                disabled={reportIssueSaving}
+                onClick={() => {
+                  void submitReportedIssue();
+                }}
+              >
+                {reportIssueSaving ? "Submitting..." : "Submit issue"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {mobileNavOpen ? (
