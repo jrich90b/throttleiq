@@ -5100,6 +5100,7 @@ function resolveFinanceTermQuestionDecision(
   text: string | null | undefined,
   parsed: PricingPaymentsIntentParse | null
 ): FinanceTermQuestionDecision | null {
+  if (isPaymentNumbersStatusQuestionText(text)) return null;
   if (isPricingPaymentsIntentParserAccepted(parsed) && parsed?.intent === "payments" && parsed.asksAprOrTerm) {
     return { source: "parser", confidence: parsed.confidence ?? 1 };
   }
@@ -19308,6 +19309,17 @@ function getUserMentionToken(user: any): string {
   return normalizeMentionToken(first);
 }
 
+function getUserMentionAliases(user: any): string[] {
+  const first =
+    String(user?.firstName ?? "").trim() ||
+    String(user?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+    "";
+  const aliases = new Set<string>();
+  if (first) aliases.add(first);
+  if (/^giovanni$/i.test(first)) aliases.add("Gio");
+  return Array.from(aliases);
+}
+
 function getUserDisplayName(user: any): string {
   const fromName = String(user?.name ?? "").trim();
   if (fromName) return fromName;
@@ -19328,16 +19340,18 @@ function findMentionedUsers(text: string, users: Array<any>): {
   const normalizedBody = body.toLowerCase();
   const matched: Array<{ user: any; token: string }> = [];
   for (const user of users ?? []) {
-    const name = String(user?.firstName ?? "").trim() || String(user?.name ?? "").split(" ")[0];
-    if (!name) continue;
-    const tokenNorm = normalizeMentionToken(name);
-    if (!tokenNorm) continue;
-    const token = escapeRegex(name);
-    const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
-    const refer = new RegExp(`\\b${token}\\b`, "i");
-    const tell = new RegExp(`\\b(tell|let)\\s+${token}\\b`, "i");
-    if (direct.test(body) || tell.test(body) || refer.test(body)) {
-      matched.push({ user, token: tokenNorm });
+    for (const name of getUserMentionAliases(user)) {
+      if (!name) continue;
+      const tokenNorm = normalizeMentionToken(name);
+      if (!tokenNorm) continue;
+      const token = escapeRegex(name);
+      const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
+      const refer = new RegExp(`\\b${token}\\b`, "i");
+      const tell = new RegExp(`\\b(tell|let)\\s+${token}\\b`, "i");
+      if (direct.test(body) || tell.test(body) || refer.test(body)) {
+        matched.push({ user, token: tokenNorm });
+        break;
+      }
     }
   }
   if (!matched.length) return { user: null, ambiguousUsers: [], token: null };
@@ -19475,11 +19489,49 @@ function hasActionableRequestBeyondMention(text: string): boolean {
 function isDirectUserMention(text: string, user: any): boolean {
   const body = String(text ?? "");
   if (!body || !user) return false;
-  const name = String(user?.firstName ?? "").trim() || String(user?.name ?? "").split(" ")[0];
-  if (!name) return false;
-  const token = escapeRegex(name);
-  const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
-  return direct.test(body);
+  return getUserMentionAliases(user).some(name => {
+    const token = escapeRegex(name);
+    const direct = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${token}\\b`, "i");
+    return direct.test(body);
+  });
+}
+
+function getCustomerFacingMentionName(user: any, text?: string): string {
+  const first =
+    String(user?.firstName ?? "").trim() ||
+    String(user?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+    "them";
+  if (/^giovanni$/i.test(first) && /\b(g|gio)\.?\b/i.test(String(text ?? ""))) return "Gio";
+  return first;
+}
+
+function findLeadOwnerInitialMentionedUser(text: string, conv: any, users: Array<any>): any | null {
+  const ownerId = String(conv?.leadOwner?.id ?? "").trim();
+  const ownerName = String(conv?.leadOwner?.name ?? "").trim();
+  const owner =
+    (ownerId ? users.find(u => String(u?.id ?? "").trim() === ownerId) : null) ??
+    (ownerName
+      ? users.find(u => {
+          const display = getUserDisplayName(u).toLowerCase();
+          return display === ownerName.toLowerCase();
+        })
+      : null);
+  if (!owner) return null;
+  const first =
+    String(owner?.firstName ?? "").trim() ||
+    String(owner?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
+    "";
+  const initial = first.charAt(0).toLowerCase();
+  if (!initial || ["a", "i", "u"].includes(initial)) return null;
+  const body = String(text ?? "").trim();
+  if (!body) return null;
+  const escaped = escapeRegex(initial);
+  const directInitial = new RegExp(`^\\s*(hey|hi|yo|ok|okay)?\\s*${escaped}\\.?\\b`, "i");
+  const subjectInitial = new RegExp(
+    `\\b(did|has|have|can|could|would|will|tell|ask|let|have)\\s+${escaped}\\.?\\b`,
+    "i"
+  );
+  return directInitial.test(body) || subjectInitial.test(body) ? owner : null;
 }
 
 function isMentionTargetCurrentSpeaker(mentionedUser: any, conv: any, fallbackAgentName?: string): boolean {
@@ -19522,8 +19574,31 @@ function inboundReferencesOtherPerson(text: string): boolean {
     /\b(call|reach|talk to|speak to|tell|let|ask|have)\s+(him|her)\b/.test(t) ||
     /\b(let|tell)\s+(him|her)\s+know\b/.test(t) ||
     /\b(can|could|would|should)\s+(he|she)\s+(call|text|reach out|follow up)\b/.test(t) ||
-    /\b(him|her)\s+(call|text|reach out|follow up)\b/.test(t)
+    /\b(him|her)\s+(call|text|reach out|follow up)\b/.test(t) ||
+    /\b(did|has|have)\s+(he|she|him|her)\s+(run|ran|work(?:ed)?(?:\s+up)?|do|did)\s+(?:the\s+)?numbers\b/.test(t)
   );
+}
+
+function isPaymentNumbersStatusQuestionText(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const lower = raw.toLowerCase();
+  const asksStatus =
+    /\?/.test(raw) ||
+    /\b(did|has|have|any update|check|checking|heard back)\b/.test(lower);
+  const asksAboutNumbers =
+    /\b(run|ran|running|work(?:ed)?(?:\s+up)?|figure(?:d)?|do|did)\s+(?:the\s+)?numbers\b/.test(lower) ||
+    /\b(payment|finance|financing)\s+numbers\b/.test(lower);
+  return asksStatus && asksAboutNumbers;
+}
+
+function buildPaymentNumbersStatusReply(conv: Conversation, user: any | null, text?: string): string {
+  const customerName = normalizeDisplayCase(conv.lead?.firstName);
+  const prefix = customerName ? `Got it, ${customerName} — ` : "Got it — ";
+  const firstName = user ? getCustomerFacingMentionName(user, text) : "";
+  return firstName
+    ? `${prefix}I’ll check with ${firstName} and have him follow up with the numbers.`
+    : `${prefix}I’ll check with the team and have someone follow up with the numbers.`;
 }
 
 function findUserFromRecentOutbound(conv: any, users: Array<any>): any | null {
@@ -35854,6 +35929,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!mentionParserResult && mentionParserConfidence >= mentionParserConfidenceMin;
   const mentionParserContextOnly =
     mentionParserAccepted && mentionParserResult?.intent === "context_reference";
+  if (!mentionedUser) {
+    mentionedUser = findLeadOwnerInitialMentionedUser(event.body ?? "", conv, usersForMentions);
+  }
   if (!mentionedUser && mentionParserAccepted && mentionParserResult?.intent === "handoff_request") {
     const targetUser = resolveMentionParserTargetUser(
       mentionParserResult.targetFirstName ?? null,
@@ -35875,9 +35953,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   if (mentionedUser) {
     const firstName =
-      String(mentionedUser.firstName ?? "").trim() ||
-      String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
-      "them";
+      getCustomerFacingMentionName(mentionedUser, event.body ?? "");
+    if (isPaymentNumbersStatusQuestionText(event.body ?? "")) {
+      addTodo(
+        conv,
+        "payments",
+        `Check whether ${firstName} ran finance/payment numbers. Customer asked: ${String(event.body ?? "").trim()}`,
+        event.providerMessageId,
+        {
+          id: String(mentionedUser.id ?? "").trim() || undefined,
+          name: String(mentionedUser.name ?? mentionedUser.firstName ?? "").trim() || firstName
+        }
+      );
+      setDialogState(conv, "payments_handoff");
+      setFollowUpMode(conv, "manual_handoff", "payment_numbers_status");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "payment_numbers_status", { setMode: "manual_handoff" });
+      return respondWithSmsRegeneratedDraft(buildPaymentNumbersStatusReply(conv, mentionedUser, event.body ?? ""), undefined, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
     const healthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
     const fallbackSensitive = healthUpdateWithoutScheduleAsk || /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")
@@ -40682,6 +40778,9 @@ if (authToken && signature) {
       !!mentionParserResult && mentionParserConfidence >= mentionParserConfidenceMin;
     mentionParserContextOnly =
       mentionParserAccepted && mentionParserResult?.intent === "context_reference";
+    if (!mentionedUser) {
+      mentionedUser = findLeadOwnerInitialMentionedUser(event.body ?? "", conv, usersForMentions);
+    }
     if (!mentionedUser && mentionParserAccepted && mentionParserResult?.intent === "handoff_request") {
       const targetUser = resolveMentionParserTargetUser(
         mentionParserResult.targetFirstName ?? null,
@@ -40732,15 +40831,40 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (event.provider === "twilio" && mentionedUser) {
-    const firstName =
-      String(mentionedUser.firstName ?? "").trim() ||
-      String(mentionedUser.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ||
-      "them";
+    const firstName = getCustomerFacingMentionName(mentionedUser, event.body ?? "");
     const updateText = String(event.body ?? "").trim();
     const noteSummary =
       (await summarizeSalespersonNoteWithLLM({ text: updateText, history: recentHistory })) ?? "";
     const todoText = noteSummary || updateText || `Update for ${firstName}`;
     addTodo(conv, "note", todoText, event.providerMessageId);
+    if (isPaymentNumbersStatusQuestionText(event.body ?? "")) {
+      addTodo(
+        conv,
+        "payments",
+        `Check whether ${firstName} ran finance/payment numbers. Customer asked: ${updateText}`,
+        event.providerMessageId,
+        {
+          id: String(mentionedUser.id ?? "").trim() || undefined,
+          name: String(mentionedUser.name ?? mentionedUser.firstName ?? "").trim() || firstName
+        }
+      );
+      setDialogState(conv, "payments_handoff");
+      setFollowUpMode(conv, "manual_handoff", "payment_numbers_status");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "payment_numbers_status", { setMode: "manual_handoff" });
+      markPricingEscalated(conv);
+      const reply = buildPaymentNumbersStatusReply(conv, mentionedUser, event.body ?? "");
+      if (webhookMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     const healthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
     const fallbackSensitive = healthUpdateWithoutScheduleAsk || /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
       String(event.body ?? "")

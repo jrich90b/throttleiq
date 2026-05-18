@@ -4912,6 +4912,9 @@ output: {"intent":"context_reference","explicit_request":false,"target_first_nam
     `EXAMPLE E
 inbound: "Thanks Joe"
 output: {"intent":"context_reference","explicit_request":false,"target_first_name":"Joe","confidence":0.9}`,
+    `EXAMPLE E2
+inbound: "Did G run the numbers yet?"
+output: {"intent":"handoff_request","explicit_request":true,"target_first_name":"Giovanni","confidence":0.88}`,
     `EXAMPLE F
 inbound: "Is this still available?"
 output: {"intent":"none","explicit_request":false,"target_first_name":"","confidence":0.98}`
@@ -5054,7 +5057,10 @@ inbound: "If financing approved at Buffalo Harley is it good at your store?"
 output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`,
     `EXAMPLE O
 inbound: "I got approved at another Harley dealer. Does that transfer to you?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`,
+    `EXAMPLE P
+inbound: "Did G run the numbers yet?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.92}`
   ];
   const prompt = [
     "You parse dealership inbound intent for pricing/payments routing.",
