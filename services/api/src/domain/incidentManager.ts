@@ -1,5 +1,6 @@
 import type express from "express";
 import * as Sentry from "@sentry/node";
+import { initializeSentry, isSentryEnabled } from "./sentryInit.js";
 
 type IncidentSeverity = "info" | "warning" | "error" | "fatal";
 
@@ -30,8 +31,6 @@ type IncidentResult = {
   deduped: boolean;
 };
 
-const SENTRY_DSN = String(process.env.SENTRY_DSN ?? "").trim();
-const SENTRY_ENABLED = !!SENTRY_DSN && String(process.env.SENTRY_ENABLED ?? "1") !== "0";
 const INCIDENT_ALERTS_ENABLED = String(process.env.INCIDENT_ALERTS_ENABLED ?? "1") !== "0";
 const SLACK_WEBHOOK_URL = String(process.env.SLACK_INCIDENT_WEBHOOK_URL ?? "").trim();
 const LINEAR_API_KEY = String(process.env.LINEAR_API_KEY ?? "").trim();
@@ -51,14 +50,7 @@ const INCIDENT_DEDUPE_MAX = Number(process.env.INCIDENT_DEDUPE_MAX ?? "500");
 const incidentDedupe = new Map<string, number>();
 
 export function initializeIncidentMonitoring() {
-  if (!SENTRY_ENABLED) return;
-  Sentry.init({
-    dsn: SENTRY_DSN,
-    environment: process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || "development",
-    release: process.env.SENTRY_RELEASE || undefined,
-    tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? "0"),
-    sendDefaultPii: String(process.env.SENTRY_SEND_DEFAULT_PII ?? "0") === "1"
-  });
+  initializeSentry();
 }
 
 export function installIncidentRequestContext(app: express.Express) {
@@ -75,7 +67,7 @@ export function installIncidentRequestContext(app: express.Express) {
 }
 
 export function installIncidentErrorHandlers(app: express.Express) {
-  if (SENTRY_ENABLED) {
+  if (isSentryEnabled()) {
     Sentry.setupExpressErrorHandler(app);
   }
 
@@ -147,7 +139,7 @@ export async function reportIncident(input: IncidentInput): Promise<IncidentResu
   }) as Record<string, unknown>;
 
   let sentryEventId: string | undefined;
-  if (SENTRY_ENABLED && input.captureSentry !== false) {
+  if (isSentryEnabled() && input.captureSentry !== false) {
     Sentry.withScope(scope => {
       scope.setLevel(severity === "fatal" ? "fatal" : severity);
       for (const [key, value] of Object.entries(tags)) scope.setTag(key, String(value));

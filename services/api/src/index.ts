@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./domain/sentryInit.js";
 import express from "express";
 import cors from "cors";
 import twilio from "twilio";
