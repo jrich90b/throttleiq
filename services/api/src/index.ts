@@ -27456,6 +27456,21 @@ app.post("/todos", requirePermission("canAccessTodos"), (req, res) => {
       conversation: conv
     });
   }
+  if (task.taskClass === "reminder") {
+    const pauseUntilIso = dueAtIso || reminderAtIso || "";
+    const pauseUntilMs = Date.parse(pauseUntilIso);
+    const cadenceKind = String(conv.followUpCadence?.kind ?? "standard").trim().toLowerCase();
+    if (
+      pauseUntilIso &&
+      Number.isFinite(pauseUntilMs) &&
+      pauseUntilMs > Date.now() &&
+      conv.followUpCadence?.status === "active" &&
+      cadenceKind !== "post_sale"
+    ) {
+      pauseFollowUpCadence(conv, pauseUntilIso, "manual_reminder");
+      setFollowUpMode(conv, "active", "manual_reminder");
+    }
+  }
   saveConversation(conv);
   return res.json({ ok: true, todo: task, conversation: conv });
 });
