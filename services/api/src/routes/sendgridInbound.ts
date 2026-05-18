@@ -3757,6 +3757,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     walkInSignalHint
   });
   const isInitialTrafficLogWalkIn = isInitialAdf && isTrafficLogWalkInLead;
+  const trafficLogFinanceContextSignal =
+    isTrafficLogProPayloadHint &&
+    (/\b(hdfs|hdfs\s*coa|coa|credit\s*app(?:lication)?|finance\s*app(?:lication)?|pre[-\s]?qual(?:ify|ified)?)\b/i.test(
+      [leadSource, lead.comment, lead.inquiry, inquiryRaw, event.body].filter(Boolean).join(" ")
+    ) ||
+      (/\bapp\s*id\s*:/i.test([lead.comment, lead.inquiry, inquiryRaw].filter(Boolean).join(" ")) &&
+        !walkInSignalHint));
   const adfHistory = buildEffectiveHistory(conv, 6);
   const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
     try {
@@ -4113,8 +4120,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     pricingInquiryIntent = false;
   }
   if (isTrafficLogWalkInLead) {
-    inferredBucket = "in_store";
-    inferredCta = "contact_us";
+    if (trafficLogFinanceContextSignal) {
+      inferredBucket = "finance_prequal";
+      inferredCta = "hdfs_coa";
+    } else {
+      inferredBucket = "in_store";
+      inferredCta = "contact_us";
+    }
   }
   if (isEagleRiderRentalSource(leadSource)) {
     inferredBucket = "general_inquiry";
@@ -4292,17 +4304,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let creditTodoCreated = false;
   const inquiryLower = inquiryText.toLowerCase();
   const isPrequalLead =
-    !isTrafficLogWalkInLead &&
+    (!isTrafficLogWalkInLead || trafficLogFinanceContextSignal) &&
     (inferredCta === "prequalify" ||
       (inferredBucket === "finance_prequal" && inferredCta !== "hdfs_coa") ||
       /prequal|pre-qual/.test(leadSourceLower) ||
       /\bprequal\b/.test(inquiryLower));
   const isCreditLead =
-    !isTrafficLogWalkInLead &&
+    (!isTrafficLogWalkInLead || trafficLogFinanceContextSignal) &&
     (inferredBucket === "finance_prequal" ||
       inferredCta === "hdfs_coa" ||
       inferredCta === "prequalify" ||
-      /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower));
+      /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower) ||
+      trafficLogFinanceContextSignal);
   if (isCreditLead) {
     if (!creditTodoCreated) {
       addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
@@ -5318,7 +5331,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const commentLower = walkInCleanedComment.toLowerCase();
   const emailLower = (lead.email ?? "").toLowerCase();
   const isWalkInLead =
-    isTrafficLogWalkInLead ||
+    (isTrafficLogWalkInLead && !trafficLogFinanceContextSignal) ||
     (inferredBucket === "in_store" && (isExplicitWalkInLeadSource || walkInSignalHint));
   if (isWalkInLead) {
     initialMedia = undefined;
