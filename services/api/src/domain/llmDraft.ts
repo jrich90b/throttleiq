@@ -3620,7 +3620,8 @@ export async function parseIntentWithLLM(args: {
     const lower = String(value ?? "").toLowerCase();
     const year = lower.match(/\b(20\d{2})\b/)?.[1] ?? "";
     const modelPatterns: Array<[RegExp, string]> = [
-      [/\bstreet\s+glide\s+3\s+limited\b|\bstreet\s+glide\s+limited\s+iii\b|\btri\s+glide\b/i, "Street Glide 3 Limited"],
+      [/\bstreet\s+glide\s+3\s+limited\b|\bstreet\s+glide\s+limited\s+iii\b/i, "Street Glide 3 Limited"],
+      [/\btri\s+glides?\b|\btri\s*glyc(?:eride|erides|erid(?:es)?)\b|\bflhtcutg\b/i, "Tri Glide"],
       [/\bcvo\s+road\s+glide\s+st\b/i, "CVO Road Glide ST"],
       [/\bcvo\s+street\s+glide\b/i, "CVO Street Glide"],
       [/\bstreet\s+glide\s+limited\b/i, "Street Glide Limited"],
@@ -3636,7 +3637,7 @@ export async function parseIntentWithLLM(args: {
       [/\bfat\s+boy\b/i, "Fat Boy"],
       [/\bheritage\s+classic\b/i, "Heritage Classic"],
       [/\bpan\s+america\b/i, "Pan America"],
-      [/\btrikes?\b|\btri\s+glides?\b/i, "Street Glide 3 Limited"]
+      [/\btrikes?\b|\btri\s+glides?\b/i, "Tri Glide"]
     ];
     const hit = modelPatterns.find(([pattern]) => pattern.test(lower));
     if (!hit) return null;
@@ -3650,8 +3651,8 @@ export async function parseIntentWithLLM(args: {
     'input: "Customer: do you have any black street glides in stock?" output: {"intent":"availability","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"black","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.97}',
     'input: "Customer: can i test ride one this week?" output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: I begin my riding academy next Monday and was told you do the jumpstart experience prior." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
-    'input: "Customer: how about a triglycerides instead. it would have to be on a saturday." output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide 3 Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
-    'input: "Customer: saturday works for me on a tri glide. does the morning work?" output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide 3 Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
+    'input: "Customer: how about a triglycerides instead. it would have to be on a saturday." output: {"intent":"none","explicit_request":false,"availability":{"model":"Tri Glide","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
+    'input: "Customer: saturday works for me on a tri glide. does the morning work?" output: {"intent":"none","explicit_request":false,"availability":{"model":"Tri Glide","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: 11am can you send photos of street glide limited" output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: do you have brake pads in stock for a 2018 street glide?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
     'input: "Customer: is the orange hoodie in stock in xl?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
@@ -3679,6 +3680,7 @@ export async function parseIntentWithLLM(args: {
     "- If message is about appointment/schedule availability (day/time/openings), intent=none and explicit_request=false.",
     "- If no clear request, intent=none and explicit_request=false.",
     "- Use empty strings for unknown availability fields (model/year/color/stock_id).",
+    "- Street Glide 3 Limited is a 2026+ model. Do not return Street Glide 3 Limited with a 2025-or-earlier year.",
     "- Use callback.requested=false and empty strings for callback.time_text/callback.phone when unknown.",
     "- confidence is a number from 0 to 1.",
     "",
@@ -3723,16 +3725,25 @@ export async function parseIntentWithLLM(args: {
     ? parsed.availability
     : null;
   const availability = availabilityRaw
-    ? {
-        model: cleanOptionalString(availabilityRaw.model),
-        year: cleanOptionalString(availabilityRaw.year),
-        color: cleanOptionalString(availabilityRaw.color),
-        stockId: cleanOptionalString(availabilityRaw.stock_id),
-        condition:
-          availabilityRaw.condition === "new" || availabilityRaw.condition === "used"
-            ? availabilityRaw.condition
-            : "unknown"
-      }
+    ? (() => {
+        const year = cleanOptionalString(availabilityRaw.year);
+        const rawModel = cleanOptionalString(availabilityRaw.model);
+        const yearNum = Number(year);
+        const model =
+          Number.isFinite(yearNum) && yearNum < 2026 && /^street glide 3 limited$/i.test(rawModel ?? "")
+            ? "Street Glide"
+            : rawModel;
+        return {
+          model,
+          year,
+          color: cleanOptionalString(availabilityRaw.color),
+          stockId: cleanOptionalString(availabilityRaw.stock_id),
+          condition:
+            availabilityRaw.condition === "new" || availabilityRaw.condition === "used"
+              ? availabilityRaw.condition
+              : "unknown"
+        };
+      })()
     : undefined;
 
   const callbackRaw = parsed.callback && typeof parsed.callback === "object" ? parsed.callback : null;
@@ -3764,6 +3775,14 @@ export async function parseIntentWithLLM(args: {
   }
 
   const inferredBike = inferBikeFromText(text);
+  const inferredBikeYearNum = Number(inferredBike?.year ?? "");
+  const inferredBikeModel =
+    inferredBike &&
+    Number.isFinite(inferredBikeYearNum) &&
+    inferredBikeYearNum < 2026 &&
+    /^street glide 3 limited$/i.test(inferredBike.model)
+      ? "Street Glide"
+      : inferredBike?.model;
   const recentTestRideContext = /\b(test ride|demo ride|line up (?:the )?(?:test )?ride|set up (?:a )?(?:test )?ride)\b/i.test(
     history.join("\n")
   );
@@ -3780,7 +3799,7 @@ export async function parseIntentWithLLM(args: {
       intent: "test_ride",
       explicitRequest: true,
       availability: {
-        model: inferredBike.model,
+        model: inferredBikeModel,
         year: inferredBike.year || undefined,
         color: availability?.color,
         stockId: availability?.stockId,
@@ -6519,8 +6538,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
     'input: "Customer: Is this available as well? [MMS image attachment]" output: {"target_type":"image_reference","is_availability_question":true,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
     'input: "Customer: any pre-owned street glides around 13 to 14 thousand?" output: {"target_type":"model_only","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0,"confidence":0.96}',
     'input: "Customer: Ken lives in Silver Creek and is looking at a 2026 Street Glide 3 Limited in Iron Horse with Chrome trim. Trade is a 2015 Tri Glide." output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":2026,"year_min":0,"year_max":0,"color":"Iron Horse","trim":"Chrome trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
-    'input: "Customer: how about a tri glide instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.95}',
-    'input: "Customer: how about a triglycerides instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide 3 Limited","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
+    'input: "Customer: how about a tri glide instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Tri Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.95}',
+    'input: "Customer: how about a triglycerides instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Tri Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
     'input: "Customer: if i can stay around 500 a month with 2500 down id do it" output: {"target_type":"none","is_availability_question":false,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":500,"down_payment":2500,"confidence":0.95}',
     'input: "Customer: anything between 2021 and 2023 under 20k?" output: {"target_type":"generic_inventory","is_availability_question":true,"is_test_ride_context":false,"model":"","year":0,"year_min":2021,"year_max":2023,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":20000,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
     'input: "Customer: im after a black trim cvo street glide st" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"CVO Street Glide ST","year":0,"year_min":0,"year_max":0,"color":"","trim":"black trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
@@ -6545,6 +6564,7 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "- is_test_ride_context: true when the message or recent history indicates the target is for a test ride/demo ride.",
     "- Do not infer values not in the message.",
     "- Use current message as source of truth over prior lead vehicle. Prior lead/history only helps interpret alternates/test-ride context.",
+    "- Street Glide 3 Limited is a 2026+ model. Do not return Street Glide 3 Limited with a 2025-or-earlier year.",
     "- Do not treat locations as colors (e.g. Silver Creek is not silver).",
     "- Do not treat trade-in vehicle year/model as the shopping target unless the customer explicitly says they want another one.",
     "- confidence is 0..1.",
@@ -6605,6 +6625,11 @@ export async function parseInventoryEntitiesWithLLM(args: {
   ];
   const stockId = cleanOptionalString(parsed.stock_id);
   const year = toYear(parsed.year) ?? inferModelYearFromStockId(stockId);
+  const parsedModel = cleanOptionalString(parsed.model);
+  const model =
+    year && year < 2026 && /^street glide 3 limited$/i.test(parsedModel ?? "")
+      ? "Street Glide"
+      : parsedModel;
 
   return {
     targetType: validTargetTypes.includes(targetTypeRaw as NonNullable<InventoryEntityParse["targetType"]>)
@@ -6612,7 +6637,7 @@ export async function parseInventoryEntitiesWithLLM(args: {
       : "none",
     isAvailabilityQuestion: !!parsed.is_availability_question,
     isTestRideContext: !!parsed.is_test_ride_context,
-    model: cleanOptionalString(parsed.model),
+    model,
     year,
     yearMin: toYear(parsed.year_min),
     yearMax: toYear(parsed.year_max),

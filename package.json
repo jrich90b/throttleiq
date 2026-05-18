@@ -44,6 +44,7 @@
     "voice_feedback:mine": "npx tsx scripts/voice_feedback_mine.ts",
     "deterministic_rules:promote": "npx tsx scripts/deterministic_rules_promote.ts",
     "manual_outbound:promote": "npx tsx scripts/manual_outbound_promote.ts",
+    "agent_manager:report": "npx tsx scripts/agent_manager_report.ts",
     "language_seed:eval": "npx tsx scripts/language_seed_fixture_eval.ts",
     "multi_turn:eval": "npx tsx scripts/multi_turn_synthetic_eval.ts",
     "orchestrator_regression:eval": "npx tsx scripts/orchestrator_regression_eval.ts",

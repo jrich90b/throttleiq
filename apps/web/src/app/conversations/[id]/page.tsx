@@ -25,6 +25,20 @@ type Conversation = {
   messages: Message[];
 };
 
+function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider">): string {
+  const provider = String(message.provider ?? "").trim();
+  if (message.direction === "out") {
+    if (provider === "draft_ai") return "AI";
+    if (provider === "twilio" || provider === "human" || provider === "sendgrid") return "User";
+  }
+  if (message.direction === "in") {
+    if (provider === "twilio") return "Customer";
+    if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
+    if (provider === "sendgrid") return "Email";
+  }
+  return provider || "?";
+}
+
 function findPendingDraft(messages: Message[]): Message | null {
   let lastDraftIdx = -1;
   let lastSentIdx = -1;
@@ -187,7 +201,7 @@ export default function ConversationPage() {
           return (
             <div key={m.id} className={`text-sm ${m.direction === "in" ? "" : "text-right"}`}>
               <div className="text-xs text-gray-500">
-                {m.direction.toUpperCase()} • {m.provider ?? "?"} • {new Date(m.at).toLocaleString()}
+                {m.direction.toUpperCase()} • {getMessageProviderDisplayLabel(m)} • {new Date(m.at).toLocaleString()}
                 {isPending ? " • DRAFT (not sent)" : ""}
               </div>
               <div className="inline-block mt-1 px-3 py-2 rounded border max-w-[85%] whitespace-pre-wrap">

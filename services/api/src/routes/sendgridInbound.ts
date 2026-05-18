@@ -178,9 +178,9 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 function normalizeModelToken(raw: string): string {
   return String(raw ?? "")
     .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glides?\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "tri glide")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
@@ -791,9 +791,9 @@ function tokenizeModelWords(input?: string | null): string[] {
   if (!input) return [];
   return String(input)
     .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glides?\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glide(?:\s+ultra)?\b/gi, "tri glide")
     .toLowerCase()
     .replace(/\bharley[-\s]?davidson\b/g, " ")
     .replace(/\bh[-\s]?d\b/g, " ")
@@ -1719,7 +1719,7 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
     return "Street Glide 3 Limited";
   }
   if (/\b(tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|flhtcutg)\b/.test(t)) {
-    return "Street Glide 3 Limited";
+    return "Tri Glide";
   }
   return undefined;
 }
@@ -1886,9 +1886,10 @@ function extractWatchDirectiveModelHint(text?: string | null): string | undefine
   if (walkInModelHint) return walkInModelHint;
   if (/\b(?:touring|bagger)\b/.test(segmentLower)) return "Touring";
   if (/\b(?:trike|trikes)\b/.test(segmentLower)) return "Trike";
-  if (/\b(?:tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|street glide limited iii)\b/.test(segmentLower)) {
+  if (/\b(?:street glide limited iii)\b/.test(segmentLower)) {
     return "Street Glide 3 Limited";
   }
+  if (/\b(?:tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|flhtcutg)\b/.test(segmentLower)) return "Tri Glide";
   if (/\b(?:road\s+glide)\b/.test(segmentLower)) return "Road Glide";
   if (/\b(?:street\s+glide)\b/.test(segmentLower)) return "Street Glide";
   if (/\b(?:road\s+king)\b/.test(segmentLower)) return "Road King";
@@ -2412,7 +2413,7 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
     /\btri glide(?:\s+ultra)?\b/.test(normalized) ||
     /\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/.test(normalized)
   ) {
-    return "Street Glide 3 Limited";
+    return "Tri Glide";
   }
   if (/\bflhxxx\b/.test(normalized) || /\bstreet glide trike\b/.test(normalized)) {
     return "Street Glide Trike";
@@ -2436,6 +2437,21 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
     return "Nightster";
   }
   return model || undefined;
+}
+
+function normalizeModelForKnownYear(model?: string | null, year?: string | number | null): string | undefined {
+  const normalized = normalizeVehicleModel(model, null);
+  if (!normalized) return undefined;
+  const yearNum = Number(year);
+  if (
+    Number.isFinite(yearNum) &&
+    yearNum > 1980 &&
+    yearNum < 2026 &&
+    /^street glide 3 limited$/i.test(normalized)
+  ) {
+    return "Street Glide";
+  }
+  return normalized;
 }
 
 function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | null {
@@ -3425,9 +3441,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (!lead.year && inquiryYearHint) {
     lead.year = inquiryYearHint;
   }
-  const model = normalizeVehicleModel(
-    lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? inquiryModelHint ?? undefined,
-    make ?? null
+  const model = normalizeModelForKnownYear(
+    normalizeVehicleModel(
+      lead.vehicleModel ?? meta.model ?? lead.vehicleDescription ?? inquiryModelHint ?? undefined,
+      make ?? null
+    ),
+    lead.year
   );
   if (!lead.vehicleCondition && lead.year) {
     const yr = Number(lead.year);

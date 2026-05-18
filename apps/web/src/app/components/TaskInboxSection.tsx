@@ -39,6 +39,7 @@ export function TaskInboxSection(props: any) {
     setAppointmentCloseNote,
     setAppointmentCloseOpen,
     markTodoDone,
+    reportTodoIssue,
     renderDealTemperatureIcon,
     getDealTemperature,
     loading,
@@ -47,7 +48,18 @@ export function TaskInboxSection(props: any) {
 
   return (
     <>
-      <div className="mt-3 text-sm font-semibold text-gray-800">Task Inbox</div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-gray-800">Task Inbox</div>
+        <button
+          className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"
+          onClick={() => {
+            void reportTodoIssue?.();
+          }}
+          title="Report a routing, task, cadence, or UI problem"
+        >
+          Report issue
+        </button>
+      </div>
       <div className="mt-3 space-y-2">
         <input
           className="w-full border rounded px-3 py-2 text-sm"
@@ -301,6 +313,15 @@ export function TaskInboxSection(props: any) {
                             title="Close this To Do"
                           >
                             Close
+                          </button>
+                          <button
+                            className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"
+                            onClick={() => {
+                              void reportTodoIssue?.(t);
+                            }}
+                            title="Report a routing, task, cadence, or UI problem"
+                          >
+                            Report issue
                           </button>
                         </div>
                       </div>

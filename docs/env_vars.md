@@ -1,0 +1,67 @@
+# Environment Variables
+
+Keep production secrets in the deployment host, not in git.
+
+## Core Runtime
+
+- `NODE_ENV=production`
+- `DATA_DIR`
+- `PUBLIC_BASE_URL`
+- `APP_BASE_URL`
+- `API_BASE_URL`
+- `AUTH_DISABLED=false`
+
+## Email and Messaging
+
+- `SENDGRID_API_KEY`
+- `SENDGRID_FROM_EMAIL`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_PHONE_NUMBER`
+
+## Google
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+
+## Meta
+
+- `META_APP_ID`
+- `META_APP_SECRET`
+- `META_REDIRECT_URI`
+
+Current Meta callback:
+
+```text
+https://api.americanharley.leadrider.ai/integrations/meta/callback
+```
+
+## Incidents
+
+- `SENTRY_DSN`
+  - Current Sentry Express/API DSN: `https://7e0e94b6c64c2018f0328ae7748d53f5@o4511411556319232.ingest.us.sentry.io/4511411559792640`
+- `SENTRY_ENVIRONMENT=production`
+- `SENTRY_RELEASE`
+- `SENTRY_TRACES_SAMPLE_RATE=0`
+- `SENTRY_SEND_DEFAULT_PII=0`
+- `INCIDENT_ALERTS_ENABLED=1`
+- `INCIDENT_DEDUPE_MINUTES=30`
+- `INCIDENT_TEST_TOKEN`
+- `SLACK_INCIDENT_WEBHOOK_URL`
+- `LINEAR_API_KEY`
+- `LINEAR_TEAM_ID=a7f65092-379e-47fc-bdda-561c74d98ac6`
+- `LINEAR_CREATE_ISSUES=1`
+- `LINEAR_PROJECT_ID`
+- `LINEAR_ASSIGNEE_ID`
+- `LINEAR_LABEL_IDS`
+- `LINEAR_ISSUE_PRIORITY=2`
+
+## Feedback Loop
+
+- `REPORT_ROOT`
+- `CONVERSATIONS_DB_PATH`
+- `FEEDBACK_LOOP_ENV_PATH`
+- `FEEDBACK_REPORT_EMAIL_TO`
+- `FEEDBACK_REPORT_EMAIL_FROM`
+- `AGENT_MANAGER_OUT_DIR`

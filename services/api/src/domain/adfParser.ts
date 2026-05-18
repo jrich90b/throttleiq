@@ -223,7 +223,7 @@ function parseFromComment(comment?: string) {
     const normalized = String(text ?? "").toLowerCase();
     if (!normalized) return undefined;
     const explicitMatch = normalized.match(
-      /preferred contact method\s*[:\-]?\s*(email|e-mail|text|sms|phone|call|voice)/i
+      /preferred\s+(?:contact\s+method|method\s+of\s+contact|contact\s+preference)\s*[:\-]?\s*(email|e-mail|text|sms|phone|call|voice)\b/i
     );
     const token = explicitMatch?.[1]?.toLowerCase();
     if (token) {

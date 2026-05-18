@@ -1126,8 +1126,8 @@ type InventoryStyleFamily = "grand_american_touring" | "cruiser" | "sport" | "ad
 
 function normalizeSpokenModelAliases(text?: string | null): string {
   return String(text ?? "")
-    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "street glide 3 limited")
-    .replace(/\btri[\s-]*glides?\b/gi, "street glide 3 limited")
+    .replace(/\btri[\s-]*glyc(?:eride|erides|erid(?:es)?)\b/gi, "tri glide")
+    .replace(/\btri[\s-]*glides?\b/gi, "tri glide")
     .replace(/\bstreet\s+glide\s+limited\s+iii\b/gi, "street glide 3 limited");
 }
 

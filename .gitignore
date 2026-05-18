@@ -12,6 +12,7 @@ dist/
 
 # logs
 *.log
+reports/
 
 # OS files
 .DS_Store

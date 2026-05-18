@@ -18,6 +18,20 @@ import {
   withLangfuseObservation
 } from "./observability/langfuse.js";
 import {
+  initializeIncidentMonitoring,
+  installIncidentErrorHandlers,
+  installIncidentRequestContext,
+  installProcessIncidentHandlers,
+  reportIncident
+} from "./domain/incidentManager.js";
+import {
+  addOpsAnomaly,
+  listOpsAnomalies,
+  updateOpsAnomalyExternal,
+  type OpsAnomalySeverity,
+  type OpsAnomalyType
+} from "./domain/opsAnomalyStore.js";
+import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   classifyBlendedChatterWithLLM,
@@ -429,7 +443,10 @@ if (!process.env.DATA_DIR) {
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
+initializeIncidentMonitoring();
+installProcessIncidentHandlers();
 initializeLangfuse();
+installIncidentRequestContext(app);
 app.use(cors());
 app.use("/uploads", express.static(path.resolve(getDataDir(), "uploads")));
 
@@ -2211,6 +2228,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/debug/inbound") ||
+    pathname.startsWith("/debug/incidents") ||
     pathname.startsWith("/auth/login") ||
     pathname.startsWith("/auth/forgot-password") ||
     pathname.startsWith("/auth/reset-password") ||
@@ -3803,6 +3821,27 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.post("/debug/incidents/test", async (req, res) => {
+  const token = String(req.header("x-incident-test-token") ?? req.query.token ?? "").trim();
+  const expected = String(process.env.INCIDENT_TEST_TOKEN ?? "").trim();
+  if ((isProd || expected) && (!expected || token !== expected)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  const result = await reportIncident({
+    title: "Manual incident pipeline test",
+    error: new Error("Manual incident pipeline test"),
+    severity: "warning",
+    source: "debug",
+    route: req.path,
+    method: req.method,
+    requestId: String((req as any).requestId ?? ""),
+    tags: {
+      test: true
+    }
+  });
+  return res.json({ ok: true, result });
+});
+
 app.get("/inventory", async (_req, res) => {
   try {
     const items = await getInventoryFeedHot();
@@ -3885,16 +3924,22 @@ function webTextWidgetEmbedScript(): string {
   var apiBase = script && script.getAttribute('data-api-base') ? script.getAttribute('data-api-base').replace(/\\/$/, '') : (script && script.src ? new URL(script.src).origin : window.location.origin);
   var brandColor = script && script.getAttribute('data-color') || '#f47b20';
   var dealerName = script && script.getAttribute('data-dealer-name') || document.title || 'the dealership';
+  var privacyUrl = script && script.getAttribute('data-privacy-url') || '';
+  var cookiesUrl = script && script.getAttribute('data-cookies-url') || '';
+  var termsUrl = script && script.getAttribute('data-terms-url') || '';
   var departments = [{key:'sales',label:'Sales'},{key:'service',label:'Service'},{key:'parts',label:'Parts'},{key:'apparel',label:'Motor Clothes'}];
   var state = { open:false, screen:'departments', department:null, label:'' };
-  var css = '.tiq-widget-root{position:fixed;z-index:2147483000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#242424}.tiq-text-button{position:fixed;left:18px;bottom:18px;border:0;border-radius:999px;background:'+brandColor+';color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.28);padding:14px 22px;font-size:18px;font-weight:700;display:flex;gap:12px;align-items:center;cursor:pointer}.tiq-panel{position:fixed;inset:0;background:#f7f7f7;color:#555;display:flex;flex-direction:column}.tiq-header{height:86px;background:'+brandColor+';color:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;font-weight:700}.tiq-title{font-size:22px;line-height:1.2}.tiq-sub{font-size:15px;opacity:.75;font-weight:500}.tiq-close,.tiq-back{margin-left:auto;background:transparent;border:0;color:#fff;font-size:44px;line-height:1;cursor:pointer;opacity:.8}.tiq-back{margin-left:0;font-size:42px}.tiq-body{padding:22px 18px;max-width:520px;width:100%;box-sizing:border-box}.tiq-card{background:#fff;border:1px solid #ccc;border-radius:10px;padding:8px 22px}.tiq-dept{width:100%;border:0;border-bottom:1px solid #ddd;background:#fff;color:#2e80f6;text-align:left;font-size:22px;padding:18px 0;cursor:pointer}.tiq-dept:last-child{border-bottom:0}.tiq-help{font-size:21px;line-height:1.45;margin:4px 0 22px;color:#555}.tiq-field{width:100%;border:0;border-bottom:1px solid #ddd;font-size:21px;padding:18px 0;color:#333;box-sizing:border-box;outline:none}.tiq-message{height:150px;resize:none}.tiq-send{margin-top:22px;width:100%;border:0;border-radius:10px;padding:16px;font-size:22px;font-weight:700;background:#ddd;color:#888}.tiq-send.tiq-ready{background:'+brandColor+';color:#fff;cursor:pointer}.tiq-consent{font-size:13px;line-height:1.45;color:#777;margin-top:16px}.tiq-error{font-size:14px;color:#b91c1c;margin-top:12px}.tiq-success{font-size:20px;line-height:1.45;color:#333;background:#fff;border:1px solid #ddd;border-radius:10px;padding:18px}.tiq-honey{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}@media(min-width:700px){.tiq-panel{inset:auto;right:18px;bottom:86px;width:390px;height:620px;border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.25);overflow:hidden}.tiq-header{height:76px}.tiq-title{font-size:20px}.tiq-body{padding:20px}.tiq-text-button{left:auto;right:18px}}';
+  var css = '.tiq-widget-root{position:fixed;z-index:2147483000;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#242424}.tiq-text-button{position:fixed;left:18px;bottom:18px;border:0;border-radius:999px;background:'+brandColor+';color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.28);padding:14px 22px;font-size:18px;font-weight:700;display:flex;gap:12px;align-items:center;cursor:pointer}.tiq-panel{position:fixed;inset:0;background:#f7f7f7;color:#555;display:flex;flex-direction:column}.tiq-header{height:86px;background:'+brandColor+';color:#fff;display:flex;align-items:center;gap:18px;padding:0 22px;font-weight:700}.tiq-title{font-size:22px;line-height:1.2}.tiq-sub{font-size:15px;opacity:.75;font-weight:500}.tiq-close,.tiq-back{margin-left:auto;background:transparent;border:0;color:#fff;font-size:44px;line-height:1;cursor:pointer;opacity:.8}.tiq-back{margin-left:0;font-size:42px}.tiq-body{padding:22px 18px;max-width:520px;width:100%;box-sizing:border-box}.tiq-card{background:#fff;border:1px solid #ccc;border-radius:10px;padding:8px 22px}.tiq-dept{width:100%;border:0;border-bottom:1px solid #ddd;background:#fff;color:#2e80f6;text-align:left;font-size:22px;padding:18px 0;cursor:pointer}.tiq-dept:last-child{border-bottom:0}.tiq-help{font-size:21px;line-height:1.45;margin:4px 0 22px;color:#555}.tiq-field{width:100%;border:0;border-bottom:1px solid #ddd;font-size:21px;padding:18px 0;color:#333;box-sizing:border-box;outline:none}.tiq-message{height:150px;resize:none}.tiq-send{margin-top:22px;width:100%;border:0;border-radius:10px;padding:16px;font-size:22px;font-weight:700;background:#ddd;color:#888}.tiq-send.tiq-ready{background:'+brandColor+';color:#fff;cursor:pointer}.tiq-consent{font-size:13px;line-height:1.45;color:#777;margin-top:16px}.tiq-consent a{color:'+brandColor+';font-weight:700;text-decoration:underline}.tiq-error{font-size:14px;color:#b91c1c;margin-top:12px}.tiq-success{font-size:20px;line-height:1.45;color:#333;background:#fff;border:1px solid #ddd;border-radius:10px;padding:18px}.tiq-honey{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}@media(min-width:700px){.tiq-panel{inset:auto;right:18px;bottom:86px;width:390px;height:620px;border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.25);overflow:hidden}.tiq-header{height:76px}.tiq-title{font-size:20px}.tiq-body{padding:20px}.tiq-text-button{left:auto;right:18px}}';
   var style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
   var root = document.createElement('div'); root.className = 'tiq-widget-root'; document.body.appendChild(root);
   function escapeHtml(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function safeUrl(v){v=String(v||'').trim();if(!v)return '';try{var u=new URL(v,window.location.origin);return /^https?:$/.test(u.protocol)?u.href:'';}catch(e){return '';}}
+  function policyLinks(){var p=safeUrl(privacyUrl),t=safeUrl(termsUrl),c=safeUrl(cookiesUrl),out=[];if(p)out.push('<a href="'+escapeHtml(p)+'" target="_blank" rel="noopener noreferrer">Privacy Policy</a>');if(t)out.push('<a href="'+escapeHtml(t)+'" target="_blank" rel="noopener noreferrer">Terms of Use</a>');if(c)out.push('<a href="'+escapeHtml(c)+'" target="_blank" rel="noopener noreferrer">Cookie Policy</a>');return out.length?' '+out.join(' · '):'';}
+  var consentDisclosure = 'By selecting Send, you agree that '+dealerName+' may contact you at the number and email you provide by call, text, or email about your inquiry. Consent is not a condition of purchase. Message and data rates may apply. Reply STOP to opt out or HELP for help.';
   function render(){
     if(!state.open){root.innerHTML='<button class="tiq-text-button" type="button" aria-label="Text us"><span style="font-size:22px">&#9632;</span><span>Text Us</span></button>';root.querySelector('button').onclick=function(){state.open=true;state.screen='departments';render();};return;}
     if(state.screen==='sent'){root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><div class="tiq-title">Message sent</div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><div class="tiq-success">Thanks. We received your message and will respond by text.</div></div></div>';root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};return;}
-    if(state.screen==='form'){root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><button class="tiq-back" type="button" aria-label="Back">&lsaquo;</button><div><div class="tiq-sub">Send a text to</div><div class="tiq-title">'+escapeHtml(state.label)+'</div></div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><p class="tiq-help">Add your details and a short message, we\\'ll respond with a text.</p><form><div class="tiq-card"><input class="tiq-field" name="name" autocomplete="name" placeholder="Name" /><input class="tiq-field" name="phone" autocomplete="tel" inputmode="tel" placeholder="Mobile Number" /><textarea class="tiq-field tiq-message" name="message" placeholder="Message"></textarea><input class="tiq-honey" name="company" tabindex="-1" autocomplete="off" /></div><button class="tiq-send" type="submit" disabled>Send</button><div class="tiq-consent">By hitting "Send" you authorize '+escapeHtml(dealerName)+' to send text messages to the mobile number provided. Message and data rates may apply. Reply STOP to opt out.</div><div class="tiq-error" hidden></div></form></div></div>';var form=root.querySelector('form'),send=root.querySelector('.tiq-send'),err=root.querySelector('.tiq-error');root.querySelector('.tiq-back').onclick=function(){state.screen='departments';render();};root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};function ready(){var fd=new FormData(form);var ok=String(fd.get('name')||'').trim()&&String(fd.get('phone')||'').trim()&&String(fd.get('message')||'').trim();send.disabled=!ok;send.classList.toggle('tiq-ready',!!ok);}form.addEventListener('input',ready);form.onsubmit=function(e){e.preventDefault();if(send.disabled)return;send.disabled=true;send.textContent='Sending...';err.hidden=true;var fd=new FormData(form);fetch(apiBase+'/public/widget/text-us',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({department:state.department,name:fd.get('name'),phone:fd.get('phone'),message:fd.get('message'),company:fd.get('company'),pageUrl:window.location.href,pageTitle:document.title,consent:true})}).then(function(r){return r.json().then(function(j){if(!r.ok||!j.ok)throw new Error(j.error||'Unable to send');state.screen='sent';render();});}).catch(function(ex){err.textContent=ex.message||'Unable to send right now.';err.hidden=false;send.disabled=false;send.textContent='Send';ready();});};return;}
+    if(state.screen==='form'){root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><button class="tiq-back" type="button" aria-label="Back">&lsaquo;</button><div><div class="tiq-sub">Send a text to</div><div class="tiq-title">'+escapeHtml(state.label)+'</div></div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><p class="tiq-help">Add your details and a short message, we\\'ll respond with a text.</p><form><div class="tiq-card"><input class="tiq-field" name="name" autocomplete="name" placeholder="Name" /><input class="tiq-field" name="phone" autocomplete="tel" inputmode="tel" placeholder="Mobile Number" /><textarea class="tiq-field tiq-message" name="message" placeholder="Message"></textarea><input class="tiq-honey" name="company" tabindex="-1" autocomplete="off" /></div><button class="tiq-send" type="submit" disabled>Send</button><div class="tiq-consent">'+escapeHtml(consentDisclosure)+policyLinks()+'</div><div class="tiq-error" hidden></div></form></div></div>';var form=root.querySelector('form'),send=root.querySelector('.tiq-send'),err=root.querySelector('.tiq-error');root.querySelector('.tiq-back').onclick=function(){state.screen='departments';render();};root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};function ready(){var fd=new FormData(form);var ok=String(fd.get('name')||'').trim()&&String(fd.get('phone')||'').trim()&&String(fd.get('message')||'').trim();send.disabled=!ok;send.classList.toggle('tiq-ready',!!ok);}form.addEventListener('input',ready);form.onsubmit=function(e){e.preventDefault();if(send.disabled)return;send.disabled=true;send.textContent='Sending...';err.hidden=true;var fd=new FormData(form);fetch(apiBase+'/public/widget/text-us',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({department:state.department,name:fd.get('name'),phone:fd.get('phone'),message:fd.get('message'),company:fd.get('company'),pageUrl:window.location.href,pageTitle:document.title,consent:true,consentDisclosure:consentDisclosure,privacyUrl:safeUrl(privacyUrl),cookiesUrl:safeUrl(cookiesUrl),termsUrl:safeUrl(termsUrl)})}).then(function(r){return r.json().then(function(j){if(!r.ok||!j.ok)throw new Error(j.error||'Unable to send');state.screen='sent';render();});}).catch(function(ex){err.textContent=ex.message||'Unable to send right now.';err.hidden=false;send.disabled=false;send.textContent='Send';ready();});};return;}
     root.innerHTML='<div class="tiq-panel"><div class="tiq-header"><div style="font-size:28px">&#128101;</div><div class="tiq-title">Choose a department</div><button class="tiq-close" type="button" aria-label="Close">&times;</button></div><div class="tiq-body"><div class="tiq-card">'+departments.map(function(d){return '<button class="tiq-dept" type="button" data-dept="'+d.key+'">'+d.label+'</button>';}).join('')+'</div></div></div>';root.querySelector('.tiq-close').onclick=function(){state.open=false;render();};Array.prototype.forEach.call(root.querySelectorAll('.tiq-dept'),function(btn){btn.onclick=function(){state.department=btn.getAttribute('data-dept');state.label=btn.textContent;state.screen='form';render();};});
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',render);else render();
@@ -3920,6 +3965,10 @@ app.post("/public/widget/text-us", async (req, res) => {
     const pageUrl = String(req.body?.pageUrl ?? "").trim().slice(0, 500);
     const pageTitle = String(req.body?.pageTitle ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
     const consent = req.body?.consent === true || String(req.body?.consent ?? "").toLowerCase() === "true";
+    const consentDisclosure = String(req.body?.consentDisclosure ?? "").replace(/\s+/g, " ").trim().slice(0, 1000);
+    const privacyUrl = String(req.body?.privacyUrl ?? "").trim().slice(0, 500);
+    const cookiesUrl = String(req.body?.cookiesUrl ?? "").trim().slice(0, 500);
+    const termsUrl = String(req.body?.termsUrl ?? "").trim().slice(0, 500);
     if (!name) return res.status(400).json({ ok: false, error: "Enter your name." });
     if (!phoneRaw) return res.status(400).json({ ok: false, error: "Enter your mobile number." });
     if (!message) return res.status(400).json({ ok: false, error: "Enter a message." });
@@ -3955,7 +4004,11 @@ app.post("/public/widget/text-us", async (req, res) => {
       meta: {
         label: webTextWidgetDepartmentLabel(department),
         pageUrl: pageUrl || null,
-        pageTitle: pageTitle || null
+        pageTitle: pageTitle || null,
+        consentDisclosure: consentDisclosure || null,
+        privacyUrl: privacyUrl || null,
+        cookiesUrl: cookiesUrl || null,
+        termsUrl: termsUrl || null
       }
     });
     const event: InboundMessageEvent = {
@@ -9314,7 +9367,7 @@ function nextLocalDateForWeekday(dayName: string, timeZone: string): { year: num
 
 function formatModelLabel(year?: string | null, model?: string | null): string {
   const yr = year ? `${year} ` : "";
-  const clean = normalizeDisplayCase(model) || "that model";
+  const clean = normalizeDisplayModelForYear(model, year) || "that model";
   return `${yr}${clean}`.trim();
 }
 
@@ -9432,9 +9485,24 @@ function isGenericMetaOfferModel(model?: string | null): boolean {
   return normalized === "other" || normalized === "full line";
 }
 
-function formatModelLabelForFollowUp(_year?: string | null, model?: string | null): string {
-  if (!model || /full line/i.test(model)) return "the bike";
+function normalizeDisplayModelForYear(model?: string | null, year?: string | number | null): string {
   const base = normalizeDisplayCase(model);
+  const yearNum = Number(year);
+  if (
+    base &&
+    Number.isFinite(yearNum) &&
+    yearNum > 1980 &&
+    yearNum < 2026 &&
+    /^street glide 3 limited$/i.test(base)
+  ) {
+    return "Street Glide";
+  }
+  return base;
+}
+
+function formatModelLabelForFollowUp(year?: string | null, model?: string | null): string {
+  if (!model || /full line/i.test(model)) return "the bike";
+  const base = normalizeDisplayModelForYear(model, year);
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }
 
@@ -9451,8 +9519,8 @@ function normalizeModelText(val?: string | null): string {
     .replace(/\banniversary\s+edition\b/g, " ")
     .replace(/\banniversary\b/g, " ")
     .replace(/\bstreet\s+glide\s+limited\s+iii\b/g, "street glide 3 limited")
-    .replace(/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/g, "street glide 3 limited")
-    .replace(/\btri\s+glide(?:\s+ultra)?\b/g, "street glide 3 limited")
+    .replace(/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/g, "tri glide")
+    .replace(/\btri\s+glide(?:\s+ultra)?\b/g, "tri glide")
     // common typing/plural variants that affect trim-specific matching
     .replace(/\bstreet\s+glides\b/g, "street glide")
     .replace(/\broad\s+glides\b/g, "road glide")
@@ -27524,6 +27592,132 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   }
   if (!task) return res.status(404).json({ ok: false, error: "Todo not found" });
   res.json({ ok: true, todo: task });
+});
+
+function opsAnomalyDefaultTitle(type: OpsAnomalyType): string {
+  switch (type) {
+    case "routing":
+      return "Routing issue reported";
+    case "task_inbox":
+      return "Task Inbox issue reported";
+    case "cadence":
+      return "Follow-up cadence issue reported";
+    case "inventory":
+      return "Inventory or model issue reported";
+    case "integration":
+      return "Integration issue reported";
+    case "ui":
+      return "UI issue reported";
+    case "tone":
+      return "Dealer tone issue reported";
+    default:
+      return "Operational issue reported";
+  }
+}
+
+app.get("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "200");
+  const anomalies = await listOpsAnomalies(Number.isFinite(limit) ? limit : 200);
+  return res.json({ ok: true, anomalies });
+});
+
+app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  const typeRaw = String(req.body?.type ?? "other").trim().toLowerCase();
+  const severityRaw = String(req.body?.severity ?? "warning").trim().toLowerCase();
+  const title = String(req.body?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const note = String(req.body?.note ?? "").trim().slice(0, 3000);
+  const convId = String(req.body?.convId ?? "").trim();
+  const taskId = String(req.body?.taskId ?? "").trim();
+  const pageUrl = String(req.body?.pageUrl ?? "").trim().slice(0, 500);
+  const section = String(req.body?.section ?? "").trim().slice(0, 80);
+  const createTicket = req.body?.createTicket !== false;
+  const allowedTypes: OpsAnomalyType[] = [
+    "routing",
+    "task_inbox",
+    "cadence",
+    "inventory",
+    "integration",
+    "ui",
+    "tone",
+    "other"
+  ];
+  const allowedSeverities: OpsAnomalySeverity[] = ["info", "warning", "error"];
+  const type = allowedTypes.includes(typeRaw as OpsAnomalyType) ? (typeRaw as OpsAnomalyType) : "other";
+  const severity = allowedSeverities.includes(severityRaw as OpsAnomalySeverity)
+    ? (severityRaw as OpsAnomalySeverity)
+    : "warning";
+  if (!title && !note) return res.status(400).json({ ok: false, error: "Describe what went wrong." });
+
+  const conv = convId ? getConversation(convId) : null;
+  if (conv && !canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  const task = taskId
+    ? listOpenTodos().find(t => t.id === taskId && (!conv || t.convId === conv.id || t.convId === convId)) ?? null
+    : null;
+  const dealerProfile = await getDealerProfileHot().catch(() => null);
+  const leadName =
+    conv?.lead?.name?.trim() ||
+    [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ").trim() ||
+    null;
+  const anomaly = await addOpsAnomaly({
+    type,
+    severity,
+    title: title || opsAnomalyDefaultTitle(type),
+    note: note || undefined,
+    reporter: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    },
+    context: {
+      dealerName: String(dealerProfile?.dealerName ?? "").trim() || null,
+      convId: (conv?.id ?? convId) || null,
+      leadKey: conv?.leadKey ?? null,
+      leadName,
+      taskId: (task?.id ?? taskId) || null,
+      taskReason: task?.reason ?? null,
+      taskSummary: task?.summary ?? null,
+      routeBucket: conv?.classification?.bucket ?? null,
+      routeCta: conv?.classification?.cta ?? null,
+      pageUrl: pageUrl || null,
+      section: section || null
+    }
+  });
+
+  if (createTicket) {
+    const result = await reportIncident({
+      title: `[Ops anomaly] ${anomaly.title}`,
+      error: new Error(note || anomaly.title),
+      severity,
+      captureSentry: false,
+      source: "ops_anomaly",
+      route: req.path,
+      method: req.method,
+      conversationId: (conv?.id ?? convId) || null,
+      leadKey: conv?.leadKey ?? null,
+      tags: {
+        anomalyId: anomaly.id,
+        anomalyType: anomaly.type,
+        taskId: (task?.id ?? taskId) || undefined
+      },
+      extra: {
+        reporter: anomaly.reporter,
+        context: anomaly.context,
+        note: note || null
+      }
+    });
+    await updateOpsAnomalyExternal(anomaly.id, { incidentResult: result });
+    anomaly.external = { incidentResult: result };
+  }
+
+  return res.json({ ok: true, anomaly });
 });
 
 app.get("/questions", (_req, res) => {
@@ -46460,6 +46654,8 @@ function escapeXml(s: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 }
+
+installIncidentErrorHandlers(app);
 
 const port = Number.parseInt(process.env.PORT ?? "3001", 10);
 const server = app.listen(port, () => {

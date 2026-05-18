@@ -13,6 +13,7 @@ type Example = {
     is_availability_question?: boolean | null;
     is_test_ride_context?: boolean | null;
     model_contains?: string | null;
+    model_not_contains?: string | null;
     year?: number | null;
     color_contains?: string | null;
     stock_id?: string | null;
@@ -67,6 +68,13 @@ for (const ex of examples) {
       expected.model_contains == null
         ? !result.model
         : norm(result.model).includes(norm(expected.model_contains))
+    );
+  }
+  if (Object.hasOwn(expected, "model_not_contains")) {
+    checks.push(
+      expected.model_not_contains == null
+        ? true
+        : !norm(result.model).includes(norm(expected.model_not_contains))
     );
   }
   if (Object.hasOwn(expected, "target_type")) {

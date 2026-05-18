@@ -105,6 +105,11 @@ async function run() {
   const toneFailuresPath = path.join(toneOutDir, "tone_quality_failures.json");
   const voiceSummaryPath = path.join(voiceOutDir, "voice_feedback_summary.json");
   const voiceRowsPath = path.join(voiceOutDir, "voice_feedback_rows.json");
+  const agentManagerOutDir =
+    process.env.AGENT_MANAGER_OUT_DIR ||
+    path.resolve(path.dirname(outDir), "agent_manager");
+  const agentManagerJsonPath = path.join(agentManagerOutDir, "agent_manager_report.json");
+  const agentManagerMdPath = path.join(agentManagerOutDir, "agent_manager_report.md");
 
   const summary = readJson(summaryPath);
   if (!summary) {
@@ -115,6 +120,7 @@ async function run() {
   const summaryWindowStart = String(summary.windowStart ?? summary?.source?.windowStart ?? "").trim();
   const toneSummary = readJson(toneSummaryPath);
   const voiceSummary = readJson(voiceSummaryPath);
+  const agentManagerSummary = readJson(agentManagerJsonPath);
 
   const auditPath = String(process.env.FEEDBACK_REPORT_AUDIT_PATH ?? "").trim();
   const mineLogPath = String(process.env.FEEDBACK_REPORT_MINE_LOG_PATH ?? "").trim();
@@ -169,6 +175,20 @@ async function run() {
       voiceSummary ? fmtCountRows(voiceSummary.outboundProviderStats, "provider") : "none"
     }`,
     "",
+    `Agent manager: ${
+      agentManagerSummary
+        ? `status=${agentManagerSummary.status ?? "unknown"} tasks=${Array.isArray(agentManagerSummary.tasks) ? agentManagerSummary.tasks.length : 0}`
+        : "not available"
+    }`,
+    `Agent manager top tasks: ${
+      Array.isArray(agentManagerSummary?.tasks) && agentManagerSummary.tasks.length
+        ? agentManagerSummary.tasks
+            .slice(0, 5)
+            .map((task: AnyObj) => `${task.priority ?? "P?"} ${task.title ?? "Untitled"}`)
+            .join("; ")
+        : "none"
+    }`,
+    "",
     `Output directory: ${outDir}`
   ].join("\n");
 
@@ -197,6 +217,8 @@ async function run() {
     maybeAttach(toneFailuresPath, "tone_quality_failures.json");
     maybeAttach(voiceSummaryPath, "voice_feedback_summary.json");
     maybeAttach(voiceRowsPath, "voice_feedback_rows.json");
+    maybeAttach(agentManagerJsonPath, "agent_manager_report.json");
+    maybeAttach(agentManagerMdPath, "agent_manager_report.md", "text/markdown");
     if (attachFull) {
       maybeAttach(fixturesPath, "edit_replay_fixtures.json");
       maybeAttach(labeledPath, "edit_feedback_labeled.json");
@@ -216,6 +238,8 @@ async function run() {
       toneFailuresPath,
       voiceSummaryPath,
       voiceRowsPath,
+      agentManagerJsonPath,
+      agentManagerMdPath,
       ...(attachFull ? [fixturesPath, labeledPath] : []),
       ...(auditPath ? [auditPath] : []),
       ...(mineLogPath ? [mineLogPath] : [])

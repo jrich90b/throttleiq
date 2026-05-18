@@ -8487,6 +8487,45 @@ export default function Home() {
     await load();
   }
 
+  async function reportTodoIssue(todo?: TodoItem) {
+    const issueTypeInput = window.prompt(
+      "What kind of issue is this? Use routing, task_inbox, cadence, inventory, integration, ui, tone, or other.",
+      "task_inbox"
+    );
+    if (issueTypeInput === null) return;
+    const noteInput = window.prompt("What went wrong? Add the detail the daily loop should review.");
+    if (noteInput === null) return;
+    const note = noteInput.trim();
+    if (!note) {
+      window.alert("Please describe what went wrong.");
+      return;
+    }
+    const type = issueTypeInput.trim().toLowerCase() || "task_inbox";
+    const resp = await fetch("/api/ops/anomalies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type,
+        severity: type === "integration" ? "error" : "warning",
+        title: todo
+          ? `Task Inbox issue: ${todo.reason || "task"} for ${todo.leadName || todo.leadKey}`
+          : `Task Inbox issue: ${type}`,
+        note,
+        convId: todo?.convId,
+        taskId: todo?.id,
+        pageUrl: typeof window !== "undefined" ? window.location.href : undefined,
+        section: "todos",
+        createTicket: true
+      })
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.ok === false) {
+      window.alert(data?.error ?? "Failed to report issue");
+      return;
+    }
+    setSaveToast(data?.anomaly?.external?.incidentResult?.linearIssueId ? "Issue reported and ticket created." : "Issue reported.");
+  }
+
   async function markQuestionDone(q: QuestionItem) {
     const outcome = questionOutcomeById[q.id] ?? q.outcome ?? "";
     const followUpAction = questionFollowUpById[q.id] ?? q.followUpAction ?? "";
@@ -11821,6 +11860,7 @@ export default function Home() {
             setAppointmentCloseNote={setAppointmentCloseNote}
             setAppointmentCloseOpen={setAppointmentCloseOpen}
             markTodoDone={markTodoDone}
+            reportTodoIssue={reportTodoIssue}
             renderDealTemperatureIcon={renderDealTemperatureIcon}
             getDealTemperature={getDealTemperature}
             loading={loading}

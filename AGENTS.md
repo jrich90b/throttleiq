@@ -8,6 +8,8 @@ This project uses a **hybrid** approach with a **parser-first requirement for ne
 ## Parser-First Rule (New States)
 When adding a new customer state/disposition, do **not** start with standalone regex routing.
 
+Treat parser-first as the default for any new customer workflow/state, especially when the phrasing can vary in production. The user should not have to remind the agent to do this. Deterministic text checks may be used only as safety gates, exact compliance controls, or fallback after the parser is disabled/low-confidence.
+
 Required order:
 1) Add a typed parser schema in `services/api/src/domain/llmDraft.ts`.
 2) Add a typed parse result and parser function with confidence output.
@@ -18,6 +20,10 @@ Required order:
 5) Keep regex only as fallback when parser is disabled/low-confidence.
 6) Add eval fixtures for new state phrases before deployment.
 7) Keep parser few-shot examples updated for newly observed production misses (live inbound and regenerate parity cases).
+
+Parser-first candidates called out from production misses:
+- Hiring / careers / employment inquiries (for example “Who is the hiring manager?”, “Are you hiring?”, “Where do I send a resume?”, “I applied online, who handles that?”) should be routed through a typed parser + shared handler, not regex-only.
+- Accessory / customization / demo-status requests (for example handlebars, heated grips/seat, stereo/speakers, pipes/exhaust) should remain parser-first with deterministic fallback only.
 
 ## ADF Inquiry Priority
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.

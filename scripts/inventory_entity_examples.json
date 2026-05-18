@@ -70,6 +70,46 @@
     }
   },
   {
+    "id": "room58_triglide_unit_stays_tri_glide_1",
+    "text": "Looking at the triglide This is the unit here: Harley-Davidson Tri Glide Ultra 2025 FLHTCUTG T58-25 Vivid Black - Black Finish",
+    "expected": {
+      "target_type": "stock_id",
+      "is_availability_question": true,
+      "model_contains": "tri glide",
+      "year": 2025,
+      "stock_id": "T58-25"
+    }
+  },
+  {
+    "id": "street_glide_3_limited_not_2025_1",
+    "text": "Do you have a 2025 Street Glide 3 Limited?",
+    "expected": {
+      "target_type": "exact_year_model",
+      "is_availability_question": true,
+      "model_contains": "street glide",
+      "model_not_contains": "street glide 3 limited",
+      "year": 2025
+    }
+  },
+  {
+    "id": "tri_glide_alternate_not_street_glide_3_1",
+    "text": "how about a tri glide instead?",
+    "expected": {
+      "target_type": "alternate_request",
+      "is_availability_question": true,
+      "model_contains": "tri glide"
+    }
+  },
+  {
+    "id": "spoken_triglycerides_maps_tri_glide_1",
+    "text": "how about a triglycerides instead?",
+    "expected": {
+      "target_type": "alternate_request",
+      "is_availability_question": true,
+      "model_contains": "tri glide"
+    }
+  },
+  {
     "id": "image_reference_availability_1",
     "text": "Is this available as well? MMS image attachment",
     "expected": {

@@ -98,6 +98,25 @@
     }
   },
   {
+    "id": "reschedule_booked_window_adjustment_930_10_1",
+    "text": "hey! Could we do 9:30-10",
+    "appointment": {
+      "status": "confirmed",
+      "whenIso": "2026-05-09T13:30:00.000Z",
+      "bookedEventId": "event_123"
+    },
+    "expected": {
+      "intent": "reschedule",
+      "explicit_request": true,
+      "requested": {
+        "time_text": "9:30-10",
+        "time_window": "range"
+      },
+      "reference": "last_appointment",
+      "normalized_contains": "9:30-10"
+    }
+  },
+  {
     "id": "cancel_today_1",
     "text": "I need to cancel my appointment for today.",
     "expected": {
