@@ -23062,18 +23062,17 @@ async function processStaffAppointmentNotifications() {
     if (conv.status === "closed") continue;
 
     const user = users.find(u => u.id === appt.bookedSalespersonId);
-    if (!user?.phone) continue;
-    const toNumber = normalizePhone(user.phone);
-    if (!toNumber.startsWith("+")) continue;
+    const toNumber = user?.phone ? normalizePhone(user.phone) : "";
+    const hasStaffSmsNumber = toNumber.startsWith("+");
 
     appt.staffNotify = appt.staffNotify ?? {};
     const token = ensureAppointmentOutcomeToken(appt);
     const link = buildStaffOutcomeLink(token);
-    if (String(appt.staffNotify.userId ?? "").trim() !== String(user.id ?? "").trim()) {
+    if (user && String(appt.staffNotify.userId ?? "").trim() !== String(user.id ?? "").trim()) {
       appt.staffNotify.userId = String(user.id ?? "").trim() || undefined;
       changed = true;
     }
-    if (String(appt.staffNotify.phone ?? "").trim() !== toNumber) {
+    if (hasStaffSmsNumber && String(appt.staffNotify.phone ?? "").trim() !== toNumber) {
       appt.staffNotify.phone = toNumber;
       changed = true;
     }
@@ -23130,7 +23129,7 @@ async function processStaffAppointmentNotifications() {
       ]
         .filter(Boolean)
         .join("\n");
-      const sent = await sendInternalSms(toNumber, bookedText);
+      const sent = hasStaffSmsNumber ? await sendInternalSms(toNumber, bookedText) : false;
       if (sent) {
         appt.staffNotify.bookedSentAt = new Date().toISOString();
         appt.staffNotify.lastEventId = appt.bookedEventId;
@@ -23160,6 +23159,35 @@ async function processStaffAppointmentNotifications() {
         : new Date(start.getTime() + Math.max(15, Number(durationMinutes) || 60) * 60 * 1000);
     const followAt = new Date(endAt.getTime() + 15 * 60 * 1000);
     if (now < followAt) continue;
+
+    const hasOpenAppointmentTodo = listOpenTodos().some(todo => {
+      if (todo.convId !== conv.id || todo.status !== "open") return false;
+      const taskClass = String(todo.taskClass ?? inferTodoTaskClass(todo.reason, todo.summary, todo))
+        .trim()
+        .toLowerCase();
+      return taskClass === "appointment";
+    });
+    if (!hasOpenAppointmentTodo) {
+      const task = addTodo(
+        conv,
+        "other",
+        `Appointment outcome needed: record what happened for ${customerName}'s ${whenLocal} appointment.`,
+        `appointment_outcome:${String(appt.bookedEventId ?? appt.whenIso ?? "").trim()}`,
+        user
+          ? {
+              id: String(user.id ?? "").trim() || undefined,
+              name:
+                [user.firstName, user.lastName].filter(Boolean).join(" ").trim() ||
+                String(user.name ?? user.email ?? "").trim() ||
+                undefined
+            }
+          : undefined,
+        { dueAt: appt.whenIso },
+        "appointment",
+        { allowSoldLead: true }
+      );
+      if (task) changed = true;
+    }
 
     if (isFinanceOutcomeManagedByCall) {
       if (String(conv?.financeOutcome?.status ?? "").trim()) continue;
@@ -23210,6 +23238,7 @@ async function processStaffAppointmentNotifications() {
       : isRepeatReminder
         ? `Reminder: please record the outcome for ${customerName}'s ${whenLocal} appointment.`
         : `Did ${customerName} show for the ${whenLocal} appointment?`;
+    if (!hasStaffSmsNumber) continue;
     const followSent = await sendInternalSms(toNumber, followText);
     if (followSent) {
       appt.staffNotify.followUpSentAt = new Date().toISOString();
