@@ -767,7 +767,21 @@ type ConversationListItem = {
     lastNotifiedAt?: string;
   } | null;
   classification?: { bucket?: string; cta?: string } | null;
-  appointment?: { status?: string } | null;
+  appointment?: {
+    status?: string;
+    whenIso?: string | null;
+    whenText?: string | null;
+    staffNotify?: {
+      followUpSentAt?: string | null;
+      outcomeReminderCount?: number | null;
+      outcome?: {
+        status?: string | null;
+        primaryStatus?: string | null;
+        secondaryStatus?: string | null;
+        updatedAt?: string | null;
+      } | null;
+    } | null;
+  } | null;
   scheduler?: { preferredSalespersonId?: string; preferredSalespersonName?: string } | null;
   updatedAt: string;
   messageCount: number;

@@ -80,6 +80,7 @@ export type AppointmentMemory = {
     bookedSentAt?: string;
     followUpSentAt?: string;
     lastEventId?: string | null;
+    outcomeReminderCount?: number;
     outcomeToken?: string;
     userId?: string;
     phone?: string;
@@ -2589,6 +2590,27 @@ export function listConversations() {
         engagement: c.engagement ?? null,
         sale: c.sale ?? null,
         classification: c.classification ?? null,
+        appointment: c.appointment
+          ? {
+              status: c.appointment.status,
+              whenIso: c.appointment.whenIso ?? null,
+              whenText: c.appointment.whenText ?? null,
+              staffNotify: c.appointment.staffNotify
+                ? {
+                    followUpSentAt: c.appointment.staffNotify.followUpSentAt ?? null,
+                    outcomeReminderCount: c.appointment.staffNotify.outcomeReminderCount ?? null,
+                    outcome: c.appointment.staffNotify.outcome
+                      ? {
+                          status: c.appointment.staffNotify.outcome.status ?? null,
+                          primaryStatus: c.appointment.staffNotify.outcome.primaryStatus ?? null,
+                          secondaryStatus: c.appointment.staffNotify.outcome.secondaryStatus ?? null,
+                          updatedAt: c.appointment.staffNotify.outcome.updatedAt ?? null
+                        }
+                      : null
+                  }
+                : null
+            }
+          : null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
         hold: c.hold ?? null,

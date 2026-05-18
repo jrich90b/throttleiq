@@ -131,6 +131,14 @@ export function InboxSection(props: any) {
     return !isShortAckNoActionText(lastMessage?.body ?? "");
   };
 
+  const hasOutcomeReminderSent = (conversation: any) => {
+    if (String(conversation?.status ?? "").trim().toLowerCase() === "closed") return false;
+    const notify = conversation?.appointment?.staffNotify ?? null;
+    if (!notify?.followUpSentAt) return false;
+    if (notify?.outcome) return false;
+    return true;
+  };
+
   return (
     <>
       <div className="mt-4 flex items-center justify-between">
@@ -336,6 +344,15 @@ export function InboxSection(props: any) {
                                 {linkedOpenCampaign ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-100 text-gray-700 border-gray-300">
                                     Open in Inbox
+                                  </span>
+                                ) : null}
+                                {hasOutcomeReminderSent(c) ? (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
+                                    title="Outcome reminder SMS sent to salesperson"
+                                  >
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                    Outcome needed
                                   </span>
                                 ) : null}
                               </div>
