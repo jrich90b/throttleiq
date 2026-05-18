@@ -31876,15 +31876,16 @@ app.delete("/suppressions/:phone", requirePermission("canAccessSuppressions"), a
 
 function buildTranscript(
   conv: any,
-  opts?: { since?: string; maxMessages?: number }
+  opts?: { since?: string; maxMessages?: number; leadRef?: string }
 ): { note: string; lastAt?: string; count: number } {
-  const lead = conv.lead ?? {};
+  const requestedLeadRef = normalizeLeadRef(opts?.leadRef);
+  const lead = leadProfileForRef(conv, requestedLeadRef) ?? conv.lead ?? {};
   const vehicle = lead.vehicle ?? {};
   const since = opts?.since;
   const maxMessages = opts?.maxMessages ?? 60;
   const header = [
     `LeadKey: ${conv.leadKey}`,
-    lead.leadRef ? `Lead Ref: ${lead.leadRef}` : null,
+    requestedLeadRef || lead.leadRef ? `Lead Ref: ${requestedLeadRef || lead.leadRef}` : null,
     lead.firstName || lead.lastName ? `Name: ${(lead.firstName ?? "").trim()} ${(lead.lastName ?? "").trim()}`.trim() : null,
     lead.phone ? `Phone: ${lead.phone}` : null,
     lead.email ? `Email: ${lead.email}` : null,
@@ -31901,6 +31902,11 @@ function buildTranscript(
   let messages = Array.isArray(conv.messages) ? conv.messages : [];
   if (since) {
     messages = messages.filter((m: any) => m?.at && m.at > since);
+  } else if (requestedLeadRef) {
+    const leadAdfAt = adfMessageAtForLeadRef(conv, requestedLeadRef);
+    if (leadAdfAt) {
+      messages = messages.filter((m: any) => m?.at && m.at >= leadAdfAt);
+    }
   }
   if (maxMessages > 0) {
     messages = messages.slice(-maxMessages);
@@ -31919,6 +31925,76 @@ function buildTranscript(
   const note = `${header}\n\nNew messages:\n${lines.join("\n")}`.trim();
   const lastAt = messages[messages.length - 1]?.at;
   return { note, lastAt, count: messages.length };
+}
+
+function normalizeLeadRef(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function extractLeadRefFromAdfBody(body: unknown): string {
+  const text = String(body ?? "");
+  return (
+    text.match(/(?:^|\n)\s*Ref:\s*([^\n\r]+)/i)?.[1]?.trim() ||
+    text.match(/(?:^|\n)\s*Lead\s*Ref:\s*([^\n\r]+)/i)?.[1]?.trim() ||
+    ""
+  );
+}
+
+function leadProfileForRef(conv: any, leadRef: string): any | null {
+  const normalized = normalizeLeadRef(leadRef);
+  if (!normalized) return null;
+  const candidates = [conv?.latestLead, conv?.lead, conv?.originalLead];
+  return candidates.find(profile => normalizeLeadRef(profile?.leadRef) === normalized) ?? null;
+}
+
+function adfMessageAtForLeadRef(conv: any, leadRef: string): string | null {
+  const normalized = normalizeLeadRef(leadRef);
+  if (!normalized || !Array.isArray(conv?.messages)) return null;
+  for (const message of conv.messages) {
+    if (message?.direction !== "in") continue;
+    if (String(message?.provider ?? "").toLowerCase() !== "sendgrid_adf") continue;
+    if (extractLeadRefFromAdfBody(message?.body) === normalized) {
+      return String(message?.at ?? "").trim() || null;
+    }
+  }
+  return null;
+}
+
+function resolveTlpContactLeadRef(
+  conv: any,
+  opts?: { explicitLeadRef?: unknown; draftId?: unknown }
+): string {
+  const explicit = normalizeLeadRef(opts?.explicitLeadRef);
+  if (explicit) return explicit;
+  if (!Array.isArray(conv?.messages)) {
+    return normalizeLeadRef(conv?.latestLead?.leadRef) || normalizeLeadRef(conv?.lead?.leadRef);
+  }
+
+  const draftId = normalizeLeadRef(opts?.draftId);
+  const draftIndex = draftId ? conv.messages.findIndex((m: any) => String(m?.id ?? "") === draftId) : -1;
+  const scanEndExclusive = draftIndex >= 0 ? draftIndex : conv.messages.length;
+  for (let i = scanEndExclusive - 1; i >= 0; i -= 1) {
+    const message = conv.messages[i];
+    if (message?.direction !== "in") continue;
+    if (String(message?.provider ?? "").toLowerCase() !== "sendgrid_adf") continue;
+    const ref = extractLeadRefFromAdfBody(message?.body);
+    if (ref) return ref;
+  }
+  for (let i = conv.messages.length - 1; i >= 0; i -= 1) {
+    const message = conv.messages[i];
+    if (message?.direction !== "in") continue;
+    if (String(message?.provider ?? "").toLowerCase() !== "sendgrid_adf") continue;
+    const ref = extractLeadRefFromAdfBody(message?.body);
+    if (ref) return ref;
+  }
+
+  return normalizeLeadRef(conv?.latestLead?.leadRef) || normalizeLeadRef(conv?.lead?.leadRef);
+}
+
+function crmLastLoggedAtForLeadRef(conv: any, leadRef: string): string | undefined {
+  const normalized = normalizeLeadRef(leadRef);
+  if (!normalized) return undefined;
+  return conv?.crm?.lastLoggedAtByLeadRef?.[normalized];
 }
 
 function messageMmsMaxBytes(): number {
@@ -32060,14 +32136,17 @@ app.post("/crm/tlp/log-contact", async (req, res) => {
   const conv = getConversation(conversationId);
   if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found" });
 
-  const { note, lastAt, count } = buildTranscript(conv, { since: conv.crm?.lastLoggedAt });
+  const { note, lastAt, count } = buildTranscript(conv, {
+    since: crmLastLoggedAtForLeadRef(conv, leadRef),
+    leadRef
+  });
   if (count === 0 || !note) {
     return res.json({ ok: true, skipped: true, reason: "no_new_messages" });
   }
 
   try {
     await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note, categoryValue });
-    if (lastAt) setCrmLastLoggedAt(conv, lastAt);
+    if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
     return res.json({ ok: true });
   } catch (err: any) {
     const msg = buildTlpLogFailureQuestion(leadRef, err);
@@ -33004,12 +33083,18 @@ app.post("/conversations/:id/send", async (req, res) => {
   };
 
   const maybeLogTlp = async () => {
-    const leadRef = conv.lead?.leadRef;
+    const leadRef = resolveTlpContactLeadRef(conv, {
+      explicitLeadRef: req.body?.leadRef ?? req.body?.tlpLeadRef,
+      draftId
+    });
     if (!leadRef) {
       console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
       return;
     }
-    const { note, lastAt, count } = buildTranscript(conv, { since: conv.crm?.lastLoggedAt });
+    const { note, lastAt, count } = buildTranscript(conv, {
+      since: crmLastLoggedAtForLeadRef(conv, leadRef),
+      leadRef
+    });
     if (count === 0 || !note) {
       console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
       return;
@@ -33023,7 +33108,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
       console.log("📝 TLP log start", { leadRef, convId: conv.id });
       await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
-      if (lastAt) setCrmLastLoggedAt(conv, lastAt);
+      if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
       console.warn("⚠️ TLP log failed:", err?.message ?? err);
@@ -46598,12 +46683,12 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
       saveConversation(conv);
       await flushConversationStore();
 
-      const leadRef = conv.lead?.leadRef;
+      const leadRef = resolveTlpContactLeadRef(conv);
       if (leadRef) {
         try {
           await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note: noteText, contactedValue });
           const lastAt = conv.messages[conv.messages.length - 1]?.at;
-          if (lastAt) setCrmLastLoggedAt(conv, lastAt);
+          if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
         } catch (err: any) {
           const msg = buildTlpLogFailureQuestion(leadRef, err);
           addInternalQuestion(conv.id, conv.leadKey, msg);

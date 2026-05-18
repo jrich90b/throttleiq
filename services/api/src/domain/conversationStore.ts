@@ -591,7 +591,7 @@ export type Conversation = {
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
   objections?: ObjectionState;
-  crm?: { lastLoggedAt?: string };
+  crm?: { lastLoggedAt?: string; lastLoggedAtByLeadRef?: Record<string, string> };
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
@@ -4038,9 +4038,14 @@ export function markOpenTodosDoneForConversationByClass(
   return count;
 }
 
-export function setCrmLastLoggedAt(conv: Conversation, iso: string) {
+export function setCrmLastLoggedAt(conv: Conversation, iso: string, leadRef?: string) {
   conv.crm = conv.crm ?? {};
   conv.crm.lastLoggedAt = iso;
+  const normalizedLeadRef = String(leadRef ?? "").trim();
+  if (normalizedLeadRef) {
+    conv.crm.lastLoggedAtByLeadRef = conv.crm.lastLoggedAtByLeadRef ?? {};
+    conv.crm.lastLoggedAtByLeadRef[normalizedLeadRef] = iso;
+  }
   conv.updatedAt = nowIso();
   scheduleSave();
 }
