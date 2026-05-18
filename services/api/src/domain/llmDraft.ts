@@ -1755,6 +1755,7 @@ export type InventoryStatusIntent =
   | "hold_status_question"
   | "incoming_status_question"
   | "factory_order_eta"
+  | "unlisted_inventory_followup"
   | "alternate_inventory_request"
   | "image_availability_check"
   | "none";
@@ -2644,6 +2645,7 @@ const INVENTORY_STATUS_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "hold_status_question",
         "incoming_status_question",
         "factory_order_eta",
+        "unlisted_inventory_followup",
         "alternate_inventory_request",
         "image_availability_check",
         "none"
@@ -6695,6 +6697,8 @@ export async function parseInventoryStatusWithLLM(args: {
     'input: "Customer: Hi! Do you have any Street Bob coming in." output: {"intent":"incoming_status_question","explicit_request":true,"model":"Street Bob","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
     'input: "Customer: Hey Gio.. is there anything in the back that we looked at that would fit my budget?" output: {"intent":"incoming_status_question","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
     'input: "Customer: anything not listed online yet around my payment range?" output: {"intent":"incoming_status_question","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
+    'history: "in: did you happen to run those numbers for that bike in the back?" input: "Customer: Can you send me some pics. I wont be able to make it today" output: {"intent":"unlisted_inventory_followup","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
+    'history: "in: is that bike in the back listed yet?" input: "Customer: Did G run numbers on it?" output: {"intent":"unlisted_inventory_followup","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
     'input: "Customer: how long would it take to get a 2026 nightster in" output: {"intent":"factory_order_eta","explicit_request":true,"model":"Nightster","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
     'input: "Customer: Do you the sportster or nightster in stock? Or something a bit lighter than the low rider" output: {"intent":"alternate_inventory_request","explicit_request":true,"model":"Sportster","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
     'input: "Customer: Is this available as well? [MMS image attachment]" output: {"intent":"image_availability_check","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
@@ -6710,11 +6714,13 @@ export async function parseInventoryStatusWithLLM(args: {
     "- hold_status_question: asks about a bike already described as on hold, including how long it is on hold.",
     "- incoming_status_question: asks whether a model is coming in, inbound, on order, expected soon, in the back/back room, or not listed/posted online yet.",
     "- factory_order_eta: asks how long it takes to get/order a model from the factory.",
+    "- unlisted_inventory_followup: current message asks for photos/pictures/video or numbers/payments on a bike that recent history identifies as in the back/back room or not listed online yet.",
     "- alternate_inventory_request: asks for alternatives or multiple models/options after a prior bike was too big/unavailable.",
     "- image_availability_check: asks if an attached/screenshot bike is available.",
     "- none: no inventory status request.",
     "- explicit_request is true only for a customer ask that should receive an inventory/status answer.",
     "- Extract target fields only when explicit in the customer message; do not infer from history except that hold_status_question may have empty target.",
+    "- For unlisted_inventory_followup, use recent history only to determine that 'it/that bike' refers to a back-room or unlisted bike; do not answer from public inventory.",
     "- If hasInboundMedia is true and text says this/that/it available, use image_availability_check.",
     "",
     `Has inbound media: ${args.hasInboundMedia ? "yes" : "no"}`,
@@ -6761,6 +6767,7 @@ export async function parseInventoryStatusWithLLM(args: {
     "hold_status_question",
     "incoming_status_question",
     "factory_order_eta",
+    "unlisted_inventory_followup",
     "alternate_inventory_request",
     "image_availability_check",
     "none"

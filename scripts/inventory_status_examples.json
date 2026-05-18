@@ -75,6 +75,34 @@
     }
   },
   {
+    "id": "unlisted_back_room_photos_followup_1",
+    "text": "Can you send me some pics. I wont be able to make it today",
+    "history": [
+      {
+        "direction": "in",
+        "body": "G hope all is well.. did you happen to run those numbers for that bike in the back?"
+      }
+    ],
+    "expected": {
+      "intent": "unlisted_inventory_followup",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "unlisted_back_room_numbers_followup_1",
+    "text": "Did G run numbers on it?",
+    "history": [
+      {
+        "direction": "in",
+        "body": "Is the bike in the back listed yet?"
+      }
+    ],
+    "expected": {
+      "intent": "unlisted_inventory_followup",
+      "explicit_request": true
+    }
+  },
+  {
     "id": "factory_eta_nightster_1",
     "text": "how long would it take to get a 2026 nightster in",
     "expected": {

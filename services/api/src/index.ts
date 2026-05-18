@@ -6091,13 +6091,34 @@ async function maybeHandleInventoryStatusParserRoute(args: {
     });
     return { kind: "reply", reply: buildHoldStatusQuestionReply(args.conv, args.parsedStatus) };
   }
-  if (intent === "incoming_status_question" || intent === "factory_order_eta") {
+  if (
+    intent === "incoming_status_question" ||
+    intent === "factory_order_eta" ||
+    intent === "unlisted_inventory_followup"
+  ) {
     const modelLabel = resolveFactoryOrderTimingModelLabel(
       args.text ?? "",
       args.parsedAvailability ?? inventoryStatusParseToAvailabilityHint(args.parsedStatus),
       args.conv
     );
-    const unlistedInventoryRequest = isUnlistedInventoryQuestionText(args.text ?? "");
+    const unlistedInventoryRequest =
+      intent === "unlisted_inventory_followup" ||
+      isBackRoomInventoryManualTurnoverRequest({ conv: args.conv, text: args.text ?? "" }) ||
+      isUnlistedInventoryQuestionText(args.text ?? "");
+    if (intent === "unlisted_inventory_followup") {
+      const reply = applyBackRoomInventoryManualTurnover({
+        conv: args.conv,
+        text: args.text ?? "",
+        providerMessageId: args.providerMessageId,
+        scope: args.scope
+      });
+      recordRouteOutcome(args.scope, "inventory_status_unlisted_followup", {
+        convId: args.conv.id,
+        leadKey: args.conv.leadKey,
+        confidence: args.parsedStatus?.confidence ?? null
+      });
+      return { kind: "reply", reply };
+    }
     const reply = unlistedInventoryRequest
       ? buildUnlistedInventoryHandoffReply(modelLabel)
       : buildFactoryOrderTimingHandoffReply(modelLabel);
@@ -6201,6 +6222,118 @@ function hasFactoryOrderTimingParserHint(text: string | null | undefined): boole
       lower
     )
   );
+}
+
+function hasBackRoomBikeReference(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  return (
+    /\b(?:that|the|this)\s+bikes?\s+(?:in|out)\s+(?:the\s+)?back\b/.test(text) ||
+    /\b(?:that|the|this)\s+(?:one|unit)\s+(?:in|out)\s+(?:the\s+)?back\b/.test(text) ||
+    /\b(?:bike|unit|one)\s+(?:from|in|out)\s+(?:the\s+)?(?:back|back room|backroom)\b/.test(text)
+  );
+}
+
+function isPhotoOrWalkaroundRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    /\b(?:send|text|shoot|get|show)\b[\s\S]{0,70}\b(?:pics?|photos?|pictures?|images?|video|walk[-\s]?around)\b/.test(
+      text
+    ) ||
+    /\b(?:pics?|photos?|pictures?|images?|video|walk[-\s]?around)\b[\s\S]{0,50}\b(?:please|pls|plz|send|text)\b/.test(
+      text
+    )
+  );
+}
+
+function isNumbersFollowupRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    isPaymentNumbersStatusQuestionText(text) ||
+    /\b(?:run|ran|work(?:ed)?|figure(?:d)?|check(?:ed)?|send)\b[\s\S]{0,80}\b(?:numbers?|payments?|payment quote|quote|price|out the door|otd)\b/.test(
+      text
+    )
+  );
+}
+
+function recentBackRoomInventoryContextText(conv: Conversation): string {
+  const directMessages = (conv.messages ?? [])
+    .slice(-10)
+    .map(m => String(m.body ?? ""))
+    .join(" ");
+  const effective = buildHistory(conv, 10)
+    .map(h => String(h.body ?? ""))
+    .join(" ");
+  return `${directMessages} ${effective}`.trim();
+}
+
+function isBackRoomInventoryManualTurnoverRequest(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+}): boolean {
+  const text = String(args.text ?? "");
+  const asksForManualAssetOrNumbers =
+    isPhotoOrWalkaroundRequestText(text) || isNumbersFollowupRequestText(text);
+  if (!asksForManualAssetOrNumbers && !isUnlistedInventoryQuestionText(text) && !hasBackRoomBikeReference(text)) {
+    return false;
+  }
+  if (isUnlistedInventoryQuestionText(text) || hasBackRoomBikeReference(text)) return true;
+
+  const reason = String(args.conv.followUp?.reason ?? "").toLowerCase();
+  if (reason === "unlisted_inventory_check" || reason === "payment_numbers_status") return true;
+
+  const recentText = recentBackRoomInventoryContextText(args.conv);
+  return isUnlistedInventoryQuestionText(recentText) || hasBackRoomBikeReference(recentText);
+}
+
+function applyBackRoomInventoryManualTurnover(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+}): string {
+  const requestText = String(args.text ?? "").trim();
+  const wantsPhotos = isPhotoOrWalkaroundRequestText(requestText);
+  const wantsNumbers = isNumbersFollowupRequestText(requestText);
+  const actionLabel =
+    wantsPhotos && wantsNumbers
+      ? "send photos and numbers"
+      : wantsPhotos
+        ? "send photos"
+        : wantsNumbers
+          ? "run/send numbers"
+          : "follow up";
+  addTodo(
+    args.conv,
+    wantsNumbers ? "payments" : "other",
+    `Manual follow-up: ${actionLabel} for the unlisted/back-room bike. Customer asked: ${requestText || "back-room inventory follow-up"}`,
+    args.providerMessageId ?? undefined
+  );
+  setDialogState(args.conv, wantsNumbers ? "payments_handoff" : "inventory_answered");
+  setFollowUpMode(args.conv, "manual_handoff", "unlisted_inventory_check");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "unlisted_inventory_check", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "unlisted_inventory_manual_turnover", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    wantsPhotos,
+    wantsNumbers
+  });
+  if (wantsPhotos && wantsNumbers) {
+    return "Got it — I’ll get you photos and numbers on that bike in the back and follow up shortly.";
+  }
+  if (wantsPhotos) {
+    return "Got it — I’ll get you photos of that bike in the back and follow up shortly.";
+  }
+  if (wantsNumbers) {
+    return "Got it — I’ll check the numbers on that bike in the back and follow up shortly.";
+  }
+  return "Got it — I’ll check on that bike in the back and follow up shortly.";
 }
 
 async function maybeHandleFactoryOrderTimingFaq(args: {
@@ -35502,6 +35635,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       regenInventoryStatusResolution.kind === "reply" ? regenInventoryStatusResolution.mediaUrls : undefined
     );
   }
+  if (
+    event.provider === "twilio" &&
+    !regenParserPricingIntent &&
+    isBackRoomInventoryManualTurnoverRequest({ conv, text: event.body ?? "" })
+  ) {
+    const reply = applyBackRoomInventoryManualTurnover({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      scope: "regen"
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: true,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   const regenAppointmentTimingAcceptedForRouting = isAppointmentTimingParserAccepted(regenAppointmentTimingParse);
   if (event.provider === "twilio" && isBusinessHoursQuestionText(event.body ?? "")) {
     const reply = await buildBusinessHoursQuestionReply(event.body ?? "");
@@ -40679,6 +40832,29 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
     )}${mediaTags}\n  </Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (
+    event.provider === "twilio" &&
+    !pricingSignal &&
+    !explicitScheduleSignal &&
+    isBackRoomInventoryManualTurnoverRequest({ conv, text: event.body ?? "" })
+  ) {
+    const reply = applyBackRoomInventoryManualTurnover({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
   if (
