@@ -161,6 +161,10 @@ export function TaskInboxSection(props: any) {
                       secondary: appointmentOutcomeSecondaryStatus || null,
                       legacy: appointmentOutcomeStatus || null
                     });
+                    const appointmentReminderSent =
+                      sectionType === "appointment" &&
+                      !appointmentOutcomeLabel &&
+                      Boolean(String(rowConv?.appointment?.staffNotify?.followUpSentAt ?? "").trim());
                     return (
                       <div
                         key={t.id}
@@ -171,6 +175,15 @@ export function TaskInboxSection(props: any) {
                             <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${taskTagClass}`}>
                               {taskLabel}
                             </span>
+                            {appointmentReminderSent ? (
+                              <span
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
+                                title="Outcome reminder SMS sent to salesperson"
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                Outcome needed
+                              </span>
+                            ) : null}
                           </div>
                           {t.leadName ? (
                             <>
