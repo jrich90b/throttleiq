@@ -32344,9 +32344,8 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
   const actorUserId = String(user?.id ?? "").trim();
   const actorUserName = String(user?.name ?? user?.email ?? "").trim();
-  const actorUserRole = String(user?.role ?? "").trim().toLowerCase();
   const outboundSendTimeoutMs = Number(process.env.OUTBOUND_SEND_TIMEOUT_MS ?? 20000);
-  const claimLeadOwnerFromActor = () => {
+  const recordManualSenderFromActor = () => {
     if (!actorUserId && !actorUserName) return;
     const now = new Date().toISOString();
     if (actorUserName) {
@@ -32357,22 +32356,6 @@ app.post("/conversations/:id/send", async (req, res) => {
         source: "manual_takeover"
       };
     }
-    if (!actorUserId) return;
-    const existingOwner = conv.leadOwner;
-    const hasExistingOwner = !!String(existingOwner?.id ?? "").trim();
-    const actorCanOwnLead = actorUserRole === "salesperson" || actorUserRole === "manager";
-    if (hasExistingOwner && !actorCanOwnLead) {
-      return;
-    }
-    const assignedAt =
-      existingOwner?.id === actorUserId
-        ? existingOwner?.assignedAt ?? now
-        : now;
-    conv.leadOwner = {
-      id: actorUserId,
-      name: actorUserName || existingOwner?.name || undefined,
-      assignedAt
-    };
   };
 
   let schedulerTimezone = "America/New_York";
@@ -32414,7 +32397,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       applyManualCadenceAdvance(args.hadOutbound);
       pauseCadenceAfterManualOutbound();
       if (manualTakeover && !draftId) {
-        claimLeadOwnerFromActor();
+        recordManualSenderFromActor();
         setConversationMode(conv.id, "human");
       }
       markAppointmentAcknowledged(conv);
@@ -33280,7 +33263,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       applyManualCadenceAdvance(hadOutbound);
       pauseCadenceAfterManualOutbound();
       if (manualTakeover && !draftId) {
-        claimLeadOwnerFromActor();
+        recordManualSenderFromActor();
         setConversationMode(conv.id, "human");
       }
       markAppointmentAcknowledged(conv);
