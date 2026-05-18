@@ -3786,7 +3786,7 @@ export function addTodo(
   owner?: { id?: string | null; name?: string | null },
   schedule?: TodoScheduleOptions,
   taskClass?: TodoTaskClass,
-  options?: { allowSoldLead?: boolean }
+  options?: { allowSoldLead?: boolean; skipMerge?: boolean }
 ): TodoTask | null {
   const soldContext =
     conv?.closedReason === "sold" ||
@@ -3800,12 +3800,14 @@ export function addTodo(
   const ownerId = ownerIdRaw || undefined;
   const ownerName = ownerNameRaw || undefined;
   const incomingTaskClass = taskClass ?? inferTodoTaskClass(reason, summary, schedule);
-  const existing = todos.find(t => {
-    if (t.convId !== conv.id || t.status !== "open") return false;
-    const existingClass = t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t);
-    if (!t.taskClass) t.taskClass = existingClass;
-    return existingClass === incomingTaskClass;
-  });
+  const existing = options?.skipMerge
+    ? null
+    : todos.find(t => {
+        if (t.convId !== conv.id || t.status !== "open") return false;
+        const existingClass = t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t);
+        if (!t.taskClass) t.taskClass = existingClass;
+        return existingClass === incomingTaskClass;
+      });
   if (existing) {
     const priorities: Record<TodoTask["reason"], number> = {
       call: 7,

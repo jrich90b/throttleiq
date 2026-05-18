@@ -6312,7 +6312,11 @@ function applyBackRoomInventoryManualTurnover(args: {
     args.conv,
     wantsNumbers ? "payments" : "other",
     `Manual follow-up: ${actionLabel} for the unlisted/back-room bike. Customer asked: ${requestText || "back-room inventory follow-up"}`,
-    args.providerMessageId ?? undefined
+    args.providerMessageId ?? undefined,
+    undefined,
+    undefined,
+    "todo",
+    { skipMerge: true }
   );
   setDialogState(args.conv, wantsNumbers ? "payments_handoff" : "inventory_answered");
   setFollowUpMode(args.conv, "manual_handoff", "unlisted_inventory_check");
