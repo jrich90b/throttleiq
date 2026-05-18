@@ -786,6 +786,8 @@ type Message = {
   at: string;
   provider?: string;
   providerMessageId?: string;
+  actorUserId?: string;
+  actorUserName?: string;
   draftStatus?: "pending" | "stale";
   feedback?: {
     rating?: "up" | "down";
@@ -797,11 +799,12 @@ type Message = {
   };
 };
 
-function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider">): string {
+function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider" | "actorUserName">): string {
   const provider = String(message.provider ?? "").trim();
+  const actorName = String(message.actorUserName ?? "").trim();
   if (message.direction === "out") {
     if (provider === "draft_ai") return "AI";
-    if (provider === "twilio" || provider === "human" || provider === "sendgrid") return "User";
+    if (provider === "twilio" || provider === "human" || provider === "sendgrid") return actorName || "AI";
   }
   if (message.direction === "in") {
     if (provider === "twilio") return "Customer";

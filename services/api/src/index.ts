@@ -32345,6 +32345,16 @@ app.post("/conversations/:id/send", async (req, res) => {
   const actorUserId = String(user?.id ?? "").trim();
   const actorUserName = String(user?.name ?? user?.email ?? "").trim();
   const outboundSendTimeoutMs = Number(process.env.OUTBOUND_SEND_TIMEOUT_MS ?? 20000);
+  const outboundActor = actorUserId || actorUserName ? { userId: actorUserId, userName: actorUserName } : undefined;
+  const normalizeOutboundCompareText = (value: unknown): string =>
+    String(value ?? "").replace(/\s+/g, " ").trim();
+  const shouldStampHumanOutboundActor = (finalText: string): boolean => {
+    if (!outboundActor) return false;
+    if (!draft) return true;
+    return normalizeOutboundCompareText(draft.body) !== normalizeOutboundCompareText(finalText);
+  };
+  const actorForOutbound = (finalText: string) =>
+    shouldStampHumanOutboundActor(finalText) ? outboundActor : undefined;
   const recordManualSenderFromActor = () => {
     if (!actorUserId && !actorUserName) return;
     const now = new Date().toISOString();
@@ -33248,9 +33258,9 @@ app.post("/conversations/:id/send", async (req, res) => {
         "email send"
       );
       const outboundProvider = "sendgrid";
-      const fin = finalizeDraftAsSent(conv, draftId, signed, outboundProvider);
+      const fin = finalizeDraftAsSent(conv, draftId, signed, outboundProvider, undefined, actorForOutbound(emailBody));
       if (!fin.usedDraft) {
-        appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider);
+        appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider, undefined, undefined, actorForOutbound(emailBody));
       }
       applyManualOutboundStateHints(emailBody, { channel: "email" });
       await reconcileManualOutboundState(emailBody, { channel: "email", delivered: true });
@@ -33300,9 +33310,9 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human", undefined, actorForOutbound(smsBody));
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", conv.leadKey, smsBody, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", conv.leadKey, smsBody, "human", undefined, mediaUrls, actorForOutbound(smsBody));
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
@@ -33328,9 +33338,9 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human", undefined, actorForOutbound(smsBody));
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls, actorForOutbound(smsBody));
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
@@ -33365,9 +33375,9 @@ app.post("/conversations/:id/send", async (req, res) => {
 
     // Log as truly sent via Twilio (store SID)
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "twilio", msg.sid);
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "twilio", msg.sid, actorForOutbound(smsBody));
     if (!fin.usedDraft) {
-      appendOutbound(conv, from, to, smsBody, "twilio", msg.sid, mediaUrls);
+      appendOutbound(conv, from, to, smsBody, "twilio", msg.sid, mediaUrls, actorForOutbound(smsBody));
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: true, sourceMessageId: msg.sid ?? null });
     queueTuningLog(msg.sid);
@@ -33382,9 +33392,9 @@ app.post("/conversations/:id/send", async (req, res) => {
   } catch (err: any) {
     // Log the attempted send as human so rep still sees it
     const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human");
+    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human", undefined, actorForOutbound(smsBody));
     if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", to, smsBody, "human", undefined, mediaUrls, actorForOutbound(smsBody));
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);

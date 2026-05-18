@@ -1479,7 +1479,8 @@ export function appendOutbound(
   body: string,
   provider: MessageProvider = "draft_ai",
   providerMessageId?: string,
-  mediaUrls?: string[]
+  mediaUrls?: string[],
+  actor?: { userId?: string | null; userName?: string | null }
 ) {
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
@@ -1551,7 +1552,9 @@ export function appendOutbound(
     mediaUrls: mediaUrls && mediaUrls.length ? mediaUrls : undefined,
     at: nowIso(),
     provider,
-    providerMessageId
+    providerMessageId,
+    actorUserId: String(actor?.userId ?? "").trim() || undefined,
+    actorUserName: String(actor?.userName ?? "").trim() || undefined
   };
   conv.messages.push(message);
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
@@ -1764,7 +1767,8 @@ export function finalizeDraftAsSent(
   draftId: string | undefined,
   finalBody: string,
   provider: MessageProvider,
-  providerMessageId?: string
+  providerMessageId?: string,
+  actor?: { userId?: string | null; userName?: string | null }
 ): { usedDraft: boolean; originalDraftBody?: string } {
   if (!draftId) return { usedDraft: false };
 
@@ -1782,6 +1786,8 @@ export function finalizeDraftAsSent(
   msg.body = tonedFinalBody;
   msg.provider = provider;
   msg.providerMessageId = providerMessageId;
+  msg.actorUserId = String(actor?.userId ?? "").trim() || undefined;
+  msg.actorUserName = String(actor?.userName ?? "").trim() || undefined;
   msg.at = new Date().toISOString();
   msg.draftStatus = undefined;
 
