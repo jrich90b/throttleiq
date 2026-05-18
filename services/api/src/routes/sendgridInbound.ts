@@ -32,6 +32,7 @@ import {
   closeConversation,
   setContactPreference,
   parseRequestedDayTime,
+  parseRequestedDateOnly,
   normalizeLeadKey,
   getConversation,
   saveConversation,
@@ -457,15 +458,23 @@ function buildCallbackTodoSchedule(
   const source = String(callbackTimeHint ?? "").trim();
   if (!source) return {};
   const hasDayToken = /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun)\b/i.test(source);
+  const hasDateToken = /\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/i.test(source);
   const hasTimeToken =
     /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b|\b(?:at|around|about|after|before|by)\s+\d{1,2}(?::\d{2})?\b)/i.test(
       source
     );
   let requested = parseRequestedDayTime(source, timezone);
   let defaultedToNineAm = false;
-  if (!requested && hasDayToken && !hasTimeToken) {
+  if (!requested && (hasDayToken || hasDateToken) && !hasTimeToken) {
     requested = parseRequestedDayTime(`${source} at 9am`, timezone);
     defaultedToNineAm = !!requested;
+  }
+  if (!requested && (hasDayToken || hasDateToken) && !hasTimeToken) {
+    const dateOnly = parseRequestedDateOnly(source, timezone);
+    if (dateOnly) {
+      requested = { ...dateOnly, hour24: 9, minute: 0 };
+      defaultedToNineAm = true;
+    }
   }
   if (!requested && hasTimeToken) {
     const clock = parseCallbackClockHint(source);
@@ -1901,8 +1910,10 @@ function extractWatchDirectiveModelHint(text?: string | null): string | undefine
 function extractWalkInReminderRequest(text?: string | null): { timeHint: string; actionNote: string } | null {
   const raw = String(text ?? "").replace(/\s+/g, " ").trim();
   if (!raw) return null;
+  const timeHintPattern =
+    "(today|tomorrow|next week(?:\\s+\\d{1,2}[\\/\\-]\\d{1,2}(?:[\\/\\-]\\d{2,4})?)?|this week|next month|this month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \\d+ (?:days?|weeks?|months?)|\\d{1,2}[\\/\\-]\\d{1,2}(?:[\\/\\-]\\d{2,4})?)";
   const actionThenTime = raw.match(
-    /\bremind me\b\s+\bto\b\s+(.+?)\s+\b(today|tomorrow|next week|this week|next month|this month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|in \d+ (?:days?|weeks?|months?))\b/i
+    new RegExp(`\\bremind me\\b\\s+\\bto\\b\\s+(.+?)\\s+\\b${timeHintPattern}\\b`, "i")
   );
   if (actionThenTime) {
     const actionNote = String(actionThenTime[1] ?? "")
@@ -5550,7 +5561,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         }
       }
       const reminderSummary = `Reminder requested: ${walkInReminderRequest.actionNote}.`;
-      addTodo(
+      const reminderTodo = addTodo(
         conv,
         "other",
         reminderSummary,
@@ -5559,6 +5570,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         reminderSchedule,
         "reminder"
       );
+      if (reminderTodo?.dueAt && conv.followUpCadence?.status === "active" && conv.followUpCadence?.kind !== "post_sale") {
+        pauseFollowUpCadence(conv, reminderTodo.dueAt, "manual_reminder");
+        setFollowUpMode(conv, "active", "manual_reminder");
+      }
     }
     if (hasCreditCosignerSignal) {
       conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
