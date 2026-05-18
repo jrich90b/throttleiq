@@ -24752,6 +24752,16 @@ app.get("/public/appointment/outcome", async (req, res) => {
       textarea { min-height: 90px; }
       .muted { color: #666; font-size: 12px; margin-top: 6px; }
       .rec-btn { margin-top: 8px; }
+      .status { margin-top: 10px; font-size: 13px; }
+      .status.error { color: #b91c1c; }
+      .status.ok { color: #166534; }
+      @media (max-width: 520px) {
+        body { padding: 16px; }
+        .card { padding: 14px; }
+        button { width: 100%; margin-right: 0; margin-top: 10px; }
+        .modal-body { display: block; overflow: auto; }
+        .modal-preview { display: none; }
+      }
       .unit-results { border: 1px solid #ddd; border-radius: 8px; max-height: 420px; overflow: auto; }
       .unit-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; gap: 10px; align-items: center; }
       .unit-item:last-child { border-bottom: none; }
@@ -24827,6 +24837,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
         <button type="button" class="rec-btn" id="rec-btn">🎤 Record note</button>
         <div class="muted" id="rec-status"></div>
+        <div class="status" id="save-status"></div>
         <button type="submit">Submit outcome</button>
       </form>
     </div>
@@ -24835,6 +24846,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const token = "${escapeHtml(token)}";
         const recBtn = document.getElementById("rec-btn");
         const statusEl = document.getElementById("rec-status");
+        const saveStatusEl = document.getElementById("save-status");
         const noteEl = document.getElementById("note-field");
         const primaryOutcomeEl = document.getElementById("primary-outcome");
         const secondaryOutcomeEl = document.getElementById("secondary-outcome");
@@ -24863,6 +24875,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           ]
         };
         const outcomeForm = document.getElementById("outcome-form");
+        const submitBtn = outcomeForm ? outcomeForm.querySelector('button[type="submit"]') : null;
         const unitSection = document.getElementById("unit-section");
         const unitModal = document.getElementById("unit-modal");
         const unitModalList = document.getElementById("unit-modal-list");
@@ -25115,20 +25128,64 @@ app.get("/public/appointment/outcome", async (req, res) => {
           ensureInventoryLoaded();
         }
         if (outcomeForm) {
-          outcomeForm.addEventListener("submit", e => {
+          outcomeForm.addEventListener("submit", async e => {
+            e.preventDefault();
+            if (saveStatusEl) {
+              saveStatusEl.className = "status";
+              saveStatusEl.textContent = "";
+            }
             const status = selectedSecondaryOutcome();
             const requiresUnit = status === "sold" || status === "hold";
             const hasId = ((unitStock && unitStock.value) || (unitVin && unitVin.value) || "").trim();
             const note = noteEl ? String(noteEl.value || "").trim() : "";
             if (!note) {
-              e.preventDefault();
-              alert("Please add what actually happened before saving the outcome.");
+              if (saveStatusEl) {
+                saveStatusEl.className = "status error";
+                saveStatusEl.textContent = "Please add what actually happened before saving the outcome.";
+              } else {
+                alert("Please add what actually happened before saving the outcome.");
+              }
               return;
             }
             if (requiresUnit && !hasId) {
-              e.preventDefault();
-              alert("Please enter a Stock # or VIN for Sold/Hold.");
+              if (saveStatusEl) {
+                saveStatusEl.className = "status error";
+                saveStatusEl.textContent = "Please enter a Stock # or VIN for Sold/Hold.";
+              } else {
+                alert("Please enter a Stock # or VIN for Sold/Hold.");
+              }
               return;
+            }
+            try {
+              if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = "Saving...";
+              }
+              const resp = await fetch("/public/appointment/outcome", {
+                method: "POST",
+                body: new FormData(outcomeForm)
+              });
+              const text = await resp.text();
+              if (!resp.ok) {
+                throw new Error(text || "Could not save outcome.");
+              }
+              if (saveStatusEl) {
+                saveStatusEl.className = "status ok";
+                saveStatusEl.textContent = "Saved. You can close this page.";
+              }
+              if (noteEl) noteEl.disabled = true;
+              if (primaryOutcomeEl) primaryOutcomeEl.disabled = true;
+              if (secondaryOutcomeEl) secondaryOutcomeEl.disabled = true;
+              if (recBtn) recBtn.disabled = true;
+            } catch (err) {
+              if (saveStatusEl) {
+                saveStatusEl.className = "status error";
+                saveStatusEl.textContent = err && err.message ? err.message : "Could not save outcome.";
+              }
+              if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = "Submit outcome";
+              }
             }
           });
         }
