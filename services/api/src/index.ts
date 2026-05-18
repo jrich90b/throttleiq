@@ -3,6 +3,7 @@ import "./domain/sentryInit.js";
 import express from "express";
 import cors from "cors";
 import twilio from "twilio";
+import dotenv from "dotenv";
 import multer from "multer";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -432,6 +433,8 @@ import {
   getUserById,
   hasAnyUsers
 } from "./domain/userStore.js";
+
+dotenv.config({ path: path.resolve(process.cwd(), "services/api/.env"), override: false });
 
 const isProd = (process.env.NODE_ENV ?? "").toLowerCase() === "production";
 if (!process.env.DATA_DIR) {
