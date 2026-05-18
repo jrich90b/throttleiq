@@ -24786,7 +24786,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
     <div class="row">${escapeHtml(whenText)}</div>
 
     <div class="card">
-      <form id="outcome-form" method="POST" action="/public/appointment/outcome">
+      <form id="outcome-form" method="POST" action="/public/appointment/outcome" novalidate>
         <input type="hidden" name="token" value="${escapeHtml(token)}" />
         <label>Attendance</label>
         <select name="primaryOutcome" id="primary-outcome">
@@ -24833,7 +24833,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
           <div class="muted"><button type="button" id="unit-clear">Clear unit</button></div>
         </div>
         <label>What actually happened?</label>
-        <textarea name="note" id="note-field" required placeholder="Example: customer rode it, liked it, wants numbers, follow up Tuesday."></textarea>
+        <textarea name="note" id="note-field" placeholder="Example: customer rode it, liked it, wants numbers, follow up Tuesday."></textarea>
         <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
         <button type="button" class="rec-btn" id="rec-btn">🎤 Record note</button>
         <div class="muted" id="rec-status"></div>
