@@ -754,6 +754,13 @@ input[type="reset"],
   background: rgba(255, 255, 255, 0.045) !important;
 }
 
+.lr-app-theme .lr-contacts-browser button.bg-white,
+.lr-app-theme .lr-contacts-browser button.bg-gray-50 {
+  background: rgba(255, 255, 255, 0.055) !important;
+  border-color: rgba(148, 163, 184, 0.34) !important;
+  color: #e7edf8 !important;
+}
+
 .lr-app-theme .lr-contacts-browser input,
 .lr-app-theme .lr-contacts-browser select,
 .lr-app-theme .lr-contacts-detail input,
