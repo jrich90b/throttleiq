@@ -10,6 +10,9 @@ Keep production secrets in the deployment host, not in git.
 - `APP_BASE_URL`
 - `API_BASE_URL`
 - `AUTH_DISABLED=false`
+- `LEADRIDER_API_STATIC_IP`
+  - Optional. Defaults to `44.194.249.46`.
+  - Used by Command dealer setup to generate API DNS records for Lightsail-hosted API domains.
 
 ## Vercel Automation
 

@@ -58,7 +58,8 @@ import {
   updateDealerSetup,
   type DealerSetupStage,
   type DealerSetupStatus,
-  type DealerSetupStepStatus
+  type DealerSetupStepStatus,
+  type DealerSetup
 } from "./domain/dealerSetupStore.js";
 import {
   addVercelProjectDomain,
@@ -24418,8 +24419,7 @@ app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async 
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const status = getVercelAutomationStatus();
   const appDomain = new URL(setup.appUrl).hostname;
-  const apiDomain = new URL(setup.apiUrl).hostname;
-  const domains = await Promise.all([getVercelDomainStatus(appDomain), getVercelDomainStatus(apiDomain)]);
+  const domains = await Promise.all([getVercelDomainStatus(appDomain)]);
   return res.json({ ok: true, configured: status.configured, projectId: status.projectId, teamId: status.teamId, domains });
 });
 
@@ -24431,8 +24431,7 @@ app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   const appDomain = new URL(setup.appUrl).hostname;
-  const apiDomain = new URL(setup.apiUrl).hostname;
-  const domains = await Promise.all([addVercelProjectDomain(appDomain), addVercelProjectDomain(apiDomain)]);
+  const domains = await Promise.all([addVercelProjectDomain(appDomain)]);
   const updated = await updateDealerSetup(setup.id, {
     stage: "vercel",
     status: "in_progress",
@@ -24441,6 +24440,89 @@ app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"
     stepNote: `Vercel domains checked: ${domains.map(domain => `${domain.domain}${domain.verified ? " verified" : " pending DNS"}`).join(", ")}`
   });
   return res.json({ ok: true, setup: updated ?? setup, domains });
+});
+
+function buildDealerDnsChecklist(setup: DealerSetup) {
+  const appDomain = new URL(setup.appUrl).hostname;
+  const apiDomain = new URL(setup.apiUrl).hostname;
+  const apiAddress = String(process.env.LEADRIDER_API_STATIC_IP ?? "44.194.249.46").trim();
+  return [
+    {
+      id: "app-domain",
+      type: "CNAME",
+      name: appDomain,
+      value: "cname.vercel-dns.com",
+      purpose: "Dealer web app on Vercel"
+    },
+    {
+      id: "api-domain",
+      type: "A",
+      name: apiDomain,
+      value: apiAddress,
+      purpose: "Dealer API on Lightsail"
+    }
+  ];
+}
+
+app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const records = buildDealerDnsChecklist(setup);
+  const updated = await updateDealerSetup(setup.id, {
+    stage: "dns",
+    status: "in_progress",
+    stepId: "dns",
+    stepStatus: "in_progress",
+    stepNote: records.map(row => `${row.type} ${row.name} -> ${row.value}`).join("; ")
+  });
+  return res.json({ ok: true, setup: updated ?? setup, records });
+});
+
+async function checkUrl(url: string) {
+  const started = Date.now();
+  try {
+    const resp = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(7000) });
+    return {
+      url,
+      ok: resp.ok,
+      status: resp.status,
+      ms: Date.now() - started
+    };
+  } catch (err: any) {
+    return {
+      url,
+      ok: false,
+      status: 0,
+      ms: Date.now() - started,
+      error: String(err?.message ?? err).slice(0, 160)
+    };
+  }
+}
+
+app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const checks = await Promise.all([
+    checkUrl(setup.appUrl),
+    checkUrl(`${setup.apiUrl.replace(/\/$/, "")}/health`)
+  ]);
+  const passed = checks.every(check => check.ok);
+  const updated = await updateDealerSetup(setup.id, {
+    stage: "live",
+    status: passed ? "ready" : "blocked",
+    stepId: "smoke",
+    stepStatus: passed ? "done" : "blocked",
+    stepNote: checks.map(check => `${check.url}: ${check.status || check.error}`).join("; ")
+  });
+  return res.json({ ok: true, setup: updated ?? setup, passed, checks });
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

@@ -35,6 +35,22 @@ type VercelDomain = {
   error?: string;
 };
 
+type DnsRecord = {
+  id: string;
+  type: string;
+  name: string;
+  value: string;
+  purpose: string;
+};
+
+type SmokeCheck = {
+  url: string;
+  ok: boolean;
+  status: number;
+  ms: number;
+  error?: string;
+};
+
 const emptyForm = {
   dealerName: "",
   slug: "",
@@ -67,7 +83,10 @@ export default function NewDealerClientPage() {
   const [busy, setBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
   const [vercelBusy, setVercelBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [vercelDomains, setVercelDomains] = useState<VercelDomain[]>([]);
+  const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
+  const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const completion = useMemo(() => {
@@ -139,12 +158,16 @@ export default function NewDealerClientPage() {
     }
   }
 
-  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack") {
+  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers") {
     if (!selected) return;
     setTaskBusy(true);
     const instructions =
       kind === "agreement"
         ? `Draft the dealer agreement packet for ${selected.dealerName}. Include pricing, usage allowances, support terms, e-sign checklist, and missing fields. Do not send it.`
+        : kind === "api"
+          ? `Create the API dealer setup work for ${selected.dealerName}. Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}. Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps. Do not overwrite existing clients.`
+        : kind === "providers"
+          ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Meta app/callback, Sentry, Linear, Slack, and OpenAI usage logging. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
         : kind === "stack"
           ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, Meta app/callback, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
         : kind === "vercel"
@@ -162,6 +185,10 @@ export default function NewDealerClientPage() {
           title:
             kind === "agreement"
               ? `Draft ${selected.dealerName} agreement`
+              : kind === "api"
+                ? `Create ${selected.dealerName} API config task`
+              : kind === "providers"
+                ? `Create ${selected.dealerName} provider setup tasks`
               : kind === "stack"
                 ? `Build ${selected.dealerName} tech-stack setup plan`
               : kind === "vercel"
@@ -177,6 +204,40 @@ export default function NewDealerClientPage() {
       setNotice(err instanceof Error ? err.message : "Agent task could not be created.");
     } finally {
       setTaskBusy(false);
+    }
+  }
+
+  async function generateDnsChecklist() {
+    if (!selected) return;
+    setActionBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/dns/checklist`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "DNS checklist could not be generated.");
+      setDnsRecords(Array.isArray(data.records) ? data.records : []);
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice("DNS checklist generated for the dealer app and API domains.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "DNS checklist could not be generated.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function runSmokeTest() {
+    if (!selected) return;
+    setActionBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/smoke-test`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Smoke test could not be run.");
+      setSmokeChecks(Array.isArray(data.checks) ? data.checks : []);
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice(data.passed ? "Launch smoke test passed." : "Launch smoke test found a blocker.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Smoke test could not be run.");
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -254,6 +315,9 @@ export default function NewDealerClientPage() {
             </button>
             <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("stack")} disabled={!selected || taskBusy}>
               Tech stack plan
+            </button>
+            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("providers")} disabled={!selected || taskBusy}>
+              Provider tasks
             </button>
           </div>
         </header>
@@ -339,6 +403,15 @@ export default function NewDealerClientPage() {
                   <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
                     Check Vercel
                   </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
+                    DNS checklist
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("api")} disabled={taskBusy}>
+                    API config task
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={runSmokeTest} disabled={actionBusy}>
+                    Smoke test
+                  </button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
                     Create Codex task
                   </button>
@@ -348,6 +421,27 @@ export default function NewDealerClientPage() {
                     {vercelDomains.map(domain => (
                       <span key={domain.domain} className={domain.exists && domain.verified ? "is-ready" : domain.error ? "is-blocked" : "is-working"}>
                         {domain.domain}: {domain.error || (domain.exists ? (domain.verified ? "verified" : "pending DNS") : "not added")}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {dnsRecords.length ? (
+                  <div className="lr-ceo-dns-records">
+                    {dnsRecords.map(record => (
+                      <div key={record.id}>
+                        <span>{record.type}</span>
+                        <strong>{record.name}</strong>
+                        <code>{record.value}</code>
+                        <small>{record.purpose}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {smokeChecks.length ? (
+                  <div className="lr-ceo-vercel-status">
+                    {smokeChecks.map(check => (
+                      <span key={check.url} className={check.ok ? "is-ready" : "is-blocked"}>
+                        {check.url}: {check.status || check.error} ({check.ms}ms)
                       </span>
                     ))}
                   </div>

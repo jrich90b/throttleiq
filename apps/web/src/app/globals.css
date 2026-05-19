@@ -719,6 +719,50 @@ a {
   color: #ffb4b4;
 }
 
+.lr-ceo-dns-records {
+  display: grid;
+  gap: 0.62rem;
+  margin-top: 0.85rem;
+}
+
+.lr-ceo-dns-records div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: center;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-dns-records span {
+  display: inline-flex;
+  justify-content: center;
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(251, 127, 4, 0.16);
+  color: #ffca92;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
+.lr-ceo-dns-records strong,
+.lr-ceo-dns-records code,
+.lr-ceo-dns-records small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lr-ceo-dns-records code {
+  color: #d9e4f5;
+}
+
+.lr-ceo-dns-records small {
+  grid-column: 2 / -1;
+  color: #9aa8bc;
+}
+
 .lr-ceo-setup-step {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr) auto;
@@ -1160,6 +1204,14 @@ a {
 
   .lr-ceo-setup-step div button {
     flex: 1;
+  }
+
+  .lr-ceo-dns-records div {
+    grid-template-columns: 1fr;
+  }
+
+  .lr-ceo-dns-records small {
+    grid-column: auto;
   }
 }
 
