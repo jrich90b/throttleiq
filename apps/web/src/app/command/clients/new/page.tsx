@@ -28,6 +28,13 @@ type DealerSetup = {
   updatedAt: string;
 };
 
+type VercelDomain = {
+  domain: string;
+  exists: boolean;
+  verified?: boolean;
+  error?: string;
+};
+
 const emptyForm = {
   dealerName: "",
   slug: "",
@@ -59,6 +66,8 @@ export default function NewDealerClientPage() {
   const [notice, setNotice] = useState("Create a dealer setup when you are ready to start onboarding.");
   const [busy, setBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
+  const [vercelBusy, setVercelBusy] = useState(false);
+  const [vercelDomains, setVercelDomains] = useState<VercelDomain[]>([]);
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const completion = useMemo(() => {
@@ -130,12 +139,14 @@ export default function NewDealerClientPage() {
     }
   }
 
-  async function createSetupTask(kind: "codex" | "agreement" | "vercel") {
+  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack") {
     if (!selected) return;
     setTaskBusy(true);
     const instructions =
       kind === "agreement"
         ? `Draft the dealer agreement packet for ${selected.dealerName}. Include pricing, usage allowances, support terms, e-sign checklist, and missing fields. Do not send it.`
+        : kind === "stack"
+          ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, Meta app/callback, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
         : kind === "vercel"
           ? `Prepare Vercel deployment steps for ${selected.dealerName}. Target app URL: ${selected.appUrl}. Target API URL: ${selected.apiUrl}. List required Vercel project/domain/env changes and DNS records. Do not make external changes without approval.`
           : `Run dealer setup review for ${selected.dealerName}. Check onboarding blockers across Vercel, DNS, API dealer config, Google, Twilio, SendGrid, Meta, agreement, and smoke testing. Return the next action list.`;
@@ -151,6 +162,8 @@ export default function NewDealerClientPage() {
           title:
             kind === "agreement"
               ? `Draft ${selected.dealerName} agreement`
+              : kind === "stack"
+                ? `Build ${selected.dealerName} tech-stack setup plan`
               : kind === "vercel"
                 ? `Prepare ${selected.dealerName} Vercel setup`
                 : `Run ${selected.dealerName} setup review`,
@@ -164,6 +177,39 @@ export default function NewDealerClientPage() {
       setNotice(err instanceof Error ? err.message : "Agent task could not be created.");
     } finally {
       setTaskBusy(false);
+    }
+  }
+
+  async function checkVercelDomains() {
+    if (!selected) return;
+    setVercelBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/vercel`, { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Vercel status could not be checked.");
+      setVercelDomains(Array.isArray(data.domains) ? data.domains : []);
+      setNotice(data.configured ? "Vercel status checked." : "Vercel token is not configured yet. Add VERCEL_API_TOKEN on the API server to automate domains.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Vercel status could not be checked.");
+    } finally {
+      setVercelBusy(false);
+    }
+  }
+
+  async function addVercelDomains() {
+    if (!selected) return;
+    setVercelBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/vercel/domains`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Vercel domains could not be added.");
+      setVercelDomains(Array.isArray(data.domains) ? data.domains : []);
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice("Vercel domains added or confirmed. DNS may still need to be pointed and verified.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Vercel domains could not be added.");
+    } finally {
+      setVercelBusy(false);
     }
   }
 
@@ -205,6 +251,9 @@ export default function NewDealerClientPage() {
             </button>
             <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("vercel")} disabled={!selected || taskBusy}>
               Prepare Vercel
+            </button>
+            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("stack")} disabled={!selected || taskBusy}>
+              Tech stack plan
             </button>
           </div>
         </header>
@@ -284,10 +333,25 @@ export default function NewDealerClientPage() {
                   <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
                     Draft agreement
                   </button>
+                  <button type="button" onClick={addVercelDomains} disabled={vercelBusy}>
+                    Add Vercel domains
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
+                    Check Vercel
+                  </button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
                     Create Codex task
                   </button>
                 </div>
+                {vercelDomains.length ? (
+                  <div className="lr-ceo-vercel-status">
+                    {vercelDomains.map(domain => (
+                      <span key={domain.domain} className={domain.exists && domain.verified ? "is-ready" : domain.error ? "is-blocked" : "is-working"}>
+                        {domain.domain}: {domain.error || (domain.exists ? (domain.verified ? "verified" : "pending DNS") : "not added")}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="lr-ceo-setup-steps">
                   {selected.steps.map(step => (
                     <div key={step.id} className="lr-ceo-setup-step">

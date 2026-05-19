@@ -82,6 +82,11 @@ export async function listDealerSetups(limit = 100): Promise<DealerSetup[]> {
     .slice(0, bounded);
 }
 
+export async function getDealerSetup(id: string): Promise<DealerSetup | null> {
+  await ensureLoaded();
+  return rows.find(row => row.id === id) ?? null;
+}
+
 export async function addDealerSetup(input: {
   dealerName: string;
   slug?: string;

@@ -53,12 +53,18 @@ import {
 } from "./domain/automationRunStore.js";
 import {
   addDealerSetup,
+  getDealerSetup,
   listDealerSetups,
   updateDealerSetup,
   type DealerSetupStage,
   type DealerSetupStatus,
   type DealerSetupStepStatus
 } from "./domain/dealerSetupStore.js";
+import {
+  addVercelProjectDomain,
+  getVercelAutomationStatus,
+  getVercelDomainStatus
+} from "./domain/vercelClient.js";
 import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
@@ -24401,6 +24407,40 @@ app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req,
   });
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   return res.json({ ok: true, setup });
+});
+
+app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const status = getVercelAutomationStatus();
+  const appDomain = new URL(setup.appUrl).hostname;
+  const apiDomain = new URL(setup.apiUrl).hostname;
+  const domains = await Promise.all([getVercelDomainStatus(appDomain), getVercelDomainStatus(apiDomain)]);
+  return res.json({ ok: true, configured: status.configured, projectId: status.projectId, teamId: status.teamId, domains });
+});
+
+app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const appDomain = new URL(setup.appUrl).hostname;
+  const apiDomain = new URL(setup.apiUrl).hostname;
+  const domains = await Promise.all([addVercelProjectDomain(appDomain), addVercelProjectDomain(apiDomain)]);
+  const updated = await updateDealerSetup(setup.id, {
+    stage: "vercel",
+    status: "in_progress",
+    stepId: "vercel",
+    stepStatus: domains.every(domain => domain.exists) ? "done" : "in_progress",
+    stepNote: `Vercel domains checked: ${domains.map(domain => `${domain.domain}${domain.verified ? " verified" : " pending DNS"}`).join(", ")}`
+  });
+  return res.json({ ok: true, setup: updated ?? setup, domains });
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

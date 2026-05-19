@@ -11,6 +11,15 @@ Keep production secrets in the deployment host, not in git.
 - `API_BASE_URL`
 - `AUTH_DISABLED=false`
 
+## Vercel Automation
+
+- `VERCEL_API_TOKEN`
+  - Optional. Enables Command dealer setup actions to add/check Vercel project domains.
+- `VERCEL_PROJECT_ID`
+  - Optional. Defaults to the current `leadrider-web` project ID.
+- `VERCEL_TEAM_ID`
+  - Optional. Defaults to the current LeadRider Vercel team ID.
+
 ## Email and Messaging
 
 - `SENDGRID_API_KEY`

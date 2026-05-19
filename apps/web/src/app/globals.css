@@ -684,6 +684,41 @@ a {
   margin-top: 1rem;
 }
 
+.lr-ceo-vercel-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.52rem;
+  margin: 0.85rem 0 0;
+}
+
+.lr-ceo-vercel-status span {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0.28rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.lr-ceo-vercel-status span.is-ready {
+  background: rgba(116, 214, 128, 0.16);
+  color: #b9f6c0;
+}
+
+.lr-ceo-vercel-status span.is-working {
+  background: rgba(251, 127, 4, 0.16);
+  color: #ffca92;
+}
+
+.lr-ceo-vercel-status span.is-blocked {
+  background: rgba(255, 99, 99, 0.16);
+  color: #ffb4b4;
+}
+
 .lr-ceo-setup-step {
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr) auto;
