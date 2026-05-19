@@ -11576,7 +11576,7 @@ export default function Home() {
               onClick={() => setSettingsOpen(false)}
             >
               <div
-                className="absolute left-[4.5rem] bottom-4 w-56 bg-white lr-light-modal border border-gray-200 rounded-lg shadow-lg p-2 text-gray-900"
+                className="absolute left-[4.5rem] bottom-4 w-56 bg-white lr-app-modal border border-gray-200 rounded-lg shadow-lg p-2 text-gray-900"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between px-2 py-1">
@@ -12628,7 +12628,7 @@ export default function Home() {
 
         {appointmentCloseOpen && appointmentCloseTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-            <div className="bg-white lr-light-modal rounded-lg shadow-lg w-full max-w-md p-4">
+            <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
               <div className="text-sm font-medium">Close Appointment Task</div>
               <div className="text-xs text-gray-500 mt-1">
                 No appointment outcome is saved yet. Add the outcome now before closing.
@@ -12719,7 +12719,7 @@ export default function Home() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white"
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
                   disabled={appointmentCloseSaving}
                   onClick={async () => {
                     if (!appointmentCloseTarget) return;
@@ -12749,7 +12749,7 @@ export default function Home() {
 
         {appointmentOutcomeOpen && selectedConv?.appointment ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-            <div className="bg-white lr-light-modal rounded-lg shadow-lg w-full max-w-md p-4">
+            <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
               <div className="text-sm font-medium">Appointment Outcome</div>
               <div className="text-xs text-gray-500 mt-1">
                 Save what happened with this appointment without going back to the task inbox.
@@ -12842,7 +12842,7 @@ export default function Home() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-gray-900 text-white"
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
                   disabled={appointmentOutcomeSaving}
                   onClick={() => {
                     void saveAppointmentOutcomeFromHeader();
@@ -12857,7 +12857,7 @@ export default function Home() {
 
         {todoResolveOpen && todoResolveTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-            <div className="bg-white lr-light-modal rounded-lg shadow-lg w-full max-w-md p-4">
+            <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
               <div className="text-sm font-medium">Resolve To Do</div>
               <div className="text-xs text-gray-500 mt-1">
                 Choose what should happen to follow-ups for this conversation.
@@ -14517,7 +14517,7 @@ export default function Home() {
                   Filter calendars
                 </button>
                 {calendarFilterOpen ? (
-                  <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] md:w-64 bg-white lr-light-modal border rounded-lg shadow-lg p-3 z-50">
+                  <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] md:w-64 bg-white lr-app-modal border rounded-lg shadow-lg p-3 z-50">
                     <div className="text-xs font-semibold text-gray-600 mb-2">Show calendars</div>
                     <div className="space-y-2 max-h-64 overflow-y-auto">
                       {calendarUsers.map((u: any) => (
@@ -15012,7 +15012,7 @@ export default function Home() {
             </div>
             {calendarEdit ? (
             <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/30 p-3 overflow-y-auto">
-                <div className="bg-white lr-light-modal w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
+                <div className="bg-white lr-app-modal w-full max-w-xl rounded-lg shadow-lg p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
                   <div className="flex items-center justify-between">
                     <div className="text-lg font-semibold">Edit appointment</div>
                     <button className="px-2 py-1 border rounded text-sm" onClick={() => setCalendarEdit(null)}>
@@ -16050,7 +16050,7 @@ export default function Home() {
 
                 {editingUserId || showNewUserForm ? (
                   <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/30 p-3 sm:p-4 overflow-y-auto">
-                    <div className="bg-white lr-light-modal w-full max-w-2xl rounded-lg shadow-lg border p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
+                    <div className="bg-white lr-app-modal w-full max-w-2xl rounded-lg shadow-lg border p-4 space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
                       <div className="flex items-center justify-between">
                         <div className="text-lg font-semibold">
                           {editingUserId ? "Edit user" : "Add user"}
@@ -17989,7 +17989,7 @@ export default function Home() {
 
             {callPickerOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-80 rounded-lg bg-white lr-light-modal shadow-lg border p-4">
+                <div className="w-80 rounded-lg bg-white lr-app-modal shadow-lg border p-4">
                   <div className="text-sm font-semibold">Place call with</div>
                   <div className="mt-3 flex gap-2">
                     {authUser?.phone ? (
@@ -18033,7 +18033,7 @@ export default function Home() {
 
             {manualApptOpen ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                <div className="w-full max-w-md rounded-lg bg-white lr-light-modal shadow-lg border p-4">
+                <div className="w-full max-w-md rounded-lg bg-white lr-app-modal shadow-lg border p-4">
                   <div className="text-sm font-semibold">Set appointment</div>
                   <div className="text-xs text-gray-500 mt-1">
                     {schedulerConfig?.timezone ?? "America/New_York"} time
@@ -18119,7 +18119,7 @@ export default function Home() {
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-2 border rounded text-sm"
+                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
                       onClick={saveManualAppointment}
                       disabled={manualApptSaving}
                     >
@@ -18133,7 +18133,7 @@ export default function Home() {
             {cadenceResolveOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="w-full max-w-2xl max-h-[94dvh] overflow-y-auto rounded-lg bg-white lr-light-modal shadow-lg border p-3 sm:p-4">
+                <div className="w-full max-w-2xl max-h-[94dvh] overflow-y-auto rounded-lg bg-white lr-app-modal shadow-lg border p-3 sm:p-4">
                   <div className="text-sm font-semibold">
                     {cadenceResolveMode === "watch" ? "Add vehicle watch" : "Follow-up cadence"}
                   </div>
@@ -18425,7 +18425,7 @@ export default function Home() {
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-2 border rounded text-sm"
+                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
                       onClick={submitCadenceResolve}
                       disabled={cadenceResolveSaving}
                     >
@@ -18440,7 +18440,7 @@ export default function Home() {
             {holdModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white lr-light-modal shadow-lg border border-slate-300 p-3 sm:p-4">
+                <div className="w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white lr-app-modal shadow-lg border border-slate-300 p-3 sm:p-4">
                   <div className="text-sm font-semibold text-slate-900">Mark bike on hold</div>
                   <div className="text-xs text-slate-800 mt-1">
                     {holdModalConv?.lead?.name ||
@@ -18725,7 +18725,7 @@ export default function Home() {
             {holdDetailsOpen && selectedConv ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                  <div className="w-full max-w-xl rounded-lg bg-white lr-light-modal shadow-lg border border-slate-200 p-3 sm:p-4">
+                  <div className="w-full max-w-xl rounded-lg bg-white lr-app-modal shadow-lg border border-slate-200 p-3 sm:p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-sm font-semibold text-slate-900">Bike on hold</div>
@@ -18856,7 +18856,7 @@ export default function Home() {
             {soldDetailsOpen && selectedConv ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                  <div className="w-full max-w-xl rounded-lg bg-white lr-light-modal shadow-lg border border-slate-200 p-3 sm:p-4">
+                  <div className="w-full max-w-xl rounded-lg bg-white lr-app-modal shadow-lg border border-slate-200 p-3 sm:p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-sm font-semibold text-slate-900">Purchased motorcycle</div>
@@ -18967,7 +18967,7 @@ export default function Home() {
             {soldModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="lr-light-modal w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
+                <div className="lr-app-modal w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
                   <div className="text-sm font-semibold text-slate-900">Mark unit sold</div>
                   <div className="text-xs text-slate-700 mt-1">
                     {soldModalConv?.lead?.name ||
@@ -19716,7 +19716,7 @@ export default function Home() {
 
             {editPromptOpen && pendingSend ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-                <div className="bg-white lr-light-modal rounded-lg shadow-lg w-full max-w-md p-4">
+                <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
                   <div className="text-sm font-medium">Quick note for tuning (optional)</div>
                   <div className="text-xs text-gray-500 mt-1">
                     What should the agent do differently next time?
@@ -19870,7 +19870,7 @@ export default function Home() {
 
       {composeOpen ? (
         <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center bg-black/40 p-3 overflow-y-auto">
-          <div className="w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-lg bg-white lr-light-modal shadow-lg border p-4">
+          <div className="w-full max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto rounded-lg bg-white lr-app-modal shadow-lg border p-4">
             <div className="text-sm font-semibold">Compose SMS</div>
             <div className="mt-3">
               <div className="text-xs text-gray-500 mb-1">Phone</div>
@@ -20523,7 +20523,7 @@ export default function Home() {
 
       {watchEditOpen ? (
         <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-black/40 p-3 sm:p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-lg bg-white lr-light-modal shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-lg bg-white lr-app-modal shadow-lg border p-4 max-h-[94dvh] overflow-y-auto">
             <div className="text-sm font-semibold">Edit vehicle watch</div>
             <div className="mt-3 space-y-3">
               {watchEditItems.map((item, idx) => {
@@ -20769,7 +20769,7 @@ export default function Home() {
                 Delete watch
               </button>
               <button
-                className="px-3 py-2 border rounded text-sm"
+                className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
                 onClick={saveWatchEdit}
                 disabled={watchEditSaving}
               >

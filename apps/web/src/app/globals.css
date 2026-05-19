@@ -594,6 +594,100 @@ input[type="reset"],
   border-color: #cbd5e1 !important;
 }
 
+/* Full app dialogs should look like the dark LeadRider workspace, not a
+   detached browser-default form. */
+.lr-app-theme .lr-app-modal {
+  background:
+    radial-gradient(760px 260px at 85% -12%, rgba(251, 127, 4, 0.14), transparent 56%),
+    linear-gradient(180deg, rgba(15, 24, 39, 0.98) 0%, rgba(8, 13, 22, 0.98) 100%) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #e7edf8 !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.56) !important;
+}
+
+.lr-app-theme .lr-app-modal .text-gray-500,
+.lr-app-theme .lr-app-modal .text-gray-600,
+.lr-app-theme .lr-app-modal .text-gray-700,
+.lr-app-theme .lr-app-modal .text-slate-600,
+.lr-app-theme .lr-app-modal .text-slate-700 {
+  color: #aebbd0 !important;
+}
+
+.lr-app-theme .lr-app-modal .text-gray-800,
+.lr-app-theme .lr-app-modal .text-gray-900,
+.lr-app-theme .lr-app-modal .text-slate-800,
+.lr-app-theme .lr-app-modal .text-slate-900 {
+  color: #f4f8ff !important;
+}
+
+.lr-app-theme .lr-app-modal .text-red-600,
+.lr-app-theme .lr-app-modal .text-red-700 {
+  color: #fca5a5 !important;
+}
+
+.lr-app-theme .lr-app-modal .text-blue-800 {
+  color: #ffd7ad !important;
+}
+
+.lr-app-theme .lr-app-modal input,
+.lr-app-theme .lr-app-modal select,
+.lr-app-theme .lr-app-modal textarea {
+  background: rgba(255, 255, 255, 0.055) !important;
+  border-color: rgba(148, 163, 184, 0.38) !important;
+  color: #f4f8ff !important;
+  -webkit-text-fill-color: #f4f8ff !important;
+  caret-color: #fb7f04 !important;
+}
+
+.lr-app-theme .lr-app-modal input::placeholder,
+.lr-app-theme .lr-app-modal textarea::placeholder {
+  color: #8ea0bb !important;
+  opacity: 1 !important;
+}
+
+.lr-app-theme .lr-app-modal select option,
+.lr-app-theme .lr-app-modal select optgroup {
+  background: #101827 !important;
+  color: #f4f8ff !important;
+}
+
+.lr-app-theme .lr-app-modal input:focus,
+.lr-app-theme .lr-app-modal select:focus,
+.lr-app-theme .lr-app-modal textarea:focus {
+  border-color: #fb7f04 !important;
+  box-shadow: 0 0 0 2px rgba(251, 127, 4, 0.22) !important;
+}
+
+.lr-app-theme .lr-app-modal .border,
+.lr-app-theme .lr-app-modal.border {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+.lr-app-theme .lr-app-modal .bg-white,
+.lr-app-theme .lr-app-modal.bg-white,
+.lr-app-theme .lr-app-modal .bg-gray-50,
+.lr-app-theme .lr-app-modal .bg-slate-50,
+.lr-app-theme .lr-app-modal .sticky {
+  background: rgba(255, 255, 255, 0.045) !important;
+  color: #e7edf8 !important;
+}
+
+.lr-app-theme .lr-app-modal button {
+  border-color: rgba(148, 163, 184, 0.34) !important;
+  color: #e7edf8 !important;
+}
+
+.lr-app-theme .lr-app-modal button:hover {
+  background: rgba(255, 255, 255, 0.075) !important;
+}
+
+.lr-app-theme .lr-app-modal button.bg-\[var\(--accent\)\],
+.lr-app-theme .lr-app-modal button.bg-orange-600 {
+  background: #fb7f04 !important;
+  border-color: #fb7f04 !important;
+  color: #101522 !important;
+}
+
 .lr-app-theme .lr-app-main-panel .bg-gray-100.text-gray-900.border-gray-200 {
   background-color: #ecf2fb !important;
   border-color: #cbd8ed !important;
