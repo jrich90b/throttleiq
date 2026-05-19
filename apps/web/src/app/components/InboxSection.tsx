@@ -131,6 +131,17 @@ export function InboxSection(props: any) {
     return !isShortAckNoActionText(lastMessage?.body ?? "");
   };
 
+  const isCampaignReplyConversation = (conversation: any) => {
+    const status = String(conversation?.campaignThread?.status ?? "").trim().toLowerCase();
+    if (status !== "linked_open" && status !== "passed") return false;
+    const lastMessage = conversation?.lastMessage;
+    return (
+      lastMessage?.direction === "in" &&
+      String(lastMessage?.provider ?? "").trim().toLowerCase() !== "sendgrid_adf" &&
+      !isShortAckNoActionText(lastMessage?.body ?? "")
+    );
+  };
+
   const hasOutcomeReminderSent = (conversation: any) => {
     if (String(conversation?.status ?? "").trim().toLowerCase() === "closed") return false;
     const notify = conversation?.appointment?.staffNotify ?? null;
@@ -273,6 +284,7 @@ export function InboxSection(props: any) {
                       .trim()
                       .toLowerCase();
                     const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
+                    const campaignReply = isCampaignReplyConversation(c);
                     const needsResponse = needsCustomerResponse(c);
                     return (
                       <div key={c.id} className="flex items-stretch">
@@ -344,6 +356,14 @@ export function InboxSection(props: any) {
                                 {linkedOpenCampaign ? (
                                   <span className="text-xs px-2 py-1 rounded border bg-gray-100 text-gray-700 border-gray-300">
                                     Open in Inbox
+                                  </span>
+                                ) : null}
+                                {campaignReply ? (
+                                  <span
+                                    className="text-xs px-2 py-1 rounded border bg-emerald-100 text-emerald-800 border-emerald-200"
+                                    title="Customer replied to a campaign message"
+                                  >
+                                    Campaign reply
                                   </span>
                                 ) : null}
                                 {hasOutcomeReminderSent(c) ? (

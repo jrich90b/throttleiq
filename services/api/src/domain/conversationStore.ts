@@ -1392,6 +1392,18 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
     provider: evt.provider as MessageProvider,
     providerMessageId: evt.providerMessageId
   });
+  const campaignThread = conv.campaignThread;
+  if (
+    campaignThread &&
+    String(campaignThread.status ?? "").trim().toLowerCase() === "campaign" &&
+    String(evt.provider ?? "").trim().toLowerCase() !== "sendgrid_adf"
+  ) {
+    conv.campaignThread = {
+      ...campaignThread,
+      status: "linked_open",
+      replySeenAt: evt.receivedAt
+    };
+  }
   trackFinanceDocsReceiptFromInbound(conv, evt);
   trackTradePayoffFromInbound(conv, evt);
   maybeMarkEngagedFromInbound(conv, evt);

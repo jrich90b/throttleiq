@@ -8177,13 +8177,23 @@ export default function Home() {
 
   const isCampaignOnlyConversation = useCallback((c: ConversationListItem | null | undefined) => {
     if (!c) return false;
-    return String(c.campaignThread?.status ?? "").trim().toLowerCase() === "campaign";
+    const campaignStatus = String(c.campaignThread?.status ?? "").trim().toLowerCase();
+    if (campaignStatus !== "campaign") return false;
+    const lastMessage = c.lastMessage;
+    if (
+      lastMessage?.direction === "in" &&
+      String(lastMessage.provider ?? "").trim().toLowerCase() !== "sendgrid_adf" &&
+      !isShortAckNoActionText(lastMessage.body ?? "")
+    ) {
+      return false;
+    }
+    return true;
   }, []);
 
   const isCampaignConversation = useCallback((c: ConversationListItem | null | undefined) => {
     if (!c) return false;
     const status = String(c.campaignThread?.status ?? "").trim().toLowerCase();
-    return status === "campaign" || status === "linked_open";
+    return status === "campaign" || status === "linked_open" || status === "passed";
   }, []);
 
   const {
