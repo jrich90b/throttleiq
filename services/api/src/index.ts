@@ -24959,7 +24959,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
         </div>
         <label>What actually happened?</label>
         <textarea name="note" id="note-field" placeholder="Example: customer rode it, liked it, wants numbers, follow up Tuesday."></textarea>
-        <div class="muted">Tap record to add a quick voice note (auto‑saved).</div>
+        <div class="muted">Tap record to add a quick voice note, then review it before submitting.</div>
         <button type="button" class="rec-btn" id="rec-btn">🎤 Record note</button>
         <div class="muted" id="rec-status"></div>
         <div class="status" id="save-status"></div>
@@ -25342,6 +25342,13 @@ app.get("/public/appointment/outcome", async (req, res) => {
           return "";
         }
 
+        function appendTranscript(transcript) {
+          const clean = String(transcript || "").trim();
+          if (!clean || !noteEl) return;
+          const current = String(noteEl.value || "").trim();
+          noteEl.value = current ? current + "\\n" + clean : clean;
+        }
+
         async function startRecording() {
           if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
             statusEl.textContent = "Recording not supported on this browser. Use keyboard dictation in Notes.";
@@ -25389,8 +25396,8 @@ app.get("/public/appointment/outcome", async (req, res) => {
               const resp = await fetch("/public/appointment/outcome/transcribe", { method: "POST", body: fd });
               const json = await resp.json().catch(() => null);
               if (json && json.ok) {
-                if (noteEl && json.transcript) noteEl.value = json.transcript;
-                statusEl.textContent = "Saved.";
+                appendTranscript(json.transcript);
+                statusEl.textContent = "Transcribed. Review the note, then submit.";
               } else {
                 statusEl.textContent = (json && json.error) ? json.error : "Transcription failed.";
               }
@@ -25570,9 +25577,6 @@ app.post("/public/appointment/outcome", async (req, res) => {
 
 app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async (req, res) => {
   const token = String(req.body?.token ?? "").trim();
-  const legacyOutcomeRaw = String(req.body?.outcome ?? "").trim();
-  const primaryOutcomeRaw = String(req.body?.primaryOutcome ?? "").trim();
-  const secondaryOutcomeRaw = String(req.body?.secondaryOutcome ?? "").trim();
   if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
@@ -25581,107 +25585,7 @@ app.post("/public/appointment/outcome/transcribe", upload.single("audio"), async
 
   const transcript = await transcribeAudioBuffer(file.buffer, file.mimetype);
   if (!transcript) return res.status(500).json({ ok: false, error: "Transcription failed" });
-  if (isFinanceOutcomeTokenForConversation(conv, token)) {
-    return res.json({ ok: true, transcript });
-  }
-
-  const fallbackStatusRaw =
-    conv.appointment?.staffNotify?.outcome?.status ??
-    conv.dealerRide?.staffNotify?.outcome?.status ??
-    "follow_up";
-  const normalizedOutcome = normalizeAppointmentOutcomeInput({
-    legacyOutcome: legacyOutcomeRaw || String(fallbackStatusRaw ?? ""),
-    primaryOutcome: primaryOutcomeRaw,
-    secondaryOutcome: secondaryOutcomeRaw
-  });
-  let status: LegacyAppointmentOutcomeStatus = normalizedOutcome.legacyStatus ?? "follow_up";
-  let primaryStatus: AppointmentPrimaryOutcome = normalizedOutcome.primaryStatus ?? "showed";
-  let secondaryStatus: AppointmentSecondaryOutcome = normalizedOutcome.secondaryStatus ?? "needs_follow_up";
-  const financeOutcomeConfidenceMin = Number(process.env.LLM_FINANCE_OUTCOME_CONFIDENCE_MIN ?? 0.8);
-  const parsedFinanceOutcome = isFinanceOutcomeContextForConversation(conv)
-    ? await safeLlmParse("public_outcome_voice_finance_parser", () =>
-        parseFinanceOutcomeFromCallWithLLM({
-          text: transcript,
-          summary: "",
-          history: buildHistory(conv, 10),
-          lead: conv.lead
-        })
-      )
-    : null;
-  const financeOutcomeAccepted =
-    !!parsedFinanceOutcome?.explicitOutcome &&
-    (parsedFinanceOutcome.confidence ?? 0) >= financeOutcomeConfidenceMin &&
-    parsedFinanceOutcome.outcome !== "none";
-  if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "declined") {
-    status = "financing_declined";
-    primaryStatus = "showed";
-    secondaryStatus = "finance_not_approved";
-  } else if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "needs_more_info") {
-    status = "financing_needs_info";
-    primaryStatus = "showed";
-    secondaryStatus = "finance_needs_info";
-  }
-  const nowIso = new Date().toISOString();
-  const unit = readOutcomeUnit(req.body);
-  if (status === "hold") {
-    const err = await applyOutcomeHold(conv, unit, transcript, nowIso);
-    if (err) return res.status(400).json({ ok: false, error: err });
-  } else if (status === "sold") {
-    const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
-    const err = await applyOutcomeSold(conv, unit, transcript, nowIso, soldById, "");
-    if (err) return res.status(400).json({ ok: false, error: err });
-  } else if (status === "financing_declined") {
-    const cfg = await getSchedulerConfigHot();
-    conv.followUp = {
-      mode: "active",
-      reason: "financing_declined",
-      updatedAt: nowIso
-    };
-    conv.followUpCadence = {
-      status: "active",
-      anchorAt: nowIso,
-      nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-      stepIndex: 0,
-      kind: "long_term"
-    };
-    await notifyBusinessManagerFinancingDeclined(conv, transcript);
-  } else if (status === "financing_needs_info") {
-    setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
-    stopFollowUpCadence(conv, "manual_handoff");
-    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", transcript);
-  }
-  if (financeOutcomeAccepted && parsedFinanceOutcome?.outcome === "approved") {
-    await applyFinanceOutcomeStatusFromSignal(conv, "approved", transcript);
-  }
-
-  const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
-  outcomeTarget.outcome = {
-    status: status as any,
-    primaryStatus,
-    secondaryStatus,
-    note: transcript,
-    updatedAt: nowIso
-  };
-  if (transcript) {
-    try {
-      await applyActionStateFromContextNote(conv, transcript, "Appointment outcome (voice)");
-    } catch (err: any) {
-      console.log("[outcome-note-actions] failed:", err?.message ?? err);
-    }
-  }
-  await maybeQueueAppointmentOutcomeRescheduleDraft({
-    conv,
-    primaryStatus,
-    secondaryStatus,
-    source: "public_outcome_voice"
-  });
-  if (conv?.id) {
-    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
-  }
-  if (conv.appointment) conv.appointment.updatedAt = new Date().toISOString();
-  saveConversation(conv);
-  await flushConversationStore();
-  return res.json({ ok: true, transcript, status, primaryStatus, secondaryStatus });
+  return res.json({ ok: true, transcript });
 });
 
 app.post(
