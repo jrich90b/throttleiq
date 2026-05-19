@@ -36,3 +36,4 @@ data/conversations.json
 !services/api/data/lead_sources/*.json
 
 sample.adf.xml
+.vercel
