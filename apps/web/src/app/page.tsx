@@ -14095,10 +14095,10 @@ export default function Home() {
                     </div>
                     {(() => {
                       const points = kpiOverview.trend
-                        .filter(row => row.medianFirstResponseMinutes != null)
+                        .filter(row => row.avgFirstResponseMinutes != null)
                         .map(row => ({
                           day: row.day,
-                          minutes: Number(row.medianFirstResponseMinutes ?? 0)
+                          minutes: Number(row.avgFirstResponseMinutes ?? 0)
                         }));
                       const chartWidth = 420;
                       const chartHeight = 210;
@@ -14118,6 +14118,12 @@ export default function Home() {
                       const lastDay = points.at(-1)?.day
                         ? new Date(`${points.at(-1)?.day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })
                         : "";
+                      const formatTrendDay = (day: string) =>
+                        new Date(`${day}T00:00:00`).toLocaleDateString(undefined, {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric"
+                        });
 
                       if (points.length === 0) {
                         return <div className="mt-5 rounded-lg border border-white/10 bg-white/5 p-5 text-sm text-slate-300">No daily response-speed data for this filter.</div>;
@@ -14126,10 +14132,10 @@ export default function Home() {
                       return (
                         <div className="mt-4">
                           <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-                            <span>Daily median response time</span>
+                            <span>Daily average response time</span>
                             <span>Lower is better</span>
                           </div>
-                          <svg className="h-52 w-full" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily median first response time in minutes">
+                          <svg className="h-52 w-full" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily average first response time in minutes">
                             {[0, 0.5, 1].map(tick => {
                               const y = top + plotHeight * tick;
                               const value = Math.round(yMax * (1 - tick));
@@ -14148,6 +14154,41 @@ export default function Home() {
                             {points.map((point, index) => (
                               <circle key={`speed-point-${point.day}`} cx={xFor(index)} cy={yFor(point.minutes)} r="4" fill="#c6ffd7" stroke="#0e1420" strokeWidth="3" />
                             ))}
+                            {points.map((point, index) => {
+                              const x = xFor(index);
+                              const y = yFor(point.minutes);
+                              const prevX = index === 0 ? left : xFor(index - 1);
+                              const nextX = index === points.length - 1 ? chartWidth - right : xFor(index + 1);
+                              const bandLeft = index === 0 ? left : (prevX + x) / 2;
+                              const bandRight = index === points.length - 1 ? chartWidth - right : (x + nextX) / 2;
+                              const tooltipWidth = 116;
+                              const tooltipHeight = 38;
+                              const tooltipX = Math.min(chartWidth - right - tooltipWidth, Math.max(left, x - tooltipWidth / 2));
+                              const tooltipY = Math.max(4, y - tooltipHeight - 14);
+                              return (
+                                <g key={`speed-hover-${point.day}`} className="group outline-none" tabIndex={0}>
+                                  <rect
+                                    x={bandLeft}
+                                    y={top}
+                                    width={Math.max(8, bandRight - bandLeft)}
+                                    height={plotHeight}
+                                    fill="transparent"
+                                    aria-label={`${formatTrendDay(point.day)} average response time ${kpiMinutes(point.minutes)}`}
+                                  />
+                                  <g className="pointer-events-none opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100">
+                                    <path d={`M${x} ${top}V${top + plotHeight}`} fill="none" stroke="rgba(147,197,253,.9)" strokeDasharray="4 4" strokeWidth="1.5" />
+                                    <circle cx={x} cy={y} r="7" fill="#bfdbfe" stroke="#0e1420" strokeWidth="3" />
+                                    <rect x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="6" fill="#f8fafc" stroke="#bfdbfe" strokeWidth="1" />
+                                    <text x={tooltipX + 10} y={tooltipY + 15} className="fill-slate-700 text-[10px] font-semibold">
+                                      {formatTrendDay(point.day)}
+                                    </text>
+                                    <text x={tooltipX + 10} y={tooltipY + 30} className="fill-slate-950 text-[11px] font-bold">
+                                      {kpiMinutes(point.minutes)} avg
+                                    </text>
+                                  </g>
+                                </g>
+                              );
+                            })}
                             <text x={left} y={chartHeight - 14} textAnchor="start" className="fill-slate-400 text-[10px]">
                               {firstDay}
                             </text>
