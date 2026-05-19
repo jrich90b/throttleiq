@@ -11,7 +11,8 @@ This playbook walks a non‑technical operator through setting up a new dealer i
 5. Inventory feed URLs.
 6. CRM provider credentials and CRM lead source overlays.
 7. Lead source rules and website provider selection.
-8. Data directory path (if you separate instances).
+8. Web and API hostnames.
+9. Data directory path (if you separate instances).
 
 ---
 
@@ -23,10 +24,42 @@ This playbook walks a non‑technical operator through setting up a new dealer i
 5. Google Cloud project with OAuth credentials.
 6. CRM credentials (for Playwright automation, if enabled).
 7. Dealer inventory feed URL.
+8. Vercel team access for the web app.
 
 ---
 
-**Step 1: Provision the Server**
+**Recommended Hosting Pattern**
+
+Use a split deployment:
+
+1. Dealer web app on Vercel.
+2. Dealer API on the dealer server or Lightsail instance.
+3. Dealer UI hostname:
+   `https://<dealer-slug>.leadrider.ai`
+4. Dealer API hostname:
+   `https://api.<dealer-slug>.leadrider.ai`
+
+American Harley initial client example:
+
+```text
+Web: https://americanharley.leadrider.ai
+API: https://api.americanharley.leadrider.ai
+Vercel project: leadrider-web
+API host: Lightsail
+```
+
+DNS should keep the API pointed at the API server and point only the web UI hostname at Vercel:
+
+```text
+<dealer-slug>.leadrider.ai      A      76.76.21.21
+api.<dealer-slug>.leadrider.ai  A      <dealer-api-server-ip>
+```
+
+Do not move the API DNS record to Vercel unless the API has been explicitly moved off the server.
+
+---
+
+**Step 1: Provision the API Server**
 1. SSH into the server.
 2. Confirm Node, npm, and PM2 are installed.
 3. If missing, install Node 20 and PM2.
@@ -40,7 +73,7 @@ pm2 -v
 
 ---
 
-**Step 2: Clone and Install the Repo**
+**Step 2: Clone and Install the API Repo**
 1. Clone or update the repo.
 2. Install dependencies.
 
@@ -52,6 +85,45 @@ if [ ! -d throttleiq ]; then
 fi
 cd /home/ubuntu/throttleiq
 npm install
+```
+
+---
+
+**Step 2A: Connect the Dealer Web App in Vercel**
+
+Use Vercel for the dealer UI. Keep API deployment separate unless intentionally changing the architecture.
+
+1. Create or reuse the Vercel project for the web app.
+2. Set the project root directory to:
+   `apps/web`
+3. Add the dealer domain:
+   `<dealer-slug>.leadrider.ai`
+4. Add Vercel environment variables for Production:
+
+```text
+API_BASE_URL=https://api.<dealer-slug>.leadrider.ai
+NEXT_PUBLIC_API_BASE_URL=https://api.<dealer-slug>.leadrider.ai
+```
+
+5. Deploy production.
+6. In DNS, point the dealer web hostname to Vercel:
+
+```text
+<dealer-slug>.leadrider.ai  A  76.76.21.21
+```
+
+7. Validate:
+
+```bash
+dig +short <dealer-slug>.leadrider.ai A
+curl -fsS https://<dealer-slug>.leadrider.ai >/dev/null && echo web-ok
+```
+
+Expected:
+
+```text
+76.76.21.21
+web-ok
 ```
 
 ---
@@ -93,6 +165,9 @@ File: `services/api/.env`
 ```bash
 DATA_DIR=/home/ubuntu/throttleiq-runtime/data
 SCHEDULER_CONFIG_PATH=/home/ubuntu/throttleiq-runtime/data/scheduler_config.json
+PUBLIC_BASE_URL=https://<dealer-slug>.leadrider.ai
+APP_BASE_URL=https://<dealer-slug>.leadrider.ai
+API_BASE_URL=https://api.<dealer-slug>.leadrider.ai
 
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -121,7 +196,7 @@ TLP_HEADLESS=true
 
 ---
 
-**Step 6: Load .env into PM2**
+**Step 6: Load .env into PM2 and Start API**
 PM2 does not automatically read `.env`. You must inject the vars into the PM2 process.
 
 Commands:
@@ -144,6 +219,18 @@ pm2 restart /home/ubuntu/throttleiq/ecosystem.config.cjs --update-env
 
 PID=$(pm2 pid throttleiq-api)
 tr '\0' '\n' < /proc/$PID/environ | egrep "TWILIO_|SENDGRID|OPENAI_|GOOGLE_|CRM_PROVIDER|DATA_DIR"
+```
+
+Validate the public API:
+
+```bash
+curl -fsS https://api.<dealer-slug>.leadrider.ai/health
+```
+
+Expected:
+
+```json
+{"ok":true}
 ```
 
 ---
@@ -281,14 +368,18 @@ pm2 logs throttleiq-api --lines 200 | grep -i "TLP log"
 ---
 
 **Step 14: Validation Checklist**
-1. ADF inbound lead shows in UI.
-2. Twilio inbound SMS shows in UI.
-3. Twilio outbound sends.
-4. SendGrid outbound sends.
-5. Calendar suggestions appear.
-6. Appointment booking works.
-7. Lead source classification matches source.
-8. Follow‑up cadence behaves per lead type.
+1. Web UI loads at `https://<dealer-slug>.leadrider.ai`.
+2. API health returns OK at `https://api.<dealer-slug>.leadrider.ai/health`.
+3. ADF inbound lead shows in UI.
+4. Twilio inbound SMS shows in UI.
+5. Twilio outbound sends.
+6. SendGrid outbound sends.
+7. Calendar suggestions appear.
+8. Appointment booking works.
+9. Lead source classification matches source.
+10. Follow‑up cadence behaves per lead type.
+11. Report issue creates an operational anomaly.
+12. Sentry/Slack/Linear incident test succeeds when enabled.
 
 ---
 
@@ -298,6 +389,9 @@ pm2 logs throttleiq-api --lines 200 | grep -i "TLP log"
 3. No calendar times: verify scheduler config + Google tokens.
 4. Lead not showing: verify DATA_DIR path and conversation store.
 5. Wrong lead classification: check catalog overlay in runtime.
+6. UI loads but API calls fail: verify Vercel `NEXT_PUBLIC_API_BASE_URL`.
+7. API health works but UI does not load: verify Vercel domain and DNS A record.
+8. API disappeared after web cutover: verify `api.<dealer-slug>.leadrider.ai` still points to the server IP, not Vercel.
 
 ---
 
@@ -310,7 +404,10 @@ pm2 logs throttleiq-api --lines 200 | grep -i "TLP log"
 ---
 
 **Scaling Notes**
-1. Prefer domain authentication per dealer.
-2. Use website‑provider subdomain if root DNS not editable.
-3. Store dealer‑specific lead source overlays in runtime.
-4. Keep per‑dealer inventory feeds.
+1. Keep the first dealer isolated: one dealer web hostname, one dealer API hostname, one runtime data directory.
+2. Prefer domain authentication per dealer.
+3. Use website‑provider subdomain if root DNS not editable.
+4. Store dealer‑specific lead source overlays in runtime.
+5. Keep per‑dealer inventory feeds.
+6. For the next dealer, repeat the checklist instead of changing American Harley records.
+7. Move to multi-tenant hosting only after the isolated client flow is stable and documented.

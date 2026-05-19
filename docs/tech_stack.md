@@ -16,7 +16,10 @@ Email DNS currently includes Google MX, SPF, DKIM, and DMARC records.
 
 - API: current Node/Express service in `services/api`
 - Web app: Next.js app in `apps/web`
-- Web hosting: Vercel project `leadrider-web` at `https://leadrider-web.vercel.app`
+- Web hosting: Vercel project `leadrider-web`
+- First client web domain: `https://americanharley.leadrider.ai`
+- First client API domain: `https://api.americanharley.leadrider.ai`
+- DNS: `americanharley.leadrider.ai` points to Vercel; `api.americanharley.leadrider.ai` points to the Lightsail API server
 - Runtime data: `DATA_DIR`
 
 ## Observability and Ops
