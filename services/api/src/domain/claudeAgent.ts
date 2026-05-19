@@ -30,7 +30,7 @@ export async function runClaudeAgentTask(task: AgentTask): Promise<ClaudeAgentRe
     };
   }
 
-  const model = String(process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-20250514").trim();
+  const model = String(process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6").trim();
   const maxTokensRaw = Number(process.env.ANTHROPIC_AGENT_MAX_TOKENS ?? "1200");
   const max_tokens = Number.isFinite(maxTokensRaw) && maxTokensRaw > 100 ? Math.floor(maxTokensRaw) : 1200;
   const system = [
