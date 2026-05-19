@@ -25,6 +25,10 @@ Keep production secrets in the deployment host, not in git.
   - Optional token for the support Gmail poll endpoint.
   - Falls back to `AUTOMATION_RUN_WRITE_TOKEN` when unset.
   - Used by `npm run support_mail:poll` to create Support Agent tasks for new support emails.
+- `SUPPORT_MAIL_AUTO_POLL_ENABLED`
+  - Optional. Defaults on. Set to `0` or `false` to disable API-side support Gmail polling.
+- `SUPPORT_MAIL_AUTO_POLL_MINUTES`
+  - Optional. Defaults to `5`.
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`

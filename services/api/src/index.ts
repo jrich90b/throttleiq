@@ -24315,32 +24315,7 @@ function canPollSupportAgent(req: any) {
 app.post("/support-mail/poll", async (req, res) => {
   if (!canPollSupportAgent(req)) return res.status(401).json({ ok: false, error: "invalid support poll token" });
   const limit = Number(req.body?.limit ?? req.query.limit ?? "10");
-  const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
-  const tasks = [];
-  for (const message of messages) {
-    const task = await ensureSupportAgentTask({
-      dedupeKey: `gmail_${message.id}`,
-      title: `Draft support reply: ${message.subject}`,
-      instructions: [
-        "Review this support Gmail message and draft a reply for approval.",
-        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
-        `Gmail message ID: ${message.id}`,
-        message.threadId ? `Thread ID: ${message.threadId}` : "",
-        `From: ${message.from}`,
-        `Subject: ${message.subject}`,
-        message.date ? `Date: ${message.date}` : "",
-        message.snippet ? `Snippet: ${message.snippet}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      priority: "normal",
-      requestedBy: {
-        name: "Support Gmail Poller",
-        role: "system"
-      }
-    });
-    tasks.push(task);
-  }
+  const { messages, tasks } = await ensureSupportAgentTasksForMail(Number.isFinite(limit) ? limit : 10);
   return res.json({ ok: true, messages: messages.length, tasks });
 });
 
@@ -28451,6 +28426,36 @@ function queueSupportAgentTask(input: Parameters<typeof ensureSupportAgentTask>[
   void ensureSupportAgentTask(input).catch(err => {
     console.warn("[support agent] auto-task failed:", err?.message ?? err);
   });
+}
+
+async function ensureSupportAgentTasksForMail(limit = 10) {
+  const messages = await listSupportInboxMessages(limit);
+  const tasks = [];
+  for (const message of messages) {
+    const task = await ensureSupportAgentTask({
+      dedupeKey: `gmail_${message.id}`,
+      title: `Draft support reply: ${message.subject}`,
+      instructions: [
+        "Review this support Gmail message and draft a reply for approval.",
+        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
+        `Gmail message ID: ${message.id}`,
+        message.threadId ? `Thread ID: ${message.threadId}` : "",
+        `From: ${message.from}`,
+        `Subject: ${message.subject}`,
+        message.date ? `Date: ${message.date}` : "",
+        message.snippet ? `Snippet: ${message.snippet}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      priority: "normal",
+      requestedBy: {
+        name: "Support Gmail Poller",
+        role: "system"
+      }
+    });
+    tasks.push(task);
+  }
+  return { messages, tasks };
 }
 
 function agentKindDefaultTitle(kind: AgentTaskKind): string {
@@ -47817,6 +47822,29 @@ const server = app.listen(port, () => {
     setTimeout(runKeepalive, 10_000).unref?.();
     const interval = setInterval(runKeepalive, keepaliveMinutes * 60 * 1000);
     (interval as any).unref?.();
+  }
+
+  const supportMailAutoPollEnabled =
+    (process.env.SUPPORT_MAIL_AUTO_POLL_ENABLED ?? "true").toLowerCase() !== "false" &&
+    process.env.SUPPORT_MAIL_AUTO_POLL_ENABLED !== "0";
+  const supportMailPollMinutesRaw = Number(process.env.SUPPORT_MAIL_AUTO_POLL_MINUTES ?? "5");
+  const supportMailPollMinutes =
+    Number.isFinite(supportMailPollMinutesRaw) && supportMailPollMinutesRaw >= 1
+      ? supportMailPollMinutesRaw
+      : 5;
+  if (supportMailAutoPollEnabled) {
+    console.log(`[support mail] auto poll enabled (${supportMailPollMinutes} min interval)`);
+    const runSupportMailPoll = async () => {
+      try {
+        const { messages, tasks } = await ensureSupportAgentTasksForMail(10);
+        console.log(`[support mail] poll checked ${messages.length} messages, ${tasks.length} support tasks present`);
+      } catch (err: any) {
+        console.warn("[support mail] poll failed:", err?.message ?? err);
+      }
+    };
+    setTimeout(runSupportMailPoll, 20_000).unref?.();
+    const supportMailInterval = setInterval(runSupportMailPoll, supportMailPollMinutes * 60 * 1000);
+    (supportMailInterval as any).unref?.();
   }
 });
 
