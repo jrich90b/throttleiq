@@ -29,6 +29,9 @@ Keep production secrets in the deployment host, not in git.
   - Optional. Defaults on. Set to `0` or `false` to disable API-side support Gmail polling.
 - `SUPPORT_MAIL_AUTO_POLL_MINUTES`
   - Optional. Defaults to `5`.
+- `SUPPORT_MAIL_AUTO_TRASH_NON_SUPPORT_ENABLED`
+  - Optional. Defaults on. Set to `0` or `false` to keep non-support Gmail messages in the inbox.
+  - When on, the Claude Support Agent may move a Gmail message to Trash only after classifying it as `non_support`. This is a recoverable Trash move, not permanent deletion.
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`

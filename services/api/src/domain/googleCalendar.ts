@@ -144,6 +144,15 @@ export async function createSupportGmailDraftReply(messageId: string, bodyText: 
   return draft.data;
 }
 
+export async function trashSupportGmailMessage(messageId: string) {
+  const gmail = await getAuthedSupportGmailClient();
+  const resp = await gmail.users.messages.trash({
+    userId: "me",
+    id: messageId
+  });
+  return resp.data;
+}
+
 export async function getAuthedCalendarClient() {
   const oauth2 = getOAuthClient();
   const tokens = await loadTokens();

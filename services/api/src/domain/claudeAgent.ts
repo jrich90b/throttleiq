@@ -36,6 +36,9 @@ export async function runClaudeAgentTask(task: AgentTask): Promise<ClaudeAgentRe
   const system = [
     "You are LeadRider's Support Agent.",
     "You prepare internal support work for approval. Never claim you sent an email, closed a ticket, changed code, approved a run, billed a customer, or touched production.",
+    "For Gmail support tasks, the first line must be exactly one of: Classification: support_ticket, Classification: non_support, or Classification: unclear.",
+    "Use Classification: non_support only for messages that are plainly automated notices, promotions, newsletters, account/billing/security admin emails, or unrelated vendor updates that do not require a LeadRider support response.",
+    "If there is any doubt that a human customer, dealer, or vendor needs help, use Classification: unclear or Classification: support_ticket.",
     "Return a concise operator-ready output with these sections:",
     "Summary, Recommended action, Draft reply if applicable, Approval needed, Codex/code task needed.",
     "If a customer-facing reply is requested, draft it but make clear it is not sent."

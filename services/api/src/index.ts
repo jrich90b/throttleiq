@@ -187,6 +187,7 @@ import {
   getSupportGmailProfile,
   listSupportInboxMessages,
   createSupportGmailDraftReply,
+  trashSupportGmailMessage,
   queryFreeBusy,
   insertEvent,
   updateEvent,
@@ -24288,6 +24289,7 @@ app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (re
       title: `Draft support reply: ${message.subject}`,
       instructions: [
         "Review this support Gmail message and draft a reply for approval.",
+        "Classify the message as support_ticket, non_support, or unclear. Only use non_support for obvious automated notices, promotions, newsletters, account/billing/security admin emails, or unrelated vendor updates that do not need a LeadRider support response.",
         "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
         `Gmail message ID: ${message.id}`,
         message.threadId ? `Thread ID: ${message.threadId}` : "",
@@ -28390,6 +28392,34 @@ const allowedAgentKinds: AgentTaskKind[] = [
 const allowedAgentStatuses: AgentTaskStatus[] = ["queued", "needs_approval", "running", "completed", "failed", "blocked"];
 const runningClaudeTasks = new Set<string>();
 
+function supportMailAutoTrashEnabled() {
+  const raw = String(process.env.SUPPORT_MAIL_AUTO_TRASH_NON_SUPPORT_ENABLED ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
+
+function extractSupportGmailMessageId(task: AgentTask) {
+  return task.instructions.match(/Gmail message ID:\s*([A-Za-z0-9_-]+)/i)?.[1] ?? null;
+}
+
+function getClaudeSupportClassification(summary: string): "support_ticket" | "non_support" | "unclear" | null {
+  const firstLine = summary
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean);
+  const match = firstLine?.match(/^classification:\s*(support_ticket|non_support|unclear)\b/i);
+  return match ? (match[1].toLowerCase() as "support_ticket" | "non_support" | "unclear") : null;
+}
+
+async function maybeTrashNonSupportSupportMail(task: AgentTask, summary: string) {
+  if (!supportMailAutoTrashEnabled()) return null;
+  if (!task.instructions.includes("[support-auto:gmail_")) return null;
+  if (getClaudeSupportClassification(summary) !== "non_support") return null;
+  const messageId = extractSupportGmailMessageId(task);
+  if (!messageId) return null;
+  await trashSupportGmailMessage(messageId);
+  return messageId;
+}
+
 function shouldAutoRunClaudeTask(task: AgentTask) {
   if (task.provider !== "claude") return false;
   if (task.status !== "queued" && task.status !== "needs_approval") return false;
@@ -28407,9 +28437,16 @@ function queueClaudeTaskExecution(task: AgentTask) {
       const result = await runClaudeAgentTask(task);
       if (result.ok) {
         const nextStatus: AgentTaskStatus = task.approval?.required ? "needs_approval" : "completed";
+        const links = [`model:${result.model}`];
+        try {
+          const trashedMessageId = await maybeTrashNonSupportSupportMail(task, result.summary);
+          if (trashedMessageId) links.push(`support-mail:trashed:${trashedMessageId}`);
+        } catch (err: any) {
+          links.push(`support-mail:trash-failed:${String(err?.message ?? err).slice(0, 120)}`);
+        }
         await updateAgentTaskStatus(task.id, nextStatus, {
           summary: result.summary,
-          links: [`model:${result.model}`]
+          links
         });
       } else if (result.reason === "not_configured") {
         await updateAgentTaskStatus(task.id, task.approval?.required ? "needs_approval" : "queued", {
@@ -28492,6 +28529,7 @@ async function ensureSupportAgentTasksForMail(limit = 10) {
       title: `Draft support reply: ${message.subject}`,
       instructions: [
         "Review this support Gmail message and draft a reply for approval.",
+        "Classify the message as support_ticket, non_support, or unclear. Only use non_support for obvious automated notices, promotions, newsletters, account/billing/security admin emails, or unrelated vendor updates that do not need a LeadRider support response.",
         "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
         `Gmail message ID: ${message.id}`,
         message.threadId ? `Thread ID: ${message.threadId}` : "",
