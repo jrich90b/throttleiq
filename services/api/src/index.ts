@@ -20159,6 +20159,80 @@ function applyServicePolicy(
   return out;
 }
 
+function hasServiceDepartmentContext(conv: any): boolean {
+  const state = String(getDialogState(conv) ?? "").toLowerCase();
+  const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
+  const cta = String(conv?.classification?.cta ?? "").toLowerCase();
+  const followUpReason = String(conv?.followUp?.reason ?? "").toLowerCase();
+  if (
+    state === "service_request" ||
+    state === "service_handoff" ||
+    state.startsWith("service_") ||
+    bucket === "service" ||
+    cta === "service_request" ||
+    followUpReason === "service_request" ||
+    followUpReason === "service_records"
+  ) {
+    return true;
+  }
+  if (listOpenTodos().some(todo => todo.convId === conv?.id && todo.status === "open" && todo.reason === "service")) {
+    return true;
+  }
+  const recentText = (conv?.messages ?? [])
+    .slice(-6)
+    .map((m: any) => String(m?.body ?? ""))
+    .join(" ")
+    .toLowerCase();
+  return /\b(service|inspection|inspect|oil change|maintenance|repair|service department)\b/.test(recentText);
+}
+
+function hasSalesSchedulingOverrideText(text: string | null | undefined): boolean {
+  return /\b(test ride|demo ride|ride it|bike|motorcycle|stock|vin|trade|trade[-\s]?in|price|pricing|payment|monthly|finance|financing|credit|road glide|street glide|sportster|softail|breakout|low rider|heritage|trike|tri glide)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | undefined): boolean {
+  const source = String(text ?? "").trim();
+  if (!source) return false;
+  if (!hasServiceDepartmentContext(conv)) return false;
+  if (hasSalesSchedulingOverrideText(source)) return false;
+  const signals = detectSchedulingSignals(source);
+  return (
+    signals.explicit ||
+    signals.hasDayTime ||
+    signals.hasDayOnlyAvailability ||
+    signals.hasDayOnlyRequest ||
+    /\b(appointment|appt|schedule|available|availability|openings?|anything|any time|time|after\s+\d{1,2}|before\s+\d{1,2}|morning|afternoon|evening)\b/i.test(
+      source
+    )
+  );
+}
+
+function formatServiceScheduleRequestPhrase(text: string | null | undefined): string {
+  const source = String(text ?? "").trim();
+  if (!source) return "";
+  const day = source.match(/\b(monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|today|tomorrow)\b/i)?.[1];
+  const dayLabel = day ? normalizeDisplayCase(day) : "";
+  const dayPart = source.match(/\b(morning|afternoon|evening)\b/i)?.[1];
+  const after = source.match(/\bafter\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)?.[1];
+  const before = source.match(/\bbefore\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)?.[1];
+  const timeToken = after || before || extractTimeToken(source);
+  const timeLabel = timeToken ? formatTime12h(timeToken) : "";
+  const qualifier = after ? "after" : before ? "before" : "";
+  return [dayLabel, dayPart ? normalizeDisplayCase(dayPart) : "", qualifier, timeLabel]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+function buildServiceSchedulingHandoffReply(text: string | null | undefined): string {
+  const phrase = formatServiceScheduleRequestPhrase(text);
+  return phrase
+    ? `Got it — I’ll have service check availability for ${phrase} and follow up.`
+    : "Got it — I’ll have service check availability and follow up.";
+}
+
 function sanitizeDepartmentClassificationForTurn(
   conv: any,
   inboundText: string,
@@ -35224,6 +35298,42 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     );
   }
+  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+    if (!hasServiceTodo) {
+      addTodo(
+        conv,
+        "service",
+        `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
+    }
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "service",
+      cta: "service_request"
+    };
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    recordRouteOutcome("regen", "service_scheduling_handoff", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const reply = buildServiceSchedulingHandoffReply(event.body);
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
   if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
     const action = regenCustomerAckActionParse?.action;
     if (action === "no_response_needed") {
@@ -42236,6 +42346,47 @@ if (authToken && signature) {
     !!bookingParse?.explicitRequest && bookingConfidence > 0 && bookingConfidence < bookingConfidenceMin;
   const appointmentTimingAccepted = isAppointmentTimingParserAccepted(appointmentTimingParse);
   const appointmentTimingIntent = appointmentTimingAccepted ? appointmentTimingParse?.intent : "none";
+  if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+    if (!hasServiceTodo) {
+      addTodo(
+        conv,
+        "service",
+        `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
+    }
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "service",
+      cta: "service_request"
+    };
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const reply = buildServiceSchedulingHandoffReply(event.body);
+    recordRouteOutcome("live", "service_scheduling_handoff", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (
     event.provider === "twilio" &&
     customerAckActionAccepted &&
