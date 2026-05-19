@@ -44,6 +44,37 @@
     }
   },
   {
+    "id": "customer_will_provide_time_after_ride_1",
+    "text": "Thursday looks like the next nice day, let me find a ride and I'll give you a time frame",
+    "history": [
+      {
+        "direction": "out",
+        "body": "What day/time works for you to come in and pick it up?"
+      }
+    ],
+    "expected": {
+      "action": "customer_will_provide_time",
+      "should_reply": false,
+      "should_book": false,
+      "day_contains": "thursday"
+    }
+  },
+  {
+    "id": "customer_will_let_us_know_soon_1",
+    "text": "Let me do some figuring out and will let you know soon",
+    "history": [
+      {
+        "direction": "out",
+        "body": "What day/time works for you to come in and pick it up?"
+      }
+    ],
+    "expected": {
+      "action": "customer_will_provide_time",
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
     "id": "purchase_pickup_window_not_trade_schedule_1",
     "text": "1-2 o'clock ish",
     "history": [

@@ -6074,6 +6074,39 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll get that locked in.";
 }
 
+function customerWillProvideScheduleTimeText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return false;
+  const willProvideTime =
+    /\b(?:i(?:'|’)?ll|i will|we(?:'|’)?ll|we will)\s+(?:let|tell|text|message|send|give)\s+(?:you|u|ya|y'all|you guys|the team|us)\b[\s\S]{0,80}\b(?:time|time ?frame|when|eta|availability|available|works?)\b/.test(
+      t
+    ) ||
+    /\b(?:let me|i need to|need to|gotta|have to)\b[\s\S]{0,80}\b(?:figure|check|find a ride|line up a ride|work it out)\b[\s\S]{0,100}\b(?:let|tell|text|message|send|give)\s+(?:you|u|ya|us)\b/.test(
+      t
+    ) ||
+    /\b(?:find a ride|line up a ride|do some figuring|figure (?:it|that|things) out)\b[\s\S]{0,100}\b(?:time ?frame|let (?:you|u|us) know|give (?:you|u|us))\b/.test(
+      t
+    );
+  if (!willProvideTime) return false;
+  return !/[?]/.test(t);
+}
+
+function hasSchedulingQuestionContext(conv: any, lastOutboundText?: string | null): boolean {
+  const state = String(getDialogState(conv) ?? "").toLowerCase();
+  if (
+    state.startsWith("schedule") ||
+    state.startsWith("test_ride") ||
+    String(conv?.appointment?.status ?? "none").toLowerCase() !== "none" ||
+    (conv?.scheduler?.lastSuggestedSlots?.length ?? 0) > 0
+  ) {
+    return true;
+  }
+  const outbound = String(lastOutboundText ?? getLastNonVoiceOutbound(conv)?.body ?? "").toLowerCase();
+  return /\b(what day\/time|what day and time|what day|what time|when works|works for you|come in|pick it up|pickup|schedule|appointment|appt)\b/.test(
+    outbound
+  );
+}
+
 function inventoryStatusParseToAvailabilityHint(
   parsed: InventoryStatusParse | null
 ): AvailabilityParseHint | null {
@@ -35121,7 +35154,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         (inbound as any)?.at ?? event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const regenCustomerAckActionParse = regenCustomerAckActionParserHint
@@ -35334,6 +35367,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: false
     });
   }
+  const regenCustomerWillProvideTimeFallback =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !isCustomerAckActionParserAccepted(regenCustomerAckActionParse) &&
+    customerWillProvideScheduleTimeText(event.body) &&
+    hasSchedulingQuestionContext(conv);
+  if (regenCustomerWillProvideTimeFallback) {
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "customer_will_provide_time_fallback_no_reply", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return respondRegenerateSkipped("customer_will_provide_time");
+  }
   if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
     const action = regenCustomerAckActionParse?.action;
     if (action === "no_response_needed") {
@@ -35343,6 +35390,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
       return respondRegenerateSkipped("customer_ack_no_response");
+    }
+    if (action === "customer_will_provide_time") {
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "customer_will_provide_time_no_reply", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondRegenerateSkipped("customer_will_provide_time");
     }
     if (action === "accept_tentative_appointment") {
       setDialogState(conv, "schedule_request");
@@ -38612,7 +38668,7 @@ if (authToken && signature) {
         event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const customerAckActionParse = customerAckActionParserHint
@@ -38631,7 +38687,14 @@ if (authToken && signature) {
   }
   const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
   const customerAckNoResponse =
-    customerAckActionAccepted && customerAckActionParse?.action === "no_response_needed";
+    customerAckActionAccepted &&
+    (customerAckActionParse?.action === "no_response_needed" ||
+      customerAckActionParse?.action === "customer_will_provide_time");
+  const customerWillProvideTimeFallback =
+    event.provider === "twilio" &&
+    !customerAckActionAccepted &&
+    customerWillProvideScheduleTimeText(event.body) &&
+    hasSchedulingQuestionContext(conv);
   const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
   const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
@@ -38653,17 +38716,27 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if ((customerAckNoResponse || (llmNoResponse && !customerAckActionAccepted)) && conv.mode !== "human") {
+  if ((customerAckNoResponse || customerWillProvideTimeFallback || (llmNoResponse && !customerAckActionAccepted)) && conv.mode !== "human") {
     discardPendingDrafts(conv, "response_control_no_response");
     delete conv.emailDraft;
     saveConversation(conv);
-    recordRouteOutcome("live", customerAckNoResponse ? "customer_ack_no_response" : "response_control_no_response", {
+    recordRouteOutcome(
+      "live",
+      customerWillProvideTimeFallback
+        ? "customer_will_provide_time_fallback_no_reply"
+        : customerAckNoResponse && customerAckActionParse?.action === "customer_will_provide_time"
+        ? "customer_will_provide_time_no_reply"
+        : customerAckNoResponse
+          ? "customer_ack_no_response"
+          : "response_control_no_response",
+      {
       convId: conv.id,
       leadKey: conv.leadKey,
       confidence: customerAckNoResponse
         ? (customerAckActionParse?.confidence ?? null)
         : (responseControlParse?.confidence ?? null)
-    });
+      }
+    );
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
