@@ -85,7 +85,58 @@ type DocusignStatus = {
   missing?: string[];
 };
 
-const emptyForm = {
+const planDefaults = {
+  Starter: {
+    setupFee: "$1,500",
+    monthlyFee: "$750/month",
+    includedUsage: "Up to 150 leads/month, 1,000 AI response credits, 1,000 outbound SMS segments/month, standard support.",
+    overageTerms: "$1.50 per lead above plan, $0.025 per outbound SMS segment, AI/token usage above included credits billed at cost plus 20%."
+  },
+  Growth: {
+    setupFee: "$2,500",
+    monthlyFee: "$1,500/month",
+    includedUsage: "Up to 500 leads/month, 5,000 AI response credits, 5,000 outbound SMS segments/month, email campaigns, support workflow.",
+    overageTerms: "$1.25 per lead above plan, $0.025 per outbound SMS segment, AI/token usage above included credits billed at cost plus 20%."
+  },
+  Pro: {
+    setupFee: "$3,500",
+    monthlyFee: "$2,500/month",
+    includedUsage: "Up to 1,000 leads/month, 12,000 AI response credits, 12,000 outbound SMS segments/month, campaigns, support, and setup automation.",
+    overageTerms: "$1.00 per lead above plan, $0.022 per outbound SMS segment, AI/token usage above included credits billed at cost plus 18%."
+  },
+  Enterprise: {
+    setupFee: "Custom",
+    monthlyFee: "Custom",
+    includedUsage: "Custom lead volume, AI response credits, outbound SMS segments, integrations, reporting, and support terms.",
+    overageTerms: "Custom usage and overage terms based on dealer volume and connected providers."
+  }
+} as const;
+
+type PlanName = keyof typeof planDefaults;
+
+type DealerSetupForm = {
+  dealerName: string;
+  slug: string;
+  owner: string;
+  primaryContact: string;
+  legalName: string;
+  dbaName: string;
+  dealerAddress: string;
+  website: string;
+  crmProvider: string;
+  leadVolume: string;
+  plan: string;
+  setupFee: string;
+  monthlyFee: string;
+  includedUsage: string;
+  overageTerms: string;
+  contractTerm: string;
+  billingStart: string;
+  generateAgreement: boolean;
+  notes: string;
+};
+
+const emptyForm: DealerSetupForm = {
   dealerName: "",
   slug: "",
   owner: "Joe Hartrich",
@@ -97,10 +148,10 @@ const emptyForm = {
   crmProvider: "",
   leadVolume: "",
   plan: "Growth",
-  setupFee: "",
-  monthlyFee: "",
-  includedUsage: "",
-  overageTerms: "",
+  setupFee: planDefaults.Growth.setupFee,
+  monthlyFee: planDefaults.Growth.monthlyFee,
+  includedUsage: planDefaults.Growth.includedUsage,
+  overageTerms: planDefaults.Growth.overageTerms,
   contractTerm: "12 months",
   billingStart: "",
   generateAgreement: false,
@@ -191,8 +242,24 @@ export default function NewDealerClientPage() {
     };
   }, [selected?.id]);
 
-  function updateField(field: keyof typeof emptyForm, value: string) {
+  function updateField(field: keyof DealerSetupForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
+  }
+
+  function updatePlan(value: string) {
+    const defaults = planDefaults[value as PlanName];
+    setForm(current => ({
+      ...current,
+      plan: value,
+      ...(defaults
+        ? {
+            setupFee: defaults.setupFee,
+            monthlyFee: defaults.monthlyFee,
+            includedUsage: defaults.includedUsage,
+            overageTerms: defaults.overageTerms
+          }
+        : {})
+    }));
   }
 
   async function createSetup() {
@@ -629,12 +696,13 @@ export default function NewDealerClientPage() {
               </label>
               <label>
                 Plan
-                <select value={form.plan} onChange={event => updateField("plan", event.target.value)}>
+                <select value={form.plan} onChange={event => updatePlan(event.target.value)}>
                   <option>Starter</option>
                   <option>Growth</option>
                   <option>Pro</option>
                   <option>Enterprise</option>
                 </select>
+                <span className="lr-ceo-field-note">Plan fills pricing and usage defaults. You can edit any field below.</span>
               </label>
               <label>
                 Setup fee

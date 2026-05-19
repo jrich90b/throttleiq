@@ -613,6 +613,12 @@ a {
   color: #b8c6dc;
 }
 
+.lr-ceo-field-note {
+  color: #8fa1bc;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .lr-ceo-form-stack .lr-ceo-checkbox-row {
   display: flex;
   align-items: center;
