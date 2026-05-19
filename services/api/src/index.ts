@@ -9021,6 +9021,14 @@ const SELL_FOLLOW_UP_MESSAGES = [
   "If you want to move forward, tell me a day to bring the bike in and I’ll set it up."
 ];
 
+const TRADE_IN_FOLLOW_UP_MESSAGES = [
+  "Just checking in on your trade-in request. I can set a quick appraisal time for {bike}. What day and time works best for you?",
+  "Quick follow-up on your trade-in appraisal for {bike}. If you want to move ahead, what day works best to stop in?",
+  "No pressure on the trade-in request. Whenever you're ready, I can line up a quick appraisal for {bike}.",
+  "If you'd still like a trade-in value, I can set an appraisal time for {bike}. What day works best?",
+  "Just checking back on the trade appraisal for {bike}. If timing changed, tell me what day works for you."
+];
+
 type EmailFollowUpCtx = {
   name: string;
   label: string;
@@ -9084,10 +9092,16 @@ function isTradeAcceleratorLead(conv: any): boolean {
   return source.includes("trade accelerator");
 }
 
+function isTradeAcceleratorTradeInLead(conv: any): boolean {
+  const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
+  return isTradeAcceleratorLead(conv) && /\btrade\s*[- ]?\s*in\b/.test(source) && !/\bsell\b/.test(source);
+}
+
 function isSellLead(conv: any): boolean {
   const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   const bucket = conv?.classification?.bucket ?? "";
   const cta = conv?.classification?.cta ?? "";
+  if (isTradeAcceleratorTradeInLead(conv)) return false;
   return (
     bucket === "trade_in_sell" ||
     cta === "sell_my_bike" ||
@@ -22249,12 +22263,13 @@ async function processDueFollowUps() {
       conv?.classification?.bucket === "trade_in_sell" &&
       isUnknownInterestVehicle(conv) &&
       isTradeAcceleratorLead(conv);
+    const isTradeInAppraisalLead = isTradeAcceleratorTradeInLead(conv);
     const isSellMyBikeLead = isSellLead(conv);
     const isTestRideCadenceLead =
       conv?.classification?.bucket === "test_ride" ||
       conv?.classification?.cta === "schedule_test_ride" ||
       isTestRideDialogState(getDialogState(conv));
-    const sellBikeLabel = isSellMyBikeLead ? getSellBikeLabel(conv) : null;
+    const sellBikeLabel = isSellMyBikeLead || isTradeInAppraisalLead ? getSellBikeLabel(conv) : null;
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
@@ -22312,11 +22327,13 @@ async function processDueFollowUps() {
       !!walkInComment &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
+      !isTradeInAppraisalLead &&
       !isSellMyBikeLead;
     const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
     if (
       !isPostSale &&
       !isTradeNoInterest &&
+      !isTradeInAppraisalLead &&
       !isSellMyBikeLead &&
       (conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal) &&
       cadence.kind !== "engaged"
@@ -22332,6 +22349,7 @@ async function processDueFollowUps() {
       !isPostSale &&
       cadence.kind !== "long_term" &&
       !isTradeNoInterest &&
+      !isTradeInAppraisalLead &&
       !isSellMyBikeLead &&
       (hasAgentContextForCadence || !!walkInComment || !!conv.engagement?.at || hasFinanceDocsCadenceSignal) &&
       contextTag !== "scheduling";
@@ -22399,6 +22417,13 @@ async function processDueFollowUps() {
         "No rush on your trade estimate — if you'd like, I can help you set a quick appraisal.",
         "If timing changed, that's fine — I can still help with your trade estimate whenever you're ready."
       ];
+    } else if (isTradeInAppraisalLead) {
+      const template =
+        TRADE_IN_FOLLOW_UP_MESSAGES[Math.min(cadence.stepIndex, TRADE_IN_FOLLOW_UP_MESSAGES.length - 1)];
+      message = template.replace("{bike}", sellBikeLabel ?? "your bike");
+      cadenceNoRepeatFallbacks = TRADE_IN_FOLLOW_UP_MESSAGES.map(template =>
+        template.replace("{bike}", sellBikeLabel ?? "your bike")
+      );
     } else if (isSellMyBikeLead) {
       const weatherStatus = await safeDealerWeatherStatus(dealerProfile, "cadence_sell_weather");
       let pickupEligible = conv.pickup?.eligible === true;
@@ -22828,6 +22853,13 @@ async function processDueFollowUps() {
           `Hi ${name},\n\nJust checking in on your trade‑in estimate. ` +
           `If you’d like a trade appraisal, I can set a time. Also, which model are you interested in? ` +
           `${tradeBookingLine}\n\nThanks,`;
+      } else if (isTradeInAppraisalLead) {
+        const tradeBookingLine = bookingUrl
+          ? `You can book an appointment here: ${bookingUrl}`
+          : "If you'd like to move ahead with the trade appraisal, just reply with a day and time that works.";
+        emailMessage =
+          `Hi ${name},\n\nJust checking in on your trade-in request for ${sellBikeLabel ?? "your bike"}. ` +
+          `I can set a quick appraisal time whenever you're ready. ${tradeBookingLine}\n\nThanks,`;
       } else if (isSellMyBikeLead) {
         const tradeBookingLine = bookingUrl
           ? `You can book an appointment here: ${bookingUrl}`
