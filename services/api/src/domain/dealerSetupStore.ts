@@ -24,6 +24,9 @@ export type DealerSetup = {
   status: DealerSetupStatus;
   owner?: string;
   primaryContact?: string;
+  legalName?: string;
+  dbaName?: string;
+  dealerAddress?: string;
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
@@ -99,6 +102,9 @@ export async function addDealerSetup(input: {
   slug?: string;
   owner?: string;
   primaryContact?: string;
+  legalName?: string;
+  dbaName?: string;
+  dealerAddress?: string;
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
@@ -125,6 +131,9 @@ export async function addDealerSetup(input: {
     status: "draft",
     owner: input.owner?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
     primaryContact: input.primaryContact?.replace(/\s+/g, " ").trim().slice(0, 160) || undefined,
+    legalName: input.legalName?.replace(/\s+/g, " ").trim().slice(0, 200) || undefined,
+    dbaName: input.dbaName?.replace(/\s+/g, " ").trim().slice(0, 200) || undefined,
+    dealerAddress: input.dealerAddress?.trim().slice(0, 400) || undefined,
     website: input.website?.trim().slice(0, 240) || undefined,
     crmProvider: input.crmProvider?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
     leadVolume: input.leadVolume?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
@@ -156,6 +165,9 @@ export async function updateDealerSetup(
       | "status"
       | "owner"
       | "primaryContact"
+      | "legalName"
+      | "dbaName"
+      | "dealerAddress"
       | "website"
       | "crmProvider"
       | "leadVolume"
@@ -182,6 +194,9 @@ export async function updateDealerSetup(
   for (const key of [
     "owner",
     "primaryContact",
+    "legalName",
+    "dbaName",
+    "dealerAddress",
     "website",
     "crmProvider",
     "leadVolume",

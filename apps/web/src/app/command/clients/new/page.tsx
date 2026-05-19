@@ -15,6 +15,9 @@ type DealerSetup = {
   status: string;
   owner?: string;
   primaryContact?: string;
+  legalName?: string;
+  dbaName?: string;
+  dealerAddress?: string;
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
@@ -63,6 +66,9 @@ const emptyForm = {
   slug: "",
   owner: "Joe Hartrich",
   primaryContact: "",
+  legalName: "",
+  dbaName: "",
+  dealerAddress: "",
   website: "",
   crmProvider: "",
   leadVolume: "",
@@ -162,6 +168,9 @@ export default function NewDealerClientPage() {
   async function createAgreementTaskForSetup(setup: DealerSetup) {
     const facts = [
       `Dealer: ${setup.dealerName}`,
+      `Dealer legal name: ${setup.legalName || "not provided"}`,
+      `DBA name: ${setup.dbaName || setup.dealerName || "not provided"}`,
+      `Dealer address: ${setup.dealerAddress || "not provided"}`,
       `Primary contact: ${setup.primaryContact || "not provided"}`,
       `Website: ${setup.website || "not provided"}`,
       `Plan: ${setup.plan || "not provided"}`,
@@ -227,6 +236,9 @@ export default function NewDealerClientPage() {
             "Flag missing fields clearly for human review. Do not send the agreement.",
             "",
             `Dealer: ${selected.dealerName}`,
+            `Dealer legal name: ${selected.legalName || "not provided"}`,
+            `DBA name: ${selected.dbaName || selected.dealerName || "not provided"}`,
+            `Dealer address: ${selected.dealerAddress || "not provided"}`,
             `Primary contact: ${selected.primaryContact || "not provided"}`,
             `Website: ${selected.website || "not provided"}`,
             `Plan: ${selected.plan || "not provided"}`,
@@ -422,6 +434,18 @@ export default function NewDealerClientPage() {
               <label>
                 Primary contact
                 <input value={form.primaryContact} onChange={event => updateField("primaryContact", event.target.value)} placeholder="Name, email, phone" />
+              </label>
+              <label>
+                Dealer legal name
+                <input value={form.legalName} onChange={event => updateField("legalName", event.target.value)} placeholder="Legal entity name" />
+              </label>
+              <label>
+                DBA name
+                <input value={form.dbaName} onChange={event => updateField("dbaName", event.target.value)} placeholder="American Harley-Davidson" />
+              </label>
+              <label>
+                Dealer address
+                <textarea value={form.dealerAddress} onChange={event => updateField("dealerAddress", event.target.value)} placeholder="Street, city, state, ZIP" />
               </label>
               <label>
                 Dealer website
