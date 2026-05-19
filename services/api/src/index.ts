@@ -24279,7 +24279,68 @@ app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (re
   }
   const limit = Number(req.query.limit ?? "10");
   const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
+  for (const message of messages) {
+    queueSupportAgentTask({
+      dedupeKey: `gmail_${message.id}`,
+      title: `Draft support reply: ${message.subject}`,
+      instructions: [
+        "Review this support Gmail message and draft a reply for approval.",
+        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
+        `Gmail message ID: ${message.id}`,
+        message.threadId ? `Thread ID: ${message.threadId}` : "",
+        `From: ${message.from}`,
+        `Subject: ${message.subject}`,
+        message.date ? `Date: ${message.date}` : "",
+        message.snippet ? `Snippet: ${message.snippet}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      priority: "normal",
+      requestedBy: {
+        name: "Support Gmail Poller",
+        role: "system"
+      }
+    });
+  }
   return res.json({ ok: true, messages });
+});
+
+function canPollSupportAgent(req: any) {
+  const configured = String(process.env.SUPPORT_AGENT_POLL_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
+  const provided = String(req.header("x-support-agent-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "") || "").trim();
+  return !!configured && !!provided && configured === provided;
+}
+
+app.post("/support-mail/poll", async (req, res) => {
+  if (!canPollSupportAgent(req)) return res.status(401).json({ ok: false, error: "invalid support poll token" });
+  const limit = Number(req.body?.limit ?? req.query.limit ?? "10");
+  const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
+  const tasks = [];
+  for (const message of messages) {
+    const task = await ensureSupportAgentTask({
+      dedupeKey: `gmail_${message.id}`,
+      title: `Draft support reply: ${message.subject}`,
+      instructions: [
+        "Review this support Gmail message and draft a reply for approval.",
+        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
+        `Gmail message ID: ${message.id}`,
+        message.threadId ? `Thread ID: ${message.threadId}` : "",
+        `From: ${message.from}`,
+        `Subject: ${message.subject}`,
+        message.date ? `Date: ${message.date}` : "",
+        message.snippet ? `Snippet: ${message.snippet}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      priority: "normal",
+      requestedBy: {
+        name: "Support Gmail Poller",
+        role: "system"
+      }
+    });
+    tasks.push(task);
+  }
+  return res.json({ ok: true, messages: messages.length, tasks });
 });
 
 app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessTodos"), async (req, res) => {
@@ -28285,6 +28346,34 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
   void sendSupportTicketEmail(anomaly, "created").catch(err => {
     console.warn("[support ticket] confirmation email failed:", err?.message ?? err);
   });
+  queueSupportAgentTask({
+    dedupeKey: `ticket_${anomaly.id}`,
+    title: `Review support ticket: ${anomaly.title}`,
+    instructions: [
+      "Review this new support ticket and draft the next support action for approval.",
+      "Do not send email, close the ticket, create external tickets, or make production changes without approval.",
+      `Ticket ID: ${anomaly.id}`,
+      `Type: ${anomaly.type}`,
+      `Severity: ${anomaly.severity}`,
+      `Status: ${anomaly.status}`,
+      anomaly.reporter?.name || anomaly.reporter?.email
+        ? `Reporter: ${[anomaly.reporter?.name, anomaly.reporter?.email].filter(Boolean).join(" <")}${anomaly.reporter?.email ? ">" : ""}`
+        : "Reporter: unknown",
+      anomaly.context?.dealerName ? `Dealer: ${anomaly.context.dealerName}` : "",
+      anomaly.context?.leadName ? `Lead: ${anomaly.context.leadName}` : "",
+      anomaly.context?.pageUrl ? `Page: ${anomaly.context.pageUrl}` : "",
+      anomaly.note ? `Issue details: ${anomaly.note}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    priority: severity === "error" ? "high" : "normal",
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    }
+  });
 
   return res.json({ ok: true, anomaly });
 });
@@ -28321,6 +28410,47 @@ const allowedAgentKinds: AgentTaskKind[] = [
   "other"
 ];
 const allowedAgentStatuses: AgentTaskStatus[] = ["queued", "needs_approval", "running", "completed", "failed", "blocked"];
+
+async function ensureSupportAgentTask(input: {
+  dedupeKey: string;
+  title: string;
+  instructions: string;
+  priority?: "normal" | "high";
+  requestedBy?: {
+    id?: string;
+    name?: string;
+    email?: string;
+    role?: string;
+  };
+}) {
+  const dedupeKey = input.dedupeKey.replace(/\s+/g, "_").slice(0, 120);
+  const marker = `[support-auto:${dedupeKey}]`;
+  const existing = (await listAgentTasks(1000)).find(task => task.instructions.includes(marker));
+  if (existing) return existing;
+  return addAgentTask({
+    provider: "claude",
+    kind: "email",
+    title: input.title.replace(/\s+/g, " ").trim().slice(0, 180) || "Support Agent review",
+    instructions: `${marker}\n${input.instructions.trim().slice(0, 4800)}`,
+    clientName: "LeadRider",
+    priority: input.priority ?? "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: "Support Agent output must be reviewed before sending email, closing tickets, or making production changes."
+    },
+    requestedBy: input.requestedBy ?? {
+      name: "LeadRider Automation",
+      role: "system"
+    }
+  });
+}
+
+function queueSupportAgentTask(input: Parameters<typeof ensureSupportAgentTask>[0]) {
+  void ensureSupportAgentTask(input).catch(err => {
+    console.warn("[support agent] auto-task failed:", err?.message ?? err);
+  });
+}
 
 function agentKindDefaultTitle(kind: AgentTaskKind): string {
   switch (kind) {
@@ -28478,6 +28608,29 @@ app.post("/automation-runs/ingest", async (req, res) => {
     logPath: String(req.body?.logPath ?? "").trim().slice(0, 500) || undefined,
     changedFiles
   });
+  if (status === "needs_approval" || status === "failed" || approvalRequired) {
+    queueSupportAgentTask({
+      dedupeKey: `automation_${run.id}`,
+      title: `Review automation run: ${run.name}`,
+      instructions: [
+        "Review this automation run and prepare the next action for approval.",
+        "Do not deploy, approve, decline, send emails, or change production without manager approval.",
+        `Run ID: ${run.id}`,
+        `Source: ${run.source}`,
+        `Status: ${run.status}`,
+        `Summary: ${run.summary}`,
+        run.approvalReason ? `Approval reason: ${run.approvalReason}` : "",
+        run.logPath ? `Log path: ${run.logPath}` : "",
+        run.commitHash ? `Commit: ${run.commitHash}` : "",
+        run.pullRequestUrl ? `Pull request: ${run.pullRequestUrl}` : "",
+        run.deployUrl ? `Deploy URL: ${run.deployUrl}` : "",
+        run.changedFiles?.length ? `Changed files:\n${run.changedFiles.map(file => `- ${file}`).join("\n")}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      priority: status === "failed" ? "high" : "normal"
+    });
+  }
   return res.json({ ok: true, run });
 });
 

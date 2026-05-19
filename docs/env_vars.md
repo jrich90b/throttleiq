@@ -21,6 +21,10 @@ Keep production secrets in the deployment host, not in git.
   - Optional. Defaults to `SENDGRID_FROM_EMAIL`, then `support@leadrider.ai`.
 - `SUPPORT_TICKET_REPLY_TO`
   - Optional. Defaults to `support@leadrider.ai`.
+- `SUPPORT_AGENT_POLL_TOKEN`
+  - Optional token for the support Gmail poll endpoint.
+  - Falls back to `AUTOMATION_RUN_WRITE_TOKEN` when unset.
+  - Used by `npm run support_mail:poll` to create Support Agent tasks for new support emails.
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`
