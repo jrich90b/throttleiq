@@ -582,6 +582,7 @@ export default function NewDealerClientPage() {
         </div>
         <nav className="lr-ceo-nav" aria-label="LeadRider command sections">
           <a href="/command">Command Home</a>
+          <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support">Support Agent</a>
           <a href="/command/clients/new" className="is-active">Dealer Setup</a>
           <a href="/command">Agreements</a>

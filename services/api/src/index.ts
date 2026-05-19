@@ -62,6 +62,13 @@ import {
   type DealerSetup
 } from "./domain/dealerSetupStore.js";
 import {
+  addSalesProspect,
+  getSalesProspect,
+  listSalesProspects,
+  updateSalesProspect,
+  type SalesProspectStage
+} from "./domain/salesProspectStore.js";
+import {
   addEsignPacket,
   getEsignPacket,
   listEsignPackets,
@@ -29244,6 +29251,85 @@ app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, r
   const task = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, summary ? { summary } : undefined);
   if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
   return res.json({ ok: true, task });
+});
+
+const allowedSalesProspectStages: SalesProspectStage[] = [
+  "new",
+  "contacted",
+  "discovery",
+  "demo_scheduled",
+  "proposal",
+  "agreement_sent",
+  "closed_won",
+  "closed_lost"
+];
+
+app.get("/sales-prospects", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "250");
+  const prospects = await listSalesProspects(Number.isFinite(limit) ? limit : 250);
+  return res.json({ ok: true, prospects });
+});
+
+app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
+  if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
+  const stageRaw = String(req.body?.stage ?? "new").trim().toLowerCase();
+  const prospect = await addSalesProspect({
+    dealerName,
+    contactName: req.body?.contactName,
+    contactEmail: req.body?.contactEmail,
+    contactPhone: req.body?.contactPhone,
+    website: req.body?.website,
+    stage: allowedSalesProspectStages.includes(stageRaw as SalesProspectStage) ? (stageRaw as SalesProspectStage) : "new",
+    owner: req.body?.owner,
+    leadVolume: req.body?.leadVolume,
+    plan: req.body?.plan,
+    expectedMonthly: req.body?.expectedMonthly,
+    nextStep: req.body?.nextStep,
+    nextStepAt: req.body?.nextStepAt,
+    zoomLink: req.body?.zoomLink,
+    docusignPacketId: req.body?.docusignPacketId,
+    onboardingEmailThread: req.body?.onboardingEmailThread,
+    notes: req.body?.notes
+  });
+  return res.json({ ok: true, prospect });
+});
+
+app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const existing = await getSalesProspect(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Prospect not found." });
+  const stageRaw = String(req.body?.stage ?? "").trim().toLowerCase();
+  const prospect = await updateSalesProspect(req.params.id, {
+    dealerName: typeof req.body?.dealerName === "string" ? req.body.dealerName : undefined,
+    contactName: typeof req.body?.contactName === "string" ? req.body.contactName : undefined,
+    contactEmail: typeof req.body?.contactEmail === "string" ? req.body.contactEmail : undefined,
+    contactPhone: typeof req.body?.contactPhone === "string" ? req.body.contactPhone : undefined,
+    website: typeof req.body?.website === "string" ? req.body.website : undefined,
+    stage: allowedSalesProspectStages.includes(stageRaw as SalesProspectStage) ? (stageRaw as SalesProspectStage) : undefined,
+    owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
+    leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
+    plan: typeof req.body?.plan === "string" ? req.body.plan : undefined,
+    expectedMonthly: typeof req.body?.expectedMonthly === "string" ? req.body.expectedMonthly : undefined,
+    nextStep: typeof req.body?.nextStep === "string" ? req.body.nextStep : undefined,
+    nextStepAt: typeof req.body?.nextStepAt === "string" ? req.body.nextStepAt : undefined,
+    zoomLink: typeof req.body?.zoomLink === "string" ? req.body.zoomLink : undefined,
+    docusignPacketId: typeof req.body?.docusignPacketId === "string" ? req.body.docusignPacketId : undefined,
+    onboardingEmailThread: typeof req.body?.onboardingEmailThread === "string" ? req.body.onboardingEmailThread : undefined,
+    notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
+  });
+  return res.json({ ok: true, prospect });
 });
 
 const allowedAutomationStatuses: AutomationRunStatus[] = [

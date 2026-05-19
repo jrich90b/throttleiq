@@ -1,0 +1,539 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type SalesProspectStage =
+  | "new"
+  | "contacted"
+  | "discovery"
+  | "demo_scheduled"
+  | "proposal"
+  | "agreement_sent"
+  | "closed_won"
+  | "closed_lost";
+
+type SalesProspect = {
+  id: string;
+  dealerName: string;
+  contactName?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  website?: string;
+  stage: SalesProspectStage;
+  owner?: string;
+  leadVolume?: string;
+  plan?: string;
+  expectedMonthly?: string;
+  nextStep?: string;
+  nextStepAt?: string;
+  zoomLink?: string;
+  docusignPacketId?: string;
+  onboardingEmailThread?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ProspectForm = {
+  dealerName: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  website: string;
+  stage: SalesProspectStage;
+  owner: string;
+  leadVolume: string;
+  plan: string;
+  expectedMonthly: string;
+  nextStep: string;
+  nextStepAt: string;
+  zoomLink: string;
+  docusignPacketId: string;
+  onboardingEmailThread: string;
+  notes: string;
+};
+
+const emptyForm: ProspectForm = {
+  dealerName: "",
+  contactName: "",
+  contactEmail: "",
+  contactPhone: "",
+  website: "",
+  stage: "new",
+  owner: "",
+  leadVolume: "",
+  plan: "Starter",
+  expectedMonthly: "$999/month",
+  nextStep: "",
+  nextStepAt: "",
+  zoomLink: "",
+  docusignPacketId: "",
+  onboardingEmailThread: "",
+  notes: ""
+};
+
+const stageLabels: Record<SalesProspectStage, string> = {
+  new: "New",
+  contacted: "Contacted",
+  discovery: "Discovery",
+  demo_scheduled: "Demo scheduled",
+  proposal: "Proposal",
+  agreement_sent: "Agreement sent",
+  closed_won: "Won",
+  closed_lost: "Lost"
+};
+
+const funnelStages: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent"];
+const allStages = [...funnelStages, "closed_won", "closed_lost"] as SalesProspectStage[];
+
+function toForm(prospect: SalesProspect): ProspectForm {
+  return {
+    dealerName: prospect.dealerName || "",
+    contactName: prospect.contactName || "",
+    contactEmail: prospect.contactEmail || "",
+    contactPhone: prospect.contactPhone || "",
+    website: prospect.website || "",
+    stage: prospect.stage || "new",
+    owner: prospect.owner || "",
+    leadVolume: prospect.leadVolume || "",
+    plan: prospect.plan || "",
+    expectedMonthly: prospect.expectedMonthly || "",
+    nextStep: prospect.nextStep || "",
+    nextStepAt: prospect.nextStepAt || "",
+    zoomLink: prospect.zoomLink || "",
+    docusignPacketId: prospect.docusignPacketId || "",
+    onboardingEmailThread: prospect.onboardingEmailThread || "",
+    notes: prospect.notes || ""
+  };
+}
+
+function formatDate(value?: string) {
+  if (!value) return "No date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function moneyValue(value?: string) {
+  const match = String(value ?? "").match(/[\d,.]+/);
+  if (!match) return 0;
+  return Number(match[0].replace(/,/g, "")) || 0;
+}
+
+export default function SalesFunnelPage() {
+  const [prospects, setProspects] = useState<SalesProspect[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [form, setForm] = useState<ProspectForm>(emptyForm);
+  const [newForm, setNewForm] = useState<ProspectForm>(emptyForm);
+  const [notice, setNotice] = useState("Sales Funnel is ready.");
+  const [busy, setBusy] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+
+  const selected = useMemo(
+    () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
+    [prospects, selectedId]
+  );
+
+  useEffect(() => {
+    void loadProspects();
+  }, []);
+
+  useEffect(() => {
+    if (selected) {
+      setSelectedId(selected.id);
+      setForm(toForm(selected));
+    }
+  }, [selected?.id]);
+
+  const metrics = useMemo(() => {
+    const open = prospects.filter(row => row.stage !== "closed_won" && row.stage !== "closed_lost");
+    const proposals = prospects.filter(row => row.stage === "proposal" || row.stage === "agreement_sent");
+    const won = prospects.filter(row => row.stage === "closed_won");
+    const pipeline = open.reduce((sum, row) => sum + moneyValue(row.expectedMonthly), 0);
+    return { open: open.length, proposals: proposals.length, won: won.length, pipeline };
+  }, [prospects]);
+
+  async function loadProspects() {
+    try {
+      const resp = await fetch("/api/sales-prospects?limit=250", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Sales prospects could not be loaded.");
+      const rows = Array.isArray(data.prospects) ? data.prospects : [];
+      setProspects(rows);
+      if (rows.length && !selectedId) setSelectedId(rows[0].id);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Sales prospects could not be loaded.");
+    }
+  }
+
+  async function createProspect() {
+    if (!newForm.dealerName.trim()) {
+      setNotice("Dealer name is required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/sales-prospects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newForm)
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Prospect could not be created.");
+      setProspects(current => [data.prospect, ...current]);
+      setSelectedId(data.prospect.id);
+      setNewForm(emptyForm);
+      setNotice(`${data.prospect.dealerName} added to the sales funnel.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Prospect could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveProspect(patch: Partial<ProspectForm> = {}) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, ...patch })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Prospect could not be updated.");
+      setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      setNotice(`${data.prospect.dealerName} updated.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Prospect could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createAgentTask(action: "zoom" | "onboarding" | "docusign" | "texting" | "research") {
+    if (!selected) return;
+    setTaskBusy(true);
+    const facts = [
+      `Dealer prospect: ${selected.dealerName}`,
+      `Contact: ${selected.contactName || "not provided"}`,
+      `Email: ${selected.contactEmail || "not provided"}`,
+      `Phone: ${selected.contactPhone || "not provided"}`,
+      `Website: ${selected.website || "not provided"}`,
+      `Stage: ${stageLabels[selected.stage]}`,
+      `Owner: ${selected.owner || "not assigned"}`,
+      `Plan: ${selected.plan || "not selected"}`,
+      `Expected monthly: ${selected.expectedMonthly || "not set"}`,
+      `Lead volume: ${selected.leadVolume || "not set"}`,
+      `Next step: ${selected.nextStep || "not set"}`,
+      `Next step date: ${selected.nextStepAt || "not set"}`,
+      `Zoom link: ${selected.zoomLink || "not set"}`,
+      `DocuSign packet: ${selected.docusignPacketId || "not set"}`,
+      `Onboarding email thread: ${selected.onboardingEmailThread || "not set"}`,
+      `Notes: ${selected.notes || "none"}`
+    ].join("\n");
+    const config = {
+      zoom: {
+        provider: "codex",
+        kind: "prospect_research",
+        title: `Prepare Zoom/Fathom workflow for ${selected.dealerName}`,
+        instructions: [
+          "Prepare a Zoom meeting workflow for this prospect. Use the logged-in salesperson email when connected.",
+          "Include Fathom note capture requirements. Do not send invites or emails without approval.",
+          "Return the exact missing account/API credentials or OAuth steps.",
+          "",
+          facts
+        ].join("\n")
+      },
+      onboarding: {
+        provider: "claude",
+        kind: "email",
+        title: `Draft onboarding email for ${selected.dealerName}`,
+        instructions: [
+          "Draft an onboarding email from onboarding@leadrider.ai for this prospect.",
+          "Keep it approval-gated. Do not send the email, delete mail, or change CRM data.",
+          "Include next steps, agreement status, and any setup items needed from the dealer.",
+          "",
+          facts
+        ].join("\n")
+      },
+      docusign: {
+        provider: "claude",
+        kind: "agreement",
+        title: `Prepare DocuSign packet for ${selected.dealerName}`,
+        instructions: [
+          "Prepare the DocuSign agreement packet for this prospect using only the facts below.",
+          "Flag missing legal name, DBA, signer, address, pricing, and billing terms. Do not send the packet.",
+          "",
+          facts
+        ].join("\n")
+      },
+      texting: {
+        provider: "codex",
+        kind: "dealer_setup",
+        title: `Plan texting setup for ${selected.dealerName}`,
+        instructions: [
+          "Create a texting-platform setup plan for this prospect.",
+          "Cover Twilio number, A2P/10DLC, opt-in language, routing, support ownership, and smoke tests.",
+          "Separate what can be automated from anything requiring human login, billing, verification, or consent.",
+          "",
+          facts
+        ].join("\n")
+      },
+      research: {
+        provider: "codex",
+        kind: "prospect_research",
+        title: `Research ${selected.dealerName} sales opportunity`,
+        instructions: [
+          "Research and summarize the sales opportunity for this dealer prospect.",
+          "Focus on lead volume, current website/forms, CRM clues, buying committee, and likely setup blockers.",
+          "Do not contact the dealer or change external systems.",
+          "",
+          facts
+        ].join("\n")
+      }
+    }[action];
+    try {
+      const resp = await fetch("/api/agent-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...config,
+          priority: action === "onboarding" || action === "docusign" ? "high" : "normal",
+          clientName: selected.dealerName
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
+      setNotice(`Agent task created: ${data.task.title}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Agent task could not be created.");
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  function updateNew(field: keyof ProspectForm, value: string) {
+    setNewForm(current => ({ ...current, [field]: value }));
+  }
+
+  function updateForm(field: keyof ProspectForm, value: string) {
+    setForm(current => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <main className="lr-ceo-shell">
+      <aside className="lr-ceo-sidebar">
+        <div className="lr-ceo-brand">
+          <div className="lr-ceo-mark">LR</div>
+          <div>
+            <p className="lr-ceo-kicker">LeadRider</p>
+            <h1>Command</h1>
+          </div>
+        </div>
+        <nav className="lr-ceo-nav" aria-label="LeadRider command sections">
+          <a href="/command">Command Home</a>
+          <a href="/command/sales" className="is-active">Sales Funnel</a>
+          <a href="/command/support">Support Agent</a>
+          <a href="/command/clients/new">Dealer Setup</a>
+          <a href="/command">Agreements</a>
+          <a href="/command">Billing</a>
+          <a href="/command">Connectors</a>
+        </nav>
+        <section className="lr-ceo-side-panel">
+          <p className="lr-ceo-kicker">Sales</p>
+          <strong>{metrics.open} open prospects</strong>
+          <span>{metrics.proposals} in proposal or signature.</span>
+        </section>
+      </aside>
+
+      <section className="lr-ceo-main">
+        <header className="lr-ceo-header">
+          <div>
+            <p className="lr-ceo-kicker">LeadRider sales CRM</p>
+            <h2>Sales Funnel</h2>
+            <p>Track prospects, owner follow-up, meeting links, agreement status, and onboarding handoff from one workspace.</p>
+          </div>
+          <div className="lr-ceo-header-actions">
+            <button type="button" className="lr-ceo-secondary-btn" onClick={loadProspects} disabled={busy}>Refresh</button>
+            <button type="button" onClick={createProspect} disabled={busy}>Add prospect</button>
+          </div>
+        </header>
+
+        <section className="lr-ceo-notice" aria-live="polite">{notice}</section>
+
+        <section className="lr-ceo-metrics" aria-label="Sales metrics">
+          <article>
+            <span>Open prospects</span>
+            <strong>{metrics.open}</strong>
+            <small>Active sales conversations</small>
+          </article>
+          <article>
+            <span>Proposal lane</span>
+            <strong>{metrics.proposals}</strong>
+            <small>Proposal or agreement sent</small>
+          </article>
+          <article>
+            <span>Monthly pipeline</span>
+            <strong>${metrics.pipeline.toLocaleString()}</strong>
+            <small>Expected recurring revenue</small>
+          </article>
+          <article>
+            <span>Closed won</span>
+            <strong>{metrics.won}</strong>
+            <small>Converted clients</small>
+          </article>
+        </section>
+
+        <section className="lr-ceo-grid">
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">New prospect</p>
+                <h3>Add dealer</h3>
+              </div>
+            </div>
+            <div className="lr-ceo-form-stack">
+              <label>Dealer name<input value={newForm.dealerName} onChange={e => updateNew("dealerName", e.target.value)} placeholder="Dealer name" /></label>
+              <label>Contact name<input value={newForm.contactName} onChange={e => updateNew("contactName", e.target.value)} placeholder="Primary contact" /></label>
+              <label>Email<input value={newForm.contactEmail} onChange={e => updateNew("contactEmail", e.target.value)} placeholder="name@dealer.com" /></label>
+              <label>Phone<input value={newForm.contactPhone} onChange={e => updateNew("contactPhone", e.target.value)} placeholder="Phone" /></label>
+              <label>Website<input value={newForm.website} onChange={e => updateNew("website", e.target.value)} placeholder="https://dealer.com" /></label>
+              <label>Owner<input value={newForm.owner} onChange={e => updateNew("owner", e.target.value)} placeholder="Salesperson" /></label>
+              <label>Plan
+                <select value={newForm.plan} onChange={e => updateNew("plan", e.target.value)}>
+                  <option>Starter</option>
+                  <option>Growth</option>
+                  <option>Pro</option>
+                  <option>Enterprise</option>
+                </select>
+              </label>
+              <label>Expected monthly<input value={newForm.expectedMonthly} onChange={e => updateNew("expectedMonthly", e.target.value)} placeholder="$999/month" /></label>
+              <label>Next step<textarea value={newForm.nextStep} onChange={e => updateNew("nextStep", e.target.value)} placeholder="Next step" /></label>
+            </div>
+          </article>
+
+          <article className="lr-ceo-panel lr-ceo-panel-wide">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Pipeline</p>
+                <h3>Prospect lanes</h3>
+              </div>
+              <span className="lr-ceo-status-ready">Live</span>
+            </div>
+            <div className="lr-ceo-funnel-board">
+              {funnelStages.map(stage => {
+                const stageRows = prospects.filter(row => row.stage === stage);
+                return (
+                  <section key={stage} className="lr-ceo-funnel-column">
+                    <div className="lr-ceo-funnel-column-title">
+                      <strong>{stageLabels[stage]}</strong>
+                      <span>{stageRows.length}</span>
+                    </div>
+                    {stageRows.map(prospect => (
+                      <button
+                        key={prospect.id}
+                        type="button"
+                        className={`lr-ceo-prospect-card ${selected?.id === prospect.id ? "is-selected" : ""}`}
+                        onClick={() => setSelectedId(prospect.id)}
+                      >
+                        <strong>{prospect.dealerName}</strong>
+                        <span>{prospect.contactName || prospect.contactEmail || "No contact yet"}</span>
+                        <small>{prospect.nextStep || "No next step"}</small>
+                        <em>{formatDate(prospect.nextStepAt)}</em>
+                      </button>
+                    ))}
+                    {!stageRows.length ? <p className="lr-ceo-note">No prospects.</p> : null}
+                  </section>
+                );
+              })}
+            </div>
+          </article>
+        </section>
+
+        <section className="lr-ceo-grid">
+          <article className="lr-ceo-panel lr-ceo-panel-wide">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Selected prospect</p>
+                <h3>{selected?.dealerName || "No prospect selected"}</h3>
+              </div>
+              {selected ? <span className="lr-ceo-pill-orange">{stageLabels[selected.stage]}</span> : null}
+            </div>
+            {selected ? (
+              <>
+                <div className="lr-ceo-form-stack lr-ceo-sales-form">
+                  <label>Dealer name<input value={form.dealerName} onChange={e => updateForm("dealerName", e.target.value)} /></label>
+                  <label>Stage
+                    <select value={form.stage} onChange={e => updateForm("stage", e.target.value as SalesProspectStage)}>
+                      {allStages.map(stage => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}
+                    </select>
+                  </label>
+                  <label>Contact name<input value={form.contactName} onChange={e => updateForm("contactName", e.target.value)} /></label>
+                  <label>Email<input value={form.contactEmail} onChange={e => updateForm("contactEmail", e.target.value)} /></label>
+                  <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
+                  <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
+                  <label>Owner<input value={form.owner} onChange={e => updateForm("owner", e.target.value)} /></label>
+                  <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
+                  <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
+                  <label>Expected monthly<input value={form.expectedMonthly} onChange={e => updateForm("expectedMonthly", e.target.value)} /></label>
+                  <label>Next step date<input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} /></label>
+                  <label>Zoom/Fathom link<input value={form.zoomLink} onChange={e => updateForm("zoomLink", e.target.value)} placeholder="Meeting link" /></label>
+                  <label>DocuSign packet<input value={form.docusignPacketId} onChange={e => updateForm("docusignPacketId", e.target.value)} placeholder="Packet id or URL" /></label>
+                  <label>Onboarding email thread<input value={form.onboardingEmailThread} onChange={e => updateForm("onboardingEmailThread", e.target.value)} placeholder="onboarding@leadrider.ai thread" /></label>
+                  <label>Next step<textarea value={form.nextStep} onChange={e => updateForm("nextStep", e.target.value)} /></label>
+                  <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
+                </div>
+                <div className="lr-ceo-action-row">
+                  <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "proposal" })} disabled={busy}>Move to proposal</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "agreement_sent" })} disabled={busy}>Agreement sent</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Closed won</button>
+                </div>
+              </>
+            ) : (
+              <p className="lr-ceo-note">Add a prospect to start tracking a dealer sales cycle.</p>
+            )}
+          </article>
+
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Agent actions</p>
+                <h3>Sales ops</h3>
+              </div>
+              <span className="lr-ceo-status-attention">Approval gated</span>
+            </div>
+            <div className="lr-ceo-agent-list">
+              <div className="lr-ceo-agent-row">
+                <strong>Zoom and Fathom</strong>
+                <p>Create the setup task for meeting links and note capture under the salesperson account.</p>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("zoom")} disabled={!selected || taskBusy}>Create task</button>
+              </div>
+              <div className="lr-ceo-agent-row">
+                <strong>Onboarding email</strong>
+                <p>Draft dealer communications from onboarding@leadrider.ai for review before sending.</p>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy}>Draft email task</button>
+              </div>
+              <div className="lr-ceo-agent-row">
+                <strong>DocuSign agreement</strong>
+                <p>Prepare the agreement packet and missing legal fields without sending it.</p>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("docusign")} disabled={!selected || taskBusy}>Prepare packet</button>
+              </div>
+              <div className="lr-ceo-agent-row">
+                <strong>Texting platform</strong>
+                <p>Plan Twilio, compliance, routing, and smoke tests for the future client.</p>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("texting")} disabled={!selected || taskBusy}>Create setup task</button>
+              </div>
+              <div className="lr-ceo-agent-row">
+                <strong>Prospect research</strong>
+                <p>Ask Codex to gather setup blockers, lead volume clues, and sales context.</p>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("research")} disabled={!selected || taskBusy}>Research task</button>
+              </div>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+  );
+}
