@@ -90,24 +90,24 @@ const planDefaults = {
     setupFee: "$1,500",
     monthlyFee: "$999/month",
     includedUsage: "Up to 150 leads/month, 1,000 AI response credits, 1,000 outbound SMS segments/month, standard support.",
-    overageTerms: "$1.50 per lead above plan, $0.025 per outbound SMS segment, AI/token usage above included credits billed at cost plus 20%."
+    overageTerms: "$2.00 per lead above plan, $0.025 per outbound SMS segment, AI usage above included credits billed at cost plus 20%."
   },
   Growth: {
     setupFee: "$2,500",
-    monthlyFee: "$1,500/month",
-    includedUsage: "Up to 500 leads/month, 5,000 AI response credits, 5,000 outbound SMS segments/month, email campaigns, support workflow.",
-    overageTerms: "$1.25 per lead above plan, $0.025 per outbound SMS segment, AI/token usage above included credits billed at cost plus 20%."
+    monthlyFee: "$1,499/month",
+    includedUsage: "Up to 300 leads/month, 5,000 AI response credits, 5,000 outbound SMS segments/month, email campaigns, support workflow.",
+    overageTerms: "$1.50 per lead above plan, $0.025 per outbound SMS segment, AI usage above included credits billed at cost plus 20%."
   },
   Pro: {
     setupFee: "$3,500",
-    monthlyFee: "$2,500/month",
-    includedUsage: "Up to 1,000 leads/month, 12,000 AI response credits, 12,000 outbound SMS segments/month, campaigns, support, and setup automation.",
-    overageTerms: "$1.00 per lead above plan, $0.022 per outbound SMS segment, AI/token usage above included credits billed at cost plus 18%."
+    monthlyFee: "$2,499/month",
+    includedUsage: "Up to 750 leads/month, 12,000 AI response credits, 12,000 outbound SMS segments/month, campaigns, support, and setup automation.",
+    overageTerms: "$1.00 per lead above plan, $0.022 per outbound SMS segment, AI usage above included credits billed at cost plus 18%."
   },
   Enterprise: {
     setupFee: "Custom",
     monthlyFee: "Custom",
-    includedUsage: "Custom lead volume, AI response credits, outbound SMS segments, integrations, reporting, and support terms.",
+    includedUsage: "Custom lead volume above 750 leads/month, AI response credits, outbound SMS segments, integrations, reporting, and support terms.",
     overageTerms: "Custom usage and overage terms based on dealer volume and connected providers."
   }
 } as const;
