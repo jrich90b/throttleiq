@@ -30,6 +30,9 @@ Keep production secrets in the deployment host, not in git.
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI`
+- `GOOGLE_SUPPORT_MAIL_TOKEN_PATH`
+  - Optional explicit token file for `support@leadrider.ai` Gmail access.
+  - Defaults to `DATA_DIR/google_support_mail_tokens.json`.
 
 ## Meta
 

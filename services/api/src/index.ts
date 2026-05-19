@@ -180,7 +180,11 @@ import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeopl
 import {
   getOAuthClient,
   saveTokens,
+  saveSupportMailTokens,
   getAuthedCalendarClient,
+  getSupportGmailProfile,
+  listSupportInboxMessages,
+  createSupportGmailDraftReply,
   queryFreeBusy,
   insertEvent,
   updateEvent,
@@ -24199,13 +24203,22 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
   return res.json({ ok: true, mediaId, igUserId, campaign: updated ?? campaign });
 });
 
-app.get("/integrations/google/start", async (_req, res) => {
+app.get("/integrations/google/start", async (req, res) => {
   const oauth2 = getOAuthClient();
-  const scopes = ["https://www.googleapis.com/auth/calendar"];
+  const kind = String(req.query.kind ?? "calendar").trim().toLowerCase();
+  const scopes =
+    kind === "support_mail"
+      ? [
+          "https://www.googleapis.com/auth/gmail.modify",
+          "https://www.googleapis.com/auth/gmail.compose",
+          "https://www.googleapis.com/auth/gmail.send"
+        ]
+      : ["https://www.googleapis.com/auth/calendar"];
   const url = oauth2.generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: scopes
+    scope: scopes,
+    state: kind === "support_mail" ? "support_mail" : "calendar"
   });
   res.redirect(url);
 });
@@ -24224,15 +24237,60 @@ app.get("/integrations/google/status", async (_req, res) => {
   }
 });
 
+app.get("/integrations/google/support-mail/status", async (_req, res) => {
+  try {
+    const profile = await getSupportGmailProfile();
+    return res.json({
+      ok: true,
+      connected: true,
+      email: profile.emailAddress ?? null,
+      messagesTotal: profile.messagesTotal ?? null,
+      threadsTotal: profile.threadsTotal ?? null
+    });
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    let reason = "error";
+    if (/invalid_grant/i.test(message)) reason = "invalid_grant";
+    else if (/not connected/i.test(message)) reason = "not_connected";
+    return res.json({ ok: true, connected: false, reason, error: message });
+  }
+});
+
 app.get("/integrations/google/callback", async (req, res) => {
   const code = String(req.query.code ?? "");
   if (!code) return res.status(400).send("Missing code");
 
   const oauth2 = getOAuthClient();
   const { tokens } = await oauth2.getToken(code);
+  const state = String(req.query.state ?? "calendar").trim().toLowerCase();
+  if (state === "support_mail") {
+    await saveSupportMailTokens(tokens);
+    return res.send("LeadRider support Gmail connected. You can close this tab.");
+  }
   await saveTokens(tokens);
 
   res.send("Google Calendar connected. You can close this tab.");
+});
+
+app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "10");
+  const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
+  return res.json({ ok: true, messages });
+});
+
+app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const bodyText = String(req.body?.body ?? "").trim().slice(0, 8000);
+  if (!bodyText) return res.status(400).json({ ok: false, error: "Draft body is required." });
+  const draft = await createSupportGmailDraftReply(req.params.id, bodyText);
+  return res.json({ ok: true, draft });
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

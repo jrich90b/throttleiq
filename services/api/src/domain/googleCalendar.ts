@@ -2,12 +2,14 @@ import { google } from "googleapis";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dataPath } from "./dataDir.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Store tokens locally for now (later: DB per account)
 const TOKEN_PATH = path.resolve(__dirname, "../../data/google_tokens.json");
+const SUPPORT_MAIL_TOKEN_PATH = process.env.GOOGLE_SUPPORT_MAIL_TOKEN_PATH || dataPath("google_support_mail_tokens.json");
 
 export function getOAuthClient() {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
@@ -29,6 +31,117 @@ export async function loadTokens() {
 export async function saveTokens(tokens: any) {
   await fs.mkdir(path.dirname(TOKEN_PATH), { recursive: true });
   await fs.writeFile(TOKEN_PATH, JSON.stringify(tokens, null, 2), "utf8");
+}
+
+export async function loadSupportMailTokens() {
+  try {
+    const raw = await fs.readFile(SUPPORT_MAIL_TOKEN_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveSupportMailTokens(tokens: any) {
+  await fs.mkdir(path.dirname(SUPPORT_MAIL_TOKEN_PATH), { recursive: true });
+  await fs.writeFile(SUPPORT_MAIL_TOKEN_PATH, JSON.stringify(tokens, null, 2), "utf8");
+}
+
+export async function getAuthedSupportGmailClient() {
+  const oauth2 = getOAuthClient();
+  const tokens = await loadSupportMailTokens();
+  if (!tokens) throw new Error("Support Gmail not connected. Visit /integrations/google/start?kind=support_mail");
+
+  oauth2.setCredentials(tokens);
+  return google.gmail({ version: "v1", auth: oauth2 });
+}
+
+function decodeBase64Url(value?: string | null) {
+  if (!value) return "";
+  return Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+
+function findHeader(headers: Array<{ name?: string | null; value?: string | null }> | undefined, name: string) {
+  return headers?.find(header => String(header.name ?? "").toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+function extractPlainText(payload: any): string {
+  if (!payload) return "";
+  if (payload.mimeType === "text/plain" && payload.body?.data) return decodeBase64Url(payload.body.data);
+  for (const part of payload.parts ?? []) {
+    const nested = extractPlainText(part);
+    if (nested) return nested;
+  }
+  if (payload.body?.data) return decodeBase64Url(payload.body.data);
+  return "";
+}
+
+export async function getSupportGmailProfile() {
+  const gmail = await getAuthedSupportGmailClient();
+  const resp = await gmail.users.getProfile({ userId: "me" });
+  return resp.data;
+}
+
+export async function listSupportInboxMessages(limit = 10) {
+  const gmail = await getAuthedSupportGmailClient();
+  const list = await gmail.users.messages.list({
+    userId: "me",
+    labelIds: ["INBOX"],
+    q: "newer_than:30d",
+    maxResults: Math.max(1, Math.min(25, Math.floor(limit)))
+  });
+  const messages = await Promise.all(
+    (list.data.messages ?? []).map(async message => {
+      const full = await gmail.users.messages.get({
+        userId: "me",
+        id: message.id!,
+        format: "metadata",
+        metadataHeaders: ["From", "Subject", "Date"]
+      });
+      const headers = full.data.payload?.headers ?? [];
+      return {
+        id: full.data.id,
+        threadId: full.data.threadId,
+        from: findHeader(headers, "From"),
+        subject: findHeader(headers, "Subject") || "(no subject)",
+        date: findHeader(headers, "Date"),
+        snippet: full.data.snippet ?? "",
+        labelIds: full.data.labelIds ?? []
+      };
+    })
+  );
+  return messages;
+}
+
+export async function createSupportGmailDraftReply(messageId: string, bodyText: string) {
+  const gmail = await getAuthedSupportGmailClient();
+  const original = await gmail.users.messages.get({ userId: "me", id: messageId, format: "full" });
+  const headers = original.data.payload?.headers ?? [];
+  const to = findHeader(headers, "Reply-To") || findHeader(headers, "From");
+  const originalSubject = findHeader(headers, "Subject") || "LeadRider support";
+  const subject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`;
+  const messageIdHeader = findHeader(headers, "Message-ID");
+  const references = findHeader(headers, "References") || messageIdHeader;
+  const lines = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    messageIdHeader ? `In-Reply-To: ${messageIdHeader}` : "",
+    references ? `References: ${references}` : "",
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    bodyText
+  ].filter(line => line !== "");
+  const raw = Buffer.from(lines.join("\r\n")).toString("base64url");
+  const draft = await gmail.users.drafts.create({
+    userId: "me",
+    requestBody: {
+      message: {
+        threadId: original.data.threadId ?? undefined,
+        raw
+      }
+    }
+  });
+  return draft.data;
 }
 
 export async function getAuthedCalendarClient() {

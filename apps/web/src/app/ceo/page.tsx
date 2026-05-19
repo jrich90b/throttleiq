@@ -95,6 +95,23 @@ type AutomationRun = {
   logPath?: string;
   changedFiles?: string[];
 };
+type SupportMailStatus = {
+  connected: boolean;
+  email?: string | null;
+  reason?: string;
+  error?: string;
+  messagesTotal?: number | null;
+  threadsTotal?: number | null;
+};
+type SupportMailMessage = {
+  id: string;
+  threadId?: string;
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  labelIds?: string[];
+};
 
 const clients: DealerClient[] = [
   {
@@ -326,6 +343,8 @@ export default function CeoCommandDashboard() {
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
+  const [supportMailStatus, setSupportMailStatus] = useState<SupportMailStatus | null>(null);
+  const [supportMailMessages, setSupportMailMessages] = useState<SupportMailMessage[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
   const [supportBusyId, setSupportBusyId] = useState<string | null>(null);
   const [automationBusyId, setAutomationBusyId] = useState<string | null>(null);
@@ -362,6 +381,20 @@ export default function CeoCommandDashboard() {
       .then(data => {
         if (!active) return;
         if (data?.ok && Array.isArray(data.runs)) setAutomationRuns(data.runs);
+      })
+      .catch(() => null);
+    fetch("/api/google/support-mail/status", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok) setSupportMailStatus(data);
+      })
+      .catch(() => null);
+    fetch("/api/support-mail/messages?limit=4", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.messages)) setSupportMailMessages(data.messages);
       })
       .catch(() => null);
     return () => {
@@ -722,7 +755,20 @@ export default function CeoCommandDashboard() {
                 <p className="lr-ceo-kicker">Support automation</p>
                 <h3>Ticket emails</h3>
               </div>
-              <span className="lr-ceo-status-ready">Active</span>
+              <span className={supportMailStatus?.connected ? "lr-ceo-status-ready" : "lr-ceo-status-attention"}>
+                {supportMailStatus?.connected ? "Gmail connected" : "Gmail needed"}
+              </span>
+            </div>
+            <div className="lr-ceo-mailbox-status">
+              <div>
+                <strong>{supportMailStatus?.connected ? supportMailStatus.email || "Support Gmail" : "Connect support@leadrider.ai"}</strong>
+                <p>
+                  {supportMailStatus?.connected
+                    ? "Agents can read the support inbox and create Gmail drafts for approval."
+                    : "Connect the support mailbox so agents can monitor emails, draft replies, and keep ticket history together."}
+                </p>
+              </div>
+              <a href="/integrations/google/start?kind=support_mail">Connect Gmail</a>
             </div>
             <div className="lr-ceo-support-flow">
               <div>
@@ -744,10 +790,20 @@ export default function CeoCommandDashboard() {
             <div className="lr-ceo-panel-title">
               <div>
                 <p className="lr-ceo-kicker">Recent support</p>
-                <h3>Open tickets</h3>
+                <h3>Open tickets and inbox</h3>
               </div>
             </div>
             <div className="lr-ceo-ticket-list">
+              {supportMailMessages.length ? (
+                supportMailMessages.map(message => (
+                  <div key={message.id} className="lr-ceo-mail-row">
+                    <span>Gmail</span>
+                    <strong>{message.subject}</strong>
+                    <small>{message.from}</small>
+                    <p>{message.snippet}</p>
+                  </div>
+                ))
+              ) : null}
               {supportTickets.length ? (
                 supportTickets.map(ticket => (
                   <div key={ticket.id} className="lr-ceo-ticket-row">
