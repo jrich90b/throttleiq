@@ -768,7 +768,11 @@ export default function CeoCommandDashboard() {
                     : "Connect the support mailbox so agents can monitor emails, draft replies, and keep ticket history together."}
                 </p>
               </div>
-              <a href="/integrations/google/start?kind=support_mail">Connect Gmail</a>
+              {supportMailStatus?.connected ? (
+                <span className="lr-ceo-mailbox-connected">Connected</span>
+              ) : (
+                <a href="/integrations/google/start?kind=support_mail">Connect Gmail</a>
+              )}
             </div>
             <div className="lr-ceo-support-flow">
               <div>

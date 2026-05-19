@@ -776,6 +776,19 @@ a {
   text-decoration: none;
 }
 
+.lr-ceo-mailbox-connected {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 0.78rem;
+  border: 1px solid rgba(116, 214, 128, 0.42);
+  border-radius: 999px;
+  background: rgba(116, 214, 128, 0.14);
+  color: #bff5c7;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
 .lr-ceo-support-flow div,
 .lr-ceo-ticket-row {
   border: 1px solid rgba(255, 255, 255, 0.12);
