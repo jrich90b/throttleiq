@@ -710,6 +710,39 @@ a {
   background: rgba(251, 127, 4, 0.055);
 }
 
+.lr-ceo-status-pill {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.lr-ceo-status-pill.is-ready {
+  border-color: rgba(116, 214, 128, 0.34);
+  background: rgba(116, 214, 128, 0.16);
+  color: #b9f6c0;
+}
+
+.lr-ceo-status-pill.is-working {
+  border-color: rgba(251, 127, 4, 0.34);
+  background: rgba(251, 127, 4, 0.16);
+  color: #ffca92;
+}
+
+.lr-ceo-status-pill.is-blocked {
+  border-color: rgba(255, 99, 99, 0.34);
+  background: rgba(255, 99, 99, 0.16);
+  color: #ffb4b4;
+}
+
 .lr-ceo-esign-panel .lr-ceo-form-stack {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

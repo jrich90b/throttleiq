@@ -63,11 +63,18 @@ import {
 } from "./domain/dealerSetupStore.js";
 import {
   addEsignPacket,
+  getEsignPacket,
   listEsignPackets,
   updateEsignPacket,
   type EsignPacketProvider,
   type EsignPacketStatus
 } from "./domain/esignPacketStore.js";
+import {
+  buildDocusignAuthUrl,
+  exchangeDocusignCode,
+  getDocusignStatus,
+  sendDocusignEnvelope
+} from "./domain/docusignIntegration.js";
 import {
   addVercelProjectDomain,
   getVercelAutomationStatus,
@@ -2276,6 +2283,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/inventory") ||
     pathname.startsWith("/public/widget") ||
     pathname.startsWith("/integrations/google") ||
+    pathname.startsWith("/integrations/docusign/callback") ||
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/support-mail/poll") ||
@@ -24719,6 +24727,44 @@ app.get("/esign/packets", requirePermission("canAccessTodos"), async (req, res) 
   return res.json({ ok: true, packets });
 });
 
+app.get("/integrations/docusign/status", requireManager, async (_req, res) => {
+  const status = await getDocusignStatus();
+  return res.json({ ok: true, ...status });
+});
+
+app.get("/integrations/docusign/start", requireManager, async (_req, res) => {
+  try {
+    const url = buildDocusignAuthUrl();
+    return res.json({ ok: true, url });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "DocuSign connect could not start." });
+  }
+});
+
+app.get("/integrations/docusign/callback", async (req, res) => {
+  const code = String(req.query.code ?? "").trim();
+  const state = String(req.query.state ?? "").trim();
+  if (!code) return res.status(400).send("Missing DocuSign authorization code.");
+  try {
+    await exchangeDocusignCode(code, state);
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        '<!doctype html><html><body style="font-family: system-ui, sans-serif; padding: 32px;"><h1>DocuSign connected</h1><p>You can close this tab and return to LeadRider Command.</p><p><a href="/command/clients/new">Back to dealer setup</a></p></body></html>'
+      );
+  } catch (err) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        `<!doctype html><html><body style="font-family: system-ui, sans-serif; padding: 32px;"><h1>DocuSign connection failed</h1><p>${escapeHtml(
+          err instanceof Error ? err.message : "Unknown DocuSign error."
+        )}</p></body></html>`
+      );
+  }
+});
+
 app.post("/dealer-setups/:id/esign/packet", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -24847,6 +24893,41 @@ app.patch("/esign/packets/:id", requirePermission("canAccessTodos"), async (req,
     });
   }
   return res.json({ ok: true, packet, setup });
+});
+
+app.post("/esign/packets/:id/docusign/send", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const packet = await getEsignPacket(req.params.id);
+  if (!packet) return res.status(404).json({ ok: false, error: "E-sign packet not found." });
+  if (packet.status === "signed") return res.status(409).json({ ok: false, error: "Signed packets cannot be resent." });
+  try {
+    const sent = await sendDocusignEnvelope(packet);
+    const updatedPacket = await updateEsignPacket(packet.id, {
+      provider: "docusign",
+      status: "sent",
+      externalPacketId: sent.envelopeId,
+      externalUrl: sent.envelopeUrl,
+      notes: [packet.notes, `DocuSign envelope ${sent.envelopeId} sent by ${user?.name || user?.email || "manager"}.`]
+        .filter(Boolean)
+        .join("\n")
+    });
+    let setup: DealerSetup | null = null;
+    if (updatedPacket?.dealerSetupId) {
+      setup = await updateDealerSetup(updatedPacket.dealerSetupId, {
+        stage: "agreement",
+        status: "in_progress",
+        stepId: "agreement",
+        stepStatus: "in_progress",
+        stepNote: `Agreement sent through DocuSign${updatedPacket.sentAt ? ` on ${updatedPacket.sentAt}` : ""}.`
+      });
+    }
+    return res.json({ ok: true, packet: updatedPacket, setup, envelopeId: sent.envelopeId, envelopeUrl: sent.envelopeUrl });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: err instanceof Error ? err.message : "DocuSign send failed." });
+  }
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

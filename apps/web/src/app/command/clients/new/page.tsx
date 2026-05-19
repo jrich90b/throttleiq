@@ -76,6 +76,15 @@ type EsignPacket = {
   signedAt?: string;
 };
 
+type DocusignStatus = {
+  configured: boolean;
+  connected: boolean;
+  accountId?: string;
+  basePath?: string;
+  connectedAt?: string;
+  missing?: string[];
+};
+
 const emptyForm = {
   dealerName: "",
   slug: "",
@@ -125,6 +134,8 @@ export default function NewDealerClientPage() {
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
   const [esignPackets, setEsignPackets] = useState<EsignPacket[]>([]);
   const [esignBusy, setEsignBusy] = useState(false);
+  const [docusignStatus, setDocusignStatus] = useState<DocusignStatus | null>(null);
+  const [docusignBusy, setDocusignBusy] = useState(false);
   const [esignForm, setEsignForm] = useState({
     provider: "manual" as EsignPacket["provider"],
     signerName: "",
@@ -156,6 +167,10 @@ export default function NewDealerClientPage() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    loadDocusignStatus();
   }, []);
 
   useEffect(() => {
@@ -389,6 +404,47 @@ export default function NewDealerClientPage() {
       );
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "E-sign packet could not be created.");
+    } finally {
+      setEsignBusy(false);
+    }
+  }
+
+  async function loadDocusignStatus() {
+    try {
+      const resp = await fetch("/api/integrations/docusign/status", { cache: "no-store" });
+      const data = await resp.json();
+      if (data?.ok) setDocusignStatus(data);
+    } catch {
+      setDocusignStatus(null);
+    }
+  }
+
+  async function connectDocusign() {
+    setDocusignBusy(true);
+    try {
+      const resp = await fetch("/api/integrations/docusign/start", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok || !data.url) throw new Error(data?.error || "DocuSign connect could not start.");
+      window.open(data.url, "_blank", "noopener,noreferrer");
+      setNotice("DocuSign opened in a new tab. After approving access, return here and refresh status.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "DocuSign connect could not start.");
+    } finally {
+      setDocusignBusy(false);
+    }
+  }
+
+  async function sendDocusignPacket(packet: EsignPacket) {
+    setEsignBusy(true);
+    try {
+      const resp = await fetch(`/api/esign/packets/${encodeURIComponent(packet.id)}/docusign/send`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "DocuSign envelope could not be sent.");
+      setEsignPackets(current => current.map(row => (row.id === data.packet.id ? data.packet : row)));
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice("DocuSign envelope sent to the dealer signer.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "DocuSign envelope could not be sent.");
     } finally {
       setEsignBusy(false);
     }
@@ -651,7 +707,21 @@ export default function NewDealerClientPage() {
                       <p className="lr-ceo-kicker">Agreement signature</p>
                       <h3>E-sign packet</h3>
                     </div>
+                    <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured ? "is-working" : "is-blocked"}`}>
+                      DocuSign {docusignStatus?.connected ? "connected" : docusignStatus?.configured ? "ready to connect" : "not configured"}
+                    </span>
                   </div>
+                  <div className="lr-ceo-action-row">
+                    <button type="button" className="lr-ceo-secondary-btn" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
+                      Connect DocuSign
+                    </button>
+                    <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
+                      Refresh DocuSign
+                    </button>
+                  </div>
+                  {!docusignStatus?.configured && docusignStatus?.missing?.length ? (
+                    <p className="lr-ceo-note">Missing DocuSign settings: {docusignStatus.missing.join(", ")}.</p>
+                  ) : null}
                   <div className="lr-ceo-form-stack">
                     <label>
                       Provider
@@ -717,6 +787,15 @@ export default function NewDealerClientPage() {
                             {packet.externalUrl ? <a href={packet.externalUrl} target="_blank" rel="noreferrer">Open e-sign link</a> : null}
                           </div>
                           <div>
+                            {packet.provider === "docusign" ? (
+                              <button
+                                type="button"
+                                onClick={() => sendDocusignPacket(packet)}
+                                disabled={esignBusy || !docusignStatus?.connected || packet.status === "signed"}
+                              >
+                                Send DocuSign
+                              </button>
+                            ) : null}
                             <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateEsignPacket(packet, "sent")} disabled={esignBusy || packet.status === "sent" || packet.status === "signed"}>
                               Mark sent
                             </button>
