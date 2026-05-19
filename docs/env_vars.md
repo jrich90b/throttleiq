@@ -86,6 +86,19 @@ https://api.americanharley.leadrider.ai/integrations/meta/callback
 - `INCIDENT_ALERTS_ENABLED=1`
 - `INCIDENT_DEDUPE_MINUTES=30`
 - `INCIDENT_TEST_TOKEN`
+
+## Claude Agent
+
+- `ANTHROPIC_API_KEY`
+  - Required for Claude Support Agent execution.
+- `ANTHROPIC_MODEL`
+  - Optional. Defaults to `claude-sonnet-4-5-20250929`.
+- `ANTHROPIC_AGENT_MAX_TOKENS`
+  - Optional. Defaults to `1200`.
+- `CLAUDE_AGENT_ENABLED`
+  - Optional. Defaults on. Set to `0` or `false` to disable background Claude task execution.
+- `CLAUDE_AGENT_POLL_MINUTES`
+  - Optional. Defaults to `2`.
 - `SLACK_INCIDENT_WEBHOOK_URL`
 - `LINEAR_API_KEY`
 - `LINEAR_TEAM_ID=a7f65092-379e-47fc-bdda-561c74d98ac6`

@@ -15,6 +15,10 @@ type AgentTask = {
     required: boolean;
     reason?: string;
   };
+  output?: {
+    summary?: string;
+    links?: string[];
+  };
 };
 
 type AutomationRun = {
@@ -311,6 +315,7 @@ export default function SupportAgentCommandPage() {
                     <span>{task.provider}</span>
                     <strong>{task.title}</strong>
                     <small>{task.approval?.reason || statusLabel(task.status)}</small>
+                    {task.output?.summary ? <p>{task.output.summary}</p> : <p>Claude is preparing this for review.</p>}
                   </div>
                 </div>
               ))}

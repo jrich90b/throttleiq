@@ -868,6 +868,13 @@ a {
   color: #aebbd2;
 }
 
+.lr-ceo-ticket-row p {
+  margin: 0.45rem 0 0;
+  color: #d7e2f3;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .lr-ceo-mail-row {
   padding: 0.78rem;
   border: 1px solid rgba(255, 255, 255, 0.12);

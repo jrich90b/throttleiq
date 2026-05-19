@@ -39,10 +39,12 @@ import {
   addAgentTask,
   listAgentTasks,
   updateAgentTaskStatus,
+  type AgentTask,
   type AgentTaskKind,
   type AgentTaskProvider,
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
+import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
   listAutomationRuns,
@@ -28386,6 +28388,54 @@ const allowedAgentKinds: AgentTaskKind[] = [
   "other"
 ];
 const allowedAgentStatuses: AgentTaskStatus[] = ["queued", "needs_approval", "running", "completed", "failed", "blocked"];
+const runningClaudeTasks = new Set<string>();
+
+function shouldAutoRunClaudeTask(task: AgentTask) {
+  if (task.provider !== "claude") return false;
+  if (task.status !== "queued" && task.status !== "needs_approval") return false;
+  if (task.output?.summary?.trim()) return false;
+  return true;
+}
+
+function queueClaudeTaskExecution(task: AgentTask) {
+  if (!shouldAutoRunClaudeTask(task)) return;
+  if (runningClaudeTasks.has(task.id)) return;
+  runningClaudeTasks.add(task.id);
+  void (async () => {
+    try {
+      await updateAgentTaskStatus(task.id, "running");
+      const result = await runClaudeAgentTask(task);
+      if (result.ok) {
+        const nextStatus: AgentTaskStatus = task.approval?.required ? "needs_approval" : "completed";
+        await updateAgentTaskStatus(task.id, nextStatus, {
+          summary: result.summary,
+          links: [`model:${result.model}`]
+        });
+      } else if (result.reason === "not_configured") {
+        await updateAgentTaskStatus(task.id, task.approval?.required ? "needs_approval" : "queued", {
+          summary: "Claude is not configured yet. Add ANTHROPIC_API_KEY on the API server to let this task run automatically."
+        });
+      } else {
+        await updateAgentTaskStatus(task.id, "failed", {
+          summary: `Claude failed to generate output: ${result.error}`
+        });
+      }
+    } catch (err: any) {
+      await updateAgentTaskStatus(task.id, "failed", {
+        summary: `Claude execution failed: ${err?.message ?? err}`
+      }).catch(() => null);
+    } finally {
+      runningClaudeTasks.delete(task.id);
+    }
+  })();
+}
+
+async function runPendingClaudeAgentTasks(limit = 10) {
+  const tasks = await listAgentTasks(1000);
+  const pending = tasks.filter(shouldAutoRunClaudeTask).slice(0, Math.max(1, Math.min(50, Math.floor(limit))));
+  for (const task of pending) queueClaudeTaskExecution(task);
+  return pending.length;
+}
 
 async function ensureSupportAgentTask(input: {
   dedupeKey: string;
@@ -28402,8 +28452,11 @@ async function ensureSupportAgentTask(input: {
   const dedupeKey = input.dedupeKey.replace(/\s+/g, "_").slice(0, 120);
   const marker = `[support-auto:${dedupeKey}]`;
   const existing = (await listAgentTasks(1000)).find(task => task.instructions.includes(marker));
-  if (existing) return existing;
-  return addAgentTask({
+  if (existing) {
+    queueClaudeTaskExecution(existing);
+    return existing;
+  }
+  const task = await addAgentTask({
     provider: "claude",
     kind: "email",
     title: input.title.replace(/\s+/g, " ").trim().slice(0, 180) || "Support Agent review",
@@ -28420,6 +28473,8 @@ async function ensureSupportAgentTask(input: {
       role: "system"
     }
   });
+  queueClaudeTaskExecution(task);
+  return task;
 }
 
 function queueSupportAgentTask(input: Parameters<typeof ensureSupportAgentTask>[0]) {
@@ -28538,6 +28593,7 @@ app.post("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =
       role: String(user?.role ?? "").trim() || undefined
     }
   });
+  queueClaudeTaskExecution(task);
   return res.json({ ok: true, task });
 });
 
@@ -47845,6 +47901,27 @@ const server = app.listen(port, () => {
     setTimeout(runSupportMailPoll, 20_000).unref?.();
     const supportMailInterval = setInterval(runSupportMailPoll, supportMailPollMinutes * 60 * 1000);
     (supportMailInterval as any).unref?.();
+  }
+
+  const claudeAgentEnabled =
+    (process.env.CLAUDE_AGENT_ENABLED ?? "true").toLowerCase() !== "false" &&
+    process.env.CLAUDE_AGENT_ENABLED !== "0";
+  const claudeAgentMinutesRaw = Number(process.env.CLAUDE_AGENT_POLL_MINUTES ?? "2");
+  const claudeAgentMinutes =
+    Number.isFinite(claudeAgentMinutesRaw) && claudeAgentMinutesRaw >= 1 ? claudeAgentMinutesRaw : 2;
+  if (claudeAgentEnabled) {
+    console.log(`[claude agent] runner enabled (${claudeAgentMinutes} min interval)`);
+    const runClaudeAgent = async () => {
+      try {
+        const queued = await runPendingClaudeAgentTasks(10);
+        if (queued) console.log(`[claude agent] queued ${queued} task(s)`);
+      } catch (err: any) {
+        console.warn("[claude agent] runner failed:", err?.message ?? err);
+      }
+    };
+    setTimeout(runClaudeAgent, 30_000).unref?.();
+    const claudeAgentInterval = setInterval(runClaudeAgent, claudeAgentMinutes * 60 * 1000);
+    (claudeAgentInterval as any).unref?.();
   }
 });
 
