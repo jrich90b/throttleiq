@@ -663,8 +663,13 @@ input[type="reset"],
   border-color: rgba(148, 163, 184, 0.28) !important;
 }
 
+.lr-app-theme .lr-app-modal.bg-white {
+  background:
+    radial-gradient(760px 260px at 85% -12%, rgba(251, 127, 4, 0.14), transparent 56%),
+    linear-gradient(180deg, #0f1827 0%, #080d16 100%) !important;
+}
+
 .lr-app-theme .lr-app-modal .bg-white,
-.lr-app-theme .lr-app-modal.bg-white,
 .lr-app-theme .lr-app-modal .bg-gray-50,
 .lr-app-theme .lr-app-modal .bg-slate-50,
 .lr-app-theme .lr-app-modal .sticky {
