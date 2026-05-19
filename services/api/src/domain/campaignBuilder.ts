@@ -10,6 +10,7 @@ import type {
 } from "./campaignStore.js";
 import type { DealerProfile } from "./dealerProfile.js";
 import { getDataDir } from "./dataDir.js";
+import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { searchGoogleCse } from "./webFallback.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -2096,6 +2097,13 @@ async function tryGenerateWithLlm(args: {
         ...optionalTemperature(model, 0.2),
         max_output_tokens: 5200
       });
+      recordOpenAIUsage(rescueResp, {
+        feature: "campaign_studio",
+        operation: "email_html_rescue",
+        requestKind: "responses.create",
+        model,
+        metadata: { channel: args.input.channel, buildMode: args.input.buildMode }
+      });
       const htmlRaw = extractHtmlFromModelOutput(rescueResp.output_text ?? "");
       if (!isRenderableEmailHtml(htmlRaw)) return "";
       const normalized = normalizeGeneratedEmailHtml(htmlRaw, {
@@ -2126,6 +2134,13 @@ async function tryGenerateWithLlm(args: {
           strict: true
         }
       }
+    });
+    recordOpenAIUsage(parsedResp, {
+      feature: "campaign_studio",
+      operation: "campaign_copy_structured",
+      requestKind: "responses.parse",
+      model,
+      metadata: { channel: args.input.channel, buildMode: args.input.buildMode }
     });
     const parsed = ((parsedResp as any)?.output_parsed as any) || parseObject(parsedResp.output_text ?? "");
     if (parsed?.sms_body || parsed?.email_subject || parsed?.email_body_text || parsed?.email_body_html) {
@@ -2190,6 +2205,13 @@ async function tryGenerateWithLlm(args: {
       ...optionalTextVerbosity(model),
       ...optionalTemperature(model, 0.2),
       max_output_tokens: 1800
+    });
+    recordOpenAIUsage(resp, {
+      feature: "campaign_studio",
+      operation: "campaign_copy_fallback",
+      requestKind: "responses.create",
+      model,
+      metadata: { channel: args.input.channel, buildMode: args.input.buildMode }
     });
     const rawHtmlDirect = extractHtmlFromModelOutput(resp.output_text ?? "");
     const parsed = parseObject(resp.output_text ?? "");

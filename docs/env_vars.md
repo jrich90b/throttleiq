@@ -37,6 +37,27 @@ Current Meta callback:
 https://api.americanharley.leadrider.ai/integrations/meta/callback
 ```
 
+## OpenAI Usage Logging
+
+- `OPENAI_USAGE_LOGGING_ENABLED`
+  - Defaults on. Set to `0` to disable local usage logging.
+- `OPENAI_USAGE_LOG_PATH`
+  - Optional explicit JSONL file path.
+  - Defaults to `DATA_DIR/openai_usage/YYYY-MM.jsonl`.
+- `OPENAI_USAGE_PRICING_JSON`
+  - Optional pricing override as JSON.
+  - Example:
+
+```json
+{
+  "gpt-5-mini": {
+    "inputPerMillion": 0.75,
+    "cachedInputPerMillion": 0.075,
+    "outputPerMillion": 4.5
+  }
+}
+```
+
 ## Incidents
 
 - `SENTRY_DSN`

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
+import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -386,6 +387,12 @@ export async function classifySmallTalkWithLLM(args: {
       ...optionalTemperature(model, 0),
       max_output_tokens: 12
     });
+    recordOpenAIUsage(fallbackResp, {
+      feature: "llm_classifier",
+      operation: "small_talk_fallback",
+      requestKind: "responses.create",
+      model
+    });
     const out = String(fallbackResp.output_text ?? "")
       .trim()
       .toUpperCase();
@@ -469,6 +476,12 @@ export async function classifyBlendedChatterWithLLM(args: {
       ...optionalCreateTextConfig(model),
       ...optionalTemperature(model, 0),
       max_output_tokens: 12
+    });
+    recordOpenAIUsage(fallbackResp, {
+      feature: "llm_classifier",
+      operation: "blended_chatter_fallback",
+      requestKind: "responses.create",
+      model
     });
     const out = String(fallbackResp.output_text ?? "")
       .trim()
@@ -613,6 +626,12 @@ export async function generateSmallTalkReplyWithLLM(args: {
         ...optionalTemperature(model, 0.2),
         max_output_tokens: 60
       });
+      recordOpenAIUsage(resp, {
+        feature: "llm_reply",
+        operation: "small_talk_freeform_backup",
+        requestKind: "responses.create",
+        model
+      });
       const freeform = toShortOneLiner(resp.output_text ?? "");
       if (!freeform) return null;
       if (isTooGeneric(freeform)) return null;
@@ -755,6 +774,12 @@ export async function generateBlendedLeadInWithLLM(args: {
       ...optionalCreateTextConfig(model),
       ...optionalTemperature(model, 0.2),
       max_output_tokens: 40
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_reply",
+      operation: "blended_lead_in_freeform_backup",
+      requestKind: "responses.create",
+      model
     });
     const leadIn = normalizeLeadIn(resp.output_text ?? "");
     if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn)) {
@@ -1419,6 +1444,12 @@ export async function summarizeSalespersonNoteWithLLM(args: {
       ...optionalCreateTextConfig(model),
       ...optionalTemperature(model, 0.2),
       max_output_tokens: 80
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_summary",
+      operation: "salesperson_note",
+      requestKind: "responses.create",
+      model
     });
     const out = resp.output_text?.trim() ?? "";
     return out || null;
@@ -2884,6 +2915,13 @@ async function requestStructuredJson(args: {
         }
       }
     });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: args.schemaName,
+      requestKind: "responses.parse",
+      model: args.model,
+      metadata: { debugTag: args.debugTag ?? null }
+    });
     const parsedFromApi = (resp as any)?.output_parsed;
     if (parsedFromApi && typeof parsedFromApi === "object") {
       return parsedFromApi;
@@ -2915,6 +2953,13 @@ async function requestStructuredJson(args: {
       input: args.prompt,
       ...optionalCreateTextConfig(args.model),
       max_output_tokens: args.maxOutputTokens ?? 220
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: `${args.schemaName}_fallback`,
+      requestKind: "responses.create",
+      model: args.model,
+      metadata: { debugTag: args.debugTag ?? null }
     });
     const raw = resp.output_text?.trim() ?? "";
     const parsed = parseObject(raw);
@@ -7297,6 +7342,12 @@ ${clipped}
       ...optionalTemperature(model, 0),
       max_output_tokens: 180
     });
+    recordOpenAIUsage(resp, {
+      feature: "llm_summary",
+      operation: "voice_call_transcript",
+      requestKind: "responses.create",
+      model
+    });
     const out = resp.output_text?.trim() ?? "";
     const cleaned = stripUnknownYears(out, raw);
     return cleaned || buildFallbackSummary(raw, args.lead);
@@ -7376,6 +7427,13 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
       ...optionalCreateTextConfig(model),
       ...optionalTemperature(model, 0),
       max_output_tokens: 220
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_summary",
+      operation: "conversation_memory",
+      requestKind: "responses.create",
+      model,
+      leadRef: args.lead?.leadRef ?? null
     });
     const out = resp.output_text?.trim() ?? "";
     return out || null;
@@ -7800,6 +7858,20 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
     instructions,
     input,
     ...optionalCreateTextConfig(model)
+  });
+  recordOpenAIUsage(response, {
+    feature: "llm_draft",
+    operation: "generate_customer_draft",
+    requestKind: "responses.create",
+    model,
+    conversationId: ctx.leadKey,
+    leadRef: ctx.lead?.leadRef ?? null,
+    metadata: {
+      channel: ctx.channel,
+      bucket: ctx.bucket ?? null,
+      cta: ctx.cta ?? null,
+      leadSource: ctx.leadSource ?? null
+    }
   });
 
   let draft = (response.output_text || "").trim();

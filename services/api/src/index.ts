@@ -139,6 +139,7 @@ import {
 import type { DailyForecast } from "./domain/weather.js";
 import { resolveTownNearestDealer, formatTownLabel } from "./domain/geo.js";
 import { getDataDir } from "./domain/dataDir.js";
+import { recordOpenAIUsage } from "./domain/openaiUsageLogger.js";
 import { getModelSpecs, buildSpecsSummary, buildGlanceSummary } from "./domain/specsScraper.js";
 import {
   getModelsByYear,
@@ -13347,6 +13348,12 @@ async function transcribeRecordingMp3(
       file,
       model: "whisper-1"
     });
+    recordOpenAIUsage(resp, {
+      feature: "voice",
+      operation: "call_transcription",
+      requestKind: "audio.transcriptions.create",
+      model: "whisper-1"
+    });
     return resp.text?.trim() || null;
   } catch (err: any) {
     console.warn("[voice] transcription failed:", err?.message ?? err);
@@ -17183,6 +17190,13 @@ async function extractInventoryDetailsFromInboundMedia(
         }
       } as any
     } as any);
+    recordOpenAIUsage(resp, {
+      feature: "inventory_media",
+      operation: "extract_inventory_details",
+      requestKind: "responses.parse",
+      model,
+      metadata: { imageCount: imageUrls.length }
+    });
     const parsedFromApi = (resp as any)?.output_parsed;
     const result = parsedFromApi
       ? parseInventoryMediaExtractionJson(JSON.stringify(parsedFromApi))
@@ -30772,6 +30786,13 @@ async function generateCampaignImageWithOpenAI(args: {
       model,
       prompt: imagePrompt,
       size
+    });
+    recordOpenAIUsage(imgResp, {
+      feature: "campaign_studio",
+      operation: "campaign_image_fallback",
+      requestKind: "images.generate",
+      model,
+      metadata: { channel: args.channel, size }
     });
     const first = Array.isArray(imgResp?.data) ? imgResp.data[0] : null;
     let buffer: Buffer | null = null;
