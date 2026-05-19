@@ -671,10 +671,19 @@ input[type="reset"],
 
 .lr-app-theme .lr-app-modal .bg-white,
 .lr-app-theme .lr-app-modal .bg-gray-50,
-.lr-app-theme .lr-app-modal .bg-slate-50,
-.lr-app-theme .lr-app-modal .sticky {
+.lr-app-theme .lr-app-modal .bg-slate-50 {
   background: rgba(255, 255, 255, 0.045) !important;
   color: #e7edf8 !important;
+}
+
+.lr-app-theme .lr-app-modal .sticky {
+  background: #080d16 !important;
+  color: #e7edf8 !important;
+}
+
+.lr-app-theme .lr-app-modal .sticky.bottom-0 {
+  background: linear-gradient(180deg, #0b111d 0%, #080d16 100%) !important;
+  box-shadow: 0 -14px 30px rgba(0, 0, 0, 0.34) !important;
 }
 
 .lr-app-theme .lr-app-modal button {
