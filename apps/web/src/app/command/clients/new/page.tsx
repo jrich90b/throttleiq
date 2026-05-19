@@ -562,13 +562,15 @@ export default function NewDealerClientPage() {
                 ? "Connected and ready to send agreements."
                 : docusignStatus?.configured
                   ? "Configured. Connect once before sending agreements."
-                  : "Server settings are missing before DocuSign can connect."}
+                  : docusignStatus
+                    ? "Server settings are missing before DocuSign can connect."
+                    : "Checking DocuSign settings."}
             </span>
           </div>
-          <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured ? "is-working" : "is-blocked"}`}>
-            {docusignStatus?.connected ? "Connected" : docusignStatus?.configured ? "Ready to connect" : "Not configured"}
+          <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured || !docusignStatus ? "is-working" : "is-blocked"}`}>
+            {docusignStatus?.connected ? "Connected" : docusignStatus?.configured ? "Ready to connect" : docusignStatus ? "Not configured" : "Checking"}
           </span>
-          <button type="button" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
+          <button type="button" onClick={connectDocusign} disabled={docusignBusy || docusignStatus?.configured === false}>
             Connect DocuSign
           </button>
           <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
