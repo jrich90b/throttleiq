@@ -34,6 +34,14 @@ import {
   type OpsAnomalyType
 } from "./domain/opsAnomalyStore.js";
 import {
+  addAgentTask,
+  listAgentTasks,
+  updateAgentTaskStatus,
+  type AgentTaskKind,
+  type AgentTaskProvider,
+  type AgentTaskStatus
+} from "./domain/agentTaskStore.js";
+import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   classifyBlendedChatterWithLLM,
@@ -28208,6 +28216,118 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
   }
 
   return res.json({ ok: true, anomaly });
+});
+
+const allowedAgentProviders: AgentTaskProvider[] = ["codex", "claude"];
+const allowedAgentKinds: AgentTaskKind[] = [
+  "dealer_setup",
+  "feedback_review",
+  "agreement",
+  "email",
+  "quickbooks",
+  "prospect_research",
+  "linear_ticket",
+  "sop",
+  "other"
+];
+const allowedAgentStatuses: AgentTaskStatus[] = ["queued", "needs_approval", "running", "completed", "failed", "blocked"];
+
+function agentKindDefaultTitle(kind: AgentTaskKind): string {
+  switch (kind) {
+    case "dealer_setup":
+      return "Run dealer setup checklist";
+    case "feedback_review":
+      return "Run feedback loop review";
+    case "agreement":
+      return "Draft dealer agreement";
+    case "email":
+      return "Draft email";
+    case "quickbooks":
+      return "Review QuickBooks item";
+    case "prospect_research":
+      return "Research prospect";
+    case "linear_ticket":
+      return "Create Linear task";
+    case "sop":
+      return "Create operating procedure";
+    default:
+      return "Agent task";
+  }
+}
+
+function agentTaskApprovalReason(kind: AgentTaskKind, instructions: string): string | undefined {
+  const text = `${kind} ${instructions}`.toLowerCase();
+  if (kind === "quickbooks") return "QuickBooks work can affect billing/accounting, so review is required first.";
+  if (kind === "agreement") return "Agreement work can affect legal/commercial terms, so review is required before sending.";
+  if (kind === "email") return "Customer or prospect emails should be approved before sending.";
+  if (text.match(/\b(send|invoice|charge|refund|pay|payment|sign|execute|delete|cancel subscription|change subscription)\b/)) {
+    return "This task includes an external action that should be approved before execution.";
+  }
+  return undefined;
+}
+
+app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "200");
+  const tasks = await listAgentTasks(Number.isFinite(limit) ? limit : 200);
+  return res.json({ ok: true, tasks });
+});
+
+app.post("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const providerRaw = String(req.body?.provider ?? "codex").trim().toLowerCase();
+  const kindRaw = String(req.body?.kind ?? "other").trim().toLowerCase();
+  const provider = allowedAgentProviders.includes(providerRaw as AgentTaskProvider)
+    ? (providerRaw as AgentTaskProvider)
+    : "codex";
+  const kind = allowedAgentKinds.includes(kindRaw as AgentTaskKind) ? (kindRaw as AgentTaskKind) : "other";
+  const title = String(req.body?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const instructions = String(req.body?.instructions ?? "").trim().slice(0, 5000);
+  const clientName = String(req.body?.clientName ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+  const priority = String(req.body?.priority ?? "normal").toLowerCase() === "high" ? "high" : "normal";
+  if (!instructions) return res.status(400).json({ ok: false, error: "Describe the work for the agent." });
+  const approvalReason = agentTaskApprovalReason(kind, instructions);
+  const task = await addAgentTask({
+    provider,
+    kind,
+    title: title || agentKindDefaultTitle(kind),
+    instructions,
+    clientName: clientName || undefined,
+    priority,
+    risk: approvalReason ? "approval_required" : "low",
+    approval: {
+      required: !!approvalReason,
+      reason: approvalReason
+    },
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    }
+  });
+  return res.json({ ok: true, task });
+});
+
+app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!allowedAgentStatuses.includes(statusRaw as AgentTaskStatus)) {
+    return res.status(400).json({ ok: false, error: "Invalid task status." });
+  }
+  const summary = String(req.body?.summary ?? "").trim().slice(0, 3000);
+  const task = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, summary ? { summary } : undefined);
+  if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  return res.json({ ok: true, task });
 });
 
 app.get("/questions", (_req, res) => {

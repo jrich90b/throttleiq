@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type ClientStage = "Prospect" | "Agreement" | "Build" | "Pilot" | "Active";
 type Health = "ready" | "attention" | "blocked";
@@ -34,6 +34,33 @@ type Connector = {
   status: "connected" | "setup needed" | "planned";
   owner: string;
   purpose: string;
+};
+type AgentTaskProvider = "codex" | "claude";
+type AgentTaskKind =
+  | "dealer_setup"
+  | "feedback_review"
+  | "agreement"
+  | "email"
+  | "quickbooks"
+  | "prospect_research"
+  | "linear_ticket"
+  | "sop"
+  | "other";
+type AgentTask = {
+  id: string;
+  provider: AgentTaskProvider;
+  kind: AgentTaskKind;
+  title: string;
+  instructions: string;
+  clientName?: string;
+  priority: "normal" | "high";
+  risk: "low" | "approval_required" | "blocked";
+  status: "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
+  createdAt: string;
+  approval?: {
+    required: boolean;
+    reason?: string;
+  };
 };
 
 const clients: DealerClient[] = [
@@ -155,6 +182,45 @@ const connectors: Connector[] = [
   }
 ];
 
+const agentTaskKinds: { value: AgentTaskKind; label: string; provider: AgentTaskProvider; template: string }[] = [
+  {
+    value: "dealer_setup",
+    label: "Dealer setup",
+    provider: "codex",
+    template: "Create the setup checklist, DNS/env validation list, smoke test plan, and next blockers for this dealer."
+  },
+  {
+    value: "agreement",
+    label: "Agreement draft",
+    provider: "claude",
+    template: "Draft or update the dealer agreement with pricing, setup fee, included usage, approval gates, and e-sign send notes."
+  },
+  {
+    value: "quickbooks",
+    label: "QuickBooks review",
+    provider: "claude",
+    template: "Review invoice/customer setup needs and prepare accounting notes. Do not create invoices or change books without approval."
+  },
+  {
+    value: "email",
+    label: "Email draft",
+    provider: "claude",
+    template: "Draft a professional dealer-facing email for approval. Do not send it."
+  },
+  {
+    value: "prospect_research",
+    label: "Prospect research",
+    provider: "claude",
+    template: "Research this prospect, summarize dealership fit, likely lead volume, decision makers, and recommended next action."
+  },
+  {
+    value: "linear_ticket",
+    label: "Linear ticket",
+    provider: "codex",
+    template: "Create a clear implementation ticket with scope, acceptance checks, and approval risk."
+  }
+];
+
 const buildSteps = [
   "Agreement drafted",
   "Agreement sent",
@@ -198,6 +264,10 @@ function healthClass(health: Health) {
   return "lr-ceo-status-blocked";
 }
 
+function taskStatusLabel(status: AgentTask["status"]) {
+  return status.replace(/_/g, " ");
+}
+
 export default function CeoCommandDashboard() {
   const [selectedClient, setSelectedClient] = useState(clients[0].name);
   const [agreementPlan, setAgreementPlan] = useState("Starter");
@@ -205,6 +275,12 @@ export default function CeoCommandDashboard() {
   const [actionNotice, setActionNotice] = useState(
     "Dashboard is ready. Connect DocuSign or Dropbox Sign, Stripe, QuickBooks, and Codex task hooks to automate actions."
   );
+  const [agentProvider, setAgentProvider] = useState<AgentTaskProvider>("claude");
+  const [agentKind, setAgentKind] = useState<AgentTaskKind>("agreement");
+  const [agentPriority, setAgentPriority] = useState<"normal" | "high">("normal");
+  const [agentInstructions, setAgentInstructions] = useState(agentTaskKinds[1].template);
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [agentBusy, setAgentBusy] = useState(false);
 
   const client = clients.find(row => row.name === selectedClient) ?? clients[0];
   const monthlyRunRate = useMemo(
@@ -214,6 +290,65 @@ export default function CeoCommandDashboard() {
   const pipelineValue = useMemo(() => clients.reduce((sum, row) => sum + row.monthlyFee, 0), []);
   const blockedCount = clients.filter(row => row.health === "blocked").length;
   const connectedCount = connectors.filter(row => row.status === "connected").length;
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/agent-tasks?limit=8", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.tasks)) setAgentTasks(data.tasks);
+      })
+      .catch(() => {
+        if (active) setActionNotice("Agent task history could not be loaded. The dashboard still works for local planning.");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function chooseAgentKind(nextKind: AgentTaskKind) {
+    const preset = agentTaskKinds.find(row => row.value === nextKind);
+    setAgentKind(nextKind);
+    if (preset) {
+      setAgentProvider(preset.provider);
+      setAgentInstructions(preset.template);
+    }
+  }
+
+  async function createAgentTask(overrides?: Partial<Pick<AgentTask, "provider" | "kind" | "title" | "instructions" | "priority">>) {
+    const provider = overrides?.provider ?? agentProvider;
+    const kind = overrides?.kind ?? agentKind;
+    const instructions = overrides?.instructions ?? agentInstructions;
+    if (!instructions.trim()) {
+      setActionNotice("Add instructions before creating an agent task.");
+      return;
+    }
+    setAgentBusy(true);
+    try {
+      const resp = await fetch("/api/agent-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          kind,
+          priority: overrides?.priority ?? agentPriority,
+          clientName: client.name,
+          title: overrides?.title,
+          instructions
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
+      setAgentTasks(current => [data.task, ...current.filter(row => row.id !== data.task.id)].slice(0, 8));
+      const approval = data.task?.approval?.required ? " It is waiting for approval before any external action." : "";
+      setActionNotice(`${provider === "claude" ? "Claude" : "Codex"} task created: ${data.task.title}.${approval}`);
+    } catch (err) {
+      setActionNotice(err instanceof Error ? err.message : "Agent task could not be created.");
+    } finally {
+      setAgentBusy(false);
+    }
+  }
 
   return (
     <main className="lr-ceo-shell">
@@ -250,10 +385,33 @@ export default function CeoCommandDashboard() {
             </p>
           </div>
           <div className="lr-ceo-header-actions">
-            <button type="button" onClick={() => setActionNotice("Agreement draft exists. Next step: choose DocuSign, Dropbox Sign, or PandaDoc and connect the e-sign workflow.")}>
+            <button
+              type="button"
+              onClick={() =>
+                createAgentTask({
+                  provider: "claude",
+                  kind: "agreement",
+                  title: `Prepare ${client.name} agreement packet`,
+                  instructions: `Prepare the ${agreementPlan} agreement packet for ${client.name}. Use the existing pricing assumptions and list missing legal/e-sign fields. Do not send it.`
+                })
+              }
+              disabled={agentBusy}
+            >
               Generate agreement
             </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => setActionNotice("Setup review is ready to route to Codex. Next step: wire this button to the Dealer Setup Agent automation.")}>
+            <button
+              type="button"
+              className="lr-ceo-secondary-btn"
+              onClick={() =>
+                createAgentTask({
+                  provider: "codex",
+                  kind: "dealer_setup",
+                  title: `Run ${client.name} setup review`,
+                  instructions: `Review the build status for ${client.name}. Produce setup blockers, DNS/API/web checks, connector gaps, and a recommended next-action list.`
+                })
+              }
+              disabled={agentBusy}
+            >
               Run setup review
             </button>
           </div>
@@ -389,7 +547,18 @@ export default function CeoCommandDashboard() {
                 </select>
               </label>
               <div className="lr-ceo-action-row">
-                <button type="button" onClick={() => setActionNotice(`${client.name} agreement packet is staged for the ${agreementPlan} plan. Final legal fields are required before sending.`)}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    createAgentTask({
+                      provider: "claude",
+                      kind: "agreement",
+                      title: `Draft ${client.name} ${agreementPlan} agreement`,
+                      instructions: `Draft the ${agreementPlan} agreement for ${client.name}. Include pricing, setup fee, included usage, overage rules, approval rules, and e-sign packet checklist. Do not send it.`
+                    })
+                  }
+                  disabled={agentBusy}
+                >
                   Draft agreement
                 </button>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => setActionNotice("E-sign send needs a connected DocuSign, Dropbox Sign, or PandaDoc account before it can send from the dashboard.")}>
@@ -450,20 +619,92 @@ export default function CeoCommandDashboard() {
           <div className="lr-ceo-panel-title">
             <div>
               <p className="lr-ceo-kicker">Ask an agent</p>
-              <h3>Command draft</h3>
+              <h3>Claude and Codex task launcher</h3>
             </div>
           </div>
-          <textarea value={commandText} onChange={event => setCommandText(event.target.value)} />
+          <div className="lr-ceo-agent-composer">
+            <label>
+              Agent
+              <select value={agentProvider} onChange={event => setAgentProvider(event.target.value as AgentTaskProvider)}>
+                <option value="claude">Claude - writing, agreements, emails, QuickBooks review</option>
+                <option value="codex">Codex - code, setup, smoke tests, tickets</option>
+              </select>
+            </label>
+            <label>
+              Work type
+              <select value={agentKind} onChange={event => chooseAgentKind(event.target.value as AgentTaskKind)}>
+                {agentTaskKinds.map(row => (
+                  <option key={row.value} value={row.value}>{row.label}</option>
+                ))}
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label>
+              Priority
+              <select value={agentPriority} onChange={event => setAgentPriority(event.target.value as "normal" | "high")}>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+          </div>
+          <textarea value={agentInstructions} onChange={event => setAgentInstructions(event.target.value)} />
           <div className="lr-ceo-action-row">
-            <button type="button" onClick={() => setActionNotice(`Codex command staged: "${commandText}"`)}>
-              Send to Codex
+            <button type="button" onClick={() => createAgentTask()} disabled={agentBusy}>
+              Create agent task
             </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => setActionNotice("Linear is connected for incidents. Next step: add a CEO-dashboard task creation endpoint.")}>
-              Create Linear task
+            <button
+              type="button"
+              className="lr-ceo-secondary-btn"
+              onClick={() =>
+                createAgentTask({
+                  provider: "codex",
+                  kind: "linear_ticket",
+                  title: `Create implementation ticket for ${client.name}`,
+                  instructions: commandText
+                })
+              }
+              disabled={agentBusy}
+            >
+              Create implementation task
             </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => setActionNotice("SOP save is staged. Next step: connect Notion or Google Drive as the operating manual destination.")}>
+            <button
+              type="button"
+              className="lr-ceo-secondary-btn"
+              onClick={() =>
+                createAgentTask({
+                  provider: "claude",
+                  kind: "sop",
+                  title: `Draft SOP for ${client.name}`,
+                  instructions: "Turn this workflow into a clear operating procedure for future dealer launches."
+                })
+              }
+              disabled={agentBusy}
+            >
               Save as SOP
             </button>
+          </div>
+          <label className="lr-ceo-command-legacy">
+            Implementation ticket note
+            <input value={commandText} onChange={event => setCommandText(event.target.value)} />
+          </label>
+          <div className="lr-ceo-task-list">
+            <strong>Recent agent tasks</strong>
+            {agentTasks.length ? (
+              agentTasks.map(task => (
+                <div key={task.id} className="lr-ceo-task-row">
+                  <span>{task.provider}</span>
+                  <p>
+                    <strong>{task.title}</strong>
+                    <small>
+                      {task.clientName || "No client"} • {taskStatusLabel(task.status)}
+                      {task.approval?.required ? ` • approval needed: ${task.approval.reason}` : ""}
+                    </small>
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="lr-ceo-note">No agent tasks yet. Create one above to start tracking delegated work.</p>
+            )}
           </div>
         </section>
       </section>

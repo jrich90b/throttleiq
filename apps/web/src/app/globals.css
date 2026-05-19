@@ -321,6 +321,11 @@ a {
   font-weight: 800;
 }
 
+.lr-ceo-shell button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .lr-ceo-shell .lr-ceo-secondary-btn {
   border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.06);
@@ -664,6 +669,72 @@ a {
   margin-bottom: 0.75rem;
 }
 
+.lr-ceo-agent-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(130px, 0.35fr);
+  gap: 0.72rem;
+  margin-bottom: 0.75rem;
+}
+
+.lr-ceo-agent-composer label,
+.lr-ceo-command-legacy {
+  display: grid;
+  gap: 0.42rem;
+  color: #b8c6dc;
+}
+
+.lr-ceo-command-legacy {
+  margin: 0.85rem 0 0;
+}
+
+.lr-ceo-task-list {
+  display: grid;
+  gap: 0.62rem;
+  margin-top: 1rem;
+}
+
+.lr-ceo-task-list > strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-task-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: start;
+  gap: 0.72rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-task-row > span {
+  display: inline-flex;
+  justify-content: center;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(251, 127, 4, 0.16);
+  color: #ffca92;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lr-ceo-task-row p {
+  margin: 0;
+}
+
+.lr-ceo-task-row strong,
+.lr-ceo-task-row small {
+  display: block;
+}
+
+.lr-ceo-task-row small {
+  margin-top: 0.22rem;
+  color: #aebbd2;
+  line-height: 1.45;
+}
+
 @media (max-width: 1050px) {
   .lr-ceo-shell {
     grid-template-columns: 1fr;
@@ -699,6 +770,7 @@ a {
   .lr-ceo-metrics,
   .lr-ceo-connector-grid,
   .lr-ceo-facts,
+  .lr-ceo-agent-composer,
   .lr-ceo-nav {
     grid-template-columns: 1fr;
   }
