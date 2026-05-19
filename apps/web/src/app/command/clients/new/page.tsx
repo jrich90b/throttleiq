@@ -1,0 +1,320 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "done";
+
+type DealerSetup = {
+  id: string;
+  dealerName: string;
+  slug: string;
+  commandUrl: string;
+  appUrl: string;
+  apiUrl: string;
+  stage: string;
+  status: string;
+  owner?: string;
+  primaryContact?: string;
+  website?: string;
+  crmProvider?: string;
+  leadVolume?: string;
+  notes?: string;
+  steps: Array<{
+    id: string;
+    label: string;
+    status: DealerSetupStepStatus;
+    note?: string;
+  }>;
+  updatedAt: string;
+};
+
+const emptyForm = {
+  dealerName: "",
+  slug: "",
+  owner: "Joe Hartrich",
+  primaryContact: "",
+  website: "",
+  crmProvider: "",
+  leadVolume: "",
+  notes: ""
+};
+
+function formatTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function statusClass(value: string) {
+  if (value === "done" || value === "ready" || value === "live") return "is-ready";
+  if (value === "blocked") return "is-blocked";
+  if (value === "in_progress") return "is-working";
+  return "";
+}
+
+export default function NewDealerClientPage() {
+  const [form, setForm] = useState(emptyForm);
+  const [setups, setSetups] = useState<DealerSetup[]>([]);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [notice, setNotice] = useState("Create a dealer setup when you are ready to start onboarding.");
+  const [busy, setBusy] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+
+  const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
+  const completion = useMemo(() => {
+    if (!selected?.steps.length) return 0;
+    return Math.round((selected.steps.filter(step => step.status === "done").length / selected.steps.length) * 100);
+  }, [selected]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/dealer-setups?limit=50", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.setups)) {
+          setSetups(data.setups);
+          setSelectedId(current => current || data.setups[0]?.id || "");
+        }
+      })
+      .catch(() => {
+        if (active) setNotice("Dealer setups could not be loaded.");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function updateField(field: keyof typeof emptyForm, value: string) {
+    setForm(current => ({ ...current, [field]: value }));
+  }
+
+  async function createSetup() {
+    setBusy(true);
+    try {
+      const resp = await fetch("/api/dealer-setups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form)
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be created.");
+      setSetups(current => [data.setup, ...current.filter(row => row.id !== data.setup.id)]);
+      setSelectedId(data.setup.id);
+      setForm(emptyForm);
+      setNotice(`Dealer setup created for ${data.setup.dealerName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Dealer setup could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateStep(stepId: string, stepStatus: DealerSetupStepStatus) {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepId, stepStatus, status: stepStatus === "blocked" ? "blocked" : "in_progress" })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Setup step could not be updated.");
+      setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice(`${data.setup.dealerName} setup updated.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Setup step could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSetupTask(kind: "codex" | "agreement" | "vercel") {
+    if (!selected) return;
+    setTaskBusy(true);
+    const instructions =
+      kind === "agreement"
+        ? `Draft the dealer agreement packet for ${selected.dealerName}. Include pricing, usage allowances, support terms, e-sign checklist, and missing fields. Do not send it.`
+        : kind === "vercel"
+          ? `Prepare Vercel deployment steps for ${selected.dealerName}. Target app URL: ${selected.appUrl}. Target API URL: ${selected.apiUrl}. List required Vercel project/domain/env changes and DNS records. Do not make external changes without approval.`
+          : `Run dealer setup review for ${selected.dealerName}. Check onboarding blockers across Vercel, DNS, API dealer config, Google, Twilio, SendGrid, Meta, agreement, and smoke testing. Return the next action list.`;
+    try {
+      const resp = await fetch("/api/agent-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: kind === "agreement" ? "claude" : "codex",
+          kind: kind === "agreement" ? "agreement" : "dealer_setup",
+          priority: "high",
+          clientName: selected.dealerName,
+          title:
+            kind === "agreement"
+              ? `Draft ${selected.dealerName} agreement`
+              : kind === "vercel"
+                ? `Prepare ${selected.dealerName} Vercel setup`
+                : `Run ${selected.dealerName} setup review`,
+          instructions
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
+      setNotice(`Agent task created: ${data.task.title}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Agent task could not be created.");
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  return (
+    <main className="lr-ceo-shell">
+      <aside className="lr-ceo-sidebar">
+        <div className="lr-ceo-brand">
+          <div className="lr-ceo-mark">LR</div>
+          <div>
+            <p className="lr-ceo-kicker">LeadRider</p>
+            <h1>Command</h1>
+          </div>
+        </div>
+        <nav className="lr-ceo-nav" aria-label="LeadRider command sections">
+          <a href="/command">Command Home</a>
+          <a href="/command/support">Support Agent</a>
+          <a href="/command/clients/new" className="is-active">Dealer Setup</a>
+          <a href="/command">Agreements</a>
+          <a href="/command">Billing</a>
+          <a href="/command">Connectors</a>
+        </nav>
+        <section className="lr-ceo-side-panel">
+          <p className="lr-ceo-kicker">Dealer setup</p>
+          <strong>{setups.length} setup records</strong>
+          <span>{selected ? `${completion}% complete for ${selected.dealerName}` : "No dealer selected"}</span>
+        </section>
+      </aside>
+
+      <section className="lr-ceo-main">
+        <header className="lr-ceo-header">
+          <div>
+            <p className="lr-ceo-kicker">Client onboarding</p>
+            <h2>New Dealer Client</h2>
+            <p>Create the setup record, track Vercel/DNS/API/connectors, and generate the Codex work needed to bring a dealer live.</p>
+          </div>
+          <div className="lr-ceo-header-actions">
+            <button type="button" onClick={() => createSetupTask("codex")} disabled={!selected || taskBusy}>
+              Run setup review
+            </button>
+            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("vercel")} disabled={!selected || taskBusy}>
+              Prepare Vercel
+            </button>
+          </div>
+        </header>
+
+        <section className="lr-ceo-notice" aria-live="polite">{notice}</section>
+
+        <section className="lr-ceo-grid">
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Create setup</p>
+                <h3>Dealer intake</h3>
+              </div>
+            </div>
+            <div className="lr-ceo-form-stack">
+              <label>
+                Dealer name
+                <input value={form.dealerName} onChange={event => updateField("dealerName", event.target.value)} placeholder="American Harley-Davidson" />
+              </label>
+              <label>
+                Subdomain slug
+                <input value={form.slug} onChange={event => updateField("slug", event.target.value)} placeholder="americanharley" />
+              </label>
+              <label>
+                Owner
+                <input value={form.owner} onChange={event => updateField("owner", event.target.value)} />
+              </label>
+              <label>
+                Primary contact
+                <input value={form.primaryContact} onChange={event => updateField("primaryContact", event.target.value)} placeholder="Name, email, phone" />
+              </label>
+              <label>
+                Dealer website
+                <input value={form.website} onChange={event => updateField("website", event.target.value)} placeholder="https://..." />
+              </label>
+              <label>
+                CRM / lead source
+                <input value={form.crmProvider} onChange={event => updateField("crmProvider", event.target.value)} placeholder="Traffic Log Pro, ADF, ..." />
+              </label>
+              <label>
+                Lead volume
+                <input value={form.leadVolume} onChange={event => updateField("leadVolume", event.target.value)} placeholder="300 leads/month" />
+              </label>
+              <label>
+                Notes
+                <textarea value={form.notes} onChange={event => updateField("notes", event.target.value)} placeholder="Special routing, owners, calendar notes, pricing assumptions..." />
+              </label>
+              <button type="button" onClick={createSetup} disabled={busy || !form.dealerName.trim()}>
+                Create dealer setup
+              </button>
+            </div>
+          </article>
+
+          <article className="lr-ceo-panel lr-ceo-panel-wide">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Build pipeline</p>
+                <h3>{selected ? selected.dealerName : "No dealer selected"}</h3>
+              </div>
+              <select value={selected?.id || ""} onChange={event => setSelectedId(event.target.value)}>
+                {setups.length ? setups.map(setup => <option key={setup.id} value={setup.id}>{setup.dealerName}</option>) : <option value="">No setups</option>}
+              </select>
+            </div>
+
+            {selected ? (
+              <>
+                <div className="lr-ceo-progress">
+                  <span style={{ width: `${completion}%` }} />
+                </div>
+                <dl className="lr-ceo-facts">
+                  <div><dt>App URL</dt><dd>{selected.appUrl}</dd></div>
+                  <div><dt>API URL</dt><dd>{selected.apiUrl}</dd></div>
+                  <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
+                  <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
+                </dl>
+                <div className="lr-ceo-action-row">
+                  <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
+                    Draft agreement
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
+                    Create Codex task
+                  </button>
+                </div>
+                <div className="lr-ceo-setup-steps">
+                  {selected.steps.map(step => (
+                    <div key={step.id} className="lr-ceo-setup-step">
+                      <span className={statusClass(step.status)}>{step.status.replace(/_/g, " ")}</span>
+                      <strong>{step.label}</strong>
+                      {step.note ? <p>{step.note}</p> : null}
+                      <div>
+                        <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(step.id, "in_progress")} disabled={busy}>
+                          Start
+                        </button>
+                        <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(step.id, "blocked")} disabled={busy}>
+                          Block
+                        </button>
+                        <button type="button" onClick={() => updateStep(step.id, "done")} disabled={busy}>
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="lr-ceo-note">Create the first dealer setup to start the onboarding workflow.</p>
+            )}
+          </article>
+        </section>
+      </section>
+    </main>
+  );
+}

@@ -52,6 +52,14 @@ import {
   type AutomationRunStatus
 } from "./domain/automationRunStore.js";
 import {
+  addDealerSetup,
+  listDealerSetups,
+  updateDealerSetup,
+  type DealerSetupStage,
+  type DealerSetupStatus,
+  type DealerSetupStepStatus
+} from "./domain/dealerSetupStore.js";
+import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   classifyBlendedChatterWithLLM,
@@ -24332,6 +24340,67 @@ app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessT
   if (!bodyText) return res.status(400).json({ ok: false, error: "Draft body is required." });
   const draft = await createSupportGmailDraftReply(req.params.id, bodyText);
   return res.json({ ok: true, draft });
+});
+
+const allowedDealerSetupStages: DealerSetupStage[] = ["intake", "dns", "vercel", "api_config", "connectors", "agreement", "live"];
+const allowedDealerSetupStatuses: DealerSetupStatus[] = ["draft", "in_progress", "blocked", "ready", "live"];
+const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = ["pending", "in_progress", "blocked", "done"];
+
+app.get("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "100");
+  const setups = await listDealerSetups(Number.isFinite(limit) ? limit : 100);
+  return res.json({ ok: true, setups });
+});
+
+app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
+  if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
+  const setup = await addDealerSetup({
+    dealerName,
+    slug: String(req.body?.slug ?? ""),
+    owner: String(req.body?.owner ?? ""),
+    primaryContact: String(req.body?.primaryContact ?? ""),
+    website: String(req.body?.website ?? ""),
+    crmProvider: String(req.body?.crmProvider ?? ""),
+    leadVolume: String(req.body?.leadVolume ?? ""),
+    notes: String(req.body?.notes ?? "")
+  });
+  return res.json({ ok: true, setup });
+});
+
+app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const stageRaw = String(req.body?.stage ?? "").trim();
+  const statusRaw = String(req.body?.status ?? "").trim();
+  const stepStatusRaw = String(req.body?.stepStatus ?? "").trim();
+  const setup = await updateDealerSetup(req.params.id, {
+    stage: allowedDealerSetupStages.includes(stageRaw as DealerSetupStage) ? (stageRaw as DealerSetupStage) : undefined,
+    status: allowedDealerSetupStatuses.includes(statusRaw as DealerSetupStatus) ? (statusRaw as DealerSetupStatus) : undefined,
+    owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
+    primaryContact: typeof req.body?.primaryContact === "string" ? req.body.primaryContact : undefined,
+    website: typeof req.body?.website === "string" ? req.body.website : undefined,
+    crmProvider: typeof req.body?.crmProvider === "string" ? req.body.crmProvider : undefined,
+    leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
+    notes: typeof req.body?.notes === "string" ? req.body.notes : undefined,
+    stepId: typeof req.body?.stepId === "string" ? req.body.stepId : undefined,
+    stepStatus: allowedDealerSetupStepStatuses.includes(stepStatusRaw as DealerSetupStepStatus)
+      ? (stepStatusRaw as DealerSetupStepStatus)
+      : undefined,
+    stepNote: typeof req.body?.stepNote === "string" ? req.body.stepNote : undefined
+  });
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  return res.json({ ok: true, setup });
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

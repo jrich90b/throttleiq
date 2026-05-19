@@ -211,7 +211,7 @@ export default function SupportAgentCommandPage() {
         <nav className="lr-ceo-nav" aria-label="LeadRider command agents">
           <a href="/command">Command Home</a>
           <a href="/command/support" className="is-active">Support Agent</a>
-          <a href="/command">Dealer Setup</a>
+          <a href="/command/clients/new">Dealer Setup</a>
           <a href="/command">Agreements</a>
           <a href="/command">Billing</a>
           <a href="/command">Connectors</a>

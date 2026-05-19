@@ -496,7 +496,7 @@ export default function CeoCommandDashboard() {
         <nav className="lr-ceo-nav" aria-label="CEO command sections">
           <a href="/command" className="is-active">Command Home</a>
           <a href="/command/support">Support Agent</a>
-          <a href="/command">Dealer Setup</a>
+          <a href="/command/clients/new">Dealer Setup</a>
           <a href="/command">Agreements</a>
           <a href="/command">Billing</a>
           <a href="/command">Connectors</a>
