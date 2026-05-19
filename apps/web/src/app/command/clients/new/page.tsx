@@ -553,6 +553,29 @@ export default function NewDealerClientPage() {
 
         <section className="lr-ceo-notice" aria-live="polite">{notice}</section>
 
+        <section className="lr-ceo-integration-strip">
+          <div>
+            <p className="lr-ceo-kicker">E-sign connector</p>
+            <strong>DocuSign</strong>
+            <span>
+              {docusignStatus?.connected
+                ? "Connected and ready to send agreements."
+                : docusignStatus?.configured
+                  ? "Configured. Connect once before sending agreements."
+                  : "Server settings are missing before DocuSign can connect."}
+            </span>
+          </div>
+          <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured ? "is-working" : "is-blocked"}`}>
+            {docusignStatus?.connected ? "Connected" : docusignStatus?.configured ? "Ready to connect" : "Not configured"}
+          </span>
+          <button type="button" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
+            Connect DocuSign
+          </button>
+          <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
+            Refresh
+          </button>
+        </section>
+
         <section className="lr-ceo-grid">
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
