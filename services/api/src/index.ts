@@ -2253,6 +2253,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/automation-runs/ingest") ||
+    pathname.startsWith("/support-mail/poll") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/debug/incidents") ||
     pathname.startsWith("/auth/login") ||
