@@ -92,7 +92,7 @@ https://api.americanharley.leadrider.ai/integrations/meta/callback
 - `ANTHROPIC_API_KEY`
   - Required for Claude Support Agent execution.
 - `ANTHROPIC_MODEL`
-  - Optional. Defaults to `claude-sonnet-4-5-20250929`.
+  - Optional. Defaults to `claude-sonnet-4-20250514`.
 - `ANTHROPIC_AGENT_MAX_TOKENS`
   - Optional. Defaults to `1200`.
 - `CLAUDE_AGENT_ENABLED`
