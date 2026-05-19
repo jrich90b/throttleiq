@@ -1,5 +1,9 @@
 import React from "react";
 
+function followUpTickerStartIso(todo: any): string | null {
+  return String(todo?.dueAt ?? "").trim() || String(todo?.createdAt ?? "").trim() || null;
+}
+
 function formatFollowUpTicker(startIso: string | null | undefined, nowMs: number): string | null {
   const startedAt = new Date(String(startIso ?? "").trim()).getTime();
   if (!Number.isFinite(startedAt)) return null;
@@ -183,8 +187,8 @@ export function TaskInboxSection(props: any) {
                       sectionType === "appointment" &&
                       !appointmentOutcomeLabel &&
                       Boolean(String(rowConv?.appointment?.staffNotify?.followUpSentAt ?? "").trim());
-                    const followUpTicker =
-                      sectionType === "followup" ? formatFollowUpTicker(t.createdAt, nowMs) : null;
+                    const followUpTickerStart = sectionType === "followup" ? followUpTickerStartIso(t) : null;
+                    const followUpTicker = formatFollowUpTicker(followUpTickerStart, nowMs);
                     return (
                       <div
                         key={t.id}
@@ -207,7 +211,7 @@ export function TaskInboxSection(props: any) {
                             {followUpTicker ? (
                               <span
                                 className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/50 bg-[#06140f] px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums tracking-wide text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.12),0_0_12px_rgba(52,211,153,0.16)]"
-                                title="How long this follow-up has been open"
+                                title={String(t.dueAt ?? "").trim() ? "How long since this follow-up became due" : "How long this follow-up has been open"}
                               >
                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.85)]" />
                                 {followUpTicker}
