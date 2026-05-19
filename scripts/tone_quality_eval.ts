@@ -252,8 +252,10 @@ function main() {
 
   const responded = rows.filter(r => r.status === "responded");
   const missing = rows.filter(r => r.status === "missing_response");
-  const passCount = responded.filter(r => r.pass).length;
-  const failCount = responded.length - passCount;
+  const passCountResponded = responded.filter(r => r.pass).length;
+  const failCountResponded = responded.length - passCountResponded;
+  const passCountAll = rows.filter(r => r.pass).length;
+  const failCountAll = rows.length - passCountAll;
   const scores = responded.map(r => r.score);
   const avgScore = scores.length ? Number((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2)) : 0;
   const medianScore = Number(computeMedian(scores).toFixed(2));
@@ -328,9 +330,12 @@ function main() {
     totalInboundTurns: rows.length,
     respondedTurns: responded.length,
     missingResponseCount: missing.length,
-    passCount,
-    failCount,
-    passRate: responded.length ? Number(((passCount / responded.length) * 100).toFixed(2)) : 0,
+    passCount: passCountAll,
+    failCount: failCountAll,
+    passRate: rows.length ? Number(((passCountAll / rows.length) * 100).toFixed(2)) : 0,
+    respondedPassCount: passCountResponded,
+    respondedFailCount: failCountResponded,
+    respondedPassRate: responded.length ? Number(((passCountResponded / responded.length) * 100).toFixed(2)) : 0,
     avgScore,
     medianScore,
     issueCounts,

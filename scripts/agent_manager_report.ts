@@ -146,7 +146,9 @@ function main() {
   const tasks: TaskCandidate[] = [];
   const stuckCount = num(routeWatchdog?.stuckTurns?.count);
   const noResponseCount = num(routeWatchdog?.routeOutcomes?.noResponseOutcomeCount);
-  const tonePassRate = num(toneSummary?.passRate, 100);
+  const tonePassRateResponded =
+    toneSummary?.respondedPassRate != null ? num(toneSummary.respondedPassRate, 100) : num(toneSummary?.passRate, 100);
+  const tonePassRateAll = num(toneSummary?.passRate, 100);
   const toneMissing = num(toneSummary?.missingResponseCount);
   const toneAvg = num(toneSummary?.avgScore, 1);
   const fixtureFailNow = num(editSummary?.fixtureFailNow);
@@ -230,13 +232,13 @@ function main() {
     });
   }
 
-  if (tonePassRate < 92 || toneAvg < 0.82) {
+  if (tonePassRateResponded < 92 || toneAvg < 0.82) {
     pushTask(tasks, {
       id: "tone-quality-regression",
-      priority: tonePassRate < 85 || toneAvg < 0.75 ? "P1" : "P2",
+      priority: tonePassRateResponded < 85 || toneAvg < 0.75 ? "P1" : "P2",
       area: "tone",
       title: "Review low tone-quality pass rate",
-      signal: `tone pass rate ${tonePassRate.toFixed(1)}%, average score ${toneAvg.toFixed(2)}`,
+      signal: `tone pass rate ${tonePassRateResponded.toFixed(1)}%, average score ${toneAvg.toFixed(2)}`,
       recommendedAction:
         "Inspect tone_quality_failures.json, promote only stable deterministic tone rules, and add fixtures for repeated issue codes.",
       evidence: { issueCounts: topCounts(toneSummary?.issueCounts, "issue"), toneDir }
@@ -325,7 +327,8 @@ function main() {
     metrics: {
       stuckTurns: stuckCount,
       noResponseRouteOutcomes: noResponseCount,
-      tonePassRate,
+      tonePassRate: tonePassRateResponded,
+      tonePassRateAll,
       toneAvgScore: toneAvg,
       toneMissingResponses: toneMissing,
       feedbackFixtureFailures: fixtureFailNow,
