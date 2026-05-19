@@ -2055,6 +2055,10 @@ const ADF_METADATA_MARKERS: RegExp[] = [
   /\bevent name\s*:/i,
   /\bfirst name\s*:/i,
   /\blast name\s*:/i,
+  /\bmodel type\s*:/i,
+  /\bmanufacturer year\s*:/i,
+  /\btrade options\s*:/i,
+  /\bvehicle images\s*:/i,
   /\bpre-inspection trade-in value estimate\b/i,
   /\brough trade in wholesale\s*:/i,
   /\bclean trade in wholesale\s*:/i,
@@ -2090,7 +2094,7 @@ function extractTrueInquiryFromAdfText(input?: string | null): string {
   let value = String(direct ?? "").trim();
   if (!value) return "";
   value = value.replace(
-    /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:|pre-inspection trade-in value estimate|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:|prices shown to customer)[\s\S]*/i,
+    /\s*(?:vehicle images\s*:|can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:|pre-inspection trade-in value estimate|rough trade in wholesale\s*:|clean trade in wholesale\s*:|average retail\s*:|suggested list price\s*:|prices shown to customer)[\s\S]*/i,
     ""
   );
   value = value.replace(/^[>\-\s:]+/, "").trim();
@@ -3432,6 +3436,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const meta = extractLeadMeta(adfXml);
   const leadSource = meta.leadSource?.trim() || undefined;
   const leadSourceLower = (leadSource ?? "").toLowerCase();
+  const isRoom58SellLeadSource =
+    /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
+  if (isRoom58SellLeadSource && lead.tradeVehicle) {
+    const tradeModel = normalizeVehicleModel(
+      lead.tradeVehicle.model ?? lead.tradeVehicle.description ?? "",
+      lead.tradeVehicle.make ?? null
+    );
+    lead.year = lead.tradeVehicle.year ?? lead.year;
+    lead.vehicleMake = lead.tradeVehicle.make ?? lead.vehicleMake;
+    lead.vehicleModel = tradeModel || lead.tradeVehicle.model || lead.vehicleModel;
+    lead.vehicleDescription =
+      [lead.tradeVehicle.make, tradeModel || lead.tradeVehicle.model].filter(Boolean).join(" ").trim() ||
+      lead.tradeVehicle.description ||
+      lead.vehicleDescription;
+    lead.vehicleColor = lead.tradeVehicle.color ?? lead.vehicleColor;
+    lead.mileage = lead.tradeVehicle.mileage ?? lead.mileage;
+    lead.vehicleCondition = "used";
+  }
   const sourceFromIdLower = String(meta.sourceFromId ?? "").trim().toLowerCase();
   const isTrafficLogProLeadSourceHint = /traffic\s*log\s*pro/i.test(leadSourceLower);
   const isTrafficLogProSourceFromIdHint = /traffic\s*log\s*pro/i.test(sourceFromIdLower);
@@ -5966,8 +5988,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  const isRoom58Sell =
-    /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
+  const isRoom58Sell = isRoom58SellLeadSource;
   const isMarketplaceContactDealerSource =
     /marketplace/i.test(leadSourceLower) &&
     /(contact\s*a\s*dealer|used\s*mkt|dealer\s*portal|h-?d1)/i.test(leadSourceLower);

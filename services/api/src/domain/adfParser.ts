@@ -106,6 +106,22 @@ function normalizeMake(raw?: string): string | undefined {
   return t;
 }
 
+function normalizeSellVehicleModel(raw?: string): string | undefined {
+  const text = normalizeDisplayCase(raw);
+  if (!text) return undefined;
+  return toTitleCase(text.replace(/\bElectric\s+Glide\b/i, "Electra Glide").trim());
+}
+
+function firstStructuredValue(text: string, labels: string[]): string | undefined {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = text.match(new RegExp(`\\b${escaped}\\s*:\\s*([^\\n\\r]+)`, "i"));
+    const value = match?.[1]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function toTitleCase(input: string): string {
   return input
     .toLowerCase()
@@ -207,7 +223,7 @@ function parseFromComment(comment?: string) {
     let value = String(direct ?? "").trim();
     if (!value) return undefined;
     value = value.replace(
-      /\s*(?:can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:)[\s\S]*/i,
+      /\s*(?:vehicle images\s*:|can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:)[\s\S]*/i,
       ""
     );
     value = value.replace(/^[>\-\s:]+/, "").trim();
@@ -254,11 +270,21 @@ function parseFromComment(comment?: string) {
   const statusMatch = clean.match(/status\s*[:=]\s*\"?(new|used|pre[-\s]?owned)\"?/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
+  const streetMatch = clean.match(/address line 1:\s*([^\n\r]+)/i);
+  const cityMatch = clean.match(/(?:town\/city|city):\s*([^\n\r]+)/i);
+  const regionMatch = clean.match(/(?:state|region):\s*([^\n\r]+)/i);
+  const postalMatch = clean.match(/(?:zip code|postal code|postalcode|zip):\s*([^\n\r]+)/i);
   const timeframeMatch = clean.match(/purchase timeframe:\s*([^\n\r]+)/i);
   const licenseMatch = clean.match(/valid motorcycle license\?\s*(yes|no)/i);
   const mileageMatch = clean.match(/mileage:\s*([0-9,]+)/i);
   const optionsMatch = clean.match(/options:\s*([^\n\r]+)/i);
+  const tradeOptionsMatch = clean.match(/trade options:\s*([^\n\r]+)/i);
   const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
+  const tradeOptionsRaw = tradeOptionsMatch?.[1]?.trim().toLowerCase();
+  const sellYear = firstStructuredValue(clean, ["manufacturer year", "model year"]);
+  const sellMake = normalizeMake(firstStructuredValue(clean, ["manufacturer", "make"]));
+  const sellModel = normalizeSellVehicleModel(firstStructuredValue(clean, ["model type", "model"]));
+  const sellColor = firstStructuredValue(clean, ["color"]);
   const preferredDateMatch = clean.match(/preferred date:\s*([^\n\r]+)/i);
   const preferredTimeMatch = clean.match(/preferred time:\s*([^\n\r]+)/i);
   const emailOptInMatch =
@@ -279,8 +305,23 @@ function parseFromComment(comment?: string) {
     else if (optionsRaw.includes("trade")) sellOption = "trade";
     else if (optionsRaw.includes("open")) sellOption = "either";
   }
+  if (!sellOption && tradeOptionsRaw) {
+    if (/\bsell\b|outright|cash/.test(tradeOptionsRaw)) sellOption = "cash";
+    else if (/\btrade\b/.test(tradeOptionsRaw)) sellOption = "trade";
+  }
   const mileage =
     mileageMatch?.[1] != null ? Number(mileageMatch[1].replace(/,/g, "")) : undefined;
+  const sellVehicle =
+    sellYear || sellMake || sellModel || sellColor || mileage
+      ? {
+          year: sellYear,
+          make: sellMake,
+          model: sellModel,
+          mileage,
+          color: sellColor,
+          description: [sellMake, sellModel].filter(Boolean).join(" ") || sellModel
+        }
+      : undefined;
   return {
     inquiry: parsedInquiry,
     stockId: stockMatch?.[1]?.trim(),
@@ -294,6 +335,10 @@ function parseFromComment(comment?: string) {
     condition: normalizeCondition(statusMatch?.[1]),
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
+    street: streetMatch?.[1]?.trim(),
+    city: cityMatch?.[1]?.trim(),
+    region: regionMatch?.[1]?.trim(),
+    postal: postalMatch?.[1]?.trim(),
     purchaseTimeframe: timeframeMatch?.[1]?.trim(),
     hasMotoLicense: licenseMatch ? licenseMatch[1].toLowerCase() === "yes" : undefined,
     mileage,
@@ -304,7 +349,8 @@ function parseFromComment(comment?: string) {
     emailOptIn: emailOptInMatch ? emailOptInMatch[1].toLowerCase() === "yes" : undefined,
     phoneOptIn: phoneOptInMatch ? phoneOptInMatch[1].toLowerCase() === "yes" : undefined,
     smsOptIn: smsOptInMatch ? smsOptInMatch[1].toLowerCase() === "yes" : undefined,
-    preferredContactMethod
+    preferredContactMethod,
+    sellVehicle
   };
 }
 
@@ -399,15 +445,15 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
   const phones = asArray(contact?.phone);
   const preferredPhone = pickByType(phones, "cell") ?? pickByType(phones, "mobile") ?? phones[0];
   const phone = text(preferredPhone);
-  const address = contact?.address ?? {};
-  const street = text(address?.street?.[0] ?? address?.street ?? address?.line1 ?? address?.line);
-  const city = text(address?.city);
-  const region = text(address?.regioncode ?? address?.region ?? address?.state);
-  const postal = text(address?.postalcode ?? address?.postal);
-
   const request = prospect?.request ?? {};
   const commentText = text(contact?.comment) ?? text(request?.comment) ?? text(request?.comments);
   const parsedFromComment = parseFromComment(commentText);
+  const address = contact?.address ?? {};
+  const street = text(address?.street?.[0] ?? address?.street ?? address?.line1 ?? address?.line) || (parsedFromComment as any).street;
+  const city = text(address?.city) || (parsedFromComment as any).city;
+  const region = text(address?.regioncode ?? address?.region ?? address?.state) || (parsedFromComment as any).region;
+  const postal = text(address?.postalcode ?? address?.postal) || (parsedFromComment as any).postal;
+
   const inquiry =
     parsedFromComment.inquiry ??
     text(request?.comments) ??
@@ -467,9 +513,12 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     phoneFromText;
 
   let tradeVehicle: ParsedAdfLead["tradeVehicle"] | undefined;
-  if (tradeVehicleRaw) {
+  const sellVehicleFromComment = (parsedFromComment as any).sellVehicle as ParsedAdfLead["tradeVehicle"] | undefined;
+  if (sellVehicleFromComment?.year || sellVehicleFromComment?.model || sellVehicleFromComment?.description) {
+    tradeVehicle = sellVehicleFromComment;
+  } else if (tradeVehicleRaw) {
     const tradeYear = text(tradeVehicleRaw?.year);
-    const tradeMake = text(tradeVehicleRaw?.make);
+    const tradeMake = normalizeMake(text(tradeVehicleRaw?.make));
     let tradeModel = text(tradeVehicleRaw?.model);
     const tradeVin = text(tradeVehicleRaw?.vin);
     const tradeOdometerRaw = text(tradeVehicleRaw?.odometer);
