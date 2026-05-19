@@ -241,6 +241,12 @@ a {
   color: #fff7ed;
 }
 
+.lr-ceo-nav a.is-active {
+  border-color: rgba(251, 127, 4, 0.72);
+  background: rgba(251, 127, 4, 0.16);
+  color: #fff7ed;
+}
+
 .lr-ceo-side-panel {
   margin-top: 2rem;
   padding: 1rem;
@@ -330,6 +336,20 @@ a {
   border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.06);
   color: #eef4ff;
+}
+
+.lr-ceo-button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 0.9rem;
+  border: 1px solid #fb7f04;
+  border-radius: 8px;
+  background: #fb7f04;
+  color: #111827;
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .lr-ceo-metrics {
@@ -667,6 +687,13 @@ a {
   padding: 0.8rem;
   resize: vertical;
   margin-bottom: 0.75rem;
+}
+
+.lr-ceo-agent-textarea {
+  min-height: 130px;
+  padding: 0.8rem;
+  resize: vertical;
+  margin-bottom: 0.8rem;
 }
 
 .lr-ceo-agent-composer {
