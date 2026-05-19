@@ -12365,7 +12365,7 @@ export default function Home() {
         ) : null}
 
         {section === "contacts" ? (
-          <div className="mt-4 border rounded-lg overflow-hidden bg-white grid grid-cols-[230px_minmax(0,1fr)] min-h-[620px]">
+          <div className="lr-contacts-browser mt-4 border rounded-lg overflow-hidden bg-white grid grid-cols-[230px_minmax(0,1fr)] min-h-[620px]">
             <div className="border-r p-3 flex flex-col">
               <div className="text-sm font-semibold text-gray-700">Groups</div>
               <div className="mt-2 space-y-1 flex-1 overflow-y-auto pr-1">
@@ -17218,7 +17218,7 @@ export default function Home() {
           </div>
         ) : section === "contacts" ? (
           selectedContact ? (
-            <div className="max-w-5xl space-y-5">
+            <div className="lr-contacts-detail max-w-5xl space-y-5">
               <div className="flex items-center justify-between border-b pb-3">
                 <div className="text-4xl font-medium text-gray-900">
                   {contactDisplayName(selectedContact)}
@@ -17406,7 +17406,7 @@ export default function Home() {
             </div>
           ) : (
             selectedContactListId !== "all" ? (
-              <div className="border rounded-lg p-6 max-w-4xl">
+              <div className="lr-contacts-empty border rounded-lg p-6 max-w-4xl">
                 <div className="text-5xl leading-none text-gray-300 mb-4">+</div>
                 <div className="text-4xl font-semibold text-gray-800">Groups are much better with contacts.</div>
                 <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-8 text-sm">

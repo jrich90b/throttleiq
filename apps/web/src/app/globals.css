@@ -721,6 +721,129 @@ input[type="reset"],
   color: #ffffff !important;
 }
 
+.lr-app-theme .lr-contacts-browser {
+  background:
+    radial-gradient(860px 280px at 18% -8%, rgba(251, 127, 4, 0.12), transparent 56%),
+    linear-gradient(180deg, rgba(15, 24, 39, 0.98) 0%, rgba(8, 13, 22, 0.98) 100%) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #e7edf8;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+}
+
+.lr-app-theme .lr-contacts-browser .border,
+.lr-app-theme .lr-contacts-browser.border,
+.lr-app-theme .lr-contacts-detail .border,
+.lr-app-theme .lr-contacts-empty.border {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+.lr-app-theme .lr-contacts-browser .border-r,
+.lr-app-theme .lr-contacts-browser .border-b,
+.lr-app-theme .lr-contacts-browser .border-t,
+.lr-app-theme .lr-contacts-detail .border-b {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+.lr-app-theme .lr-contacts-browser .divide-y > * + *,
+.lr-app-theme .lr-contacts-detail .divide-y > * + * {
+  border-top-color: rgba(148, 163, 184, 0.28) !important;
+}
+
+.lr-app-theme .lr-contacts-browser .bg-white,
+.lr-app-theme .lr-contacts-browser .bg-gray-50 {
+  background: rgba(255, 255, 255, 0.045) !important;
+}
+
+.lr-app-theme .lr-contacts-browser input,
+.lr-app-theme .lr-contacts-browser select,
+.lr-app-theme .lr-contacts-detail input,
+.lr-app-theme .lr-contacts-detail select {
+  background: rgba(255, 255, 255, 0.055) !important;
+  border-color: rgba(148, 163, 184, 0.38) !important;
+  color: #f4f8ff !important;
+  -webkit-text-fill-color: #f4f8ff !important;
+}
+
+.lr-app-theme .lr-contacts-browser input::placeholder,
+.lr-app-theme .lr-contacts-detail input::placeholder {
+  color: #8ea0bb !important;
+  opacity: 1 !important;
+}
+
+.lr-app-theme .lr-contacts-browser select option,
+.lr-app-theme .lr-contacts-detail select option {
+  background: #101827;
+  color: #f4f8ff;
+}
+
+.lr-app-theme .lr-contacts-browser input:focus,
+.lr-app-theme .lr-contacts-browser select:focus,
+.lr-app-theme .lr-contacts-detail input:focus,
+.lr-app-theme .lr-contacts-detail select:focus {
+  outline: none;
+  border-color: #fb7f04 !important;
+  box-shadow: 0 0 0 2px rgba(251, 127, 4, 0.22);
+}
+
+.lr-app-theme .lr-contacts-browser button {
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #e7edf8;
+}
+
+.lr-app-theme .lr-contacts-browser button:hover {
+  background: rgba(255, 255, 255, 0.075) !important;
+}
+
+.lr-app-theme .lr-contacts-browser .bg-blue-600,
+.lr-app-theme .lr-contacts-browser .bg-blue-100 {
+  background:
+    linear-gradient(180deg, rgba(251, 127, 4, 0.92) 0%, rgba(174, 91, 24, 0.92) 100%) !important;
+  border-color: rgba(251, 127, 4, 0.82) !important;
+  color: #101522 !important;
+  box-shadow: 0 10px 24px rgba(251, 127, 4, 0.14);
+}
+
+.lr-app-theme .lr-contacts-browser .bg-blue-100 .text-gray-500,
+.lr-app-theme .lr-contacts-browser .bg-blue-600 .text-gray-500 {
+  color: rgba(16, 21, 34, 0.76) !important;
+}
+
+.lr-app-theme .lr-contacts-browser .text-gray-500,
+.lr-app-theme .lr-contacts-browser .text-gray-600,
+.lr-app-theme .lr-contacts-browser .text-gray-700,
+.lr-app-theme .lr-contacts-detail .text-gray-500,
+.lr-app-theme .lr-contacts-detail .text-gray-600 {
+  color: #aebbd0 !important;
+}
+
+.lr-app-theme .lr-contacts-browser .text-gray-800,
+.lr-app-theme .lr-contacts-browser .text-gray-900,
+.lr-app-theme .lr-contacts-detail .text-gray-800,
+.lr-app-theme .lr-contacts-detail .text-gray-900 {
+  color: #f4f8ff !important;
+}
+
+.lr-app-theme .lr-contacts-detail > .border,
+.lr-app-theme .lr-contacts-empty {
+  background:
+    radial-gradient(640px 240px at 88% -16%, rgba(251, 127, 4, 0.1), transparent 58%),
+    linear-gradient(180deg, rgba(15, 24, 39, 0.92) 0%, rgba(8, 13, 22, 0.92) 100%);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+}
+
+.lr-app-theme .lr-contacts-detail .text-blue-600,
+.lr-app-theme .lr-contacts-empty .text-blue-600 {
+  color: #ffd7ad !important;
+}
+
+.lr-app-theme .lr-contacts-detail button.bg-\[var\(--accent\)\],
+.lr-app-theme .lr-contacts-browser button.bg-\[var\(--accent\)\] {
+  background: #fb7f04 !important;
+  border-color: #fb7f04 !important;
+  color: #101522 !important;
+  font-weight: 700;
+}
+
 .lr-app-theme .lr-app-sidebar-panel .bg-\[var\(--surface\)\],
 .lr-app-theme .lr-app-main-panel .bg-\[var\(--surface\)\] {
   background-color: rgba(15, 24, 39, 0.96) !important;
