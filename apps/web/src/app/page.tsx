@@ -5168,12 +5168,13 @@ export default function Home() {
       selectedConv?.id === convId ? selectedConv : await fetchConversationDetail(convId);
     setSoldModalConv(conv);
     const leadOptions = buildSoldLeadRefOptions(conv);
-    setSoldLeadRef(
-      String(conv?.sale?.leadRef ?? "").trim() ||
-        String(conv?.lead?.leadRef ?? "").trim() ||
-        leadOptions[0]?.leadRef ||
-        ""
-    );
+    const existingSaleLeadRef = String(conv?.sale?.leadRef ?? "").trim();
+    const defaultLeadRef =
+      existingSaleLeadRef ||
+      (leadOptions.length === 1
+        ? leadOptions[0]?.leadRef || String(conv?.lead?.leadRef ?? "").trim()
+        : "");
+    setSoldLeadRef(defaultLeadRef);
     setSoldNote(conv?.sale?.note ?? "");
     const leadVehicle = conv?.lead?.vehicle ?? {};
     setSoldManualUnit({
@@ -5232,6 +5233,11 @@ export default function Home() {
   async function submitSold(selection: any) {
     if (!soldModalConv) return;
     const resolved = selection ?? resolveSoldSelection();
+    const selectedLeadRef = String(soldLeadRef ?? "").trim();
+    if (soldLeadRefOptions.length > 1 && !selectedLeadRef) {
+      setSoldError("Please choose the CRM lead to close.");
+      return;
+    }
     if (!resolved) {
       setSoldError("Please select a unit or enter a stock/VIN to mark sold.");
       return;
@@ -5264,7 +5270,7 @@ export default function Home() {
           reason: "sold",
           soldById,
           soldByName,
-          leadRef: String(soldLeadRef ?? "").trim() || undefined,
+          leadRef: selectedLeadRef || undefined,
           soldUnit: soldPayload
         })
       });
@@ -5277,7 +5283,7 @@ export default function Home() {
         soldAt: nowIso,
         soldById: soldById || undefined,
         soldByName: soldByName || undefined,
-        leadRef: String(soldLeadRef ?? "").trim() || undefined,
+        leadRef: selectedLeadRef || undefined,
         year: soldPayload.year,
         make: soldPayload.make,
         model: soldPayload.model,
@@ -18990,13 +18996,16 @@ export default function Home() {
 
                   {soldLeadRefOptions.length >= 1 ? (
                     <div className="mt-3">
-                      <div className="text-xs font-medium text-slate-700 mb-1">CRM lead to update</div>
+                      <div className="text-xs font-medium text-slate-700 mb-1">CRM lead to close</div>
                       <select
                         className="w-full rounded border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 focus:border-orange-500 focus:ring-1 focus:ring-orange-500 disabled:bg-slate-100 disabled:text-slate-600"
                         value={soldLeadRef}
                         onChange={e => setSoldLeadRef(e.target.value)}
                         disabled={soldLeadRefOptions.length === 1}
                       >
+                        {soldLeadRefOptions.length > 1 ? (
+                          <option value="">Choose CRM lead to close...</option>
+                        ) : null}
                         {soldLeadRefOptions.map(option => (
                           <option key={option.leadRef} value={option.leadRef}>
                             {option.label}
@@ -19005,7 +19014,7 @@ export default function Home() {
                       </select>
                       <div className="mt-1 text-[11px] text-slate-600">
                         {soldLeadRefOptions.length > 1
-                          ? "This is the TLP lead that will be marked delivered/sold."
+                          ? "Choose the exact TLP lead that should be marked delivered/sold."
                           : "Only one CRM lead ref was found in this conversation."}
                       </div>
                     </div>
