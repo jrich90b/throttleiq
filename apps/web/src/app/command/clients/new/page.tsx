@@ -88,7 +88,7 @@ type DocusignStatus = {
 const planDefaults = {
   Starter: {
     setupFee: "$1,500",
-    monthlyFee: "$750/month",
+    monthlyFee: "$999/month",
     includedUsage: "Up to 150 leads/month, 1,000 AI response credits, 1,000 outbound SMS segments/month, standard support.",
     overageTerms: "$1.50 per lead above plan, $0.025 per outbound SMS segment, AI/token usage above included credits billed at cost plus 20%."
   },
