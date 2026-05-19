@@ -15,6 +15,12 @@ Keep production secrets in the deployment host, not in git.
 
 - `SENDGRID_API_KEY`
 - `SENDGRID_FROM_EMAIL`
+- `SUPPORT_TICKET_EMAILS_ENABLED`
+  - Defaults on. Set to `0` to disable support ticket confirmation/completion emails.
+- `SUPPORT_TICKET_EMAIL_FROM`
+  - Optional. Defaults to `SENDGRID_FROM_EMAIL`, then `support@leadrider.ai`.
+- `SUPPORT_TICKET_REPLY_TO`
+  - Optional. Defaults to `support@leadrider.ai`.
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_PHONE_NUMBER`

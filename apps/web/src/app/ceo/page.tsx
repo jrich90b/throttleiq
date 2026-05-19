@@ -62,6 +62,23 @@ type AgentTask = {
     reason?: string;
   };
 };
+type SupportTicket = {
+  id: string;
+  type: string;
+  severity: string;
+  title: string;
+  note?: string;
+  createdAt: string;
+  status: "open" | "triaged" | "closed";
+  reporter?: {
+    name?: string;
+    email?: string;
+  };
+  context?: {
+    leadName?: string | null;
+    pageUrl?: string | null;
+  };
+};
 
 const clients: DealerClient[] = [
   {
@@ -280,7 +297,9 @@ export default function CeoCommandDashboard() {
   const [agentPriority, setAgentPriority] = useState<"normal" | "high">("normal");
   const [agentInstructions, setAgentInstructions] = useState(agentTaskKinds[1].template);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [supportBusyId, setSupportBusyId] = useState<string | null>(null);
 
   const client = clients.find(row => row.name === selectedClient) ?? clients[0];
   const monthlyRunRate = useMemo(
@@ -302,6 +321,13 @@ export default function CeoCommandDashboard() {
       .catch(() => {
         if (active) setActionNotice("Agent task history could not be loaded. The dashboard still works for local planning.");
       });
+    fetch("/api/ops/anomalies?limit=6", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.anomalies)) setSupportTickets(data.anomalies);
+      })
+      .catch(() => null);
     return () => {
       active = false;
     };
@@ -347,6 +373,25 @@ export default function CeoCommandDashboard() {
       setActionNotice(err instanceof Error ? err.message : "Agent task could not be created.");
     } finally {
       setAgentBusy(false);
+    }
+  }
+
+  async function closeSupportTicket(ticket: SupportTicket) {
+    setSupportBusyId(ticket.id);
+    try {
+      const resp = await fetch(`/api/ops/anomalies/${encodeURIComponent(ticket.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "closed" })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Support ticket could not be closed.");
+      setSupportTickets(current => current.map(row => (row.id === ticket.id ? data.anomaly : row)));
+      setActionNotice(`Support ticket closed: ${data.anomaly.title}. Completion email will send when the reporter has an email on file.`);
+    } catch (err) {
+      setActionNotice(err instanceof Error ? err.message : "Support ticket could not be closed.");
+    } finally {
+      setSupportBusyId(null);
     }
   }
 
@@ -611,6 +656,69 @@ export default function CeoCommandDashboard() {
                   </div>
                 );
               })}
+            </div>
+          </article>
+        </section>
+
+        <section className="lr-ceo-grid">
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Support automation</p>
+                <h3>Ticket emails</h3>
+              </div>
+              <span className="lr-ceo-status-ready">Active</span>
+            </div>
+            <div className="lr-ceo-support-flow">
+              <div>
+                <strong>1. Ticket received</strong>
+                <p>Report Issue creates a support ticket and emails the reporter a confirmation.</p>
+              </div>
+              <div>
+                <strong>2. Agent work</strong>
+                <p>Codex or Claude tasks can be created for the fix, draft, review, or follow-up.</p>
+              </div>
+              <div>
+                <strong>3. Ticket complete</strong>
+                <p>Closing the ticket sends a completion email back to the reporter.</p>
+              </div>
+            </div>
+          </article>
+
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Recent support</p>
+                <h3>Open tickets</h3>
+              </div>
+            </div>
+            <div className="lr-ceo-ticket-list">
+              {supportTickets.length ? (
+                supportTickets.map(ticket => (
+                  <div key={ticket.id} className="lr-ceo-ticket-row">
+                    <div>
+                      <span>{ticket.status}</span>
+                      <strong>{ticket.title}</strong>
+                      <small>
+                        {ticket.reporter?.name || ticket.reporter?.email || "Unknown reporter"}
+                        {ticket.context?.leadName ? ` • ${ticket.context.leadName}` : ""}
+                      </small>
+                    </div>
+                    {ticket.status !== "closed" ? (
+                      <button
+                        type="button"
+                        className="lr-ceo-secondary-btn"
+                        onClick={() => closeSupportTicket(ticket)}
+                        disabled={supportBusyId === ticket.id}
+                      >
+                        Mark complete
+                      </button>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <p className="lr-ceo-note">No support tickets loaded yet.</p>
+              )}
             </div>
           </article>
         </section>

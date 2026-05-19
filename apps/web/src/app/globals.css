@@ -735,6 +735,64 @@ a {
   line-height: 1.45;
 }
 
+.lr-ceo-support-flow,
+.lr-ceo-ticket-list {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.lr-ceo-support-flow div,
+.lr-ceo-ticket-row {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-support-flow div {
+  padding: 0.78rem;
+}
+
+.lr-ceo-support-flow strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-support-flow p {
+  margin: 0.32rem 0 0;
+  color: #aebbd2;
+  line-height: 1.45;
+}
+
+.lr-ceo-ticket-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.78rem;
+}
+
+.lr-ceo-ticket-row span,
+.lr-ceo-ticket-row strong,
+.lr-ceo-ticket-row small {
+  display: block;
+}
+
+.lr-ceo-ticket-row span {
+  color: #fbaf64;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lr-ceo-ticket-row strong {
+  margin-top: 0.22rem;
+  color: #f7fbff;
+}
+
+.lr-ceo-ticket-row small {
+  margin-top: 0.22rem;
+  color: #aebbd2;
+}
+
 @media (max-width: 1050px) {
   .lr-ceo-shell {
     grid-template-columns: 1fr;

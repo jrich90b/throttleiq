@@ -95,6 +95,18 @@ export async function updateOpsAnomalyExternal(
   return anomaly;
 }
 
+export async function updateOpsAnomalyStatus(
+  id: string,
+  status: OpsAnomaly["status"]
+): Promise<OpsAnomaly | null> {
+  await ensureLoaded();
+  const anomaly = rows.find(row => row.id === id);
+  if (!anomaly) return null;
+  anomaly.status = status;
+  scheduleSave();
+  return anomaly;
+}
+
 async function ensureLoaded() {
   if (loaded) return;
   loaded = true;

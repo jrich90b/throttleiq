@@ -29,10 +29,12 @@ import {
 import {
   addOpsAnomaly,
   listOpsAnomalies,
+  updateOpsAnomalyStatus,
   updateOpsAnomalyExternal,
   type OpsAnomalySeverity,
   type OpsAnomalyType
 } from "./domain/opsAnomalyStore.js";
+import { sendSupportTicketEmail } from "./domain/supportTicketEmail.js";
 import {
   addAgentTask,
   listAgentTasks,
@@ -28215,6 +28217,29 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
     anomaly.external = { incidentResult: result };
   }
 
+  void sendSupportTicketEmail(anomaly, "created").catch(err => {
+    console.warn("[support ticket] confirmation email failed:", err?.message ?? err);
+  });
+
+  return res.json({ ok: true, anomaly });
+});
+
+app.patch("/ops/anomalies/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!["open", "triaged", "closed"].includes(statusRaw)) {
+    return res.status(400).json({ ok: false, error: "Invalid support ticket status." });
+  }
+  const anomaly = await updateOpsAnomalyStatus(req.params.id, statusRaw as "open" | "triaged" | "closed");
+  if (!anomaly) return res.status(404).json({ ok: false, error: "Support ticket not found" });
+  if (statusRaw === "closed") {
+    void sendSupportTicketEmail(anomaly, "completed").catch(err => {
+      console.warn("[support ticket] completion email failed:", err?.message ?? err);
+    });
+  }
   return res.json({ ok: true, anomaly });
 });
 
