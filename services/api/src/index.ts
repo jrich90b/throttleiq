@@ -62,6 +62,13 @@ import {
   type DealerSetup
 } from "./domain/dealerSetupStore.js";
 import {
+  addEsignPacket,
+  listEsignPackets,
+  updateEsignPacket,
+  type EsignPacketProvider,
+  type EsignPacketStatus
+} from "./domain/esignPacketStore.js";
+import {
   addVercelProjectDomain,
   getVercelAutomationStatus,
   getVercelDomainStatus
@@ -24682,6 +24689,164 @@ app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), a
     stepNote: checks.map(check => `${check.url}: ${check.status || check.error}`).join("; ")
   });
   return res.json({ ok: true, setup: updated ?? setup, passed, checks });
+});
+
+const allowedEsignProviders: EsignPacketProvider[] = ["manual", "docusign", "dropbox_sign", "pandadoc", "signwell"];
+const allowedEsignStatuses: EsignPacketStatus[] = ["draft", "ready", "sent", "signed", "declined", "voided"];
+
+function extractEmailFromText(value: string | null | undefined): string | undefined {
+  const match = String(value ?? "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0]?.trim();
+}
+
+function extractNameFromPrimaryContact(value: string | null | undefined): string | undefined {
+  const text = String(value ?? "").trim();
+  if (!text) return undefined;
+  const withoutEmail = text.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "").trim();
+  const withoutPhone = withoutEmail.replace(/\+?1?[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{4}/g, "").trim();
+  const name = withoutPhone.split(/[,;|]/)[0]?.replace(/\s+/g, " ").trim();
+  return name || undefined;
+}
+
+app.get("/esign/packets", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const dealerSetupId = String(req.query.dealerSetupId ?? "").trim() || undefined;
+  const limit = Number(req.query.limit ?? "200");
+  const packets = await listEsignPackets({ dealerSetupId, limit: Number.isFinite(limit) ? limit : 200 });
+  return res.json({ ok: true, packets });
+});
+
+app.post("/dealer-setups/:id/esign/packet", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const providerRaw = String(req.body?.provider ?? "manual").trim().toLowerCase();
+  const provider = allowedEsignProviders.includes(providerRaw as EsignPacketProvider)
+    ? (providerRaw as EsignPacketProvider)
+    : "manual";
+  const signerEmail =
+    String(req.body?.signerEmail ?? "").trim() ||
+    extractEmailFromText(setup.primaryContact) ||
+    undefined;
+  const signerName =
+    String(req.body?.signerName ?? "").replace(/\s+/g, " ").trim() ||
+    extractNameFromPrimaryContact(setup.primaryContact) ||
+    undefined;
+  const packet = await addEsignPacket({
+    dealerSetupId: setup.id,
+    dealerName: setup.dealerName,
+    provider,
+    agreementTitle:
+      String(req.body?.agreementTitle ?? "").replace(/\s+/g, " ").trim() ||
+      `${setup.dealerName} LeadRider Agreement`,
+    signerName,
+    signerEmail,
+    signerTitle: String(req.body?.signerTitle ?? "").replace(/\s+/g, " ").trim() || undefined,
+    agreementUrl: String(req.body?.agreementUrl ?? "").trim() || undefined,
+    externalPacketId: String(req.body?.externalPacketId ?? "").trim() || undefined,
+    externalUrl: String(req.body?.externalUrl ?? "").trim() || undefined,
+    notes: String(req.body?.notes ?? "").trim() || undefined
+  });
+  const missing = [
+    !setup.legalName ? "dealer legal name" : "",
+    !setup.dealerAddress ? "dealer address" : "",
+    !signerName ? "signer name" : "",
+    !signerEmail ? "signer email" : "",
+    !packet.agreementUrl ? "agreement PDF/link" : ""
+  ].filter(Boolean);
+  const updated = await updateDealerSetup(setup.id, {
+    stage: "agreement",
+    status: missing.length ? "blocked" : "in_progress",
+    stepId: "agreement",
+    stepStatus: missing.length ? "blocked" : "in_progress",
+    stepNote: missing.length
+      ? `E-sign packet created but missing: ${missing.join(", ")}.`
+      : `E-sign packet created for ${signerName} <${signerEmail}>.`
+  });
+  const task = await addAgentTask({
+    provider: "claude",
+    kind: "agreement",
+    title: `Review e-sign packet for ${setup.dealerName}`,
+    clientName: setup.dealerName,
+    priority: "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: "Agreement/e-sign sends require approval before anything is sent to the dealer."
+    },
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    },
+    instructions: [
+      "Review this dealer e-sign packet for missing fields and prepare a send checklist. Do not send it.",
+      `E-sign packet ID: ${packet.id}`,
+      `Dealer: ${setup.dealerName}`,
+      `Legal name: ${setup.legalName || "missing"}`,
+      `DBA: ${setup.dbaName || setup.dealerName}`,
+      `Address: ${setup.dealerAddress || "missing"}`,
+      `Signer: ${signerName || "missing"}`,
+      `Signer email: ${signerEmail || "missing"}`,
+      `Provider: ${provider}`,
+      `Agreement title: ${packet.agreementTitle}`,
+      `Agreement link/PDF: ${packet.agreementUrl || "missing"}`,
+      missing.length ? `Missing fields: ${missing.join(", ")}` : "Packet appears ready for human approval."
+    ].join("\n")
+  });
+  queueClaudeTaskExecution(task);
+  return res.json({ ok: true, packet, setup: updated ?? setup, task, missing });
+});
+
+app.patch("/esign/packets/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  const providerRaw = String(req.body?.provider ?? "").trim().toLowerCase();
+  const status = allowedEsignStatuses.includes(statusRaw as EsignPacketStatus)
+    ? (statusRaw as EsignPacketStatus)
+    : undefined;
+  const provider = allowedEsignProviders.includes(providerRaw as EsignPacketProvider)
+    ? (providerRaw as EsignPacketProvider)
+    : undefined;
+  const packet = await updateEsignPacket(req.params.id, {
+    status,
+    provider,
+    agreementTitle: typeof req.body?.agreementTitle === "string" ? req.body.agreementTitle : undefined,
+    signerName: typeof req.body?.signerName === "string" ? req.body.signerName : undefined,
+    signerEmail: typeof req.body?.signerEmail === "string" ? req.body.signerEmail : undefined,
+    signerTitle: typeof req.body?.signerTitle === "string" ? req.body.signerTitle : undefined,
+    agreementUrl: typeof req.body?.agreementUrl === "string" ? req.body.agreementUrl : undefined,
+    externalPacketId: typeof req.body?.externalPacketId === "string" ? req.body.externalPacketId : undefined,
+    externalUrl: typeof req.body?.externalUrl === "string" ? req.body.externalUrl : undefined,
+    notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
+  });
+  if (!packet) return res.status(404).json({ ok: false, error: "E-sign packet not found." });
+  let setup: DealerSetup | null = null;
+  if (packet.dealerSetupId) {
+    setup = await updateDealerSetup(packet.dealerSetupId, {
+      stage: "agreement",
+      status: packet.status === "signed" ? "in_progress" : packet.status === "voided" || packet.status === "declined" ? "blocked" : "in_progress",
+      stepId: "agreement",
+      stepStatus: packet.status === "signed" ? "done" : packet.status === "voided" || packet.status === "declined" ? "blocked" : "in_progress",
+      stepNote:
+        packet.status === "signed"
+          ? `Agreement signed${packet.signedAt ? ` on ${packet.signedAt}` : ""}.`
+          : packet.status === "sent"
+            ? `Agreement sent for e-sign${packet.sentAt ? ` on ${packet.sentAt}` : ""}.`
+            : `E-sign packet status: ${packet.status}.`
+    });
+  }
+  return res.json({ ok: true, packet, setup });
 });
 
 app.post("/scheduler/suggest", async (req, res) => {

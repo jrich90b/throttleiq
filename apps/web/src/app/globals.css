@@ -702,6 +702,59 @@ a {
   margin-top: 1rem;
 }
 
+.lr-ceo-esign-panel {
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border: 1px solid rgba(251, 127, 4, 0.2);
+  border-radius: 8px;
+  background: rgba(251, 127, 4, 0.055);
+}
+
+.lr-ceo-esign-panel .lr-ceo-form-stack {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lr-ceo-esign-panel .lr-ceo-form-stack label:nth-last-child(-n + 2) {
+  grid-column: 1 / -1;
+}
+
+.lr-ceo-esign-list {
+  display: grid;
+  gap: 0.62rem;
+  margin-top: 0.85rem;
+}
+
+.lr-ceo-esign-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.72rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 14, 24, 0.72);
+}
+
+.lr-ceo-esign-row strong,
+.lr-ceo-esign-row p {
+  margin: 0;
+}
+
+.lr-ceo-esign-row p {
+  color: #aebbd2;
+}
+
+.lr-ceo-esign-row a {
+  color: #ffca92;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.lr-ceo-esign-row > div:last-child {
+  display: flex;
+  gap: 0.45rem;
+}
+
 .lr-ceo-vercel-status {
   display: flex;
   flex-wrap: wrap;
@@ -1221,6 +1274,23 @@ a {
   }
 
   .lr-ceo-setup-step div button {
+    flex: 1;
+  }
+
+  .lr-ceo-esign-panel .lr-ceo-form-stack,
+  .lr-ceo-esign-row {
+    grid-template-columns: 1fr;
+  }
+
+  .lr-ceo-esign-panel .lr-ceo-form-stack label:nth-last-child(-n + 2) {
+    grid-column: auto;
+  }
+
+  .lr-ceo-esign-row > div:last-child {
+    justify-content: stretch;
+  }
+
+  .lr-ceo-esign-row > div:last-child button {
     flex: 1;
   }
 

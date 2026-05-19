@@ -60,6 +60,21 @@ type SmokeCheck = {
   ms: number;
   error?: string;
 };
+type EsignPacket = {
+  id: string;
+  dealerSetupId?: string;
+  dealerName: string;
+  provider: "manual" | "docusign" | "dropbox_sign" | "pandadoc" | "signwell";
+  status: "draft" | "ready" | "sent" | "signed" | "declined" | "voided";
+  agreementTitle: string;
+  signerName?: string;
+  signerEmail?: string;
+  agreementUrl?: string;
+  externalUrl?: string;
+  updatedAt: string;
+  sentAt?: string;
+  signedAt?: string;
+};
 
 const emptyForm = {
   dealerName: "",
@@ -108,6 +123,15 @@ export default function NewDealerClientPage() {
   const [vercelDomains, setVercelDomains] = useState<VercelDomain[]>([]);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
+  const [esignPackets, setEsignPackets] = useState<EsignPacket[]>([]);
+  const [esignBusy, setEsignBusy] = useState(false);
+  const [esignForm, setEsignForm] = useState({
+    provider: "manual" as EsignPacket["provider"],
+    signerName: "",
+    signerEmail: "",
+    agreementUrl: "",
+    externalUrl: ""
+  });
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const completion = useMemo(() => {
@@ -133,6 +157,24 @@ export default function NewDealerClientPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setEsignPackets([]);
+      return;
+    }
+    let active = true;
+    fetch(`/api/esign/packets?dealerSetupId=${encodeURIComponent(selected.id)}&limit=10`, { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.packets)) setEsignPackets(data.packets);
+      })
+      .catch(() => null);
+    return () => {
+      active = false;
+    };
+  }, [selected?.id]);
 
   function updateField(field: keyof typeof emptyForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
@@ -324,6 +366,51 @@ export default function NewDealerClientPage() {
       setNotice(err instanceof Error ? err.message : "Smoke test could not be run.");
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function createEsignPacket() {
+    if (!selected) return;
+    setEsignBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/esign/packet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(esignForm)
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "E-sign packet could not be created.");
+      setEsignPackets(current => [data.packet, ...current.filter(row => row.id !== data.packet.id)]);
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice(
+        data.missing?.length
+          ? `E-sign packet created. Missing: ${data.missing.join(", ")}.`
+          : "E-sign packet created and ready for review."
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "E-sign packet could not be created.");
+    } finally {
+      setEsignBusy(false);
+    }
+  }
+
+  async function updateEsignPacket(packet: EsignPacket, status: EsignPacket["status"]) {
+    setEsignBusy(true);
+    try {
+      const resp = await fetch(`/api/esign/packets/${encodeURIComponent(packet.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "E-sign packet could not be updated.");
+      setEsignPackets(current => current.map(row => (row.id === data.packet.id ? data.packet : row)));
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice(`E-sign packet marked ${data.packet.status}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "E-sign packet could not be updated.");
+    } finally {
+      setEsignBusy(false);
     }
   }
 
@@ -536,6 +623,9 @@ export default function NewDealerClientPage() {
                   <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
                     Draft agreement
                   </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={createEsignPacket} disabled={esignBusy}>
+                    Create e-sign packet
+                  </button>
                   <button type="button" onClick={addVercelDomains} disabled={vercelBusy}>
                     Add Vercel domains
                   </button>
@@ -554,6 +644,92 @@ export default function NewDealerClientPage() {
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
                     Create Codex task
                   </button>
+                </div>
+                <div className="lr-ceo-esign-panel">
+                  <div className="lr-ceo-panel-title">
+                    <div>
+                      <p className="lr-ceo-kicker">Agreement signature</p>
+                      <h3>E-sign packet</h3>
+                    </div>
+                  </div>
+                  <div className="lr-ceo-form-stack">
+                    <label>
+                      Provider
+                      <select
+                        value={esignForm.provider}
+                        onChange={event => setEsignForm(current => ({ ...current, provider: event.target.value as EsignPacket["provider"] }))}
+                      >
+                        <option value="manual">Manual upload/link</option>
+                        <option value="docusign">DocuSign</option>
+                        <option value="dropbox_sign">Dropbox Sign</option>
+                        <option value="pandadoc">PandaDoc</option>
+                        <option value="signwell">SignWell</option>
+                      </select>
+                    </label>
+                    <label>
+                      Signer name
+                      <input
+                        value={esignForm.signerName}
+                        onChange={event => setEsignForm(current => ({ ...current, signerName: event.target.value }))}
+                        placeholder="Dealer signer"
+                      />
+                    </label>
+                    <label>
+                      Signer email
+                      <input
+                        value={esignForm.signerEmail}
+                        onChange={event => setEsignForm(current => ({ ...current, signerEmail: event.target.value }))}
+                        placeholder="owner@dealer.com"
+                      />
+                    </label>
+                    <label>
+                      Agreement PDF or document link
+                      <input
+                        value={esignForm.agreementUrl}
+                        onChange={event => setEsignForm(current => ({ ...current, agreementUrl: event.target.value }))}
+                        placeholder="Google Drive, DocuSign, Dropbox Sign, or PDF URL"
+                      />
+                    </label>
+                    <label>
+                      E-sign envelope link
+                      <input
+                        value={esignForm.externalUrl}
+                        onChange={event => setEsignForm(current => ({ ...current, externalUrl: event.target.value }))}
+                        placeholder="Optional signing/envelope link"
+                      />
+                    </label>
+                  </div>
+                  <div className="lr-ceo-action-row">
+                    <button type="button" onClick={createEsignPacket} disabled={esignBusy}>
+                      Create packet
+                    </button>
+                  </div>
+                  {esignPackets.length ? (
+                    <div className="lr-ceo-esign-list">
+                      {esignPackets.map(packet => (
+                        <div key={packet.id} className="lr-ceo-esign-row">
+                          <div>
+                            <strong>{packet.agreementTitle}</strong>
+                            <p>
+                              {packet.provider.replace(/_/g, " ")} · {packet.status}
+                              {packet.signerEmail ? ` · ${packet.signerEmail}` : ""}
+                            </p>
+                            {packet.externalUrl ? <a href={packet.externalUrl} target="_blank" rel="noreferrer">Open e-sign link</a> : null}
+                          </div>
+                          <div>
+                            <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateEsignPacket(packet, "sent")} disabled={esignBusy || packet.status === "sent" || packet.status === "signed"}>
+                              Mark sent
+                            </button>
+                            <button type="button" onClick={() => updateEsignPacket(packet, "signed")} disabled={esignBusy || packet.status === "signed"}>
+                              Mark signed
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="lr-ceo-note">No e-sign packets yet.</p>
+                  )}
                 </div>
                 {vercelDomains.length ? (
                   <div className="lr-ceo-vercel-status">
