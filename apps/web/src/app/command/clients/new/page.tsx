@@ -18,6 +18,13 @@ type DealerSetup = {
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
+  plan?: string;
+  setupFee?: string;
+  monthlyFee?: string;
+  includedUsage?: string;
+  overageTerms?: string;
+  contractTerm?: string;
+  billingStart?: string;
   notes?: string;
   steps: Array<{
     id: string;
@@ -59,6 +66,14 @@ const emptyForm = {
   website: "",
   crmProvider: "",
   leadVolume: "",
+  plan: "Growth",
+  setupFee: "",
+  monthlyFee: "",
+  includedUsage: "",
+  overageTerms: "",
+  contractTerm: "12 months",
+  billingStart: "",
+  generateAgreement: false,
   notes: ""
 };
 
@@ -120,6 +135,7 @@ export default function NewDealerClientPage() {
   async function createSetup() {
     setBusy(true);
     try {
+      const shouldGenerateAgreement = form.generateAgreement;
       const resp = await fetch("/api/dealer-setups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -130,12 +146,54 @@ export default function NewDealerClientPage() {
       setSetups(current => [data.setup, ...current.filter(row => row.id !== data.setup.id)]);
       setSelectedId(data.setup.id);
       setForm(emptyForm);
-      setNotice(`Dealer setup created for ${data.setup.dealerName}.`);
+      if (shouldGenerateAgreement) {
+        await createAgreementTaskForSetup(data.setup);
+        setNotice(`Dealer setup created for ${data.setup.dealerName}, and the agreement draft task was created.`);
+      } else {
+        setNotice(`Dealer setup created for ${data.setup.dealerName}.`);
+      }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Dealer setup could not be created.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function createAgreementTaskForSetup(setup: DealerSetup) {
+    const facts = [
+      `Dealer: ${setup.dealerName}`,
+      `Primary contact: ${setup.primaryContact || "not provided"}`,
+      `Website: ${setup.website || "not provided"}`,
+      `Plan: ${setup.plan || "not provided"}`,
+      `Setup fee: ${setup.setupFee || "not provided"}`,
+      `Monthly fee: ${setup.monthlyFee || "not provided"}`,
+      `Included usage: ${setup.includedUsage || setup.leadVolume || "not provided"}`,
+      `Overage terms: ${setup.overageTerms || "not provided"}`,
+      `Contract term: ${setup.contractTerm || "not provided"}`,
+      `Billing start: ${setup.billingStart || "not provided"}`,
+      `Notes: ${setup.notes || "none"}`
+    ].join("\n");
+    const resp = await fetch("/api/agent-tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "claude",
+        kind: "agreement",
+        priority: "high",
+        clientName: setup.dealerName,
+        title: `Draft ${setup.dealerName} agreement`,
+        instructions: [
+          "Draft a dealer agreement packet using only the structured facts below for business terms.",
+          "Do not invent pricing, usage, contract dates, legal names, signer details, or overage terms that are not provided.",
+          "Flag missing fields clearly for human review. Do not send the agreement.",
+          "",
+          facts
+        ].join("\n")
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agreement task could not be created.");
+    return data.task;
   }
 
   async function updateStep(stepId: string, stepStatus: DealerSetupStepStatus) {
@@ -163,7 +221,23 @@ export default function NewDealerClientPage() {
     setTaskBusy(true);
     const instructions =
       kind === "agreement"
-        ? `Draft the dealer agreement packet for ${selected.dealerName}. Include pricing, usage allowances, support terms, e-sign checklist, and missing fields. Do not send it.`
+        ? [
+            "Draft a dealer agreement packet using only the structured facts below for business terms.",
+            "Do not invent pricing, usage, contract dates, legal names, signer details, or overage terms that are not provided.",
+            "Flag missing fields clearly for human review. Do not send the agreement.",
+            "",
+            `Dealer: ${selected.dealerName}`,
+            `Primary contact: ${selected.primaryContact || "not provided"}`,
+            `Website: ${selected.website || "not provided"}`,
+            `Plan: ${selected.plan || "not provided"}`,
+            `Setup fee: ${selected.setupFee || "not provided"}`,
+            `Monthly fee: ${selected.monthlyFee || "not provided"}`,
+            `Included usage: ${selected.includedUsage || selected.leadVolume || "not provided"}`,
+            `Overage terms: ${selected.overageTerms || "not provided"}`,
+            `Contract term: ${selected.contractTerm || "not provided"}`,
+            `Billing start: ${selected.billingStart || "not provided"}`,
+            `Notes: ${selected.notes || "none"}`
+          ].join("\n")
         : kind === "api"
           ? `Create the API dealer setup work for ${selected.dealerName}. Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}. Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps. Do not overwrite existing clients.`
         : kind === "providers"
@@ -360,6 +434,47 @@ export default function NewDealerClientPage() {
               <label>
                 Lead volume
                 <input value={form.leadVolume} onChange={event => updateField("leadVolume", event.target.value)} placeholder="300 leads/month" />
+              </label>
+              <label>
+                Plan
+                <select value={form.plan} onChange={event => updateField("plan", event.target.value)}>
+                  <option>Starter</option>
+                  <option>Growth</option>
+                  <option>Pro</option>
+                  <option>Enterprise</option>
+                </select>
+              </label>
+              <label>
+                Setup fee
+                <input value={form.setupFee} onChange={event => updateField("setupFee", event.target.value)} placeholder="$2,500" />
+              </label>
+              <label>
+                Monthly fee
+                <input value={form.monthlyFee} onChange={event => updateField("monthlyFee", event.target.value)} placeholder="$1,500/month" />
+              </label>
+              <label>
+                Included usage
+                <input value={form.includedUsage} onChange={event => updateField("includedUsage", event.target.value)} placeholder="Up to 500 leads/month, standard SMS/email usage" />
+              </label>
+              <label>
+                Overage terms
+                <input value={form.overageTerms} onChange={event => updateField("overageTerms", event.target.value)} placeholder="Usage above included tier billed at..." />
+              </label>
+              <label>
+                Contract term
+                <input value={form.contractTerm} onChange={event => updateField("contractTerm", event.target.value)} placeholder="12 months" />
+              </label>
+              <label>
+                Billing start
+                <input value={form.billingStart} onChange={event => updateField("billingStart", event.target.value)} placeholder="On launch / June 1, 2026" />
+              </label>
+              <label className="lr-ceo-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={form.generateAgreement}
+                  onChange={event => setForm(current => ({ ...current, generateAgreement: event.target.checked }))}
+                />
+                Generate agreement draft on create
               </label>
               <label>
                 Notes

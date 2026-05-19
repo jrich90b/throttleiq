@@ -27,6 +27,13 @@ export type DealerSetup = {
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
+  plan?: string;
+  setupFee?: string;
+  monthlyFee?: string;
+  includedUsage?: string;
+  overageTerms?: string;
+  contractTerm?: string;
+  billingStart?: string;
   notes?: string;
   steps: DealerSetupStep[];
   createdAt: string;
@@ -95,6 +102,13 @@ export async function addDealerSetup(input: {
   website?: string;
   crmProvider?: string;
   leadVolume?: string;
+  plan?: string;
+  setupFee?: string;
+  monthlyFee?: string;
+  includedUsage?: string;
+  overageTerms?: string;
+  contractTerm?: string;
+  billingStart?: string;
   notes?: string;
 }): Promise<DealerSetup> {
   await ensureLoaded();
@@ -114,6 +128,13 @@ export async function addDealerSetup(input: {
     website: input.website?.trim().slice(0, 240) || undefined,
     crmProvider: input.crmProvider?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
     leadVolume: input.leadVolume?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
+    plan: input.plan?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
+    setupFee: input.setupFee?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
+    monthlyFee: input.monthlyFee?.replace(/\s+/g, " ").trim().slice(0, 80) || undefined,
+    includedUsage: input.includedUsage?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
+    overageTerms: input.overageTerms?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
+    contractTerm: input.contractTerm?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
+    billingStart: input.billingStart?.replace(/\s+/g, " ").trim().slice(0, 120) || undefined,
     notes: input.notes?.trim().slice(0, 2000) || undefined,
     steps: defaultSteps(),
     createdAt: now,
@@ -128,7 +149,26 @@ export async function addDealerSetup(input: {
 
 export async function updateDealerSetup(
   id: string,
-  patch: Partial<Pick<DealerSetup, "stage" | "status" | "owner" | "primaryContact" | "website" | "crmProvider" | "leadVolume" | "notes">> & {
+  patch: Partial<
+    Pick<
+      DealerSetup,
+      | "stage"
+      | "status"
+      | "owner"
+      | "primaryContact"
+      | "website"
+      | "crmProvider"
+      | "leadVolume"
+      | "plan"
+      | "setupFee"
+      | "monthlyFee"
+      | "includedUsage"
+      | "overageTerms"
+      | "contractTerm"
+      | "billingStart"
+      | "notes"
+    >
+  > & {
     stepId?: string;
     stepStatus?: DealerSetupStepStatus;
     stepNote?: string;
@@ -139,7 +179,21 @@ export async function updateDealerSetup(
   if (!setup) return null;
   if (patch.stage) setup.stage = patch.stage;
   if (patch.status) setup.status = patch.status;
-  for (const key of ["owner", "primaryContact", "website", "crmProvider", "leadVolume", "notes"] as const) {
+  for (const key of [
+    "owner",
+    "primaryContact",
+    "website",
+    "crmProvider",
+    "leadVolume",
+    "plan",
+    "setupFee",
+    "monthlyFee",
+    "includedUsage",
+    "overageTerms",
+    "contractTerm",
+    "billingStart",
+    "notes"
+  ] as const) {
     if (typeof patch[key] === "string") (setup as any)[key] = patch[key]?.trim() || undefined;
   }
   if (patch.stepId && patch.stepStatus) {

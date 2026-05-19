@@ -613,6 +613,24 @@ a {
   color: #b8c6dc;
 }
 
+.lr-ceo-form-stack .lr-ceo-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.58rem;
+  min-height: 42px;
+  padding: 0.55rem 0.68rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f7fbff;
+  font-weight: 800;
+}
+
+.lr-ceo-form-stack .lr-ceo-checkbox-row input {
+  width: 18px;
+  height: 18px;
+}
+
 .lr-ceo-note {
   margin: 0.9rem 0 0;
   line-height: 1.5;

@@ -24378,6 +24378,13 @@ app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res)
     website: String(req.body?.website ?? ""),
     crmProvider: String(req.body?.crmProvider ?? ""),
     leadVolume: String(req.body?.leadVolume ?? ""),
+    plan: String(req.body?.plan ?? ""),
+    setupFee: String(req.body?.setupFee ?? ""),
+    monthlyFee: String(req.body?.monthlyFee ?? ""),
+    includedUsage: String(req.body?.includedUsage ?? ""),
+    overageTerms: String(req.body?.overageTerms ?? ""),
+    contractTerm: String(req.body?.contractTerm ?? ""),
+    billingStart: String(req.body?.billingStart ?? ""),
     notes: String(req.body?.notes ?? "")
   });
   return res.json({ ok: true, setup });
@@ -24399,6 +24406,13 @@ app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req,
     website: typeof req.body?.website === "string" ? req.body.website : undefined,
     crmProvider: typeof req.body?.crmProvider === "string" ? req.body.crmProvider : undefined,
     leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
+    plan: typeof req.body?.plan === "string" ? req.body.plan : undefined,
+    setupFee: typeof req.body?.setupFee === "string" ? req.body.setupFee : undefined,
+    monthlyFee: typeof req.body?.monthlyFee === "string" ? req.body.monthlyFee : undefined,
+    includedUsage: typeof req.body?.includedUsage === "string" ? req.body.includedUsage : undefined,
+    overageTerms: typeof req.body?.overageTerms === "string" ? req.body.overageTerms : undefined,
+    contractTerm: typeof req.body?.contractTerm === "string" ? req.body.contractTerm : undefined,
+    billingStart: typeof req.body?.billingStart === "string" ? req.body.billingStart : undefined,
     notes: typeof req.body?.notes === "string" ? req.body.notes : undefined,
     stepId: typeof req.body?.stepId === "string" ? req.body.stepId : undefined,
     stepStatus: allowedDealerSetupStepStatuses.includes(stepStatusRaw as DealerSetupStepStatus)
