@@ -44,6 +44,12 @@ import {
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
 import {
+  addAutomationRun,
+  listAutomationRuns,
+  updateAutomationRunStatus,
+  type AutomationRunStatus
+} from "./domain/automationRunStore.js";
+import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
   classifyBlendedChatterWithLLM,
@@ -2242,6 +2248,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/widget") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/meta/callback") ||
+    pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/debug/incidents") ||
     pathname.startsWith("/auth/login") ||
@@ -28353,6 +28360,86 @@ app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, r
   const task = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, summary ? { summary } : undefined);
   if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
   return res.json({ ok: true, task });
+});
+
+const allowedAutomationStatuses: AutomationRunStatus[] = [
+  "running",
+  "completed",
+  "failed",
+  "needs_approval",
+  "approved",
+  "declined"
+];
+
+function canWriteAutomationRun(req: any) {
+  const configured = String(process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
+  const provided = String(req.header("x-automation-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "") || "").trim();
+  return !!configured && !!provided && configured === provided;
+}
+
+app.get("/automation-runs", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "50");
+  const runs = await listAutomationRuns(Number.isFinite(limit) ? limit : 50);
+  return res.json({ ok: true, runs });
+});
+
+app.post("/automation-runs/ingest", async (req, res) => {
+  if (!canWriteAutomationRun(req)) return res.status(401).json({ ok: false, error: "invalid automation token" });
+  const statusRaw = String(req.body?.status ?? "completed").trim().toLowerCase();
+  const status = allowedAutomationStatuses.includes(statusRaw as AutomationRunStatus)
+    ? (statusRaw as AutomationRunStatus)
+    : "completed";
+  const sourceRaw = String(req.body?.source ?? "other").trim().toLowerCase();
+  const source = ["codex", "feedback_loop", "manual", "other"].includes(sourceRaw)
+    ? (sourceRaw as "codex" | "feedback_loop" | "manual" | "other")
+    : "other";
+  const name = String(req.body?.name ?? "Automation run").replace(/\s+/g, " ").trim().slice(0, 180);
+  const summary = String(req.body?.summary ?? "").trim().slice(0, 4000) || "Automation run completed.";
+  const startedAt = String(req.body?.startedAt ?? "").trim() || new Date().toISOString();
+  const finishedAt = String(req.body?.finishedAt ?? "").trim() || undefined;
+  const approvalRequired = !!req.body?.approvalRequired || status === "needs_approval";
+  const changedFiles = Array.isArray(req.body?.changedFiles)
+    ? req.body.changedFiles.map((item: unknown) => String(item).trim()).filter(Boolean).slice(0, 100)
+    : undefined;
+  const run = await addAutomationRun({
+    name: name || "Automation run",
+    source,
+    status,
+    summary,
+    startedAt,
+    finishedAt,
+    approvalRequired,
+    approvalReason: String(req.body?.approvalReason ?? "").trim().slice(0, 1000) || undefined,
+    commitHash: String(req.body?.commitHash ?? "").trim().slice(0, 80) || undefined,
+    pullRequestUrl: String(req.body?.pullRequestUrl ?? "").trim().slice(0, 500) || undefined,
+    deployUrl: String(req.body?.deployUrl ?? "").trim().slice(0, 500) || undefined,
+    logPath: String(req.body?.logPath ?? "").trim().slice(0, 500) || undefined,
+    changedFiles
+  });
+  return res.json({ ok: true, run });
+});
+
+app.patch("/automation-runs/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!["approved", "declined"].includes(statusRaw)) {
+    return res.status(400).json({ ok: false, error: "Only approval decisions are allowed here." });
+  }
+  const run = await updateAutomationRunStatus(req.params.id, statusRaw as AutomationRunStatus, {
+    id: String(user?.id ?? "").trim() || undefined,
+    name: String(user?.name ?? "").trim() || undefined,
+    email: String(user?.email ?? "").trim() || undefined,
+    at: new Date().toISOString()
+  });
+  if (!run) return res.status(404).json({ ok: false, error: "Automation run not found" });
+  return res.json({ ok: true, run });
 });
 
 app.get("/questions", (_req, res) => {

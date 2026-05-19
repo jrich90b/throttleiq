@@ -79,6 +79,22 @@ type SupportTicket = {
     pageUrl?: string | null;
   };
 };
+type AutomationRun = {
+  id: string;
+  name: string;
+  source: "codex" | "feedback_loop" | "manual" | "other";
+  status: "running" | "completed" | "failed" | "needs_approval" | "approved" | "declined";
+  summary: string;
+  startedAt: string;
+  finishedAt?: string;
+  approvalRequired: boolean;
+  approvalReason?: string;
+  commitHash?: string;
+  pullRequestUrl?: string;
+  deployUrl?: string;
+  logPath?: string;
+  changedFiles?: string[];
+};
 
 const clients: DealerClient[] = [
   {
@@ -285,6 +301,17 @@ function taskStatusLabel(status: AgentTask["status"]) {
   return status.replace(/_/g, " ");
 }
 
+function formatRunTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
+}
+
 export default function CeoCommandDashboard() {
   const [selectedClient, setSelectedClient] = useState(clients[0].name);
   const [agreementPlan, setAgreementPlan] = useState("Starter");
@@ -298,8 +325,10 @@ export default function CeoCommandDashboard() {
   const [agentInstructions, setAgentInstructions] = useState(agentTaskKinds[1].template);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
   const [supportBusyId, setSupportBusyId] = useState<string | null>(null);
+  const [automationBusyId, setAutomationBusyId] = useState<string | null>(null);
 
   const client = clients.find(row => row.name === selectedClient) ?? clients[0];
   const monthlyRunRate = useMemo(
@@ -326,6 +355,13 @@ export default function CeoCommandDashboard() {
       .then(data => {
         if (!active) return;
         if (data?.ok && Array.isArray(data.anomalies)) setSupportTickets(data.anomalies);
+      })
+      .catch(() => null);
+    fetch("/api/automation-runs?limit=6", { cache: "no-store" })
+      .then(resp => resp.json())
+      .then(data => {
+        if (!active) return;
+        if (data?.ok && Array.isArray(data.runs)) setAutomationRuns(data.runs);
       })
       .catch(() => null);
     return () => {
@@ -392,6 +428,25 @@ export default function CeoCommandDashboard() {
       setActionNotice(err instanceof Error ? err.message : "Support ticket could not be closed.");
     } finally {
       setSupportBusyId(null);
+    }
+  }
+
+  async function decideAutomationRun(run: AutomationRun, status: "approved" | "declined") {
+    setAutomationBusyId(run.id);
+    try {
+      const resp = await fetch(`/api/automation-runs/${encodeURIComponent(run.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Automation run could not be updated.");
+      setAutomationRuns(current => current.map(row => (row.id === run.id ? data.run : row)));
+      setActionNotice(`Automation run ${status}: ${data.run.name}.`);
+    } catch (err) {
+      setActionNotice(err instanceof Error ? err.message : "Automation run could not be updated.");
+    } finally {
+      setAutomationBusyId(null);
     }
   }
 
@@ -721,6 +776,64 @@ export default function CeoCommandDashboard() {
               )}
             </div>
           </article>
+        </section>
+
+        <section className="lr-ceo-panel">
+          <div className="lr-ceo-panel-title">
+            <div>
+              <p className="lr-ceo-kicker">Closed loop</p>
+              <h3>Automation runs</h3>
+            </div>
+            <span className="lr-ceo-status-ready">Synced</span>
+          </div>
+          <div className="lr-ceo-run-list">
+            {automationRuns.length ? (
+              automationRuns.map(run => (
+                <div key={run.id} className="lr-ceo-run-row">
+                  <div>
+                    <span className={`lr-ceo-run-status is-${run.status}`}>{run.status.replace(/_/g, " ")}</span>
+                    <strong>{run.name}</strong>
+                    <p>{run.summary}</p>
+                    <small>
+                      {run.source.replace(/_/g, " ")} • {formatRunTime(run.startedAt)}
+                      {run.commitHash ? ` • commit ${run.commitHash.slice(0, 7)}` : ""}
+                      {run.changedFiles?.length ? ` • ${run.changedFiles.length} files changed` : ""}
+                    </small>
+                    {run.approvalRequired && run.status === "needs_approval" ? (
+                      <em>{run.approvalReason || "This run needs approval before the next production action."}</em>
+                    ) : null}
+                  </div>
+                  <div className="lr-ceo-run-actions">
+                    {run.pullRequestUrl ? <a href={run.pullRequestUrl}>PR</a> : null}
+                    {run.deployUrl ? <a href={run.deployUrl}>Deploy</a> : null}
+                    {run.status === "needs_approval" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => decideAutomationRun(run, "approved")}
+                          disabled={automationBusyId === run.id}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="lr-ceo-secondary-btn"
+                          onClick={() => decideAutomationRun(run, "declined")}
+                          disabled={automationBusyId === run.id}
+                        >
+                          Decline
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="lr-ceo-note">
+                No automation runs logged yet. The daily feedback loop will appear here after its next recorded run.
+              </p>
+            )}
+          </div>
         </section>
 
         <section className="lr-ceo-panel lr-ceo-command-box">

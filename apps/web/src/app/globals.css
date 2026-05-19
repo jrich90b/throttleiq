@@ -793,6 +793,98 @@ a {
   color: #aebbd2;
 }
 
+.lr-ceo-run-list {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.lr-ceo-run-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.9rem;
+  align-items: start;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-run-row strong,
+.lr-ceo-run-row small,
+.lr-ceo-run-row em {
+  display: block;
+}
+
+.lr-ceo-run-row strong {
+  margin-top: 0.32rem;
+  color: #f7fbff;
+}
+
+.lr-ceo-run-row p {
+  margin: 0.38rem 0;
+  color: #cbd8eb;
+  line-height: 1.45;
+}
+
+.lr-ceo-run-row small {
+  color: #aebbd2;
+}
+
+.lr-ceo-run-row em {
+  margin-top: 0.45rem;
+  color: #ffdfbd;
+  font-style: normal;
+}
+
+.lr-ceo-run-status {
+  display: inline-flex;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lr-ceo-run-status.is-completed,
+.lr-ceo-run-status.is-approved {
+  background: #d9fbe3;
+  color: #166534;
+}
+
+.lr-ceo-run-status.is-needs_approval,
+.lr-ceo-run-status.is-running {
+  background: #fff0d5;
+  color: #9a4a00;
+}
+
+.lr-ceo-run-status.is-failed,
+.lr-ceo-run-status.is-declined {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.lr-ceo-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.52rem;
+}
+
+.lr-ceo-run-actions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  color: #eef4ff;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 800;
+}
+
 @media (max-width: 1050px) {
   .lr-ceo-shell {
     grid-template-columns: 1fr;
@@ -820,7 +912,8 @@ a {
   }
 
   .lr-ceo-header,
-  .lr-ceo-panel-title {
+  .lr-ceo-panel-title,
+  .lr-ceo-run-row {
     display: grid;
   }
 

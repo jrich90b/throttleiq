@@ -92,3 +92,8 @@ https://api.americanharley.leadrider.ai/integrations/meta/callback
 - `FEEDBACK_REPORT_EMAIL_TO`
 - `FEEDBACK_REPORT_EMAIL_FROM`
 - `AGENT_MANAGER_OUT_DIR`
+- `AUTOMATION_RUNS_PATH`
+  - Optional explicit JSON file path for CEO dashboard closed-loop run history.
+  - Defaults to `DATA_DIR/automation_runs.json`.
+- `AUTOMATION_RUN_WRITE_TOKEN`
+  - Optional token for external automation jobs to post to `/automation-runs/ingest`.

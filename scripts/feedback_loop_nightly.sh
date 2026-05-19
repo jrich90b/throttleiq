@@ -32,12 +32,48 @@ fi
 mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 AUDIT_JSON="$LOG_DIR/conversation_audit_$TS.json"
 MINE_LOG="$LOG_DIR/edit_feedback_mine_$TS.log"
 RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
 WATCHDOG_JSON="$LOG_DIR/route_watchdog_$TS.json"
 REPLAY_LOG="$LOG_DIR/conversation_replay_$TS.log"
 ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
+
+record_closed_loop_run() {
+  local exit_code="$1"
+  set +e
+  local status="completed"
+  local summary="Daily feedback loop completed. Review the attached run log and generated reports for details."
+  local approval_required="0"
+  local approval_reason=""
+  local changed_files=""
+  if [[ "$exit_code" != "0" ]]; then
+    status="failed"
+    summary="Daily feedback loop failed. Review the run log before relying on generated outputs."
+  else
+    changed_files="$(git status --short 2>/dev/null | sed 's/^...//' | head -100 || true)"
+    if [[ -n "$changed_files" ]]; then
+      status="needs_approval"
+      approval_required="1"
+      approval_reason="The feedback loop left repository changes that need review before deployment."
+      summary="Daily feedback loop completed and produced changes that need approval."
+    fi
+  fi
+  AUTOMATION_RUN_STATUS="$status" \
+    AUTOMATION_RUN_NAME="Daily feedback loop" \
+    AUTOMATION_RUN_SOURCE="feedback_loop" \
+    AUTOMATION_RUN_SUMMARY="$summary" \
+    AUTOMATION_RUN_STARTED_AT="$RUN_STARTED_AT" \
+    AUTOMATION_RUN_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    AUTOMATION_RUN_LOG_PATH="$RUN_LOG" \
+    AUTOMATION_RUN_APPROVAL_REQUIRED="$approval_required" \
+    AUTOMATION_RUN_APPROVAL_REASON="$approval_reason" \
+    AUTOMATION_RUN_CHANGED_FILES="$changed_files" \
+    npm run automation_run:record >/dev/null 2>&1 || true
+}
+
+trap 'record_closed_loop_run "$?"' EXIT
 
 {
   echo "[feedback-loop] started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
