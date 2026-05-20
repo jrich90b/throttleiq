@@ -12051,6 +12051,62 @@ function clearAppointmentStaffPromptState(appt: any): boolean {
   return changed;
 }
 
+function isBookedAppointmentCancellationText(text: string | null | undefined): boolean {
+  const normalized = String(text ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (/\b(cancel|cancelled|canceled|wrong place|wrong location|wrong dealer|wrong dealership|not your store)\b/i.test(normalized)) {
+    return true;
+  }
+  return /\b(supposed to be|meant to be|should be)\b/i.test(normalized) &&
+    /\b(georgia|cartersville|different (?:dealer|dealership|store|location)|another (?:dealer|dealership|store|location))\b/i.test(normalized);
+}
+
+async function cancelBookedAppointmentForConversation(
+  conv: any,
+  args?: { reason?: string; reschedulePending?: boolean }
+): Promise<boolean> {
+  const appt = conv?.appointment;
+  const eventId = String(appt?.bookedEventId ?? "").trim();
+  if (!appt || !eventId) return false;
+
+  let changed = false;
+  try {
+    const cfg = await getSchedulerConfigHot();
+    const calendarId =
+      String(appt.bookedCalendarId ?? "").trim() ||
+      String(appt.matchedSlot?.calendarId ?? "").trim() ||
+      String((cfg.salespeople ?? []).find(p => p.id === appt.bookedSalespersonId)?.calendarId ?? "").trim();
+    if (calendarId) {
+      const cal = await getAuthedCalendarClient();
+      await updateEventDetails(cal, calendarId, eventId, cfg.timezone, {
+        status: "cancelled",
+        description: args?.reason ? `Status: cancelled\nReason: ${args.reason}` : "Status: cancelled"
+      });
+    }
+  } catch (err: any) {
+    console.warn("[appointment-cancel] calendar cancel failed:", err?.message ?? err);
+  }
+
+  appt.status = "none";
+  appt.whenText = undefined;
+  appt.whenIso = null;
+  appt.confirmedBy = undefined;
+  appt.bookedEventId = null;
+  appt.bookedEventLink = null;
+  appt.bookedSalespersonId = null;
+  appt.bookedSalespersonName = null;
+  appt.bookedCalendarId = null;
+  appt.matchedSlot = undefined;
+  appt.reschedulePending = args?.reschedulePending ?? false;
+  appt.updatedAt = new Date().toISOString();
+  clearAppointmentStaffPromptState(appt);
+  if (conv?.id) {
+    markOpenTodosDoneForConversationByClass(conv.id, ["appointment"]);
+  }
+  changed = true;
+  return changed;
+}
+
 function getOutcomeStaffNotifyTarget(conv: any): any {
   if (conv?.appointment) {
     conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
@@ -43567,6 +43623,41 @@ if (authToken && signature) {
     !!bookingParse?.explicitRequest && bookingConfidence > 0 && bookingConfidence < bookingConfidenceMin;
   const appointmentTimingAccepted = isAppointmentTimingParserAccepted(appointmentTimingParse);
   const appointmentTimingIntent = appointmentTimingAccepted ? appointmentTimingParse?.intent : "none";
+  const bookedAppointmentCancelRequested =
+    event.provider === "twilio" &&
+    !!conv.appointment?.bookedEventId &&
+    isFutureBookedAppointment &&
+    ((bookingIntentAccepted && bookingParse?.intent === "cancel") ||
+      isBookedAppointmentCancellationText(event.body));
+  if (bookedAppointmentCancelRequested) {
+    await cancelBookedAppointmentForConversation(conv, {
+      reason: event.body ?? "Customer cancelled appointment.",
+      reschedulePending: false
+    });
+    setFollowUpMode(conv, "manual_handoff", "appointment_cancelled");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "appointment_cancelled", { setMode: "manual_handoff" });
+    recordRouteOutcome("live", "booked_appointment_cancelled_by_customer", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserIntent: bookingParse?.intent ?? null,
+      parserConfidence: bookingConfidence || null
+    });
+    const reply = "Sorry about that — I’ve cancelled that appointment.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
