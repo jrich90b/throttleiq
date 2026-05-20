@@ -4173,6 +4173,21 @@ app.put("/inventory", async (req, res) => {
   }
 });
 
+async function clearInventoryAvailabilityRefs(stockId?: string | null, vin?: string | null): Promise<void> {
+  const stock = String(stockId ?? "").trim();
+  const v = String(vin ?? "").trim();
+  await clearInventoryHold(stock || undefined, v || undefined);
+  await clearInventorySold(stock || undefined, v || undefined);
+  if (stock) {
+    await clearInventoryHold(stock, null);
+    await clearInventorySold(stock, null);
+  }
+  if (v) {
+    await clearInventoryHold(null, v);
+    await clearInventorySold(null, v);
+  }
+}
+
 app.post("/inventory/availability", async (req, res) => {
   try {
     const stockId = String(req.body?.stockId ?? "").trim() || undefined;
@@ -4193,12 +4208,12 @@ app.post("/inventory/availability", async (req, res) => {
     const actorName = String(user?.name ?? user?.email ?? "").trim() || undefined;
 
     if (status === "available") {
-      await clearInventoryHold(stockId, vin);
-      await clearInventorySold(stockId, vin);
+      await clearInventoryAvailabilityRefs(stockId, vin);
       return res.json({ ok: true, status: "available", stockId, vin });
     }
 
     if (status === "hold") {
+      await clearInventoryAvailabilityRefs(stockId, vin);
       const hold = {
         id: key,
         stockId,
@@ -4209,10 +4224,10 @@ app.post("/inventory/availability", async (req, res) => {
         updatedAt: nowIso
       };
       await setInventoryHold({ stockId, vin, hold });
-      await clearInventorySold(stockId, vin);
       return res.json({ ok: true, status: "hold", stockId, vin, hold });
     }
 
+    await clearInventoryAvailabilityRefs(stockId, vin);
     const soldKey = normalizeInventorySoldKey(stockId, vin) ?? key;
     const sold = {
       id: soldKey,
@@ -4227,7 +4242,6 @@ app.post("/inventory/availability", async (req, res) => {
       updatedAt: nowIso
     };
     await setInventorySold({ stockId, vin, sold });
-    await clearInventoryHold(stockId, vin);
     return res.json({ ok: true, status: "sold", stockId, vin, sold });
   } catch (err: any) {
     console.warn("inventory availability update failed:", err?.message ?? err);
