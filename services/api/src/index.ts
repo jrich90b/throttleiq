@@ -130,6 +130,7 @@ import {
   parseJourneyIntentWithLLM,
   parseConversationStateWithLLM,
   parseFinanceOutcomeFromCallWithLLM,
+  parseAppointmentOutcomeFollowUpPlanWithLLM,
   parseStaffOutcomeUpdateWithLLM,
   parseWalkInOutcomeWithLLM,
   parseUnifiedSemanticSlotsWithLLM,
@@ -142,6 +143,7 @@ import type {
   AccessoryRequestParse,
   CadenceRegenerateContextParse,
   AppointmentTimingParse,
+  AppointmentOutcomeFollowUpPlanParse,
   CompositeSalesInquiryParse,
   ConversationStateParse,
   CustomerAckActionParse,
@@ -12355,6 +12357,7 @@ async function activateAppointmentOutcomeFollowUp(args: {
   primaryStatus?: AppointmentPrimaryOutcome;
   secondaryStatus?: AppointmentSecondaryOutcome;
   actor?: { id?: string | null; name?: string | null };
+  plan?: AppointmentOutcomeFollowUpPlanParse | null;
 }): Promise<{ activated: boolean; nextDueAt?: string }> {
   const conv = args.conv;
   if (!conv || conv.status === "closed") return { activated: false };
@@ -12364,6 +12367,12 @@ async function activateAppointmentOutcomeFollowUp(args: {
   const now = nowIso();
   const nextDueAt = computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone);
   const note = String(args.note ?? "").trim();
+  const plan = args.plan ?? null;
+  const parsedDraft = String(plan?.draftSms ?? "").trim();
+  const followUpMessage =
+    plan?.followUpNeeded === false || plan?.recommendedAction === "no_follow_up"
+      ? ""
+      : parsedDraft || buildAppointmentOutcomeFollowUpMessage(conv, note);
   setFollowUpMode(conv, "active", "appointment_outcome_follow_up");
   conv.followUpCadence = {
     status: "active",
@@ -12371,18 +12380,49 @@ async function activateAppointmentOutcomeFollowUp(args: {
     nextDueAt,
     stepIndex: 0,
     kind: "engaged",
-    deferredMessage: buildAppointmentOutcomeFollowUpMessage(conv, note),
+    deferredMessage: followUpMessage,
     contextTag: "appointment_outcome_follow_up",
     contextTagUpdatedAt: now,
     scheduleInviteCount: 0,
     scheduleMuted: false
   };
+  if (conv.appointment?.staffNotify?.outcome && plan) {
+    conv.appointment.staffNotify.outcome.followUpPlan = {
+      followUpNeeded: plan.followUpNeeded,
+      customerStatus: plan.customerStatus,
+      primaryConcern: plan.primaryConcern,
+      recommendedAction: plan.recommendedAction,
+      targetVehicleModel: plan.targetVehicleModel || undefined,
+      targetVehicleYear: plan.targetVehicleYear || undefined,
+      targetVehicleCondition: plan.targetVehicleCondition || undefined,
+      originalVehicleModel: plan.originalVehicleModel || undefined,
+      followUpWindowText: plan.followUpWindowText || undefined,
+      messageAngle: plan.messageAngle,
+      urgency: plan.urgency,
+      draftSms: parsedDraft || undefined,
+      reasoning: plan.reasoning || undefined,
+      confidence: plan.confidence,
+      parsedAt: now
+    };
+  }
   if (note) {
     const contextText = [
       `Appointment outcome: ${args.primaryStatus === "showed" ? "customer showed" : args.primaryStatus ?? "outcome recorded"} and needs follow-up.`,
       `Salesperson note: ${note}`,
+      plan
+        ? `Parsed follow-up plan: ${[
+            plan.recommendedAction,
+            plan.primaryConcern,
+            plan.targetVehicleModel ? `target ${plan.targetVehicleModel}` : null,
+            plan.followUpWindowText ? `timing ${plan.followUpWindowText}` : null
+          ]
+            .filter(Boolean)
+            .join(", ")}.`
+        : null,
       "Use this context for the next follow-up draft."
-    ].join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
     setAgentContext(conv, {
       text: contextText,
       mode: "next_reply",
@@ -28275,11 +28315,24 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
       secondaryStatus: normalizedOutcome.secondaryStatus,
       source: "conversation_header"
     });
+    const appointmentFollowUpPlan =
+      normalizedOutcome.secondaryStatus === "needs_follow_up" && appointmentOutcomeNote
+        ? await safeLlmParse("appointment_outcome_follow_up_plan_parser", () =>
+            parseAppointmentOutcomeFollowUpPlanWithLLM({
+              note: appointmentOutcomeNote,
+              primaryStatus: normalizedOutcome.primaryStatus,
+              secondaryStatus: normalizedOutcome.secondaryStatus,
+              history: buildHistory(conv, 8),
+              lead: conv.lead
+            })
+          )
+        : null;
     await activateAppointmentOutcomeFollowUp({
       conv,
       note: appointmentOutcomeNote,
       primaryStatus: normalizedOutcome.primaryStatus,
       secondaryStatus: normalizedOutcome.secondaryStatus,
+      plan: appointmentFollowUpPlan,
       actor: {
         id: String((req as any).user?.id ?? "").trim() || undefined,
         name:
@@ -29231,6 +29284,18 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         secondaryStatus: normalizedOutcome.secondaryStatus,
         source: "todo_done_modal"
       });
+      const appointmentFollowUpPlan =
+        normalizedOutcome.secondaryStatus === "needs_follow_up" && appointmentOutcomeNote
+          ? await safeLlmParse("todo_appointment_outcome_follow_up_plan_parser", () =>
+              parseAppointmentOutcomeFollowUpPlanWithLLM({
+                note: appointmentOutcomeNote,
+                primaryStatus: normalizedOutcome.primaryStatus,
+                secondaryStatus: normalizedOutcome.secondaryStatus,
+                history: buildHistory(conv, 8),
+                lead: conv.lead
+              })
+            )
+          : null;
       if (appointmentOutcomeNote) {
         try {
           await applyActionStateFromContextNote(conv, appointmentOutcomeNote, "Appointment outcome");
@@ -29243,6 +29308,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         note: appointmentOutcomeNote,
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
+        plan: appointmentFollowUpPlan,
         actor: {
           id: String(user?.id ?? "").trim() || undefined,
           name:

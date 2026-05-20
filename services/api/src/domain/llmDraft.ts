@@ -1871,6 +1871,58 @@ export type StaffOutcomeUpdateParse = {
   confidence?: number;
 };
 
+export type AppointmentOutcomeFollowUpPlanParse = {
+  followUpNeeded: boolean;
+  customerStatus:
+    | "interested"
+    | "uncertain"
+    | "not_ready"
+    | "needs_more_info"
+    | "comparing_options"
+    | "finance_pending"
+    | "lost"
+    | "unknown";
+  primaryConcern:
+    | "bike_fit"
+    | "comfort_confidence"
+    | "price_payment"
+    | "trade"
+    | "financing"
+    | "timing"
+    | "availability"
+    | "needs_spouse_or_friend"
+    | "none"
+    | "unknown";
+  recommendedAction:
+    | "invite_back"
+    | "offer_alternative_ride"
+    | "send_numbers"
+    | "send_photos_or_video"
+    | "call_customer"
+    | "check_inventory"
+    | "manager_follow_up"
+    | "finance_follow_up"
+    | "soft_check_in"
+    | "no_follow_up";
+  targetVehicleModel?: string | null;
+  targetVehicleYear?: string | null;
+  targetVehicleCondition?: "new" | "used" | "any" | "unknown" | null;
+  originalVehicleModel?: string | null;
+  followUpWindowText?: string | null;
+  messageAngle:
+    | "compare_alternative"
+    | "confidence_reassurance"
+    | "numbers_next_step"
+    | "inventory_options"
+    | "appointment_invite"
+    | "soft_check_in"
+    | "no_message";
+  urgency: "now" | "today" | "tomorrow" | "this_week" | "next_week" | "later" | "unknown";
+  draftSms?: string | null;
+  reasoning?: string | null;
+  confidence?: number;
+};
+
 export type FinanceOutcomeFromCallParse = {
   outcome: "approved" | "declined" | "needs_more_info" | "none";
   explicitOutcome: boolean;
@@ -2741,6 +2793,94 @@ const STAFF_OUTCOME_UPDATE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     unit_make: { type: "string" },
     unit_model: { type: "string" },
     unit_trim: { type: "string" },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
+  }
+};
+
+const APPOINTMENT_OUTCOME_FOLLOW_UP_PLAN_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "follow_up_needed",
+    "customer_status",
+    "primary_concern",
+    "recommended_action",
+    "target_vehicle_model",
+    "target_vehicle_year",
+    "target_vehicle_condition",
+    "original_vehicle_model",
+    "follow_up_window_text",
+    "message_angle",
+    "urgency",
+    "draft_sms",
+    "reasoning",
+    "confidence"
+  ],
+  properties: {
+    follow_up_needed: { type: "boolean" },
+    customer_status: {
+      type: "string",
+      enum: [
+        "interested",
+        "uncertain",
+        "not_ready",
+        "needs_more_info",
+        "comparing_options",
+        "finance_pending",
+        "lost",
+        "unknown"
+      ]
+    },
+    primary_concern: {
+      type: "string",
+      enum: [
+        "bike_fit",
+        "comfort_confidence",
+        "price_payment",
+        "trade",
+        "financing",
+        "timing",
+        "availability",
+        "needs_spouse_or_friend",
+        "none",
+        "unknown"
+      ]
+    },
+    recommended_action: {
+      type: "string",
+      enum: [
+        "invite_back",
+        "offer_alternative_ride",
+        "send_numbers",
+        "send_photos_or_video",
+        "call_customer",
+        "check_inventory",
+        "manager_follow_up",
+        "finance_follow_up",
+        "soft_check_in",
+        "no_follow_up"
+      ]
+    },
+    target_vehicle_model: { type: "string" },
+    target_vehicle_year: { type: "string" },
+    target_vehicle_condition: { type: "string", enum: ["new", "used", "any", "unknown"] },
+    original_vehicle_model: { type: "string" },
+    follow_up_window_text: { type: "string" },
+    message_angle: {
+      type: "string",
+      enum: [
+        "compare_alternative",
+        "confidence_reassurance",
+        "numbers_next_step",
+        "inventory_options",
+        "appointment_invite",
+        "soft_check_in",
+        "no_message"
+      ]
+    },
+    urgency: { type: "string", enum: ["now", "today", "tomorrow", "this_week", "next_week", "later", "unknown"] },
+    draft_sms: { type: "string" },
+    reasoning: { type: "string" },
     confidence: { type: "number", minimum: 0, maximum: 1 }
   }
 };
@@ -6039,6 +6179,129 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     unitMake: cleanOptionalString(parsed.unit_make),
     unitModel: cleanOptionalString(parsed.unit_model),
     unitTrim: cleanOptionalString(parsed.unit_trim),
+    confidence
+  };
+}
+
+export async function parseAppointmentOutcomeFollowUpPlanWithLLM(args: {
+  note: string;
+  primaryStatus?: string | null;
+  secondaryStatus?: string | null;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<AppointmentOutcomeFollowUpPlanParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_APPOINTMENT_OUTCOME_PLAN_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const note = String(args.note ?? "").trim();
+  if (!note) return null;
+  const debug = process.env.LLM_APPOINTMENT_OUTCOME_PLAN_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_APPOINTMENT_OUTCOME_PLAN_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_APPOINTMENT_OUTCOME_PLAN_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You parse messy salesperson appointment/test-ride outcome notes into an actionable follow-up plan.",
+    "Return only JSON matching the schema.",
+    "",
+    "Common notes and expected interpretation:",
+    '- "Needs a little getting used to the trike. Not sure if he is really interested. Invite him back to ride a Heritage Softail" -> follow_up_needed=true, customer_status=uncertain, primary_concern=comfort_confidence, recommended_action=offer_alternative_ride, target_vehicle_model=Heritage Softail, message_angle=compare_alternative.',
+    '- "Loved the bike but payment was high, wants numbers with 2k down" -> recommended_action=send_numbers, primary_concern=price_payment, message_angle=numbers_next_step.',
+    '- "No showed, call tomorrow" -> recommended_action=call_customer, urgency=tomorrow.',
+    '- "Wife needs to see it, bring her back Saturday" -> primary_concern=needs_spouse_or_friend, recommended_action=invite_back, urgency=this_week.',
+    '- "Bought elsewhere" -> follow_up_needed=false, customer_status=lost, recommended_action=no_follow_up.',
+    "",
+    "Rules:",
+    "- Do not invent stock numbers or facts.",
+    "- Extract the alternative target vehicle if the note asks to invite/ride/compare a different bike.",
+    "- draft_sms should be a short salesperson SMS, under 280 chars, no hard promise unless the note has one.",
+    "- If the note is ambiguous but says needs follow-up, choose soft_check_in.",
+    "- If there is no clear follow-up needed, set follow_up_needed=false and draft_sms empty.",
+    "",
+    `Outcome selection: ${JSON.stringify({
+      primaryStatus: args.primaryStatus ?? null,
+      secondaryStatus: args.secondaryStatus ?? null
+    })}`,
+    `Known lead info: ${JSON.stringify({
+      leadRef: lead?.leadRef ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Salesperson outcome note: ${note}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "appointment_outcome_follow_up_plan_parser",
+      schema: APPOINTMENT_OUTCOME_FOLLOW_UP_PLAN_JSON_SCHEMA,
+      maxOutputTokens: 420,
+      debugTag: "llm-appointment-outcome-plan-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const enumValue = <T extends string>(raw: unknown, allowed: readonly T[], fallback: T): T => {
+    const value = String(raw ?? "").trim().toLowerCase();
+    return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+  };
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    followUpNeeded: !!parsed.follow_up_needed,
+    customerStatus: enumValue(
+      parsed.customer_status,
+      ["interested", "uncertain", "not_ready", "needs_more_info", "comparing_options", "finance_pending", "lost", "unknown"] as const,
+      "unknown"
+    ),
+    primaryConcern: enumValue(
+      parsed.primary_concern,
+      ["bike_fit", "comfort_confidence", "price_payment", "trade", "financing", "timing", "availability", "needs_spouse_or_friend", "none", "unknown"] as const,
+      "unknown"
+    ),
+    recommendedAction: enumValue(
+      parsed.recommended_action,
+      ["invite_back", "offer_alternative_ride", "send_numbers", "send_photos_or_video", "call_customer", "check_inventory", "manager_follow_up", "finance_follow_up", "soft_check_in", "no_follow_up"] as const,
+      "soft_check_in"
+    ),
+    targetVehicleModel: cleanOptionalString(parsed.target_vehicle_model),
+    targetVehicleYear: cleanOptionalString(parsed.target_vehicle_year),
+    targetVehicleCondition: enumValue(
+      parsed.target_vehicle_condition,
+      ["new", "used", "any", "unknown"] as const,
+      "unknown"
+    ),
+    originalVehicleModel: cleanOptionalString(parsed.original_vehicle_model),
+    followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    messageAngle: enumValue(
+      parsed.message_angle,
+      ["compare_alternative", "confidence_reassurance", "numbers_next_step", "inventory_options", "appointment_invite", "soft_check_in", "no_message"] as const,
+      "soft_check_in"
+    ),
+    urgency: enumValue(
+      parsed.urgency,
+      ["now", "today", "tomorrow", "this_week", "next_week", "later", "unknown"] as const,
+      "unknown"
+    ),
+    draftSms: cleanOptionalString(parsed.draft_sms),
+    reasoning: cleanOptionalString(parsed.reasoning),
     confidence
   };
 }
