@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 // Store tokens locally for now (later: DB per account)
 const TOKEN_PATH = path.resolve(__dirname, "../../data/google_tokens.json");
 const SUPPORT_MAIL_TOKEN_PATH = process.env.GOOGLE_SUPPORT_MAIL_TOKEN_PATH || dataPath("google_support_mail_tokens.json");
+const PERSONAL_MAIL_TOKEN_PATH = process.env.GOOGLE_PERSONAL_MAIL_TOKEN_PATH || dataPath("google_personal_mail_tokens.json");
 
 export function getOAuthClient() {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
@@ -47,13 +48,40 @@ export async function saveSupportMailTokens(tokens: any) {
   await fs.writeFile(SUPPORT_MAIL_TOKEN_PATH, JSON.stringify(tokens, null, 2), "utf8");
 }
 
-export async function getAuthedSupportGmailClient() {
+export async function loadPersonalMailTokens() {
+  try {
+    const raw = await fs.readFile(PERSONAL_MAIL_TOKEN_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function savePersonalMailTokens(tokens: any) {
+  await fs.mkdir(path.dirname(PERSONAL_MAIL_TOKEN_PATH), { recursive: true });
+  await fs.writeFile(PERSONAL_MAIL_TOKEN_PATH, JSON.stringify(tokens, null, 2), "utf8");
+}
+
+async function getAuthedGmailClient(tokens: any, notConnectedMessage: string) {
   const oauth2 = getOAuthClient();
-  const tokens = await loadSupportMailTokens();
-  if (!tokens) throw new Error("Support Gmail not connected. Visit /integrations/google/start?kind=support_mail");
+  if (!tokens) throw new Error(notConnectedMessage);
 
   oauth2.setCredentials(tokens);
   return google.gmail({ version: "v1", auth: oauth2 });
+}
+
+export async function getAuthedSupportGmailClient() {
+  return getAuthedGmailClient(
+    await loadSupportMailTokens(),
+    "Support Gmail not connected. Visit /integrations/google/start?kind=support_mail"
+  );
+}
+
+export async function getAuthedPersonalGmailClient() {
+  return getAuthedGmailClient(
+    await loadPersonalMailTokens(),
+    "Personal Gmail not connected. Visit /integrations/google/start?kind=personal_mail"
+  );
 }
 
 function decodeBase64Url(value?: string | null) {
@@ -82,8 +110,13 @@ export async function getSupportGmailProfile() {
   return resp.data;
 }
 
-export async function listSupportInboxMessages(limit = 10) {
-  const gmail = await getAuthedSupportGmailClient();
+export async function getPersonalGmailProfile() {
+  const gmail = await getAuthedPersonalGmailClient();
+  const resp = await gmail.users.getProfile({ userId: "me" });
+  return resp.data;
+}
+
+async function listInboxMessages(gmail: any, limit = 10) {
   const list = await gmail.users.messages.list({
     userId: "me",
     labelIds: ["INBOX"],
@@ -91,7 +124,7 @@ export async function listSupportInboxMessages(limit = 10) {
     maxResults: Math.max(1, Math.min(25, Math.floor(limit)))
   });
   const messages = await Promise.all(
-    (list.data.messages ?? []).map(async message => {
+    (list.data.messages ?? []).map(async (message: any) => {
       const full = await gmail.users.messages.get({
         userId: "me",
         id: message.id!,
@@ -111,6 +144,14 @@ export async function listSupportInboxMessages(limit = 10) {
     })
   );
   return messages;
+}
+
+export async function listSupportInboxMessages(limit = 10) {
+  return listInboxMessages(await getAuthedSupportGmailClient(), limit);
+}
+
+export async function listPersonalInboxMessages(limit = 10) {
+  return listInboxMessages(await getAuthedPersonalGmailClient(), limit);
 }
 
 export async function createSupportGmailDraftReply(messageId: string, bodyText: string) {

@@ -225,9 +225,12 @@ import {
   getOAuthClient,
   saveTokens,
   saveSupportMailTokens,
+  savePersonalMailTokens,
   getAuthedCalendarClient,
   getSupportGmailProfile,
+  getPersonalGmailProfile,
   listSupportInboxMessages,
+  listPersonalInboxMessages,
   createSupportGmailDraftReply,
   trashSupportGmailMessage,
   queryFreeBusy,
@@ -24394,7 +24397,7 @@ app.get("/integrations/google/start", async (req, res) => {
   const oauth2 = getOAuthClient();
   const kind = String(req.query.kind ?? "calendar").trim().toLowerCase();
   const scopes =
-    kind === "support_mail"
+    kind === "support_mail" || kind === "personal_mail"
       ? [
           "https://www.googleapis.com/auth/gmail.modify",
           "https://www.googleapis.com/auth/gmail.compose",
@@ -24405,7 +24408,7 @@ app.get("/integrations/google/start", async (req, res) => {
     access_type: "offline",
     prompt: "consent",
     scope: scopes,
-    state: kind === "support_mail" ? "support_mail" : "calendar"
+    state: kind === "support_mail" ? "support_mail" : kind === "personal_mail" ? "personal_mail" : "calendar"
   });
   res.redirect(url);
 });
@@ -24443,6 +24446,25 @@ app.get("/integrations/google/support-mail/status", async (_req, res) => {
   }
 });
 
+app.get("/integrations/google/personal-mail/status", async (_req, res) => {
+  try {
+    const profile = await getPersonalGmailProfile();
+    return res.json({
+      ok: true,
+      connected: true,
+      email: profile.emailAddress ?? null,
+      messagesTotal: profile.messagesTotal ?? null,
+      threadsTotal: profile.threadsTotal ?? null
+    });
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    let reason = "error";
+    if (/invalid_grant/i.test(message)) reason = "invalid_grant";
+    else if (/not connected/i.test(message)) reason = "not_connected";
+    return res.json({ ok: true, connected: false, reason, error: message });
+  }
+});
+
 app.get("/integrations/google/callback", async (req, res) => {
   const code = String(req.query.code ?? "");
   if (!code) return res.status(400).send("Missing code");
@@ -24454,9 +24476,47 @@ app.get("/integrations/google/callback", async (req, res) => {
     await saveSupportMailTokens(tokens);
     return res.send("LeadRider support Gmail connected. You can close this tab.");
   }
+  if (state === "personal_mail") {
+    await savePersonalMailTokens(tokens);
+    return res.send("LeadRider personal Gmail connected. You can close this tab.");
+  }
   await saveTokens(tokens);
 
   res.send("Google Calendar connected. You can close this tab.");
+});
+
+app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "10");
+  const messages = await listPersonalInboxMessages(Number.isFinite(limit) ? limit : 10);
+  for (const message of messages) {
+    queueSupportAgentTask({
+      dedupeKey: `personal_gmail_${message.id}`,
+      title: `Review personal email: ${message.subject}`,
+      instructions: [
+        "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
+        "Classify it as important, follow_up, spam_or_promo, vendor_admin, or unclear.",
+        "If a reply is useful, draft it for approval. Do not send, delete, archive, mark read, unsubscribe, or change external systems.",
+        `Gmail message ID: ${message.id}`,
+        message.threadId ? `Thread ID: ${message.threadId}` : "",
+        `From: ${message.from}`,
+        `Subject: ${message.subject}`,
+        message.date ? `Date: ${message.date}` : "",
+        message.snippet ? `Snippet: ${message.snippet}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      priority: "normal",
+      requestedBy: {
+        name: "Personal Gmail Monitor",
+        role: "system"
+      }
+    });
+  }
+  return res.json({ ok: true, messages });
 });
 
 app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {

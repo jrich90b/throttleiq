@@ -62,23 +62,6 @@ type AgentTask = {
     reason?: string;
   };
 };
-type SupportTicket = {
-  id: string;
-  type: string;
-  severity: string;
-  title: string;
-  note?: string;
-  createdAt: string;
-  status: "open" | "triaged" | "closed";
-  reporter?: {
-    name?: string;
-    email?: string;
-  };
-  context?: {
-    leadName?: string | null;
-    pageUrl?: string | null;
-  };
-};
 type AutomationRun = {
   id: string;
   name: string;
@@ -341,12 +324,10 @@ export default function CeoCommandDashboard() {
   const [agentPriority, setAgentPriority] = useState<"normal" | "high">("normal");
   const [agentInstructions, setAgentInstructions] = useState(agentTaskKinds[1].template);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
-  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
-  const [supportMailStatus, setSupportMailStatus] = useState<SupportMailStatus | null>(null);
-  const [supportMailMessages, setSupportMailMessages] = useState<SupportMailMessage[]>([]);
+  const [personalMailStatus, setPersonalMailStatus] = useState<SupportMailStatus | null>(null);
+  const [personalMailMessages, setPersonalMailMessages] = useState<SupportMailMessage[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [supportBusyId, setSupportBusyId] = useState<string | null>(null);
   const [automationBusyId, setAutomationBusyId] = useState<string | null>(null);
 
   const client = clients.find(row => row.name === selectedClient) ?? clients[0];
@@ -369,13 +350,6 @@ export default function CeoCommandDashboard() {
       .catch(() => {
         if (active) setActionNotice("Agent task history could not be loaded. The dashboard still works for local planning.");
       });
-    fetch("/api/ops/anomalies?limit=6", { cache: "no-store" })
-      .then(resp => resp.json())
-      .then(data => {
-        if (!active) return;
-        if (data?.ok && Array.isArray(data.anomalies)) setSupportTickets(data.anomalies);
-      })
-      .catch(() => null);
     fetch("/api/automation-runs?limit=6", { cache: "no-store" })
       .then(resp => resp.json())
       .then(data => {
@@ -383,18 +357,18 @@ export default function CeoCommandDashboard() {
         if (data?.ok && Array.isArray(data.runs)) setAutomationRuns(data.runs);
       })
       .catch(() => null);
-    fetch("/api/google/support-mail/status", { cache: "no-store" })
+    fetch("/api/google/personal-mail/status", { cache: "no-store" })
       .then(resp => resp.json())
       .then(data => {
         if (!active) return;
-        if (data?.ok) setSupportMailStatus(data);
+        if (data?.ok) setPersonalMailStatus(data);
       })
       .catch(() => null);
-    fetch("/api/support-mail/messages?limit=4", { cache: "no-store" })
+    fetch("/api/personal-mail/messages?limit=5", { cache: "no-store" })
       .then(resp => resp.json())
       .then(data => {
         if (!active) return;
-        if (data?.ok && Array.isArray(data.messages)) setSupportMailMessages(data.messages);
+        if (data?.ok && Array.isArray(data.messages)) setPersonalMailMessages(data.messages);
       })
       .catch(() => null);
     return () => {
@@ -442,25 +416,6 @@ export default function CeoCommandDashboard() {
       setActionNotice(err instanceof Error ? err.message : "Agent task could not be created.");
     } finally {
       setAgentBusy(false);
-    }
-  }
-
-  async function closeSupportTicket(ticket: SupportTicket) {
-    setSupportBusyId(ticket.id);
-    try {
-      const resp = await fetch(`/api/ops/anomalies/${encodeURIComponent(ticket.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "closed" })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Support ticket could not be closed.");
-      setSupportTickets(current => current.map(row => (row.id === ticket.id ? data.anomaly : row)));
-      setActionNotice(`Support ticket closed: ${data.anomaly.title}. Completion email will send when the reporter has an email on file.`);
-    } catch (err) {
-      setActionNotice(err instanceof Error ? err.message : "Support ticket could not be closed.");
-    } finally {
-      setSupportBusyId(null);
     }
   }
 
@@ -755,43 +710,58 @@ export default function CeoCommandDashboard() {
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
-                <p className="lr-ceo-kicker">Support automation</p>
-                <h3>Support Agent</h3>
+                <p className="lr-ceo-kicker">Personal inbox</p>
+                <h3>Joe's email</h3>
               </div>
-              <span className={supportMailStatus?.connected ? "lr-ceo-status-ready" : "lr-ceo-status-attention"}>
-                {supportMailStatus?.connected ? "Gmail connected" : "Gmail needed"}
+              <span className={personalMailStatus?.connected ? "lr-ceo-status-ready" : "lr-ceo-status-attention"}>
+                {personalMailStatus?.connected ? "Gmail connected" : "Gmail needed"}
               </span>
             </div>
             <div className="lr-ceo-mailbox-status">
               <div>
-                <strong>{supportMailStatus?.connected ? supportMailStatus.email || "Support Gmail" : "Connect support@leadrider.ai"}</strong>
+                <strong>{personalMailStatus?.connected ? personalMailStatus.email || "Personal Gmail" : "Connect joe.hartrich@leadrider.ai"}</strong>
                 <p>
-                  {supportMailStatus?.connected
-                    ? "Agents can read the support inbox and create Gmail drafts for approval."
-                    : "Connect the support mailbox so agents can monitor emails, draft replies, and keep ticket history together."}
+                  {personalMailStatus?.connected
+                    ? "Claude can monitor important personal email and prepare draft replies for approval."
+                    : "Connect Joe's LeadRider inbox so Command can show important email and create Claude draft tasks."}
                 </p>
               </div>
-              {supportMailStatus?.connected ? (
+              {personalMailStatus?.connected ? (
                 <span className="lr-ceo-mailbox-connected">Connected</span>
               ) : (
-                <a href="/integrations/google/start?kind=support_mail">Connect Gmail</a>
+                <a href="/integrations/google/start?kind=personal_mail">Connect Gmail</a>
               )}
             </div>
             <div className="lr-ceo-action-row">
-              <a className="lr-ceo-button-link" href="/command/support">Open Support Agent</a>
+              <button
+                type="button"
+                onClick={() =>
+                  createAgentTask({
+                    provider: "claude",
+                    kind: "email",
+                    priority: "high",
+                    title: "Review Joe's personal inbox",
+                    instructions:
+                      "Review Joe's personal LeadRider inbox messages shown in Command. Summarize what matters, identify obvious spam or promotions separately, and draft any needed replies for approval. Do not send, delete, archive, mark read, unsubscribe, or change external systems."
+                  })
+                }
+                disabled={agentBusy || !personalMailStatus?.connected}
+              >
+                Ask Claude
+              </button>
             </div>
             <div className="lr-ceo-support-flow">
               <div>
-                <strong>1. Ticket received</strong>
-                <p>Report Issue creates a support ticket and emails the reporter a confirmation.</p>
+                <strong>Important first</strong>
+                <p>Dealer, billing, legal, platform, and sales messages stay visible for review.</p>
               </div>
               <div>
-                <strong>2. Agent work</strong>
-                <p>Codex or Claude tasks can be created for the fix, draft, review, or follow-up.</p>
+                <strong>Drafts only</strong>
+                <p>Claude can prepare replies and new emails, but sending stays approval-gated.</p>
               </div>
               <div>
-                <strong>3. Ticket complete</strong>
-                <p>Closing the ticket sends a completion email back to the reporter.</p>
+                <strong>Spam reviewed</strong>
+                <p>Low-value mail can be classified for review before any delete/archive automation is enabled.</p>
               </div>
             </div>
           </article>
@@ -799,13 +769,13 @@ export default function CeoCommandDashboard() {
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
-                <p className="lr-ceo-kicker">Recent support</p>
-                <h3>Open tickets and inbox</h3>
+                <p className="lr-ceo-kicker">Recent mail</p>
+                <h3>Personal inbox</h3>
               </div>
             </div>
             <div className="lr-ceo-ticket-list">
-              {supportMailMessages.length ? (
-                supportMailMessages.map(message => (
+              {personalMailMessages.length ? (
+                personalMailMessages.map(message => (
                   <div key={message.id} className="lr-ceo-mail-row">
                     <span>Gmail</span>
                     <strong>{message.subject}</strong>
@@ -813,32 +783,10 @@ export default function CeoCommandDashboard() {
                     <p>{message.snippet}</p>
                   </div>
                 ))
-              ) : null}
-              {supportTickets.length ? (
-                supportTickets.map(ticket => (
-                  <div key={ticket.id} className="lr-ceo-ticket-row">
-                    <div>
-                      <span>{ticket.status}</span>
-                      <strong>{ticket.title}</strong>
-                      <small>
-                        {ticket.reporter?.name || ticket.reporter?.email || "Unknown reporter"}
-                        {ticket.context?.leadName ? ` • ${ticket.context.leadName}` : ""}
-                      </small>
-                    </div>
-                    {ticket.status !== "closed" ? (
-                      <button
-                        type="button"
-                        className="lr-ceo-secondary-btn"
-                        onClick={() => closeSupportTicket(ticket)}
-                        disabled={supportBusyId === ticket.id}
-                      >
-                        Mark complete
-                      </button>
-                    ) : null}
-                  </div>
-                ))
               ) : (
-                <p className="lr-ceo-note">No support tickets loaded yet.</p>
+                <p className="lr-ceo-note">
+                  {personalMailStatus?.connected ? "No personal inbox messages loaded yet." : "Connect Joe's Gmail to show personal inbox messages here."}
+                </p>
               )}
             </div>
           </article>
