@@ -29,6 +29,8 @@ type SalesProspect = {
   zoomLink?: string;
   docusignPacketId?: string;
   onboardingEmailThread?: string;
+  emailSenderType?: "personal" | "onboarding" | "support";
+  emailSenderAddress?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -61,6 +63,8 @@ type ProspectForm = {
   zoomLink: string;
   docusignPacketId: string;
   onboardingEmailThread: string;
+  emailSenderType: "personal" | "onboarding" | "support";
+  emailSenderAddress: string;
   notes: string;
 };
 
@@ -80,6 +84,8 @@ const emptyForm: ProspectForm = {
   zoomLink: "",
   docusignPacketId: "",
   onboardingEmailThread: "",
+  emailSenderType: "personal",
+  emailSenderAddress: "joe.hartrich@leadrider.ai",
   notes: ""
 };
 
@@ -114,8 +120,39 @@ function toForm(prospect: SalesProspect): ProspectForm {
     zoomLink: prospect.zoomLink || "",
     docusignPacketId: prospect.docusignPacketId || "",
     onboardingEmailThread: prospect.onboardingEmailThread || "",
+    emailSenderType: prospect.emailSenderType || "personal",
+    emailSenderAddress: prospect.emailSenderAddress || emailAddressForSender(prospect.emailSenderType || "personal"),
     notes: prospect.notes || ""
   };
+}
+
+const emailSenderOptions: Array<{ value: ProspectForm["emailSenderType"]; label: string; email: string; managedBy: string }> = [
+  {
+    value: "personal",
+    label: "Personal sales",
+    email: "joe.hartrich@leadrider.ai",
+    managedBy: "Claude drafts only; Joe approves before send"
+  },
+  {
+    value: "onboarding",
+    label: "Onboarding",
+    email: "onboarding@leadrider.ai",
+    managedBy: "Claude drafts onboarding emails for approval"
+  },
+  {
+    value: "support",
+    label: "Support",
+    email: "support@leadrider.ai",
+    managedBy: "Claude drafts support replies for approval"
+  }
+];
+
+function emailAddressForSender(sender: ProspectForm["emailSenderType"] | undefined) {
+  return emailSenderOptions.find(option => option.value === sender)?.email || "joe.hartrich@leadrider.ai";
+}
+
+function labelForSender(sender: ProspectForm["emailSenderType"] | undefined) {
+  return emailSenderOptions.find(option => option.value === sender)?.label || "Personal sales";
 }
 
 function formatDate(value?: string) {
@@ -297,9 +334,11 @@ export default function SalesFunnelPage() {
     }
   }
 
-  async function createAgentTask(action: "zoom" | "onboarding" | "docusign" | "texting" | "research") {
+  async function createAgentTask(action: "sales_email" | "zoom" | "onboarding" | "docusign" | "texting" | "research") {
     if (!selected) return;
     setTaskBusy(true);
+    const senderType = form.emailSenderType || selected.emailSenderType || "personal";
+    const senderAddress = form.emailSenderAddress || selected.emailSenderAddress || emailAddressForSender(senderType);
     const facts = [
       `Dealer prospect: ${selected.dealerName}`,
       `Contact: ${selected.contactName || "not provided"}`,
@@ -316,9 +355,23 @@ export default function SalesFunnelPage() {
       `Zoom link: ${selected.zoomLink || "not set"}`,
       `DocuSign packet: ${selected.docusignPacketId || "not set"}`,
       `Onboarding email thread: ${selected.onboardingEmailThread || "not set"}`,
+      `Selected email sender lane: ${labelForSender(senderType)} (${senderAddress})`,
       `Notes: ${selected.notes || "none"}`
     ].join("\n");
     const config = {
+      sales_email: {
+        provider: "claude",
+        kind: "email",
+        title: `Draft sales email for ${selected.dealerName}`,
+        instructions: [
+          `Draft a prospect email from ${senderAddress}.`,
+          "This is approval-gated draft work only. Do not send the email, delete mail, mark messages read, or change external systems.",
+          "If the sender is a personal sales inbox, write in Joe's voice and make the next step clear.",
+          "Return subject, body, and a short note explaining why this email is appropriate.",
+          "",
+          facts
+        ].join("\n")
+      },
       zoom: {
         provider: "codex",
         kind: "prospect_research",
@@ -385,7 +438,7 @@ export default function SalesFunnelPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...config,
-          priority: action === "onboarding" || action === "docusign" ? "high" : "normal",
+          priority: action === "sales_email" || action === "onboarding" || action === "docusign" ? "high" : "normal",
           clientName: selected.dealerName
         })
       });
@@ -405,6 +458,10 @@ export default function SalesFunnelPage() {
 
   function updateForm(field: keyof ProspectForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
+  }
+
+  function updateEmailSender(value: ProspectForm["emailSenderType"]) {
+    setForm(current => ({ ...current, emailSenderType: value, emailSenderAddress: emailAddressForSender(value) }));
   }
 
   return (
@@ -521,6 +578,14 @@ export default function SalesFunnelPage() {
                 </select>
               </label>
               <label>Expected monthly<input value={newForm.expectedMonthly} onChange={e => updateNew("expectedMonthly", e.target.value)} placeholder="$999/month" /></label>
+              <label>Email sender
+                <select
+                  value={newForm.emailSenderType}
+                  onChange={e => setNewForm(current => ({ ...current, emailSenderType: e.target.value as ProspectForm["emailSenderType"], emailSenderAddress: emailAddressForSender(e.target.value as ProspectForm["emailSenderType"]) }))}
+                >
+                  {emailSenderOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </label>
               <label>Next step<textarea value={newForm.nextStep} onChange={e => updateNew("nextStep", e.target.value)} placeholder="Next step" /></label>
             </div>
           </article>
@@ -593,8 +658,23 @@ export default function SalesFunnelPage() {
                   <label>Zoom/Fathom link<input value={form.zoomLink} onChange={e => updateForm("zoomLink", e.target.value)} placeholder="Meeting link" /></label>
                   <label>DocuSign packet<input value={form.docusignPacketId} onChange={e => updateForm("docusignPacketId", e.target.value)} placeholder="Packet id or URL" /></label>
                   <label>Onboarding email thread<input value={form.onboardingEmailThread} onChange={e => updateForm("onboardingEmailThread", e.target.value)} placeholder="onboarding@leadrider.ai thread" /></label>
+                  <label>Email sender
+                    <select value={form.emailSenderType} onChange={e => updateEmailSender(e.target.value as ProspectForm["emailSenderType"])}>
+                      {emailSenderOptions.map(option => <option key={option.value} value={option.value}>{option.label} - {option.email}</option>)}
+                    </select>
+                  </label>
+                  <label>Sender address<input value={form.emailSenderAddress} onChange={e => updateForm("emailSenderAddress", e.target.value)} /></label>
                   <label>Next step<textarea value={form.nextStep} onChange={e => updateForm("nextStep", e.target.value)} /></label>
                   <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
+                </div>
+                <div className="lr-ceo-email-lanes">
+                  {emailSenderOptions.map(option => (
+                    <article className={form.emailSenderType === option.value ? "is-selected" : ""} key={option.value}>
+                      <strong>{option.label}</strong>
+                      <span>{option.email}</span>
+                      <small>{option.managedBy}</small>
+                    </article>
+                  ))}
                 </div>
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
@@ -618,6 +698,13 @@ export default function SalesFunnelPage() {
               <span className="lr-ceo-status-attention">Approval gated</span>
             </div>
             <div className="lr-ceo-agent-list lr-ceo-sales-actions">
+              <div className="lr-ceo-agent-row">
+                <div>
+                  <strong>Personal sales email</strong>
+                  <p>Ask Claude to draft from {form.emailSenderAddress || "joe.hartrich@leadrider.ai"} for approval before sending.</p>
+                </div>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("sales_email")} disabled={!selected || taskBusy}>Draft sales email</button>
+              </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Zoom and Fathom</strong>

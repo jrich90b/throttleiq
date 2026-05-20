@@ -29,6 +29,8 @@ export type SalesProspect = {
   zoomLink?: string;
   docusignPacketId?: string;
   onboardingEmailThread?: string;
+  emailSenderType?: "personal" | "onboarding" | "support";
+  emailSenderAddress?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -72,6 +74,8 @@ export async function addSalesProspect(input: Partial<SalesProspect> & { dealerN
     zoomLink: clean(input.zoomLink, 500),
     docusignPacketId: clean(input.docusignPacketId, 160),
     onboardingEmailThread: clean(input.onboardingEmailThread, 240),
+    emailSenderType: normalizeEmailSenderType(input.emailSenderType),
+    emailSenderAddress: clean(input.emailSenderAddress, 180),
     notes: clean(input.notes, 3000),
     createdAt: now,
     updatedAt: now
@@ -106,9 +110,14 @@ export async function updateSalesProspect(id: string, patch: Partial<SalesProspe
     "zoomLink",
     "docusignPacketId",
     "onboardingEmailThread",
+    "emailSenderAddress",
     "notes"
   ] as const) {
     if (typeof patch[key] === "string") (prospect as any)[key] = clean(patch[key], key === "notes" ? 3000 : 500);
+  }
+  if (patch.emailSenderType) {
+    const emailSenderType = normalizeEmailSenderType(patch.emailSenderType);
+    if (emailSenderType) prospect.emailSenderType = emailSenderType;
   }
   prospect.updatedAt = new Date().toISOString();
   scheduleSave();
@@ -129,6 +138,12 @@ const stages: SalesProspectStage[] = [
 function normalizeStage(value: unknown): SalesProspectStage | undefined {
   const stage = String(value ?? "").trim().toLowerCase();
   return stages.includes(stage as SalesProspectStage) ? (stage as SalesProspectStage) : undefined;
+}
+
+function normalizeEmailSenderType(value: unknown): SalesProspect["emailSenderType"] | undefined {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "personal" || normalized === "onboarding" || normalized === "support") return normalized;
+  return undefined;
 }
 
 function clean(value: unknown, max: number): string | undefined {

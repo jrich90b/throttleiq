@@ -29343,6 +29343,8 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
     zoomLink: req.body?.zoomLink,
     docusignPacketId: req.body?.docusignPacketId,
     onboardingEmailThread: req.body?.onboardingEmailThread,
+    emailSenderType: req.body?.emailSenderType,
+    emailSenderAddress: req.body?.emailSenderAddress,
     notes: req.body?.notes
   });
   return res.json({ ok: true, prospect });
@@ -29372,6 +29374,8 @@ app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (re
     zoomLink: typeof req.body?.zoomLink === "string" ? req.body.zoomLink : undefined,
     docusignPacketId: typeof req.body?.docusignPacketId === "string" ? req.body.docusignPacketId : undefined,
     onboardingEmailThread: typeof req.body?.onboardingEmailThread === "string" ? req.body.onboardingEmailThread : undefined,
+    emailSenderType: typeof req.body?.emailSenderType === "string" ? req.body.emailSenderType : undefined,
+    emailSenderAddress: typeof req.body?.emailSenderAddress === "string" ? req.body.emailSenderAddress : undefined,
     notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
   });
   return res.json({ ok: true, prospect });

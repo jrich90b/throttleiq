@@ -780,6 +780,51 @@ a {
   grid-column: 1 / -1;
 }
 
+.lr-ceo-email-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.72rem;
+  margin: 0.9rem 0;
+}
+
+.lr-ceo-email-lanes article {
+  min-width: 0;
+  padding: 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-email-lanes article.is-selected {
+  border-color: rgba(251, 127, 4, 0.78);
+  background: linear-gradient(180deg, rgba(251, 127, 4, 0.18), rgba(251, 127, 4, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lr-ceo-email-lanes strong,
+.lr-ceo-email-lanes span,
+.lr-ceo-email-lanes small {
+  display: block;
+}
+
+.lr-ceo-email-lanes strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-email-lanes span {
+  margin-top: 0.24rem;
+  overflow-wrap: anywhere;
+  color: #fbaf64;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.lr-ceo-email-lanes small {
+  margin-top: 0.35rem;
+  color: #aebbd2;
+  line-height: 1.35;
+}
+
 .lr-ceo-connector-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1472,6 +1517,7 @@ a {
   .lr-ceo-facts,
   .lr-ceo-funnel-board,
   .lr-ceo-sales-form,
+  .lr-ceo-email-lanes,
   .lr-ceo-agent-composer,
   .lr-ceo-integration-strip,
   .lr-ceo-user-row,
