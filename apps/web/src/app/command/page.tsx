@@ -82,24 +82,6 @@ type AutomationRun = {
   logPath?: string;
   changedFiles?: string[];
 };
-type SupportMailStatus = {
-  connected: boolean;
-  email?: string | null;
-  reason?: string;
-  error?: string;
-  messagesTotal?: number | null;
-  threadsTotal?: number | null;
-};
-type SupportMailMessage = {
-  id: string;
-  threadId?: string;
-  from: string;
-  subject: string;
-  date: string;
-  snippet: string;
-  labelIds?: string[];
-};
-
 const clients: DealerClient[] = [
   {
     name: "American Harley-Davidson",
@@ -305,20 +287,6 @@ function taskStatusLabel(status: AgentTask["status"]) {
   return status.replace(/_/g, " ");
 }
 
-function personalGmailMessageId(task: AgentTask) {
-  if (!task.instructions.includes("[personal-mail-auto:") && !/^Review personal email:/i.test(task.title)) return "";
-  return task.instructions.match(/Gmail message ID:\s*([^\s]+)/i)?.[1] ?? "";
-}
-
-function personalMailRecommendation(task: AgentTask) {
-  const text = `${task.output?.summary ?? ""}\n${task.instructions}`.toLowerCase();
-  if (text.includes("trash_candidate") || text.includes("spam_or_promo")) return "Trash candidate";
-  if (text.includes("draft_reply")) return "Draft reply";
-  if (text.includes("needs_approval") || text.includes("vendor_admin")) return "Needs approval";
-  if (text.includes("keep_only")) return "Keep only";
-  return "Review";
-}
-
 function formatRunTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -343,8 +311,6 @@ export default function CeoCommandDashboard() {
   const [agentInstructions, setAgentInstructions] = useState(agentTaskKinds[1].template);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
-  const [personalMailStatus, setPersonalMailStatus] = useState<SupportMailStatus | null>(null);
-  const [personalMailMessages, setPersonalMailMessages] = useState<SupportMailMessage[]>([]);
   const [agentBusy, setAgentBusy] = useState(false);
   const [automationBusyId, setAutomationBusyId] = useState<string | null>(null);
 
@@ -356,6 +322,17 @@ export default function CeoCommandDashboard() {
   const pipelineValue = useMemo(() => clients.reduce((sum, row) => sum + row.monthlyFee, 0), []);
   const blockedCount = clients.filter(row => row.health === "blocked").length;
   const connectedCount = connectors.filter(row => row.status === "connected").length;
+  const visibleAgentTasks = useMemo(
+    () =>
+      agentTasks.filter(
+        task =>
+          !task.instructions.includes("[personal-mail-auto:") &&
+          !task.instructions.includes("[personal-mail-auto-trash:") &&
+          !/^Review personal email:/i.test(task.title) &&
+          !/^Auto-trashed personal email:/i.test(task.title)
+      ),
+    [agentTasks]
+  );
 
   useEffect(() => {
     let active = true;
@@ -373,20 +350,6 @@ export default function CeoCommandDashboard() {
       .then(data => {
         if (!active) return;
         if (data?.ok && Array.isArray(data.runs)) setAutomationRuns(data.runs);
-      })
-      .catch(() => null);
-    fetch("/api/google/personal-mail/status", { cache: "no-store" })
-      .then(resp => resp.json())
-      .then(data => {
-        if (!active) return;
-        if (data?.ok) setPersonalMailStatus(data);
-      })
-      .catch(() => null);
-    fetch("/api/personal-mail/messages?limit=5", { cache: "no-store" })
-      .then(resp => resp.json())
-      .then(data => {
-        if (!active) return;
-        if (data?.ok && Array.isArray(data.messages)) setPersonalMailMessages(data.messages);
       })
       .catch(() => null);
     return () => {
@@ -456,59 +419,6 @@ export default function CeoCommandDashboard() {
     }
   }
 
-  async function updateAgentTask(task: AgentTask, status: AgentTask["status"], summary: string) {
-    setAgentBusy(true);
-    try {
-      const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, summary })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be updated.");
-      setAgentTasks(current => current.map(row => (row.id === task.id ? data.task : row)));
-      setActionNotice(summary);
-    } catch (err) {
-      setActionNotice(err instanceof Error ? err.message : "Agent task could not be updated.");
-    } finally {
-      setAgentBusy(false);
-    }
-  }
-
-  async function trashPersonalMailFromTask(task: AgentTask) {
-    const messageId = personalGmailMessageId(task);
-    if (!messageId) {
-      setActionNotice("This task is missing a Gmail message id, so it cannot be trashed from Command.");
-      return;
-    }
-    setAgentBusy(true);
-    try {
-      const resp = await fetch(`/api/personal-mail/messages/${encodeURIComponent(messageId)}/trash`, {
-        method: "POST"
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Personal email could not be moved to trash.");
-      const summary = `Moved personal Gmail message to trash: ${task.title.replace(/^Review personal email:\s*/i, "")}`;
-      const taskResp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "completed", summary })
-      });
-      const taskData = await taskResp.json();
-      if (taskResp.ok && taskData?.ok) {
-        setAgentTasks(current => current.map(row => (row.id === task.id ? taskData.task : row)));
-      } else {
-        setAgentTasks(current => current.map(row => (row.id === task.id ? { ...row, status: "completed" } : row)));
-      }
-      setPersonalMailMessages(current => current.filter(message => message.id !== messageId));
-      setActionNotice(summary);
-    } catch (err) {
-      setActionNotice(err instanceof Error ? err.message : "Personal email could not be moved to trash.");
-    } finally {
-      setAgentBusy(false);
-    }
-  }
-
   return (
     <main className="lr-ceo-shell">
       <aside className="lr-ceo-sidebar">
@@ -523,6 +433,7 @@ export default function CeoCommandDashboard() {
           <a href="/command" className="is-active">Command Home</a>
           <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support">Support Agent</a>
+          <a href="/command/personal-email">Personal Email</a>
           <a href="/command/clients/new">Dealer Setup</a>
           <a href="/command/users">Users</a>
           <a href="/command">Agreements</a>
@@ -777,92 +688,6 @@ export default function CeoCommandDashboard() {
           </article>
         </section>
 
-        <section className="lr-ceo-grid">
-          <article className="lr-ceo-panel">
-            <div className="lr-ceo-panel-title">
-              <div>
-                <p className="lr-ceo-kicker">Personal inbox</p>
-                <h3>Joe's email</h3>
-              </div>
-              <span className={personalMailStatus?.connected ? "lr-ceo-status-ready" : "lr-ceo-status-attention"}>
-                {personalMailStatus?.connected ? "Gmail connected" : "Gmail needed"}
-              </span>
-            </div>
-            <div className="lr-ceo-mailbox-status">
-              <div>
-                <strong>{personalMailStatus?.connected ? personalMailStatus.email || "Personal Gmail" : "Connect joe.hartrich@leadrider.ai"}</strong>
-                <p>
-                  {personalMailStatus?.connected
-                    ? "Claude can monitor important personal email and prepare draft replies for approval."
-                    : "Connect Joe's LeadRider inbox so Command can show important email and create Claude draft tasks."}
-                </p>
-              </div>
-              {personalMailStatus?.connected ? (
-                <span className="lr-ceo-mailbox-connected">Connected</span>
-              ) : (
-                <a href="/integrations/google/start?kind=personal_mail">Connect Gmail</a>
-              )}
-            </div>
-            <div className="lr-ceo-action-row">
-              <button
-                type="button"
-                onClick={() =>
-                  createAgentTask({
-                    provider: "claude",
-                    kind: "email",
-                    priority: "high",
-                    title: "Review Joe's personal inbox",
-                    instructions:
-                      "Review Joe's personal LeadRider inbox messages shown in Command. Summarize what matters, identify obvious spam or promotions separately, and draft any needed replies for approval. Do not send, delete, archive, mark read, unsubscribe, or change external systems."
-                  })
-                }
-                disabled={agentBusy || !personalMailStatus?.connected}
-              >
-                Ask Claude
-              </button>
-            </div>
-            <div className="lr-ceo-support-flow">
-              <div>
-                <strong>Important first</strong>
-                <p>Dealer, billing, legal, platform, and sales messages stay visible for review.</p>
-              </div>
-              <div>
-                <strong>Drafts only</strong>
-                <p>Claude can prepare replies and new emails, but sending stays approval-gated.</p>
-              </div>
-              <div>
-                <strong>Spam reviewed</strong>
-                <p>Low-value mail can be classified for review before any delete/archive automation is enabled.</p>
-              </div>
-            </div>
-          </article>
-
-          <article className="lr-ceo-panel">
-            <div className="lr-ceo-panel-title">
-              <div>
-                <p className="lr-ceo-kicker">Recent mail</p>
-                <h3>Personal inbox</h3>
-              </div>
-            </div>
-            <div className="lr-ceo-ticket-list">
-              {personalMailMessages.length ? (
-                personalMailMessages.map(message => (
-                  <div key={message.id} className="lr-ceo-mail-row">
-                    <span>Gmail</span>
-                    <strong>{message.subject}</strong>
-                    <small>{message.from}</small>
-                    <p>{message.snippet}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="lr-ceo-note">
-                  {personalMailStatus?.connected ? "No personal inbox messages loaded yet." : "Connect Joe's Gmail to show personal inbox messages here."}
-                </p>
-              )}
-            </div>
-          </article>
-        </section>
-
         <section className="lr-ceo-panel">
           <div className="lr-ceo-panel-title">
             <div>
@@ -995,8 +820,8 @@ export default function CeoCommandDashboard() {
           </label>
           <div className="lr-ceo-task-list">
             <strong>Recent agent tasks</strong>
-            {agentTasks.length ? (
-              agentTasks.map(task => (
+            {visibleAgentTasks.length ? (
+              visibleAgentTasks.map(task => (
                 <div key={task.id} className="lr-ceo-task-row">
                   <span>{task.provider}</span>
                   <p>
@@ -1005,26 +830,8 @@ export default function CeoCommandDashboard() {
                       {task.clientName || "No client"} • {taskStatusLabel(task.status)}
                       {task.approval?.required ? ` • approval needed: ${task.approval.reason}` : ""}
                     </small>
-                    {personalGmailMessageId(task) ? (
-                      <small>Recommendation: {personalMailRecommendation(task)}</small>
-                    ) : null}
                     {task.output?.summary ? <small>{task.output.summary}</small> : null}
                   </p>
-                  {personalGmailMessageId(task) && task.status === "needs_approval" ? (
-                    <div className="lr-ceo-run-actions">
-                      <button type="button" onClick={() => trashPersonalMailFromTask(task)} disabled={agentBusy}>
-                        Trash email
-                      </button>
-                      <button
-                        type="button"
-                        className="lr-ceo-secondary-btn"
-                        onClick={() => updateAgentTask(task, "completed", "Reviewed personal email and kept it in the inbox.")}
-                        disabled={agentBusy}
-                      >
-                        Keep
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
               ))
             ) : (
