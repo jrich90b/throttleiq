@@ -646,6 +646,26 @@ function ensureDealerRideOutcomeToken(conv: any): string {
   return token;
 }
 
+function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token: string; outcomeLink?: string | null }) {
+  addTodo(
+    conv,
+    "other",
+    [
+      `Dealer ride outcome needed for ${args.customerName}.`,
+      "DLA confirms they rode a demo bike.",
+      "Record what happened so the correct follow-up cadence can start.",
+      args.outcomeLink ? `Update form: ${args.outcomeLink}` : null
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    `dealer_ride_outcome:${args.token}`,
+    undefined,
+    { dueAt: new Date().toISOString() },
+    "appointment",
+    { allowSoldLead: true }
+  );
+}
+
 function isDealerLeadAppAdfBody(body: string | null | undefined): boolean {
   return isDealerLeadAppPostDemoRideAdfText(body);
 }
@@ -4576,6 +4596,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         "customer";
       const token = ensureDealerRideOutcomeToken(conv);
       const outcomeLink = buildStaffOutcomeLink(token);
+      addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
       conv.dealerRide.staffNotify.userId =
@@ -4648,6 +4669,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() || conv.leadKey || "customer";
     const token = ensureDealerRideOutcomeToken(conv);
     const outcomeLink = buildStaffOutcomeLink(token);
+    addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
     conv.dealerRide = conv.dealerRide ?? {};
     conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
     conv.dealerRide.staffNotify.userId =

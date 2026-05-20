@@ -11667,6 +11667,26 @@ function ensureDealerRideOutcomeToken(conv: any): string {
   return token;
 }
 
+function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token: string; outcomeLink?: string | null }) {
+  addTodo(
+    conv,
+    "other",
+    [
+      `Dealer ride outcome needed for ${args.customerName}.`,
+      "DLA confirms they rode a demo bike.",
+      "Record what happened so the correct follow-up cadence can start.",
+      args.outcomeLink ? `Update form: ${args.outcomeLink}` : null
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    `dealer_ride_outcome:${args.token}`,
+    undefined,
+    { dueAt: new Date().toISOString() },
+    "appointment",
+    { allowSoldLead: true }
+  );
+}
+
 function summarizeConversationForStaff(conv: any): string {
   const lastInbound = String(getLastInboundBody(conv) ?? "").trim();
   if (lastInbound) {
@@ -13396,9 +13416,26 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff", close: true });
     confirmation = "Saved LOST and closed the lead.";
   } else {
-    setFollowUpMode(conv, "manual_handoff", "dealer_ride_follow_up");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    const followUpPlan = await safeLlmParse("dealer_ride_outcome_follow_up_plan_parser", () =>
+      parseAppointmentOutcomeFollowUpPlanWithLLM({
+        note,
+        primaryStatus: "showed",
+        secondaryStatus: "needs_follow_up",
+        history: buildHistory(conv, 8),
+        lead: conv.lead
+      })
+    );
+    await activateAppointmentOutcomeFollowUp({
+      conv,
+      note,
+      primaryStatus: "showed",
+      secondaryStatus: "needs_follow_up",
+      plan: followUpPlan,
+      actor: {
+        id: String(staff.id ?? "").trim() || undefined,
+        name: String(staff.name ?? staff.firstName ?? staff.email ?? "").trim() || undefined
+      }
+    });
     confirmation = "Saved FOLLOW UP outcome.";
   }
 
@@ -26788,6 +26825,26 @@ app.post("/public/appointment/outcome", async (req, res) => {
     secondaryStatus: normalizedOutcome.secondaryStatus,
     source: "public_outcome_form"
   });
+  const appointmentFollowUpPlan =
+    normalizedOutcome.secondaryStatus === "needs_follow_up" && note
+      ? await safeLlmParse("public_appointment_outcome_follow_up_plan_parser", () =>
+          parseAppointmentOutcomeFollowUpPlanWithLLM({
+            note,
+            primaryStatus: normalizedOutcome.primaryStatus,
+            secondaryStatus: normalizedOutcome.secondaryStatus,
+            history: buildHistory(conv, 8),
+            lead: conv.lead
+          })
+        )
+      : null;
+  await activateAppointmentOutcomeFollowUp({
+    conv,
+    note,
+    primaryStatus: normalizedOutcome.primaryStatus,
+    secondaryStatus: normalizedOutcome.secondaryStatus,
+    plan: appointmentFollowUpPlan,
+    actor: { name: "public outcome form" }
+  });
   markOutcomeRelatedTodosDone(conv, {
     includeFinance: outcome === "financing_declined" || outcome === "financing_needs_info"
   });
@@ -37106,6 +37163,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         "customer";
       const token = ensureDealerRideOutcomeToken(conv);
       const outcomeLink = buildStaffOutcomeLink(token);
+      addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
       conv.dealerRide.staffNotify.userId =
