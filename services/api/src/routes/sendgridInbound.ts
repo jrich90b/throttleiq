@@ -451,6 +451,18 @@ function extractCallbackTimeHintFromText(text: string): string {
   return single ? single[0].trim() : "";
 }
 
+function usableCallbackTimeHint(value: string | null | undefined): string {
+  const source = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/[.。]+$/g, "")
+    .trim();
+  if (!source) return "";
+  if (/^(any|anytime|any time|open|flexible|no preference|no preferred time|n\/a|na|none)$/i.test(source)) {
+    return "";
+  }
+  return source;
+}
+
 function buildCallbackTodoSchedule(
   callbackTimeHint: string,
   timezone: string
@@ -4385,19 +4397,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ) ||
       /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b)\b/i.test(callbackInquiryText) ||
       /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)\b/i.test(callbackInquiryText));
+  const callbackTimeFromParserUsable = usableCallbackTimeHint(callbackTimeFromParser);
+  const preferredCallbackTime = usableCallbackTimeHint(lead.preferredTime);
   const callbackIntentFromExplicitLeadText =
     callbackIntentFromParser &&
     (callbackCueInInquiry ||
-      !!String(callbackTimeFromParser ?? "").trim() ||
-      !!String(lead.preferredTime ?? "").trim());
+      !!callbackTimeFromParserUsable ||
+      !!preferredCallbackTime);
   const callbackRequestedInLead =
     callbackIntentFromExplicitLeadText ||
     callbackRequestedByLeadHeuristic ||
-    !!String(lead.preferredTime ?? "").trim();
+    !!preferredCallbackTime;
   const callbackTimeHintFromText = extractCallbackTimeHintFromText(callbackInquiryText);
   const callbackTimeHint =
-    callbackTimeFromParser ||
-    String(lead.preferredTime ?? "").trim() ||
+    callbackTimeFromParserUsable ||
+    preferredCallbackTime ||
     callbackTimeHintFromText ||
     (inquiryDayPart ? `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}` : "");
   const callbackTz = callbackRequestedInLead
