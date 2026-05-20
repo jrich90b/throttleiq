@@ -17658,7 +17658,7 @@ export default function Home() {
                         onClick={openAppointmentOutcomeModal}
                       >
                         {selectedConv.appointment?.staffNotify?.outcome
-                          ? "Update outcome"
+                          ? "Outcome recorded"
                           : headerAppointment.isPast
                             ? "Outcome needed"
                             : "Add outcome"}
