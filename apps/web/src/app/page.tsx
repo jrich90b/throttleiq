@@ -12669,24 +12669,26 @@ export default function Home() {
                   : "No appointment outcome is saved yet. Add the outcome now before closing."}
               </div>
               <div className="mt-3 grid grid-cols-1 gap-2">
-                <label className="text-xs text-gray-600">
-                  Attendance
-                  <select
-                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
-                    value={appointmentClosePrimaryOutcome}
-                    onChange={e => {
-                      const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
-                      setAppointmentClosePrimaryOutcome(nextPrimary);
-                      const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
-                      const hasCurrent = options.some(opt => opt.value === appointmentCloseSecondaryOutcome);
-                      if (!hasCurrent) setAppointmentCloseSecondaryOutcome(options[0]?.value ?? "needs_follow_up");
-                    }}
-                  >
-                    <option value="showed">Showed</option>
-                    <option value="did_not_show">Did not show</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </label>
+                {isDealerRideOutcomeTodo(appointmentCloseTarget) ? null : (
+                  <label className="text-xs text-gray-600">
+                    Attendance
+                    <select
+                      className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                      value={appointmentClosePrimaryOutcome}
+                      onChange={e => {
+                        const nextPrimary = (e.target.value as "showed" | "did_not_show" | "cancelled") || "showed";
+                        setAppointmentClosePrimaryOutcome(nextPrimary);
+                        const options = APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[nextPrimary] ?? [];
+                        const hasCurrent = options.some(opt => opt.value === appointmentCloseSecondaryOutcome);
+                        if (!hasCurrent) setAppointmentCloseSecondaryOutcome(options[0]?.value ?? "needs_follow_up");
+                      }}
+                    >
+                      <option value="showed">Showed</option>
+                      <option value="did_not_show">Did not show</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </label>
+                )}
                 <label className="text-xs text-gray-600">
                   Disposition
                   <select
@@ -12694,7 +12696,9 @@ export default function Home() {
                     value={appointmentCloseSecondaryOutcome}
                     onChange={e => setAppointmentCloseSecondaryOutcome(e.target.value)}
                   >
-                    {(APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[appointmentClosePrimaryOutcome] ?? []).map(opt => (
+                    {(APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[
+                      isDealerRideOutcomeTodo(appointmentCloseTarget) ? "showed" : appointmentClosePrimaryOutcome
+                    ] ?? []).map(opt => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
@@ -12707,7 +12711,11 @@ export default function Home() {
                     className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[72px]"
                     value={appointmentCloseNote}
                     onChange={e => setAppointmentCloseNote(e.target.value)}
-                    placeholder="Add any context from the visit."
+                    placeholder={
+                      isDealerRideOutcomeTodo(appointmentCloseTarget)
+                        ? "Add any context from the demo ride."
+                        : "Add any context from the visit."
+                    }
                   />
                 </label>
                 <div className="flex flex-col gap-1">
@@ -12765,7 +12773,7 @@ export default function Home() {
                         "dismiss",
                         undefined,
                         appointmentCloseNote,
-                        appointmentClosePrimaryOutcome,
+                        isDealerRideOutcomeTodo(appointmentCloseTarget) ? "showed" : appointmentClosePrimaryOutcome,
                         appointmentCloseSecondaryOutcome
                       );
                       setAppointmentCloseOpen(false);
