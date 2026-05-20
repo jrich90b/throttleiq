@@ -16109,6 +16109,70 @@ function markOpenPostSalePickupScheduleTodosDone(conv: any): number {
   return count;
 }
 
+function isConcretePricingOrPaymentAnswerText(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  const normalized = raw.toLowerCase();
+  const hasMoney =
+    /\$\s*\d[\d,]*(?:\.\d{2})?/.test(raw) ||
+    /\b\d[\d,]*(?:\.\d{2})?\s*(?:dollars?|bucks?)\b/i.test(raw);
+  const hasPricingAnswer =
+    hasMoney &&
+    /\b(price|priced|pricing|sale price|listed|asking|sticker|total|out the door|otd|fees?|tax|serviced|floor|website|online)\b/i.test(
+      raw
+    );
+  const hasPaymentAnswer =
+    (hasMoney || /\b\d{1,3}\s*(?:months?|mos?)\b/i.test(raw)) &&
+    /\b(payment|payments|monthly|per month|a month|apr|rate|term|terms|down payment|money down|cash down|finance|financing|numbers?)\b/i.test(
+      raw
+    );
+  const hasExplicitQuote =
+    /\b(i (?:quoted|told|gave|sent)|we (?:quoted|told|gave|sent)|quote(?:d)?|gave (?:him|her|them|the customer) (?:a )?(?:price|quote|number|payment)|sent (?:him|her|them|the customer) (?:a )?(?:price|quote|number|payment))\b/i.test(
+      raw
+    ) &&
+    (hasMoney || /\b(price|quote|payment|numbers?)\b/i.test(raw));
+
+  if (hasPricingAnswer || hasPaymentAnswer || hasExplicitQuote) return true;
+
+  // Avoid treating a question as answered unless it contains an actual numeric quote.
+  if (/\?/.test(raw) && !hasMoney) return false;
+  return false;
+}
+
+function isPricingOrPaymentTodoSummary(summary: string | null | undefined): boolean {
+  const text = String(summary ?? "").trim();
+  if (!text) return false;
+  return /\b(price|pricing|priced|payment|payments|monthly|quote|numbers?|out the door|otd|total|apr|term|down payment|money down|cash down|confirm exact price)\b/i.test(
+    text
+  );
+}
+
+function markOpenPricingAnswerTodosDone(
+  conv: any,
+  answerText: string | null | undefined,
+  opts?: { channel?: string | null; source?: string | null }
+): number {
+  const convId = String(conv?.id ?? "").trim();
+  if (!convId || !isConcretePricingOrPaymentAnswerText(answerText)) return 0;
+  let count = 0;
+  for (const todo of listOpenTodos()) {
+    if (todo.convId !== convId || todo.status !== "open") continue;
+    const reason = String(todo.reason ?? "").trim().toLowerCase();
+    if (reason !== "pricing" && reason !== "payments" && !isPricingOrPaymentTodoSummary(todo.summary)) continue;
+    if (markTodoDone(convId, todo.id)) count += 1;
+  }
+  if (count > 0) {
+    recordRouteOutcome("manual", "pricing_payment_todo_auto_closed", {
+      convId,
+      leadKey: conv?.leadKey ?? null,
+      count,
+      channel: opts?.channel ?? null,
+      source: opts?.source ?? null
+    });
+  }
+  return count;
+}
+
 function buildPostSalePickupArrivalAck(text: string | null | undefined): string {
   const arrival = formatPurchaseDeliveryArrivalWindow(text);
   const leavingNotice = /\b(let you know|let u know|text you|call you|more exact|when i leave|once i leave)\b/i.test(
@@ -35162,6 +35226,11 @@ app.post("/conversations/:id/send", async (req, res) => {
     const text = String(outboundBody ?? "").trim();
     if (!text) return;
 
+    markOpenPricingAnswerTodosDone(conv, text, {
+      channel: opts?.channel ?? "manual",
+      source: "manual_outbound"
+    });
+
     const lower = text.toLowerCase();
     const explicitWatchVerb =
       /\b(keep (?:an|any) eye out|watch for|let you know (?:if|when)|text you (?:if|when|as soon as)|notify you (?:if|when))\b/i.test(
@@ -49474,6 +49543,12 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           "voice_summary",
           callScopedMessageId
         );
+        if (!isVoicemail) {
+          markOpenPricingAnswerTodosDone(conv, `${summaryText}\n${transcriptText}`, {
+            channel: "call",
+            source: "voice_summary"
+          });
+        }
         if (isVoicemail) {
           if (inboundCall) {
             const existing = listOpenTodos().some(
