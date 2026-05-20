@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { apiFetch } from "../../../../lib/apiFetch";
 
 export async function GET() {
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
-  const host = new Headers().get("host");
   const store = await cookies();
   const token = store.get("lr_session")?.value;
   const r = await apiFetch(`${base}/auth/me`, {
@@ -16,9 +15,8 @@ export async function GET() {
   const text = await r.text();
   try {
     const data = JSON.parse(text);
-    const requestHeaders = await import("next/headers");
-    const headerStore = await requestHeaders.headers();
-    const currentHost = headerStore.get("host")?.split(":")[0]?.toLowerCase() ?? host ?? "";
+    const headerStore = await headers();
+    const currentHost = headerStore.get("host")?.split(":")[0]?.toLowerCase() ?? "";
     const isLeadRiderHost = currentHost === "leadrider.ai" || currentHost === "www.leadrider.ai";
     const email = String(data?.user?.email ?? "").trim().toLowerCase();
     if (r.ok && data?.ok && email) {
