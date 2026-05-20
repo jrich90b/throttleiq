@@ -16064,6 +16064,48 @@ function isPostSalePickupArrivalWindowText(text: string | null | undefined): boo
   return hasTimeRange && hasArrivalWindow && hasPickupContext;
 }
 
+function hasRecentPickupCoordinationContext(conv: any): boolean {
+  const recent = (Array.isArray(conv?.messages) ? conv.messages : [])
+    .slice(-12)
+    .map((m: any) => String(m?.body ?? ""))
+    .join("\n");
+  return /\b(pick it up|pick up|pickup|come in and pick|bracket|seat|saddleman|shift lever|solves the issue|what day\/time works|what day and time works)\b/i.test(
+    recent
+  );
+}
+
+function isPostSalePickupCoordinationText(conv: any, text: string | null | undefined): boolean {
+  if (!isSoldOrPostSaleConversation(conv)) return false;
+  if (!hasRecentPickupCoordinationContext(conv)) return false;
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    isPostSalePickupArrivalWindowText(t) ||
+    /\b(let me find a ride|give you a time frame|let you know (?:a )?time|let u know (?:a )?time|when i leave|more exact|heading over|headed over|out there|pick(?:ing)? up|pickup)\b/i.test(
+      t
+    ) ||
+    (/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t) &&
+      /\b(ride|time frame|timeframe|pick(?:ing)? up|pickup|out there|come in|stop by)\b/i.test(t))
+  );
+}
+
+function markOpenPostSalePickupScheduleTodosDone(conv: any): number {
+  const convId = String(conv?.id ?? "").trim();
+  if (!convId) return 0;
+  let count = 0;
+  for (const todo of listOpenTodos()) {
+    if (todo.convId !== convId || todo.status !== "open") continue;
+    const summary = String(todo.summary ?? "");
+    if (
+      /\bAppointment requested\. Customer shared a day but not a time yet\b/i.test(summary) ||
+      /\bAppointment requested\. Requested time:/i.test(summary)
+    ) {
+      if (markTodoDone(convId, todo.id)) count += 1;
+    }
+  }
+  return count;
+}
+
 function buildPostSalePickupArrivalAck(text: string | null | undefined): string {
   const arrival = formatPurchaseDeliveryArrivalWindow(text);
   const leavingNotice = /\b(let you know|let u know|text you|call you|more exact|when i leave|once i leave)\b/i.test(
@@ -16242,14 +16284,18 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
     parsed: args.parsed
   });
   if (args.parsed.intent === "delivery_timing") {
-    addTodo(
-      args.conv,
-      "note",
-      `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(
-        args.parsed.timingText || args.text || ""
-      )}.`,
-      args.providerMessageId ?? undefined
-    );
+    if (isPostSalePickupCoordinationText(args.conv, args.text)) {
+      markOpenPostSalePickupScheduleTodosDone(args.conv);
+    } else {
+      addTodo(
+        args.conv,
+        "note",
+        `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(
+          args.parsed.timingText || args.text || ""
+        )}.`,
+        args.providerMessageId ?? undefined
+      );
+    }
   }
   if (args.parsed.intent === "post_sale_item_pickup") {
     addTodo(
@@ -40040,6 +40086,26 @@ if (authToken && signature) {
         (humanBookingParse.intent === "schedule" ||
           humanBookingParse.intent === "reschedule" ||
           humanBookingParse.intent === "availability");
+      if (humanBookingAccepted && isPostSalePickupCoordinationText(conv, humanModeText)) {
+        markOpenPostSalePickupScheduleTodosDone(conv);
+        setDialogState(conv, "purchase_delivery");
+        recordRouteOutcome("live", "post_sale_pickup_schedule_todo_suppressed", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          intent: humanBookingParse.intent,
+          confidence: bookingConfidence
+        });
+        const pickupDraft = isPostSalePickupArrivalWindowText(humanModeText)
+          ? buildPostSalePickupArrivalAck(humanModeText)
+          : "";
+        if (pickupDraft) {
+          appendOutbound(conv, event.to, event.from, pickupDraft, "draft_ai");
+        }
+        saveConversation(conv);
+        await flushConversationStore();
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
       if (humanBookingAccepted) {
         const cfg = await getSchedulerConfigHot();
         const timezone = cfg.timezone || "America/New_York";
