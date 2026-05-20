@@ -41,7 +41,8 @@ const STATE_MAX_AGE_MS = 15 * 60 * 1000;
 function zoomConfig() {
   const clientId = String(process.env.ZOOM_CLIENT_ID ?? "").trim();
   const clientSecret = String(process.env.ZOOM_CLIENT_SECRET ?? "").trim();
-  const redirectUri = String(process.env.ZOOM_REDIRECT_URI ?? "").trim();
+  const leadriderApiBase = String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").trim().replace(/\/$/, "");
+  const redirectUri = String(process.env.ZOOM_REDIRECT_URI ?? `${leadriderApiBase}/integrations/zoom/callback`).trim();
   const oauthBase = String(process.env.ZOOM_OAUTH_BASE ?? "https://zoom.us").trim().replace(/\/$/, "");
   const apiBase = String(process.env.ZOOM_API_BASE ?? "https://api.zoom.us/v2").trim().replace(/\/$/, "");
   const scopes = String(process.env.ZOOM_SCOPES ?? "").trim();

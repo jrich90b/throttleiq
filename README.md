@@ -13,6 +13,16 @@ To support both local dev and the Lightsail instance:
 
 This allows one OAuth client to work in both environments.
 
+## LeadRider Command OAuth
+
+LeadRider-owned integrations should use the parent SaaS API domain, not a client API domain.
+
+- Zoom callback: `https://api.leadrider.ai/integrations/zoom/callback`
+- Google callback: `https://api.leadrider.ai/integrations/google/callback`
+- DocuSign callback: `https://api.leadrider.ai/integrations/docusign/callback`
+
+Client-owned integrations can still use client API domains when the provider account is specific to that dealer.
+
 ## Lead Source Catalogs (HDMC + CRM Overlays)
 Lead source routing supports a base HDMC catalog plus optional CRM-specific overlays.
 

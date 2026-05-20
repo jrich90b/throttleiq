@@ -17,9 +17,11 @@ Email DNS currently includes Google MX, SPF, DKIM, and DMARC records.
 - API: current Node/Express service in `services/api`
 - Web app: Next.js app in `apps/web`
 - Web hosting: Vercel project `leadrider-web`
+- LeadRider Command domain: `https://www.leadrider.ai/command`
+- LeadRider Command API domain: `https://api.leadrider.ai`
 - First client web domain: `https://americanharley.leadrider.ai`
 - First client API domain: `https://api.americanharley.leadrider.ai`
-- DNS: `americanharley.leadrider.ai` points to Vercel; `api.americanharley.leadrider.ai` points to the Lightsail API server
+- DNS: `americanharley.leadrider.ai` points to Vercel; `api.americanharley.leadrider.ai` and `api.leadrider.ai` point to the Lightsail API server
 - Runtime data: `DATA_DIR`
 
 ## Observability and Ops
@@ -34,6 +36,7 @@ Email DNS currently includes Google MX, SPF, DKIM, and DMARC records.
 - Messaging: Twilio
 - Email delivery: SendGrid
 - Calendar: Google Calendar authorized through `integrations@leadrider.ai`
+- LeadRider Command integrations: use LeadRider-owned callbacks such as `https://api.leadrider.ai/integrations/zoom/callback`
 - Campaign image generation: Google Vertex/Gemini image model, managed through `integrations@leadrider.ai`; runtime uses the `vertex-search-runner` service account
 - Meta: Facebook/Instagram app integration for Campaign Studio
 - Inventory and CRM inputs: ADF, Room58, Traffic Log Pro
