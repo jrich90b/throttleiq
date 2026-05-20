@@ -1909,6 +1909,7 @@ export type AppointmentOutcomeFollowUpPlanParse = {
   targetVehicleCondition?: "new" | "used" | "any" | "unknown" | null;
   originalVehicleModel?: string | null;
   followUpWindowText?: string | null;
+  followUpDateText?: string | null;
   messageAngle:
     | "compare_alternative"
     | "confidence_reassurance"
@@ -2810,6 +2811,7 @@ const APPOINTMENT_OUTCOME_FOLLOW_UP_PLAN_JSON_SCHEMA: { [key: string]: unknown }
     "target_vehicle_condition",
     "original_vehicle_model",
     "follow_up_window_text",
+    "follow_up_date_text",
     "message_angle",
     "urgency",
     "draft_sms",
@@ -2866,6 +2868,7 @@ const APPOINTMENT_OUTCOME_FOLLOW_UP_PLAN_JSON_SCHEMA: { [key: string]: unknown }
     target_vehicle_condition: { type: "string", enum: ["new", "used", "any", "unknown"] },
     original_vehicle_model: { type: "string" },
     follow_up_window_text: { type: "string" },
+    follow_up_date_text: { type: "string" },
     message_angle: {
       type: "string",
       enum: [
@@ -6214,12 +6217,14 @@ export async function parseAppointmentOutcomeFollowUpPlanWithLLM(args: {
     '- "Needs a little getting used to the trike. Not sure if he is really interested. Invite him back to ride a Heritage Softail" -> follow_up_needed=true, customer_status=uncertain, primary_concern=comfort_confidence, recommended_action=offer_alternative_ride, target_vehicle_model=Heritage Softail, message_angle=compare_alternative.',
     '- "Loved the bike but payment was high, wants numbers with 2k down" -> recommended_action=send_numbers, primary_concern=price_payment, message_angle=numbers_next_step.',
     '- "No showed, call tomorrow" -> recommended_action=call_customer, urgency=tomorrow.',
+    '- "Reach back out on 5/22" -> follow_up_window_text=5/22, follow_up_date_text=5/22, urgency=this_week.',
     '- "Wife needs to see it, bring her back Saturday" -> primary_concern=needs_spouse_or_friend, recommended_action=invite_back, urgency=this_week.',
     '- "Bought elsewhere" -> follow_up_needed=false, customer_status=lost, recommended_action=no_follow_up.',
     "",
     "Rules:",
     "- Do not invent stock numbers or facts.",
     "- Extract the alternative target vehicle if the note asks to invite/ride/compare a different bike.",
+    "- Extract a specific requested follow-up date into follow_up_date_text when present, such as 5/22, 05/22/2026, Friday, tomorrow, or next Tuesday.",
     "- draft_sms should be a short salesperson SMS, under 280 chars, no hard promise unless the note has one.",
     "- If the note is ambiguous but says needs follow-up, choose soft_check_in.",
     "- If there is no clear follow-up needed, set follow_up_needed=false and draft_sms empty.",
@@ -6290,6 +6295,7 @@ export async function parseAppointmentOutcomeFollowUpPlanWithLLM(args: {
     ),
     originalVehicleModel: cleanOptionalString(parsed.original_vehicle_model),
     followUpWindowText: cleanOptionalString(parsed.follow_up_window_text),
+    followUpDateText: cleanOptionalString(parsed.follow_up_date_text),
     messageAngle: enumValue(
       parsed.message_angle,
       ["compare_alternative", "confidence_reassurance", "numbers_next_step", "inventory_options", "appointment_invite", "soft_check_in", "no_message"] as const,

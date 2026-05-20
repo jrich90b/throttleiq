@@ -12381,6 +12381,35 @@ function buildAppointmentOutcomeFollowUpMessage(conv: any, note: string): string
   return `Hey ${firstName}, just checking in after your visit. If you want to come back in and compare another option, send me a day that works for you.`;
 }
 
+function resolveOutcomeFollowUpDueAt(args: {
+  note: string;
+  plan?: AppointmentOutcomeFollowUpPlanParse | null;
+  fallbackDueAt: string;
+  timeZone: string;
+  nowIso: string;
+}): string {
+  const text = [args.plan?.followUpDateText, args.plan?.followUpWindowText, args.note]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const dateMatch = text.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
+  if (!dateMatch) return args.fallbackDueAt;
+  const month = Number(dateMatch[1]);
+  const day = Number(dateMatch[2]);
+  if (!Number.isFinite(month) || !Number.isFinite(day) || month < 1 || month > 12 || day < 1 || day > 31) {
+    return args.fallbackDueAt;
+  }
+  const now = new Date(args.nowIso);
+  const localNow = getLocalDateParts(now, args.timeZone);
+  let year = dateMatch[3] ? Number(dateMatch[3]) : localNow.year;
+  if (dateMatch[3] && dateMatch[3].length === 2) year = 2000 + year;
+  let dueAt = localPartsToUtcDate(args.timeZone, { year, month, day, hour24: 10, minute: 30 });
+  if (!dateMatch[3] && dueAt.getTime() < now.getTime() - 60 * 60 * 1000) {
+    dueAt = localPartsToUtcDate(args.timeZone, { year: year + 1, month, day, hour24: 10, minute: 30 });
+  }
+  return dueAt.toISOString();
+}
+
 async function activateAppointmentOutcomeFollowUp(args: {
   conv: any;
   note?: string;
@@ -12395,9 +12424,15 @@ async function activateAppointmentOutcomeFollowUp(args: {
   const cfg = await getSchedulerConfigHot();
   const timezone = cfg.timezone || "America/New_York";
   const now = nowIso();
-  const nextDueAt = computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone);
   const note = String(args.note ?? "").trim();
   const plan = args.plan ?? null;
+  const nextDueAt = resolveOutcomeFollowUpDueAt({
+    note,
+    plan,
+    fallbackDueAt: computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone),
+    timeZone: timezone,
+    nowIso: now
+  });
   const parsedDraft = String(plan?.draftSms ?? "").trim();
   const followUpMessage =
     plan?.followUpNeeded === false || plan?.recommendedAction === "no_follow_up"
@@ -12427,6 +12462,7 @@ async function activateAppointmentOutcomeFollowUp(args: {
       targetVehicleCondition: plan.targetVehicleCondition || undefined,
       originalVehicleModel: plan.originalVehicleModel || undefined,
       followUpWindowText: plan.followUpWindowText || undefined,
+      followUpDateText: plan.followUpDateText || undefined,
       messageAngle: plan.messageAngle,
       urgency: plan.urgency,
       draftSms: parsedDraft || undefined,
@@ -15961,6 +15997,27 @@ function isPostSaleItemPickupLogisticsText(text: string | null | undefined): boo
   );
 }
 
+function isPostSalePickupArrivalWindowText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasArrivalWindow =
+    /\b(?:should|will|i'?ll|i will|we'?ll|we will|can)\s+(?:be|come|stop|swing|head|make it|get)\s+(?:out\s+there|there|in|by|over)\b/.test(t) ||
+    /\b(?:out\s+there|there|in|by|over)\s+\d{1,2}(?::?\d{2})?\s*(?:-|to|and|\/)\s*\d{1,2}(?::?\d{2})?\b/.test(t);
+  const hasTimeRange = /\b\d{1,2}(?::?\d{2})?\s*(?:-|to|and|\/)\s*\d{1,2}(?::?\d{2})?\s*(?:am|pm)?\b/.test(t);
+  const hasPickupContext = /\b(tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|pick(?:ing)? up|pickup|come in|stop in|stop by|out there|leave|leaving)\b/.test(t);
+  return hasTimeRange && hasArrivalWindow && hasPickupContext;
+}
+
+function buildPostSalePickupArrivalAck(text: string | null | undefined): string {
+  const arrival = formatPurchaseDeliveryArrivalWindow(text);
+  const leavingNotice = /\b(let you know|let u know|text you|call you|more exact|when i leave|once i leave)\b/i.test(
+    String(text ?? "")
+  );
+  return leavingNotice
+    ? `Sounds good — ${arrival} works. Just let me know when you’re heading over.`
+    : `Sounds good — ${arrival} works. We’ll see you then.`;
+}
+
 function getRecentConversationTextForDeliveryContext(
   conv: any,
   currentInboundText: string | null | undefined,
@@ -16105,6 +16162,9 @@ function buildPurchaseDeliveryLogisticsReply(args: {
     return `${prefix}No problem on the stock exhaust; just have them stop by when they can and we’ll get it handled.`;
   }
   if (args.parsed.intent === "delivery_timing") {
+    if (isPostSalePickupArrivalWindowText(args.text)) {
+      return buildPostSalePickupArrivalAck(args.text);
+    }
     return buildPurchaseDeliveryTimingReply(args.parsed.timingText || args.text);
   }
   if (args.parsed.intent === "docs_status") {
@@ -16185,6 +16245,9 @@ function extractArrivalStatusTimeLabel(text: string): string | null {
 }
 
 function buildLogisticsProgressAcknowledgement(text: string): string {
+  if (isPostSalePickupArrivalWindowText(text)) {
+    return buildPostSalePickupArrivalAck(text);
+  }
   const arrivalTime = extractArrivalStatusTimeLabel(text);
   if (arrivalTime) {
     return `Sounds good — see you around ${arrivalTime}.`;
