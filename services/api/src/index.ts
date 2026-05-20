@@ -11667,7 +11667,17 @@ function ensureDealerRideOutcomeToken(conv: any): string {
   return token;
 }
 
+function appointmentOutcomeWinsDealerRideOutcome(conv: any): boolean {
+  const appt = conv?.appointment ?? null;
+  return !!(
+    appt &&
+    String(appt.status ?? "").trim().toLowerCase() === "confirmed" &&
+    (String(appt.bookedEventId ?? "").trim() || String(appt.whenIso ?? "").trim())
+  );
+}
+
 function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token: string; outcomeLink?: string | null }) {
+  if (appointmentOutcomeWinsDealerRideOutcome(conv)) return;
   addTodo(
     conv,
     "other",
@@ -37130,10 +37140,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenPreRouteDecision.kind === "skip" &&
     regenPreRouteDecision.note === "dealer_ride_no_purchase_manual_handoff"
   ) {
-    addCallTodoIfMissing(
-      conv,
-      "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
-    );
+    const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
+    if (!appointmentOutcomeWins) {
+      addCallTodoIfMissing(
+        conv,
+        "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
+      );
+    }
     const users = await listUsers();
     const pickUserPhone = (user: any): string => {
       if (!user || typeof user !== "object") return "";
@@ -37180,7 +37193,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       String(conv.leadOwner?.name ?? "").trim() ||
       "salesperson";
     const ownerPhone = pickUserPhone(owner);
-    if (ownerPhone) {
+    if (ownerPhone && !appointmentOutcomeWins) {
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
@@ -37210,7 +37223,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         conv.dealerRide.staffNotify.followUpSentAt =
           conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
       }
-    } else {
+    } else if (!appointmentOutcomeWins) {
       addTodo(
         conv,
         "note",

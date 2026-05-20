@@ -646,7 +646,17 @@ function ensureDealerRideOutcomeToken(conv: any): string {
   return token;
 }
 
+function appointmentOutcomeWinsDealerRideOutcome(conv: any): boolean {
+  const appt = conv?.appointment ?? null;
+  return !!(
+    appt &&
+    String(appt.status ?? "").trim().toLowerCase() === "confirmed" &&
+    (String(appt.bookedEventId ?? "").trim() || String(appt.whenIso ?? "").trim())
+  );
+}
+
 function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token: string; outcomeLink?: string | null }) {
+  if (appointmentOutcomeWinsDealerRideOutcome(conv)) return;
   addTodo(
     conv,
     "other",
@@ -4555,6 +4565,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       isDealerRideEventFromParser);
   if (isDealerRideEventLead) {
     const appt = conv.appointment;
+    const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
     const apptType = String(appt?.appointmentType ?? appt?.matchedSlot?.appointmentType ?? "").toLowerCase();
     const isBookedTestRide =
       !!appt?.bookedEventId &&
@@ -4589,7 +4600,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       String(owner?.name ?? "").trim() ||
       String(conv.leadOwner?.name ?? "").trim() ||
       "salesperson";
-    if (!appt?.staffNotify?.followUpSentAt) {
+    if (!appointmentOutcomeWins && !appt?.staffNotify?.followUpSentAt) {
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
@@ -4637,10 +4648,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     parserNoPurchaseSignal;
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
-    addCallTodoIfMissing(
-      conv,
-      "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
-    );
+    const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
+    if (!appointmentOutcomeWins) {
+      addCallTodoIfMissing(
+        conv,
+        "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
+      );
+    }
     const users = await listUsers();
     const ownerId = String(conv.leadOwner?.id ?? "").trim();
     const owner =
@@ -4667,33 +4681,39 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "salesperson";
     const customerName =
       [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() || conv.leadKey || "customer";
-    const token = ensureDealerRideOutcomeToken(conv);
-    const outcomeLink = buildStaffOutcomeLink(token);
-    addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
-    conv.dealerRide = conv.dealerRide ?? {};
-    conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
-    conv.dealerRide.staffNotify.userId =
-      String(owner?.id ?? "").trim() || conv.dealerRide.staffNotify.userId;
-    conv.dealerRide.staffNotify.phone =
-      pickUserPhone(owner) || conv.dealerRide.staffNotify.phone;
-    const leadSummary = [
-      `Dealer ride outcome needed for ${customerName}.`,
-      'DLA says "not interested in purchasing at this time".',
-      "Please include what actually happened or what they said.",
-      `Reply: OUTCOME ${token} SOLD <stock/vin> <context> | HOLD <stock/vin> <context> | FOLLOWUP <context> | LOST <reason>.`,
-      outcomeLink ? `Update form: ${outcomeLink}` : null
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const staffSms = await sendInternalSalespersonSms(pickUserPhone(owner), leadSummary);
-    if (!staffSms.sent) {
-      addTodo(conv, "note", `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`);
-    }
-    if (staffSms.sent) {
+    let staffSms: any = {
+      sent: false,
+      reason: appointmentOutcomeWins ? "appointment_outcome_wins" : "not_sent"
+    };
+    if (!appointmentOutcomeWins) {
+      const token = ensureDealerRideOutcomeToken(conv);
+      const outcomeLink = buildStaffOutcomeLink(token);
+      addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
       conv.dealerRide = conv.dealerRide ?? {};
       conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
-      conv.dealerRide.staffNotify.followUpSentAt =
-        conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
+      conv.dealerRide.staffNotify.userId =
+        String(owner?.id ?? "").trim() || conv.dealerRide.staffNotify.userId;
+      conv.dealerRide.staffNotify.phone =
+        pickUserPhone(owner) || conv.dealerRide.staffNotify.phone;
+      const leadSummary = [
+        `Dealer ride outcome needed for ${customerName}.`,
+        'DLA says "not interested in purchasing at this time".',
+        "Please include what actually happened or what they said.",
+        `Reply: OUTCOME ${token} SOLD <stock/vin> <context> | HOLD <stock/vin> <context> | FOLLOWUP <context> | LOST <reason>.`,
+        outcomeLink ? `Update form: ${outcomeLink}` : null
+      ]
+        .filter(Boolean)
+        .join("\n");
+      staffSms = await sendInternalSalespersonSms(pickUserPhone(owner), leadSummary);
+      if (!staffSms.sent) {
+        addTodo(conv, "note", `Salesperson SMS failed for ${ownerName}: ${staffSms.reason ?? "unknown_error"}.`);
+      }
+      if (staffSms.sent) {
+        conv.dealerRide = conv.dealerRide ?? {};
+        conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+        conv.dealerRide.staffNotify.followUpSentAt =
+          conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
+      }
     }
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
