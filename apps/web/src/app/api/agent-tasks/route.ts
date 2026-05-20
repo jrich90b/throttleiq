@@ -7,8 +7,10 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const limit = url.searchParams.get("limit") ?? "";
+  const scope = url.searchParams.get("scope") ?? "";
   const upstream = new URL(`${base}/agent-tasks`);
   if (limit) upstream.searchParams.set("limit", limit);
+  if (scope) upstream.searchParams.set("scope", scope);
 
   const r = await apiFetch(upstream.toString(), { cache: "no-store" });
   const text = await r.text();

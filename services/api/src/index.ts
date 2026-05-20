@@ -29326,7 +29326,27 @@ app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =>
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "200");
-  const tasks = await listAgentTasks(Number.isFinite(limit) ? limit : 200);
+  const scope = String(req.query.scope ?? "").trim().toLowerCase();
+  let tasks = await listAgentTasks(Number.isFinite(limit) ? limit : 200);
+  if (scope === "support") {
+    tasks = tasks.filter(task => {
+      const text = `${task.title}\n${task.instructions}`.toLowerCase();
+      const summary = task.output?.summary ?? "";
+      const supportRelevant =
+        task.instructions.includes("[support-auto:") ||
+        text.includes("support ticket") ||
+        text.includes("support gmail") ||
+        text.includes("support inbox") ||
+        text.includes("support reply") ||
+        text.includes("support agent");
+      return (
+        supportRelevant &&
+        !/\bclassification:\s*non_support\b/i.test(summary) &&
+        !task.instructions.includes("[personal-mail-auto:") &&
+        !/^Review personal email:/i.test(task.title)
+      );
+    });
+  }
   return res.json({ ok: true, tasks });
 });
 

@@ -89,7 +89,7 @@ function statusLabel(value: string) {
 }
 
 function isNonSupportMailTask(task: AgentTask) {
-  return /^classification:\s*non_support\b/i.test(task.output?.summary?.trim() ?? "");
+  return /\bclassification:\s*non_support\b/i.test(task.output?.summary ?? "");
 }
 
 function isSupportRelevantTask(task: AgentTask) {
@@ -147,7 +147,7 @@ export default function SupportAgentCommandPage() {
       fetch("/api/support-mail/messages?limit=12", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/ops/anomalies?limit=20", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/automation-runs?limit=20", { cache: "no-store" }).then(resp => resp.json()),
-      fetch("/api/agent-tasks?limit=20", { cache: "no-store" }).then(resp => resp.json())
+      fetch("/api/agent-tasks?limit=20&scope=support", { cache: "no-store" }).then(resp => resp.json())
     ]).then(results => {
       if (!active) return;
       const [mailStatus, mailMessages, tickets, runs, tasks] = results.map(result =>
