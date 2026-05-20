@@ -9286,6 +9286,18 @@ function buildInitialEmailDraft(conv: any, dealerProfile: any): string {
   const isCustomBuild = /custom build/.test(leadSourceLower);
   const isTestRide =
     conv?.classification?.bucket === "test_ride" || conv?.classification?.cta === "schedule_test_ride";
+  const preferredDateLabel = isTestRide ? formatPreferredDateForReply(conv?.lead?.preferredDate) : null;
+  if (isTestRide && preferredDateLabel) {
+    const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
+    const modelClause = label ? ` on the ${label}` : "";
+    const dateLine = isOpenPreferredTime(preferredTime)
+      ? `I have ${preferredDateLabel} noted. What time works best for you?`
+      : `I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+    return formatEmailLayout(
+      `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. This is ${agentName} at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`,
+      { firstName: name, fallbackName: "there" }
+    );
+  }
   const thanks = isCustomBuild
     ? label
       ? `Thanks for building your ${label} online.`
@@ -39070,30 +39082,33 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     closeConversation(conv, "international");
     stopFollowUpCadence(conv, "manual_handoff");
   }
-  if (
-    event.provider === "sendgrid_adf" &&
-    shouldForceInitialTestRideSourceScheduleCopy({
+  if (event.provider === "sendgrid_adf") {
+    const sourceIsTestRide = /test ride|book test ride|online test ride request/i.test(String(conv.lead?.source ?? ""));
+    const classificationIsTestRide =
+      conv.classification?.bucket === "test_ride" || conv.classification?.cta === "schedule_test_ride";
+    const preferredDateReply = sourceIsTestRide || classificationIsTestRide ? buildTestRidePreferredDateReply(conv) : null;
+    const shouldForceTestRideCopy = shouldForceInitialTestRideSourceScheduleCopy({
       isInitialAdf: true,
       inferredBucket: conv.classification?.bucket ?? null,
       inferredCta: conv.classification?.cta ?? null,
       leadSourceLower: String(conv.lead?.source ?? "").toLowerCase(),
       draft: reply
-    })
-  ) {
-    const preferredDateReply = buildTestRidePreferredDateReply(conv);
-    const modelLabel = formatModelLabel(
-      conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
-      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
-    );
-    const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
-    const unavailableTestRideReply = await buildRecentManualTestRideAvailabilityCadenceOverride({
-      conv,
-      name: normalizeDisplayCase(conv.lead?.firstName) || "there"
     });
-    reply =
-      preferredDateReply ??
-      unavailableTestRideReply ??
-      `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
+    if (preferredDateReply || shouldForceTestRideCopy) {
+      const modelLabel = formatModelLabel(
+        conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+        conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+      );
+      const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+      const unavailableTestRideReply = await buildRecentManualTestRideAvailabilityCadenceOverride({
+        conv,
+        name: normalizeDisplayCase(conv.lead?.firstName) || "there"
+      });
+      reply =
+        preferredDateReply ??
+        unavailableTestRideReply ??
+        `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
+    }
   }
   if (event.provider === "sendgrid_adf" && !hasSentOutbound) {
     if (!regenIsWalkInLead) {

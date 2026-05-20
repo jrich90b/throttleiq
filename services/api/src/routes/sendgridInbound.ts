@@ -1487,6 +1487,16 @@ function buildInitialEmailDraft(
       ? options.testRideInventoryStatus
       : "unknown";
   const testRideInStock = !isTestRide || testRideInventoryStatus === "in_stock";
+  const preferredDateLabel = isTestRide ? formatPreferredDateForReply(conv?.lead?.preferredDate) : null;
+  if (isTestRide && preferredDateLabel) {
+    const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
+    const modelClause = model ? ` on the ${model}` : "";
+    const dateLine = isOpenPreferredTime(preferredTime)
+      ? `I have ${preferredDateLabel} noted. What time works best for you?`
+      : `I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+    const draft = `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. This is ${agentName} at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`;
+    return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
+  }
   const thanks = isTestRide
     ? model
       ? `Thanks for your interest in a test ride on the ${model}.`
