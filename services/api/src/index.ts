@@ -83,6 +83,12 @@ import {
   sendDocusignEnvelope
 } from "./domain/docusignIntegration.js";
 import {
+  buildZoomAuthUrl,
+  createZoomMeetingForProspect,
+  exchangeZoomCode,
+  getZoomStatus
+} from "./domain/zoomIntegration.js";
+import {
   addVercelProjectDomain,
   getVercelAutomationStatus,
   getVercelDomainStatus
@@ -2291,6 +2297,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/widget") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/docusign/callback") ||
+    pathname.startsWith("/integrations/zoom/callback") ||
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/support-mail/poll") ||
@@ -24772,6 +24779,44 @@ app.get("/integrations/docusign/callback", async (req, res) => {
   }
 });
 
+app.get("/integrations/zoom/status", requireManager, async (_req, res) => {
+  const status = await getZoomStatus();
+  return res.json({ ok: true, ...status });
+});
+
+app.get("/integrations/zoom/start", requireManager, async (_req, res) => {
+  try {
+    const url = buildZoomAuthUrl();
+    return res.json({ ok: true, url });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Zoom connect could not start." });
+  }
+});
+
+app.get("/integrations/zoom/callback", async (req, res) => {
+  const code = String(req.query.code ?? "").trim();
+  const state = String(req.query.state ?? "").trim();
+  if (!code) return res.status(400).send("Missing Zoom authorization code.");
+  try {
+    await exchangeZoomCode(code, state);
+    return res
+      .status(200)
+      .type("html")
+      .send(
+        '<!doctype html><html><body style="font-family: system-ui, sans-serif; padding: 32px;"><h1>Zoom connected</h1><p>You can close this tab and return to LeadRider Command.</p><p><a href="/command/sales">Back to Sales Funnel</a></p></body></html>'
+      );
+  } catch (err) {
+    return res
+      .status(400)
+      .type("html")
+      .send(
+        `<!doctype html><html><body style="font-family: system-ui, sans-serif; padding: 32px;"><h1>Zoom connection failed</h1><p>${escapeHtml(
+          err instanceof Error ? err.message : "Unknown Zoom error."
+        )}</p></body></html>`
+      );
+  }
+});
+
 app.post("/dealer-setups/:id/esign/packet", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -29330,6 +29375,40 @@ app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (re
     notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
   });
   return res.json({ ok: true, prospect });
+});
+
+app.post("/sales-prospects/:id/zoom/meeting", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const existing = await getSalesProspect(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Prospect not found." });
+  try {
+    const meeting = await createZoomMeetingForProspect(existing, {
+      topic: typeof req.body?.topic === "string" ? req.body.topic : undefined,
+      startTime: typeof req.body?.startTime === "string" ? req.body.startTime : undefined,
+      duration: Number(req.body?.duration ?? 30),
+      timezone: typeof req.body?.timezone === "string" ? req.body.timezone : undefined,
+      agenda: typeof req.body?.agenda === "string" ? req.body.agenda : undefined,
+      userId: typeof req.body?.userId === "string" ? req.body.userId : undefined
+    });
+    const notes = [
+      existing.notes || "",
+      `Zoom meeting created: ${meeting.joinUrl}${meeting.startTime ? ` (${meeting.startTime})` : ""}`
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, 3000);
+    const prospect = await updateSalesProspect(existing.id, {
+      zoomLink: meeting.joinUrl,
+      nextStepAt: meeting.startTime || existing.nextStepAt,
+      notes
+    });
+    return res.json({ ok: true, meeting, prospect });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Zoom meeting could not be created." });
+  }
 });
 
 const allowedAutomationStatuses: AutomationRunStatus[] = [

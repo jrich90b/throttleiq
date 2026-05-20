@@ -34,6 +34,17 @@ type SalesProspect = {
   updatedAt: string;
 };
 
+type ZoomStatus = {
+  configured: boolean;
+  connected: boolean;
+  connectedAt?: string;
+  updatedAt?: string;
+  apiBase?: string;
+  redirectUri?: string;
+  scopes?: string;
+  missing?: string[];
+};
+
 type ProspectForm = {
   dealerName: string;
   contactName: string;
@@ -128,6 +139,8 @@ export default function SalesFunnelPage() {
   const [notice, setNotice] = useState("Sales Funnel is ready.");
   const [busy, setBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
+  const [zoomStatus, setZoomStatus] = useState<ZoomStatus | null>(null);
+  const [zoomBusy, setZoomBusy] = useState(false);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -136,6 +149,7 @@ export default function SalesFunnelPage() {
 
   useEffect(() => {
     void loadProspects();
+    void loadZoomStatus();
   }, []);
 
   useEffect(() => {
@@ -208,6 +222,68 @@ export default function SalesFunnelPage() {
       setNotice(err instanceof Error ? err.message : "Prospect could not be updated.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function loadZoomStatus() {
+    try {
+      const resp = await fetch("/api/integrations/zoom/status", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Zoom status could not be loaded.");
+      setZoomStatus(data);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Zoom status could not be loaded.");
+    }
+  }
+
+  async function connectZoom() {
+    setZoomBusy(true);
+    try {
+      const resp = await fetch("/api/integrations/zoom/start", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok || !data.url) throw new Error(data?.error || "Zoom connection could not start.");
+      window.location.href = data.url;
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Zoom connection could not start.");
+    } finally {
+      setZoomBusy(false);
+    }
+  }
+
+  async function createZoomMeeting() {
+    if (!selected) return;
+    if (!zoomStatus?.connected) {
+      setNotice(zoomStatus?.configured ? "Connect Zoom before creating a meeting." : `Zoom is missing settings: ${(zoomStatus?.missing || []).join(", ") || "Zoom app credentials"}.`);
+      return;
+    }
+    setZoomBusy(true);
+    try {
+      const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}/zoom/meeting`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: `LeadRider discovery - ${form.dealerName || selected.dealerName}`,
+          startTime: form.nextStepAt || selected.nextStepAt,
+          duration: 30,
+          agenda: [
+            `Dealer prospect: ${form.dealerName || selected.dealerName}`,
+            form.contactName ? `Contact: ${form.contactName}` : "",
+            form.contactEmail ? `Email: ${form.contactEmail}` : "",
+            form.contactPhone ? `Phone: ${form.contactPhone}` : "",
+            form.website ? `Website: ${form.website}` : "",
+            form.nextStep ? `Next step: ${form.nextStep}` : ""
+          ].filter(Boolean).join("\n")
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Zoom meeting could not be created.");
+      setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      setForm(toForm(data.prospect));
+      setNotice(`Zoom meeting created for ${data.prospect.dealerName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Zoom meeting could not be created.");
+    } finally {
+      setZoomBusy(false);
     }
   }
 
@@ -362,6 +438,31 @@ export default function SalesFunnelPage() {
 
         <section className="lr-ceo-notice" aria-live="polite">{notice}</section>
 
+        <section className="lr-ceo-integration-strip">
+          <div>
+            <p className="lr-ceo-kicker">Meeting connector</p>
+            <strong>Zoom</strong>
+            <p>
+              {zoomStatus?.connected
+                ? "Connected and ready to create prospect meetings."
+                : zoomStatus?.configured
+                  ? "Ready to connect."
+                  : zoomStatus
+                    ? `Missing settings: ${(zoomStatus.missing || []).join(", ")}.`
+                    : "Checking Zoom settings."}
+            </p>
+          </div>
+          <span className={`lr-ceo-status-pill ${zoomStatus?.connected ? "is-ready" : zoomStatus?.configured || !zoomStatus ? "is-working" : "is-blocked"}`}>
+            {zoomStatus?.connected ? "Connected" : zoomStatus?.configured ? "Ready to connect" : zoomStatus ? "Not configured" : "Checking"}
+          </span>
+          <button type="button" onClick={connectZoom} disabled={zoomBusy || zoomStatus?.configured === false}>
+            Connect Zoom
+          </button>
+          <button type="button" className="lr-ceo-secondary-btn" onClick={loadZoomStatus} disabled={zoomBusy}>
+            Refresh
+          </button>
+        </section>
+
         <section className="lr-ceo-metrics" aria-label="Sales metrics">
           <article>
             <span>Open prospects</span>
@@ -489,6 +590,7 @@ export default function SalesFunnelPage() {
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "proposal" })} disabled={busy}>Move to proposal</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "agreement_sent" })} disabled={busy}>Agreement sent</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Closed won</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={zoomBusy || !selected}>Create Zoom meeting</button>
                 </div>
               </>
             ) : (
@@ -508,9 +610,9 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Zoom and Fathom</strong>
-                  <p>Create the setup task for meeting links and note capture under the salesperson account.</p>
+                  <p>Create a Zoom meeting link from the connected Zoom account and store it on the prospect.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("zoom")} disabled={!selected || taskBusy}>Create task</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected}>Create meeting</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
