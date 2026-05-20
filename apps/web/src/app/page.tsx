@@ -1133,6 +1133,10 @@ type TodoItem = {
   appointmentOutcomePrimaryStatus?: string | null;
   appointmentOutcomeSecondaryStatus?: string | null;
   appointmentOutcomeNote?: string | null;
+  dealerRideOutcomeStatus?: string | null;
+  dealerRideOutcomePrimaryStatus?: string | null;
+  dealerRideOutcomeSecondaryStatus?: string | null;
+  sourceMessageId?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
   createdAt: string;
@@ -1363,6 +1367,13 @@ function todoAppointmentTimeLabel(todo: TodoItem): string | null {
   return null;
 }
 
+function isDealerRideOutcomeTodo(todo: TodoItem | null | undefined): boolean {
+  return (
+    String(todo?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
+    /\bdealer ride outcome needed\b/i.test(String(todo?.summary ?? ""))
+  );
+}
+
 function todoInboxSection(todo: TodoItem): TodoInboxSection {
   const explicitTaskClass = String(todo.taskClass ?? "").toLowerCase();
   const reason = String(todo.reason ?? "").toLowerCase();
@@ -1373,6 +1384,7 @@ function todoInboxSection(todo: TodoItem): TodoInboxSection {
     /\b(appointment|schedule|scheduled|book|booking|reschedule|no[\s-]?show|showed up|show up|test ride|demo ride)\b/.test(
       `${reason} ${summary} ${action}`
     );
+  if (isDealerRideOutcomeTodo(todo)) return "todo";
   if (explicitTaskClass === "appointment") {
     // Prevent stale legacy appointment flags from forcing non-appointment
     // tasks into the appointment bucket.
@@ -12648,9 +12660,13 @@ export default function Home() {
         {appointmentCloseOpen && appointmentCloseTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
             <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
-              <div className="text-sm font-medium">Close Appointment Task</div>
+              <div className="text-sm font-medium">
+                {isDealerRideOutcomeTodo(appointmentCloseTarget) ? "Close Demo Ride Outcome" : "Close Appointment Task"}
+              </div>
               <div className="text-xs text-gray-500 mt-1">
-                No appointment outcome is saved yet. Add the outcome now before closing.
+                {isDealerRideOutcomeTodo(appointmentCloseTarget)
+                  ? "Record what happened on the demo ride before closing this To Do."
+                  : "No appointment outcome is saved yet. Add the outcome now before closing."}
               </div>
               <div className="mt-3 grid grid-cols-1 gap-2">
                 <label className="text-xs text-gray-600">

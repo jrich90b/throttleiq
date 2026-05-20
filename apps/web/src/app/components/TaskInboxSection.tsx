@@ -16,6 +16,13 @@ function formatFollowUpTicker(startIso: string | null | undefined, nowMs: number
   return days > 0 ? `${days}d ${clock}` : clock;
 }
 
+function isDealerRideOutcomeTodo(todo: any): boolean {
+  return (
+    String(todo?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
+    /\bdealer ride outcome needed\b/i.test(String(todo?.summary ?? ""))
+  );
+}
+
 export function TaskInboxSection(props: any) {
   const {
     todoQuery,
@@ -183,6 +190,7 @@ export function TaskInboxSection(props: any) {
                       secondary: appointmentOutcomeSecondaryStatus || null,
                       legacy: appointmentOutcomeStatus || null
                     });
+                    const dealerRideOutcomeNeeded = isDealerRideOutcomeTodo(t) && !String(t.dealerRideOutcomeStatus ?? "").trim();
                     const appointmentReminderSent =
                       sectionType === "appointment" &&
                       !appointmentOutcomeLabel &&
@@ -204,6 +212,23 @@ export function TaskInboxSection(props: any) {
                                 type="button"
                                 className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
                                 title="Record appointment outcome"
+                                onClick={() => {
+                                  setAppointmentCloseTarget(t);
+                                  setAppointmentClosePrimaryOutcome("showed");
+                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                  setAppointmentCloseNote("");
+                                  setAppointmentCloseOpen(true);
+                                }}
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                Outcome needed
+                              </button>
+                            ) : null}
+                            {dealerRideOutcomeNeeded ? (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
+                                title="Record demo ride outcome"
                                 onClick={() => {
                                   setAppointmentCloseTarget(t);
                                   setAppointmentClosePrimaryOutcome("showed");
@@ -354,7 +379,7 @@ export function TaskInboxSection(props: any) {
                           <button
                             className="px-3 py-2 border rounded text-sm text-gray-600"
                             onClick={() => {
-                              if (sectionType === "appointment" && !appointmentOutcomeLabel) {
+                              if ((sectionType === "appointment" && !appointmentOutcomeLabel) || dealerRideOutcomeNeeded) {
                                 setAppointmentCloseTarget(t);
                                 setAppointmentClosePrimaryOutcome("showed");
                                 setAppointmentCloseSecondaryOutcome("needs_follow_up");
@@ -366,7 +391,9 @@ export function TaskInboxSection(props: any) {
                             }}
                             title="Close this To Do"
                           >
-                            {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                            {(sectionType === "appointment" && !appointmentOutcomeLabel) || dealerRideOutcomeNeeded
+                              ? "Record outcome"
+                              : "Close"}
                           </button>
                           <button
                             className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"

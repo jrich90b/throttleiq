@@ -661,7 +661,7 @@ function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token
     `dealer_ride_outcome:${args.token}`,
     undefined,
     { dueAt: new Date().toISOString() },
-    "appointment",
+    "todo",
     { allowSoldLead: true }
   );
 }

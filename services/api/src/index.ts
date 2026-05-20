@@ -11682,7 +11682,7 @@ function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token
     `dealer_ride_outcome:${args.token}`,
     undefined,
     { dueAt: new Date().toISOString() },
-    "appointment",
+    "todo",
     { allowSoldLead: true }
   );
 }
@@ -29097,6 +29097,12 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
         const appointmentOutcomeSecondaryStatus =
           String(conv?.appointment?.staffNotify?.outcome?.secondaryStatus ?? "").trim() || null;
         const appointmentOutcomeNote = String(conv?.appointment?.staffNotify?.outcome?.note ?? "").trim() || null;
+        const dealerRideOutcome = conv?.dealerRide?.staffNotify?.outcome as any;
+        const dealerRideOutcomeStatus = String(dealerRideOutcome?.status ?? "").trim() || null;
+        const dealerRideOutcomePrimaryStatus =
+          String(dealerRideOutcome?.primaryStatus ?? "").trim() || null;
+        const dealerRideOutcomeSecondaryStatus =
+          String(dealerRideOutcome?.secondaryStatus ?? "").trim() || null;
         const action = deriveTodoActionLabel(t, conv, actionTimeZone);
         return {
           ...t,
@@ -29109,6 +29115,9 @@ app.get("/todos", requirePermission("canAccessTodos"), async (req, res) => {
           appointmentOutcomePrimaryStatus,
           appointmentOutcomeSecondaryStatus,
           appointmentOutcomeNote,
+          dealerRideOutcomeStatus,
+          dealerRideOutcomePrimaryStatus,
+          dealerRideOutcomeSecondaryStatus,
           ownerDisplayName,
           ownerDisplayType,
           leadOwnerName,
@@ -29266,7 +29275,10 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
     const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
     const appointmentSecondaryOutcome = String(req.body?.appointmentSecondaryOutcome ?? "").trim();
     const appointmentOutcomeNote = String(req.body?.appointmentOutcomeNote ?? "").trim();
-    if ((appointmentOutcome || appointmentPrimaryOutcome || appointmentSecondaryOutcome) && conv?.appointment) {
+    const isDealerRideOutcomeTask =
+      String(existingTask?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
+      /\bdealer ride outcome needed\b/i.test(String(existingTask?.summary ?? ""));
+    if ((appointmentOutcome || appointmentPrimaryOutcome || appointmentSecondaryOutcome) && (conv?.appointment || isDealerRideOutcomeTask)) {
       const normalizedOutcome = normalizeAppointmentOutcomeInput({
         legacyOutcome: appointmentOutcome,
         primaryOutcome: appointmentPrimaryOutcome,
@@ -29327,8 +29339,16 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         setFollowUpMode(conv, "paused_indefinite", "appointment_hold");
         stopFollowUpCadence(conv, "appointment_hold");
       }
-      conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
-      conv.appointment.staffNotify.outcome = {
+      let notifyTarget: any;
+      if (isDealerRideOutcomeTask) {
+        conv.dealerRide = conv.dealerRide ?? {};
+        conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+        notifyTarget = conv.dealerRide.staffNotify;
+      } else {
+        conv.appointment!.staffNotify = conv.appointment!.staffNotify ?? {};
+        notifyTarget = conv.appointment!.staffNotify;
+      }
+      notifyTarget.outcome = {
         status: appointmentOutcomeStatus as any,
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
@@ -29355,7 +29375,11 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           : null;
       if (appointmentOutcomeNote) {
         try {
-          await applyActionStateFromContextNote(conv, appointmentOutcomeNote, "Appointment outcome");
+          await applyActionStateFromContextNote(
+            conv,
+            appointmentOutcomeNote,
+            isDealerRideOutcomeTask ? "Dealer ride outcome" : "Appointment outcome"
+          );
         } catch (err: any) {
           console.log("[todo-appointment-outcome-note-actions] failed:", err?.message ?? err);
         }
@@ -29374,7 +29398,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
             undefined
         }
       });
-      conv.appointment.updatedAt = nowIsoValue;
+      if (conv.appointment) conv.appointment.updatedAt = nowIsoValue;
     }
     const resolution = String(req.body?.resolution ?? "resume").trim();
     const nowIso = new Date().toISOString();
