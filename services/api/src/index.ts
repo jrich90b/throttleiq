@@ -24394,8 +24394,10 @@ app.post("/campaigns/:id/publish/instagram", requireManager, async (req, res) =>
 });
 
 app.get("/integrations/google/start", async (req, res) => {
-  const oauth2 = getOAuthClient();
   const kind = String(req.query.kind ?? "calendar").trim().toLowerCase();
+  const leadriderGoogleRedirectUri = `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/integrations/google/callback`;
+  const redirectUri = kind === "support_mail" || kind === "personal_mail" ? leadriderGoogleRedirectUri : undefined;
+  const oauth2 = getOAuthClient(redirectUri);
   const scopes =
     kind === "support_mail" || kind === "personal_mail"
       ? [
@@ -24469,9 +24471,11 @@ app.get("/integrations/google/callback", async (req, res) => {
   const code = String(req.query.code ?? "");
   if (!code) return res.status(400).send("Missing code");
 
-  const oauth2 = getOAuthClient();
-  const { tokens } = await oauth2.getToken(code);
   const state = String(req.query.state ?? "calendar").trim().toLowerCase();
+  const leadriderGoogleRedirectUri = `${String(process.env.LEADRIDER_API_BASE_URL ?? "https://api.leadrider.ai").replace(/\/$/, "")}/integrations/google/callback`;
+  const redirectUri = state === "support_mail" || state === "personal_mail" ? leadriderGoogleRedirectUri : undefined;
+  const oauth2 = getOAuthClient(redirectUri);
+  const { tokens } = await oauth2.getToken(code);
   if (state === "support_mail") {
     await saveSupportMailTokens(tokens);
     return res.send("LeadRider support Gmail connected. You can close this tab.");

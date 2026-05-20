@@ -12,10 +12,10 @@ const TOKEN_PATH = path.resolve(__dirname, "../../data/google_tokens.json");
 const SUPPORT_MAIL_TOKEN_PATH = process.env.GOOGLE_SUPPORT_MAIL_TOKEN_PATH || dataPath("google_support_mail_tokens.json");
 const PERSONAL_MAIL_TOKEN_PATH = process.env.GOOGLE_PERSONAL_MAIL_TOKEN_PATH || dataPath("google_personal_mail_tokens.json");
 
-export function getOAuthClient() {
+export function getOAuthClient(redirectUriOverride?: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID!;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI!;
+  const redirectUri = redirectUriOverride || process.env.GOOGLE_REDIRECT_URI!;
 
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
