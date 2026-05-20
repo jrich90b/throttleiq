@@ -88,28 +88,12 @@ function statusLabel(value: string) {
   return value.replace(/_/g, " ");
 }
 
-function isNonSupportMailTask(task: AgentTask) {
-  return /\bclassification:\s*non_support\b/i.test(task.output?.summary ?? "");
-}
-
-function isSupportRelevantTask(task: AgentTask) {
-  const text = `${task.title}\n${task.instructions}`.toLowerCase();
-  return (
-    task.instructions.includes("[support-auto:") ||
-    text.includes("support ticket") ||
-    text.includes("support gmail") ||
-    text.includes("support inbox") ||
-    text.includes("support reply") ||
-    text.includes("support agent")
-  );
-}
-
 export default function SupportAgentCommandPage() {
   const [supportMailStatus, setSupportMailStatus] = useState<SupportMailStatus | null>(null);
   const [supportMailMessages, setSupportMailMessages] = useState<SupportMailMessage[]>([]);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
   const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
-  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [, setAgentTasks] = useState<AgentTask[]>([]);
   const [notice, setNotice] = useState("Support Agent workspace is ready.");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
@@ -119,45 +103,26 @@ export default function SupportAgentCommandPage() {
 
   const openTickets = useMemo(() => supportTickets.filter(ticket => ticket.status !== "closed"), [supportTickets]);
   const closedTickets = useMemo(() => supportTickets.filter(ticket => ticket.status === "closed"), [supportTickets]);
-  const approvalRuns = useMemo(() => automationRuns.filter(run => run.status === "needs_approval"), [automationRuns]);
   const closedLoopRuns = useMemo(
     () => automationRuns.filter(run => run.source === "feedback_loop" || /feedback|closed loop/i.test(run.name)),
     [automationRuns]
   );
-  const supportAgentTasks = useMemo(
-    () =>
-      agentTasks.filter(
-        task =>
-          isSupportRelevantTask(task) &&
-          !isNonSupportMailTask(task) &&
-          !task.instructions.includes("[personal-mail-auto:") &&
-          !/^Review personal email:/i.test(task.title)
-      ),
-    [agentTasks]
-  );
-  const approvalTasks = useMemo(
-    () => supportAgentTasks.filter(task => task.status === "needs_approval" || task.approval?.required),
-    [supportAgentTasks]
-  );
-
   useEffect(() => {
     let active = true;
     Promise.allSettled([
       fetch("/api/google/support-mail/status", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/support-mail/messages?limit=12", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/ops/anomalies?limit=20", { cache: "no-store" }).then(resp => resp.json()),
-      fetch("/api/automation-runs?limit=20", { cache: "no-store" }).then(resp => resp.json()),
-      fetch("/api/agent-tasks?limit=20&scope=support", { cache: "no-store" }).then(resp => resp.json())
+      fetch("/api/automation-runs?limit=20", { cache: "no-store" }).then(resp => resp.json())
     ]).then(results => {
       if (!active) return;
-      const [mailStatus, mailMessages, tickets, runs, tasks] = results.map(result =>
+      const [mailStatus, mailMessages, tickets, runs] = results.map(result =>
         result.status === "fulfilled" ? result.value : null
       );
       if (mailStatus?.ok) setSupportMailStatus(mailStatus);
       if (mailMessages?.ok && Array.isArray(mailMessages.messages)) setSupportMailMessages(mailMessages.messages);
       if (tickets?.ok && Array.isArray(tickets.anomalies)) setSupportTickets(tickets.anomalies);
       if (runs?.ok && Array.isArray(runs.runs)) setAutomationRuns(runs.runs);
-      if (tasks?.ok && Array.isArray(tasks.tasks)) setAgentTasks(tasks.tasks);
     });
     return () => {
       active = false;
@@ -250,8 +215,8 @@ export default function SupportAgentCommandPage() {
         </nav>
         <section className="lr-ceo-side-panel">
           <p className="lr-ceo-kicker">Support Agent</p>
-          <strong>{approvalRuns.length + approvalTasks.length} approvals waiting</strong>
-          <span>{openTickets.length} open support tickets</span>
+          <strong>{openTickets.length} open support tickets</strong>
+          <span>{supportMailStatus?.connected ? "Support Gmail connected" : "Support Gmail not connected"}</span>
         </section>
       </aside>
 
@@ -260,7 +225,7 @@ export default function SupportAgentCommandPage() {
           <div>
             <p className="lr-ceo-kicker">Agent workspace</p>
             <h2>Support Agent</h2>
-            <p>Monitor support emails, Report Issue tickets, closed-loop automation runs, and anything waiting for your approval.</p>
+            <p>Monitor support emails, Report Issue tickets, and closed-loop automation runs.</p>
           </div>
           <div className="lr-ceo-header-actions">
             <button type="button" onClick={() => createSupportAgentTask()} disabled={agentBusy}>
@@ -288,9 +253,9 @@ export default function SupportAgentCommandPage() {
             <small>Report Issue queue</small>
           </article>
           <article>
-            <span>Needs approval</span>
-            <strong>{approvalRuns.length + approvalTasks.length}</strong>
-            <small>Agent or automation approvals</small>
+            <span>Closed-loop runs</span>
+            <strong>{closedLoopRuns.length}</strong>
+            <small>Feedback automation history</small>
           </article>
           <article>
             <span>Closed tickets</span>
@@ -330,45 +295,6 @@ export default function SupportAgentCommandPage() {
               >
                 Draft email replies
               </button>
-            </div>
-          </article>
-
-          <article className="lr-ceo-panel">
-            <div className="lr-ceo-panel-title">
-              <div>
-                <p className="lr-ceo-kicker">Approvals</p>
-                <h3>Needs your review</h3>
-              </div>
-            </div>
-            <div className="lr-ceo-ticket-list">
-              {approvalTasks.map(task => (
-                <div key={task.id} className="lr-ceo-ticket-row">
-                  <div>
-                    <span>{task.provider}</span>
-                    <strong>{task.title}</strong>
-                    <small>{task.approval?.reason || statusLabel(task.status)}</small>
-                    {task.output?.summary ? <p>{task.output.summary}</p> : <p>Claude is preparing this for review.</p>}
-                  </div>
-                </div>
-              ))}
-              {approvalRuns.map(run => (
-                <div key={run.id} className="lr-ceo-ticket-row">
-                  <div>
-                    <span>Automation</span>
-                    <strong>{run.name}</strong>
-                    <small>{run.approvalReason || run.summary}</small>
-                  </div>
-                  <div className="lr-ceo-run-actions">
-                    <button type="button" onClick={() => decideAutomationRun(run, "approved")} disabled={busyId === run.id}>
-                      Approve
-                    </button>
-                    <button type="button" className="lr-ceo-secondary-btn" onClick={() => decideAutomationRun(run, "declined")} disabled={busyId === run.id}>
-                      Decline
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {!approvalTasks.length && !approvalRuns.length ? <p className="lr-ceo-note">No approvals waiting.</p> : null}
             </div>
           </article>
         </section>
