@@ -6,7 +6,23 @@ export async function POST(req: Request) {
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
+  const host = req.headers.get("host")?.split(":")[0]?.toLowerCase() ?? "";
+  const isLeadRiderHost = host === "leadrider.ai" || host === "www.leadrider.ai";
   const body = await req.text();
+  const requestedEmail = (() => {
+    try {
+      return String(JSON.parse(body)?.email ?? "").trim().toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  if (isLeadRiderHost && requestedEmail && !requestedEmail.endsWith("@leadrider.ai")) {
+    return NextResponse.json({ ok: false, error: "Use a LeadRider email for Command." }, { status: 403 });
+  }
+  if (!isLeadRiderHost && requestedEmail.endsWith("@leadrider.ai")) {
+    return NextResponse.json({ ok: false, error: "Use a dealer account for this dealership workspace." }, { status: 403 });
+  }
+
   const r = await apiFetch(`${base}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

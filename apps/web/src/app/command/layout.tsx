@@ -14,7 +14,15 @@ export default function CommandLayout({ children }: { children: React.ReactNode 
   async function checkAuth() {
     const resp = await fetch("/api/auth/me", { cache: "no-store" });
     const data = await resp.json().catch(() => null);
-    setAuthState(resp.ok && data?.ok && data?.user ? "authed" : "guest");
+    const userEmail = String(data?.user?.email ?? "").trim().toLowerCase();
+    if (resp.ok && data?.ok && userEmail.endsWith("@leadrider.ai")) {
+      setAuthState("authed");
+      return;
+    }
+    if (resp.ok && data?.ok && userEmail) {
+      setError("Use a LeadRider email for Command.");
+    }
+    setAuthState("guest");
   }
 
   useEffect(() => {
@@ -32,6 +40,8 @@ export default function CommandLayout({ children }: { children: React.ReactNode 
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Sign in failed.");
+      const userEmail = String(data?.user?.email ?? "").trim().toLowerCase();
+      if (!userEmail.endsWith("@leadrider.ai")) throw new Error("Use a LeadRider email for Command.");
       setEmail("");
       setPassword("");
       setAuthState("authed");
