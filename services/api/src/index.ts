@@ -12324,6 +12324,85 @@ async function maybeQueueAppointmentOutcomeRescheduleDraft(args: {
   return { queued: true, reply };
 }
 
+function extractAppointmentOutcomeRideTarget(note: string): string {
+  const text = String(note ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const rideMatch =
+    text.match(/\b(?:ride|test ride|demo ride)\s+(?:a|an|the)?\s*([a-z0-9][a-z0-9\s-]{2,60}?)(?:[.!?]|$)/i) ??
+    text.match(/\b(?:try|look at|compare)\s+(?:a|an|the)?\s*([a-z0-9][a-z0-9\s-]{2,60}?)(?:[.!?]|$)/i);
+  const raw = String(rideMatch?.[1] ?? "").trim();
+  if (!raw) return "";
+  return normalizeDisplayCase(
+    raw
+      .replace(/\b(to|and|or|if|when|that|this|it|him|her|them)\b[\s\S]*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
+function buildAppointmentOutcomeFollowUpMessage(conv: any, note: string): string {
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName) || "there";
+  const rideTarget = extractAppointmentOutcomeRideTarget(note);
+  if (rideTarget) {
+    return `Hey ${firstName}, just checking in after the trike ride. If you want, we can have you come back in and ride a ${rideTarget} to compare. What day works for you?`;
+  }
+  return `Hey ${firstName}, just checking in after your visit. If you want to come back in and compare another option, send me a day that works for you.`;
+}
+
+async function activateAppointmentOutcomeFollowUp(args: {
+  conv: any;
+  note?: string;
+  primaryStatus?: AppointmentPrimaryOutcome;
+  secondaryStatus?: AppointmentSecondaryOutcome;
+  actor?: { id?: string | null; name?: string | null };
+}): Promise<{ activated: boolean; nextDueAt?: string }> {
+  const conv = args.conv;
+  if (!conv || conv.status === "closed") return { activated: false };
+  if (args.secondaryStatus !== "needs_follow_up") return { activated: false };
+  const cfg = await getSchedulerConfigHot();
+  const timezone = cfg.timezone || "America/New_York";
+  const now = nowIso();
+  const nextDueAt = computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone);
+  const note = String(args.note ?? "").trim();
+  setFollowUpMode(conv, "active", "appointment_outcome_follow_up");
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: now,
+    nextDueAt,
+    stepIndex: 0,
+    kind: "engaged",
+    deferredMessage: buildAppointmentOutcomeFollowUpMessage(conv, note),
+    contextTag: "appointment_outcome_follow_up",
+    contextTagUpdatedAt: now,
+    scheduleInviteCount: 0,
+    scheduleMuted: false
+  };
+  if (note) {
+    const contextText = [
+      `Appointment outcome: ${args.primaryStatus === "showed" ? "customer showed" : args.primaryStatus ?? "outcome recorded"} and needs follow-up.`,
+      `Salesperson note: ${note}`,
+      "Use this context for the next follow-up draft."
+    ].join(" ");
+    setAgentContext(conv, {
+      text: contextText,
+      mode: "next_reply",
+      expiresAt: computeFollowUpDueAt(now, 14, timezone),
+      updatedByUserId: String(args.actor?.id ?? "").trim() || undefined,
+      updatedByUserName: String(args.actor?.name ?? "").trim() || undefined
+    });
+  }
+  addTodo(
+    conv,
+    "note",
+    `Appointment outcome follow-up scheduled${nextDueAt ? ` for ${formatSlotLocal(nextDueAt, timezone)}` : ""}${note ? `: ${note}` : "."}`,
+    `appointment_outcome_follow_up:${String(conv.appointment?.bookedEventId ?? conv.appointment?.whenIso ?? conv.id ?? "").trim()}`,
+    undefined,
+    { dueAt: nextDueAt },
+    "followup"
+  );
+  return { activated: true, nextDueAt };
+}
+
 function buildAppointmentOutcomeRescheduleReply(args: {
   conv?: any;
   bookingUrl?: string | null;
@@ -22612,6 +22691,12 @@ async function processDueFollowUps() {
       const longTerm = await buildLongTermFollowUp(conv, dealerProfile);
       message = longTerm.body;
       mediaUrls = longTerm.mediaUrls;
+    } else if (
+      String(cadence.contextTag ?? "").trim().toLowerCase() === "appointment_outcome_follow_up" &&
+      String(cadence.deferredMessage ?? "").trim()
+    ) {
+      message = String(cadence.deferredMessage).trim();
+      cadenceNoRepeatFallbacks = [message];
     } else if (isTradeNoInterest) {
       const day2 = cadence.stepIndex === 0 ? await buildDay2Options(cfg) : null;
       if (day2) {
@@ -28190,6 +28275,22 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
       secondaryStatus: normalizedOutcome.secondaryStatus,
       source: "conversation_header"
     });
+    await activateAppointmentOutcomeFollowUp({
+      conv,
+      note: appointmentOutcomeNote,
+      primaryStatus: normalizedOutcome.primaryStatus,
+      secondaryStatus: normalizedOutcome.secondaryStatus,
+      actor: {
+        id: String((req as any).user?.id ?? "").trim() || undefined,
+        name:
+          [((req as any).user?.firstName ?? ""), ((req as any).user?.lastName ?? "")]
+            .filter(Boolean)
+            .join(" ")
+            .trim() ||
+          String((req as any).user?.name ?? (req as any).user?.email ?? "").trim() ||
+          undefined
+      }
+    });
     markOutcomeRelatedTodosDone(conv, {
       includeFinance: appointmentOutcomeStatus === "financing_declined" || appointmentOutcomeStatus === "financing_needs_info"
     });
@@ -29129,6 +29230,26 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
         source: "todo_done_modal"
+      });
+      if (appointmentOutcomeNote) {
+        try {
+          await applyActionStateFromContextNote(conv, appointmentOutcomeNote, "Appointment outcome");
+        } catch (err: any) {
+          console.log("[todo-appointment-outcome-note-actions] failed:", err?.message ?? err);
+        }
+      }
+      await activateAppointmentOutcomeFollowUp({
+        conv,
+        note: appointmentOutcomeNote,
+        primaryStatus: normalizedOutcome.primaryStatus,
+        secondaryStatus: normalizedOutcome.secondaryStatus,
+        actor: {
+          id: String(user?.id ?? "").trim() || undefined,
+          name:
+            [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() ||
+            String(user?.name ?? user?.email ?? "").trim() ||
+            undefined
+        }
       });
       conv.appointment.updatedAt = nowIsoValue;
     }
