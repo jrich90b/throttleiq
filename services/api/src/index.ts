@@ -12002,13 +12002,16 @@ async function notifyBusinessManagerFinanceOutcome(
           .join("\n");
 
   const sent = await sendInternalSms(toNumber, message);
-  addTodo(
+  const noteTodo = addTodo(
     conv,
     "note",
     sent
       ? `Business manager SMS sent to ${targetName}: financing ${status}.`
       : `Business manager SMS failed for ${targetName}: send_failed.`
   );
+  if (sent && noteTodo?.id) {
+    markTodoDone(conv.id, noteTodo.id);
+  }
   if (sent) {
     if (status === "declined") notifyState.declinedSentAt = new Date().toISOString();
     else if (status === "approved") notifyState.approvedSentAt = new Date().toISOString();
