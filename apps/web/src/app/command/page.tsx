@@ -498,6 +498,7 @@ export default function CeoCommandDashboard() {
           <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support">Support Agent</a>
           <a href="/command/clients/new">Dealer Setup</a>
+          <a href="/command/users">Users</a>
           <a href="/command">Agreements</a>
           <a href="/command">Billing</a>
           <a href="/command">Connectors</a>

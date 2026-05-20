@@ -469,6 +469,48 @@ a {
   display: block;
 }
 
+.lr-ceo-user-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.lr-ceo-user-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(130px, 0.45fr) minmax(220px, 0.75fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.lr-ceo-user-row strong,
+.lr-ceo-user-row span {
+  display: block;
+}
+
+.lr-ceo-user-row strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-user-row span {
+  margin-top: 0.22rem;
+  color: #aebbd2;
+  font-size: 0.86rem;
+}
+
+.lr-ceo-user-password {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.lr-ceo-empty {
+  margin: 0;
+  color: #aebbd2;
+}
+
 .lr-ceo-client-list small {
   margin-top: 0.22rem;
   color: #aebbd2;
@@ -1404,6 +1446,10 @@ a {
   .lr-ceo-funnel-board {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
+
+  .lr-ceo-user-row {
+    grid-template-columns: minmax(0, 1fr) minmax(130px, 0.5fr);
+  }
 }
 
 @media (max-width: 680px) {
@@ -1428,7 +1474,12 @@ a {
   .lr-ceo-sales-form,
   .lr-ceo-agent-composer,
   .lr-ceo-integration-strip,
+  .lr-ceo-user-row,
   .lr-ceo-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .lr-ceo-user-password {
     grid-template-columns: 1fr;
   }
 

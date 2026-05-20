@@ -1,16 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
+import { headers } from "next/headers";
 import { apiFetch } from "../../../../lib/apiFetch";
 
 type Ctx = {
   params: Promise<{ id: string }>;
 };
 
+async function hostScope() {
+  const host = (await headers()).get("host")?.split(":")[0]?.toLowerCase() ?? "";
+  return {
+    isLeadRiderHost: host === "leadrider.ai" || host === "www.leadrider.ai"
+  };
+}
+
+async function loadUserForScope(base: string, id: string) {
+  const r = await apiFetch(`${base}/users`, { cache: "no-store" });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || !data?.ok || !Array.isArray(data.users)) return null;
+  return data.users.find((user: any) => String(user?.id ?? "") === id) ?? null;
+}
+
+function emailAllowedForScope(email: string, isLeadRiderHost: boolean) {
+  const normalized = String(email ?? "").trim().toLowerCase();
+  return isLeadRiderHost ? normalized.endsWith("@leadrider.ai") : !normalized.endsWith("@leadrider.ai");
+}
+
 export async function PUT(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
+  const scope = await hostScope();
+  const existing = await loadUserForScope(base, id);
+  if (!existing || !emailAllowedForScope(existing.email, scope.isLeadRiderHost)) {
+    return NextResponse.json({ ok: false, error: "User is outside this workspace." }, { status: 403 });
+  }
   const body = await req.text();
+  const requestedEmail = (() => {
+    try {
+      return String(JSON.parse(body)?.email ?? existing.email ?? "").trim().toLowerCase();
+    } catch {
+      return String(existing.email ?? "").trim().toLowerCase();
+    }
+  })();
+  if (!emailAllowedForScope(requestedEmail, scope.isLeadRiderHost)) {
+    return NextResponse.json({ ok: false, error: "User email is outside this workspace." }, { status: 403 });
+  }
+
   const r = await apiFetch(`${base}/users/${encodeURIComponent(id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -32,6 +68,12 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
+
+  const scope = await hostScope();
+  const existing = await loadUserForScope(base, id);
+  if (!existing || !emailAllowedForScope(existing.email, scope.isLeadRiderHost)) {
+    return NextResponse.json({ ok: false, error: "User is outside this workspace." }, { status: 403 });
+  }
 
   const r = await apiFetch(`${base}/users/${encodeURIComponent(id)}`, { method: "DELETE" });
   const text = await r.text();
