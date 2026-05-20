@@ -88,6 +88,22 @@ function statusLabel(value: string) {
   return value.replace(/_/g, " ");
 }
 
+function isNonSupportMailTask(task: AgentTask) {
+  return /^classification:\s*non_support\b/i.test(task.output?.summary?.trim() ?? "");
+}
+
+function isSupportRelevantTask(task: AgentTask) {
+  const text = `${task.title}\n${task.instructions}`.toLowerCase();
+  return (
+    task.instructions.includes("[support-auto:") ||
+    text.includes("support ticket") ||
+    text.includes("support gmail") ||
+    text.includes("support inbox") ||
+    text.includes("support reply") ||
+    text.includes("support agent")
+  );
+}
+
 export default function SupportAgentCommandPage() {
   const [supportMailStatus, setSupportMailStatus] = useState<SupportMailStatus | null>(null);
   const [supportMailMessages, setSupportMailMessages] = useState<SupportMailMessage[]>([]);
@@ -109,7 +125,14 @@ export default function SupportAgentCommandPage() {
     [automationRuns]
   );
   const supportAgentTasks = useMemo(
-    () => agentTasks.filter(task => !task.instructions.includes("[personal-mail-auto:") && !/^Review personal email:/i.test(task.title)),
+    () =>
+      agentTasks.filter(
+        task =>
+          isSupportRelevantTask(task) &&
+          !isNonSupportMailTask(task) &&
+          !task.instructions.includes("[personal-mail-auto:") &&
+          !/^Review personal email:/i.test(task.title)
+      ),
     [agentTasks]
   );
   const approvalTasks = useMemo(

@@ -24524,6 +24524,19 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
   return res.json({ ok: true, messages });
 });
 
+function isObviousNonSupportEmail(message: { from?: string; subject?: string; snippet?: string }) {
+  const from = String(message.from ?? "").toLowerCase();
+  const subject = String(message.subject ?? "").toLowerCase();
+  const snippet = String(message.snippet ?? "").toLowerCase();
+  const text = `${from}\n${subject}\n${snippet}`;
+  if (/\b(no-?reply|notify-noreply|workspace-noreply|noreply)\b/.test(from)) return true;
+  if (from.includes("@google.com") && /\b(google workspace|google cloud organization|billing information|new google account|referring google workspace|verification code|your code is)\b/.test(text)) {
+    return true;
+  }
+  if (from.includes("docusign") && /\b(code|verification|one-time|otp)\b/.test(text)) return true;
+  return false;
+}
+
 app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -24532,6 +24545,7 @@ app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (re
   const limit = Number(req.query.limit ?? "10");
   const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
   for (const message of messages) {
+    if (isObviousNonSupportEmail(message)) continue;
     queueSupportAgentTask({
       dedupeKey: `gmail_${message.id}`,
       title: `Draft support reply: ${message.subject}`,
@@ -29149,7 +29163,9 @@ function queueClaudeTaskExecution(task: AgentTask) {
       await updateAgentTaskStatus(task.id, "running");
       const result = await runClaudeAgentTask(task);
       if (result.ok) {
-        const nextStatus: AgentTaskStatus = task.approval?.required ? "needs_approval" : "completed";
+        const supportAutoNonSupport =
+          task.instructions.includes("[support-auto:gmail_") && getClaudeSupportClassification(result.summary) === "non_support";
+        const nextStatus: AgentTaskStatus = supportAutoNonSupport ? "completed" : task.approval?.required ? "needs_approval" : "completed";
         const links = [`model:${result.model}`];
         try {
           const trashedMessageId = await maybeTrashNonSupportSupportMail(task, result.summary);
@@ -29242,6 +29258,7 @@ async function ensureSupportAgentTasksForMail(limit = 10) {
   const messages = await listSupportInboxMessages(limit);
   const tasks = [];
   for (const message of messages) {
+    if (isObviousNonSupportEmail(message)) continue;
     const task = await ensureSupportAgentTask({
       dedupeKey: `gmail_${message.id}`,
       title: `Draft support reply: ${message.subject}`,
