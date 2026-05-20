@@ -24527,6 +24527,7 @@ function classifyPersonalMailForAutoTrash(message: Pick<GmailListMessage, "from"
   const snippet = String(message.snippet ?? "").toLowerCase();
   const text = `${from}\n${subject}\n${snippet}`;
   const noReply = /\b(no-?reply|notify-noreply|workspace-noreply|noreply|notifications?)\b/.test(from);
+  const protectedNotice = /\b(billing|invoice|payment|receipt|security alert|password|suspicious|sign[- ]in|login|legal|contract|agreement|domain|dmarc|dkim|spf)\b/.test(text);
   const expiredCode = /\b(your code is|verification code|one[- ]time code|otp|security code|passcode)\b/.test(text) && minutesSinceMailDate(message.date) > 30;
   if (expiredCode) return "expired one-time code";
   if (
@@ -24534,11 +24535,27 @@ function classifyPersonalMailForAutoTrash(message: Pick<GmailListMessage, "from"
     /\b(boost productivity|tips?|getting started|start building|developer account is ready|referring google workspace|newsletter|unsubscribe|webinar|trial tips?|product update|new features?)\b/.test(
       text
     ) &&
-    !/\b(billing|invoice|payment|receipt|security alert|password|suspicious|sign[- ]in|login|legal|contract|agreement|domain|dmarc|dkim|spf)\b/.test(text)
+    !protectedNotice
   ) {
     return "obvious no-reply promo or onboarding tip";
   }
+  if (/\b(developer account is ready|everything you need to start building|start building)\b/.test(text) && !protectedNotice) {
+    return "developer onboarding notice";
+  }
   return "";
+}
+
+function isPersonalMailSummarySafeToTrash(summary: string) {
+  const text = summary.toLowerCase();
+  if (/\b(billing|invoice|payment|receipt|security alert|password|suspicious|sign[- ]in|login|legal|contract|agreement|domain|dmarc|dkim|spf)\b/.test(text)) {
+    return false;
+  }
+  return (
+    /\brecommendation:\s*trash candidate\b/i.test(summary) ||
+    /\bclassification:\s*(trash_candidate|non_support)\b/i.test(summary) ||
+    /\binbox classification:\s*(spam_or_promo|vendor_admin)\b/i.test(summary) ||
+    /\bspam_or_promo\b/i.test(summary)
+  );
 }
 
 async function logPersonalMailAutoTrash(message: GmailListMessage, reason: string) {
@@ -24622,6 +24639,33 @@ async function ensurePersonalMailTasks(messages: GmailListMessage[]) {
   return { tasks, trashed };
 }
 
+async function processPersonalMailTrashRecommendations(limit = 1000) {
+  if (!personalMailAutoTrashEnabled()) return 0;
+  const tasks = await listAgentTasks(limit);
+  let trashed = 0;
+  for (const task of tasks) {
+    if (task.status !== "needs_approval") continue;
+    if (!task.instructions.includes("[personal-mail-auto:")) continue;
+    const summary = task.output?.summary ?? "";
+    if (!summary || !isPersonalMailSummarySafeToTrash(summary)) continue;
+    const messageId = extractPersonalGmailMessageId(task);
+    if (!messageId) continue;
+    try {
+      await trashPersonalGmailMessage(messageId);
+      await updateAgentTaskStatus(task.id, "completed", {
+        summary: `${summary}\n\nAuto-trashed after personal inbox policy matched an older trash recommendation.`,
+        links: [...(task.output?.links ?? []), `personal-mail:trashed:${messageId}`]
+      });
+      trashed += 1;
+    } catch (err: any) {
+      await updateAgentTaskStatus(task.id, "needs_approval", {
+        summary: `${summary}\n\nAuto-trash failed: ${String(err?.message ?? err).slice(0, 300)}`
+      }).catch(() => null);
+    }
+  }
+  return trashed;
+}
+
 function buildPersonalMailReviewInstructions(message: GmailListMessage, note?: string) {
   return [
     "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
@@ -24648,7 +24692,8 @@ app.post("/personal-mail/poll", async (req, res) => {
   const limit = Number(req.body?.limit ?? req.query.limit ?? "10");
   const messages = await listPersonalInboxMessages(Number.isFinite(limit) ? limit : 10);
   const { tasks, trashed } = await ensurePersonalMailTasks(messages);
-  return res.json({ ok: true, messages: messages.length, tasks: tasks.length, trashed });
+  const reviewedTrash = await processPersonalMailTrashRecommendations();
+  return res.json({ ok: true, messages: messages.length, tasks: tasks.length, trashed: trashed + reviewedTrash });
 });
 
 function isObviousNonSupportEmail(message: { from?: string; subject?: string; snippet?: string }) {
@@ -29293,7 +29338,7 @@ async function maybeTrashNonSupportSupportMail(task: AgentTask, summary: string)
 async function maybeTrashPersonalMail(task: AgentTask, summary: string) {
   if (!personalMailAutoTrashEnabled()) return null;
   if (!task.instructions.includes("[personal-mail-auto:")) return null;
-  if (getClaudePersonalMailClassification(summary) !== "trash_candidate") return null;
+  if (getClaudePersonalMailClassification(summary) !== "trash_candidate" && !isPersonalMailSummarySafeToTrash(summary)) return null;
   const messageId = extractPersonalGmailMessageId(task);
   if (!messageId) return null;
   await trashPersonalGmailMessage(messageId);
@@ -29319,7 +29364,8 @@ function queueClaudeTaskExecution(task: AgentTask) {
         const supportAutoNonSupport =
           task.instructions.includes("[support-auto:gmail_") && getClaudeSupportClassification(result.summary) === "non_support";
         const personalAutoTrash =
-          task.instructions.includes("[personal-mail-auto:") && getClaudePersonalMailClassification(result.summary) === "trash_candidate";
+          task.instructions.includes("[personal-mail-auto:") &&
+          (getClaudePersonalMailClassification(result.summary) === "trash_candidate" || isPersonalMailSummarySafeToTrash(result.summary));
         const nextStatus: AgentTaskStatus =
           supportAutoNonSupport || personalAutoTrash ? "completed" : task.approval?.required ? "needs_approval" : "completed";
         const links = [`model:${result.model}`];
@@ -49106,7 +49152,8 @@ const server = app.listen(port, () => {
       try {
         const messages = await listPersonalInboxMessages(10);
         const { tasks, trashed } = await ensurePersonalMailTasks(messages);
-        console.log(`[personal mail] poll checked ${messages.length} messages, ${tasks.length} review tasks present, ${trashed} auto-trashed`);
+        const reviewedTrash = await processPersonalMailTrashRecommendations();
+        console.log(`[personal mail] poll checked ${messages.length} messages, ${tasks.length} review tasks present, ${trashed + reviewedTrash} auto-trashed`);
       } catch (err: any) {
         console.warn("[personal mail] poll failed:", err?.message ?? err);
       }
