@@ -35,3 +35,23 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: false, error: text || "Invalid response" }, { status: 500 });
   }
 }
+
+export async function POST(req: NextRequest) {
+  const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.API_BASE_URL;
+  if (!base) {
+    return NextResponse.json({ ok: false, error: "Missing API base URL" }, { status: 500 });
+  }
+  const body = await req.text();
+  const r = await apiFetch(`${base}/inventory/availability`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body
+  });
+  const text = await r.text();
+  try {
+    const json = JSON.parse(text);
+    return NextResponse.json(json, { status: r.status });
+  } catch {
+    return NextResponse.json({ ok: false, error: text || "Invalid response" }, { status: 500 });
+  }
+}

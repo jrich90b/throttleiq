@@ -273,6 +273,7 @@ import {
 import {
   listInventorySolds,
   setInventorySold,
+  clearInventorySold,
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
 import { sendEmail } from "./domain/emailSender.js";
@@ -3929,11 +3930,14 @@ app.get("/inventory", async (_req, res) => {
     if (!items.length) {
       const snap = await loadInventorySnapshot();
       if (snap.items.length) {
+        const notes = await listInventoryNotes();
+        const holds = await listInventoryHolds();
+        const solds = await listInventorySolds();
         const withNotes = snap.items.map(item => ({
           ...item,
-          notes: [],
-          hold: null,
-          sold: null
+          notes: notes?.[normalizeInventoryHoldKey(item.stockId, item.vin) ?? ""]?.notes ?? [],
+          hold: holds?.[normalizeInventoryHoldKey(item.stockId, item.vin) ?? ""] ?? null,
+          sold: solds?.[normalizeInventorySoldKey(item.stockId, item.vin) ?? ""] ?? null
         }));
         return res.json({ ok: true, items: withNotes, snapshot: true });
       }
@@ -4166,6 +4170,68 @@ app.put("/inventory", async (req, res) => {
   } catch (err: any) {
     console.warn("inventory note update failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: "Failed to save note" });
+  }
+});
+
+app.post("/inventory/availability", async (req, res) => {
+  try {
+    const stockId = String(req.body?.stockId ?? "").trim() || undefined;
+    const vin = String(req.body?.vin ?? "").trim() || undefined;
+    const status = String(req.body?.status ?? "").trim().toLowerCase();
+    const key = normalizeInventoryHoldKey(stockId, vin);
+    if (!key) {
+      return res.status(400).json({ ok: false, error: "Missing stockId or VIN." });
+    }
+    if (!["available", "hold", "sold"].includes(status)) {
+      return res.status(400).json({ ok: false, error: "Status must be available, hold, or sold." });
+    }
+    const nowIso = new Date().toISOString();
+    const label = String(req.body?.label ?? "").trim() || undefined;
+    const note = String(req.body?.note ?? "").trim() || undefined;
+    const user = (req as any).user ?? null;
+    const actorId = String(user?.id ?? "").trim() || undefined;
+    const actorName = String(user?.name ?? user?.email ?? "").trim() || undefined;
+
+    if (status === "available") {
+      await clearInventoryHold(stockId, vin);
+      await clearInventorySold(stockId, vin);
+      return res.json({ ok: true, status: "available", stockId, vin });
+    }
+
+    if (status === "hold") {
+      const hold = {
+        id: key,
+        stockId,
+        vin,
+        label,
+        note,
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+      await setInventoryHold({ stockId, vin, hold });
+      await clearInventorySold(stockId, vin);
+      return res.json({ ok: true, status: "hold", stockId, vin, hold });
+    }
+
+    const soldKey = normalizeInventorySoldKey(stockId, vin) ?? key;
+    const sold = {
+      id: soldKey,
+      stockId,
+      vin,
+      label,
+      note,
+      soldAt: nowIso,
+      soldById: actorId,
+      soldByName: actorName,
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    await setInventorySold({ stockId, vin, sold });
+    await clearInventoryHold(stockId, vin);
+    return res.json({ ok: true, status: "sold", stockId, vin, sold });
+  } catch (err: any) {
+    console.warn("inventory availability update failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: "Failed to update inventory availability" });
   }
 });
 

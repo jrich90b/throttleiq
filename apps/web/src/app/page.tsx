@@ -3139,6 +3139,7 @@ export default function Home() {
   const [inventoryQuery, setInventoryQuery] = useState("");
   const [inventoryNotes, setInventoryNotes] = useState<Record<string, any[]>>({});
   const [inventorySaving, setInventorySaving] = useState<string | null>(null);
+  const [inventoryStatusSaving, setInventoryStatusSaving] = useState<string | null>(null);
   const [inventoryExpandedNote, setInventoryExpandedNote] = useState<string | null>(null);
   const inventoryNoteSuggestions = useMemo(() => {
     const labels = new Set<string>();
@@ -6862,6 +6863,44 @@ export default function Home() {
       setSettingsError(err?.message ?? "Failed to save note");
     } finally {
       setInventorySaving(null);
+    }
+  }
+
+  async function updateInventoryAvailability(it: any, status: "available" | "hold" | "sold") {
+    const key = String(it?.stockId ?? it?.vin ?? "").trim().toLowerCase();
+    if (!key) return;
+    setInventoryStatusSaving(`${key}:${status}`);
+    try {
+      const label = [it?.year, it?.make, it?.model, it?.trim].filter(Boolean).join(" ").trim();
+      const resp = await fetch("/api/inventory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stockId: it?.stockId ?? "",
+          vin: it?.vin ?? "",
+          label,
+          status
+        })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || json?.ok === false) {
+        throw new Error(json?.error ?? "Failed to update inventory status");
+      }
+      setInventoryItems(prev =>
+        prev.map(item => {
+          const itemKey = String(item?.stockId ?? item?.vin ?? "").trim().toLowerCase();
+          if (itemKey !== key) return item;
+          if (status === "hold") return { ...item, hold: json?.hold ?? { stockId: it?.stockId, vin: it?.vin, label }, sold: null };
+          if (status === "sold") return { ...item, sold: json?.sold ?? { stockId: it?.stockId, vin: it?.vin, label }, hold: null };
+          return { ...item, hold: null, sold: null };
+        })
+      );
+      setSaveToast(status === "available" ? "Inventory marked available." : status === "hold" ? "Inventory marked on hold." : "Inventory marked sold.");
+      setTimeout(() => setSaveToast(null), 2000);
+    } catch (err: any) {
+      setSettingsError(err?.message ?? "Failed to update inventory status");
+    } finally {
+      setInventoryStatusSaving(null);
     }
   }
 
@@ -15266,6 +15305,9 @@ export default function Home() {
                   })
                   .map((it: any) => {
                     const key = String(it.stockId ?? it.vin ?? "").trim().toLowerCase();
+                    const isHeld = !!it.hold;
+                    const isSold = !!it.sold;
+                    const statusLabel = isSold ? "Sold" : isHeld ? "On hold" : "Available";
                     return (
                       <div key={key || it.url || Math.random()} className="border rounded-lg p-3 space-y-2">
                         {it.images?.[0] ? (
@@ -15289,11 +15331,55 @@ export default function Home() {
                           {it.color ? `Color: ${it.color}` : "Color: —"}{" "}
                           {it.price ? `• $${Number(it.price).toLocaleString()}` : ""}
                         </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                              isSold
+                                ? "bg-red-100 text-red-800 border border-red-200"
+                                : isHeld
+                                  ? "bg-amber-100 text-amber-900 border border-amber-200"
+                                  : "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                            }`}
+                          >
+                            {statusLabel}
+                          </span>
+                          {isHeld && it.hold?.label ? (
+                            <span className="text-[11px] text-gray-500">Hold: {it.hold.label}</span>
+                          ) : null}
+                          {isSold && it.sold?.soldAt ? (
+                            <span className="text-[11px] text-gray-500">
+                              Sold {new Date(it.sold.soldAt).toLocaleDateString()}
+                            </span>
+                          ) : null}
+                        </div>
                         {it.url ? (
                           <a className="text-xs text-blue-600 underline" href={it.url} target="_blank" rel="noreferrer">
                             View listing
                           </a>
                         ) : null}
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            className={`px-2 py-1 border rounded text-xs ${isHeld ? "bg-amber-50 border-amber-300 text-amber-900" : ""}`}
+                            onClick={() => updateInventoryAvailability(it, "hold")}
+                            disabled={!key || inventoryStatusSaving === `${key}:hold`}
+                          >
+                            {inventoryStatusSaving === `${key}:hold` ? "Saving..." : "Hold"}
+                          </button>
+                          <button
+                            className={`px-2 py-1 border rounded text-xs ${isSold ? "bg-red-50 border-red-300 text-red-800" : ""}`}
+                            onClick={() => updateInventoryAvailability(it, "sold")}
+                            disabled={!key || inventoryStatusSaving === `${key}:sold`}
+                          >
+                            {inventoryStatusSaving === `${key}:sold` ? "Saving..." : "Sold"}
+                          </button>
+                          <button
+                            className="px-2 py-1 border rounded text-xs"
+                            onClick={() => updateInventoryAvailability(it, "available")}
+                            disabled={!key || inventoryStatusSaving === `${key}:available` || (!isHeld && !isSold)}
+                          >
+                            {inventoryStatusSaving === `${key}:available` ? "Saving..." : "Available"}
+                          </button>
+                        </div>
                         <div className="space-y-2">
                           {(inventoryNotes[key] ?? []).map((n: any, idx: number) => {
                             const expired = n?.expiresAt && n.expiresAt < new Date().toISOString().slice(0, 10);
