@@ -131,6 +131,16 @@ function moneyValue(value?: string) {
   return Number(match[0].replace(/,/g, "")) || 0;
 }
 
+function commandApiError(message?: string) {
+  if (message === "auth required" || message === "invalid session" || message === "user not found") {
+    return "Sign in on www.leadrider.ai first, then try Zoom again.";
+  }
+  if (message === "manager required" || message === "forbidden") {
+    return "Your LeadRider account does not have permission to manage Zoom.";
+  }
+  return message || "Request failed.";
+}
+
 export default function SalesFunnelPage() {
   const [prospects, setProspects] = useState<SalesProspect[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -171,7 +181,7 @@ export default function SalesFunnelPage() {
     try {
       const resp = await fetch("/api/sales-prospects?limit=250", { cache: "no-store" });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Sales prospects could not be loaded.");
+      if (!resp.ok || !data?.ok) throw new Error(commandApiError(data?.error || "Sales prospects could not be loaded."));
       const rows = Array.isArray(data.prospects) ? data.prospects : [];
       setProspects(rows);
       if (rows.length && !selectedId) setSelectedId(rows[0].id);
@@ -229,7 +239,7 @@ export default function SalesFunnelPage() {
     try {
       const resp = await fetch("/api/integrations/zoom/status", { cache: "no-store" });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Zoom status could not be loaded.");
+      if (!resp.ok || !data?.ok) throw new Error(commandApiError(data?.error || "Zoom status could not be loaded."));
       setZoomStatus(data);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Zoom status could not be loaded.");
@@ -241,7 +251,7 @@ export default function SalesFunnelPage() {
     try {
       const resp = await fetch("/api/integrations/zoom/start", { cache: "no-store" });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok || !data.url) throw new Error(data?.error || "Zoom connection could not start.");
+      if (!resp.ok || !data?.ok || !data.url) throw new Error(commandApiError(data?.error || "Zoom connection could not start."));
       window.location.href = data.url;
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Zoom connection could not start.");
