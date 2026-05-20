@@ -24500,6 +24500,7 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
     queueSupportAgentTask({
       dedupeKey: `personal_gmail_${message.id}`,
       title: `Review personal email: ${message.subject}`,
+      lane: "personal_mail",
       instructions: [
         "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
         "Classify it as important, follow_up, spam_or_promo, vendor_admin, or unclear.",
@@ -29191,6 +29192,7 @@ async function ensureSupportAgentTask(input: {
   title: string;
   instructions: string;
   priority?: "normal" | "high";
+  lane?: "support" | "personal_mail";
   requestedBy?: {
     id?: string;
     name?: string;
@@ -29199,7 +29201,8 @@ async function ensureSupportAgentTask(input: {
   };
 }) {
   const dedupeKey = input.dedupeKey.replace(/\s+/g, "_").slice(0, 120);
-  const marker = `[support-auto:${dedupeKey}]`;
+  const lane = input.lane ?? "support";
+  const marker = `[${lane === "personal_mail" ? "personal-mail-auto" : "support-auto"}:${dedupeKey}]`;
   const existing = (await listAgentTasks(1000)).find(task => task.instructions.includes(marker));
   if (existing) {
     queueClaudeTaskExecution(existing);
@@ -29208,14 +29211,17 @@ async function ensureSupportAgentTask(input: {
   const task = await addAgentTask({
     provider: "claude",
     kind: "email",
-    title: input.title.replace(/\s+/g, " ").trim().slice(0, 180) || "Support Agent review",
+    title: input.title.replace(/\s+/g, " ").trim().slice(0, 180) || (lane === "personal_mail" ? "Personal inbox review" : "Support Agent review"),
     instructions: `${marker}\n${input.instructions.trim().slice(0, 4800)}`,
     clientName: "LeadRider",
     priority: input.priority ?? "high",
     risk: "approval_required",
     approval: {
       required: true,
-      reason: "Support Agent output must be reviewed before sending email, closing tickets, or making production changes."
+      reason:
+        lane === "personal_mail"
+          ? "Personal inbox output must be reviewed before sending email, deleting mail, archiving, or making external changes."
+          : "Support Agent output must be reviewed before sending email, closing tickets, or making production changes."
     },
     requestedBy: input.requestedBy ?? {
       name: "LeadRider Automation",

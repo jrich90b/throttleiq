@@ -108,7 +108,14 @@ export default function SupportAgentCommandPage() {
     () => automationRuns.filter(run => run.source === "feedback_loop" || /feedback|closed loop/i.test(run.name)),
     [automationRuns]
   );
-  const approvalTasks = useMemo(() => agentTasks.filter(task => task.status === "needs_approval" || task.approval?.required), [agentTasks]);
+  const supportAgentTasks = useMemo(
+    () => agentTasks.filter(task => !task.instructions.includes("[personal-mail-auto:") && !/^Review personal email:/i.test(task.title)),
+    [agentTasks]
+  );
+  const approvalTasks = useMemo(
+    () => supportAgentTasks.filter(task => task.status === "needs_approval" || task.approval?.required),
+    [supportAgentTasks]
+  );
 
   useEffect(() => {
     let active = true;
