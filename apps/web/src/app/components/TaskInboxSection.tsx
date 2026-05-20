@@ -200,13 +200,21 @@ export function TaskInboxSection(props: any) {
                               {taskLabel}
                             </span>
                             {appointmentReminderSent ? (
-                              <span
-                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
-                                title="Outcome reminder SMS sent to salesperson"
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
+                                title="Record appointment outcome"
+                                onClick={() => {
+                                  setAppointmentCloseTarget(t);
+                                  setAppointmentClosePrimaryOutcome("showed");
+                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                  setAppointmentCloseNote("");
+                                  setAppointmentCloseOpen(true);
+                                }}
                               >
                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                                 Outcome needed
-                              </span>
+                              </button>
                             ) : null}
                             {followUpTicker ? (
                               <span
@@ -358,7 +366,7 @@ export function TaskInboxSection(props: any) {
                             }}
                             title="Close this To Do"
                           >
-                            Close
+                            {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
                           </button>
                           <button
                             className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"

@@ -32,6 +32,8 @@ export async function POST(req: Request) {
   const resolution = String(body?.resolution ?? "").trim();
   const appointmentOutcome = String(body?.appointmentOutcome ?? "").trim();
   const appointmentOutcomeNote = String(body?.appointmentOutcomeNote ?? "").trim();
+  const appointmentPrimaryOutcome = String(body?.appointmentPrimaryOutcome ?? "").trim();
+  const appointmentSecondaryOutcome = String(body?.appointmentSecondaryOutcome ?? "").trim();
   if (!convId || !todoId) {
     return NextResponse.json({ ok: false, error: "Missing convId/todoId" }, { status: 400 });
   }
@@ -42,7 +44,9 @@ export async function POST(req: Request) {
     body: JSON.stringify({
       resolution,
       appointmentOutcome: appointmentOutcome || undefined,
-      appointmentOutcomeNote: appointmentOutcomeNote || undefined
+      appointmentOutcomeNote: appointmentOutcomeNote || undefined,
+      appointmentPrimaryOutcome: appointmentPrimaryOutcome || undefined,
+      appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined
     })
   });
   const text = await r.text();

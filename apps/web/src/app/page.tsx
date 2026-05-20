@@ -8569,6 +8569,9 @@ export default function Home() {
       })
     });
     await load();
+    if (selectedConv?.id === todo.convId) {
+      await loadConversation(todo.convId);
+    }
   }
 
   async function reportTodoIssue(todo?: TodoItem) {
