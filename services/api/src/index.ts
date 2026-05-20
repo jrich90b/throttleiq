@@ -2305,6 +2305,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/integrations/meta/callback") ||
     pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/support-mail/poll") ||
+    pathname.startsWith("/personal-mail/poll") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/debug/incidents") ||
     pathname.startsWith("/auth/login") ||
@@ -24497,35 +24498,7 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
   }
   const limit = Number(req.query.limit ?? "10");
   const messages = await listPersonalInboxMessages(Number.isFinite(limit) ? limit : 10);
-  for (const message of messages) {
-    queueSupportAgentTask({
-      dedupeKey: `personal_gmail_${message.id}`,
-      title: `Review personal email: ${message.subject}`,
-      lane: "personal_mail",
-      instructions: [
-        "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
-        "Classify it as exactly one of: trash_candidate, needs_approval, draft_reply, keep_only.",
-        "Use trash_candidate only for obvious low-value mail: expired one-time codes, marketing/promotional newsletters, no-reply onboarding noise, referral ads, automated product tips, or spam with no business record value.",
-        "Use needs_approval for billing, legal, account/security, vendor setup, dealer/prospect messages, anything involving money/access/contracts, or anything uncertain.",
-        "Use draft_reply when a real person needs an answer. Draft the reply for approval.",
-        "Use keep_only for useful records that do not need a reply.",
-        "Do not send, delete, archive, mark read, unsubscribe, or change external systems. Joe approves those actions in Command.",
-        `Gmail message ID: ${message.id}`,
-        message.threadId ? `Thread ID: ${message.threadId}` : "",
-        `From: ${message.from}`,
-        `Subject: ${message.subject}`,
-        message.date ? `Date: ${message.date}` : "",
-        message.snippet ? `Snippet: ${message.snippet}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      priority: "normal",
-      requestedBy: {
-        name: "Personal Gmail Monitor",
-        role: "system"
-      }
-    });
-  }
+  await ensurePersonalMailTasks(messages);
   return res.json({ ok: true, messages });
 });
 
@@ -24538,6 +24511,144 @@ app.post("/personal-mail/messages/:id/trash", requirePermission("canAccessTodos"
   if (!messageId) return res.status(400).json({ ok: false, error: "Gmail message id is required." });
   const result = await trashPersonalGmailMessage(messageId);
   return res.json({ ok: true, message: result });
+});
+
+type GmailListMessage = Awaited<ReturnType<typeof listPersonalInboxMessages>>[number];
+
+function minutesSinceMailDate(dateValue?: string) {
+  const ts = Date.parse(String(dateValue ?? ""));
+  if (!Number.isFinite(ts)) return Number.POSITIVE_INFINITY;
+  return (Date.now() - ts) / 60000;
+}
+
+function classifyPersonalMailForAutoTrash(message: Pick<GmailListMessage, "from" | "subject" | "snippet" | "date">) {
+  const from = String(message.from ?? "").toLowerCase();
+  const subject = String(message.subject ?? "").toLowerCase();
+  const snippet = String(message.snippet ?? "").toLowerCase();
+  const text = `${from}\n${subject}\n${snippet}`;
+  const noReply = /\b(no-?reply|notify-noreply|workspace-noreply|noreply|notifications?)\b/.test(from);
+  const expiredCode = /\b(your code is|verification code|one[- ]time code|otp|security code|passcode)\b/.test(text) && minutesSinceMailDate(message.date) > 30;
+  if (expiredCode) return "expired one-time code";
+  if (
+    noReply &&
+    /\b(boost productivity|tips?|getting started|start building|developer account is ready|referring google workspace|newsletter|unsubscribe|webinar|trial tips?|product update|new features?)\b/.test(
+      text
+    ) &&
+    !/\b(billing|invoice|payment|receipt|security alert|password|suspicious|sign[- ]in|login|legal|contract|agreement|domain|dmarc|dkim|spf)\b/.test(text)
+  ) {
+    return "obvious no-reply promo or onboarding tip";
+  }
+  return "";
+}
+
+async function logPersonalMailAutoTrash(message: GmailListMessage, reason: string) {
+  const existing = (await listAgentTasks(1000)).find(task =>
+    task.instructions.includes(`[personal-mail-auto-trash:${message.id}]`)
+  );
+  if (existing) return existing;
+  const task = await addAgentTask({
+    provider: "claude",
+    kind: "email",
+    title: `Auto-trashed personal email: ${message.subject}`,
+    instructions: [
+      `[personal-mail-auto-trash:${message.id}]`,
+      "Personal inbox policy moved this message to Gmail trash automatically.",
+      `Reason: ${reason}`,
+      `Gmail message ID: ${message.id}`,
+      message.threadId ? `Thread ID: ${message.threadId}` : "",
+      `From: ${message.from}`,
+      `Subject: ${message.subject}`,
+      message.date ? `Date: ${message.date}` : "",
+      message.snippet ? `Snippet: ${message.snippet}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    clientName: "LeadRider",
+    priority: "normal",
+    risk: "low",
+    approval: { required: false },
+    requestedBy: {
+      name: "Personal Gmail Monitor",
+      role: "system"
+    }
+  });
+  await updateAgentTaskStatus(task.id, "completed", {
+    summary: `Auto-trashed personal email (${reason}): ${message.subject}`,
+    links: [`personal-mail:trashed:${message.id}`]
+  });
+  return task;
+}
+
+async function ensurePersonalMailTasks(messages: GmailListMessage[]) {
+  const tasks = [];
+  let trashed = 0;
+  for (const message of messages) {
+    const autoTrashReason = personalMailAutoTrashEnabled() ? classifyPersonalMailForAutoTrash(message) : "";
+    if (autoTrashReason) {
+      try {
+        await trashPersonalGmailMessage(message.id);
+        await logPersonalMailAutoTrash(message, autoTrashReason);
+        trashed += 1;
+      } catch (err: any) {
+        console.warn("[personal mail] auto-trash failed:", err?.message ?? err);
+        const task = await ensureSupportAgentTask({
+          dedupeKey: `personal_gmail_${message.id}`,
+          title: `Review personal email: ${message.subject}`,
+          lane: "personal_mail",
+          instructions: buildPersonalMailReviewInstructions(message, `Auto-trash failed: ${String(err?.message ?? err).slice(0, 300)}`),
+          priority: "normal",
+          requestedBy: {
+            name: "Personal Gmail Monitor",
+            role: "system"
+          }
+        });
+        tasks.push(task);
+      }
+      continue;
+    }
+    const task = await ensureSupportAgentTask({
+      dedupeKey: `personal_gmail_${message.id}`,
+      title: `Review personal email: ${message.subject}`,
+      lane: "personal_mail",
+      instructions: buildPersonalMailReviewInstructions(message),
+      priority: "normal",
+      requestedBy: {
+        name: "Personal Gmail Monitor",
+        role: "system"
+      }
+    });
+    tasks.push(task);
+  }
+  return { tasks, trashed };
+}
+
+function buildPersonalMailReviewInstructions(message: GmailListMessage, note?: string) {
+  return [
+    "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
+    "First line must be: Classification: trash_candidate, needs_approval, draft_reply, or keep_only.",
+    "Use trash_candidate only for obvious low-value mail: expired one-time codes, marketing/promotional newsletters, no-reply onboarding noise, referral ads, automated product tips, or spam with no business record value.",
+    "Use needs_approval for billing, legal, account/security, vendor setup, dealer/prospect messages, anything involving money/access/contracts, or anything uncertain.",
+    "Use draft_reply when a real person needs an answer. Draft the reply for approval.",
+    "Use keep_only for useful records that do not need a reply.",
+    "Do not send, delete, archive, mark read, unsubscribe, or change external systems unless the classification is trash_candidate. Joe has approved automatic trashing only for trash_candidate.",
+    note ? `Review note: ${note}` : "",
+    `Gmail message ID: ${message.id}`,
+    message.threadId ? `Thread ID: ${message.threadId}` : "",
+    `From: ${message.from}`,
+    `Subject: ${message.subject}`,
+    message.date ? `Date: ${message.date}` : "",
+    message.snippet ? `Snippet: ${message.snippet}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+app.post("/personal-mail/poll", async (req, res) => {
+  if (!canPollSupportAgent(req)) return res.status(401).json({ ok: false, error: "invalid personal mail poll token" });
+  const limit = Number(req.body?.limit ?? req.query.limit ?? "10");
+  const messages = await listPersonalInboxMessages(Number.isFinite(limit) ? limit : 10);
+  const { tasks, trashed } = await ensurePersonalMailTasks(messages);
+  return res.json({ ok: true, messages: messages.length, tasks: tasks.length, trashed });
 });
 
 function isObviousNonSupportEmail(message: { from?: string; subject?: string; snippet?: string }) {
@@ -29140,7 +29251,16 @@ function supportMailAutoTrashEnabled() {
   return raw !== "0" && raw !== "false" && raw !== "off";
 }
 
+function personalMailAutoTrashEnabled() {
+  const raw = String(process.env.PERSONAL_MAIL_AUTO_TRASH_ENABLED ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
+
 function extractSupportGmailMessageId(task: AgentTask) {
+  return task.instructions.match(/Gmail message ID:\s*([A-Za-z0-9_-]+)/i)?.[1] ?? null;
+}
+
+function extractPersonalGmailMessageId(task: AgentTask) {
   return task.instructions.match(/Gmail message ID:\s*([A-Za-z0-9_-]+)/i)?.[1] ?? null;
 }
 
@@ -29153,6 +29273,13 @@ function getClaudeSupportClassification(summary: string): "support_ticket" | "no
   return match ? (match[1].toLowerCase() as "support_ticket" | "non_support" | "unclear") : null;
 }
 
+function getClaudePersonalMailClassification(summary: string): "trash_candidate" | "needs_approval" | "draft_reply" | "keep_only" | null {
+  const match = summary.match(/\bclassification:\s*(trash_candidate|needs_approval|draft_reply|keep_only)\b/i);
+  return match
+    ? (match[1].toLowerCase() as "trash_candidate" | "needs_approval" | "draft_reply" | "keep_only")
+    : null;
+}
+
 async function maybeTrashNonSupportSupportMail(task: AgentTask, summary: string) {
   if (!supportMailAutoTrashEnabled()) return null;
   if (!task.instructions.includes("[support-auto:gmail_")) return null;
@@ -29160,6 +29287,16 @@ async function maybeTrashNonSupportSupportMail(task: AgentTask, summary: string)
   const messageId = extractSupportGmailMessageId(task);
   if (!messageId) return null;
   await trashSupportGmailMessage(messageId);
+  return messageId;
+}
+
+async function maybeTrashPersonalMail(task: AgentTask, summary: string) {
+  if (!personalMailAutoTrashEnabled()) return null;
+  if (!task.instructions.includes("[personal-mail-auto:")) return null;
+  if (getClaudePersonalMailClassification(summary) !== "trash_candidate") return null;
+  const messageId = extractPersonalGmailMessageId(task);
+  if (!messageId) return null;
+  await trashPersonalGmailMessage(messageId);
   return messageId;
 }
 
@@ -29181,13 +29318,22 @@ function queueClaudeTaskExecution(task: AgentTask) {
       if (result.ok) {
         const supportAutoNonSupport =
           task.instructions.includes("[support-auto:gmail_") && getClaudeSupportClassification(result.summary) === "non_support";
-        const nextStatus: AgentTaskStatus = supportAutoNonSupport ? "completed" : task.approval?.required ? "needs_approval" : "completed";
+        const personalAutoTrash =
+          task.instructions.includes("[personal-mail-auto:") && getClaudePersonalMailClassification(result.summary) === "trash_candidate";
+        const nextStatus: AgentTaskStatus =
+          supportAutoNonSupport || personalAutoTrash ? "completed" : task.approval?.required ? "needs_approval" : "completed";
         const links = [`model:${result.model}`];
         try {
           const trashedMessageId = await maybeTrashNonSupportSupportMail(task, result.summary);
           if (trashedMessageId) links.push(`support-mail:trashed:${trashedMessageId}`);
         } catch (err: any) {
           links.push(`support-mail:trash-failed:${String(err?.message ?? err).slice(0, 120)}`);
+        }
+        try {
+          const trashedMessageId = await maybeTrashPersonalMail(task, result.summary);
+          if (trashedMessageId) links.push(`personal-mail:trashed:${trashedMessageId}`);
+        } catch (err: any) {
+          links.push(`personal-mail:trash-failed:${String(err?.message ?? err).slice(0, 120)}`);
         }
         await updateAgentTaskStatus(task.id, nextStatus, {
           summary: result.summary,
@@ -48944,6 +49090,30 @@ const server = app.listen(port, () => {
     setTimeout(runSupportMailPoll, 20_000).unref?.();
     const supportMailInterval = setInterval(runSupportMailPoll, supportMailPollMinutes * 60 * 1000);
     (supportMailInterval as any).unref?.();
+  }
+
+  const personalMailAutoPollEnabled =
+    (process.env.PERSONAL_MAIL_AUTO_POLL_ENABLED ?? "true").toLowerCase() !== "false" &&
+    process.env.PERSONAL_MAIL_AUTO_POLL_ENABLED !== "0";
+  const personalMailPollMinutesRaw = Number(process.env.PERSONAL_MAIL_AUTO_POLL_MINUTES ?? "5");
+  const personalMailPollMinutes =
+    Number.isFinite(personalMailPollMinutesRaw) && personalMailPollMinutesRaw >= 1
+      ? personalMailPollMinutesRaw
+      : 5;
+  if (personalMailAutoPollEnabled) {
+    console.log(`[personal mail] auto poll enabled (${personalMailPollMinutes} min interval)`);
+    const runPersonalMailPoll = async () => {
+      try {
+        const messages = await listPersonalInboxMessages(10);
+        const { tasks, trashed } = await ensurePersonalMailTasks(messages);
+        console.log(`[personal mail] poll checked ${messages.length} messages, ${tasks.length} review tasks present, ${trashed} auto-trashed`);
+      } catch (err: any) {
+        console.warn("[personal mail] poll failed:", err?.message ?? err);
+      }
+    };
+    setTimeout(runPersonalMailPoll, 25_000).unref?.();
+    const personalMailInterval = setInterval(runPersonalMailPoll, personalMailPollMinutes * 60 * 1000);
+    (personalMailInterval as any).unref?.();
   }
 
   const claudeAgentEnabled =
