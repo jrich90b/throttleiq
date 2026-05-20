@@ -376,25 +376,25 @@ export function TaskInboxSection(props: any) {
                               Call
                             </button>
                           ) : null}
-                          <button
-                            className="px-3 py-2 border rounded text-sm text-gray-600"
-                            onClick={() => {
-                              if ((sectionType === "appointment" && !appointmentOutcomeLabel) || dealerRideOutcomeNeeded) {
-                                setAppointmentCloseTarget(t);
-                                setAppointmentClosePrimaryOutcome("showed");
-                                setAppointmentCloseSecondaryOutcome("needs_follow_up");
-                                setAppointmentCloseNote("");
-                                setAppointmentCloseOpen(true);
-                                return;
-                              }
-                              void markTodoDone(t, "dismiss");
-                            }}
-                            title="Close this To Do"
-                          >
-                            {(sectionType === "appointment" && !appointmentOutcomeLabel) || dealerRideOutcomeNeeded
-                              ? "Record outcome"
-                              : "Close"}
-                          </button>
+                          {appointmentReminderSent || dealerRideOutcomeNeeded ? null : (
+                            <button
+                              className="px-3 py-2 border rounded text-sm text-gray-600"
+                              onClick={() => {
+                                if (sectionType === "appointment" && !appointmentOutcomeLabel) {
+                                  setAppointmentCloseTarget(t);
+                                  setAppointmentClosePrimaryOutcome("showed");
+                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                  setAppointmentCloseNote("");
+                                  setAppointmentCloseOpen(true);
+                                  return;
+                                }
+                                void markTodoDone(t, "dismiss");
+                              }}
+                              title="Close this To Do"
+                            >
+                              {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                            </button>
+                          )}
                           <button
                             className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"
                             onClick={() => {
