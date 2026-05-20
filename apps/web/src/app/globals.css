@@ -608,6 +608,16 @@ a {
   text-transform: uppercase;
 }
 
+.lr-ceo-sales-actions .lr-ceo-agent-row {
+  grid-template-columns: 1fr;
+  gap: 0.72rem;
+}
+
+.lr-ceo-sales-actions .lr-ceo-agent-row button {
+  justify-self: start;
+  max-width: 100%;
+}
+
 .lr-ceo-form-stack label {
   display: grid;
   gap: 0.42rem;

@@ -504,30 +504,40 @@ export default function SalesFunnelPage() {
               </div>
               <span className="lr-ceo-status-attention">Approval gated</span>
             </div>
-            <div className="lr-ceo-agent-list">
+            <div className="lr-ceo-agent-list lr-ceo-sales-actions">
               <div className="lr-ceo-agent-row">
-                <strong>Zoom and Fathom</strong>
-                <p>Create the setup task for meeting links and note capture under the salesperson account.</p>
+                <div>
+                  <strong>Zoom and Fathom</strong>
+                  <p>Create the setup task for meeting links and note capture under the salesperson account.</p>
+                </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("zoom")} disabled={!selected || taskBusy}>Create task</button>
               </div>
               <div className="lr-ceo-agent-row">
-                <strong>Onboarding email</strong>
-                <p>Draft dealer communications from onboarding@leadrider.ai for review before sending.</p>
+                <div>
+                  <strong>Onboarding email</strong>
+                  <p>Draft dealer communications from onboarding@leadrider.ai for review before sending.</p>
+                </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy}>Draft email task</button>
               </div>
               <div className="lr-ceo-agent-row">
-                <strong>DocuSign agreement</strong>
-                <p>Prepare the agreement packet and missing legal fields without sending it.</p>
+                <div>
+                  <strong>DocuSign agreement</strong>
+                  <p>Prepare the agreement packet and missing legal fields without sending it.</p>
+                </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("docusign")} disabled={!selected || taskBusy}>Prepare packet</button>
               </div>
               <div className="lr-ceo-agent-row">
-                <strong>Texting platform</strong>
-                <p>Plan Twilio, compliance, routing, and smoke tests for the future client.</p>
+                <div>
+                  <strong>Texting platform</strong>
+                  <p>Plan Twilio, compliance, routing, and smoke tests for the future client.</p>
+                </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("texting")} disabled={!selected || taskBusy}>Create setup task</button>
               </div>
               <div className="lr-ceo-agent-row">
-                <strong>Prospect research</strong>
-                <p>Ask Codex to gather setup blockers, lead volume clues, and sales context.</p>
+                <div>
+                  <strong>Prospect research</strong>
+                  <p>Ask Codex to gather setup blockers, lead volume clues, and sales context.</p>
+                </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("research")} disabled={!selected || taskBusy}>Research task</button>
               </div>
             </div>
