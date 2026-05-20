@@ -61,6 +61,10 @@ type AgentTask = {
     required: boolean;
     reason?: string;
   };
+  output?: {
+    summary?: string;
+    links?: string[];
+  };
 };
 type AutomationRun = {
   id: string;
@@ -301,6 +305,20 @@ function taskStatusLabel(status: AgentTask["status"]) {
   return status.replace(/_/g, " ");
 }
 
+function personalGmailMessageId(task: AgentTask) {
+  if (!task.instructions.includes("[personal-mail-auto:") && !/^Review personal email:/i.test(task.title)) return "";
+  return task.instructions.match(/Gmail message ID:\s*([^\s]+)/i)?.[1] ?? "";
+}
+
+function personalMailRecommendation(task: AgentTask) {
+  const text = `${task.output?.summary ?? ""}\n${task.instructions}`.toLowerCase();
+  if (text.includes("trash_candidate") || text.includes("spam_or_promo")) return "Trash candidate";
+  if (text.includes("draft_reply")) return "Draft reply";
+  if (text.includes("needs_approval") || text.includes("vendor_admin")) return "Needs approval";
+  if (text.includes("keep_only")) return "Keep only";
+  return "Review";
+}
+
 function formatRunTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -435,6 +453,59 @@ export default function CeoCommandDashboard() {
       setActionNotice(err instanceof Error ? err.message : "Automation run could not be updated.");
     } finally {
       setAutomationBusyId(null);
+    }
+  }
+
+  async function updateAgentTask(task: AgentTask, status: AgentTask["status"], summary: string) {
+    setAgentBusy(true);
+    try {
+      const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, summary })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be updated.");
+      setAgentTasks(current => current.map(row => (row.id === task.id ? data.task : row)));
+      setActionNotice(summary);
+    } catch (err) {
+      setActionNotice(err instanceof Error ? err.message : "Agent task could not be updated.");
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function trashPersonalMailFromTask(task: AgentTask) {
+    const messageId = personalGmailMessageId(task);
+    if (!messageId) {
+      setActionNotice("This task is missing a Gmail message id, so it cannot be trashed from Command.");
+      return;
+    }
+    setAgentBusy(true);
+    try {
+      const resp = await fetch(`/api/personal-mail/messages/${encodeURIComponent(messageId)}/trash`, {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Personal email could not be moved to trash.");
+      const summary = `Moved personal Gmail message to trash: ${task.title.replace(/^Review personal email:\s*/i, "")}`;
+      const taskResp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "completed", summary })
+      });
+      const taskData = await taskResp.json();
+      if (taskResp.ok && taskData?.ok) {
+        setAgentTasks(current => current.map(row => (row.id === task.id ? taskData.task : row)));
+      } else {
+        setAgentTasks(current => current.map(row => (row.id === task.id ? { ...row, status: "completed" } : row)));
+      }
+      setPersonalMailMessages(current => current.filter(message => message.id !== messageId));
+      setActionNotice(summary);
+    } catch (err) {
+      setActionNotice(err instanceof Error ? err.message : "Personal email could not be moved to trash.");
+    } finally {
+      setAgentBusy(false);
     }
   }
 
@@ -934,7 +1005,26 @@ export default function CeoCommandDashboard() {
                       {task.clientName || "No client"} • {taskStatusLabel(task.status)}
                       {task.approval?.required ? ` • approval needed: ${task.approval.reason}` : ""}
                     </small>
+                    {personalGmailMessageId(task) ? (
+                      <small>Recommendation: {personalMailRecommendation(task)}</small>
+                    ) : null}
+                    {task.output?.summary ? <small>{task.output.summary}</small> : null}
                   </p>
+                  {personalGmailMessageId(task) && task.status === "needs_approval" ? (
+                    <div className="lr-ceo-run-actions">
+                      <button type="button" onClick={() => trashPersonalMailFromTask(task)} disabled={agentBusy}>
+                        Trash email
+                      </button>
+                      <button
+                        type="button"
+                        className="lr-ceo-secondary-btn"
+                        onClick={() => updateAgentTask(task, "completed", "Reviewed personal email and kept it in the inbox.")}
+                        disabled={agentBusy}
+                      >
+                        Keep
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ))
             ) : (

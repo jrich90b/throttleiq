@@ -194,6 +194,15 @@ export async function trashSupportGmailMessage(messageId: string) {
   return resp.data;
 }
 
+export async function trashPersonalGmailMessage(messageId: string) {
+  const gmail = await getAuthedPersonalGmailClient();
+  const resp = await gmail.users.messages.trash({
+    userId: "me",
+    id: messageId
+  });
+  return resp.data;
+}
+
 export async function getAuthedCalendarClient() {
   const oauth2 = getOAuthClient();
   const tokens = await loadTokens();

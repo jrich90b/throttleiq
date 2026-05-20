@@ -233,6 +233,7 @@ import {
   listPersonalInboxMessages,
   createSupportGmailDraftReply,
   trashSupportGmailMessage,
+  trashPersonalGmailMessage,
   queryFreeBusy,
   insertEvent,
   updateEvent,
@@ -24503,8 +24504,12 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
       lane: "personal_mail",
       instructions: [
         "Review this personal LeadRider Gmail message for Joe and prepare a concise inbox update.",
-        "Classify it as important, follow_up, spam_or_promo, vendor_admin, or unclear.",
-        "If a reply is useful, draft it for approval. Do not send, delete, archive, mark read, unsubscribe, or change external systems.",
+        "Classify it as exactly one of: trash_candidate, needs_approval, draft_reply, keep_only.",
+        "Use trash_candidate only for obvious low-value mail: expired one-time codes, marketing/promotional newsletters, no-reply onboarding noise, referral ads, automated product tips, or spam with no business record value.",
+        "Use needs_approval for billing, legal, account/security, vendor setup, dealer/prospect messages, anything involving money/access/contracts, or anything uncertain.",
+        "Use draft_reply when a real person needs an answer. Draft the reply for approval.",
+        "Use keep_only for useful records that do not need a reply.",
+        "Do not send, delete, archive, mark read, unsubscribe, or change external systems. Joe approves those actions in Command.",
         `Gmail message ID: ${message.id}`,
         message.threadId ? `Thread ID: ${message.threadId}` : "",
         `From: ${message.from}`,
@@ -24522,6 +24527,17 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
     });
   }
   return res.json({ ok: true, messages });
+});
+
+app.post("/personal-mail/messages/:id/trash", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const messageId = String(req.params.id ?? "").trim();
+  if (!messageId) return res.status(400).json({ ok: false, error: "Gmail message id is required." });
+  const result = await trashPersonalGmailMessage(messageId);
+  return res.json({ ok: true, message: result });
 });
 
 function isObviousNonSupportEmail(message: { from?: string; subject?: string; snippet?: string }) {

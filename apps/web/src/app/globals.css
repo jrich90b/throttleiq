@@ -1192,7 +1192,7 @@ a {
 
 .lr-ceo-task-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr) auto;
   align-items: start;
   gap: 0.72rem;
   padding: 0.75rem;
@@ -1226,6 +1226,10 @@ a {
   margin-top: 0.22rem;
   color: #aebbd2;
   line-height: 1.45;
+}
+
+.lr-ceo-task-row .lr-ceo-run-actions {
+  align-self: center;
 }
 
 .lr-ceo-support-flow,
@@ -1521,6 +1525,7 @@ a {
   .lr-ceo-agent-composer,
   .lr-ceo-integration-strip,
   .lr-ceo-user-row,
+  .lr-ceo-task-row,
   .lr-ceo-nav {
     grid-template-columns: 1fr;
   }
