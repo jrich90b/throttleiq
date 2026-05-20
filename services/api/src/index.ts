@@ -9154,6 +9154,62 @@ function isUnknownInterestVehicle(conv: any): boolean {
   return /full line|other/i.test(raw);
 }
 
+function parsePreferredDateOnlyForReply(value: string | null | undefined): Date | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
+  if (m[3] && m[3].length === 2) year = 2000 + year;
+  if (
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(year) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+}
+
+function formatPreferredDateForReply(value: string | null | undefined): string | null {
+  const date = parsePreferredDateOnlyForReply(value);
+  if (!date) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    month: "long",
+    day: "numeric"
+  }).format(date);
+}
+
+function isOpenPreferredTime(value: string | null | undefined): boolean {
+  const raw = String(value ?? "").trim();
+  return !raw || /^(any|anytime|flexible|open|no preference|n\/a|na)$/i.test(raw);
+}
+
+function buildTestRidePreferredDateReply(conv: any): string | null {
+  const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
+  if (!preferredDateLabel) return null;
+  const rawModel =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.lead?.vehicleDescription ??
+    "";
+  const modelLabel = /full line/i.test(String(rawModel)) ? "" : formatModelLabel(conv?.lead?.vehicle?.year ?? null, rawModel);
+  const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+  const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
+  if (!isOpenPreferredTime(preferredTime)) {
+    return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+  }
+  return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
+}
+
 function isTradeAcceleratorLead(conv: any): boolean {
   const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   return source.includes("trade accelerator");
@@ -39024,6 +39080,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       draft: reply
     })
   ) {
+    const preferredDateReply = buildTestRidePreferredDateReply(conv);
     const modelLabel = formatModelLabel(
       conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
@@ -39034,6 +39091,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       name: normalizeDisplayCase(conv.lead?.firstName) || "there"
     });
     reply =
+      preferredDateReply ??
       unavailableTestRideReply ??
       `Thanks — I saw you’re interested in a test ride${modelClause}. What day works best for you?`;
   }

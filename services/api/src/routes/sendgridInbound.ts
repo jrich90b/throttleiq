@@ -1400,6 +1400,55 @@ function parsePreferredDateOnly(value: string | null | undefined): Date | null {
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
 }
 
+function formatPreferredDateForReply(value: string | null | undefined): string | null {
+  const date = parsePreferredDateOnly(value);
+  if (!date) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    month: "long",
+    day: "numeric"
+  }).format(date);
+}
+
+function isOpenPreferredTime(value: string | null | undefined): boolean {
+  const raw = String(value ?? "").trim();
+  return !raw || /^(any|anytime|flexible|open|no preference|n\/a|na)$/i.test(raw);
+}
+
+function buildStructuredTestRideInquiryFromLead(lead: {
+  vehicleModel?: string;
+  vehicleDescription?: string;
+  year?: string;
+  preferredDate?: string;
+  preferredTime?: string;
+}) {
+  const model = String(lead.vehicleModel ?? lead.vehicleDescription ?? "").replace(/\bfull line\b/i, "").trim();
+  const parts = [
+    `Test ride request${model ? ` for ${model}` : ""}.`,
+    lead.preferredDate ? `Preferred date: ${lead.preferredDate}.` : null,
+    lead.preferredTime ? `Preferred time: ${lead.preferredTime}.` : null
+  ].filter(Boolean);
+  return parts.join(" ").trim();
+}
+
+function buildInitialTestRidePreferredDateReply(conv: any): string | null {
+  const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
+  if (!preferredDateLabel) return null;
+  const rawModel =
+    conv?.lead?.vehicle?.model ??
+    conv?.lead?.vehicle?.description ??
+    conv?.lead?.vehicleDescription ??
+    "";
+  const modelLabel = /full line/i.test(String(rawModel)) ? "" : formatModelLabel(conv?.lead?.vehicle?.year ?? null, rawModel);
+  const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+  const preferredTime = String(conv?.lead?.preferredTime ?? "").trim();
+  if (!isOpenPreferredTime(preferredTime)) {
+    return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
+  }
+  return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
+}
+
 function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
@@ -3714,6 +3763,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "";
     const sanitizedTradeInquiry = sanitizeTradeAcceleratorInquiry(tradeInquiryCandidate);
     effectiveInquiry = sanitizedTradeInquiry || "trade-in appraisal request";
+  }
+  if (!effectiveInquiry && /test ride|book test ride/i.test(leadSourceLower)) {
+    effectiveInquiry = buildStructuredTestRideInquiryFromLead(lead);
   }
   lead.inquiry = effectiveInquiry;
   adfLeadProfile.inquiry = effectiveInquiry || undefined;
@@ -6939,6 +6991,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "manual_handoff");
     }
   }
+  const preferredTestRideDateReply =
+    isInitialAdf &&
+    (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
+    !initialCompositeSalesInquiryDecision &&
+    !initialAdfVehicleFactDecision &&
+    !initialAdfInventoryStatusAccepted
+      ? buildInitialTestRidePreferredDateReply(conv)
+      : null;
+  if (preferredTestRideDateReply) {
+    draft = preferredTestRideDateReply;
+  }
   if (
     shouldForceInitialTestRideSourceScheduleCopy({
       isInitialAdf,
@@ -6947,6 +7010,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       leadSourceLower,
       draft
     }) &&
+    !preferredTestRideDateReply &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfInventoryStatusAccepted

@@ -266,6 +266,7 @@ function parseFromComment(comment?: string) {
   const colorMatch = clean.match(/color:\s*([^\n\r]+)/i);
   const makeMatch = clean.match(/\bmake\s*:\s*([^\n\r,]+)/i);
   const modelMatch = clean.match(/\bmodel\s*:\s*([^\n\r,]+)/i);
+  const requestedVehicleMatch = clean.match(/(?:^|\n)\s*vehicle\s*:\s*([^\n\r]+)/i);
   const trimMatch = clean.match(/\btrim\s*:\s*([^\n\r,]+)/i);
   const statusMatch = clean.match(/status\s*[:=]\s*\"?(new|used|pre[-\s]?owned)\"?/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
@@ -329,7 +330,7 @@ function parseFromComment(comment?: string) {
     year: yearMatch?.[1]?.trim() ?? modelYearMatch?.[1]?.trim(),
     item: itemMatch?.[1]?.trim(),
     make: normalizeMake(makeMatch?.[1]?.trim()),
-    model: modelMatch?.[1]?.trim(),
+    model: modelMatch?.[1]?.trim() ?? requestedVehicleMatch?.[1]?.trim(),
     trim: trimMatch?.[1]?.trim() ?? itemDetails.trim,
     color: colorMatch?.[1]?.trim() ?? itemDetails.color ?? itemColor,
     condition: normalizeCondition(statusMatch?.[1]),
@@ -469,7 +470,10 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     text(vehicle?.stock) ?? text(vehicle?.stock_id) ?? text(vehicle?.stockid) ?? parsedFromComment.stockId;
   const year = text(vehicle?.year) ?? parsedFromComment.year;
   let vehicleMake = normalizeMake(text(vehicle?.make)) ?? parsedFromComment.make;
-  let vehicleModel = text(vehicle?.model) ?? parsedFromComment.model;
+  let vehicleModel = text(vehicle?.model);
+  if (!vehicleModel || (/^full line$/i.test(vehicleModel) && parsedFromComment.model)) {
+    vehicleModel = parsedFromComment.model;
+  }
   if (vehicleModel) {
     const makeInModelMatch = vehicleModel.match(/\b(harley[-\s]?davidson|h[-\s]?d)\b/i);
     if (makeInModelMatch) {
