@@ -81,6 +81,10 @@ function personalMailRecommendation(task: AgentTask) {
   return "Review";
 }
 
+const defaultPersonalMailInstructions =
+  "Review Joe's personal email. Auto-trash safe spam, promos, expired codes, and routine no-reply vendor mail. Draft replies for real business conversations. Ask approval before sending, archiving important mail, or making account changes.";
+const autoTrashLogRetentionMs = 24 * 60 * 60 * 1000;
+
 export default function PersonalEmailCommandPage() {
   const [personalMailStatus, setPersonalMailStatus] = useState<PersonalMailStatus | null>(null);
   const [personalMailMessages, setPersonalMailMessages] = useState<PersonalMailMessage[]>([]);
@@ -88,9 +92,6 @@ export default function PersonalEmailCommandPage() {
   const [notice, setNotice] = useState("Personal Email workspace is ready.");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [instructions, setInstructions] = useState(
-    "Review Joe's personal email. Auto-trash safe spam, promos, expired codes, and routine no-reply vendor mail. Draft replies for real business conversations. Ask approval before sending, archiving important mail, or making account changes."
-  );
 
   const personalTasks = useMemo(() => agentTasks.filter(isPersonalMailTask), [agentTasks]);
   const pendingPersonalTasks = useMemo(
@@ -99,11 +100,12 @@ export default function PersonalEmailCommandPage() {
   );
   const autoTrashedTasks = useMemo(
     () =>
-      personalTasks.filter(
-        task =>
-          /^Auto-trashed personal email:/i.test(task.title) ||
-          (task.output?.links ?? []).some(link => link.includes("personal-mail:trashed"))
-      ),
+      personalTasks.filter(task => {
+        if (!/^Auto-trashed personal email:/i.test(task.title)) return false;
+        const createdAt = new Date(task.createdAt).getTime();
+        if (!Number.isFinite(createdAt)) return true;
+        return Date.now() - createdAt <= autoTrashLogRetentionMs;
+      }),
     [personalTasks]
   );
 
@@ -139,7 +141,7 @@ export default function PersonalEmailCommandPage() {
           priority: "normal",
           clientName: "LeadRider",
           title: title || "Review personal email inbox",
-          instructions: taskInstructions || instructions
+          instructions: taskInstructions || defaultPersonalMailInstructions
         })
       });
       const data = await resp.json();
@@ -235,6 +237,19 @@ export default function PersonalEmailCommandPage() {
             <button type="button" onClick={() => createPersonalMailTask()} disabled={agentBusy}>
               Ask Claude
             </button>
+            <button
+              type="button"
+              className="lr-ceo-secondary-btn"
+              onClick={() =>
+                createPersonalMailTask(
+                  "Draft personal email replies",
+                  "Review Joe's latest personal Gmail messages and draft replies only for real business conversations. Do not send anything. Do not ask approval for obvious spam."
+                )
+              }
+              disabled={agentBusy}
+            >
+              Draft replies
+            </button>
             {personalMailStatus?.connected ? (
               <span className="lr-ceo-mailbox-connected">Gmail connected</span>
             ) : (
@@ -259,47 +274,12 @@ export default function PersonalEmailCommandPage() {
           <article>
             <span>Auto-trashed</span>
             <strong>{autoTrashedTasks.length}</strong>
-            <small>Safe cleanup log</small>
+            <small>Last 24 hours</small>
           </article>
           <article>
             <span>Claude tasks</span>
             <strong>{personalTasks.length}</strong>
             <small>Personal inbox history</small>
-          </article>
-        </section>
-
-        <section className="lr-ceo-grid">
-          <article className="lr-ceo-panel lr-ceo-panel-wide">
-            <div className="lr-ceo-panel-title">
-              <div>
-                <p className="lr-ceo-kicker">Claude personal email agent</p>
-                <h3>Rules</h3>
-              </div>
-              <span className="lr-ceo-status-attention">Approval gated</span>
-            </div>
-            <textarea
-              className="lr-ceo-agent-textarea"
-              value={instructions}
-              onChange={event => setInstructions(event.target.value)}
-            />
-            <div className="lr-ceo-action-row">
-              <button type="button" onClick={() => createPersonalMailTask()} disabled={agentBusy}>
-                Create review task
-              </button>
-              <button
-                type="button"
-                className="lr-ceo-secondary-btn"
-                onClick={() =>
-                  createPersonalMailTask(
-                    "Draft personal email replies",
-                    "Review Joe's latest personal Gmail messages and draft replies only for real business conversations. Do not send anything. Do not ask approval for obvious spam."
-                  )
-                }
-                disabled={agentBusy}
-              >
-                Draft replies
-              </button>
-            </div>
           </article>
         </section>
 
@@ -395,7 +375,7 @@ export default function PersonalEmailCommandPage() {
               <p className="lr-ceo-kicker">Auto-trash log</p>
               <h3>Safe cleanup history</h3>
             </div>
-            <span className="lr-ceo-status-ready">Synced</span>
+            <span className="lr-ceo-status-ready">Last 24 hours</span>
           </div>
           <div className="lr-ceo-task-list">
             {autoTrashedTasks.length ? (
@@ -412,7 +392,7 @@ export default function PersonalEmailCommandPage() {
                 </div>
               ))
             ) : (
-              <p className="lr-ceo-note">No auto-trashed personal email logged yet.</p>
+              <p className="lr-ceo-note">No personal emails auto-trashed in the last 24 hours.</p>
             )}
           </div>
         </section>
