@@ -30630,40 +30630,60 @@ function detectLeadWidgets(pages: ProspectResearchPage[]) {
 }
 
 function detectDealerManufacturers(pages: ProspectResearchPage[]) {
-  const haystack = pages
-    .flatMap(page => [page.url, page.title, page.text, page.html.slice(0, 100000)])
-    .join("\n")
-    .toLowerCase();
+  const homeAndDealerPages = pages.filter(page => /(^|\/)(dealer-info|about|contact|staff|team)?\/?$/i.test(new URL(page.url).pathname) || /about|contact|staff|team|dealer/i.test(page.title));
+  const newInventoryPages = pages.filter(page => /new|showroom|models/i.test(`${page.url} ${page.title}`) && !/used|pre-owned|preowned/i.test(`${page.url} ${page.title}`));
+  const identityHaystack = [...homeAndDealerPages, ...newInventoryPages]
+    .flatMap(page => [page.url, page.title, page.text.slice(0, 6000), page.html.slice(0, 50000)])
+    .join("\n");
   const brands: string[] = [];
-  const checks: Array<[string, RegExp]> = [
-    ["Harley-Davidson", /\bharley[-\s]?davidson\b|\bh-?d\b/i],
-    ["Honda", /\bhonda\b/i],
-    ["Yamaha", /\byamaha\b/i],
-    ["Kawasaki", /\bkawasaki\b/i],
-    ["Suzuki", /\bsuzuki\b/i],
-    ["Indian Motorcycle", /\bindian motorcycle\b|\bindian\b/i],
-    ["BMW Motorrad", /\bbmw motorrad\b|\bbmw\b/i],
-    ["Triumph", /\btriumph\b/i],
-    ["Ducati", /\bducati\b/i],
-    ["KTM", /\bktm\b/i],
-    ["Husqvarna", /\bhusqvarna\b/i],
-    ["Can-Am", /\bcan[-\s]?am\b/i],
-    ["Sea-Doo", /\bsea[-\s]?doo\b/i],
-    ["Ski-Doo", /\bski[-\s]?doo\b/i],
-    ["Polaris", /\bpolaris\b/i],
-    ["Slingshot", /\bslingshot\b/i],
-    ["CFMOTO", /\bcf ?moto\b/i],
-    ["Moto Guzzi", /\bmoto guzzi\b/i],
-    ["Aprilia", /\baprilia\b/i],
-    ["Royal Enfield", /\broyal enfield\b/i],
-    ["Vespa", /\bvespa\b/i],
-    ["Piaggio", /\bpiaggio\b/i],
-    ["Zero Motorcycles", /\bzero motorcycles?\b/i],
-    ["LiveWire", /\blivewire\b/i],
-    ["Stacyc", /\bstacyc\b/i]
+  const checks: Array<[string, string[]]> = [
+    ["Harley-Davidson", ["harley-davidson", "harley davidson", "h-d"]],
+    ["Honda", ["honda"]],
+    ["Yamaha", ["yamaha"]],
+    ["Kawasaki", ["kawasaki"]],
+    ["Suzuki", ["suzuki"]],
+    ["Indian Motorcycle", ["indian motorcycle"]],
+    ["BMW Motorrad", ["bmw motorrad"]],
+    ["Triumph", ["triumph"]],
+    ["Ducati", ["ducati"]],
+    ["KTM", ["ktm"]],
+    ["Husqvarna", ["husqvarna"]],
+    ["Can-Am", ["can-am", "can am"]],
+    ["Sea-Doo", ["sea-doo", "sea doo"]],
+    ["Ski-Doo", ["ski-doo", "ski doo"]],
+    ["Polaris", ["polaris"]],
+    ["Slingshot", ["slingshot"]],
+    ["CFMOTO", ["cfmoto", "cf moto"]],
+    ["Moto Guzzi", ["moto guzzi"]],
+    ["Aprilia", ["aprilia"]],
+    ["Royal Enfield", ["royal enfield"]],
+    ["Vespa", ["vespa"]],
+    ["Piaggio", ["piaggio"]],
+    ["Zero Motorcycles", ["zero motorcycles", "zero motorcycle"]],
+    ["LiveWire", ["livewire"]],
+    ["Stacyc", ["stacyc"]]
   ];
-  for (const [label, regex] of checks) {
-    if (regex.test(haystack) && !brands.includes(label)) brands.push(label);
+  const hasFranchiseEvidence = (label: string, aliases: string[]) => {
+    for (const alias of aliases) {
+      const escaped = alias
+        .split(/[-\s]+/)
+        .filter(Boolean)
+        .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[-\\s]?");
+      const brand = new RegExp(`\\b${escaped}\\b`, "i");
+      const franchiseContext = new RegExp(
+        `\\b(?:authorized|official|premiere)\\b[^.\\n]{0,90}\\b${escaped}\\b|\\b${escaped}\\b[^.\\n]{0,90}\\b(?:authorized|official|premiere|dealer|dealership)\\b|\\bnew\\s+${escaped}\\b|\\b${escaped}\\b[^.\\n]{0,70}\\b(?:motorcycles?|powersports|models?)\\s+for\\s+sale\\b`,
+        "i"
+      );
+      const newInventoryContext = newInventoryPages.some(page => brand.test(`${page.url} ${page.title}`) || franchiseContext.test(`${page.title}\n${page.text.slice(0, 2500)}`));
+      const dealerIdentityContext = homeAndDealerPages.some(page => franchiseContext.test(`${page.title}\n${page.text.slice(0, 5000)}`));
+      const brandDealerName = new RegExp(`\\b${escaped}\\b[^\\n]{0,45}\\bdealer(?:ship)?\\b|\\bperformance\\s+${escaped}\\b`, "i").test(identityHaystack);
+      if (newInventoryContext || dealerIdentityContext || brandDealerName) return true;
+    }
+    return label === "Harley-Davidson" && /harley[-\s]?davidson|h-?d/i.test(identityHaystack);
+  };
+  for (const [label, aliases] of checks) {
+    if (hasFranchiseEvidence(label, aliases) && !brands.includes(label)) brands.push(label);
   }
   return brands;
 }
