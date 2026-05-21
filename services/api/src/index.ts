@@ -70,6 +70,15 @@ import {
   type SalesProspect,
   type SalesProspectStage
 } from "./domain/salesProspectStore.js";
+import {
+  addActiveClient,
+  addActiveClientPayment,
+  getActiveClient,
+  listActiveClients,
+  updateActiveClient,
+  type ActiveClientPaymentMethod,
+  type ActiveClientStatus
+} from "./domain/activeClientStore.js";
 import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
 import {
   addEsignPacket,
@@ -25979,6 +25988,106 @@ app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req,
   });
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
   return res.json({ ok: true, setup });
+});
+
+const allowedActiveClientStatuses: ActiveClientStatus[] = ["active", "implementation", "paused", "canceled"];
+const allowedActiveClientPaymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "other"];
+
+app.get("/active-clients", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const limit = Number(req.query.limit ?? "250");
+  const clients = await listActiveClients(Number.isFinite(limit) ? limit : 250);
+  return res.json({ ok: true, clients });
+});
+
+app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
+  if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
+  const statusRaw = String(req.body?.status ?? "active").trim().toLowerCase();
+  const client = await addActiveClient({
+    dealerSetupId: req.body?.dealerSetupId,
+    dealerName,
+    status: allowedActiveClientStatuses.includes(statusRaw as ActiveClientStatus) ? (statusRaw as ActiveClientStatus) : "active",
+    owner: req.body?.owner,
+    primaryContactName: req.body?.primaryContactName,
+    primaryContactEmail: req.body?.primaryContactEmail,
+    primaryContactPhone: req.body?.primaryContactPhone,
+    billingContactName: req.body?.billingContactName,
+    billingContactEmail: req.body?.billingContactEmail,
+    billingContactPhone: req.body?.billingContactPhone,
+    agreementUrl: req.body?.agreementUrl,
+    agreementStatus: req.body?.agreementStatus,
+    agreementSignedAt: req.body?.agreementSignedAt,
+    plan: req.body?.plan,
+    monthlyFee: req.body?.monthlyFee,
+    setupFee: req.body?.setupFee,
+    achMandateStatus: req.body?.achMandateStatus,
+    bankLast4: req.body?.bankLast4,
+    paymentTerms: req.body?.paymentTerms,
+    notes: req.body?.notes
+  });
+  return res.json({ ok: true, client });
+});
+
+app.patch("/active-clients/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const existing = await getActiveClient(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Active client not found." });
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  const client = await updateActiveClient(existing.id, {
+    dealerSetupId: typeof req.body?.dealerSetupId === "string" ? req.body.dealerSetupId : undefined,
+    dealerName: typeof req.body?.dealerName === "string" ? req.body.dealerName : undefined,
+    status: allowedActiveClientStatuses.includes(statusRaw as ActiveClientStatus) ? (statusRaw as ActiveClientStatus) : undefined,
+    owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
+    primaryContactName: typeof req.body?.primaryContactName === "string" ? req.body.primaryContactName : undefined,
+    primaryContactEmail: typeof req.body?.primaryContactEmail === "string" ? req.body.primaryContactEmail : undefined,
+    primaryContactPhone: typeof req.body?.primaryContactPhone === "string" ? req.body.primaryContactPhone : undefined,
+    billingContactName: typeof req.body?.billingContactName === "string" ? req.body.billingContactName : undefined,
+    billingContactEmail: typeof req.body?.billingContactEmail === "string" ? req.body.billingContactEmail : undefined,
+    billingContactPhone: typeof req.body?.billingContactPhone === "string" ? req.body.billingContactPhone : undefined,
+    agreementUrl: typeof req.body?.agreementUrl === "string" ? req.body.agreementUrl : undefined,
+    agreementStatus: typeof req.body?.agreementStatus === "string" ? req.body.agreementStatus : undefined,
+    agreementSignedAt: typeof req.body?.agreementSignedAt === "string" ? req.body.agreementSignedAt : undefined,
+    plan: typeof req.body?.plan === "string" ? req.body.plan : undefined,
+    monthlyFee: typeof req.body?.monthlyFee === "string" ? req.body.monthlyFee : undefined,
+    setupFee: typeof req.body?.setupFee === "string" ? req.body.setupFee : undefined,
+    achMandateStatus: typeof req.body?.achMandateStatus === "string" ? req.body.achMandateStatus : undefined,
+    bankLast4: typeof req.body?.bankLast4 === "string" ? req.body.bankLast4 : undefined,
+    paymentTerms: typeof req.body?.paymentTerms === "string" ? req.body.paymentTerms : undefined,
+    notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
+  });
+  return res.json({ ok: true, client });
+});
+
+app.post("/active-clients/:id/payments", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const amount = String(req.body?.amount ?? "").replace(/\s+/g, " ").trim();
+  if (!amount) return res.status(400).json({ ok: false, error: "Payment amount is required." });
+  const methodRaw = String(req.body?.method ?? "ach").trim().toLowerCase();
+  const client = await addActiveClientPayment(req.params.id, {
+    paidAt: String(req.body?.paidAt ?? "").trim(),
+    amount,
+    method: allowedActiveClientPaymentMethods.includes(methodRaw as ActiveClientPaymentMethod)
+      ? (methodRaw as ActiveClientPaymentMethod)
+      : "ach",
+    reference: req.body?.reference,
+    note: req.body?.note
+  });
+  if (!client) return res.status(404).json({ ok: false, error: "Active client not found." });
+  return res.json({ ok: true, client });
 });
 
 app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async (req, res) => {

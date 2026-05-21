@@ -662,6 +662,7 @@ export default function NewDealerClientPage() {
           <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support">Support Agent</a>
           <a href="/command/personal-email">Personal Email</a>
+          <a href="/command/clients">Active Clients</a>
           <a href="/command/clients/new" className="is-active">Dealer Setup</a>
           <a href="/command/users">Users</a>
           <a href="/command">Agreements</a>
