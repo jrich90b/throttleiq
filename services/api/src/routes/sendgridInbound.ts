@@ -38,7 +38,8 @@ import {
   saveConversation,
   flushConversationStore,
   listOpenQuestions,
-  markQuestionDone
+  markQuestionDone,
+  markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
@@ -3445,12 +3446,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           console.warn("[sendgrid inbound] human watch parser failed:", err?.message ?? err);
         }
       }
-      addTodo(
-        conv,
-        "note",
-        buildHumanEmailReplyTodoSummary(event.body),
-        event.providerMessageId
-      );
+      const resolvedEmailTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
+        channel: "email",
+        source: "human_email_reply"
+      });
+      if (resolvedEmailTodoCount === 0) {
+        addTodo(
+          conv,
+          "note",
+          buildHumanEmailReplyTodoSummary(event.body),
+          event.providerMessageId
+        );
+      }
       if (!watchHandledByParser) {
         setFollowUpMode(conv, "manual_handoff", "human_email_reply");
         stopFollowUpCadence(conv, "manual_handoff");

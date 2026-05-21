@@ -4080,6 +4080,143 @@ export function markOpenTodosDoneForConversationByClass(
   return count;
 }
 
+function communicationHasDayOrTime(text: string): boolean {
+  return (
+    /\b(today|tomorrow|monday|mon|tuesday|tue|wednesday|wed|thursday|thu|friday|fri|saturday|sat|sunday|sun|weekend)\b/i.test(
+      text
+    ) ||
+    /\b\d{1,2}(?::?\d{2})?\s*(?:am|pm)?\b/i.test(text) ||
+    /\b(morning|afternoon|evening|noon|midday|close|open)\b/i.test(text)
+  );
+}
+
+function communicationLooksLikeAcceptedTime(text: string): boolean {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized.trim()) return false;
+  const accepted =
+    /\b(i can|can definitely|that works|works for me|works|sounds good|ok(?:ay)?|yes|sure|let'?s do|i'?ll be there|be there|see you|i can make|we can do)\b/i.test(
+      normalized
+    );
+  if (!accepted) return false;
+  return communicationHasDayOrTime(normalized);
+}
+
+function communicationLooksLikeStaffCompleted(text: string): boolean {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized.trim()) return false;
+  return /\b(all set|handled|taken care of|completed|done|answered|sent over|scheduled|booked|confirmed|locked in|i have (?:that|you|it).*noted|have (?:that|you|it).*noted|have you down|you'?re set|you are set|that time is noted)\b/i.test(
+    normalized
+  );
+}
+
+function communicationLooksLikeOfferOnly(text: string): boolean {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized.trim()) return false;
+  if (communicationLooksLikeStaffCompleted(normalized)) return false;
+  if (communicationLooksLikeAcceptedTime(normalized)) return false;
+  return (
+    /\b(we can do|i can do|can do|available|availability|openings?|squeeze (?:you )?in|i have|we have)\b/i.test(
+      normalized
+    ) && communicationHasDayOrTime(normalized)
+  );
+}
+
+function recentOutboundOfferedSchedule(conv: Conversation): boolean {
+  const recent = [...(conv.messages ?? [])].reverse().slice(0, 10);
+  return recent.some(message => {
+    if (message.direction !== "out") return false;
+    const body = String(message.body ?? "");
+    if (!body.trim()) return false;
+    return (
+      /\b(we can do|i can do|can do|available|availability|openings?|squeeze (?:you )?in|what time|what day|does .* work|would .* work)\b/i.test(
+        body
+      ) && communicationHasDayOrTime(body)
+    );
+  });
+}
+
+function taskLooksResolvableByCommunication(
+  task: TodoTask,
+  opts: {
+    resolvedScheduling: boolean;
+    resolvedGeneral: boolean;
+  }
+): boolean {
+  const reason = String(task.reason ?? "").trim().toLowerCase();
+  const summary = String(task.summary ?? "").toLowerCase();
+  const inferred = inferTodoTaskClass(task.reason, task.summary, task);
+  const explicit = String(task.taskClass ?? "").trim().toLowerCase();
+  const klass =
+    explicit === "followup" ||
+    explicit === "appointment" ||
+    explicit === "todo" ||
+    explicit === "reminder"
+      ? (explicit as TodoTaskClass)
+      : inferred;
+
+  if (reason === "pricing" || reason === "payments" || reason === "approval" || reason === "manager") {
+    return false;
+  }
+
+  const department = reason === "service" || reason === "parts" || reason === "apparel";
+  if (department && (opts.resolvedScheduling || opts.resolvedGeneral)) return true;
+  if (klass === "appointment" && opts.resolvedScheduling) return true;
+
+  const schedulingSummary =
+    /\b(schedule|appointment|appt|availability|available|come in|stop in|service|pickup|pick up|time|tomorrow|today)\b/i.test(
+      summary
+    );
+  if ((klass === "followup" || klass === "reminder") && opts.resolvedScheduling && schedulingSummary) {
+    return true;
+  }
+  if ((reason === "call" || reason === "other" || reason === "note") && opts.resolvedGeneral) {
+    return true;
+  }
+  return false;
+}
+
+export function markOpenTodosResolvedByCommunication(
+  conv: Conversation,
+  text: string | null | undefined,
+  opts?: { channel?: string | null; source?: string | null }
+): number {
+  const body = String(text ?? "").trim();
+  if (!body) return 0;
+  if (communicationLooksLikeOfferOnly(body)) return 0;
+
+  const acceptedRecentScheduleOffer =
+    recentOutboundOfferedSchedule(conv) && communicationLooksLikeAcceptedTime(body);
+  const resolvedScheduling =
+    acceptedRecentScheduleOffer ||
+    communicationLooksLikeStaffCompleted(body) ||
+    /\b(?:appointment|appt|service|pickup|pick up|come in|stop in).*\b(?:booked|scheduled|confirmed|all set|handled|noted)\b/i.test(
+      body
+    );
+  const resolvedGeneral = communicationLooksLikeStaffCompleted(body);
+  if (!resolvedScheduling && !resolvedGeneral) return 0;
+
+  let count = 0;
+  const doneAt = nowIso();
+  for (const task of todos) {
+    if (task.convId !== conv.id || task.status !== "open") continue;
+    if (!taskLooksResolvableByCommunication(task, { resolvedScheduling, resolvedGeneral })) continue;
+    task.status = "done";
+    task.doneAt = doneAt;
+    count += 1;
+  }
+  if (count > 0) {
+    console.log("[todos] auto-closed resolved tasks", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      count,
+      channel: opts?.channel ?? null,
+      source: opts?.source ?? null
+    });
+    scheduleSave();
+  }
+  return count;
+}
+
 export function setCrmLastLoggedAt(conv: Conversation, iso: string, leadRef?: string) {
   conv.crm = conv.crm ?? {};
   conv.crm.lastLoggedAt = iso;

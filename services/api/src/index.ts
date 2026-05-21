@@ -421,6 +421,7 @@ import {
   markTodoReminderSent,
   markOpenTodosDoneForConversation,
   markOpenTodosDoneForConversationByClass,
+  markOpenTodosResolvedByCommunication,
   reassignOpenTodoOwnersForConversation,
   deleteConversation,
   setFollowUpMode,
@@ -37010,6 +37011,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       channel: opts?.channel ?? "manual",
       source: "manual_outbound"
     });
+    markOpenTodosResolvedByCommunication(conv, text, {
+      channel: opts?.channel ?? "manual",
+      source: "manual_outbound"
+    });
 
     const lower = text.toLowerCase();
     const explicitWatchVerb =
@@ -38427,8 +38432,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
+      channel: "sms",
+      source: "service_scheduling_inbound"
+    });
     const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
-    if (!hasServiceTodo) {
+    if (!hasServiceTodo && resolvedTodoCount === 0) {
       addTodo(
         conv,
         "service",
@@ -45608,8 +45617,12 @@ if (authToken && signature) {
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
+      channel: "sms",
+      source: "service_scheduling_inbound"
+    });
     const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
-    if (!hasServiceTodo) {
+    if (!hasServiceTodo && resolvedTodoCount === 0) {
       addTodo(
         conv,
         "service",
@@ -45656,6 +45669,16 @@ if (authToken && signature) {
       customerAckActionParse?.action === "purchase_delivery_update")
   ) {
     const action = customerAckActionParse.action;
+    if (
+      action === "accept_tentative_appointment" ||
+      action === "provide_arrival_window" ||
+      action === "purchase_delivery_update"
+    ) {
+      markOpenTodosResolvedByCommunication(conv, event.body, {
+        channel: "sms",
+        source: `customer_ack_${action}`
+      });
+    }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
       const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
@@ -45828,6 +45851,12 @@ if (authToken && signature) {
     if (checked?.alternatives.length) {
       setLastSuggestedSlots(conv, checked.alternatives);
       setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+    }
+    if (!checked?.alternatives.length) {
+      markOpenTodosResolvedByCommunication(conv, event.body, {
+        channel: "sms",
+        source: `appointment_timing_${appointmentTimingIntent}`
+      });
     }
     recordRouteOutcome("live", `appointment_timing_${appointmentTimingIntent}`, {
       convId: conv.id,
@@ -51454,6 +51483,10 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
         );
         if (!isVoicemail) {
           markOpenPricingAnswerTodosDone(conv, `${summaryText}\n${transcriptText}`, {
+            channel: "call",
+            source: "voice_summary"
+          });
+          markOpenTodosResolvedByCommunication(conv, `${summaryText}\n${transcriptText}`, {
             channel: "call",
             source: "voice_summary"
           });
