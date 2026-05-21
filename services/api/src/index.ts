@@ -6269,6 +6269,217 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll get that locked in.";
 }
 
+function buildRequestedSlotUnavailableReply(requestedLabel: string, alternatives: any[]): string {
+  const label = requestedLabel ? normalizeDisplayCase(requestedLabel) : "that time";
+  if (alternatives.length === 1) {
+    return `${label} is already booked. I have ${alternatives[0].startLocal} available instead — does that work?`;
+  }
+  if (alternatives.length >= 2) {
+    return `${label} is already booked. I have ${alternatives[0].startLocal} or ${alternatives[1].startLocal} available instead — do either of those work?`;
+  }
+  return `${label} is already booked. What other time works for you?`;
+}
+
+function resolveCustomerAckRequestedDayTime(args: {
+  conv: any;
+  parsed: CustomerAckActionParse | null;
+  rawText: string | null | undefined;
+  timeZone: string;
+}): ReturnType<typeof parseRequestedDayTime> {
+  const parsedDay = String(args.parsed?.requested?.day ?? "").trim();
+  const parsedTime = String(args.parsed?.requested?.timeText ?? "").trim();
+  const normalized = String(args.parsed?.normalizedText ?? "").trim();
+  const raw = String(args.rawText ?? "").trim();
+  const direct =
+    parseRequestedDayTimeWithRawFallback(`${parsedDay} ${parsedTime}`.trim(), raw, args.timeZone) ??
+    parseRequestedDayTimeWithRawFallback(normalized, raw, args.timeZone);
+  if (direct) return direct;
+  if (!parsedTime) return null;
+  const bookedIso = String(args.conv?.appointment?.whenIso ?? "").trim();
+  if (!bookedIso) return null;
+  const baseParts = getLocalDateParts(new Date(bookedIso), args.timeZone);
+  const rebased = parseRequestedDayTime(
+    `${baseParts.month}/${baseParts.day}/${baseParts.year} ${parsedTime}`,
+    args.timeZone
+  );
+  return rebased;
+}
+
+async function findRequestedAppointmentSlotAvailability(args: {
+  conv: any;
+  requested: NonNullable<ReturnType<typeof parseRequestedDayTime>>;
+  appointmentType: string;
+}): Promise<{
+  requestedLabel: string;
+  available: boolean;
+  exactSlot?: any;
+  alternatives: any[];
+} | null> {
+  const cfg = await getSchedulerConfigHot();
+  const appointmentTypes = cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } };
+  const durationMinutes =
+    appointmentTypes[args.appointmentType]?.durationMinutes ??
+    appointmentTypes.inventory_visit?.durationMinutes ??
+    60;
+  const preferredSalespeople = getPreferredSalespeopleForConv(cfg, args.conv);
+  const salespeople = cfg.salespeople ?? [];
+  const primarySp = salespeople.find((p: any) => p.id === preferredSalespeople[0]);
+  if (!primarySp?.calendarId) return null;
+
+  const cal = await getAuthedCalendarClient();
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+  const fb = await queryFreeBusy(cal, [primarySp.calendarId], timeMin, timeMax, cfg.timezone);
+  let busy = (fb.calendars?.[primarySp.calendarId]?.busy ?? []) as any[];
+  const existingEventId = String(args.conv?.appointment?.bookedEventId ?? "").trim();
+  const existingCalendarId = String(args.conv?.appointment?.bookedCalendarId ?? "").trim();
+  if (existingEventId && existingCalendarId === primarySp.calendarId && args.conv?.appointment?.whenIso) {
+    const oldStart = new Date(args.conv.appointment.whenIso);
+    const oldEnd = new Date(oldStart.getTime() + durationMinutes * 60_000);
+    busy = busy.filter(b => !(new Date(String(b?.start ?? "")) < oldEnd && oldStart < new Date(String(b?.end ?? ""))));
+  }
+  const gapMinutes = cfg.minGapBetweenAppointmentsMinutes ?? 60;
+  const expanded = expandBusyBlocks(busy, gapMinutes);
+  const exact = findExactSlotForSalesperson(
+    cfg,
+    primarySp.id,
+    primarySp.calendarId,
+    args.requested,
+    durationMinutes,
+    expanded
+  );
+  const requestedStart = localPartsToUtcDate(cfg.timezone, args.requested);
+  const requestedLabel = formatRequestedDayTimePhrase(args.requested, cfg.timezone);
+  if (exact) {
+    return {
+      requestedLabel,
+      available: true,
+      exactSlot: {
+        salespersonId: primarySp.id,
+        salespersonName: primarySp.name,
+        calendarId: primarySp.calendarId,
+        start: exact.start,
+        end: exact.end,
+        startLocal: formatSlotLocal(exact.start, cfg.timezone),
+        endLocal: formatSlotLocal(exact.end, cfg.timezone),
+        appointmentType: args.appointmentType
+      },
+      alternatives: []
+    };
+  }
+
+  const candidatesByDay = generateCandidateSlots(cfg, new Date(), durationMinutes, 14);
+  const alternatives: any[] = [];
+  for (const c of candidatesByDay.flatMap(d => d.candidates).sort((a, b) => a.start.getTime() - b.start.getTime())) {
+    if (alternatives.length >= 2) break;
+    if (c.start.getTime() <= requestedStart.getTime()) continue;
+    if (expanded.some(b => c.start < b.end && b.start < c.end)) continue;
+    const tooClose = alternatives.some(r => {
+      const rs = new Date(new Date(r.start).getTime() - gapMinutes * 60_000);
+      const re = new Date(new Date(r.end).getTime() + gapMinutes * 60_000);
+      return c.start < re && rs < c.end;
+    });
+    if (tooClose) continue;
+    alternatives.push({
+      salespersonId: primarySp.id,
+      salespersonName: primarySp.name,
+      calendarId: primarySp.calendarId,
+      start: c.start.toISOString(),
+      end: c.end.toISOString(),
+      startLocal: formatSlotLocal(c.start.toISOString(), cfg.timezone),
+      endLocal: formatSlotLocal(c.end.toISOString(), cfg.timezone),
+      appointmentType: args.appointmentType
+    });
+  }
+  return { requestedLabel, available: false, alternatives };
+}
+
+async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
+  conv: any;
+  parsed: CustomerAckActionParse | null;
+  rawText: string | null | undefined;
+}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+  const cfg = await getSchedulerConfigHot();
+  const requested = resolveCustomerAckRequestedDayTime({
+    conv: args.conv,
+    parsed: args.parsed,
+    rawText: args.rawText,
+    timeZone: cfg.timezone || "America/New_York"
+  });
+  if (!requested) {
+    return {
+      reply: buildAppointmentArrivalAck({
+        intent: "arrival_update",
+        explicitRequest: true,
+        requested: args.parsed?.requested,
+        reference: "none",
+        normalizedText: args.parsed?.normalizedText ?? null,
+        confidence: args.parsed?.confidence
+      }),
+      alternatives: [],
+      checkedCalendar: false
+    };
+  }
+  const appointmentType = inferAppointmentTypeFromConv(args.conv);
+  const availability = await findRequestedAppointmentSlotAvailability({
+    conv: args.conv,
+    requested,
+    appointmentType
+  }).catch(e => {
+    console.log("[scheduler] customer ack requested slot check failed", e?.message ?? e);
+    return null;
+  });
+  if (!availability) {
+    return {
+      reply: buildAppointmentArrivalAck({
+        intent: "arrival_update",
+        explicitRequest: true,
+        requested: args.parsed?.requested,
+        reference: "none",
+        normalizedText: args.parsed?.normalizedText ?? null,
+        confidence: args.parsed?.confidence
+      }),
+      alternatives: [],
+      checkedCalendar: false
+    };
+  }
+  if (!availability.available) {
+    return {
+      reply: buildRequestedSlotUnavailableReply(availability.requestedLabel, availability.alternatives),
+      alternatives: availability.alternatives,
+      checkedCalendar: true
+    };
+  }
+  return {
+    reply: `Sounds good — I’ll see you ${availability.requestedLabel}. Text me if anything changes.`,
+    alternatives: [],
+    checkedCalendar: true
+  };
+}
+
+async function buildAppointmentTimingArrivalReplyWithCalendarCheck(args: {
+  conv: any;
+  parsed: AppointmentTimingParse | null;
+  rawText: string | null | undefined;
+}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+  return buildCustomerAckArrivalReplyWithCalendarCheck({
+    conv: args.conv,
+    rawText: args.rawText,
+    parsed: args.parsed
+      ? {
+          action: "provide_arrival_window",
+          explicitAction: args.parsed.explicitRequest ?? true,
+          shouldReply: true,
+          shouldBook: false,
+          requested: args.parsed.requested,
+          reference: args.parsed.reference,
+          normalizedText: args.parsed.normalizedText,
+          confidence: args.parsed.confidence
+        }
+      : null
+  });
+}
+
 function customerWillProvideScheduleTimeText(text: string | null | undefined): boolean {
   const t = String(text ?? "").trim().toLowerCase();
   if (!t) return false;
@@ -38082,49 +38293,63 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
     if (action === "provide_arrival_window") {
+      const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
+        conv,
+        parsed: regenCustomerAckActionParse,
+        rawText: event.body
+      });
+      if (checked.alternatives.length) {
+        setLastSuggestedSlots(conv, checked.alternatives);
+        setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      }
       recordRouteOutcome("regen", "customer_ack_arrival_window", {
         convId: conv.id,
         leadKey: conv.leadKey,
-        confidence: regenCustomerAckActionParse?.confidence ?? null
+        confidence: regenCustomerAckActionParse?.confidence ?? null,
+        checkedCalendar: checked.checkedCalendar,
+        alternativeCount: checked.alternatives.length
       });
-      return respondWithSmsRegeneratedDraft(
-        buildAppointmentArrivalAck({
-          intent: "arrival_update",
-          explicitRequest: true,
-          requested: regenCustomerAckActionParse?.requested,
-          reference: "none",
-          normalizedText: regenCustomerAckActionParse?.normalizedText ?? null,
-          confidence: regenCustomerAckActionParse?.confidence
-        }),
-        undefined,
-        {
-          turnSchedulingIntent: false,
-          turnAvailabilityIntent: false,
-          turnFinanceIntent: false
-        }
-      );
+      return respondWithSmsRegeneratedDraft(checked.reply, undefined, {
+        turnSchedulingIntent: checked.alternatives.length > 0,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
     }
     if (action === "purchase_delivery_update") {
-      const reply = buildPurchaseDeliveryTimingReply(
-        customerAckActionRequestedPhrase(regenCustomerAckActionParse) || (event.body ?? "")
-      );
-      addTodo(
+      const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
         conv,
-        "note",
-        `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
-        (inbound as any)?.providerMessageId
-      );
-      setDialogState(conv, "purchase_delivery");
-      setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
-      stopFollowUpCadence(conv, "purchase_delivery");
-      stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+        parsed: regenCustomerAckActionParse,
+        rawText: event.body
+      });
+      const reply = checked.checkedCalendar
+        ? checked.reply
+        : buildPurchaseDeliveryTimingReply(
+            customerAckActionRequestedPhrase(regenCustomerAckActionParse) || (event.body ?? "")
+          );
+      if (checked.alternatives.length) {
+        setLastSuggestedSlots(conv, checked.alternatives);
+        setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      } else {
+        addTodo(
+          conv,
+          "note",
+          `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
+          (inbound as any)?.providerMessageId
+        );
+        setDialogState(conv, "purchase_delivery");
+        setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+        stopFollowUpCadence(conv, "purchase_delivery");
+        stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+      }
       recordRouteOutcome("regen", "customer_ack_purchase_delivery_update", {
         convId: conv.id,
         leadKey: conv.leadKey,
-        confidence: regenCustomerAckActionParse?.confidence ?? null
+        confidence: regenCustomerAckActionParse?.confidence ?? null,
+        checkedCalendar: checked.checkedCalendar,
+        alternativeCount: checked.alternatives.length
       });
       return respondWithSmsRegeneratedDraft(reply, undefined, {
-        turnSchedulingIntent: false,
+        turnSchedulingIntent: checked.alternatives.length > 0,
         turnAvailabilityIntent: false,
         turnFinanceIntent: false
       });
@@ -39104,14 +39329,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (regenAppointmentTimingIntent === "arrival_update" ||
       regenAppointmentTimingIntent === "tentative_time_window")
   ) {
-    const reply =
+    const checked =
       regenAppointmentTimingIntent === "arrival_update"
+        ? await buildAppointmentTimingArrivalReplyWithCalendarCheck({
+            conv,
+            parsed: regenAppointmentTimingParse,
+            rawText: event.body
+          })
+        : null;
+    const reply =
+      checked?.reply ??
+      (regenAppointmentTimingIntent === "arrival_update"
         ? buildAppointmentArrivalAck(regenAppointmentTimingParse)
-        : buildTentativeAppointmentWindowAck(regenAppointmentTimingParse);
+        : buildTentativeAppointmentWindowAck(regenAppointmentTimingParse));
+    if (checked?.alternatives.length) {
+      setLastSuggestedSlots(conv, checked.alternatives);
+      setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+    }
     recordRouteOutcome("regen", `appointment_timing_${regenAppointmentTimingIntent}`, {
       convId: conv.id,
       leadKey: conv.leadKey,
-      confidence: regenAppointmentTimingParse?.confidence ?? null
+      confidence: regenAppointmentTimingParse?.confidence ?? null,
+      checkedCalendar: checked?.checkedCalendar ?? false,
+      alternativeCount: checked?.alternatives.length ?? 0
     });
     if (regenAppointmentTimingIntent === "tentative_time_window") {
       const cfg = await getSchedulerConfigHot();
@@ -39121,7 +39361,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         cfg.timezone
       );
     }
-    setDialogState(conv, "schedule_request");
+    if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -45187,10 +45427,20 @@ if (authToken && signature) {
       }
     }
     if (action === "purchase_delivery_update") {
-      const reply = buildPurchaseDeliveryTimingReply(
-        customerAckActionRequestedPhrase(customerAckActionParse) || (event.body ?? "")
-      );
-      if (isPostSalePickupCoordinationText(conv, event.body)) {
+      const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
+        conv,
+        parsed: customerAckActionParse,
+        rawText: event.body
+      });
+      const reply = checked.checkedCalendar
+        ? checked.reply
+        : buildPurchaseDeliveryTimingReply(
+            customerAckActionRequestedPhrase(customerAckActionParse) || (event.body ?? "")
+          );
+      if (checked.alternatives.length) {
+        setLastSuggestedSlots(conv, checked.alternatives);
+        setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      } else if (isPostSalePickupCoordinationText(conv, event.body)) {
         markOpenPostSalePickupScheduleTodosDone(conv);
       } else {
         addTodo(
@@ -45200,14 +45450,18 @@ if (authToken && signature) {
           event.providerMessageId
         );
       }
-      setDialogState(conv, "purchase_delivery");
-      setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
-      stopFollowUpCadence(conv, "purchase_delivery");
-      stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+      if (!checked.alternatives.length) {
+        setDialogState(conv, "purchase_delivery");
+        setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+        stopFollowUpCadence(conv, "purchase_delivery");
+        stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+      }
       recordRouteOutcome("live", "customer_ack_purchase_delivery_update", {
         convId: conv.id,
         leadKey: conv.leadKey,
-        confidence: customerAckActionParse?.confidence ?? null
+        confidence: customerAckActionParse?.confidence ?? null,
+        checkedCalendar: checked.checkedCalendar,
+        alternativeCount: checked.alternatives.length
       });
       const systemMode = webhookMode;
       if (systemMode === "suggest") {
@@ -45221,6 +45475,39 @@ if (authToken && signature) {
       saveConversation(conv);
       await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    if (action === "provide_arrival_window") {
+      const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
+        conv,
+        parsed: customerAckActionParse,
+        rawText: event.body
+      });
+      if (checked.alternatives.length) {
+        setLastSuggestedSlots(conv, checked.alternatives);
+        setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      } else {
+        setDialogState(conv, "schedule_request");
+      }
+      recordRouteOutcome("live", "customer_ack_arrival_window", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null,
+        checkedCalendar: checked.checkedCalendar,
+        alternativeCount: checked.alternatives.length
+      });
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, checked.reply, "draft_ai");
+        saveConversation(conv);
+        await flushConversationStore();
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, checked.reply, "twilio");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(checked.reply)}</Message></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
     const reply =
@@ -45241,7 +45528,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       confidence: customerAckActionParse?.confidence ?? null
     });
-    setDialogState(conv, action === "provide_arrival_window" ? "schedule_request" : "schedule_request");
+    setDialogState(conv, "schedule_request");
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -45262,14 +45549,29 @@ if (authToken && signature) {
     !pricingOrPaymentsIntent &&
     (appointmentTimingIntent === "arrival_update" || appointmentTimingIntent === "tentative_time_window")
   ) {
-    const reply =
+    const checked =
       appointmentTimingIntent === "arrival_update"
+        ? await buildAppointmentTimingArrivalReplyWithCalendarCheck({
+            conv,
+            parsed: appointmentTimingParse,
+            rawText: event.body
+          })
+        : null;
+    const reply =
+      checked?.reply ??
+      (appointmentTimingIntent === "arrival_update"
         ? buildAppointmentArrivalAck(appointmentTimingParse)
-        : buildTentativeAppointmentWindowAck(appointmentTimingParse);
+        : buildTentativeAppointmentWindowAck(appointmentTimingParse));
+    if (checked?.alternatives.length) {
+      setLastSuggestedSlots(conv, checked.alternatives);
+      setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+    }
     recordRouteOutcome("live", `appointment_timing_${appointmentTimingIntent}`, {
       convId: conv.id,
       leadKey: conv.leadKey,
-      confidence: appointmentTimingParse?.confidence ?? null
+      confidence: appointmentTimingParse?.confidence ?? null,
+      checkedCalendar: checked?.checkedCalendar ?? false,
+      alternativeCount: checked?.alternatives.length ?? 0
     });
     if (appointmentTimingIntent === "tentative_time_window") {
       const cfg = await getSchedulerConfigHot();
@@ -45279,7 +45581,7 @@ if (authToken && signature) {
         cfg.timezone
       );
     }
-    setDialogState(conv, "schedule_request");
+    if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
