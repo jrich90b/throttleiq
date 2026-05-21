@@ -52,6 +52,7 @@ function BookingPageInner() {
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [bookingBusy, setBookingBusy] = useState(false);
   const [appointmentType, setAppointmentType] = useState("inventory_visit");
   const [preferredType, setPreferredType] = useState<string | null>(null);
   const [lockedType, setLockedType] = useState<string | null>(null);
@@ -237,8 +238,9 @@ function BookingPageInner() {
   }, [selectedSlot, form]);
 
   async function submitBooking() {
-    if (!selectedSlot) return;
+    if (!selectedSlot || bookingBusy) return;
     setError(null);
+    setBookingBusy(true);
     const leadName = [form.firstName, form.lastName].filter(Boolean).join(" ").trim();
     try {
       const resp = await fetch(isCommandBooking ? "/api/command-booking/book" : "/api/booking/book", {
@@ -261,11 +263,16 @@ function BookingPageInner() {
           }
         })
       });
-      const json = await resp.json();
-      if (!resp.ok) throw new Error(json?.error ?? "Booking failed");
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.ok) {
+        const detail = [json?.error, json?.detail ? `(${json.detail})` : ""].filter(Boolean).join(" ");
+        throw new Error(detail || "Booking failed");
+      }
       setSuccess(json);
     } catch (err: any) {
       setError(err?.message ?? "Booking failed");
+    } finally {
+      setBookingBusy(false);
     }
   }
 
@@ -467,10 +474,10 @@ function BookingPageInner() {
               </div>
               <button
                 className="px-4 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-gray-300"
-                disabled={!canSubmit}
+                disabled={!canSubmit || bookingBusy}
                 onClick={submitBooking}
               >
-                {isCommandBooking ? "Book demo" : "Book appointment"}
+                {bookingBusy ? "Booking..." : isCommandBooking ? "Book demo" : "Book appointment"}
               </button>
             </div>
           </div>

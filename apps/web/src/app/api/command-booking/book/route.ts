@@ -18,8 +18,15 @@ export async function POST(req: Request) {
     const data = JSON.parse(text);
     return NextResponse.json(data, { status: r.status });
   } catch {
+    const contentType = r.headers.get("content-type") ?? "";
+    const body = text.replace(/\s+/g, " ").trim().slice(0, 500);
     return NextResponse.json(
-      { ok: false, error: "Upstream not JSON", status: r.status, body: text.slice(0, 200) },
+      {
+        ok: false,
+        error: body ? `Booking service returned ${r.status} ${contentType}: ${body}` : "Booking service returned an empty response.",
+        status: r.status,
+        body
+      },
       { status: 502 }
     );
   }

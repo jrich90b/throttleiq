@@ -26532,24 +26532,41 @@ app.post("/public/command-booking/book", async (req, res) => {
     zoomError = err instanceof Error ? err.message : "Zoom meeting could not be created.";
     console.error("[command-booking] zoom.create.failed", { userId: user.id, error: zoomError });
   }
-  const event = await insertEvent(
-    cal,
-    user.commandCalendarId,
-    cfg.timezone,
-    `LeadRider demo - ${name}`,
-    [
-      `Prospect: ${name}`,
-      `Email: ${lead.email ?? ""}`,
-      `Phone: ${lead.phone ?? ""}`,
-      `Dealer: ${lead.dealerName ?? ""}`,
-      `Website: ${lead.website ?? ""}`,
-      zoomMeeting?.joinUrl ? `Zoom: ${zoomMeeting.joinUrl}` : "",
-      "",
-      `Notes: ${lead.notes ?? ""}`
-    ].join("\n"),
-    slot.start,
-    slot.end
-  );
+  let event: any;
+  try {
+    event = await insertEvent(
+      cal,
+      user.commandCalendarId,
+      cfg.timezone,
+      `LeadRider demo - ${name}`,
+      [
+        `Prospect: ${name}`,
+        `Email: ${lead.email ?? ""}`,
+        `Phone: ${lead.phone ?? ""}`,
+        `Dealer: ${lead.dealerName ?? ""}`,
+        `Website: ${lead.website ?? ""}`,
+        zoomMeeting?.joinUrl ? `Zoom: ${zoomMeeting.joinUrl}` : "",
+        "",
+        `Notes: ${lead.notes ?? ""}`
+      ].join("\n"),
+      slot.start,
+      slot.end
+    );
+  } catch (err: any) {
+    const message = String(err?.message ?? err?.response?.data?.error?.message ?? "").trim();
+    const cause = String(err?.cause?.message ?? "").trim();
+    const detail = cause || message || "Calendar event could not be created.";
+    const calendarAccessError = /writer access|forbidden|insufficient|permission/i.test(detail);
+    return res.status(calendarAccessError ? 403 : 502).json({
+      ok: false,
+      error: calendarAccessError
+        ? "LeadRider cannot write to this Command calendar yet. Share the calendar with the connected LeadRider Google account or choose a calendar that account can edit."
+        : `Calendar event could not be created: ${detail}`,
+      detail,
+      zoomJoinUrl: zoomMeeting?.joinUrl,
+      zoomCreated: !!zoomMeeting?.joinUrl
+    });
+  }
   return res.json({
     ok: true,
     command: true,
