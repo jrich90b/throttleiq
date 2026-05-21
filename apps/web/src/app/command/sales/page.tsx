@@ -110,6 +110,7 @@ const workflowStages: Array<{ stage: SalesProspectStage; label: string; action: 
   { stage: "agreement_sent", label: "Agreement", action: "Agreement sent" },
   { stage: "closed_won", label: "Closed won", action: "Closed won" }
 ];
+const stageProgression: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent", "closed_won"];
 
 function toForm(prospect: SalesProspect): ProspectForm {
   return {
@@ -283,6 +284,24 @@ export default function SalesFunnelPage() {
     }
   }
 
+  async function advanceProspectStage(prospect: SalesProspect, targetStage: SalesProspectStage, noticePrefix: string) {
+    const currentIndex = stageProgression.indexOf(prospect.stage);
+    const targetIndex = stageProgression.indexOf(targetStage);
+    if (targetIndex < 0 || currentIndex < 0 || currentIndex >= targetIndex) return prospect;
+
+    const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(prospect.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...toForm(prospect), stage: targetStage })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data?.ok) throw new Error(data?.error || "Prospect stage could not be updated.");
+    setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+    setForm(toForm(data.prospect));
+    setNotice(`${noticePrefix} Flow moved to ${stageLabels[targetStage]}.`);
+    return data.prospect as SalesProspect;
+  }
+
   async function loadZoomStatus() {
     try {
       const resp = await fetch("/api/integrations/zoom/status", { cache: "no-store" });
@@ -338,6 +357,7 @@ export default function SalesFunnelPage() {
       setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
       setForm(toForm(data.prospect));
       setNotice(`Zoom meeting created for ${data.prospect.dealerName}.`);
+      await advanceProspectStage(data.prospect, "demo_scheduled", `Zoom meeting created for ${data.prospect.dealerName}.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Zoom meeting could not be created.");
     } finally {
@@ -355,6 +375,7 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be created.");
       if (data.prospect) setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      if (data.prospect) await advanceProspectStage(data.prospect, "closed_won", `${data.setup.dealerName} is in Dealer Setup.`);
       const setupUrl = `/command/clients/new?setup=${encodeURIComponent(data.setup.id)}`;
       setNotice(`${data.setup.dealerName} is in Dealer Setup. ${data.existing ? "Opening existing setup." : "Opening new setup."}`);
       window.location.href = setupUrl;
@@ -476,6 +497,14 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
       setNotice(`Agent task created: ${data.task.title}.`);
+      const autoStageByAction: Partial<Record<typeof action, SalesProspectStage>> = {
+        sales_email: "contacted",
+        docusign: "proposal"
+      };
+      const nextStage = autoStageByAction[action];
+      if (nextStage) {
+        await advanceProspectStage(selected, nextStage, `Agent task created: ${data.task.title}.`);
+      }
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Agent task could not be created.");
     } finally {
