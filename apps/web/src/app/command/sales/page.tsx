@@ -265,11 +265,12 @@ export default function SalesFunnelPage() {
   }, [agentTasks, selected]);
 
   const latestResearchMissingWebsite = useMemo(() => {
+    const currentWebsite = form.website.trim() || selected?.website?.trim();
     return Boolean(
-      selected?.website?.trim() &&
+      currentWebsite &&
       latestResearchTask?.output?.summary?.includes("No dealer website was provided")
     );
-  }, [latestResearchTask, selected?.website]);
+  }, [form.website, latestResearchTask, selected?.website]);
 
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
@@ -541,25 +542,49 @@ export default function SalesFunnelPage() {
     setTaskBusy(true);
     const senderType = form.emailSenderType || selected.emailSenderType || "personal";
     const senderAddress = form.emailSenderAddress || selected.emailSenderAddress || emailAddressForSender(senderType);
-    const currentWebsite = form.website.trim() || selected.website || "not provided";
+    const currentWebsite = form.website.trim() || selected.website || "";
+    if (action === "research" && !currentWebsite) {
+      setNotice("Add the dealer website before running research.");
+      setTaskBusy(false);
+      return;
+    }
+    let taskSelected = selected;
+    if (action === "research" && form.website.trim() && form.website.trim() !== (selected.website || "").trim()) {
+      try {
+        const saveResp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ website: form.website.trim() })
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || !saveData?.ok) throw new Error(saveData?.error || "Website could not be saved before research.");
+        taskSelected = saveData.prospect;
+        setProspects(current => current.map(row => (row.id === saveData.prospect.id ? saveData.prospect : row)));
+        setForm(toForm(saveData.prospect));
+      } catch (err) {
+        setNotice(err instanceof Error ? err.message : "Website could not be saved before research.");
+        setTaskBusy(false);
+        return;
+      }
+    }
     const facts = [
-      `Dealer prospect: ${selected.dealerName}`,
-      `Contact: ${selected.contactName || "not provided"}`,
-      `Email: ${selected.contactEmail || "not provided"}`,
-      `Phone: ${selected.contactPhone || "not provided"}`,
-      `Website: ${currentWebsite}`,
-      `Stage: ${stageLabels[selected.stage]}`,
-      `Owner: ${selected.owner || "not assigned"}`,
-      `Plan: ${selected.plan || "not selected"}`,
-      `Expected monthly: ${selected.expectedMonthly || "not set"}`,
-      `Lead volume: ${selected.leadVolume || "not set"}`,
-      `Next step: ${selected.nextStep || "not set"}`,
-      `Next step date: ${selected.nextStepAt || "not set"}`,
-      `Zoom link: ${selected.zoomLink || "not set"}`,
-      `DocuSign packet: ${selected.docusignPacketId || "not set"}`,
-      `Onboarding email thread: ${selected.onboardingEmailThread || "not set"}`,
+      `Dealer prospect: ${taskSelected.dealerName}`,
+      `Contact: ${taskSelected.contactName || "not provided"}`,
+      `Email: ${taskSelected.contactEmail || "not provided"}`,
+      `Phone: ${taskSelected.contactPhone || "not provided"}`,
+      `Website: ${currentWebsite || "not provided"}`,
+      `Stage: ${stageLabels[taskSelected.stage]}`,
+      `Owner: ${taskSelected.owner || "not assigned"}`,
+      `Plan: ${taskSelected.plan || "not selected"}`,
+      `Expected monthly: ${taskSelected.expectedMonthly || "not set"}`,
+      `Lead volume: ${taskSelected.leadVolume || "not set"}`,
+      `Next step: ${taskSelected.nextStep || "not set"}`,
+      `Next step date: ${taskSelected.nextStepAt || "not set"}`,
+      `Zoom link: ${taskSelected.zoomLink || "not set"}`,
+      `DocuSign packet: ${taskSelected.docusignPacketId || "not set"}`,
+      `Onboarding email thread: ${taskSelected.onboardingEmailThread || "not set"}`,
       `Selected email sender lane: ${labelForSender(senderType)} (${senderAddress})`,
-      `Notes: ${selected.notes || "none"}`
+      `Notes: ${taskSelected.notes || "none"}`
     ].join("\n");
     const config = {
       sales_email: {
@@ -646,6 +671,10 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
       setAgentTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 100));
       setNotice(`Agent task created: ${data.task.title}.`);
+      if (action === "research") {
+        window.setTimeout(() => void loadAgentTasks(), 1500);
+        window.setTimeout(() => void loadAgentTasks(), 5000);
+      }
       const completedActionByTask: Record<typeof action, SalesActionId> = {
         sales_email: "sales_email",
         zoom: "schedule_demo",

@@ -30557,7 +30557,15 @@ function summarizeRelevantPages(pages: ProspectResearchPage[], keywords: string[
 }
 
 async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[] }> {
-  const websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
+  let websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
+  if (!websiteFromInstructions || /^not provided$/i.test(websiteFromInstructions)) {
+    const clientName = String(task.clientName ?? "").trim().toLowerCase();
+    if (clientName) {
+      const prospects = await listSalesProspects(250);
+      const prospect = prospects.find(row => row.dealerName.trim().toLowerCase() === clientName);
+      if (prospect?.website?.trim()) websiteFromInstructions = prospect.website.trim();
+    }
+  }
   const rootUrl = normalizeProspectResearchUrl(websiteFromInstructions);
   if (!rootUrl) {
     return {
