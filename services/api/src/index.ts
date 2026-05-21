@@ -30283,6 +30283,24 @@ type ProspectSearchResult = {
   snippet: string;
 };
 
+type ProspectResearchBrief = {
+  executiveSummary: string;
+  officialWebsite: string | null;
+  dealerName: string | null;
+  locations: string[];
+  phones: string[];
+  manufacturers: string[];
+  websiteProviders: string[];
+  inventorySummary: string;
+  leadCaptureSummary: string;
+  leadForms: Array<{ type: string; url: string; provider: string | null; confidence: number }>;
+  financePaymentEstimatorDetected: boolean;
+  staffPeople: Array<{ name: string; role: string | null; sourceUrl: string | null }>;
+  setupRisks: string[];
+  recommendedNextStep: string;
+  confidence: number;
+};
+
 function normalizeProspectResearchUrl(value?: string) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -30664,6 +30682,192 @@ function compactResearchLinks(items: string[], max = 8) {
   return items.filter(Boolean).filter((item, index, list) => list.indexOf(item) === index).slice(0, max);
 }
 
+function buildFallbackResearchBrief(args: {
+  home: ProspectResearchPage;
+  inventory: ReturnType<typeof estimateInventoryCounts>;
+  location: ReturnType<typeof findLocationSignals>;
+  manufacturers: string[];
+  providers: string[];
+  widgets: string[];
+  forms: ReturnType<typeof summarizeDetectedForms>;
+  financePaymentEstimatorDetected: boolean;
+  staffPages: string[];
+  score: number;
+}): ProspectResearchBrief {
+  return {
+    executiveSummary: `${args.home.title || "Dealer website"} shows inventory and lead-capture signals. Verify counts and routing before setup.`,
+    officialWebsite: args.home.url,
+    dealerName: args.home.title || null,
+    locations: args.location.addresses,
+    phones: args.location.phones,
+    manufacturers: args.manufacturers,
+    websiteProviders: args.providers,
+    inventorySummary: `New: ${args.inventory.newCount}; used/pre-owned: ${args.inventory.usedCount}. ${args.inventory.note}`,
+    leadCaptureSummary: args.widgets.length ? args.widgets.join(", ") : "No lead widgets/forms confidently detected.",
+    leadForms: args.forms.map(form => ({
+      type: form.type,
+      url: form.url,
+      provider: form.provider ?? null,
+      confidence: form.provider ? 0.85 : 0.65
+    })),
+    financePaymentEstimatorDetected: args.financePaymentEstimatorDetected,
+    staffPeople: [],
+    setupRisks: [
+      "Inventory counts are crawler estimates and should be verified against the live inventory provider.",
+      args.providers.length ? "Website provider/integration clues should be validated before setup." : "Website provider was not detected; manual inspection may be needed.",
+      args.widgets.length ? "Existing widgets may overlap with LeadRider routing, opt-in, and attribution." : "Lead forms/widgets may be JavaScript-rendered and require browser-based inspection."
+    ],
+    recommendedNextStep: "Review detected lead forms/widgets and confirm where each lead type routes before proposing implementation.",
+    confidence: Math.min(0.9, Math.max(0.45, args.score / 100))
+  };
+}
+
+async function refineProspectResearchWithLLM(args: {
+  clientName: string;
+  deterministic: Record<string, unknown>;
+  pages: ProspectResearchPage[];
+}): Promise<ProspectResearchBrief | null> {
+  if (process.env.PROSPECT_RESEARCH_LLM_ENABLED === "0") return null;
+  if (!process.env.OPENAI_API_KEY) return null;
+  const model =
+    process.env.PROSPECT_RESEARCH_LLM_MODEL?.trim() ||
+    process.env.OPENAI_INTENT_PARSER_MODEL?.trim() ||
+    "gpt-4o-mini";
+  const pageEvidence = args.pages.slice(0, 10).map(page => ({
+    title: page.title,
+    url: page.url,
+    fetchSource: page.fetchSource,
+    text: page.text.slice(0, 1600),
+    forms: page.forms.slice(0, 6)
+  }));
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      executiveSummary: { type: "string" },
+      officialWebsite: { type: ["string", "null"] },
+      dealerName: { type: ["string", "null"] },
+      locations: { type: "array", items: { type: "string" } },
+      phones: { type: "array", items: { type: "string" } },
+      manufacturers: { type: "array", items: { type: "string" } },
+      websiteProviders: { type: "array", items: { type: "string" } },
+      inventorySummary: { type: "string" },
+      leadCaptureSummary: { type: "string" },
+      leadForms: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            type: { type: "string" },
+            url: { type: "string" },
+            provider: { type: ["string", "null"] },
+            confidence: { type: "number" }
+          },
+          required: ["type", "url", "provider", "confidence"]
+        }
+      },
+      financePaymentEstimatorDetected: { type: "boolean" },
+      staffPeople: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+            role: { type: ["string", "null"] },
+            sourceUrl: { type: ["string", "null"] }
+          },
+          required: ["name", "role", "sourceUrl"]
+        }
+      },
+      setupRisks: { type: "array", items: { type: "string" } },
+      recommendedNextStep: { type: "string" },
+      confidence: { type: "number" }
+    },
+    required: [
+      "executiveSummary",
+      "officialWebsite",
+      "dealerName",
+      "locations",
+      "phones",
+      "manufacturers",
+      "websiteProviders",
+      "inventorySummary",
+      "leadCaptureSummary",
+      "leadForms",
+      "financePaymentEstimatorDetected",
+      "staffPeople",
+      "setupRisks",
+      "recommendedNextStep",
+      "confidence"
+    ]
+  };
+
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 20000 });
+  try {
+    const resp = await client.responses.parse({
+      model,
+      input: [
+        {
+          role: "system",
+          content:
+            "You normalize noisy dealer website crawl evidence into a concise LeadRider sales research brief. Use only the evidence provided. Do not invent facts."
+        },
+        {
+          role: "user",
+          content: [
+            "Dealer prospect:",
+            args.clientName || "unknown",
+            "",
+            "What to look for:",
+            "- Official website and dealer identity from title/header/contact/about evidence.",
+            "- True locations: only real street addresses, not motorcycle model lists, prices, stock rows, or inventory descriptions.",
+            "- Manufacturers/franchise lines: include brands only when the site appears to sell/support them, not when brand names appear in generic filters, comparison text, parts, or SEO blocks.",
+            "- Website provider and lead vendors from scripts/forms/classes/provider clues.",
+            "- Lead capture: contact, test ride, service, trade/sell, finance/prequal, payment estimator, text/chat widgets.",
+            "- Staff/team: only named people with role evidence from staff/about/contact pages.",
+            "- Setup risks and next sales move.",
+            "",
+            "Where to look first:",
+            "1. Homepage title/header/footer/contact blocks.",
+            "2. Contact/about/staff/team pages.",
+            "3. Inventory pages for counts and provider clues.",
+            "4. Form ids/classes/actions and script names for vendor clues.",
+            "",
+            "Deterministic crawl signals:",
+            JSON.stringify(args.deterministic).slice(0, 9000),
+            "",
+            "Page evidence:",
+            JSON.stringify(pageEvidence).slice(0, 12000)
+          ].join("\n")
+        }
+      ],
+      max_output_tokens: 1400,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "prospect_research_brief",
+          strict: true,
+          schema
+        }
+      }
+    } as any);
+    recordOpenAIUsage(resp, {
+      feature: "prospect_research",
+      operation: "normalize_research_brief",
+      requestKind: "responses.parse",
+      model,
+      metadata: { clientName: args.clientName || null, pageCount: args.pages.length }
+    });
+    const parsed = (resp as any)?.output_parsed;
+    if (parsed && typeof parsed === "object") return parsed as ProspectResearchBrief;
+  } catch (err: any) {
+    console.warn("[prospect-research-llm] brief parse failed:", err?.message ?? err);
+  }
+  return null;
+}
+
 async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[]; research?: Record<string, unknown> }> {
   let websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
   const clientNameForSearch = String(task.clientName ?? task.instructions.match(/Dealer prospect:\s*(.+)/i)?.[1] ?? "").trim();
@@ -30751,7 +30955,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
   const score = Math.min(100, 35 + Math.min(25, inventory.totalSignals) + widgets.length * 5 + providers.length * 3);
   const crawlMethod = pages.some(page => page.fetchSource === "zenrows") ? "zenrows" : "direct";
   const financePaymentEstimatorDetected = widgets.some(widget => widget.includes("Payment") || widget.includes("Finance"));
-  const research = {
+  const deterministicResearch = {
     schemaVersion: 1,
     checkedAt: new Date().toISOString(),
     officialWebsite: home.url,
@@ -30790,50 +30994,75 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     ],
     recommendedNextStep: "Review the detected lead forms/widgets and confirm where each lead type currently routes before proposing implementation."
   };
+  const fallbackBrief = buildFallbackResearchBrief({
+    home,
+    inventory,
+    location,
+    manufacturers,
+    providers,
+    widgets,
+    forms,
+    financePaymentEstimatorDetected,
+    staffPages,
+    score
+  });
+  const brief =
+    (await safeLlmParse("prospect_research_brief_parser", () =>
+      refineProspectResearchWithLLM({
+        clientName: clientNameForSearch,
+        deterministic: deterministicResearch,
+        pages
+      }),
+      24000
+    )) ?? fallbackBrief;
+  const research = {
+    ...deterministicResearch,
+    brief
+  };
 
   const summary = [
     "Sources Used",
-    `- Official website used: ${home.url}`,
+    `- Official website used: ${brief.officialWebsite || home.url}`,
     `- Checked: ${now} ET`,
     `- Crawl method: ${crawlMethod === "zenrows" ? "ZenRows fallback" : "Direct fetch"}`,
     discoveryResults.length ? `- Google Search discovery checked: ${discoveryResults.map(result => result.link).slice(0, 3).join(", ")}` : "- Google Search discovery not configured or returned no results.",
     ...pages.slice(0, 8).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
     "",
+    "Executive Summary",
+    `- ${brief.executiveSummary}`,
+    "",
     "Inventory Count",
-    `- New bikes listed: ${inventory.newCount}`,
-    `- Used/pre-owned bikes listed: ${inventory.usedCount}`,
-    `- Inventory signal count: ${inventory.totalSignals || "not confirmed"}`,
-    `- Note: ${inventory.note}`,
+    `- ${brief.inventorySummary}`,
+    `- Raw crawler signals: new ${inventory.newCount}, used/pre-owned ${inventory.usedCount}, signal count ${inventory.totalSignals || "not confirmed"}.`,
     "",
     "Dealer Profile",
-    `- Address signals: ${location.addresses.length ? location.addresses.join("; ") : "not found in crawled pages"}`,
-    `- Phone signals: ${location.phones.length ? location.phones.join(", ") : "not found in crawled pages"}`,
-    `- Manufacturer/brand signals: ${manufacturers.length ? manufacturers.join(", ") : "not detected"}`,
-    `- Website/provider clues: ${providers.length ? providers.join(", ") : "not detected"}`,
-    `- Single vs group: ${/group|locations|dealerships|our stores/i.test(pages.map(page => page.text).join(" ")) ? "possible group/multi-location clues found" : "not confirmed"}`,
+    `- Address: ${brief.locations.length ? brief.locations.join("; ") : "not confidently found"}`,
+    `- Phone: ${brief.phones.length ? brief.phones.join(", ") : "not confidently found"}`,
+    `- Manufacturer/franchise lines: ${brief.manufacturers.length ? brief.manufacturers.join(", ") : "not confidently found"}`,
+    `- Website/provider clues: ${brief.websiteProviders.length ? brief.websiteProviders.join(", ") : "not detected"}`,
+    `- Confidence: ${Math.round(Math.max(0, Math.min(1, brief.confidence)) * 100)}%`,
     "",
     "Team/Employees",
-    staffPages.length ? staffPages.map(page => `- ${page}`).join("\n") : "- No staff/team page was found in the crawled pages.",
+    brief.staffPeople.length
+      ? brief.staffPeople.map(person => `- ${person.name}${person.role ? `, ${person.role}` : ""}${person.sourceUrl ? ` - ${person.sourceUrl}` : ""}`).join("\n")
+      : "- No named staff/team members were confidently found in the crawled pages.",
     "",
     "Lead Capture/Tech Stack",
-    `- Lead widgets/forms detected: ${widgets.length ? widgets.join(", ") : "none detected from static crawl"}`,
-    `- Finance/payment estimator signals: ${financePaymentEstimatorDetected ? "detected" : "not detected"}`,
+    `- ${brief.leadCaptureSummary}`,
+    `- Finance/payment estimator signals: ${brief.financePaymentEstimatorDetected ? "detected" : "not detected"}`,
     leadPages.length ? leadPages.slice(0, 6).map(page => `- Lead page: ${page}`).join("\n") : "- No dedicated lead pages found in crawled pages.",
-    forms.length
-      ? forms.map(form => `- Form: ${form.type}${form.provider ? ` (${form.provider})` : ""} - ${form.url}`).join("\n")
+    brief.leadForms.length
+      ? brief.leadForms.slice(0, 8).map(form => `- Form: ${form.type}${form.provider ? ` (${form.provider})` : ""} - ${form.url}`).join("\n")
       : "- No raw HTML forms detected. Forms may be injected by JavaScript.",
     "",
     "Opportunity Score",
     `- ${score}/100 preliminary fit score based on inventory signals, lead capture surface area, and provider clues.`,
     "",
     "Setup Risks",
-    "- Inventory counts are static-crawl estimates and should be verified against the live inventory provider.",
-    providers.length ? "- Website provider/integration clues should be validated before setup." : "- Website provider was not detected; manual inspection may be needed.",
-    widgets.length ? "- Existing widgets may overlap with LeadRider routing, opt-in, and attribution." : "- Lead forms/widgets may be JavaScript-rendered and require browser-based inspection.",
+    ...brief.setupRisks.map(risk => `- ${risk}`),
     "",
     "Recommended Next Step",
-    "- Review the detected lead forms/widgets and confirm where each lead type currently routes before proposing implementation.",
-    "- If this is an active opportunity, schedule a demo and use the research summary to tailor the sales follow-up."
+    `- ${brief.recommendedNextStep}`
   ].join("\n");
 
   return { summary, links: pages.map(page => page.url).slice(0, 20), research };
