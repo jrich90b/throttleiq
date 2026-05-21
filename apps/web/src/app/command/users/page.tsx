@@ -85,7 +85,7 @@ export default function CommandUsersPage() {
   async function loadUsers() {
     setBusy(true);
     try {
-      const resp = await fetch("/api/users", { cache: "no-store" });
+      const resp = await fetch("/api/users?scope=command", { cache: "no-store" });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Users could not be loaded.");
       setUsers(Array.isArray(data.users) ? data.users : []);
@@ -107,7 +107,7 @@ export default function CommandUsersPage() {
     }
     setBusy(true);
     try {
-      const resp = await fetch("/api/users", {
+      const resp = await fetch("/api/users?scope=command", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(commandPayload(form))
@@ -133,7 +133,7 @@ export default function CommandUsersPage() {
     setBusy(true);
     try {
       const nextRole = patch.role ?? (user.role === "manager" ? "manager" : "salesperson");
-      const resp = await fetch(`/api/users/${encodeURIComponent(user.id)}`, {
+      const resp = await fetch(`/api/users/${encodeURIComponent(user.id)}?scope=command`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -179,7 +179,7 @@ export default function CommandUsersPage() {
     if (!confirmed) return;
     setBusy(true);
     try {
-      const resp = await fetch(`/api/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+      const resp = await fetch(`/api/users/${encodeURIComponent(user.id)}?scope=command`, { method: "DELETE" });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "User could not be deactivated.");
       setUsers(current => current.filter(row => row.id !== user.id));

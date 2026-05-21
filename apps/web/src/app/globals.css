@@ -540,7 +540,7 @@ a {
 
 .lr-ceo-user-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(120px, 0.4fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 0.75rem;
   padding: 0.85rem;
@@ -591,18 +591,38 @@ a {
 .lr-ceo-user-row select,
 .lr-ceo-user-row button,
 .lr-ceo-user-row .lr-ceo-status-pill {
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .lr-ceo-user-password {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.5rem;
   width: 100%;
 }
 
 .lr-ceo-user-password input {
   min-width: 0;
+}
+
+.lr-ceo-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 44px;
+  color: #dbe6f6;
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.lr-ceo-panel .lr-ceo-inline-check input[type="checkbox"] {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
 }
 
 .lr-ceo-empty {
@@ -1815,7 +1835,7 @@ a {
   }
 
   .lr-ceo-user-row {
-    grid-template-columns: minmax(0, 1fr) minmax(130px, 0.5fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

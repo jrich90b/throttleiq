@@ -6,6 +6,11 @@ type Ctx = {
   params: Promise<{ id: string }>;
 };
 
+type ApiUser = {
+  id?: unknown;
+  email?: unknown;
+};
+
 async function hostScope() {
   const host = (await headers()).get("host")?.split(":")[0]?.toLowerCase() ?? "";
   return {
@@ -13,11 +18,15 @@ async function hostScope() {
   };
 }
 
+function forceCommandScope(req: Request) {
+  return new URL(req.url).searchParams.get("scope") === "command";
+}
+
 async function loadUserForScope(base: string, id: string) {
   const r = await apiFetch(`${base}/users`, { cache: "no-store" });
   const data = await r.json().catch(() => null);
   if (!r.ok || !data?.ok || !Array.isArray(data.users)) return null;
-  return data.users.find((user: any) => String(user?.id ?? "") === id) ?? null;
+  return data.users.find((user: ApiUser) => String(user?.id ?? "") === id) ?? null;
 }
 
 function emailAllowedForScope(email: string, isLeadRiderHost: boolean) {
@@ -31,8 +40,9 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
   const scope = await hostScope();
+  const isCommandScope = scope.isLeadRiderHost || forceCommandScope(req);
   const existing = await loadUserForScope(base, id);
-  if (!existing || !emailAllowedForScope(existing.email, scope.isLeadRiderHost)) {
+  if (!existing || !emailAllowedForScope(existing.email, isCommandScope)) {
     return NextResponse.json({ ok: false, error: "User is outside this workspace." }, { status: 403 });
   }
   const body = await req.text();
@@ -43,7 +53,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
       return String(existing.email ?? "").trim().toLowerCase();
     }
   })();
-  if (!emailAllowedForScope(requestedEmail, scope.isLeadRiderHost)) {
+  if (!emailAllowedForScope(requestedEmail, isCommandScope)) {
     return NextResponse.json({ ok: false, error: "User email is outside this workspace." }, { status: 403 });
   }
 
@@ -64,14 +74,15 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
   const { id } = await params;
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
   const scope = await hostScope();
+  const isCommandScope = scope.isLeadRiderHost || forceCommandScope(req);
   const existing = await loadUserForScope(base, id);
-  if (!existing || !emailAllowedForScope(existing.email, scope.isLeadRiderHost)) {
+  if (!existing || !emailAllowedForScope(existing.email, isCommandScope)) {
     return NextResponse.json({ ok: false, error: "User is outside this workspace." }, { status: 403 });
   }
 
