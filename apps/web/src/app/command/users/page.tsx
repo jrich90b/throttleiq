@@ -268,7 +268,7 @@ export default function CommandUsersPage() {
                   <div>
                     <strong>{displayName(user)}</strong>
                     <span>{user.email}</span>
-                    <small>Command booking uses this LeadRider calendar only. It does not affect dealer appointment calendars.</small>
+                    <small>Paste the LeadRider Command Google Calendar ID below. This stays separate from dealer appointment calendars.</small>
                     {user.commandBookingEnabled !== false && user.commandCalendarId ? (
                       <a href={bookingLinkFor(user)} target="_blank" rel="noreferrer">
                         {bookingLinkFor(user)}
