@@ -30749,6 +30749,51 @@ function summarizeRelevantPages(pages: ProspectResearchPage[], keywords: string[
     .slice(0, 8);
 }
 
+function extractStaffPeople(pages: ProspectResearchPage[]) {
+  const staffPages = pages.filter(page =>
+    /staff|team|meet|about|dealer-info/i.test(`${page.url} ${page.title}`) ||
+    /\b(meet the team|our team|sales|finance|management|dealer principal|general manager)\b/i.test(page.text.slice(0, 4000))
+  );
+  const nameRe = /^[A-Z][a-z]+(?:\s+[A-Z][a-z.'-]+){1,3}$/;
+  const roleRe =
+    /\b(owner|principal|president|general manager|manager|sales|salesman|salesperson|finance|business manager|accounting|office|assistant|events?|service|parts|accessories|motorclothes|marketing|bdc|internet|director|controller)\b/i;
+  const departmentOnlyRe = /^(sales|finance|parts(?:\s*&\s*accessories)?|motorclothes®?|service|office|management)$/i;
+  const badNameRe = /\b(home|models|motorcycles|shop|service|parts|financing|dealer|contact|street|syracuse|performance|harley|davidson|welcome|previous|next)\b/i;
+  const people: Array<{ name: string; role: string | null; sourceUrl: string | null }> = [];
+  for (const page of staffPages) {
+    const lines = page.text
+      .split(/\n+/)
+      .map(line => compactWhitespace(line))
+      .filter(Boolean)
+      .slice(0, 500);
+    let currentDepartment = "";
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (departmentOnlyRe.test(line)) {
+        currentDepartment = line;
+        continue;
+      }
+      if (!nameRe.test(line) || badNameRe.test(line)) continue;
+      const next = lines[i + 1] || "";
+      const afterNext = lines[i + 2] || "";
+      const roleLine = next === line ? afterNext : next;
+      const role =
+        roleLine && roleRe.test(roleLine) && !nameRe.test(roleLine)
+          ? roleLine
+          : currentDepartment || null;
+      if (!role) continue;
+      people.push({
+        name: line,
+        role,
+        sourceUrl: page.url
+      });
+    }
+  }
+  return people
+    .filter((person, index, list) => list.findIndex(other => other.name.toLowerCase() === person.name.toLowerCase()) === index)
+    .slice(0, 20);
+}
+
 function compactResearchLinks(items: string[], max = 8) {
   return items.filter(Boolean).filter((item, index, list) => list.indexOf(item) === index).slice(0, max);
 }
@@ -30785,6 +30830,9 @@ function formatProspectResearchBriefSummary(args: {
   );
   const sourceCount = new Set(pages.map(page => page.url)).size;
   const leadFormTypes = [...new Set(brief.leadForms.map(form => form.type).filter(Boolean))].slice(0, 5);
+  const staffContacts = brief.staffPeople
+    .slice(0, 5)
+    .map(person => `${person.name}${person.role ? ` (${person.role})` : ""}`);
   const setupRisks = brief.setupRisks.slice(0, 3);
   const confidence = Math.round(Math.max(0, Math.min(1, brief.confidence)) * 100);
   return [
@@ -30796,6 +30844,7 @@ function formatProspectResearchBriefSummary(args: {
     `- Location: ${summarizeBriefList(brief.locations, "not confidently found", 2)}`,
     `- Phone: ${summarizeBriefList(brief.phones, "not confidently found", 2)}`,
     `- Franchise signal: ${summarizeBriefList(brief.manufacturers, "not confidently found", 3)}`,
+    `- Team contacts: ${staffContacts.length ? staffContacts.join(", ") : "not confidently found"}`,
     `- Inventory: ${sentenceFromResearchText(brief.inventorySummary, "Inventory exists, but counts need verification.")}`,
     "",
     "LeadRider fit",
@@ -30828,6 +30877,7 @@ function buildFallbackResearchBrief(args: {
   forms: ReturnType<typeof summarizeDetectedForms>;
   financePaymentEstimatorDetected: boolean;
   staffPages: string[];
+  staffPeople: Array<{ name: string; role: string | null; sourceUrl: string | null }>;
   score: number;
 }): ProspectResearchBrief {
   return {
@@ -30847,7 +30897,7 @@ function buildFallbackResearchBrief(args: {
       confidence: form.provider ? 0.85 : 0.65
     })),
     financePaymentEstimatorDetected: args.financePaymentEstimatorDetected,
-    staffPeople: [],
+    staffPeople: args.staffPeople,
     setupRisks: [
       "Inventory counts are crawler estimates and should be verified against the live inventory provider.",
       args.providers.length ? "Website provider/integration clues should be validated before setup." : "Website provider was not detected; manual inspection may be needed.",
@@ -31077,7 +31127,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
   const pageResults = await Promise.all(targetUrls.map(url => fetchProspectResearchPage(url, 9000)));
   const pages = [home, ...pageResults.filter((page): page is ProspectResearchPage => !!page)]
     .filter((page, index, list) => list.findIndex(other => other.url === page.url) === index)
-    .slice(0, 14);
+    .slice(0, 18);
 
   const providers = detectWebsiteProviders(pages);
   const widgets = detectLeadWidgets(pages);
@@ -31086,6 +31136,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
   const location = findLocationSignals(pages);
   const forms = summarizeDetectedForms(pages);
   const staffPages = summarizeRelevantPages(pages, ["staff", "team", "about", "manager", "owner", "sales", "finance"]);
+  const staffPeople = extractStaffPeople(pages);
   const leadPages = summarizeRelevantPages(pages, ["contact", "trade", "sell", "finance", "payment", "prequal", "test ride", "service", "quote", "availability"]);
   const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
   const score = Math.min(100, 35 + Math.min(25, inventory.totalSignals) + widgets.length * 5 + providers.length * 3);
@@ -31121,7 +31172,10 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
       leadPages,
       forms
     },
-    teamEmployees: staffPages,
+    teamEmployees: {
+      pages: staffPages,
+      people: staffPeople
+    },
     opportunityScore: score,
     setupRisks: [
       "Inventory counts are crawler estimates and should be verified against the live inventory provider.",
@@ -31140,6 +31194,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     forms,
     financePaymentEstimatorDetected,
     staffPages,
+    staffPeople,
     score
   });
   const brief =
@@ -31151,6 +31206,12 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
       }),
       24000
     )) ?? fallbackBrief;
+  if (staffPeople.length) {
+    const mergedStaff = [...(Array.isArray(brief.staffPeople) ? brief.staffPeople : []), ...staffPeople]
+      .filter((person, index, list) => list.findIndex(other => other.name.toLowerCase() === person.name.toLowerCase()) === index)
+      .slice(0, 20);
+    brief.staffPeople = mergedStaff;
+  }
   brief.confidence = Math.min(0.94, Math.max(0.35, Number(brief.confidence) || fallbackBrief.confidence));
   const research = {
     ...deterministicResearch,
