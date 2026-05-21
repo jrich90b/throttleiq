@@ -14,6 +14,13 @@ type CommandUser = {
     canViewAllTasks?: boolean;
     canViewAllLeads?: boolean;
   };
+  calendarId?: string;
+  includeInSchedule?: boolean;
+  commandBookingEnabled?: boolean;
+  commandCalendarId?: string;
+  phone?: string;
+  extension?: string;
+  emailSignature?: string;
 };
 
 type UserForm = {
@@ -21,6 +28,11 @@ type UserForm = {
   email: string;
   password: string;
   role: "manager" | "salesperson";
+};
+
+type UserPatch = Partial<UserForm> & {
+  commandBookingEnabled?: boolean;
+  commandCalendarId?: string;
 };
 
 const emptyForm: UserForm = {
@@ -112,7 +124,12 @@ export default function CommandUsersPage() {
     }
   }
 
-  async function updateUser(user: CommandUser, patch: Partial<UserForm>) {
+  function bookingLinkFor(user: CommandUser) {
+    if (typeof window === "undefined") return `/book?commandUser=${encodeURIComponent(user.id)}`;
+    return `${window.location.origin}/book?commandUser=${encodeURIComponent(user.id)}`;
+  }
+
+  async function updateUser(user: CommandUser, patch: UserPatch) {
     setBusy(true);
     try {
       const nextRole = patch.role ?? (user.role === "manager" ? "manager" : "salesperson");
@@ -124,6 +141,17 @@ export default function CommandUsersPage() {
           email: patch.email ?? user.email,
           password: patch.password || undefined,
           role: nextRole,
+          calendarId: user.calendarId,
+          includeInSchedule: user.includeInSchedule,
+          phone: user.phone,
+          extension: user.extension,
+          emailSignature: user.emailSignature,
+          commandBookingEnabled:
+            typeof patch.commandBookingEnabled === "boolean"
+              ? patch.commandBookingEnabled
+              : user.commandBookingEnabled ?? true,
+          commandCalendarId:
+            patch.commandCalendarId == null ? user.commandCalendarId ?? "" : patch.commandCalendarId,
           permissions:
             nextRole === "manager"
               ? undefined
@@ -240,6 +268,12 @@ export default function CommandUsersPage() {
                   <div>
                     <strong>{displayName(user)}</strong>
                     <span>{user.email}</span>
+                    <small>Command booking uses this LeadRider calendar only. It does not affect dealer appointment calendars.</small>
+                    {user.commandBookingEnabled !== false && user.commandCalendarId ? (
+                      <a href={bookingLinkFor(user)} target="_blank" rel="noreferrer">
+                        {bookingLinkFor(user)}
+                      </a>
+                    ) : null}
                   </div>
                   <select
                     value={user.role === "manager" ? "manager" : "salesperson"}
@@ -249,6 +283,44 @@ export default function CommandUsersPage() {
                     <option value="manager">Admin</option>
                     <option value="salesperson">Operator</option>
                   </select>
+                  <div className="lr-ceo-user-password">
+                    <input
+                      value={user.commandCalendarId ?? ""}
+                      onChange={event =>
+                        setUsers(current =>
+                          current.map(row => (row.id === user.id ? { ...row, commandCalendarId: event.target.value } : row))
+                        )
+                      }
+                      placeholder="Command Google Calendar ID"
+                    />
+                    <label className="lr-ceo-inline-check">
+                      <input
+                        type="checkbox"
+                        checked={user.commandBookingEnabled !== false}
+                        onChange={event =>
+                          setUsers(current =>
+                            current.map(row =>
+                              row.id === user.id ? { ...row, commandBookingEnabled: event.target.checked } : row
+                            )
+                          )
+                        }
+                      />
+                      Booking enabled
+                    </label>
+                    <button
+                      type="button"
+                      className="lr-ceo-secondary-btn"
+                      onClick={() =>
+                        updateUser(user, {
+                          commandCalendarId: user.commandCalendarId ?? "",
+                          commandBookingEnabled: user.commandBookingEnabled !== false
+                        })
+                      }
+                      disabled={busy}
+                    >
+                      Save booking
+                    </button>
+                  </div>
                   <div className="lr-ceo-user-password">
                     <input
                       type="password"

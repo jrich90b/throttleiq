@@ -59,6 +59,8 @@ export type UserRecord = {
   role: UserRole;
   includeInSchedule?: boolean;
   calendarId?: string;
+  commandBookingEnabled?: boolean;
+  commandCalendarId?: string;
   phone?: string;
   extension?: string;
   permissions: UserPermissions;
@@ -161,6 +163,8 @@ export async function createUser(input: {
   emailSignature?: string;
   includeInSchedule?: boolean;
   calendarId?: string;
+  commandBookingEnabled?: boolean;
+  commandCalendarId?: string;
   phone?: string;
   extension?: string;
   permissions?: Partial<UserPermissions>;
@@ -207,6 +211,8 @@ export async function createUser(input: {
     role: input.role,
     includeInSchedule,
     calendarId: input.calendarId?.trim() || undefined,
+    commandBookingEnabled: input.commandBookingEnabled ?? true,
+    commandCalendarId: input.commandCalendarId?.trim() || undefined,
     phone: input.phone?.trim() || undefined,
     extension: input.extension?.trim() || undefined,
     permissions: perms,
@@ -230,6 +236,8 @@ export async function updateUser(
     emailSignature: string;
     includeInSchedule: boolean;
     calendarId: string;
+    commandBookingEnabled: boolean;
+    commandCalendarId: string;
     phone: string;
     extension: string;
     permissions: Partial<UserPermissions>;
@@ -283,9 +291,15 @@ export async function updateUser(
       patch.emailSignature == null ? existing.emailSignature : patch.emailSignature.trim() || undefined,
     role: nextRole,
     includeInSchedule,
-    calendarId: patch.calendarId?.trim() || undefined,
-    phone: patch.phone?.trim() || undefined,
-    extension: patch.extension?.trim() || undefined,
+    calendarId: patch.calendarId == null ? existing.calendarId : patch.calendarId.trim() || undefined,
+    commandBookingEnabled:
+      typeof patch.commandBookingEnabled === "boolean"
+        ? patch.commandBookingEnabled
+        : existing.commandBookingEnabled ?? true,
+    commandCalendarId:
+      patch.commandCalendarId == null ? existing.commandCalendarId : patch.commandCalendarId.trim() || undefined,
+    phone: patch.phone == null ? existing.phone : patch.phone.trim() || undefined,
+    extension: patch.extension == null ? existing.extension : patch.extension.trim() || undefined,
     permissions: nextPerms,
     passwordHash: patch.password ? hashPassword(patch.password) : existing.passwordHash,
     updatedAt: new Date().toISOString()

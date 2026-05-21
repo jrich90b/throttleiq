@@ -223,7 +223,13 @@ import {
   inferWalkIn,
   startPostSaleCadence
 } from "./domain/conversationStore.js";
-import { getSchedulerConfig, saveSchedulerConfig, dayKey, getPreferredSalespeople } from "./domain/schedulerConfig.js";
+import {
+  getSchedulerConfig,
+  saveSchedulerConfig,
+  dayKey,
+  getPreferredSalespeople,
+  type SchedulerConfig
+} from "./domain/schedulerConfig.js";
 import {
   getOAuthClient,
   saveTokens,
@@ -2300,6 +2306,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/webhooks/twilio") ||
     pathname.startsWith("/crm/leads/adf/sendgrid") ||
     pathname.startsWith("/public/booking") ||
+    pathname.startsWith("/public/command-booking") ||
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/marketing") ||
     pathname.startsWith("/public/inventory") ||
@@ -4460,6 +4467,8 @@ app.get("/auth/me", async (req, res) => {
       role: user.role,
       includeInSchedule: user.includeInSchedule,
       calendarId: user.calendarId,
+      commandBookingEnabled: user.commandBookingEnabled,
+      commandCalendarId: user.commandCalendarId,
       phone: user.phone,
       extension: user.extension,
       permissions: user.permissions
@@ -4594,6 +4603,8 @@ app.get("/users", requirePermission("canEditAppointments"), async (_req, res) =>
       role: u.role,
       includeInSchedule: u.includeInSchedule,
       calendarId: u.calendarId,
+      commandBookingEnabled: u.commandBookingEnabled,
+      commandCalendarId: u.commandCalendarId,
       phone: u.phone,
       extension: u.extension,
       permissions: u.permissions
@@ -4618,10 +4629,13 @@ app.post("/users", async (req, res) => {
   const name = [firstName, lastName].filter(Boolean).join(" ").trim() || nameRaw;
   const emailSignature = String(req.body?.emailSignature ?? "").trim();
   const calendarId = String(req.body?.calendarId ?? "").trim();
+  const commandCalendarId = String(req.body?.commandCalendarId ?? "").trim();
   const phone = String(req.body?.phone ?? "").trim();
   const extension = String(req.body?.extension ?? "").trim();
   const includeInSchedule =
     req.body?.includeInSchedule == null ? undefined : Boolean(req.body.includeInSchedule);
+  const commandBookingEnabled =
+    req.body?.commandBookingEnabled == null ? undefined : Boolean(req.body.commandBookingEnabled);
   const permissions = req.body?.permissions ?? undefined;
   if (!email || !password) return res.status(400).json({ ok: false, error: "Missing email/password" });
   try {
@@ -4635,6 +4649,8 @@ app.post("/users", async (req, res) => {
       emailSignature,
       includeInSchedule,
       calendarId,
+      commandBookingEnabled,
+      commandCalendarId,
       phone,
       extension,
       permissions
@@ -4652,6 +4668,8 @@ app.post("/users", async (req, res) => {
         role: user.role,
         includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
+        commandBookingEnabled: user.commandBookingEnabled,
+        commandCalendarId: user.commandCalendarId,
         phone: user.phone,
         extension: user.extension,
         permissions: user.permissions
@@ -4681,6 +4699,8 @@ app.put("/users/:id", requireManager, async (req, res) => {
       emailSignature: req.body?.emailSignature,
       includeInSchedule: req.body?.includeInSchedule,
       calendarId: req.body?.calendarId,
+      commandBookingEnabled: req.body?.commandBookingEnabled,
+      commandCalendarId: req.body?.commandCalendarId,
       phone: req.body?.phone,
       extension: req.body?.extension,
       permissions: req.body?.permissions
@@ -4698,6 +4718,8 @@ app.put("/users/:id", requireManager, async (req, res) => {
         role: user.role,
         includeInSchedule: user.includeInSchedule,
         calendarId: user.calendarId,
+        commandBookingEnabled: user.commandBookingEnabled,
+        commandCalendarId: user.commandCalendarId,
         phone: user.phone,
         extension: user.extension,
         permissions: user.permissions
@@ -26324,6 +26346,173 @@ app.get("/public/booking/config", async (req, res) => {
     },
     timezone: cfg.timezone,
     appointmentTypes: Object.keys(cfg.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } })
+  });
+});
+
+function commandBookingBaseUrl(req: express.Request) {
+  const configured = String(process.env.LEADRIDER_WEB_BASE_URL ?? process.env.PUBLIC_BASE_URL ?? "").trim();
+  if (configured) return configured.replace(/\/$/, "");
+  const proto = String(req.get("x-forwarded-proto") ?? req.protocol ?? "https").split(",")[0].trim() || "https";
+  const host = String(req.get("x-forwarded-host") ?? req.get("host") ?? "www.leadrider.ai").split(",")[0].trim();
+  return `${proto}://${host}`.replace(/\/$/, "");
+}
+
+function commandBookingUrlForUser(req: express.Request, userId: string) {
+  return `${commandBookingBaseUrl(req)}/book?commandUser=${encodeURIComponent(userId)}`;
+}
+
+function commandBookingSchedulerConfig(calendarId: string): SchedulerConfig {
+  const timezone = String(process.env.COMMAND_BOOKING_TIMEZONE ?? "America/New_York").trim() || "America/New_York";
+  return {
+    timezone,
+    assignmentMode: "preferred",
+    preferredSalespeople: ["command_user"],
+    salespeople: [{ id: "command_user", name: "LeadRider", calendarId }],
+    businessHours: {
+      monday: { open: "09:00", close: "17:00" },
+      tuesday: { open: "09:00", close: "17:00" },
+      wednesday: { open: "09:00", close: "17:00" },
+      thursday: { open: "09:00", close: "17:00" },
+      friday: { open: "09:00", close: "17:00" },
+      saturday: { open: null, close: null },
+      sunday: { open: null, close: null }
+    },
+    bookingWindows: {
+      weekday: { earliestStart: "09:00", latestStart: "16:30" },
+      saturday: { earliestStart: "09:00", latestStart: "12:00" }
+    },
+    minLeadTimeHours: Number(process.env.COMMAND_BOOKING_MIN_LEAD_HOURS ?? "4") || 4,
+    minGapBetweenAppointmentsMinutes: Number(process.env.COMMAND_BOOKING_GAP_MINUTES ?? "15") || 15,
+    appointmentTypes: {
+      sales_demo: { durationMinutes: Number(process.env.COMMAND_BOOKING_DEMO_MINUTES ?? "30") || 30 }
+    },
+    availabilityBlocks: {}
+  };
+}
+
+async function getCommandBookingUser(userRef: string) {
+  const ref = userRef.trim().toLowerCase();
+  if (!ref) return null;
+  const users = await listUsers();
+  return (
+    users.find(user => user.id === userRef) ??
+    users.find(user => user.email.toLowerCase() === ref) ??
+    null
+  );
+}
+
+app.get("/public/command-booking/config", async (req, res) => {
+  const userRef = String(req.query?.user ?? "").trim();
+  const user = await getCommandBookingUser(userRef);
+  if (!user || user.commandBookingEnabled === false || !user.commandCalendarId) {
+    return res.status(404).json({ ok: false, error: "Booking calendar is not available for this LeadRider user." });
+  }
+  const cfg = commandBookingSchedulerConfig(user.commandCalendarId);
+  return res.json({
+    ok: true,
+    command: true,
+    user: {
+      id: user.id,
+      name: user.name || [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email,
+      email: user.email
+    },
+    bookingUrl: commandBookingUrlForUser(req, user.id),
+    timezone: cfg.timezone,
+    appointmentTypes: Object.keys(cfg.appointmentTypes)
+  });
+});
+
+app.get("/public/command-booking/availability", async (req, res) => {
+  const userRef = String(req.query?.user ?? "").trim();
+  const user = await getCommandBookingUser(userRef);
+  if (!user || user.commandBookingEnabled === false || !user.commandCalendarId) {
+    return res.status(404).json({ ok: false, error: "Booking calendar is not available for this LeadRider user." });
+  }
+  const cfg = commandBookingSchedulerConfig(user.commandCalendarId);
+  const appointmentType = String(req.query?.type ?? "sales_demo").trim() || "sales_demo";
+  const durationMinutes = cfg.appointmentTypes[appointmentType]?.durationMinutes ?? 30;
+  const daysAheadRaw = Number(req.query?.daysAhead ?? 30);
+  const daysAhead = Number.isFinite(daysAheadRaw) ? Math.min(Math.max(daysAheadRaw, 3), 60) : 30;
+  const perDayRaw = Number(req.query?.perDay ?? 24);
+  const perDay = Number.isFinite(perDayRaw) ? Math.min(Math.max(perDayRaw, 2), 48) : 24;
+
+  const now = new Date();
+  const candidatesByDay = generateCandidateSlots(cfg, now, durationMinutes, daysAhead);
+  const timeMin = candidatesByDay[0]?.candidates[0]?.start?.toISOString() ?? now.toISOString();
+  const lastDay = candidatesByDay[candidatesByDay.length - 1];
+  const timeMax =
+    lastDay?.candidates[lastDay.candidates.length - 1]?.end?.toISOString() ??
+    new Date(now.getTime() + daysAhead * 864e5).toISOString();
+  const cal = await getAuthedCalendarClient();
+  const fb = await queryFreeBusy(cal, [user.commandCalendarId], timeMin, timeMax, cfg.timezone);
+  const busy = (fb.calendars?.[user.commandCalendarId]?.busy ?? []) as any[];
+  const expanded = expandBusyBlocks(busy, cfg.minGapBetweenAppointmentsMinutes ?? 15);
+  const slots: Array<{ start: string; end: string; startLocal: string; endLocal: string }> = [];
+  const perDayCounts = new Map<string, number>();
+  for (const dayEntry of candidatesByDay) {
+    for (const c of dayEntry.candidates) {
+      if (expanded.some(b => overlaps(c.start, c.end, b.start, b.end))) continue;
+      const day = dayKeyLocal(c.start.toISOString(), cfg.timezone);
+      const count = perDayCounts.get(day) ?? 0;
+      if (count >= perDay) continue;
+      slots.push({
+        start: c.start.toISOString(),
+        end: c.end.toISOString(),
+        startLocal: fmtLocal(c.start.toISOString(), cfg.timezone),
+        endLocal: fmtLocal(c.end.toISOString(), cfg.timezone)
+      });
+      perDayCounts.set(day, count + 1);
+    }
+  }
+  return res.json({ ok: true, command: true, appointmentType, durationMinutes, slots });
+});
+
+app.post("/public/command-booking/book", async (req, res) => {
+  const userRef = String(req.body?.user ?? "").trim();
+  const user = await getCommandBookingUser(userRef);
+  if (!user || user.commandBookingEnabled === false || !user.commandCalendarId) {
+    return res.status(404).json({ ok: false, error: "Booking calendar is not available for this LeadRider user." });
+  }
+  const slot = req.body?.slot as { start?: string; end?: string; startLocal?: string; endLocal?: string };
+  if (!slot?.start || !slot?.end) return res.status(400).json({ ok: false, error: "Missing slot.start/end" });
+  const lead = req.body?.lead ?? {};
+  const name =
+    String(lead.name ?? "").trim() ||
+    [String(lead.firstName ?? "").trim(), String(lead.lastName ?? "").trim()].filter(Boolean).join(" ").trim() ||
+    String(lead.email ?? lead.phone ?? "LeadRider prospect").trim();
+  const cfg = commandBookingSchedulerConfig(user.commandCalendarId);
+  const cal = await getAuthedCalendarClient();
+  const fb = await queryFreeBusy(cal, [user.commandCalendarId], slot.start, slot.end, cfg.timezone);
+  const busy = (fb.calendars?.[user.commandCalendarId]?.busy ?? []) as any[];
+  const startDate = new Date(slot.start);
+  const endDate = new Date(slot.end);
+  if (busy.some((b: any) => startDate < new Date(b.end) && new Date(b.start) < endDate)) {
+    return res.status(409).json({ ok: false, error: "No longer available" });
+  }
+  const event = await insertEvent(
+    cal,
+    user.commandCalendarId,
+    cfg.timezone,
+    `LeadRider demo - ${name}`,
+    [
+      `Prospect: ${name}`,
+      `Email: ${lead.email ?? ""}`,
+      `Phone: ${lead.phone ?? ""}`,
+      `Dealer: ${lead.dealerName ?? ""}`,
+      `Website: ${lead.website ?? ""}`,
+      "",
+      `Notes: ${lead.notes ?? ""}`
+    ].join("\n"),
+    slot.start,
+    slot.end
+  );
+  return res.json({
+    ok: true,
+    command: true,
+    eventId: event.id,
+    htmlLink: event.htmlLink,
+    whenText: slot.startLocal ?? fmtLocal(slot.start, cfg.timezone),
+    user: { id: user.id, name: user.name || user.email, email: user.email }
   });
 });
 

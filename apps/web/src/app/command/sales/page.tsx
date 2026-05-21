@@ -47,6 +47,14 @@ type ZoomStatus = {
   missing?: string[];
 };
 
+type CommandUser = {
+  id: string;
+  email: string;
+  name?: string;
+  commandBookingEnabled?: boolean;
+  commandCalendarId?: string;
+};
+
 type SalesActionId = "research" | "sales_email" | "schedule_demo" | "agreement" | "onboarding" | "dealer_setup";
 
 type AgentTask = {
@@ -237,6 +245,7 @@ export default function SalesFunnelPage() {
   const [agentTasksBusy, setAgentTasksBusy] = useState(false);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const [draftBusy, setDraftBusy] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CommandUser | null>(null);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -247,6 +256,7 @@ export default function SalesFunnelPage() {
     void loadProspects();
     void loadZoomStatus();
     void loadAgentTasks();
+    void loadCurrentUser();
   }, []);
 
   useEffect(() => {
@@ -430,6 +440,22 @@ export default function SalesFunnelPage() {
         {buttonLabel}
       </button>
     );
+  }
+
+  function commandBookingLink() {
+    if (!currentUser?.id || currentUser.commandBookingEnabled === false || !currentUser.commandCalendarId) return "";
+    if (typeof window === "undefined") return `/book?commandUser=${encodeURIComponent(currentUser.id)}`;
+    return `${window.location.origin}/book?commandUser=${encodeURIComponent(currentUser.id)}`;
+  }
+
+  async function loadCurrentUser() {
+    try {
+      const resp = await fetch("/api/auth/me", { cache: "no-store" });
+      const data = await resp.json();
+      if (resp.ok && data?.ok && data.user) setCurrentUser(data.user);
+    } catch {
+      // Non-blocking. Sales drafts can still ask for a reply time.
+    }
   }
 
   function taskStatusLabel(status: AgentTask["status"]) {
@@ -622,8 +648,13 @@ export default function SalesFunnelPage() {
     if (!selected) return;
     setTaskBusy(true);
     const senderType = form.emailSenderType || selected.emailSenderType || "personal";
-    const senderAddress = form.emailSenderAddress || selected.emailSenderAddress || emailAddressForSender(senderType);
+    const senderAddress =
+      currentUser?.email ||
+      form.emailSenderAddress ||
+      selected.emailSenderAddress ||
+      emailAddressForSender(senderType);
     const currentWebsite = form.website.trim() || selected.website || "";
+    const bookingLink = commandBookingLink();
     if (action === "research" && !currentWebsite) {
       setNotice("Add the dealer website before running research.");
       setTaskBusy(false);
@@ -665,6 +696,7 @@ export default function SalesFunnelPage() {
       `DocuSign packet: ${taskSelected.docusignPacketId || "not set"}`,
       `Onboarding email thread: ${taskSelected.onboardingEmailThread || "not set"}`,
       `Selected email sender lane: ${labelForSender(senderType)} (${senderAddress})`,
+      `LeadRider command booking link: ${bookingLink || "not configured"}`,
       `Notes: ${taskSelected.notes || "none"}`
     ].join("\n");
     const config = {
@@ -676,7 +708,14 @@ export default function SalesFunnelPage() {
           `Draft a prospect follow-up email from ${senderAddress}.`,
           "This is approval-gated draft work only. Do not send the email, delete mail, mark messages read, or change external systems.",
           "If the sender is a personal sales inbox, write in Joe's voice and make the next step clear.",
-          "Return subject, body, and a short note explaining why this email is appropriate.",
+          "Return only a clean email draft in this exact format:",
+          "Subject: <subject line>",
+          "",
+          "Body:",
+          "<email body>",
+          "Do not include Summary, Recommended Action, Approval Needed, Codex/code task notes, markdown headings, checklists, or internal commentary.",
+          "If the LeadRider command booking link is configured, include it naturally as the scheduling link.",
+          "If the LeadRider command booking link is not configured, ask them to reply with a time that works. Do not use placeholder links.",
           "",
           facts
         ].join("\n")

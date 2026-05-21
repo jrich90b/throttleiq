@@ -44,6 +44,8 @@ function dayKeyFromParts(year: number, monthIndex: number, day: number, tz: stri
 function BookingPageInner() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
+  const commandUser = params.get("commandUser") ?? "";
+  const isCommandBooking = Boolean(commandUser);
   const leadKey = params.get("leadKey") ?? "";
 
   const [config, setConfig] = useState<any>(null);
@@ -67,7 +69,7 @@ function BookingPageInner() {
   });
 
   useEffect(() => {
-    if (!token) {
+    if (!token && !isCommandBooking) {
       setLoadingConfig(false);
       setError("Missing booking token.");
       return;
@@ -76,9 +78,12 @@ function BookingPageInner() {
       setLoadingConfig(true);
       setError(null);
       try {
-        const resp = await fetch(`/api/booking/config?token=${encodeURIComponent(token)}`, {
-          cache: "no-store"
-        });
+        const resp = await fetch(
+          isCommandBooking
+            ? `/api/command-booking/config?user=${encodeURIComponent(commandUser)}`
+            : `/api/booking/config?token=${encodeURIComponent(token)}`,
+          { cache: "no-store" }
+        );
         const json = await resp.json();
         if (!resp.ok) {
           throw new Error(json?.error ?? "Failed to load booking config");
@@ -96,10 +101,10 @@ function BookingPageInner() {
         setLoadingConfig(false);
       }
     })();
-  }, [token, preferredType]);
+  }, [token, preferredType, isCommandBooking, commandUser]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || isCommandBooking) return;
     const firstName = params.get("firstName") ?? "";
     const lastName = params.get("lastName") ?? "";
     const email = params.get("email") ?? "";
@@ -113,10 +118,10 @@ function BookingPageInner() {
       email: prev.email || email,
       phone: prev.phone || phone
     }));
-  }, [params, token]);
+  }, [params, token, isCommandBooking]);
 
   useEffect(() => {
-    if (!token || !leadKey) return;
+    if (!token || !leadKey || isCommandBooking) return;
     void (async () => {
       try {
         const resp = await fetch(
@@ -142,23 +147,30 @@ function BookingPageInner() {
         // ignore
       }
     })();
-  }, [token, leadKey]);
+  }, [token, leadKey, isCommandBooking]);
 
   useEffect(() => {
-    if (!token || !appointmentType) return;
+    if ((!token && !isCommandBooking) || !appointmentType) return;
     void (async () => {
       setLoadingSlots(true);
       setError(null);
       try {
         const qs = new URLSearchParams({
-          token,
           type: appointmentType,
           daysAhead: "30",
           perDay: "48"
         });
-        const resp = await fetch(`/api/booking/availability?${qs.toString()}`, {
-          cache: "no-store"
-        });
+        if (isCommandBooking) {
+          qs.set("user", commandUser);
+        } else {
+          qs.set("token", token);
+        }
+        const resp = await fetch(
+          isCommandBooking
+            ? `/api/command-booking/availability?${qs.toString()}`
+            : `/api/booking/availability?${qs.toString()}`,
+          { cache: "no-store" }
+        );
         const json = await resp.json();
         if (!resp.ok) {
           throw new Error(json?.error ?? "Failed to load availability");
@@ -170,9 +182,10 @@ function BookingPageInner() {
         setLoadingSlots(false);
       }
     })();
-  }, [token, appointmentType]);
+  }, [token, appointmentType, isCommandBooking, commandUser]);
 
-  const dealerName = config?.dealer?.dealerName ?? "Dealer";
+  const dealerName = isCommandBooking ? "LeadRider" : config?.dealer?.dealerName ?? "Dealer";
+  const commandUserName = config?.user?.name ?? "LeadRider";
   const tz = config?.timezone ?? "America/New_York";
   const appointmentTypes = config?.appointmentTypes ?? ["inventory_visit"];
   const showTypeSelect = !lockedType && !preferredType;
@@ -228,11 +241,12 @@ function BookingPageInner() {
     setError(null);
     const leadName = [form.firstName, form.lastName].filter(Boolean).join(" ").trim();
     try {
-      const resp = await fetch("/api/booking/book", {
+      const resp = await fetch(isCommandBooking ? "/api/command-booking/book" : "/api/booking/book", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           token,
+          user: commandUser,
           appointmentType,
           slot: selectedSlot,
           lead: {
@@ -241,7 +255,9 @@ function BookingPageInner() {
             lastName: form.lastName.trim(),
             email: form.email.trim(),
             phone: form.phone.trim(),
-            notes: form.notes.trim()
+            notes: form.notes.trim(),
+            dealerName: params.get("dealer") ?? "",
+            website: params.get("website") ?? ""
           }
         })
       });
@@ -257,7 +273,11 @@ function BookingPageInner() {
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl bg-white border rounded-lg shadow-sm p-6">
         <div className="text-xl font-semibold mb-1">{dealerName}</div>
-        <div className="text-sm text-gray-600 mb-6">Book a time to stop in (timezone: {tz}).</div>
+        <div className="text-sm text-gray-600 mb-6">
+          {isCommandBooking
+            ? `Book a LeadRider demo with ${commandUserName} (timezone: ${tz}).`
+            : `Book a time to stop in (timezone: ${tz}).`}
+        </div>
 
         {loadingConfig ? (
           <div className="text-sm text-gray-600">Loading booking info…</div>
@@ -442,7 +462,7 @@ function BookingPageInner() {
                 disabled={!canSubmit}
                 onClick={submitBooking}
               >
-                Book appointment
+                {isCommandBooking ? "Book demo" : "Book appointment"}
               </button>
             </div>
           </div>
