@@ -30403,6 +30403,43 @@ async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promis
   }
 }
 
+async function probeProspectResearchUrl(url: string, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; LeadRiderResearchBot/1.0; +https://www.leadrider.ai)",
+        accept: "text/html,application/xhtml+xml,text/plain"
+      }
+    });
+    const body = await resp.text().catch(() => "");
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      finalUrl: resp.url || url,
+      server: resp.headers.get("server") || "",
+      cfMitigated: resp.headers.get("cf-mitigated") || "",
+      title: compactWhitespace(decodeHtmlEntities(body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")),
+      bodyStart: htmlToResearchText(body).slice(0, 300)
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 0,
+      finalUrl: url,
+      server: "",
+      cfMitigated: "",
+      title: "",
+      bodyStart: err?.message ? String(err.message) : "Fetch failed"
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function chooseProspectResearchUrls(home: ProspectResearchPage, rootUrl: string) {
   const keywordScore = (url: string) => {
     const text = url.toLowerCase();
@@ -30582,16 +30619,28 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
 
   const home = await fetchProspectResearchPage(rootUrl);
   if (!home) {
+    const probe = await probeProspectResearchUrl(rootUrl);
+    const cloudflareBlocked =
+      probe.cfMitigated.toLowerCase() === "challenge" ||
+      probe.server.toLowerCase().includes("cloudflare") ||
+      /just a moment|enable javascript and cookies|cloudflare/i.test(`${probe.title} ${probe.bodyStart}`);
     return {
       summary: [
         "Sources Used",
-        `- Attempted: ${rootUrl}`,
+        `- Attempted: ${probe.finalUrl || rootUrl}`,
+        `- HTTP status: ${probe.status || "request failed"}`,
+        cloudflareBlocked ? "- Blocker: Cloudflare managed challenge blocked the server-side crawler." : "- Blocker: The website could not be fetched by the server-side crawler.",
         "",
         "Setup Risks",
-        "- The website could not be fetched by the automated crawler. The site may block bots, require JavaScript rendering, or be temporarily unavailable.",
+        cloudflareBlocked
+          ? "- This dealer site requires a real browser challenge/cookie flow before page content can be read. A plain backend crawler cannot safely bypass that."
+          : "- The site may block bots, require JavaScript rendering, or be temporarily unavailable.",
+        "- Inventory counts, web provider, widgets, and lead forms need browser-assisted inspection or an accessible inventory/feed endpoint.",
         "",
         "Recommended Next Step",
-        "- Verify the URL in a browser and consider manual research if the site blocks server-side fetches."
+        cloudflareBlocked
+          ? "- Use browser-assisted research from an authenticated/interactive Chrome session, or ask the dealer/web provider to allowlist LeadRider research traffic or provide inventory/feed access."
+          : "- Verify the URL in a browser and consider manual research if the site blocks server-side fetches."
       ].join("\n"),
       links: [rootUrl]
     };
