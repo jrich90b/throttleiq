@@ -27610,7 +27610,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
               }
               const resp = await fetch("/public/appointment/outcome", {
                 method: "POST",
-                body: new FormData(outcomeForm)
+                body: new URLSearchParams(new FormData(outcomeForm))
               });
               const text = await resp.text();
               if (!resp.ok) {
@@ -27770,7 +27770,7 @@ app.get("/r/:token", async (req, res) => {
   return res.redirect(target);
 });
 
-app.post("/public/appointment/outcome", async (req, res) => {
+app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
   const token = String(req.body?.token ?? "").trim();
   const legacyOutcomeRaw = String(req.body?.outcome ?? "").trim();
   const primaryOutcomeRaw = String(req.body?.primaryOutcome ?? "").trim();
