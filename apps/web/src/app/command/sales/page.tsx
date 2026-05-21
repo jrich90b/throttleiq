@@ -324,10 +324,12 @@ export default function SalesFunnelPage() {
 
   useEffect(() => {
     if (!selected || latestResearchTask?.kind !== "prospect_research") return;
+    const hasSummary = Boolean(latestResearchTask.output?.summary?.trim());
     const shouldPoll =
       latestResearchTask.status === "queued" ||
       latestResearchTask.status === "running" ||
-      (latestResearchTask.status === "completed" && !latestResearchTask.output?.summary?.trim());
+      (!hasSummary && latestResearchTask.status === "needs_approval") ||
+      (latestResearchTask.status === "completed" && !hasSummary);
     if (!shouldPoll) return;
 
     let cancelled = false;
@@ -345,10 +347,12 @@ export default function SalesFunnelPage() {
 
   useEffect(() => {
     if (!selected || latestSalesEmailTask?.kind !== "email") return;
+    const hasSummary = Boolean(latestSalesEmailTask.output?.summary?.trim());
     const shouldPoll =
       latestSalesEmailTask.status === "queued" ||
       latestSalesEmailTask.status === "running" ||
-      (latestSalesEmailTask.status === "completed" && !latestSalesEmailTask.output?.summary?.trim());
+      (!hasSummary && latestSalesEmailTask.status === "needs_approval") ||
+      (latestSalesEmailTask.status === "completed" && !hasSummary);
     if (!shouldPoll) return;
 
     let cancelled = false;
@@ -825,7 +829,7 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
       setAgentTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 100));
       setNotice(`Agent task created: ${data.task.title}.`);
-      if (action === "research") {
+      if (action === "research" || action === "sales_email") {
         window.setTimeout(() => void loadAgentTasks(), 1500);
         window.setTimeout(() => void loadAgentTasks(), 5000);
       }
