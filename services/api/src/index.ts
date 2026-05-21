@@ -30753,6 +30753,71 @@ function compactResearchLinks(items: string[], max = 8) {
   return items.filter(Boolean).filter((item, index, list) => list.indexOf(item) === index).slice(0, max);
 }
 
+function sentenceFromResearchText(value: string, fallback: string) {
+  const cleaned = compactWhitespace(value || "");
+  if (!cleaned) return fallback;
+  const sentences = cleaned.match(/[^.!?]+[.!?]+/g)?.map(sentence => compactWhitespace(sentence)).filter(Boolean) ?? [];
+  return (sentences[0] || cleaned).slice(0, 360);
+}
+
+function summarizeBriefList(items: string[], fallback: string, max = 4) {
+  const clean = items.map(item => compactWhitespace(item)).filter(Boolean);
+  if (!clean.length) return fallback;
+  const shown = clean.slice(0, max);
+  const extra = clean.length - shown.length;
+  return `${shown.join(", ")}${extra > 0 ? `, plus ${extra} more` : ""}`;
+}
+
+function formatProspectResearchBriefSummary(args: {
+  brief: ProspectResearchBrief;
+  home: ProspectResearchPage;
+  pages: ProspectResearchPage[];
+  score: number;
+  checkedAt: string;
+  crawlMethod: string;
+}) {
+  const { brief, home, pages, score, checkedAt, crawlMethod } = args;
+  const site = brief.officialWebsite || home.url;
+  const dealerName = compactWhitespace(brief.dealerName || home.title || "This dealer");
+  const summarySentence = sentenceFromResearchText(
+    brief.executiveSummary,
+    `${dealerName} appears to be an active powersports dealership with inventory, lead capture, and setup signals worth reviewing.`
+  );
+  const sourceCount = new Set(pages.map(page => page.url)).size;
+  const leadFormTypes = [...new Set(brief.leadForms.map(form => form.type).filter(Boolean))].slice(0, 5);
+  const setupRisks = brief.setupRisks.slice(0, 3);
+  const confidence = Math.round(Math.max(0, Math.min(1, brief.confidence)) * 100);
+  return [
+    "Prospect Brief",
+    summarySentence,
+    "",
+    "What we found",
+    `- Website: ${site}`,
+    `- Location: ${summarizeBriefList(brief.locations, "not confidently found", 2)}`,
+    `- Phone: ${summarizeBriefList(brief.phones, "not confidently found", 2)}`,
+    `- Franchise signal: ${summarizeBriefList(brief.manufacturers, "not confidently found", 3)}`,
+    `- Inventory: ${sentenceFromResearchText(brief.inventorySummary, "Inventory exists, but counts need verification.")}`,
+    "",
+    "LeadRider fit",
+    `- ${sentenceFromResearchText(brief.leadCaptureSummary, "Lead capture signals were detected, but routing needs confirmation.")}`,
+    `- Key forms/widgets: ${leadFormTypes.length ? leadFormTypes.join(", ") : "not confidently detected"}`,
+    `- Payment/finance estimator: ${brief.financePaymentEstimatorDetected ? "detected" : "not detected"}`,
+    `- Website stack clues: ${summarizeBriefList(brief.websiteProviders, "not detected", 4)}`,
+    "",
+    "Setup watch-outs",
+    ...(setupRisks.length ? setupRisks.map(risk => `- ${risk}`) : ["- Confirm inventory feed, lead routing, and opt-in handling before setup."]),
+    "",
+    "Recommended next step",
+    `- ${brief.recommendedNextStep}`,
+    "",
+    "Research details",
+    `- Fit score: ${score}/100`,
+    `- Confidence: ${confidence}%`,
+    `- Checked: ${checkedAt} ET`,
+    `- Sources reviewed: ${sourceCount} pages (${crawlMethod === "zenrows" ? "ZenRows fallback" : "direct fetch"})`
+  ].join("\n");
+}
+
 function buildFallbackResearchBrief(args: {
   home: ProspectResearchPage;
   inventory: ReturnType<typeof estimateInventoryCounts>;
@@ -31092,50 +31157,14 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     brief
   };
 
-  const summary = [
-    "Sources Used",
-    `- Official website used: ${brief.officialWebsite || home.url}`,
-    `- Checked: ${now} ET`,
-    `- Crawl method: ${crawlMethod === "zenrows" ? "ZenRows fallback" : "Direct fetch"}`,
-    discoveryResults.length ? `- Google Search discovery checked: ${discoveryResults.map(result => result.link).slice(0, 3).join(", ")}` : "- Google Search discovery not configured or returned no results.",
-    ...pages.slice(0, 8).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
-    "",
-    "Executive Summary",
-    `- ${brief.executiveSummary}`,
-    "",
-    "Inventory Count",
-    `- ${brief.inventorySummary}`,
-    `- Raw crawler signals: new ${inventory.newCount}, used/pre-owned ${inventory.usedCount}, signal count ${inventory.totalSignals || "not confirmed"}.`,
-    "",
-    "Dealer Profile",
-    `- Address: ${brief.locations.length ? brief.locations.join("; ") : "not confidently found"}`,
-    `- Phone: ${brief.phones.length ? brief.phones.join(", ") : "not confidently found"}`,
-    `- Manufacturer/franchise lines: ${brief.manufacturers.length ? brief.manufacturers.join(", ") : "not confidently found"}`,
-    `- Website/provider clues: ${brief.websiteProviders.length ? brief.websiteProviders.join(", ") : "not detected"}`,
-    `- Confidence: ${Math.round(Math.max(0, Math.min(1, brief.confidence)) * 100)}%`,
-    "",
-    "Team/Employees",
-    brief.staffPeople.length
-      ? brief.staffPeople.map(person => `- ${person.name}${person.role ? `, ${person.role}` : ""}${person.sourceUrl ? ` - ${person.sourceUrl}` : ""}`).join("\n")
-      : "- No named staff/team members were confidently found in the crawled pages.",
-    "",
-    "Lead Capture/Tech Stack",
-    `- ${brief.leadCaptureSummary}`,
-    `- Finance/payment estimator signals: ${brief.financePaymentEstimatorDetected ? "detected" : "not detected"}`,
-    leadPages.length ? leadPages.slice(0, 6).map(page => `- Lead page: ${page}`).join("\n") : "- No dedicated lead pages found in crawled pages.",
-    brief.leadForms.length
-      ? brief.leadForms.slice(0, 8).map(form => `- Form: ${form.type}${form.provider ? ` (${form.provider})` : ""} - ${form.url}`).join("\n")
-      : "- No raw HTML forms detected. Forms may be injected by JavaScript.",
-    "",
-    "Opportunity Score",
-    `- ${score}/100 preliminary fit score based on inventory signals, lead capture surface area, and provider clues.`,
-    "",
-    "Setup Risks",
-    ...brief.setupRisks.map(risk => `- ${risk}`),
-    "",
-    "Recommended Next Step",
-    `- ${brief.recommendedNextStep}`
-  ].join("\n");
+  const summary = formatProspectResearchBriefSummary({
+    brief,
+    home,
+    pages,
+    score,
+    checkedAt: now,
+    crawlMethod
+  });
 
   return { summary, links: pages.map(page => page.url).slice(0, 20), research };
 }
