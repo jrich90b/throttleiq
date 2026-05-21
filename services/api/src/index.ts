@@ -63,6 +63,7 @@ import {
 } from "./domain/dealerSetupStore.js";
 import {
   addSalesProspect,
+  deleteSalesProspect,
   getSalesProspect,
   listSalesProspects,
   updateSalesProspect,
@@ -32430,6 +32431,17 @@ app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (re
     notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
   });
   return res.json({ ok: true, prospect });
+});
+
+app.delete("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const existing = await getSalesProspect(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Prospect not found." });
+  const deleted = await deleteSalesProspect(existing.id);
+  return res.json({ ok: deleted, deleted });
 });
 
 app.post("/sales-prospects/:id/zoom/meeting", requirePermission("canAccessTodos"), async (req, res) => {

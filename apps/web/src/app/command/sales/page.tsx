@@ -688,6 +688,31 @@ export default function SalesFunnelPage() {
     }
   }
 
+  async function deleteProspect() {
+    if (!selected) return;
+    const dealerName = selected.dealerName || "this prospect";
+    if (!window.confirm(`Delete ${dealerName} from the sales funnel? Use this only for mistaken entries.`)) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+        method: "DELETE"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Prospect could not be deleted.");
+      setProspects(current => {
+        const remaining = current.filter(row => row.id !== selected.id);
+        setSelectedId(remaining[0]?.id ?? "");
+        if (!remaining.length) setForm(emptyForm);
+        return remaining;
+      });
+      setNotice(`${dealerName} deleted from the sales funnel.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Prospect could not be deleted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function advanceProspectStage(prospect: SalesProspect, targetStage: SalesProspectStage, noticePrefix: string) {
     const currentIndex = stageProgression.indexOf(prospect.stage);
     const targetIndex = stageProgression.indexOf(targetStage);
@@ -1549,6 +1574,7 @@ export default function SalesFunnelPage() {
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_lost" })} disabled={busy}>Mark lost</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Mark won</button>
+                  <button type="button" className="lr-ceo-link-btn" onClick={deleteProspect} disabled={busy}>Delete mistake</button>
                 </div>
               </>
             ) : (

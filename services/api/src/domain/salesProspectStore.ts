@@ -127,6 +127,15 @@ export async function updateSalesProspect(id: string, patch: Partial<SalesProspe
   return prospect;
 }
 
+export async function deleteSalesProspect(id: string): Promise<boolean> {
+  await ensureLoaded();
+  const before = rows.length;
+  rows = rows.filter(row => row.id !== id);
+  const deleted = rows.length !== before;
+  if (deleted) scheduleSave();
+  return deleted;
+}
+
 const stages: SalesProspectStage[] = [
   "new",
   "contacted",
