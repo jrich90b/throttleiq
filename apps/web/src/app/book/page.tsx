@@ -289,6 +289,14 @@ function BookingPageInner() {
             <div className="text-sm text-gray-700">
               We’ll see you at {success.whenText ?? selectedSlot?.startLocal}.
             </div>
+            {isCommandBooking && success.zoomJoinUrl ? (
+              <div className="text-sm text-gray-700">
+                Zoom link:{" "}
+                <a className="text-blue-700 underline break-all" href={success.zoomJoinUrl}>
+                  {success.zoomJoinUrl}
+                </a>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="space-y-6">

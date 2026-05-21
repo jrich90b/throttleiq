@@ -66,6 +66,7 @@ import {
   getSalesProspect,
   listSalesProspects,
   updateSalesProspect,
+  type SalesProspect,
   type SalesProspectStage
 } from "./domain/salesProspectStore.js";
 import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
@@ -26489,6 +26490,46 @@ app.post("/public/command-booking/book", async (req, res) => {
   if (busy.some((b: any) => startDate < new Date(b.end) && new Date(b.start) < endDate)) {
     return res.status(409).json({ ok: false, error: "No longer available" });
   }
+  let zoomMeeting: Awaited<ReturnType<typeof createZoomMeetingForProspect>> | null = null;
+  let zoomError: string | undefined;
+  try {
+    const zoomStatus = await getZoomStatus();
+    if (zoomStatus.connected) {
+      const commandProspect: SalesProspect = {
+        id: `command_booking_${Date.now().toString(36)}`,
+        dealerName: String(lead.dealerName ?? "").trim() || "LeadRider demo prospect",
+        contactName: name,
+        contactEmail: String(lead.email ?? "").trim() || undefined,
+        contactPhone: String(lead.phone ?? "").trim() || undefined,
+        website: String(lead.website ?? "").trim() || undefined,
+        stage: "demo_scheduled",
+        owner: user.name || user.email,
+        nextStep: "LeadRider demo booked from Command booking page.",
+        nextStepAt: slot.start,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      zoomMeeting = await createZoomMeetingForProspect(commandProspect, {
+        topic: `LeadRider demo - ${name}`,
+        startTime: slot.start,
+        duration: Math.max(15, Math.round((endDate.getTime() - startDate.getTime()) / 60000) || 30),
+        timezone: cfg.timezone,
+        agenda: [
+          `Prospect: ${name}`,
+          `Email: ${lead.email ?? ""}`,
+          `Phone: ${lead.phone ?? ""}`,
+          `Dealer: ${lead.dealerName ?? ""}`,
+          `Website: ${lead.website ?? ""}`,
+          "",
+          `Booked with: ${user.name || user.email}`,
+          `Notes: ${lead.notes ?? ""}`
+        ].join("\n")
+      });
+    }
+  } catch (err) {
+    zoomError = err instanceof Error ? err.message : "Zoom meeting could not be created.";
+    console.error("[command-booking] zoom.create.failed", { userId: user.id, error: zoomError });
+  }
   const event = await insertEvent(
     cal,
     user.commandCalendarId,
@@ -26500,6 +26541,7 @@ app.post("/public/command-booking/book", async (req, res) => {
       `Phone: ${lead.phone ?? ""}`,
       `Dealer: ${lead.dealerName ?? ""}`,
       `Website: ${lead.website ?? ""}`,
+      zoomMeeting?.joinUrl ? `Zoom: ${zoomMeeting.joinUrl}` : "",
       "",
       `Notes: ${lead.notes ?? ""}`
     ].join("\n"),
@@ -26511,6 +26553,9 @@ app.post("/public/command-booking/book", async (req, res) => {
     command: true,
     eventId: event.id,
     htmlLink: event.htmlLink,
+    zoomJoinUrl: zoomMeeting?.joinUrl,
+    zoomCreated: !!zoomMeeting?.joinUrl,
+    zoomError,
     whenText: slot.startLocal ?? fmtLocal(slot.start, cfg.timezone),
     user: { id: user.id, name: user.name || user.email, email: user.email }
   });
