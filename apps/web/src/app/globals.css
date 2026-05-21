@@ -605,6 +605,7 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.5rem;
+  margin-top: 0.22rem;
   width: 100%;
 }
 
@@ -635,6 +636,7 @@ a {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.72rem;
+  margin-top: 0.28rem;
 }
 
 .lr-ceo-inline-check {
