@@ -101,7 +101,15 @@ const stageLabels: Record<SalesProspectStage, string> = {
 };
 
 const funnelStages: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent"];
-const allStages = [...funnelStages, "closed_won", "closed_lost"] as SalesProspectStage[];
+const workflowStages: Array<{ stage: SalesProspectStage; label: string; action: string }> = [
+  { stage: "new", label: "New", action: "Mark new" },
+  { stage: "contacted", label: "Contacted", action: "Mark contacted" },
+  { stage: "discovery", label: "Discovery", action: "Move to discovery" },
+  { stage: "demo_scheduled", label: "Demo", action: "Demo scheduled" },
+  { stage: "proposal", label: "Proposal", action: "Move to proposal" },
+  { stage: "agreement_sent", label: "Agreement", action: "Agreement sent" },
+  { stage: "closed_won", label: "Closed won", action: "Closed won" }
+];
 
 function toForm(prospect: SalesProspect): ProspectForm {
   return {
@@ -266,6 +274,7 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Prospect could not be updated.");
       setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      setForm(toForm(data.prospect));
       setNotice(`${data.prospect.dealerName} updated.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Prospect could not be updated.");
@@ -665,11 +674,6 @@ export default function SalesFunnelPage() {
               <>
                 <div className="lr-ceo-form-stack lr-ceo-sales-form">
                   <label>Dealer name<input value={form.dealerName} onChange={e => updateForm("dealerName", e.target.value)} /></label>
-                  <label>Stage
-                    <select value={form.stage} onChange={e => updateForm("stage", e.target.value as SalesProspectStage)}>
-                      {allStages.map(stage => <option key={stage} value={stage}>{stageLabels[stage]}</option>)}
-                    </select>
-                  </label>
                   <label>Contact name<input value={form.contactName} onChange={e => updateForm("contactName", e.target.value)} /></label>
                   <label>Email<input value={form.contactEmail} onChange={e => updateForm("contactEmail", e.target.value)} /></label>
                   <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
@@ -693,10 +697,6 @@ export default function SalesFunnelPage() {
                 </div>
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "proposal" })} disabled={busy}>Move to proposal</button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "agreement_sent" })} disabled={busy}>Agreement sent</button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Closed won</button>
-                  <button type="button" onClick={pushToDealerSetup} disabled={busy || !selected}>Push to dealer setup</button>
                 </div>
               </>
             ) : (
@@ -713,6 +713,30 @@ export default function SalesFunnelPage() {
               <span className="lr-ceo-status-attention">Approval gated</span>
             </div>
             <div className="lr-ceo-agent-list lr-ceo-sales-actions">
+              <section className="lr-ceo-workflow-card" aria-label="Prospect workflow">
+                <div>
+                  <span>Flow</span>
+                  <strong>{selected ? stageLabels[selected.stage] : "No prospect selected"}</strong>
+                  <p>Move the dealer from first contact through agreement, then push the won account into Dealer Setup.</p>
+                </div>
+                <div className="lr-ceo-stage-flow">
+                  {workflowStages.map(step => (
+                    <button
+                      key={step.stage}
+                      type="button"
+                      className={selected?.stage === step.stage ? "is-current" : "lr-ceo-secondary-btn"}
+                      onClick={() => saveProspect({ stage: step.stage })}
+                      disabled={!selected || busy}
+                    >
+                      <small>{step.label}</small>
+                      <span>{selected?.stage === step.stage ? "Current" : step.action}</span>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={pushToDealerSetup} disabled={busy || !selected}>
+                  Push to dealer setup
+                </button>
+              </section>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Draft email</strong>

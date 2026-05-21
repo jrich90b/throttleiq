@@ -724,6 +724,75 @@ a {
   max-width: 100%;
 }
 
+.lr-ceo-workflow-card {
+  display: grid;
+  gap: 0.78rem;
+  padding: 0.88rem;
+  border: 1px solid rgba(251, 127, 4, 0.28);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(251, 127, 4, 0.12), rgba(255, 255, 255, 0.04));
+}
+
+.lr-ceo-workflow-card > div:first-child {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.lr-ceo-workflow-card span {
+  color: #fbaf64;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lr-ceo-workflow-card strong {
+  color: #fff7ed;
+}
+
+.lr-ceo-workflow-card p {
+  margin: 0;
+  color: #c9d3e4;
+}
+
+.lr-ceo-stage-flow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.lr-ceo-stage-flow button {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+  padding: 0.62rem;
+  text-align: left;
+}
+
+.lr-ceo-stage-flow button small,
+.lr-ceo-stage-flow button span {
+  display: block;
+}
+
+.lr-ceo-stage-flow button small {
+  color: inherit;
+  font-size: 0.88rem;
+  font-weight: 900;
+}
+
+.lr-ceo-stage-flow button span {
+  color: inherit;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  opacity: 0.82;
+  text-transform: none;
+}
+
+.lr-ceo-stage-flow button.is-current {
+  border-color: #ffe5c7;
+  background: #fff3e1;
+  color: #7c3500;
+}
+
 .lr-ceo-form-stack label {
   display: grid;
   gap: 0.42rem;
