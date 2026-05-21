@@ -243,6 +243,7 @@ import {
   listPersonalInboxMessages,
   createSupportGmailDraftReply,
   createPersonalGmailDraftEmail,
+  sendPersonalGmailEmail,
   trashSupportGmailMessage,
   trashPersonalGmailMessage,
   queryFreeBusy,
@@ -31908,6 +31909,32 @@ app.post("/agent-tasks/:id/personal-gmail-draft", requirePermission("canAccessTo
     return res.json({ ok: true, draft, task: updated ?? task });
   } catch (err: any) {
     return res.status(502).json({ ok: false, error: err?.message ?? "Gmail draft could not be created." });
+  }
+});
+
+app.post("/agent-tasks/:id/personal-gmail-send", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const tasks = await listAgentTasks(1000);
+  const task = tasks.find(row => row.id === req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  if (task.kind !== "email") return res.status(400).json({ ok: false, error: "Only email tasks can send Gmail messages." });
+  const to = String(req.body?.to ?? "").trim().slice(0, 240);
+  const subject = String(req.body?.subject ?? "").trim().slice(0, 240);
+  const bodyText = String(req.body?.bodyText ?? "").trim().slice(0, 8000);
+  if (!to) return res.status(400).json({ ok: false, error: "Recipient email is required." });
+  if (!bodyText) return res.status(400).json({ ok: false, error: "Email body is required." });
+  try {
+    const sent = await sendPersonalGmailEmail({ to, subject, bodyText });
+    const updated = await updateAgentTaskStatus(task.id, "completed", {
+      summary: req.body?.summary == null ? task.output?.summary : String(req.body.summary ?? "").trim().slice(0, 3000),
+      links: [...(task.output?.links ?? []), `personal-gmail-sent:${sent.id ?? "sent"}`]
+    });
+    return res.json({ ok: true, sent, task: updated ?? task });
+  } catch (err: any) {
+    return res.status(502).json({ ok: false, error: err?.message ?? "Gmail message could not be sent." });
   }
 });
 

@@ -902,11 +902,41 @@ export default function SalesFunnelPage() {
     }
   }
 
+  async function approveAndSendSalesTask(task: AgentTask) {
+    if (!selected) return;
+    const edited = draftEdits[task.id] ?? task.output?.summary ?? "";
+    const parsed = parseEmailDraft(edited);
+    setDraftBusy(true);
+    try {
+      const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}/personal-gmail-send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: form.contactEmail || selected.contactEmail,
+          subject: parsed.subject,
+          bodyText: parsed.body || edited,
+          summary: edited
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Email could not be sent.");
+      if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
+      setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
+      markActionCompleted("sales_email");
+      setNotice("Sales email approved and sent from the connected personal Gmail inbox.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Email could not be sent.");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
   function renderSalesDraftReview() {
     if (!latestSalesEmailTask) return null;
     const draftText = draftEdits[latestSalesEmailTask.id] ?? latestSalesEmailTask.output?.summary ?? "";
     const hasOutput = Boolean(latestSalesEmailTask.output?.summary?.trim());
     const gmailDraftCreated = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
+    const gmailSent = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
     return (
       <div className="lr-ceo-draft-review">
         <div className="lr-ceo-draft-review-head">
@@ -940,10 +970,10 @@ export default function SalesFunnelPage() {
               <button
                 type="button"
                 className="lr-ceo-secondary-btn"
-                onClick={() => updateSalesDraftTask(latestSalesEmailTask, "completed", draftText, "Sales draft approved.")}
-                disabled={draftBusy}
+                onClick={() => approveAndSendSalesTask(latestSalesEmailTask)}
+                disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailSent}
               >
-                Approve
+                {gmailSent ? "Email sent" : "Approve and send"}
               </button>
               <button
                 type="button"
