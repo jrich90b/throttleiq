@@ -522,11 +522,13 @@ export default function SalesFunnelPage() {
             </p>
           </div>
           <span className={`lr-ceo-status-pill ${zoomStatus?.connected ? "is-ready" : zoomStatus?.configured || !zoomStatus ? "is-working" : "is-blocked"}`}>
-            {zoomStatus?.connected ? "Connected" : zoomStatus?.configured ? "Ready to connect" : zoomStatus ? "Not configured" : "Checking"}
+            {zoomStatus?.connected ? "Zoom connected" : zoomStatus?.configured ? "Ready to connect" : zoomStatus ? "Not configured" : "Checking"}
           </span>
-          <button type="button" onClick={connectZoom} disabled={zoomBusy || zoomStatus?.configured === false}>
-            Connect Zoom
-          </button>
+          {!zoomStatus?.connected ? (
+            <button type="button" onClick={connectZoom} disabled={zoomBusy || zoomStatus?.configured === false}>
+              Connect Zoom
+            </button>
+          ) : null}
           <button type="button" className="lr-ceo-secondary-btn" onClick={loadZoomStatus} disabled={zoomBusy}>
             Refresh
           </button>

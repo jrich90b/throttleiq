@@ -638,11 +638,13 @@ export default function NewDealerClientPage() {
             </span>
           </div>
           <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured || !docusignStatus ? "is-working" : "is-blocked"}`}>
-            {docusignStatus?.connected ? "Connected" : docusignStatus?.configured ? "Ready to connect" : docusignStatus ? "Not configured" : "Checking"}
+            {docusignStatus?.connected ? "DocuSign connected" : docusignStatus?.configured ? "Ready to connect" : docusignStatus ? "Not configured" : "Checking"}
           </span>
-          <button type="button" onClick={connectDocusign} disabled={docusignBusy || docusignStatus?.configured === false}>
-            Connect DocuSign
-          </button>
+          {!docusignStatus?.connected ? (
+            <button type="button" onClick={connectDocusign} disabled={docusignBusy || docusignStatus?.configured === false}>
+              Connect DocuSign
+            </button>
+          ) : null}
           <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
             Refresh
           </button>
@@ -804,13 +806,15 @@ export default function NewDealerClientPage() {
                       <h3>E-sign packet</h3>
                     </div>
                     <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured ? "is-working" : "is-blocked"}`}>
-                      DocuSign {docusignStatus?.connected ? "connected" : docusignStatus?.configured ? "ready to connect" : "not configured"}
+                      {docusignStatus?.connected ? "DocuSign connected" : docusignStatus?.configured ? "DocuSign ready to connect" : "DocuSign not configured"}
                     </span>
                   </div>
                   <div className="lr-ceo-action-row">
-                    <button type="button" className="lr-ceo-secondary-btn" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
-                      Connect DocuSign
-                    </button>
+                    {!docusignStatus?.connected ? (
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
+                        Connect DocuSign
+                      </button>
+                    ) : null}
                     <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
                       Refresh DocuSign
                     </button>
