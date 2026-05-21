@@ -40,6 +40,29 @@ type PersonalMailMessage = {
   labelIds?: string[];
 };
 
+type EmailStyleSettings = {
+  tone: string;
+  signature: string;
+};
+
+type ComposeForm = {
+  to: string;
+  subject: string;
+  notes: string;
+};
+
+const defaultEmailStyle: EmailStyleSettings = {
+  tone:
+    "Write like Joe: direct, casual, helpful, short paragraphs, no corporate filler, no over-polished wording. Keep the next step clear.",
+  signature: "Joe Hartrich\nLeadRider\njoe.hartrich@leadrider.ai"
+};
+
+const emptyCompose: ComposeForm = {
+  to: "",
+  subject: "",
+  notes: ""
+};
+
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -84,6 +107,7 @@ function personalMailRecommendation(task: AgentTask) {
 const defaultPersonalMailInstructions =
   "Review Joe's personal email. Auto-trash safe spam, promos, expired codes, and routine no-reply vendor mail. Draft replies for real business conversations. Ask approval before sending, archiving important mail, or making account changes.";
 const autoTrashLogRetentionMs = 24 * 60 * 60 * 1000;
+const emailStyleStorageKey = "leadrider-command-personal-email-style";
 
 export default function PersonalEmailCommandPage() {
   const [personalMailStatus, setPersonalMailStatus] = useState<PersonalMailStatus | null>(null);
@@ -92,6 +116,8 @@ export default function PersonalEmailCommandPage() {
   const [notice, setNotice] = useState("Personal Email workspace is ready.");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
+  const [compose, setCompose] = useState<ComposeForm>(emptyCompose);
+  const [emailStyle, setEmailStyle] = useState<EmailStyleSettings>(defaultEmailStyle);
 
   const personalTasks = useMemo(() => agentTasks.filter(isPersonalMailTask), [agentTasks]);
   const pendingPersonalTasks = useMemo(
@@ -109,14 +135,13 @@ export default function PersonalEmailCommandPage() {
     [personalTasks]
   );
 
-  useEffect(() => {
-    let active = true;
+  async function loadWorkspace(isActive: () => boolean = () => true) {
     Promise.allSettled([
       fetch("/api/google/personal-mail/status", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/personal-mail/messages?limit=12", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/agent-tasks?limit=50", { cache: "no-store" }).then(resp => resp.json())
     ]).then(results => {
-      if (!active) return;
+      if (!isActive()) return;
       const [mailStatus, mailMessages, tasks] = results.map(result =>
         result.status === "fulfilled" ? result.value : null
       );
@@ -124,12 +149,38 @@ export default function PersonalEmailCommandPage() {
       if (mailMessages?.ok && Array.isArray(mailMessages.messages)) setPersonalMailMessages(mailMessages.messages);
       if (tasks?.ok && Array.isArray(tasks.tasks)) setAgentTasks(tasks.tasks);
     });
+  }
+
+  useEffect(() => {
+    let active = true;
+    loadWorkspace(() => active);
+    try {
+      const saved = window.localStorage.getItem(emailStyleStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setEmailStyle({
+          tone: String(parsed?.tone ?? defaultEmailStyle.tone),
+          signature: String(parsed?.signature ?? defaultEmailStyle.signature)
+        });
+      }
+    } catch {
+      setEmailStyle(defaultEmailStyle);
+    }
     return () => {
       active = false;
     };
   }, []);
 
-  async function createPersonalMailTask(title?: string, taskInstructions?: string) {
+  function styleInstruction() {
+    return [
+      "Use this email style profile:",
+      emailStyle.tone.trim() || defaultEmailStyle.tone,
+      "Use this signature at the end of the draft unless the email clearly should not include a signature:",
+      emailStyle.signature.trim() || defaultEmailStyle.signature
+    ].join("\n");
+  }
+
+  async function createPersonalMailTask(title?: string, taskInstructions?: string, successNotice?: string) {
     setAgentBusy(true);
     try {
       const resp = await fetch("/api/agent-tasks", {
@@ -141,17 +192,47 @@ export default function PersonalEmailCommandPage() {
           priority: "normal",
           clientName: "LeadRider",
           title: title || "Review personal email inbox",
-          instructions: taskInstructions || defaultPersonalMailInstructions
+          instructions: `${taskInstructions || defaultPersonalMailInstructions}\n\n${styleInstruction()}`
         })
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Personal email task could not be created.");
       setAgentTasks(current => [data.task, ...current.filter(row => row.id !== data.task.id)].slice(0, 50));
-      setNotice(`Claude task created: ${data.task.title}.`);
+      setNotice(successNotice || `Draft queued: ${data.task.title}.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Personal email task could not be created.");
     } finally {
       setAgentBusy(false);
+    }
+  }
+
+  async function createComposeDraft() {
+    if (!compose.to.trim() && !compose.notes.trim()) {
+      setNotice("Add a recipient or describe the email you want to draft.");
+      return;
+    }
+    await createPersonalMailTask(
+      `Draft personal email: ${compose.subject || compose.to || "New message"}`,
+      [
+        "Draft a new email from Joe's personal LeadRider inbox for approval.",
+        "Do not send the email.",
+        `From account: ${personalMailStatus?.email || "joe.hartrich@leadrider.ai"}`,
+        `To: ${compose.to || "not specified"}`,
+        `Subject: ${compose.subject || "write an appropriate subject"}`,
+        "Joe's notes:",
+        compose.notes || "No notes provided."
+      ].join("\n"),
+      "Email draft queued for review."
+    );
+    setCompose(emptyCompose);
+  }
+
+  function saveEmailStyle() {
+    try {
+      window.localStorage.setItem(emailStyleStorageKey, JSON.stringify(emailStyle));
+      setNotice("Personal email tone and signature saved for this Command browser.");
+    } catch {
+      setNotice("Could not save email style in this browser.");
     }
   }
 
@@ -231,24 +312,19 @@ export default function PersonalEmailCommandPage() {
           <div>
             <p className="lr-ceo-kicker">Joe's inbox</p>
             <h2>Personal Email</h2>
-            <p>Keep personal mail, spam cleanup, Claude drafts, and review decisions separate from support operations.</p>
+            <p>Personal mail, automatic cleanup, draft replies, compose, and approval decisions in one place.</p>
           </div>
           <div className="lr-ceo-header-actions">
-            <button type="button" onClick={() => createPersonalMailTask()} disabled={agentBusy}>
-              Ask Claude
-            </button>
             <button
               type="button"
               className="lr-ceo-secondary-btn"
-              onClick={() =>
-                createPersonalMailTask(
-                  "Draft personal email replies",
-                  "Review Joe's latest personal Gmail messages and draft replies only for real business conversations. Do not send anything. Do not ask approval for obvious spam."
-                )
-              }
+              onClick={() => {
+                setNotice("Refreshing personal inbox and draft queue.");
+                loadWorkspace();
+              }}
               disabled={agentBusy}
             >
-              Draft replies
+              Refresh inbox
             </button>
             {personalMailStatus?.connected ? (
               <span className="lr-ceo-mailbox-connected">Gmail connected</span>
@@ -277,9 +353,57 @@ export default function PersonalEmailCommandPage() {
             <small>Last 24 hours</small>
           </article>
           <article>
-            <span>Claude tasks</span>
+            <span>Email drafts</span>
             <strong>{personalTasks.length}</strong>
-            <small>Personal inbox history</small>
+            <small>Draft and cleanup history</small>
+          </article>
+        </section>
+
+        <section className="lr-ceo-email-workspace">
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Compose</p>
+                <h3>New email</h3>
+              </div>
+              <span className="lr-ceo-status-attention">Approval before send</span>
+            </div>
+            <div className="lr-ceo-compose-form">
+              <label>
+                To
+                <input value={compose.to} onChange={event => setCompose(current => ({ ...current, to: event.target.value }))} placeholder="name@company.com" />
+              </label>
+              <label>
+                Subject
+                <input value={compose.subject} onChange={event => setCompose(current => ({ ...current, subject: event.target.value }))} placeholder="Subject" />
+              </label>
+              <label>
+                What should this say?
+                <textarea value={compose.notes} onChange={event => setCompose(current => ({ ...current, notes: event.target.value }))} placeholder="Type a rough note or tell the draft what you need." />
+              </label>
+              <button type="button" onClick={createComposeDraft} disabled={agentBusy}>Create draft</button>
+            </div>
+          </article>
+
+          <article className="lr-ceo-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Email style</p>
+                <h3>Tone and signature</h3>
+              </div>
+              <span className="lr-ceo-status-ready">Used for drafts</span>
+            </div>
+            <div className="lr-ceo-compose-form">
+              <label>
+                Joe's tone
+                <textarea value={emailStyle.tone} onChange={event => setEmailStyle(current => ({ ...current, tone: event.target.value }))} />
+              </label>
+              <label>
+                Signature
+                <textarea value={emailStyle.signature} onChange={event => setEmailStyle(current => ({ ...current, signature: event.target.value }))} />
+              </label>
+              <button type="button" className="lr-ceo-secondary-btn" onClick={saveEmailStyle}>Save email style</button>
+            </div>
           </article>
         </section>
 
@@ -287,11 +411,11 @@ export default function PersonalEmailCommandPage() {
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
-                <p className="lr-ceo-kicker">Recent mail</p>
-                <h3>Personal inbox</h3>
+                <p className="lr-ceo-kicker">Inbox</p>
+                <h3>Recent messages</h3>
               </div>
               <span className={personalMailStatus?.connected ? "lr-ceo-status-ready" : "lr-ceo-status-attention"}>
-                {personalMailStatus?.connected ? "Connected" : "Needs connection"}
+                {personalMailStatus?.connected ? "Auto-reviewing" : "Needs connection"}
               </span>
             </div>
             <div className="lr-ceo-ticket-list">
@@ -314,7 +438,7 @@ export default function PersonalEmailCommandPage() {
                         }
                         disabled={agentBusy}
                       >
-                        Review
+                        Draft reply
                       </button>
                     </div>
                   </div>
