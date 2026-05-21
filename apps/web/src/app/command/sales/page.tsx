@@ -199,6 +199,10 @@ function parseEmailDraft(text: string) {
   return { subject, body };
 }
 
+function taskLinkValue(task: AgentTask, prefix: string) {
+  return task.output?.links?.find(link => link.startsWith(prefix))?.slice(prefix.length);
+}
+
 function formatDate(value?: string) {
   if (!value) return "No date";
   const date = new Date(value);
@@ -895,7 +899,12 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Gmail draft could not be created.");
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
-      setNotice("Gmail draft created in the connected personal sales inbox.");
+      const sentBefore = task.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
+      const draftMessage = sentBefore
+        ? "New Gmail draft created. It has not been sent; this task still has an earlier sent email on record."
+        : "Gmail draft created in the connected personal sales inbox.";
+      setDraftSendStatus(current => ({ ...current, [task.id]: draftMessage }));
+      setNotice(draftMessage);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Gmail draft could not be created.");
     } finally {
@@ -929,7 +938,7 @@ export default function SalesFunnelPage() {
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
       markActionCompleted("sales_email");
-      setDraftSendStatus(current => ({ ...current, [task.id]: "Email sent." }));
+      setDraftSendStatus(current => ({ ...current, [task.id]: `Email sent to ${form.contactEmail || selected.contactEmail}.` }));
       setNotice("Sales email approved and sent from the connected personal Gmail inbox.");
       await loadAgentTasks();
     } catch (err) {
@@ -947,6 +956,11 @@ export default function SalesFunnelPage() {
     const hasOutput = Boolean(latestSalesEmailTask.output?.summary?.trim());
     const gmailDraftCreated = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
     const gmailSent = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
+    const sentTo = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-to:") || form.contactEmail || selected?.contactEmail || "";
+    const sentAt = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-at:");
+    const sentMessage = gmailSent
+      ? `Already sent${sentTo ? ` to ${sentTo}` : ""}${sentAt ? ` on ${formatDate(sentAt)}` : ""}. Creating another Gmail draft will not send another email.`
+      : "";
     const sendStatus = draftSendStatus[latestSalesEmailTask.id];
     return (
       <div className="lr-ceo-draft-review">
@@ -984,7 +998,7 @@ export default function SalesFunnelPage() {
                 onClick={() => approveAndSendSalesTask(latestSalesEmailTask)}
                 disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailSent}
               >
-                {gmailSent ? "Email sent" : "Approve and send"}
+                {gmailSent ? "Already sent" : "Approve and send"}
               </button>
               <button
                 type="button"
@@ -1002,7 +1016,7 @@ export default function SalesFunnelPage() {
                 Discard
               </button>
             </div>
-            {sendStatus ? <p className="lr-ceo-draft-send-status">{sendStatus}</p> : null}
+            {sendStatus || sentMessage ? <p className="lr-ceo-draft-send-status">{sendStatus || sentMessage}</p> : null}
           </>
         ) : (
           <p>Draft task created. The draft will appear here after Claude finishes.</p>

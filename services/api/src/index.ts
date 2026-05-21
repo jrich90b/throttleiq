@@ -31947,7 +31947,12 @@ app.post("/agent-tasks/:id/personal-gmail-send", requirePermission("canAccessTod
     const sent = await sendPersonalGmailEmail({ to, subject, bodyText });
     const updated = await updateAgentTaskStatus(task.id, "completed", {
       summary: req.body?.summary == null ? task.output?.summary : String(req.body.summary ?? "").trim().slice(0, 3000),
-      links: [...(task.output?.links ?? []), `personal-gmail-sent:${sent.id ?? "sent"}`]
+      links: [
+        ...(task.output?.links ?? []),
+        `personal-gmail-sent:${sent.id ?? "sent"}`,
+        `personal-gmail-sent-to:${to}`,
+        `personal-gmail-sent-at:${new Date().toISOString()}`
+      ]
     });
     return res.json({ ok: true, sent, task: updated ?? task });
   } catch (err: any) {
