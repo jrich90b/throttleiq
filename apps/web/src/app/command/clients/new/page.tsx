@@ -367,10 +367,11 @@ export default function NewDealerClientPage() {
       case "api":
         return "Create API config task";
       case "google":
-      case "twilio":
       case "sendgrid":
       case "meta":
         return "Create provider task";
+      case "twilio":
+        return "Plan texting setup";
       case "smoke":
         return "Run smoke test";
       case "handoff":
@@ -404,7 +405,12 @@ export default function NewDealerClientPage() {
       await updateStep(currentStep.id, "in_progress");
       return;
     }
-    if (["google", "twilio", "sendgrid", "meta"].includes(currentStep.id)) {
+    if (currentStep.id === "twilio") {
+      await createSetupTask("texting");
+      await updateStep(currentStep.id, "in_progress");
+      return;
+    }
+    if (["google", "sendgrid", "meta"].includes(currentStep.id)) {
       await createSetupTask("providers");
       await updateStep(currentStep.id, "in_progress");
       return;
@@ -416,7 +422,7 @@ export default function NewDealerClientPage() {
     await updateStep(currentStep.id, "in_progress");
   }
 
-  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers") {
+  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers" | "texting") {
     if (!selected) return;
     setTaskBusy(true);
     const instructions =
@@ -445,6 +451,8 @@ export default function NewDealerClientPage() {
           ? `Create the API dealer setup work for ${selected.dealerName}. Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}. Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps. Do not overwrite existing clients.`
         : kind === "providers"
           ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Meta app/callback, Sentry, Linear, Slack, and OpenAI usage logging. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
+        : kind === "texting"
+          ? `Create the texting setup plan for ${selected.dealerName}. Cover Twilio number selection or porting, A2P/10DLC brand/campaign registration, opt-in and STOP/HELP compliance language, inbound/outbound routing, salesperson ownership, support escalation, campaign safeguards, and smoke tests. Separate what Codex can prepare from anything requiring human login, billing, consent, carrier verification, or credentials.`
         : kind === "stack"
           ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, Meta app/callback, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
         : kind === "vercel"
@@ -464,6 +472,8 @@ export default function NewDealerClientPage() {
               ? `Draft ${selected.dealerName} agreement`
               : kind === "api"
                 ? `Create ${selected.dealerName} API config task`
+              : kind === "texting"
+                ? `Plan ${selected.dealerName} texting setup`
               : kind === "providers"
                 ? `Create ${selected.dealerName} provider setup tasks`
               : kind === "stack"

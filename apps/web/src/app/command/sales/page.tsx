@@ -168,6 +168,12 @@ function moneyValue(value?: string) {
   return Number(match[0].replace(/,/g, "")) || 0;
 }
 
+function isAtLeastStage(stage: SalesProspectStage | undefined, minimum: SalesProspectStage) {
+  const currentIndex = stageProgression.indexOf(stage || "new");
+  const minimumIndex = stageProgression.indexOf(minimum);
+  return currentIndex >= minimumIndex && minimumIndex >= 0;
+}
+
 function commandApiError(message?: string) {
   if (message === "auth required" || message === "invalid session" || message === "user not found") {
     return "Sign in on www.leadrider.ai first, then try Zoom again.";
@@ -324,6 +330,10 @@ export default function SalesFunnelPage() {
       setNotice(zoomStatus?.configured ? "Connect Zoom before creating a meeting." : `Zoom is missing settings: ${(zoomStatus?.missing || []).join(", ") || "Zoom app credentials"}.`);
       return;
     }
+    if (!form.nextStepAt && !selected.nextStepAt) {
+      setNotice("Set the next step date before scheduling a demo.");
+      return;
+    }
     setZoomBusy(true);
     try {
       const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}/zoom/meeting`, {
@@ -377,7 +387,7 @@ export default function SalesFunnelPage() {
     }
   }
 
-  async function createAgentTask(action: "sales_email" | "zoom" | "onboarding" | "docusign" | "texting" | "research") {
+  async function createAgentTask(action: "sales_email" | "zoom" | "onboarding" | "docusign" | "research") {
     if (!selected) return;
     setTaskBusy(true);
     const senderType = form.emailSenderType || selected.emailSenderType || "personal";
@@ -405,9 +415,9 @@ export default function SalesFunnelPage() {
       sales_email: {
         provider: "claude",
         kind: "email",
-        title: `Draft sales email for ${selected.dealerName}`,
+        title: `Draft sales follow-up for ${selected.dealerName}`,
         instructions: [
-          `Draft a prospect email from ${senderAddress}.`,
+          `Draft a prospect follow-up email from ${senderAddress}.`,
           "This is approval-gated draft work only. Do not send the email, delete mail, mark messages read, or change external systems.",
           "If the sender is a personal sales inbox, write in Joe's voice and make the next step clear.",
           "Return subject, body, and a short note explaining why this email is appropriate.",
@@ -446,18 +456,6 @@ export default function SalesFunnelPage() {
         instructions: [
           "Prepare the DocuSign agreement packet for this prospect using only the facts below.",
           "Flag missing legal name, DBA, signer, address, pricing, and billing terms. Do not send the packet.",
-          "",
-          facts
-        ].join("\n")
-      },
-      texting: {
-        provider: "codex",
-        kind: "dealer_setup",
-        title: `Plan texting setup for ${selected.dealerName}`,
-        instructions: [
-          "Create a texting-platform setup plan for this prospect.",
-          "Cover Twilio number, A2P/10DLC, opt-in language, routing, support ownership, and smoke tests.",
-          "Separate what can be automated from anything requiring human login, billing, verification, or consent.",
           "",
           facts
         ].join("\n")
@@ -742,17 +740,17 @@ export default function SalesFunnelPage() {
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Draft email</strong>
-                  <p>From {form.emailSenderAddress || "joe.hartrich@leadrider.ai"}.</p>
+                  <strong>Sales follow-up</strong>
+                  <p>Draft from {form.emailSenderAddress || "joe.hartrich@leadrider.ai"}.</p>
                 </div>
                 <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("sales_email")} disabled={!selected || taskBusy}>Draft</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Zoom meeting</strong>
-                  <p>Create and save a meeting link.</p>
+                  <strong>Schedule demo</strong>
+                  <p>Create a Zoom link from the selected next step date.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected}>Create</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt)}>Schedule</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
@@ -763,17 +761,10 @@ export default function SalesFunnelPage() {
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Onboarding email</strong>
-                  <p>Prepare dealer onboarding copy.</p>
+                  <strong>Draft onboarding</strong>
+                  <p>Prepare dealer onboarding copy after proposal stage.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy}>Draft</button>
-              </div>
-              <div className="lr-ceo-agent-row">
-                <div>
-                  <strong>Texting setup</strong>
-                  <p>Plan Twilio, compliance, and routing.</p>
-                </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("texting")} disabled={!selected || taskBusy}>Plan</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy || !isAtLeastStage(selected.stage, "proposal")}>Draft</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
