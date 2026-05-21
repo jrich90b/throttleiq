@@ -76,6 +76,7 @@ import {
   getEsignPacket,
   listEsignPackets,
   updateEsignPacket,
+  type EsignPacket,
   type EsignPacketProvider,
   type EsignPacketStatus
 } from "./domain/esignPacketStore.js";
@@ -26123,6 +26124,25 @@ app.get("/esign/packets", requirePermission("canAccessTodos"), async (req, res) 
   return res.json({ ok: true, packets });
 });
 
+async function closeSalesProspectsForSignedPacket(packet: EsignPacket): Promise<SalesProspect[]> {
+  if (packet.status !== "signed") return [];
+  const prospects = await listSalesProspects(1000);
+  const matches = prospects.filter(prospect => prospect.docusignPacketId === packet.id && prospect.stage !== "closed_won");
+  const updated: SalesProspect[] = [];
+  for (const prospect of matches) {
+    const nextStep = packet.signedAt
+      ? `Agreement signed on ${packet.signedAt}.`
+      : "Agreement signed.";
+    const closed = await updateSalesProspect(prospect.id, {
+      stage: "closed_won",
+      nextStep,
+      notes: [prospect.notes || "", nextStep].filter(Boolean).join("\n").slice(0, 3000)
+    });
+    if (closed) updated.push(closed);
+  }
+  return updated;
+}
+
 app.get("/integrations/docusign/status", requireManager, async (_req, res) => {
   const status = await getDocusignStatus();
   return res.json({ ok: true, ...status });
@@ -26326,7 +26346,8 @@ app.patch("/esign/packets/:id", requirePermission("canAccessTodos"), async (req,
             : `E-sign packet status: ${packet.status}.`
     });
   }
-  return res.json({ ok: true, packet, setup });
+  const salesProspects = await closeSalesProspectsForSignedPacket(packet);
+  return res.json({ ok: true, packet, setup, salesProspects });
 });
 
 app.post("/esign/packets/:id/docusign/send", requirePermission("canAccessTodos"), async (req, res) => {

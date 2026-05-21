@@ -37,6 +37,12 @@ type SalesProspect = {
   updatedAt: string;
 };
 
+type EsignPacket = {
+  id: string;
+  status: "draft" | "ready" | "sent" | "signed" | "declined" | "voided";
+  signedAt?: string;
+};
+
 type ZoomStatus = {
   configured: boolean;
   connected: boolean;
@@ -620,11 +626,40 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(commandApiError(data?.error || "Sales prospects could not be loaded."));
       const rows = Array.isArray(data.prospects) ? data.prospects : [];
-      setProspects(rows);
-      if (rows.length && !selectedId) setSelectedId(rows[0].id);
+      const syncedRows = await syncSignedAgreementProspects(rows);
+      setProspects(syncedRows);
+      if (syncedRows.length && !selectedId) setSelectedId(syncedRows[0].id);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Sales prospects could not be loaded.");
     }
+  }
+
+  async function syncSignedAgreementProspects(rows: SalesProspect[]) {
+    const agreementRows = rows.filter(row => row.stage !== "closed_won" && row.docusignPacketId);
+    if (!agreementRows.length) return rows;
+    const packetsResp = await fetch(`/api/esign/packets?limit=250`, { cache: "no-store" });
+    const packetsData = await packetsResp.json();
+    if (!packetsResp.ok || !packetsData?.ok) return rows;
+    const packets = Array.isArray(packetsData.packets) ? (packetsData.packets as EsignPacket[]) : [];
+    const updates = await Promise.all(
+      agreementRows.map(async row => {
+        try {
+          const packet = packets.find(candidate => candidate.id === row.docusignPacketId);
+          if (packet?.status !== "signed") return row;
+          const nextStep = packet.signedAt ? `Agreement signed on ${packet.signedAt}.` : "Agreement signed.";
+          const saveResp = await fetch(`/api/sales-prospects/${encodeURIComponent(row.id)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...toForm(row), stage: "closed_won", nextStep })
+          });
+          const saveData = await saveResp.json();
+          return saveResp.ok && saveData?.ok ? (saveData.prospect as SalesProspect) : row;
+        } catch {
+          return row;
+        }
+      })
+    );
+    return rows.map(row => updates.find(updated => updated.id === row.id) ?? row);
   }
 
   async function loadAgentTasks() {
