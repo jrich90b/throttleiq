@@ -724,6 +724,24 @@ a {
   max-width: 100%;
 }
 
+.lr-ceo-inline-field {
+  display: grid;
+  gap: 0.38rem;
+  margin-top: 0.72rem;
+  color: #b8c6dc;
+  font-size: 0.88rem;
+}
+
+.lr-ceo-inline-field input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 0 0.72rem;
+  background: rgba(255, 255, 255, 0.045);
+  color: #f7fbff;
+}
+
 .lr-ceo-form-stack label {
   display: grid;
   gap: 0.42rem;
