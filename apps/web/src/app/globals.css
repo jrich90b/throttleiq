@@ -867,6 +867,13 @@ a {
   line-height: 1.45;
 }
 
+.lr-ceo-draft-send-status {
+  margin: 0;
+  color: #dcfce7;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
 .lr-ceo-agent-row span,
 .lr-ceo-connector span {
   color: #fbaf64;

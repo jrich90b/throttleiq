@@ -249,6 +249,7 @@ export default function SalesFunnelPage() {
   const [agentTasksBusy, setAgentTasksBusy] = useState(false);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const [draftBusy, setDraftBusy] = useState(false);
+  const [draftSendStatus, setDraftSendStatus] = useState<Record<string, string>>({});
   const [currentUser, setCurrentUser] = useState<CommandUser | null>(null);
   const [bookingLinkCopied, setBookingLinkCopied] = useState(false);
 
@@ -907,6 +908,8 @@ export default function SalesFunnelPage() {
     const edited = draftEdits[task.id] ?? task.output?.summary ?? "";
     const parsed = parseEmailDraft(edited);
     setDraftBusy(true);
+    setDraftSendStatus(current => ({ ...current, [task.id]: "Sending email..." }));
+    setNotice("Sending approved sales email from the connected personal Gmail inbox.");
     try {
       const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}/personal-gmail-send`, {
         method: "POST",
@@ -923,9 +926,13 @@ export default function SalesFunnelPage() {
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
       markActionCompleted("sales_email");
+      setDraftSendStatus(current => ({ ...current, [task.id]: "Email sent." }));
       setNotice("Sales email approved and sent from the connected personal Gmail inbox.");
+      await loadAgentTasks();
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Email could not be sent.");
+      const message = err instanceof Error ? err.message : "Email could not be sent.";
+      setDraftSendStatus(current => ({ ...current, [task.id]: message }));
+      setNotice(message);
     } finally {
       setDraftBusy(false);
     }
@@ -937,6 +944,7 @@ export default function SalesFunnelPage() {
     const hasOutput = Boolean(latestSalesEmailTask.output?.summary?.trim());
     const gmailDraftCreated = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
     const gmailSent = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
+    const sendStatus = draftSendStatus[latestSalesEmailTask.id];
     return (
       <div className="lr-ceo-draft-review">
         <div className="lr-ceo-draft-review-head">
@@ -991,6 +999,7 @@ export default function SalesFunnelPage() {
                 Discard
               </button>
             </div>
+            {sendStatus ? <p className="lr-ceo-draft-send-status">{sendStatus}</p> : null}
           </>
         ) : (
           <p>Draft task created. The draft will appear here after Claude finishes.</p>
