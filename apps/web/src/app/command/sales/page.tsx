@@ -165,6 +165,7 @@ const stageLabels: Record<SalesProspectStage, string> = {
 
 const funnelStages: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent"];
 const stageProgression: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent", "closed_won"];
+const editableStages: SalesProspectStage[] = [...stageProgression, "closed_lost"];
 const actionStateStorageKey = "lr.salesFunnel.actionState.v1";
 
 function toForm(prospect: SalesProspect): ProspectForm {
@@ -1523,6 +1524,13 @@ export default function SalesFunnelPage() {
                   <label>Email<input value={form.contactEmail} onChange={e => updateForm("contactEmail", e.target.value)} /></label>
                   <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
                   <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
+                  <label>Status
+                    <select value={form.stage} onChange={e => updateForm("stage", e.target.value as SalesProspectStage)}>
+                      {editableStages.map(stage => (
+                        <option key={stage} value={stage}>{stageLabels[stage]}</option>
+                      ))}
+                    </select>
+                  </label>
                   <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
                   <label>Dealer lines<input type="number" min="1" value={form.dealerLines} onChange={e => updateDealerLines(e.target.value)} /></label>
                   <label>Plan
@@ -1539,6 +1547,8 @@ export default function SalesFunnelPage() {
                 </div>
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_lost" })} disabled={busy}>Mark lost</button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Mark won</button>
                 </div>
               </>
             ) : (
