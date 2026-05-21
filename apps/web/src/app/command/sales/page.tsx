@@ -942,7 +942,7 @@ export default function SalesFunnelPage() {
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
       markActionCompleted("sales_email");
-      setDraftSendStatus(current => ({ ...current, [task.id]: `Email sent to ${form.contactEmail || selected.contactEmail}.` }));
+      setDraftSendStatus(current => ({ ...current, [task.id]: `Gmail accepted the send to ${form.contactEmail || selected.contactEmail}.` }));
       setNotice("Sales email approved and sent from the connected personal Gmail inbox.");
       await loadAgentTasks();
     } catch (err) {
@@ -963,7 +963,7 @@ export default function SalesFunnelPage() {
     const sentTo = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-to:") || form.contactEmail || selected?.contactEmail || "";
     const sentAt = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-at:");
     const sentMessage = gmailSent
-      ? `Already sent${sentTo ? ` to ${sentTo}` : ""}${sentAt ? ` on ${formatDate(sentAt)}` : ""}. Creating another Gmail draft will not send another email.`
+      ? `Gmail accepted this send${sentTo ? ` to ${sentTo}` : ""}${sentAt ? ` on ${formatDate(sentAt)}` : ""}. Creating another Gmail draft will not send another email.`
       : "";
     const sendStatus = draftSendStatus[latestSalesEmailTask.id];
     return (
@@ -1002,7 +1002,7 @@ export default function SalesFunnelPage() {
                 onClick={() => approveAndSendSalesTask(latestSalesEmailTask)}
                 disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailSent}
               >
-                {gmailSent ? "Already sent" : "Approve and send"}
+                {gmailSent ? "Sent by Gmail" : "Approve and send"}
               </button>
               <button
                 type="button"
