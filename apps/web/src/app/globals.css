@@ -410,6 +410,39 @@ a {
   margin-bottom: 0.9rem;
 }
 
+.lr-ceo-guided-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.9rem;
+  padding: 1rem;
+  border: 1px solid rgba(116, 214, 128, 0.26);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(14, 35, 27, 0.82), rgba(10, 18, 28, 0.94));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.22);
+}
+
+.lr-ceo-guided-setup h3 {
+  color: #f7fbff;
+  font-size: 1.18rem;
+}
+
+.lr-ceo-guided-setup p,
+.lr-ceo-guided-setup small {
+  display: block;
+  margin: 0.42rem 0 0;
+  color: #bfd0e7;
+  line-height: 1.45;
+}
+
+.lr-ceo-guided-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.62rem;
+}
+
 .lr-ceo-panel {
   min-width: 0;
   padding: 1rem;
@@ -1541,6 +1574,7 @@ a {
   .lr-ceo-header,
   .lr-ceo-panel-title,
   .lr-ceo-mailbox-status,
+  .lr-ceo-guided-setup,
   .lr-ceo-run-row,
   .lr-ceo-setup-step {
     display: grid;
@@ -1549,6 +1583,7 @@ a {
   .lr-ceo-grid,
   .lr-ceo-metrics,
   .lr-ceo-email-workspace,
+  .lr-ceo-guided-setup,
   .lr-ceo-connector-grid,
   .lr-ceo-facts,
   .lr-ceo-funnel-board,

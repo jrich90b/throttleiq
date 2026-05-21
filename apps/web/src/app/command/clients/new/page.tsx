@@ -200,6 +200,10 @@ export default function NewDealerClientPage() {
     if (!selected?.steps.length) return 0;
     return Math.round((selected.steps.filter(step => step.status === "done").length / selected.steps.length) * 100);
   }, [selected]);
+  const currentStep = useMemo(() => {
+    if (!selected?.steps.length) return null;
+    return selected.steps.find(step => step.status === "blocked") ?? selected.steps.find(step => step.status !== "done") ?? selected.steps[0];
+  }, [selected]);
 
   useEffect(() => {
     let active = true;
@@ -209,7 +213,8 @@ export default function NewDealerClientPage() {
         if (!active) return;
         if (data?.ok && Array.isArray(data.setups)) {
           setSetups(data.setups);
-          setSelectedId(current => current || data.setups[0]?.id || "");
+          const requestedSetup = new URLSearchParams(window.location.search).get("setup") || "";
+          setSelectedId(current => current || requestedSetup || data.setups[0]?.id || "");
         }
       })
       .catch(() => {
@@ -347,6 +352,68 @@ export default function NewDealerClientPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function guidedStepButtonLabel(stepId: string) {
+    switch (stepId) {
+      case "intake":
+        return "Mark intake complete";
+      case "agreement":
+        return "Draft agreement";
+      case "vercel":
+        return "Add Vercel domains";
+      case "dns":
+        return "Generate DNS checklist";
+      case "api":
+        return "Create API config task";
+      case "google":
+      case "twilio":
+      case "sendgrid":
+      case "meta":
+        return "Create provider task";
+      case "smoke":
+        return "Run smoke test";
+      case "handoff":
+        return "Mark handoff complete";
+      default:
+        return "Start step";
+    }
+  }
+
+  async function runGuidedStep() {
+    if (!selected || !currentStep) return;
+    if (currentStep.id === "intake" || currentStep.id === "handoff") {
+      await updateStep(currentStep.id, "done");
+      return;
+    }
+    if (currentStep.id === "agreement") {
+      await createSetupTask("agreement");
+      await updateStep(currentStep.id, "in_progress");
+      return;
+    }
+    if (currentStep.id === "vercel") {
+      await addVercelDomains();
+      return;
+    }
+    if (currentStep.id === "dns") {
+      await generateDnsChecklist();
+      return;
+    }
+    if (currentStep.id === "api") {
+      await createSetupTask("api");
+      await updateStep(currentStep.id, "in_progress");
+      return;
+    }
+    if (["google", "twilio", "sendgrid", "meta"].includes(currentStep.id)) {
+      await createSetupTask("providers");
+      await updateStep(currentStep.id, "in_progress");
+      return;
+    }
+    if (currentStep.id === "smoke") {
+      await runSmokeTest();
+      return;
+    }
+    await updateStep(currentStep.id, "in_progress");
   }
 
   async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers") {
@@ -649,6 +716,29 @@ export default function NewDealerClientPage() {
             Refresh
           </button>
         </section>
+
+        {selected && currentStep ? (
+          <section className="lr-ceo-guided-setup">
+            <div>
+              <p className="lr-ceo-kicker">Guided setup</p>
+              <h3>{currentStep.status === "blocked" ? "Blocked step" : "Next step"}: {currentStep.label}</h3>
+              <p>
+                Work through one step at a time. Buttons either update the setup record directly or create the Codex/Claude task
+                needed for that setup step.
+              </p>
+              {currentStep.note ? <small>{currentStep.note}</small> : null}
+            </div>
+            <div className="lr-ceo-guided-actions">
+              <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{currentStep.status.replace(/_/g, " ")}</span>
+              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || esignBusy}>
+                {guidedStepButtonLabel(currentStep.id)}
+              </button>
+              <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "blocked")} disabled={busy}>
+                Mark blocked
+              </button>
+            </div>
+          </section>
+        ) : null}
 
         <section className="lr-ceo-grid">
           <article className="lr-ceo-panel">

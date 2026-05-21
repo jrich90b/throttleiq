@@ -30401,6 +30401,65 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
   return res.json({ ok: true, prospect });
 });
 
+app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const prospect = await getSalesProspect(req.params.id);
+  if (!prospect) return res.status(404).json({ ok: false, error: "Prospect not found." });
+
+  const prospectName = prospect.dealerName.trim().toLowerCase();
+  const prospectWebsite = String(prospect.website ?? "").trim().toLowerCase().replace(/\/$/, "");
+  const existing = (await listDealerSetups(500)).find(setup => {
+    const setupName = setup.dealerName.trim().toLowerCase();
+    const setupWebsite = String(setup.website ?? "").trim().toLowerCase().replace(/\/$/, "");
+    return setupName === prospectName || (!!prospectWebsite && setupWebsite === prospectWebsite);
+  });
+
+  const contact = [prospect.contactName, prospect.contactEmail, prospect.contactPhone].filter(Boolean).join(" - ");
+  const notes = [
+    prospect.notes || "",
+    `Pushed from sales prospect ${prospect.id}.`,
+    prospect.nextStep ? `Sales next step: ${prospect.nextStep}` : "",
+    prospect.zoomLink ? `Zoom/Fathom link: ${prospect.zoomLink}` : "",
+    prospect.docusignPacketId ? `DocuSign packet: ${prospect.docusignPacketId}` : "",
+    prospect.onboardingEmailThread ? `Onboarding thread: ${prospect.onboardingEmailThread}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const setup =
+    existing ??
+    (await addDealerSetup({
+      dealerName: prospect.dealerName,
+      owner: prospect.owner,
+      primaryContact: contact,
+      website: prospect.website,
+      leadVolume: prospect.leadVolume,
+      plan: prospect.plan,
+      monthlyFee: prospect.expectedMonthly,
+      notes
+    }));
+
+  if (!existing) {
+    await updateDealerSetup(setup.id, {
+      status: "in_progress",
+      stepId: "intake",
+      stepStatus: "in_progress",
+      stepNote: "Created from Sales Funnel prospect."
+    });
+  }
+
+  const updatedProspect = await updateSalesProspect(prospect.id, {
+    stage: prospect.stage === "closed_won" ? "closed_won" : "agreement_sent",
+    nextStep: `Dealer setup created: ${setup.appUrl}`,
+    notes: notes.slice(0, 3000)
+  });
+
+  return res.json({ ok: true, setup: (await getDealerSetup(setup.id)) ?? setup, prospect: updatedProspect, existing: !!existing });
+});
+
 app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {

@@ -334,6 +334,26 @@ export default function SalesFunnelPage() {
     }
   }
 
+  async function pushToDealerSetup() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}/dealer-setup`, {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be created.");
+      if (data.prospect) setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      const setupUrl = `/command/clients/new?setup=${encodeURIComponent(data.setup.id)}`;
+      setNotice(`${data.setup.dealerName} is in Dealer Setup. ${data.existing ? "Opening existing setup." : "Opening new setup."}`);
+      window.location.href = setupUrl;
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Dealer setup could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createAgentTask(action: "sales_email" | "zoom" | "onboarding" | "docusign" | "texting" | "research") {
     if (!selected) return;
     setTaskBusy(true);
@@ -684,6 +704,7 @@ export default function SalesFunnelPage() {
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "proposal" })} disabled={busy}>Move to proposal</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "agreement_sent" })} disabled={busy}>Agreement sent</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Closed won</button>
+                  <button type="button" onClick={pushToDealerSetup} disabled={busy || !selected}>Push to dealer setup</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={zoomBusy || !selected}>Create Zoom meeting</button>
                 </div>
               </>
