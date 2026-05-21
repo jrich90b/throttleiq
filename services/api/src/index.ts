@@ -30274,6 +30274,7 @@ type ProspectResearchPage = {
   links: string[];
   scripts: string[];
   forms: string[];
+  fetchSource: "direct" | "zenrows";
 };
 
 type ProspectSearchResult = {
@@ -30379,7 +30380,7 @@ function htmlToResearchText(html: string) {
 async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promise<ProspectResearchPage | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const pageFromHtml = (html: string, finalUrl: string): ProspectResearchPage => {
+  const pageFromHtml = (html: string, finalUrl: string, fetchSource: ProspectResearchPage["fetchSource"]): ProspectResearchPage => {
     const title = compactWhitespace(decodeHtmlEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ""));
     return {
       url: finalUrl,
@@ -30388,7 +30389,8 @@ async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promis
       html: html.slice(0, 300000),
       links: extractResearchLinks(html, finalUrl),
       scripts: extractResearchScripts(html, finalUrl),
-      forms: extractResearchForms(html)
+      forms: extractResearchForms(html),
+      fetchSource
     };
   };
   try {
@@ -30409,13 +30411,13 @@ async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promis
       html.toLowerCase().includes("challenge-platform") ||
       html.toLowerCase().includes("just a moment");
     if (!blocked && (contentType.includes("text/html") || contentType.includes("application/xhtml"))) {
-      return pageFromHtml(html, finalUrl);
+      return pageFromHtml(html, finalUrl, "direct");
     }
     const smartHtml = await fetchHtmlSmart(url, "Prospect Research");
-    return smartHtml ? pageFromHtml(smartHtml, finalUrl) : null;
+    return smartHtml ? pageFromHtml(smartHtml, finalUrl, "zenrows") : null;
   } catch {
     const smartHtml = await fetchHtmlSmart(url, "Prospect Research");
-    return smartHtml ? pageFromHtml(smartHtml, url) : null;
+    return smartHtml ? pageFromHtml(smartHtml, url, "zenrows") : null;
   } finally {
     clearTimeout(timeout);
   }
@@ -30620,14 +30622,34 @@ function estimateInventoryCounts(pages: ProspectResearchPage[]) {
 function findLocationSignals(pages: ProspectResearchPage[]) {
   const combined = pages.map(page => page.text).join(" ").slice(0, 60000);
   const phones = [...new Set([...combined.matchAll(/\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g)].map(match => match[0]))].slice(0, 5);
-  const addresses = [...new Set([...combined.matchAll(/\b\d{2,6}\s+[A-Z0-9][A-Za-z0-9 .'-]{3,80}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Hwy|Highway|Pkwy|Parkway)\b[^.]{0,80}/g)].map(match => compactWhitespace(match[0])))]
+  const addressRe =
+    /\b\d{2,6}\s+[A-Z0-9][A-Za-z0-9 .'-]{2,60}\s+(?:St\.?|Street|Ave\.?|Avenue|Rd\.?|Road|Blvd\.?|Boulevard|Dr\.?|Drive|Ln\.?|Lane|Hwy\.?|Highway|Pkwy\.?|Parkway)\b(?:,?\s+[A-Za-z .'-]{2,40})?(?:,?\s+[A-Z]{2})?(?:\s+\d{5})?/gi;
+  const addresses = [...new Set([...combined.matchAll(addressRe)].map(match => compactWhitespace(match[0])))]
+    .filter(address => address.length < 140 && !/\b(close|custom|breakout|fat boy|forty-eight|heritage|low rider|road glide|street glide|softail|trike|limited|models?)\b/i.test(address))
     .slice(0, 5);
   return { phones, addresses };
 }
 
 function summarizeDetectedForms(pages: ProspectResearchPage[]) {
-  return pages
-    .flatMap(page => page.forms.map(form => `${page.url}: ${form}`))
+  const classifyForm = (form: string) => {
+    const lower = form.toLowerCase();
+    if (lower.includes("r58form16") || lower.includes("test") || lower.includes("ride")) return "Test ride lead form";
+    if (lower.includes("r58form14") || lower.includes("service")) return "Service lead form";
+    if (lower.includes("trade") || lower.includes("sell")) return "Trade/sell lead form";
+    if (lower.includes("credit") || lower.includes("finance") || lower.includes("prequal")) return "Finance/prequal lead form";
+    if (lower.includes("inventoryform") || lower.includes("inventory")) return "Inventory search/filter form";
+    if (lower.includes("r58form17")) return "Inventory lead/contact form";
+    return "Lead/contact form";
+  };
+  const summaries = pages.flatMap(page =>
+    page.forms.map(form => ({
+      type: classifyForm(form),
+      url: page.url,
+      provider: /r58form/i.test(form) || /sd-tracking--form/i.test(form) ? "Room58" : undefined
+    }))
+  );
+  return summaries
+    .filter((item, index, list) => list.findIndex(other => other.type === item.type && other.url === item.url) === index)
     .slice(0, 12);
 }
 
@@ -30638,7 +30660,11 @@ function summarizeRelevantPages(pages: ProspectResearchPage[], keywords: string[
     .slice(0, 8);
 }
 
-async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[] }> {
+function compactResearchLinks(items: string[], max = 8) {
+  return items.filter(Boolean).filter((item, index, list) => list.indexOf(item) === index).slice(0, max);
+}
+
+async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[]; research?: Record<string, unknown> }> {
   let websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
   const clientNameForSearch = String(task.clientName ?? task.instructions.match(/Dealer prospect:\s*(.+)/i)?.[1] ?? "").trim();
   if (!websiteFromInstructions || /^not provided$/i.test(websiteFromInstructions)) {
@@ -30723,13 +30749,55 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
   const leadPages = summarizeRelevantPages(pages, ["contact", "trade", "sell", "finance", "payment", "prequal", "test ride", "service", "quote", "availability"]);
   const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
   const score = Math.min(100, 35 + Math.min(25, inventory.totalSignals) + widgets.length * 5 + providers.length * 3);
+  const crawlMethod = pages.some(page => page.fetchSource === "zenrows") ? "zenrows" : "direct";
+  const financePaymentEstimatorDetected = widgets.some(widget => widget.includes("Payment") || widget.includes("Finance"));
+  const research = {
+    schemaVersion: 1,
+    checkedAt: new Date().toISOString(),
+    officialWebsite: home.url,
+    crawlMethod,
+    crawlStatus: "completed",
+    sourcesUsed: compactResearchLinks([home.url, ...pages.map(page => page.url), ...discoveryResults.map(result => result.link)], 20),
+    googleSearch: {
+      configured: discoveryResults.length > 0,
+      results: discoveryResults.slice(0, 5)
+    },
+    inventoryEstimate: {
+      new: inventory.newCount,
+      used: inventory.usedCount,
+      signalCount: inventory.totalSignals,
+      note: inventory.note
+    },
+    dealerProfile: {
+      phones: location.phones,
+      addresses: location.addresses,
+      manufacturers,
+      websiteProviders: providers,
+      singleVsGroup: /group|locations|dealerships|our stores/i.test(pages.map(page => page.text).join(" ")) ? "possible_group_or_multi_location" : "not_confirmed"
+    },
+    leadCapture: {
+      widgets,
+      financePaymentEstimatorDetected,
+      leadPages,
+      forms
+    },
+    teamEmployees: staffPages,
+    opportunityScore: score,
+    setupRisks: [
+      "Inventory counts are crawler estimates and should be verified against the live inventory provider.",
+      providers.length ? "Website provider/integration clues should be validated before setup." : "Website provider was not detected; manual inspection may be needed.",
+      widgets.length ? "Existing widgets may overlap with LeadRider routing, opt-in, and attribution." : "Lead forms/widgets may be JavaScript-rendered and require browser-based inspection."
+    ],
+    recommendedNextStep: "Review the detected lead forms/widgets and confirm where each lead type currently routes before proposing implementation."
+  };
 
   const summary = [
     "Sources Used",
     `- Official website used: ${home.url}`,
     `- Checked: ${now} ET`,
+    `- Crawl method: ${crawlMethod === "zenrows" ? "ZenRows fallback" : "Direct fetch"}`,
     discoveryResults.length ? `- Google Search discovery checked: ${discoveryResults.map(result => result.link).slice(0, 3).join(", ")}` : "- Google Search discovery not configured or returned no results.",
-    ...pages.slice(0, 10).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
+    ...pages.slice(0, 8).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
     "",
     "Inventory Count",
     `- New bikes listed: ${inventory.newCount}`,
@@ -30738,7 +30806,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     `- Note: ${inventory.note}`,
     "",
     "Dealer Profile",
-    `- Location/address signals: ${location.addresses.length ? location.addresses.join("; ") : "not found in crawled pages"}`,
+    `- Address signals: ${location.addresses.length ? location.addresses.join("; ") : "not found in crawled pages"}`,
     `- Phone signals: ${location.phones.length ? location.phones.join(", ") : "not found in crawled pages"}`,
     `- Manufacturer/brand signals: ${manufacturers.length ? manufacturers.join(", ") : "not detected"}`,
     `- Website/provider clues: ${providers.length ? providers.join(", ") : "not detected"}`,
@@ -30749,9 +30817,11 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     "",
     "Lead Capture/Tech Stack",
     `- Lead widgets/forms detected: ${widgets.length ? widgets.join(", ") : "none detected from static crawl"}`,
-    `- Finance/payment estimator signals: ${widgets.some(widget => widget.includes("Payment") || widget.includes("Finance")) ? "detected" : "not detected"}`,
-    leadPages.length ? leadPages.map(page => `- Lead page: ${page}`).join("\n") : "- No dedicated lead pages found in crawled pages.",
-    forms.length ? forms.map(form => `- Form: ${form}`).join("\n") : "- No raw HTML forms detected. Forms may be injected by JavaScript.",
+    `- Finance/payment estimator signals: ${financePaymentEstimatorDetected ? "detected" : "not detected"}`,
+    leadPages.length ? leadPages.slice(0, 6).map(page => `- Lead page: ${page}`).join("\n") : "- No dedicated lead pages found in crawled pages.",
+    forms.length
+      ? forms.map(form => `- Form: ${form.type}${form.provider ? ` (${form.provider})` : ""} - ${form.url}`).join("\n")
+      : "- No raw HTML forms detected. Forms may be injected by JavaScript.",
     "",
     "Opportunity Score",
     `- ${score}/100 preliminary fit score based on inventory signals, lead capture surface area, and provider clues.`,
@@ -30766,7 +30836,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     "- If this is an active opportunity, schedule a demo and use the research summary to tailor the sales follow-up."
   ].join("\n");
 
-  return { summary, links: pages.map(page => page.url).slice(0, 20) };
+  return { summary, links: pages.map(page => page.url).slice(0, 20), research };
 }
 
 function queueProspectResearchTaskExecution(task: AgentTask) {

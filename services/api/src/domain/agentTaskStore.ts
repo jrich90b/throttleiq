@@ -41,6 +41,7 @@ export type AgentTask = {
   output?: {
     summary?: string;
     links?: string[];
+    research?: Record<string, unknown>;
   };
 };
 
