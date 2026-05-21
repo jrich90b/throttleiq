@@ -23028,7 +23028,14 @@ async function processDueFollowUps() {
     return normalizeDisplayCase(noParenSuffix);
   };
   const getPostSaleModel = (conv: any) => {
-    const raw = conv?.lead?.vehicle?.model ?? "";
+    const sale = conv?.sale ?? {};
+    const saleLabel =
+      String(sale?.label ?? "").trim() ||
+      [sale?.year, sale?.make, sale?.model, sale?.trim, sale?.color]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+    const raw = saleLabel || conv?.lead?.vehicle?.model || conv?.lead?.vehicle?.description || "";
     const normalized = normalizeModelForPostSale(String(raw));
     return normalized || "bike";
   };
