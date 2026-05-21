@@ -93,6 +93,15 @@ function findHeader(headers: Array<{ name?: string | null; value?: string | null
   return headers?.find(header => String(header.name ?? "").toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
+function cleanHeaderValue(value: string) {
+  return value.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function encodeHeaderValue(value: string) {
+  const cleaned = cleanHeaderValue(value);
+  return /^[\x00-\x7F]*$/.test(cleaned) ? cleaned : `=?UTF-8?B?${Buffer.from(cleaned, "utf8").toString("base64")}?=`;
+}
+
 function extractPlainText(payload: any): string {
   if (!payload) return "";
   if (payload.mimeType === "text/plain" && payload.body?.data) return decodeBase64Url(payload.body.data);
@@ -165,9 +174,10 @@ export async function createSupportGmailDraftReply(messageId: string, bodyText: 
   const references = findHeader(headers, "References") || messageIdHeader;
   const lines = [
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeHeaderValue(subject)}`,
     messageIdHeader ? `In-Reply-To: ${messageIdHeader}` : "",
     references ? `References: ${references}` : "",
+    "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "",
     bodyText
@@ -194,7 +204,8 @@ export async function createPersonalGmailDraftEmail(input: { to: string; subject
   if (!bodyText) throw new Error("Draft body is required.");
   const lines = [
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeHeaderValue(subject)}`,
+    "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "",
     bodyText
@@ -218,7 +229,8 @@ export async function sendPersonalGmailEmail(input: { to: string; subject: strin
   if (!bodyText) throw new Error("Email body is required.");
   const lines = [
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeHeaderValue(subject)}`,
+    "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "",
     bodyText
