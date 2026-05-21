@@ -603,14 +603,18 @@ a {
 
 .lr-ceo-user-password {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.5rem;
-  margin-top: 0.22rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.62rem;
+  margin-top: 0.7rem;
   width: 100%;
 }
 
 .lr-ceo-user-password input {
   min-width: 0;
+}
+
+.lr-ceo-user-password button {
+  justify-self: start;
 }
 
 .lr-ceo-user-booking {
@@ -636,7 +640,8 @@ a {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.72rem;
-  margin-top: 0.28rem;
+  margin-top: 0.78rem;
+  padding-top: 0.12rem;
 }
 
 .lr-ceo-inline-check {
