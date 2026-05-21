@@ -724,9 +724,32 @@ a {
   background: rgba(251, 127, 4, 0.08);
 }
 
+.lr-ceo-action-meta.is-ready {
+  border-color: rgba(116, 214, 128, 0.3);
+  background: rgba(116, 214, 128, 0.08);
+}
+
+.lr-ceo-action-meta.is-blocked {
+  border-color: rgba(254, 202, 202, 0.32);
+  background: rgba(127, 29, 29, 0.2);
+}
+
 .lr-ceo-action-meta small {
   overflow-wrap: anywhere;
   color: #f8dcc4;
+}
+
+.lr-ceo-action-meta.is-ready small {
+  color: #d7fbe0;
+}
+
+.lr-ceo-action-meta.is-blocked small {
+  color: #fecaca;
+}
+
+.lr-ceo-action-meta .lr-ceo-link-btn {
+  justify-self: start;
+  margin-top: 0.2rem;
 }
 
 .lr-ceo-draft-review {

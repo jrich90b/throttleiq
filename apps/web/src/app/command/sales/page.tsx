@@ -206,6 +206,10 @@ function formatDate(value?: string) {
   return date.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function formatMeetingDate(value?: string) {
+  return value ? formatDate(value) : "No demo time";
+}
+
 function moneyValue(value?: string) {
   const match = String(value ?? "").match(/[\d,.]+/);
   if (!match) return 0;
@@ -246,6 +250,7 @@ export default function SalesFunnelPage() {
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const [draftBusy, setDraftBusy] = useState(false);
   const [currentUser, setCurrentUser] = useState<CommandUser | null>(null);
+  const [bookingLinkCopied, setBookingLinkCopied] = useState(false);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -448,6 +453,30 @@ export default function SalesFunnelPage() {
     return `${window.location.origin}/book?commandUser=${encodeURIComponent(currentUser.id)}`;
   }
 
+  function commandBookingSetupMessage() {
+    if (!currentUser) return "Checking your Command booking setup.";
+    if (currentUser.commandBookingEnabled === false) return "Command booking is turned off for your user.";
+    if (!currentUser.commandCalendarId) return "Add your Command calendar in Users before sharing a booking link.";
+    return "Your Command booking link is ready to share.";
+  }
+
+  function currentUserLabel() {
+    return currentUser?.name || currentUser?.email || "Current LeadRider user";
+  }
+
+  async function copyCommandBookingLink() {
+    const link = commandBookingLink();
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setBookingLinkCopied(true);
+      setNotice("Command booking link copied.");
+      window.setTimeout(() => setBookingLinkCopied(false), 1800);
+    } catch {
+      setNotice(link);
+    }
+  }
+
   async function loadCurrentUser() {
     try {
       const resp = await fetch("/api/auth/me", { cache: "no-store" });
@@ -586,7 +615,7 @@ export default function SalesFunnelPage() {
       return;
     }
     if (!form.nextStepAt && !selected.nextStepAt) {
-      setNotice("Set the next step date before scheduling a demo.");
+      setNotice("Set the confirmed demo time before creating a Zoom meeting.");
       return;
     }
     setZoomBusy(true);
@@ -612,7 +641,7 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Zoom meeting could not be created.");
       setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
       setForm(toForm(data.prospect));
-      setNotice(`Zoom meeting created for ${data.prospect.dealerName}.`);
+      setNotice(`Zoom meeting created for ${data.prospect.dealerName}. The link is saved in Next actions.`);
       markActionCompleted("schedule_demo", data.prospect.id);
       await advanceProspectStage(data.prospect, "demo_scheduled", `Zoom meeting created for ${data.prospect.dealerName}.`);
     } catch (err) {
@@ -691,7 +720,7 @@ export default function SalesFunnelPage() {
       `Expected monthly: ${taskSelected.expectedMonthly || "not set"}`,
       `Lead volume: ${taskSelected.leadVolume || "not set"}`,
       `Next step: ${taskSelected.nextStep || "not set"}`,
-      `Next step date: ${taskSelected.nextStepAt || "not set"}`,
+      `Confirmed demo time: ${taskSelected.nextStepAt || "not set"}`,
       `Zoom link: ${taskSelected.zoomLink || "not set"}`,
       `DocuSign packet: ${taskSelected.docusignPacketId || "not set"}`,
       `Onboarding email thread: ${taskSelected.onboardingEmailThread || "not set"}`,
@@ -714,7 +743,7 @@ export default function SalesFunnelPage() {
           "Body:",
           "<email body>",
           "Do not include Summary, Recommended Action, Approval Needed, Codex/code task notes, markdown headings, checklists, or internal commentary.",
-          "If the LeadRider command booking link is configured, include it naturally as the scheduling link.",
+          "If the LeadRider Command booking link is configured, include it naturally as the scheduling link.",
           "If the LeadRider command booking link is not configured, ask them to reply with a time that works. Do not use placeholder links.",
           "",
           facts
@@ -1094,7 +1123,7 @@ export default function SalesFunnelPage() {
                         <strong>{prospect.dealerName}</strong>
                         <span>{prospect.contactName || prospect.contactEmail || "No contact yet"}</span>
                         <small>{prospect.nextStep || "No next step"}</small>
-                        <em>{formatDate(prospect.nextStepAt)}</em>
+                        <em>{formatMeetingDate(prospect.nextStepAt)}</em>
                       </button>
                     ))}
                     {!stageRows.length ? <p className="lr-ceo-note">No prospects.</p> : null}
@@ -1196,19 +1225,39 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Schedule demo</strong>
-                  <p>{form.zoomLink || selected?.zoomLink ? "Zoom link saved on this prospect." : "Pick a meeting time and create a Zoom link."}</p>
+                  <p>
+                    {form.zoomLink || selected?.zoomLink
+                      ? "Zoom meeting is saved on this prospect."
+                      : "Share the Command booking link, or create Zoom after a demo time is confirmed."}
+                  </p>
+                  <div className={`lr-ceo-action-meta ${commandBookingLink() ? "is-ready" : "is-blocked"}`}>
+                    <span>Command booking</span>
+                    <small>{currentUserLabel()}</small>
+                    <small>{commandBookingSetupMessage()}</small>
+                    {commandBookingLink() ? (
+                      <>
+                        <small>{commandBookingLink()}</small>
+                        <button type="button" className="lr-ceo-link-btn" onClick={copyCommandBookingLink}>
+                          {bookingLinkCopied ? "Copied" : "Copy booking link"}
+                        </button>
+                      </>
+                    ) : currentUser ? (
+                      <a className="lr-ceo-link-btn" href="/command/users">Open Users</a>
+                    ) : null}
+                  </div>
                   {(form.zoomLink || selected?.zoomLink) ? (
                     <div className="lr-ceo-action-meta">
-                      <span>Zoom/Fathom link</span>
+                      <span>Zoom meeting</span>
                       <small>{form.zoomLink || selected?.zoomLink}</small>
+                      <small>Use Fathom when joining the call so notes are captured for follow-up.</small>
                     </div>
                   ) : null}
                   <label className="lr-ceo-inline-field">
-                    Demo meeting time
+                    Confirmed demo time
                     <input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} />
                   </label>
                 </div>
-                {renderActionControl("schedule_demo", "Schedule", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
+                {renderActionControl("schedule_demo", "Create Zoom", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
