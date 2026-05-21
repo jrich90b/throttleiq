@@ -30272,6 +30272,7 @@ type ProspectResearchPage = {
   text: string;
   html: string;
   links: string[];
+  menuLinks: string[];
   scripts: string[];
   forms: string[];
   fetchSource: "direct" | "zenrows";
@@ -30352,6 +30353,40 @@ function extractResearchLinks(html: string, baseUrl: string) {
   return [...links].slice(0, 250);
 }
 
+function extractResearchMenuLinks(html: string, baseUrl: string) {
+  const links = new Set<string>();
+  const baseHost = (() => {
+    try {
+      return new URL(baseUrl).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  })();
+  const menuKeywordRe = /\b(home|models?|showroom|inventory|motorcycles?|new|used|pre-owned|preowned|shop|service|parts|financ|dealer info|about|staff|team|contact|test ride|trade)\b/i;
+  const anchorRe = /<a\b([^>]*)href=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorRe.exec(html))) {
+    const attrs = `${match[1] ?? ""} ${match[3] ?? ""}`;
+    const text = compactWhitespace(htmlToResearchText(match[4] ?? ""));
+    const localContext = html.slice(Math.max(0, match.index - 700), Math.min(html.length, match.index + match[0].length + 700));
+    const looksLikeMenu =
+      /\b(nav|navbar|navigation|menu|mega|header|topbar|site-header|main-menu)\b/i.test(`${attrs} ${localContext}`) ||
+      menuKeywordRe.test(text);
+    if (!looksLikeMenu) continue;
+    const absolute = absoluteResearchUrl(baseUrl, match[2]);
+    if (!absolute || !absolute.startsWith("http")) continue;
+    try {
+      const url = new URL(absolute);
+      if (baseHost && url.hostname.replace(/^www\./, "") !== baseHost) continue;
+      url.hash = "";
+      links.add(url.toString());
+    } catch {
+      continue;
+    }
+  }
+  return [...links].slice(0, 80);
+}
+
 function extractResearchScripts(html: string, baseUrl: string) {
   const scripts = new Set<string>();
   const scriptRe = /<script\b[^>]*src=["']([^"']+)["'][^>]*>/gi;
@@ -30406,6 +30441,7 @@ async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promis
       text: htmlToResearchText(html),
       html: html.slice(0, 300000),
       links: extractResearchLinks(html, finalUrl),
+      menuLinks: extractResearchMenuLinks(html, finalUrl),
       scripts: extractResearchScripts(html, finalUrl),
       forms: extractResearchForms(html),
       fetchSource
@@ -30516,26 +30552,32 @@ function chooseProspectResearchUrls(home: ProspectResearchPage, rootUrl: string)
       ["pre-owned", 8],
       ["preowned", 8],
       ["motorcycle", 6],
+      ["showroom", 6],
+      ["models", 5],
       ["staff", 8],
       ["team", 8],
       ["about", 7],
       ["contact", 7],
+      ["dealer-info", 7],
       ["finance", 7],
+      ["financing", 7],
       ["payment", 7],
       ["prequal", 7],
       ["test-ride", 7],
       ["trade", 7],
       ["sell", 5],
-      ["service", 5]
+      ["service", 5],
+      ["parts", 4]
     ] as const) {
       if (text.includes(keyword)) score += points;
     }
     return score;
   };
-  return [rootUrl, ...home.links]
+  const menuSet = new Set(home.menuLinks);
+  return [rootUrl, ...home.menuLinks, ...home.links]
     .filter((url, index, list) => list.indexOf(url) === index)
-    .sort((a, b) => keywordScore(b) - keywordScore(a))
-    .slice(0, 14);
+    .sort((a, b) => keywordScore(b) + (menuSet.has(b) ? 6 : 0) - (keywordScore(a) + (menuSet.has(a) ? 6 : 0)))
+    .slice(0, 18);
 }
 
 function detectWebsiteProviders(pages: ProspectResearchPage[]) {
