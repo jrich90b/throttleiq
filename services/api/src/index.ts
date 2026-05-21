@@ -68,6 +68,7 @@ import {
   updateSalesProspect,
   type SalesProspectStage
 } from "./domain/salesProspectStore.js";
+import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
 import {
   addEsignPacket,
   getEsignPacket,
@@ -30275,6 +30276,12 @@ type ProspectResearchPage = {
   forms: string[];
 };
 
+type ProspectSearchResult = {
+  title: string;
+  link: string;
+  snippet: string;
+};
+
 function normalizeProspectResearchUrl(value?: string) {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -30372,20 +30379,7 @@ function htmlToResearchText(html: string) {
 async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promise<ProspectResearchPage | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "user-agent": "LeadRiderResearchBot/1.0 (+https://www.leadrider.ai)",
-        accept: "text/html,application/xhtml+xml"
-      }
-    });
-    if (!resp.ok) return null;
-    const contentType = resp.headers.get("content-type") || "";
-    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) return null;
-    const html = await resp.text();
-    const finalUrl = resp.url || url;
+  const pageFromHtml = (html: string, finalUrl: string): ProspectResearchPage => {
     const title = compactWhitespace(decodeHtmlEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ""));
     return {
       url: finalUrl,
@@ -30396,10 +30390,61 @@ async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promis
       scripts: extractResearchScripts(html, finalUrl),
       forms: extractResearchForms(html)
     };
+  };
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "user-agent": "LeadRiderResearchBot/1.0 (+https://www.leadrider.ai)",
+        accept: "text/html,application/xhtml+xml"
+      }
+    });
+    const contentType = resp.headers.get("content-type") || "";
+    const html = await resp.text();
+    const finalUrl = resp.url || url;
+    const blocked =
+      !resp.ok ||
+      html.toLowerCase().includes("cf-mitigated") ||
+      html.toLowerCase().includes("challenge-platform") ||
+      html.toLowerCase().includes("just a moment");
+    if (!blocked && (contentType.includes("text/html") || contentType.includes("application/xhtml"))) {
+      return pageFromHtml(html, finalUrl);
+    }
+    const smartHtml = await fetchHtmlSmart(url, "Prospect Research");
+    return smartHtml ? pageFromHtml(smartHtml, finalUrl) : null;
   } catch {
-    return null;
+    const smartHtml = await fetchHtmlSmart(url, "Prospect Research");
+    return smartHtml ? pageFromHtml(smartHtml, url) : null;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function searchProspectGoogle(query: string): Promise<ProspectSearchResult[]> {
+  const apiKey = String(process.env.GOOGLE_CSE_API_KEY ?? process.env.GOOGLE_CUSTOM_SEARCH_API_KEY ?? "").trim();
+  const cx = String(process.env.GOOGLE_CSE_CX ?? process.env.GOOGLE_CSE_DEFAULT_CX ?? process.env.GOOGLE_CUSTOM_SEARCH_CX ?? "").trim();
+  if (!apiKey || !cx || !query.trim()) return [];
+  try {
+    const url = new URL("https://www.googleapis.com/customsearch/v1");
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("cx", cx);
+    url.searchParams.set("q", query.trim());
+    url.searchParams.set("num", "5");
+    const resp = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+    if (!resp.ok) return [];
+    const data: any = await resp.json();
+    return Array.isArray(data.items)
+      ? data.items
+          .map((item: any) => ({
+            title: String(item.title ?? "").trim(),
+            link: String(item.link ?? "").trim(),
+            snippet: String(item.snippet ?? "").replace(/\s+/g, " ").trim()
+          }))
+          .filter((item: ProspectSearchResult) => item.link)
+      : [];
+  } catch {
+    return [];
   }
 }
 
@@ -30595,13 +30640,20 @@ function summarizeRelevantPages(pages: ProspectResearchPage[], keywords: string[
 
 async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[] }> {
   let websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
+  const clientNameForSearch = String(task.clientName ?? task.instructions.match(/Dealer prospect:\s*(.+)/i)?.[1] ?? "").trim();
   if (!websiteFromInstructions || /^not provided$/i.test(websiteFromInstructions)) {
-    const clientName = String(task.clientName ?? "").trim().toLowerCase();
+    const clientName = clientNameForSearch.toLowerCase();
     if (clientName) {
       const prospects = await listSalesProspects(250);
       const prospect = prospects.find(row => row.dealerName.trim().toLowerCase() === clientName);
       if (prospect?.website?.trim()) websiteFromInstructions = prospect.website.trim();
     }
+  }
+  const discoveryResults = clientNameForSearch
+    ? await searchProspectGoogle(`${clientNameForSearch} official dealer website inventory staff contact`)
+    : [];
+  if ((!websiteFromInstructions || /^not provided$/i.test(websiteFromInstructions)) && discoveryResults[0]?.link) {
+    websiteFromInstructions = discoveryResults[0].link;
   }
   const rootUrl = normalizeProspectResearchUrl(websiteFromInstructions);
   if (!rootUrl) {
@@ -30609,6 +30661,9 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
       summary: [
         "Sources Used",
         "- No dealer website was provided, so automated crawling could not start. Add the official dealer website to the prospect and rerun Research.",
+        discoveryResults.length
+          ? `- Google Search checked but no usable official website was selected. Top result: ${discoveryResults[0].title} - ${discoveryResults[0].link}`
+          : "- Google Search fallback is not configured or returned no results.",
         "",
         "Recommended Next Step",
         "- Add the dealer website URL, then rerun the research task."
@@ -30620,6 +30675,10 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
   const home = await fetchProspectResearchPage(rootUrl);
   if (!home) {
     const probe = await probeProspectResearchUrl(rootUrl);
+    const searchFallbackResults = [
+      ...discoveryResults,
+      ...(clientNameForSearch ? await searchProspectGoogle(`site:${new URL(rootUrl).hostname.replace(/^www\./, "")} inventory finance payment estimator trade service test ride`) : [])
+    ].filter((item, index, list) => item.link && list.findIndex(other => other.link === item.link) === index).slice(0, 8);
     const cloudflareBlocked =
       probe.cfMitigated.toLowerCase() === "challenge" ||
       probe.server.toLowerCase().includes("cloudflare") ||
@@ -30630,10 +30689,12 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
         `- Attempted: ${probe.finalUrl || rootUrl}`,
         `- HTTP status: ${probe.status || "request failed"}`,
         cloudflareBlocked ? "- Blocker: Cloudflare managed challenge blocked the server-side crawler." : "- Blocker: The website could not be fetched by the server-side crawler.",
+        searchFallbackResults.length ? "- Google Search fallback results:" : "- Google Search fallback returned no usable results or is not configured.",
+        ...searchFallbackResults.map(result => `  - ${result.title}: ${result.link}${result.snippet ? ` — ${result.snippet}` : ""}`),
         "",
         "Setup Risks",
         cloudflareBlocked
-          ? "- This dealer site requires a real browser challenge/cookie flow before page content can be read. A plain backend crawler cannot safely bypass that."
+          ? "- Direct fetch was blocked by Cloudflare. ZenRows was attempted through the smart crawler helper; if this still appears, ZenRows also could not return readable HTML for this URL."
           : "- The site may block bots, require JavaScript rendering, or be temporarily unavailable.",
         "- Inventory counts, web provider, widgets, and lead forms need browser-assisted inspection or an accessible inventory/feed endpoint.",
         "",
@@ -30642,7 +30703,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
           ? "- Use browser-assisted research from an authenticated/interactive Chrome session, or ask the dealer/web provider to allowlist LeadRider research traffic or provide inventory/feed access."
           : "- Verify the URL in a browser and consider manual research if the site blocks server-side fetches."
       ].join("\n"),
-      links: [rootUrl]
+      links: [rootUrl, ...searchFallbackResults.map(result => result.link)]
     };
   }
 
@@ -30667,6 +30728,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     "Sources Used",
     `- Official website used: ${home.url}`,
     `- Checked: ${now} ET`,
+    discoveryResults.length ? `- Google Search discovery checked: ${discoveryResults.map(result => result.link).slice(0, 3).join(", ")}` : "- Google Search discovery not configured or returned no results.",
     ...pages.slice(0, 10).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
     "",
     "Inventory Count",
