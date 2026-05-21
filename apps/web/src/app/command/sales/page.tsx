@@ -1599,8 +1599,8 @@ export default function SalesFunnelPage() {
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Schedule demo</strong>
-                  <p>{form.zoomLink || selected?.zoomLink ? "Zoom meeting is saved on this prospect." : "Create a manual Zoom only when a demo time is already confirmed outside the booking page."}</p>
+                  <strong>Demo logistics</strong>
+                  <p>{form.zoomLink || selected?.zoomLink ? "Zoom meeting is saved on this prospect." : "Booking link is handled in the sales email. Create a manual Zoom only when a demo time is confirmed outside the booking page."}</p>
                   <div className={`lr-ceo-action-meta ${commandBookingLink() ? "is-ready" : "is-blocked"}`}>
                     <span>Command booking</span>
                     <small>{currentUserLabel()}</small>
