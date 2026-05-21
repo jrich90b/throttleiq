@@ -572,8 +572,8 @@ export default function SalesFunnelPage() {
   function commandBookingSetupMessage() {
     if (!currentUser) return "Checking your Command booking setup.";
     if (currentUser.commandBookingEnabled === false) return "Command booking is turned off for your user.";
-    if (!currentUser.commandCalendarId) return "Add your Command calendar in Users before sharing a booking link.";
-    return "Your Command booking link is ready to share.";
+    if (!currentUser.commandCalendarId) return "Add your Command calendar in Users before using booking.";
+    return "Booking link is available for sales emails and manual copy.";
   }
 
   function currentUserLabel() {
@@ -1600,18 +1600,13 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Schedule demo</strong>
-                  <p>
-                    {form.zoomLink || selected?.zoomLink
-                      ? "Zoom meeting is saved on this prospect."
-                      : "Use the booking link from the sales email, or create a manual Zoom when you already have a time."}
-                  </p>
+                  <p>{form.zoomLink || selected?.zoomLink ? "Zoom meeting is saved on this prospect." : "Create a manual Zoom only when a demo time is already confirmed outside the booking page."}</p>
                   <div className={`lr-ceo-action-meta ${commandBookingLink() ? "is-ready" : "is-blocked"}`}>
                     <span>Command booking</span>
                     <small>{currentUserLabel()}</small>
                     <small>{bookingLinkAlreadyInSalesDraft() ? "Included in the latest sales email." : commandBookingSetupMessage()}</small>
                     {commandBookingLink() ? (
                       <>
-                        {bookingLinkAlreadyInSalesDraft() ? null : <small>{commandBookingLink()}</small>}
                         <button type="button" className="lr-ceo-link-btn" onClick={copyCommandBookingLink}>
                           {bookingLinkCopied ? "Copied" : "Copy booking link"}
                         </button>
