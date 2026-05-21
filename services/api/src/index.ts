@@ -30026,6 +30026,7 @@ const allowedAgentKinds: AgentTaskKind[] = [
 ];
 const allowedAgentStatuses: AgentTaskStatus[] = ["queued", "needs_approval", "running", "completed", "failed", "blocked"];
 const runningClaudeTasks = new Set<string>();
+const runningProspectResearchTasks = new Set<string>();
 
 function supportMailAutoTrashEnabled() {
   const raw = String(process.env.SUPPORT_MAIL_AUTO_TRASH_NON_SUPPORT_ENABLED ?? "1").trim().toLowerCase();
@@ -30264,6 +30265,371 @@ function agentTaskApprovalReason(kind: AgentTaskKind, instructions: string): str
   return undefined;
 }
 
+type ProspectResearchPage = {
+  url: string;
+  title: string;
+  text: string;
+  html: string;
+  links: string[];
+  scripts: string[];
+  forms: string[];
+};
+
+function normalizeProspectResearchUrl(value?: string) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw.match(/^https?:\/\//i) ? raw : `https://${raw}`).toString();
+  } catch {
+    return "";
+  }
+}
+
+function compactWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function absoluteResearchUrl(base: string, href: string) {
+  try {
+    return new URL(decodeHtmlEntities(href), base).toString();
+  } catch {
+    return "";
+  }
+}
+
+function extractResearchLinks(html: string, baseUrl: string) {
+  const links = new Set<string>();
+  const linkRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = linkRe.exec(html))) {
+    const absolute = absoluteResearchUrl(baseUrl, match[1]);
+    if (!absolute || !absolute.startsWith("http")) continue;
+    try {
+      const url = new URL(absolute);
+      const base = new URL(baseUrl);
+      if (url.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) continue;
+      url.hash = "";
+      links.add(url.toString());
+    } catch {
+      continue;
+    }
+  }
+  return [...links].slice(0, 250);
+}
+
+function extractResearchScripts(html: string, baseUrl: string) {
+  const scripts = new Set<string>();
+  const scriptRe = /<script\b[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptRe.exec(html))) {
+    const absolute = absoluteResearchUrl(baseUrl, match[1]);
+    if (absolute) scripts.add(absolute);
+  }
+  return [...scripts].slice(0, 120);
+}
+
+function extractResearchForms(html: string) {
+  const forms = new Set<string>();
+  const formRe = /<form\b[^>]*>([\s\S]*?)<\/form>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = formRe.exec(html))) {
+    const formHtml = match[0];
+    const action = formHtml.match(/\baction=["']([^"']+)["']/i)?.[1] ?? "";
+    const id = formHtml.match(/\bid=["']([^"']+)["']/i)?.[1] ?? "";
+    const cls = formHtml.match(/\bclass=["']([^"']+)["']/i)?.[1] ?? "";
+    const fields = [...formHtml.matchAll(/\b(?:name|placeholder|aria-label)=["']([^"']+)["']/gi)]
+      .map(field => compactWhitespace(decodeHtmlEntities(field[1])))
+      .filter(Boolean)
+      .slice(0, 12)
+      .join(", ");
+    forms.add(compactWhitespace([action ? `action=${action}` : "", id ? `id=${id}` : "", cls ? `class=${cls}` : "", fields ? `fields=${fields}` : ""].filter(Boolean).join(" | ")));
+  }
+  return [...forms].filter(Boolean).slice(0, 40);
+}
+
+function htmlToResearchText(html: string) {
+  return decodeHtmlEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 12000);
+}
+
+async function fetchProspectResearchPage(url: string, timeoutMs = 10000): Promise<ProspectResearchPage | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "user-agent": "LeadRiderResearchBot/1.0 (+https://www.leadrider.ai)",
+        accept: "text/html,application/xhtml+xml"
+      }
+    });
+    if (!resp.ok) return null;
+    const contentType = resp.headers.get("content-type") || "";
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) return null;
+    const html = await resp.text();
+    const finalUrl = resp.url || url;
+    const title = compactWhitespace(decodeHtmlEntities(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? ""));
+    return {
+      url: finalUrl,
+      title,
+      text: htmlToResearchText(html),
+      html: html.slice(0, 300000),
+      links: extractResearchLinks(html, finalUrl),
+      scripts: extractResearchScripts(html, finalUrl),
+      forms: extractResearchForms(html)
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function chooseProspectResearchUrls(home: ProspectResearchPage, rootUrl: string) {
+  const keywordScore = (url: string) => {
+    const text = url.toLowerCase();
+    let score = 0;
+    for (const [keyword, points] of [
+      ["inventory", 12],
+      ["new", 7],
+      ["used", 7],
+      ["pre-owned", 8],
+      ["preowned", 8],
+      ["motorcycle", 6],
+      ["staff", 8],
+      ["team", 8],
+      ["about", 7],
+      ["contact", 7],
+      ["finance", 7],
+      ["payment", 7],
+      ["prequal", 7],
+      ["test-ride", 7],
+      ["trade", 7],
+      ["sell", 5],
+      ["service", 5]
+    ] as const) {
+      if (text.includes(keyword)) score += points;
+    }
+    return score;
+  };
+  return [rootUrl, ...home.links]
+    .filter((url, index, list) => list.indexOf(url) === index)
+    .sort((a, b) => keywordScore(b) - keywordScore(a))
+    .slice(0, 14);
+}
+
+function detectWebsiteProviders(pages: ProspectResearchPage[]) {
+  const haystack = pages.flatMap(page => [page.url, page.title, page.html.slice(0, 80000), ...page.scripts]).join("\n").toLowerCase();
+  const providers: string[] = [];
+  const checks: Array<[string, RegExp]> = [
+    ["Dealer Inspire", /dealerinspire|di-site|di-assets|dealer inspire/i],
+    ["DealerOn", /dealeron|dealer\.com\/sites|cdn\.dealeron/i],
+    ["Dealer Spike", /dealerspike|psndealer|powersportsnetwork/i],
+    ["ARI / Endeavor", /arinet|endeavor|dx1app|dx1/i],
+    ["Lightspeed / Dealer Spike inventory", /lightspeed|dealerspike/i],
+    ["Room58", /room58/i],
+    ["Traffic Log Pro", /trafficlogpro|traffic log pro/i],
+    ["AutoManager", /automanager/i],
+    ["WordPress", /wp-content|wordpress/i],
+    ["Wix", /wixstatic|wix\.com/i],
+    ["Squarespace", /squarespace/i],
+    ["Shopify", /cdn\.shopify|shopify/i],
+    ["Dealer.com", /dealer\.com|dealertrack/i],
+    ["GoDaddy Website Builder", /godaddy|wsimg/i]
+  ];
+  for (const [label, regex] of checks) {
+    if (regex.test(haystack) && !providers.includes(label)) providers.push(label);
+  }
+  return providers;
+}
+
+function detectLeadWidgets(pages: ProspectResearchPage[]) {
+  const widgets = new Set<string>();
+  const haystack = pages.flatMap(page => [page.url, page.title, page.text, page.html.slice(0, 100000), ...page.scripts, ...page.forms]).join("\n").toLowerCase();
+  const checks: Array<[string, RegExp]> = [
+    ["Chat widget", /\b(chat|livechat|live chat|intercom|drift|tawk|podium|gubagoo|activengage|carcodes|conversations)\b/i],
+    ["Text/SMS widget", /\b(text us|text now|sms|message us|podium|kenect|carwars|callrail)\b/i],
+    ["Contact form", /\b(contact us|contact form|request information|request info|get more information)\b/i],
+    ["Trade / sell-my-bike form", /\b(trade[- ]?in|sell your|sell my|value your trade|trade appraisal|instant cash offer)\b/i],
+    ["Finance / prequal form", /\b(financ|pre[- ]?qual|credit app|credit application|apply now|get approved)\b/i],
+    ["Payment estimator/calculator", /\b(payment calculator|payment estimator|estimate payment|calculate payment|monthly payment|loan calculator|financing calculator|shop by payment)\b/i],
+    ["Test ride form", /\b(test ride|schedule.*ride|book.*ride|demo ride)\b/i],
+    ["Service appointment form", /\b(service appointment|schedule service|service request|book service)\b/i],
+    ["Newsletter / marketing opt-in", /\b(newsletter|subscribe|email updates|special offers)\b/i],
+    ["Inventory lead form", /\b(check availability|unlock price|eprice|get today's price|make an offer|request quote)\b/i]
+  ];
+  for (const [label, regex] of checks) {
+    if (regex.test(haystack)) widgets.add(label);
+  }
+  return [...widgets];
+}
+
+function estimateInventoryCounts(pages: ProspectResearchPage[]) {
+  const inventoryPages = pages.filter(page => /inventory|new|used|pre-owned|preowned|motorcycle/i.test(`${page.url} ${page.title}`));
+  const combined = inventoryPages.map(page => page.text).join("\n");
+  const newExplicit = combined.match(/\bnew\b/gi)?.length ?? 0;
+  const usedExplicit = combined.match(/\b(used|pre-owned|preowned)\b/gi)?.length ?? 0;
+  const stockRefs = combined.match(/\bstock\s*#?\s*[A-Z0-9-]{3,}\b/gi)?.length ?? 0;
+  return {
+    newCount: newExplicit ? `approx ${newExplicit}` : "not confirmed",
+    usedCount: usedExplicit ? `approx ${usedExplicit}` : "not confirmed",
+    totalSignals: stockRefs || newExplicit + usedExplicit,
+    note: "Counts are crawler estimates from visible page text and may overcount labels repeated in filters. Verify with inventory filters/provider feed before pricing."
+  };
+}
+
+function findLocationSignals(pages: ProspectResearchPage[]) {
+  const combined = pages.map(page => page.text).join(" ").slice(0, 60000);
+  const phones = [...new Set([...combined.matchAll(/\(?\b\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g)].map(match => match[0]))].slice(0, 5);
+  const addresses = [...new Set([...combined.matchAll(/\b\d{2,6}\s+[A-Z0-9][A-Za-z0-9 .'-]{3,80}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Dr|Drive|Ln|Lane|Hwy|Highway|Pkwy|Parkway)\b[^.]{0,80}/g)].map(match => compactWhitespace(match[0])))]
+    .slice(0, 5);
+  return { phones, addresses };
+}
+
+function summarizeDetectedForms(pages: ProspectResearchPage[]) {
+  return pages
+    .flatMap(page => page.forms.map(form => `${page.url}: ${form}`))
+    .slice(0, 12);
+}
+
+function summarizeRelevantPages(pages: ProspectResearchPage[], keywords: string[]) {
+  return pages
+    .filter(page => keywords.some(keyword => `${page.url} ${page.title} ${page.text.slice(0, 1000)}`.toLowerCase().includes(keyword)))
+    .map(page => `${page.title || "Untitled"} - ${page.url}`)
+    .slice(0, 8);
+}
+
+async function runProspectResearch(task: AgentTask): Promise<{ summary: string; links: string[] }> {
+  const websiteFromInstructions = task.instructions.match(/Website:\s*(.+)/i)?.[1]?.trim();
+  const rootUrl = normalizeProspectResearchUrl(websiteFromInstructions);
+  if (!rootUrl) {
+    return {
+      summary: [
+        "Sources Used",
+        "- No dealer website was provided, so automated crawling could not start. Add the official dealer website to the prospect and rerun Research.",
+        "",
+        "Recommended Next Step",
+        "- Add the dealer website URL, then rerun the research task."
+      ].join("\n"),
+      links: []
+    };
+  }
+
+  const home = await fetchProspectResearchPage(rootUrl);
+  if (!home) {
+    return {
+      summary: [
+        "Sources Used",
+        `- Attempted: ${rootUrl}`,
+        "",
+        "Setup Risks",
+        "- The website could not be fetched by the automated crawler. The site may block bots, require JavaScript rendering, or be temporarily unavailable.",
+        "",
+        "Recommended Next Step",
+        "- Verify the URL in a browser and consider manual research if the site blocks server-side fetches."
+      ].join("\n"),
+      links: [rootUrl]
+    };
+  }
+
+  const targetUrls = chooseProspectResearchUrls(home, rootUrl);
+  const pageResults = await Promise.all(targetUrls.map(url => fetchProspectResearchPage(url, 9000)));
+  const pages = [home, ...pageResults.filter((page): page is ProspectResearchPage => !!page)]
+    .filter((page, index, list) => list.findIndex(other => other.url === page.url) === index)
+    .slice(0, 14);
+
+  const providers = detectWebsiteProviders(pages);
+  const widgets = detectLeadWidgets(pages);
+  const inventory = estimateInventoryCounts(pages);
+  const location = findLocationSignals(pages);
+  const forms = summarizeDetectedForms(pages);
+  const staffPages = summarizeRelevantPages(pages, ["staff", "team", "about", "manager", "owner", "sales", "finance"]);
+  const leadPages = summarizeRelevantPages(pages, ["contact", "trade", "sell", "finance", "payment", "prequal", "test ride", "service", "quote", "availability"]);
+  const now = new Date().toLocaleString("en-US", { timeZone: "America/New_York" });
+  const score = Math.min(100, 35 + Math.min(25, inventory.totalSignals) + widgets.length * 5 + providers.length * 3);
+
+  const summary = [
+    "Sources Used",
+    `- Official website used: ${home.url}`,
+    `- Checked: ${now} ET`,
+    ...pages.slice(0, 10).map(page => `- ${page.title || "Untitled"}: ${page.url}`),
+    "",
+    "Inventory Count",
+    `- New bikes listed: ${inventory.newCount}`,
+    `- Used/pre-owned bikes listed: ${inventory.usedCount}`,
+    `- Inventory signal count: ${inventory.totalSignals || "not confirmed"}`,
+    `- Note: ${inventory.note}`,
+    "",
+    "Dealer Profile",
+    `- Location/address signals: ${location.addresses.length ? location.addresses.join("; ") : "not found in crawled pages"}`,
+    `- Phone signals: ${location.phones.length ? location.phones.join(", ") : "not found in crawled pages"}`,
+    `- Website/provider clues: ${providers.length ? providers.join(", ") : "not detected"}`,
+    `- Single vs group: ${/group|locations|dealerships|our stores/i.test(pages.map(page => page.text).join(" ")) ? "possible group/multi-location clues found" : "not confirmed"}`,
+    "",
+    "Team/Employees",
+    staffPages.length ? staffPages.map(page => `- ${page}`).join("\n") : "- No staff/team page was found in the crawled pages.",
+    "",
+    "Lead Capture/Tech Stack",
+    `- Lead widgets/forms detected: ${widgets.length ? widgets.join(", ") : "none detected from static crawl"}`,
+    `- Finance/payment estimator signals: ${widgets.some(widget => widget.includes("Payment") || widget.includes("Finance")) ? "detected" : "not detected"}`,
+    leadPages.length ? leadPages.map(page => `- Lead page: ${page}`).join("\n") : "- No dedicated lead pages found in crawled pages.",
+    forms.length ? forms.map(form => `- Form: ${form}`).join("\n") : "- No raw HTML forms detected. Forms may be injected by JavaScript.",
+    "",
+    "Opportunity Score",
+    `- ${score}/100 preliminary fit score based on inventory signals, lead capture surface area, and provider clues.`,
+    "",
+    "Setup Risks",
+    "- Inventory counts are static-crawl estimates and should be verified against the live inventory provider.",
+    providers.length ? "- Website provider/integration clues should be validated before setup." : "- Website provider was not detected; manual inspection may be needed.",
+    widgets.length ? "- Existing widgets may overlap with LeadRider routing, opt-in, and attribution." : "- Lead forms/widgets may be JavaScript-rendered and require browser-based inspection.",
+    "",
+    "Recommended Next Step",
+    "- Review the detected lead forms/widgets and confirm where each lead type currently routes before proposing implementation.",
+    "- If this is an active opportunity, schedule a demo and use the research summary to tailor the sales follow-up."
+  ].join("\n");
+
+  return { summary, links: pages.map(page => page.url).slice(0, 20) };
+}
+
+function queueProspectResearchTaskExecution(task: AgentTask) {
+  if (task.provider !== "codex" || task.kind !== "prospect_research") return;
+  if (task.status !== "queued" && task.status !== "needs_approval") return;
+  if (task.output?.summary?.trim()) return;
+  if (runningProspectResearchTasks.has(task.id)) return;
+  runningProspectResearchTasks.add(task.id);
+  void (async () => {
+    try {
+      await updateAgentTaskStatus(task.id, "running");
+      const result = await runProspectResearch(task);
+      await updateAgentTaskStatus(task.id, "completed", result);
+    } catch (err: any) {
+      await updateAgentTaskStatus(task.id, "failed", {
+        summary: `Automated prospect research failed: ${err?.message ?? err}`
+      }).catch(() => null);
+    } finally {
+      runningProspectResearchTasks.delete(task.id);
+    }
+  })();
+}
+
 app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -30272,6 +30638,9 @@ app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =>
   const limit = Number(req.query.limit ?? "200");
   const scope = String(req.query.scope ?? "").trim().toLowerCase();
   let tasks = await listAgentTasks(Number.isFinite(limit) ? limit : 200);
+  for (const task of tasks.slice(0, 50)) {
+    queueProspectResearchTaskExecution(task);
+  }
   if (scope === "support") {
     tasks = tasks.filter(task => {
       const text = `${task.title}\n${task.instructions}`.toLowerCase();
@@ -30331,6 +30700,7 @@ app.post("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =
     }
   });
   queueClaudeTaskExecution(task);
+  queueProspectResearchTaskExecution(task);
   return res.json({ ok: true, task });
 });
 
