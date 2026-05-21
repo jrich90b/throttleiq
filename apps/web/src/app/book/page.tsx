@@ -304,6 +304,13 @@ function BookingPageInner() {
                 </a>
               </div>
             ) : null}
+            {isCommandBooking ? (
+              <div className="text-sm text-gray-700">
+                {success.customerConfirmationSent
+                  ? "A confirmation email with the Zoom link was sent."
+                  : "The meeting is booked. Confirmation email could not be sent automatically."}
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="space-y-6">

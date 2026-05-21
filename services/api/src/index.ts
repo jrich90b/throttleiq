@@ -26407,6 +26407,54 @@ async function getCommandBookingUser(userRef: string) {
   );
 }
 
+function commandBookingEmailBody(input: {
+  recipientName: string;
+  hostName: string;
+  whenText: string;
+  zoomJoinUrl?: string;
+  eventLink?: string;
+  notes?: string;
+}) {
+  return [
+    `Hi ${input.recipientName || "there"},`,
+    "",
+    `Your LeadRider demo with ${input.hostName} is confirmed for ${input.whenText}.`,
+    input.zoomJoinUrl ? `Zoom link: ${input.zoomJoinUrl}` : "",
+    input.eventLink ? `Calendar event: ${input.eventLink}` : "",
+    input.notes ? `Notes: ${input.notes}` : "",
+    "",
+    "Talk soon,",
+    "LeadRider"
+  ].filter(line => line !== "").join("\n");
+}
+
+function commandBookingInternalEmailBody(input: {
+  hostName: string;
+  prospectName: string;
+  prospectEmail?: string;
+  prospectPhone?: string;
+  whenText: string;
+  zoomJoinUrl?: string;
+  eventLink?: string;
+  notes?: string;
+}) {
+  return [
+    `Hi ${input.hostName || "there"},`,
+    "",
+    "A LeadRider demo was booked from your Command booking link.",
+    "",
+    `Prospect: ${input.prospectName}`,
+    input.prospectEmail ? `Email: ${input.prospectEmail}` : "",
+    input.prospectPhone ? `Phone: ${input.prospectPhone}` : "",
+    `Time: ${input.whenText}`,
+    input.zoomJoinUrl ? `Zoom link: ${input.zoomJoinUrl}` : "",
+    input.eventLink ? `Calendar event: ${input.eventLink}` : "",
+    input.notes ? `Notes: ${input.notes}` : "",
+    "",
+    "LeadRider Command"
+  ].filter(line => line !== "").join("\n");
+}
+
 app.get("/public/command-booking/config", async (req, res) => {
   const userRef = String(req.query?.user ?? "").trim();
   const user = await getCommandBookingUser(userRef);
@@ -26486,6 +26534,9 @@ app.post("/public/command-booking/book", async (req, res) => {
     String(lead.name ?? "").trim() ||
     [String(lead.firstName ?? "").trim(), String(lead.lastName ?? "").trim()].filter(Boolean).join(" ").trim() ||
     String(lead.email ?? lead.phone ?? "LeadRider prospect").trim();
+  const leadEmail = extractEmailFromText(String(lead.email ?? ""));
+  const leadPhone = String(lead.phone ?? "").replace(/\s+/g, " ").trim();
+  const hostName = user.name || [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email;
   const cfg = commandBookingSchedulerConfig(user.commandCalendarId);
   const cal = await getAuthedCalendarClient();
   const fb = await queryFreeBusy(cal, [user.commandCalendarId], slot.start, slot.end, cfg.timezone);
@@ -26537,6 +26588,10 @@ app.post("/public/command-booking/book", async (req, res) => {
   }
   let event: any;
   try {
+    const attendees = [
+      leadEmail ? { email: leadEmail, displayName: name } : null,
+      user.email ? { email: user.email, displayName: hostName } : null
+    ].filter(Boolean) as Array<{ email: string; displayName?: string }>;
     event = await insertEvent(
       cal,
       user.commandCalendarId,
@@ -26553,7 +26608,13 @@ app.post("/public/command-booking/book", async (req, res) => {
         `Notes: ${lead.notes ?? ""}`
       ].join("\n"),
       slot.start,
-      slot.end
+      slot.end,
+      undefined,
+      {
+        attendees,
+        location: zoomMeeting?.joinUrl,
+        sendUpdates: "none"
+      }
     );
   } catch (err: any) {
     const message = String(err?.message ?? err?.response?.data?.error?.message ?? "").trim();
@@ -26570,6 +26631,54 @@ app.post("/public/command-booking/book", async (req, res) => {
       zoomCreated: !!zoomMeeting?.joinUrl
     });
   }
+  const whenText = slot.startLocal ?? fmtLocal(slot.start, cfg.timezone);
+  const confirmationErrors: string[] = [];
+  let customerConfirmationSent = false;
+  let commandUserConfirmationSent = false;
+  if (leadEmail) {
+    try {
+      await sendPersonalGmailEmail({
+        to: leadEmail,
+        subject: `LeadRider demo confirmed - ${whenText}`,
+        bodyText: commandBookingEmailBody({
+          recipientName: name,
+          hostName,
+          whenText,
+          zoomJoinUrl: zoomMeeting?.joinUrl,
+          eventLink: event.htmlLink,
+          notes: String(lead.notes ?? "").trim()
+        })
+      });
+      customerConfirmationSent = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Customer confirmation email failed.";
+      confirmationErrors.push(`customer:${message}`);
+      console.error("[command-booking] customer.confirmation.failed", { userId: user.id, email: leadEmail, error: message });
+    }
+  }
+  if (user.email && user.email.toLowerCase() !== leadEmail?.toLowerCase()) {
+    try {
+      await sendPersonalGmailEmail({
+        to: user.email,
+        subject: `New LeadRider demo booked - ${name}`,
+        bodyText: commandBookingInternalEmailBody({
+          hostName,
+          prospectName: name,
+          prospectEmail: leadEmail,
+          prospectPhone: leadPhone,
+          whenText,
+          zoomJoinUrl: zoomMeeting?.joinUrl,
+          eventLink: event.htmlLink,
+          notes: String(lead.notes ?? "").trim()
+        })
+      });
+      commandUserConfirmationSent = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Command user confirmation email failed.";
+      confirmationErrors.push(`command_user:${message}`);
+      console.error("[command-booking] user.confirmation.failed", { userId: user.id, email: user.email, error: message });
+    }
+  }
   return res.json({
     ok: true,
     command: true,
@@ -26578,8 +26687,11 @@ app.post("/public/command-booking/book", async (req, res) => {
     zoomJoinUrl: zoomMeeting?.joinUrl,
     zoomCreated: !!zoomMeeting?.joinUrl,
     zoomError,
-    whenText: slot.startLocal ?? fmtLocal(slot.start, cfg.timezone),
-    user: { id: user.id, name: user.name || user.email, email: user.email }
+    customerConfirmationSent,
+    commandUserConfirmationSent,
+    confirmationErrors,
+    whenText,
+    user: { id: user.id, name: hostName, email: user.email }
   });
 });
 

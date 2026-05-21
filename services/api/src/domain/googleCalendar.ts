@@ -303,15 +303,23 @@ export async function insertEvent(
   description: string,
   startIso: string,
   endIso: string,
-  colorId?: string
+  colorId?: string,
+  options?: {
+    attendees?: Array<{ email: string; displayName?: string }>;
+    location?: string;
+    sendUpdates?: "all" | "externalOnly" | "none";
+  }
 ) {
   console.log("[gcal] insertEvent.request", { calendarId, summary, startIso, endIso, timeZone });
   try {
     const resp = await calendar.events.insert({
       calendarId,
+      ...(options?.sendUpdates ? { sendUpdates: options.sendUpdates } : {}),
       requestBody: {
         summary,
         description,
+        ...(options?.location ? { location: options.location } : {}),
+        ...(options?.attendees?.length ? { attendees: options.attendees } : {}),
         ...(colorId ? { colorId } : {}),
         start: { dateTime: startIso, timeZone },
         end: { dateTime: endIso, timeZone }
