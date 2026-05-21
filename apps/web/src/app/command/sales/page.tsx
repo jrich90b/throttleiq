@@ -93,6 +93,20 @@ type ProspectForm = {
   notes: string;
 };
 
+type AgreementForm = {
+  legalName: string;
+  dbaName: string;
+  dealerAddress: string;
+  signerName: string;
+  signerEmail: string;
+  signerTitle: string;
+  setupFee: string;
+  monthlyFee: string;
+  contractTerm: string;
+  billingStart: string;
+  agreementUrl: string;
+};
+
 const emptyForm: ProspectForm = {
   dealerName: "",
   contactName: "",
@@ -112,6 +126,20 @@ const emptyForm: ProspectForm = {
   emailSenderType: "personal",
   emailSenderAddress: "joe.hartrich@leadrider.ai",
   notes: ""
+};
+
+const emptyAgreementForm: AgreementForm = {
+  legalName: "",
+  dbaName: "",
+  dealerAddress: "",
+  signerName: "",
+  signerEmail: "",
+  signerTitle: "",
+  setupFee: "",
+  monthlyFee: "$999/month",
+  contractTerm: "Month-to-month",
+  billingStart: "",
+  agreementUrl: ""
 };
 
 const stageLabels: Record<SalesProspectStage, string> = {
@@ -220,6 +248,17 @@ function moneyValue(value?: string) {
   return Number(match[0].replace(/,/g, "")) || 0;
 }
 
+function agreementFormForProspect(prospect: SalesProspect | null): AgreementForm {
+  return {
+    ...emptyAgreementForm,
+    legalName: prospect?.dealerName || "",
+    dbaName: prospect?.dealerName || "",
+    signerName: prospect?.contactName || "",
+    signerEmail: prospect?.contactEmail || "",
+    monthlyFee: prospect?.expectedMonthly || emptyAgreementForm.monthlyFee
+  };
+}
+
 function isAtLeastStage(stage: SalesProspectStage | undefined, minimum: SalesProspectStage) {
   const currentIndex = stageProgression.indexOf(stage || "new");
   const minimumIndex = stageProgression.indexOf(minimum);
@@ -256,6 +295,10 @@ export default function SalesFunnelPage() {
   const [draftSendStatus, setDraftSendStatus] = useState<Record<string, string>>({});
   const [currentUser, setCurrentUser] = useState<CommandUser | null>(null);
   const [bookingLinkCopied, setBookingLinkCopied] = useState(false);
+  const [agreementForm, setAgreementForm] = useState<AgreementForm>(emptyAgreementForm);
+  const [agreementBusy, setAgreementBusy] = useState(false);
+  const [agreementSendBusy, setAgreementSendBusy] = useState(false);
+  const [dealerSetupLink, setDealerSetupLink] = useState<string>("");
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -284,6 +327,8 @@ export default function SalesFunnelPage() {
     if (selected) {
       setSelectedId(selected.id);
       setForm(toForm(selected));
+      setAgreementForm(agreementFormForProspect(selected));
+      setDealerSetupLink("");
     }
   }, [selected?.id]);
 
@@ -310,6 +355,16 @@ export default function SalesFunnelPage() {
     return agentTasks.find(task =>
       task.kind === "email" &&
       /^Draft sales follow-up/i.test(task.title) &&
+      (task.clientName || "").trim().toLowerCase() === selectedName
+    ) ?? null;
+  }, [agentTasks, selected]);
+
+  const latestOnboardingTask = useMemo(() => {
+    if (!selected) return null;
+    const selectedName = selected.dealerName.trim().toLowerCase();
+    return agentTasks.find(task =>
+      task.kind === "email" &&
+      /^Draft onboarding email/i.test(task.title) &&
       (task.clientName || "").trim().toLowerCase() === selectedName
     ) ?? null;
   }, [agentTasks, selected]);
@@ -369,6 +424,29 @@ export default function SalesFunnelPage() {
   }, [latestSalesEmailTask?.id, latestSalesEmailTask?.status, latestSalesEmailTask?.output?.summary, selected?.id]);
 
   useEffect(() => {
+    if (!selected || latestOnboardingTask?.kind !== "email") return;
+    const hasSummary = Boolean(latestOnboardingTask.output?.summary?.trim());
+    const shouldPoll =
+      latestOnboardingTask.status === "queued" ||
+      latestOnboardingTask.status === "running" ||
+      (!hasSummary && latestOnboardingTask.status === "needs_approval") ||
+      (latestOnboardingTask.status === "completed" && !hasSummary);
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+    const refresh = () => {
+      if (!cancelled) void loadAgentTasks();
+    };
+    const firstRefresh = window.setTimeout(refresh, 2000);
+    const interval = window.setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(firstRefresh);
+      window.clearInterval(interval);
+    };
+  }, [latestOnboardingTask?.id, latestOnboardingTask?.status, latestOnboardingTask?.output?.summary, selected?.id]);
+
+  useEffect(() => {
     if (!latestSalesEmailTask?.id || !latestSalesEmailTask.output?.summary) return;
     setDraftEdits(current =>
       current[latestSalesEmailTask.id] == null
@@ -376,6 +454,15 @@ export default function SalesFunnelPage() {
         : current
     );
   }, [latestSalesEmailTask?.id, latestSalesEmailTask?.output?.summary]);
+
+  useEffect(() => {
+    if (!latestOnboardingTask?.id || !latestOnboardingTask.output?.summary) return;
+    setDraftEdits(current =>
+      current[latestOnboardingTask.id] == null
+        ? { ...current, [latestOnboardingTask.id]: latestOnboardingTask.output?.summary ?? "" }
+        : current
+    );
+  }, [latestOnboardingTask?.id, latestOnboardingTask?.output?.summary]);
 
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
@@ -431,9 +518,9 @@ export default function SalesFunnelPage() {
     if (completedActions.includes(key)) return true;
     if (actionId === "sales_email") return Boolean(latestSalesEmailTask?.output?.summary?.trim());
     if (actionId === "schedule_demo") return Boolean(form.zoomLink || selected.zoomLink);
-    if (actionId === "agreement") return isAtLeastStage(selected.stage, "proposal") || Boolean(form.docusignPacketId || selected.docusignPacketId);
-    if (actionId === "onboarding") return Boolean(form.onboardingEmailThread || selected.onboardingEmailThread);
-    if (actionId === "dealer_setup") return selected.stage === "closed_won";
+    if (actionId === "agreement") return Boolean(form.docusignPacketId || selected.docusignPacketId);
+    if (actionId === "onboarding") return Boolean(form.onboardingEmailThread || selected.onboardingEmailThread || latestOnboardingTask?.output?.summary?.trim());
+    if (actionId === "dealer_setup") return selected.stage === "closed_won" || Boolean(dealerSetupLink);
     return false;
   }
 
@@ -671,6 +758,7 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be created.");
       if (data.prospect) setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
       if (data.prospect) markActionCompleted("dealer_setup", data.prospect.id);
+      if (data.setup?.id) setDealerSetupLink(`/command/clients/new?setup=${encodeURIComponent(data.setup.id)}`);
       if (data.prospect) await advanceProspectStage(data.prospect, "closed_won", `${data.setup.dealerName} is in Dealer Setup.`);
       const setupUrl = `/command/clients/new?setup=${encodeURIComponent(data.setup.id)}`;
       setNotice(`${data.setup.dealerName} is in Dealer Setup. ${data.existing ? "Opening existing setup." : "Opening new setup."}`);
@@ -829,7 +917,7 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
       setAgentTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 100));
       setNotice(`Agent task created: ${data.task.title}.`);
-      if (action === "research" || action === "sales_email") {
+      if (action === "research" || action === "sales_email" || action === "onboarding") {
         window.setTimeout(() => void loadAgentTasks(), 1500);
         window.setTimeout(() => void loadAgentTasks(), 5000);
       }
@@ -840,7 +928,7 @@ export default function SalesFunnelPage() {
         docusign: "agreement",
         research: "research"
       };
-      if (action !== "research" && action !== "sales_email") markActionCompleted(completedActionByTask[action]);
+      if (action !== "research" && action !== "sales_email" && action !== "onboarding") markActionCompleted(completedActionByTask[action]);
       const autoStageByAction: Partial<Record<typeof action, SalesProspectStage>> = {
         sales_email: "contacted",
         docusign: "proposal"
@@ -864,7 +952,165 @@ export default function SalesFunnelPage() {
     setForm(current => ({ ...current, [field]: value }));
   }
 
-  async function updateSalesDraftTask(task: AgentTask, status: AgentTask["status"], summary: string, noticeText: string) {
+  function updateAgreement(field: keyof AgreementForm, value: string) {
+    setAgreementForm(current => ({ ...current, [field]: value }));
+  }
+
+  function missingAgreementFields() {
+    return [
+      !agreementForm.legalName.trim() ? "legal name" : "",
+      !agreementForm.dealerAddress.trim() ? "dealer address" : "",
+      !agreementForm.signerName.trim() ? "signer name" : "",
+      !agreementForm.signerEmail.trim() ? "signer email" : "",
+      !agreementForm.monthlyFee.trim() ? "monthly fee" : "",
+      !agreementForm.contractTerm.trim() ? "contract term" : "",
+      !agreementForm.agreementUrl.trim() ? "agreement PDF/link" : ""
+    ].filter(Boolean);
+  }
+
+  async function createAgreementPacket() {
+    if (!selected) return;
+    const missing = missingAgreementFields();
+    if (missing.length) {
+      setNotice(`Agreement is missing: ${missing.join(", ")}.`);
+      return;
+    }
+    setAgreementBusy(true);
+    try {
+      const saveResp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          plan: form.plan || selected.plan,
+          expectedMonthly: agreementForm.monthlyFee || form.expectedMonthly,
+          contactName: form.contactName || agreementForm.signerName,
+          contactEmail: form.contactEmail || agreementForm.signerEmail
+        })
+      });
+      const saveData = await saveResp.json();
+      if (!saveResp.ok || !saveData?.ok) throw new Error(saveData?.error || "Agreement details could not be saved.");
+      if (saveData.prospect) {
+        setProspects(current => current.map(row => (row.id === saveData.prospect.id ? saveData.prospect : row)));
+        setForm(toForm(saveData.prospect));
+      }
+
+      const setupResp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}/dealer-setup`, { method: "POST" });
+      const setupData = await setupResp.json();
+      if (!setupResp.ok || !setupData?.ok) throw new Error(setupData?.error || "Dealer setup could not be prepared for agreement.");
+      const setup = setupData.setup;
+      if (setup?.id) setDealerSetupLink(`/command/clients/new?setup=${encodeURIComponent(setup.id)}`);
+
+      const setupPatchResp = await fetch(`/api/dealer-setups/${encodeURIComponent(setup.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legalName: agreementForm.legalName,
+          dbaName: agreementForm.dbaName,
+          dealerAddress: agreementForm.dealerAddress,
+          primaryContact: [agreementForm.signerName, agreementForm.signerEmail].filter(Boolean).join(" - "),
+          plan: form.plan,
+          setupFee: agreementForm.setupFee,
+          monthlyFee: agreementForm.monthlyFee,
+          contractTerm: agreementForm.contractTerm,
+          billingStart: agreementForm.billingStart,
+          notes: [
+            setup.notes || "",
+            `Agreement signer: ${agreementForm.signerName} <${agreementForm.signerEmail}>`,
+            agreementForm.signerTitle ? `Signer title: ${agreementForm.signerTitle}` : ""
+          ].filter(Boolean).join("\n")
+        })
+      });
+      const setupPatchData = await setupPatchResp.json();
+      if (!setupPatchResp.ok || !setupPatchData?.ok) throw new Error(setupPatchData?.error || "Dealer setup agreement fields could not be saved.");
+
+      const packetResp = await fetch(`/api/dealer-setups/${encodeURIComponent(setup.id)}/esign/packet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "docusign",
+          agreementTitle: `${agreementForm.legalName || selected.dealerName} LeadRider Agreement`,
+          signerName: agreementForm.signerName,
+          signerEmail: agreementForm.signerEmail,
+          signerTitle: agreementForm.signerTitle,
+          agreementUrl: agreementForm.agreementUrl,
+          notes: [
+            `Plan: ${form.plan || "not selected"}`,
+            `Monthly fee: ${agreementForm.monthlyFee}`,
+            agreementForm.setupFee ? `Setup fee: ${agreementForm.setupFee}` : "",
+            `Contract term: ${agreementForm.contractTerm}`,
+            agreementForm.billingStart ? `Billing start: ${agreementForm.billingStart}` : ""
+          ].filter(Boolean).join("\n")
+        })
+      });
+      const packetData = await packetResp.json();
+      if (!packetResp.ok || !packetData?.ok) throw new Error(packetData?.error || "Agreement packet could not be created.");
+
+      const prospectResp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...toForm(saveData.prospect || selected),
+          docusignPacketId: packetData.packet.id,
+          stage: "agreement_sent",
+          nextStep: `Agreement packet ready: ${packetData.packet.id}`
+        })
+      });
+      const prospectData = await prospectResp.json();
+      if (!prospectResp.ok || !prospectData?.ok) throw new Error(prospectData?.error || "Prospect agreement status could not be saved.");
+      setProspects(current => current.map(row => (row.id === prospectData.prospect.id ? prospectData.prospect : row)));
+      setForm(toForm(prospectData.prospect));
+      markActionCompleted("agreement", prospectData.prospect.id);
+      setNotice(`Agreement packet created for ${prospectData.prospect.dealerName}. Review it before sending.`);
+      await loadAgentTasks();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Agreement packet could not be created.");
+    } finally {
+      setAgreementBusy(false);
+    }
+  }
+
+  async function sendAgreementPacket() {
+    if (!selected) return;
+    const packetId = form.docusignPacketId || selected.docusignPacketId;
+    if (!packetId) {
+      setNotice("Create the agreement packet before sending with DocuSign.");
+      return;
+    }
+    setAgreementSendBusy(true);
+    try {
+      const resp = await fetch(`/api/esign/packets/${encodeURIComponent(packetId)}/docusign/send`, {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agreement could not be sent with DocuSign.");
+      const nextStep = data.envelopeUrl
+        ? `Agreement sent with DocuSign: ${data.envelopeUrl}`
+        : `Agreement sent with DocuSign: ${data.envelopeId || packetId}`;
+      const prospectResp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          stage: "agreement_sent",
+          nextStep,
+          docusignPacketId: packetId
+        })
+      });
+      const prospectData = await prospectResp.json();
+      if (!prospectResp.ok || !prospectData?.ok) throw new Error(prospectData?.error || "Prospect agreement send status could not be saved.");
+      setProspects(current => current.map(row => (row.id === prospectData.prospect.id ? prospectData.prospect : row)));
+      setForm(toForm(prospectData.prospect));
+      markActionCompleted("agreement", prospectData.prospect.id);
+      setNotice(`Agreement sent with DocuSign for ${prospectData.prospect.dealerName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Agreement could not be sent with DocuSign.");
+    } finally {
+      setAgreementSendBusy(false);
+    }
+  }
+
+  async function updateSalesDraftTask(task: AgentTask, status: AgentTask["status"], summary: string, noticeText: string, actionId: SalesActionId = "sales_email") {
     setDraftBusy(true);
     try {
       const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
@@ -876,7 +1122,7 @@ export default function SalesFunnelPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Draft could not be updated.");
       setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task.output?.summary || summary }));
-      if (status === "completed") markActionCompleted("sales_email");
+      if (status === "completed") markActionCompleted(actionId);
       setNotice(noticeText);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Draft could not be updated.");
@@ -916,7 +1162,7 @@ export default function SalesFunnelPage() {
     }
   }
 
-  async function approveAndSendSalesTask(task: AgentTask) {
+  async function approveAndSendSalesTask(task: AgentTask, actionId: SalesActionId = "sales_email") {
     if (!selected) return;
     const edited = draftEdits[task.id] ?? task.output?.summary ?? "";
     const parsed = parseEmailDraft(edited);
@@ -941,7 +1187,7 @@ export default function SalesFunnelPage() {
       }
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
-      markActionCompleted("sales_email");
+      markActionCompleted(actionId);
       setDraftSendStatus(current => ({ ...current, [task.id]: `Gmail accepted the send to ${form.contactEmail || selected.contactEmail}.` }));
       setNotice("Sales email approved and sent from the connected personal Gmail inbox.");
       await loadAgentTasks();
@@ -954,44 +1200,44 @@ export default function SalesFunnelPage() {
     }
   }
 
-  function renderSalesDraftReview() {
-    if (!latestSalesEmailTask) return null;
-    const draftText = draftEdits[latestSalesEmailTask.id] ?? latestSalesEmailTask.output?.summary ?? "";
-    const hasOutput = Boolean(latestSalesEmailTask.output?.summary?.trim());
-    const gmailDraftCreated = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
-    const gmailSent = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
-    const sentTo = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-to:") || form.contactEmail || selected?.contactEmail || "";
-    const sentAt = taskLinkValue(latestSalesEmailTask, "personal-gmail-sent-at:");
+  function renderEmailDraftReview(task: AgentTask | null, actionId: SalesActionId) {
+    if (!task) return null;
+    const draftText = draftEdits[task.id] ?? task.output?.summary ?? "";
+    const hasOutput = Boolean(task.output?.summary?.trim());
+    const gmailDraftCreated = task.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
+    const gmailSent = task.output?.links?.some(link => link.startsWith("personal-gmail-sent:"));
+    const sentTo = taskLinkValue(task, "personal-gmail-sent-to:") || form.contactEmail || selected?.contactEmail || "";
+    const sentAt = taskLinkValue(task, "personal-gmail-sent-at:");
     const sentMessage = gmailSent
       ? `Gmail accepted this send${sentTo ? ` to ${sentTo}` : ""}${sentAt ? ` on ${formatDate(sentAt)}` : ""}. Creating another Gmail draft will not send another email.`
       : "";
-    const sendStatus = draftSendStatus[latestSalesEmailTask.id];
+    const sendStatus = draftSendStatus[task.id];
     return (
       <div className="lr-ceo-draft-review">
         <div className="lr-ceo-draft-review-head">
-          <span>{latestSalesEmailTask.provider}</span>
-          <strong>{taskStatusLabel(latestSalesEmailTask.status)}</strong>
-          <small>Updated {formatDate(latestSalesEmailTask.updatedAt)}</small>
+          <span>{task.provider}</span>
+          <strong>{taskStatusLabel(task.status)}</strong>
+          <small>Updated {formatDate(task.updatedAt)}</small>
         </div>
         {hasOutput ? (
           <>
             <textarea
               value={draftText}
-              onChange={event => setDraftEdits(current => ({ ...current, [latestSalesEmailTask.id]: event.target.value }))}
+              onChange={event => setDraftEdits(current => ({ ...current, [task.id]: event.target.value }))}
               aria-label="Sales email draft"
             />
             <div className="lr-ceo-action-row">
               <button
                 type="button"
                 className="lr-ceo-secondary-btn"
-                onClick={() => updateSalesDraftTask(latestSalesEmailTask, "needs_approval", draftText, "Sales draft edits saved.")}
+                onClick={() => updateSalesDraftTask(task, "needs_approval", draftText, "Draft edits saved.", actionId)}
                 disabled={draftBusy}
               >
                 Save edits
               </button>
               <button
                 type="button"
-                onClick={() => createGmailDraftFromSalesTask(latestSalesEmailTask)}
+                onClick={() => createGmailDraftFromSalesTask(task)}
                 disabled={draftBusy || !(form.contactEmail || selected?.contactEmail)}
               >
                 {gmailDraftCreated ? "Create another Gmail draft" : "Create Gmail draft"}
@@ -999,7 +1245,7 @@ export default function SalesFunnelPage() {
               <button
                 type="button"
                 className="lr-ceo-secondary-btn"
-                onClick={() => approveAndSendSalesTask(latestSalesEmailTask)}
+                onClick={() => approveAndSendSalesTask(task, actionId)}
                 disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailSent}
               >
                 {gmailSent ? "Sent by Gmail" : "Approve and send"}
@@ -1009,10 +1255,11 @@ export default function SalesFunnelPage() {
                 className="lr-ceo-link-btn"
                 onClick={() =>
                   updateSalesDraftTask(
-                    latestSalesEmailTask,
+                    task,
                     "completed",
                     `${draftText}\n\nDiscarded by operator.`,
-                    "Sales draft discarded."
+                    "Draft discarded.",
+                    actionId
                   )
                 }
                 disabled={draftBusy}
@@ -1027,6 +1274,10 @@ export default function SalesFunnelPage() {
         )}
       </div>
     );
+  }
+
+  function renderSalesDraftReview() {
+    return renderEmailDraftReview(latestSalesEmailTask, "sales_email");
   }
 
   return (
@@ -1322,15 +1573,42 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Agreement</strong>
-                  <p>Prepare missing legal and pricing fields.</p>
+                  <p>Complete the required legal and pricing fields, then create the packet.</p>
+                  <div className="lr-ceo-agreement-grid">
+                    <label>Legal name<input value={agreementForm.legalName} onChange={e => updateAgreement("legalName", e.target.value)} /></label>
+                    <label>DBA<input value={agreementForm.dbaName} onChange={e => updateAgreement("dbaName", e.target.value)} /></label>
+                    <label>Signer name<input value={agreementForm.signerName} onChange={e => updateAgreement("signerName", e.target.value)} /></label>
+                    <label>Signer email<input value={agreementForm.signerEmail} onChange={e => updateAgreement("signerEmail", e.target.value)} /></label>
+                    <label>Signer title<input value={agreementForm.signerTitle} onChange={e => updateAgreement("signerTitle", e.target.value)} /></label>
+                    <label>Monthly fee<input value={agreementForm.monthlyFee} onChange={e => updateAgreement("monthlyFee", e.target.value)} /></label>
+                    <label>Setup fee<input value={agreementForm.setupFee} onChange={e => updateAgreement("setupFee", e.target.value)} /></label>
+                    <label>Contract term<input value={agreementForm.contractTerm} onChange={e => updateAgreement("contractTerm", e.target.value)} /></label>
+                    <label>Billing start<input value={agreementForm.billingStart} onChange={e => updateAgreement("billingStart", e.target.value)} /></label>
+                    <label className="is-wide">Dealer address<input value={agreementForm.dealerAddress} onChange={e => updateAgreement("dealerAddress", e.target.value)} /></label>
+                    <label className="is-wide">Agreement PDF/link<input value={agreementForm.agreementUrl} onChange={e => updateAgreement("agreementUrl", e.target.value)} placeholder="https://..." /></label>
+                  </div>
+                  {missingAgreementFields().length ? (
+                    <div className="lr-ceo-action-meta is-blocked">
+                      <span>Missing</span>
+                      <small>{missingAgreementFields().join(", ")}</small>
+                    </div>
+                  ) : (
+                    <div className="lr-ceo-action-meta is-ready">
+                      <span>Ready</span>
+                      <small>Agreement packet can be created for approval.</small>
+                    </div>
+                  )}
                   {(form.docusignPacketId || selected?.docusignPacketId) ? (
                     <div className="lr-ceo-action-meta">
                       <span>DocuSign packet</span>
                       <small>{form.docusignPacketId || selected?.docusignPacketId}</small>
+                      <button type="button" className="lr-ceo-link-btn" onClick={sendAgreementPacket} disabled={agreementSendBusy}>
+                        Send with DocuSign
+                      </button>
                     </div>
                   ) : null}
                 </div>
-                {renderActionControl("agreement", "Prepare", () => createAgentTask("docusign"), !selected || taskBusy)}
+                {renderActionControl("agreement", "Create packet", createAgreementPacket, !selected || agreementBusy || Boolean(missingAgreementFields().length))}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
@@ -1342,6 +1620,7 @@ export default function SalesFunnelPage() {
                       <small>{form.onboardingEmailThread || selected?.onboardingEmailThread}</small>
                     </div>
                   ) : null}
+                  {renderEmailDraftReview(latestOnboardingTask, "onboarding")}
                 </div>
                 {renderActionControl("onboarding", "Draft", () => createAgentTask("onboarding"), !selected || taskBusy || !isAtLeastStage(selected.stage, "proposal"))}
               </div>
@@ -1349,6 +1628,13 @@ export default function SalesFunnelPage() {
                 <div>
                   <strong>Dealer setup</strong>
                   <p>Push a won dealer into the onboarding setup checklist.</p>
+                  {dealerSetupLink ? (
+                    <div className="lr-ceo-action-meta is-ready">
+                      <span>Setup checklist</span>
+                      <small>{dealerSetupLink}</small>
+                      <a className="lr-ceo-link-btn" href={dealerSetupLink}>Open setup</a>
+                    </div>
+                  ) : null}
                 </div>
                 {renderActionControl("dealer_setup", "Push", pushToDealerSetup, busy || !selected)}
               </div>

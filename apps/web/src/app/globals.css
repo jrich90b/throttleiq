@@ -910,6 +910,34 @@ a {
   color: #f7fbff;
 }
 
+.lr-ceo-agreement-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.72rem;
+}
+
+.lr-ceo-agreement-grid label {
+  display: grid;
+  gap: 0.34rem;
+  color: #b8c6dc;
+  font-size: 0.84rem;
+}
+
+.lr-ceo-agreement-grid label.is-wide {
+  grid-column: 1 / -1;
+}
+
+.lr-ceo-agreement-grid input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 0 0.66rem;
+  background: rgba(255, 255, 255, 0.045);
+  color: #f7fbff;
+}
+
 .lr-ceo-action-complete {
   display: inline-flex;
   align-items: center;
@@ -1900,6 +1928,7 @@ a {
   .lr-ceo-integration-strip,
   .lr-ceo-user-row,
   .lr-ceo-task-row,
+  .lr-ceo-agreement-grid,
   .lr-ceo-nav {
     grid-template-columns: 1fr;
   }
