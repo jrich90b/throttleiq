@@ -142,6 +142,13 @@ const emptyAgreementForm: AgreementForm = {
   agreementUrl: ""
 };
 
+const planOptions = [
+  { name: "Starter", monthly: "$999/month" },
+  { name: "Growth", monthly: "$1,499/month" },
+  { name: "Pro", monthly: "$1,999/month" },
+  { name: "Enterprise", monthly: "Custom" }
+];
+
 const stageLabels: Record<SalesProspectStage, string> = {
   new: "New",
   contacted: "Contacted",
@@ -952,6 +959,27 @@ export default function SalesFunnelPage() {
     setForm(current => ({ ...current, [field]: value }));
   }
 
+  function updateNewPlan(plan: string) {
+    const option = planOptions.find(row => row.name === plan);
+    setNewForm(current => ({
+      ...current,
+      plan,
+      expectedMonthly: option?.monthly ?? current.expectedMonthly
+    }));
+  }
+
+  function updateSelectedPlan(plan: string) {
+    const option = planOptions.find(row => row.name === plan);
+    setForm(current => ({
+      ...current,
+      plan,
+      expectedMonthly: option?.monthly ?? current.expectedMonthly
+    }));
+    if (option?.monthly) {
+      setAgreementForm(current => ({ ...current, monthlyFee: option.monthly }));
+    }
+  }
+
   function updateAgreement(field: keyof AgreementForm, value: string) {
     setAgreementForm(current => ({ ...current, [field]: value }));
   }
@@ -1389,11 +1417,10 @@ export default function SalesFunnelPage() {
               <label>Email<input value={newForm.contactEmail} onChange={e => updateNew("contactEmail", e.target.value)} placeholder="name@dealer.com" /></label>
               <label>Website<input value={newForm.website} onChange={e => updateNew("website", e.target.value)} placeholder="https://dealer.com" /></label>
               <label>Plan
-                <select value={newForm.plan} onChange={e => updateNew("plan", e.target.value)}>
-                  <option>Starter</option>
-                  <option>Growth</option>
-                  <option>Pro</option>
-                  <option>Enterprise</option>
+                <select value={newForm.plan} onChange={e => updateNewPlan(e.target.value)}>
+                  {planOptions.map(option => (
+                    <option key={option.name} value={option.name}>{option.name}</option>
+                  ))}
                 </select>
               </label>
               <label>Expected monthly<input value={newForm.expectedMonthly} onChange={e => updateNew("expectedMonthly", e.target.value)} placeholder="$999/month" /></label>
@@ -1468,7 +1495,14 @@ export default function SalesFunnelPage() {
                   <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
                   <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
                   <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
-                  <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
+                  <label>Plan
+                    <select value={form.plan} onChange={e => updateSelectedPlan(e.target.value)}>
+                      <option value="">Select plan</option>
+                      {planOptions.map(option => (
+                        <option key={option.name} value={option.name}>{option.name}</option>
+                      ))}
+                    </select>
+                  </label>
                   <label>Expected monthly<input value={form.expectedMonthly} onChange={e => updateForm("expectedMonthly", e.target.value)} /></label>
                   <label>Next step<textarea value={form.nextStep} onChange={e => updateForm("nextStep", e.target.value)} /></label>
                   <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
