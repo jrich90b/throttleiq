@@ -31678,6 +31678,8 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
   const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
   if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
   const stageRaw = String(req.body?.stage ?? "new").trim().toLowerCase();
+  const creatorName = String(user?.name ?? user?.email ?? "").replace(/\s+/g, " ").trim();
+  const creatorEmail = String(user?.email ?? "").trim();
   const prospect = await addSalesProspect({
     dealerName,
     contactName: req.body?.contactName,
@@ -31685,7 +31687,7 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
     contactPhone: req.body?.contactPhone,
     website: req.body?.website,
     stage: allowedSalesProspectStages.includes(stageRaw as SalesProspectStage) ? (stageRaw as SalesProspectStage) : "new",
-    owner: req.body?.owner,
+    owner: req.body?.owner || creatorName,
     leadVolume: req.body?.leadVolume,
     plan: req.body?.plan,
     expectedMonthly: req.body?.expectedMonthly,
@@ -31694,8 +31696,8 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
     zoomLink: req.body?.zoomLink,
     docusignPacketId: req.body?.docusignPacketId,
     onboardingEmailThread: req.body?.onboardingEmailThread,
-    emailSenderType: req.body?.emailSenderType,
-    emailSenderAddress: req.body?.emailSenderAddress,
+    emailSenderType: req.body?.emailSenderType || "personal",
+    emailSenderAddress: req.body?.emailSenderAddress || creatorEmail || "joe.hartrich@leadrider.ai",
     notes: req.body?.notes
   });
   return res.json({ ok: true, prospect });

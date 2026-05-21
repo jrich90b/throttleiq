@@ -173,6 +173,10 @@ function labelForSender(sender: ProspectForm["emailSenderType"] | undefined) {
   return emailSenderOptions.find(option => option.value === sender)?.label || "Personal sales";
 }
 
+function visibleSenderAddress(prospect: SalesProspect | null, form: ProspectForm) {
+  return form.emailSenderAddress || prospect?.emailSenderAddress || "joe.hartrich@leadrider.ai";
+}
+
 function formatDate(value?: string) {
   if (!value) return "No date";
   const date = new Date(value);
@@ -727,10 +731,6 @@ export default function SalesFunnelPage() {
     setForm(current => ({ ...current, [field]: value }));
   }
 
-  function updateEmailSender(value: ProspectForm["emailSenderType"]) {
-    setForm(current => ({ ...current, emailSenderType: value, emailSenderAddress: emailAddressForSender(value) }));
-  }
-
   return (
     <main className="lr-ceo-shell">
       <aside className="lr-ceo-sidebar">
@@ -839,7 +839,6 @@ export default function SalesFunnelPage() {
               <label>Contact name<input value={newForm.contactName} onChange={e => updateNew("contactName", e.target.value)} placeholder="Primary contact" /></label>
               <label>Email<input value={newForm.contactEmail} onChange={e => updateNew("contactEmail", e.target.value)} placeholder="name@dealer.com" /></label>
               <label>Website<input value={newForm.website} onChange={e => updateNew("website", e.target.value)} placeholder="https://dealer.com" /></label>
-              <label>Owner<input value={newForm.owner} onChange={e => updateNew("owner", e.target.value)} placeholder="Salesperson" /></label>
               <label>Plan
                 <select value={newForm.plan} onChange={e => updateNew("plan", e.target.value)}>
                   <option>Starter</option>
@@ -904,7 +903,12 @@ export default function SalesFunnelPage() {
                 <p className="lr-ceo-kicker">Selected prospect</p>
                 <h3>{selected?.dealerName || "No prospect selected"}</h3>
               </div>
-              {selected ? <span className="lr-ceo-pill-orange">{stageLabels[selected.stage]}</span> : null}
+              {selected ? (
+                <div className="lr-ceo-title-tags">
+                  <span className="lr-ceo-pill-orange">{stageLabels[selected.stage]}</span>
+                  {form.owner || selected.owner ? <span className="lr-ceo-pill-blue">{form.owner || selected.owner}</span> : null}
+                </div>
+              ) : null}
             </div>
             {selected ? (
               <>
@@ -914,19 +918,9 @@ export default function SalesFunnelPage() {
                   <label>Email<input value={form.contactEmail} onChange={e => updateForm("contactEmail", e.target.value)} /></label>
                   <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
                   <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
-                  <label>Owner<input value={form.owner} onChange={e => updateForm("owner", e.target.value)} /></label>
                   <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
                   <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
                   <label>Expected monthly<input value={form.expectedMonthly} onChange={e => updateForm("expectedMonthly", e.target.value)} /></label>
-                  <label>Zoom/Fathom link<input value={form.zoomLink} onChange={e => updateForm("zoomLink", e.target.value)} placeholder="Meeting link" /></label>
-                  <label>DocuSign packet<input value={form.docusignPacketId} onChange={e => updateForm("docusignPacketId", e.target.value)} placeholder="Packet id or URL" /></label>
-                  <label>Onboarding email thread<input value={form.onboardingEmailThread} onChange={e => updateForm("onboardingEmailThread", e.target.value)} placeholder="onboarding@leadrider.ai thread" /></label>
-                  <label>Email sender
-                    <select value={form.emailSenderType} onChange={e => updateEmailSender(e.target.value as ProspectForm["emailSenderType"])}>
-                      {emailSenderOptions.map(option => <option key={option.value} value={option.value}>{option.label} - {option.email}</option>)}
-                    </select>
-                  </label>
-                  <label>Sender address<input value={form.emailSenderAddress} onChange={e => updateForm("emailSenderAddress", e.target.value)} /></label>
                   <label>Next step<textarea value={form.nextStep} onChange={e => updateForm("nextStep", e.target.value)} /></label>
                   <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
                 </div>
@@ -981,7 +975,11 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Sales follow-up</strong>
-                  <p>Draft from {form.emailSenderAddress || "joe.hartrich@leadrider.ai"}.</p>
+                  <p>Draft from the prospect owner’s sales inbox.</p>
+                  <div className="lr-ceo-action-meta">
+                    <span>{labelForSender(form.emailSenderType || selected?.emailSenderType || "personal")}</span>
+                    <small>{visibleSenderAddress(selected, form)}</small>
+                  </div>
                 </div>
                 {renderActionControl("sales_email", "Draft", () => createAgentTask("sales_email"), !selected || taskBusy)}
               </div>
@@ -989,11 +987,16 @@ export default function SalesFunnelPage() {
                 <div>
                   <strong>Schedule demo</strong>
                   <p>{form.zoomLink || selected?.zoomLink ? "Zoom link saved on this prospect." : "Pick a meeting time and create a Zoom link."}</p>
+                  {(form.zoomLink || selected?.zoomLink) ? (
+                    <div className="lr-ceo-action-meta">
+                      <span>Zoom/Fathom link</span>
+                      <small>{form.zoomLink || selected?.zoomLink}</small>
+                    </div>
+                  ) : null}
                   <label className="lr-ceo-inline-field">
                     Demo meeting time
                     <input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} />
                   </label>
-                  {(form.zoomLink || selected?.zoomLink) ? <small>{form.zoomLink || selected?.zoomLink}</small> : null}
                 </div>
                 {renderActionControl("schedule_demo", "Schedule", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
               </div>
@@ -1001,6 +1004,12 @@ export default function SalesFunnelPage() {
                 <div>
                   <strong>Agreement</strong>
                   <p>Prepare missing legal and pricing fields.</p>
+                  {(form.docusignPacketId || selected?.docusignPacketId) ? (
+                    <div className="lr-ceo-action-meta">
+                      <span>DocuSign packet</span>
+                      <small>{form.docusignPacketId || selected?.docusignPacketId}</small>
+                    </div>
+                  ) : null}
                 </div>
                 {renderActionControl("agreement", "Prepare", () => createAgentTask("docusign"), !selected || taskBusy)}
               </div>
@@ -1008,6 +1017,12 @@ export default function SalesFunnelPage() {
                 <div>
                   <strong>Draft onboarding</strong>
                   <p>Prepare dealer onboarding copy after proposal stage.</p>
+                  {(form.onboardingEmailThread || selected?.onboardingEmailThread) ? (
+                    <div className="lr-ceo-action-meta">
+                      <span>Onboarding thread</span>
+                      <small>{form.onboardingEmailThread || selected?.onboardingEmailThread}</small>
+                    </div>
+                  ) : null}
                 </div>
                 {renderActionControl("onboarding", "Draft", () => createAgentTask("onboarding"), !selected || taskBusy || !isAtLeastStage(selected.stage, "proposal"))}
               </div>

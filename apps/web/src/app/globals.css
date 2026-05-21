@@ -626,6 +626,13 @@ a {
   color: #991b1b;
 }
 
+.lr-ceo-title-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.42rem;
+}
+
 .lr-ceo-progress {
   height: 10px;
   overflow: hidden;
@@ -704,6 +711,22 @@ a {
 
 .lr-ceo-agent-row p {
   margin: 0.25rem 0;
+}
+
+.lr-ceo-action-meta {
+  display: grid;
+  gap: 0.18rem;
+  max-width: 100%;
+  margin-top: 0.55rem;
+  padding: 0.58rem 0.66rem;
+  border: 1px solid rgba(251, 175, 100, 0.24);
+  border-radius: 8px;
+  background: rgba(251, 127, 4, 0.08);
+}
+
+.lr-ceo-action-meta small {
+  overflow-wrap: anywhere;
+  color: #f8dcc4;
 }
 
 .lr-ceo-agent-row span,
