@@ -27,6 +27,12 @@ type ActiveClient = {
   billingContactName?: string;
   billingContactEmail?: string;
   billingContactPhone?: string;
+  website?: string;
+  leadVolume?: string;
+  dealerLines?: string;
+  contractTerm?: string;
+  billingStart?: string;
+  onboardingThread?: string;
   agreementUrl?: string;
   agreementStatus?: string;
   agreementSignedAt?: string;
@@ -62,6 +68,12 @@ const emptyClientForm: ClientForm = {
   billingContactName: "",
   billingContactEmail: "",
   billingContactPhone: "",
+  website: "",
+  leadVolume: "",
+  dealerLines: "",
+  contractTerm: "",
+  billingStart: "",
+  onboardingThread: "",
   agreementUrl: "",
   agreementStatus: "Signed",
   agreementSignedAt: "",
@@ -101,6 +113,12 @@ function toForm(client: ActiveClient): ClientForm {
     billingContactName: client.billingContactName || "",
     billingContactEmail: client.billingContactEmail || "",
     billingContactPhone: client.billingContactPhone || "",
+    website: client.website || "",
+    leadVolume: client.leadVolume || "",
+    dealerLines: client.dealerLines || "",
+    contractTerm: client.contractTerm || "",
+    billingStart: client.billingStart || "",
+    onboardingThread: client.onboardingThread || "",
     agreementUrl: client.agreementUrl || "",
     agreementStatus: client.agreementStatus || "",
     agreementSignedAt: client.agreementSignedAt || "",
@@ -383,18 +401,24 @@ export default function ActiveClientsPage() {
                 </label>
                 <label>Owner<input value={form.owner} onChange={e => updateForm("owner", e.target.value)} /></label>
                 <label>Primary contact<input value={form.primaryContactName} onChange={e => updateForm("primaryContactName", e.target.value)} /></label>
-                <label>Primary email<input value={form.primaryContactEmail} onChange={e => updateForm("primaryContactEmail", e.target.value)} /></label>
-                <label>Primary phone<input value={form.primaryContactPhone} onChange={e => updateForm("primaryContactPhone", e.target.value)} /></label>
-                <label>Billing contact<input value={form.billingContactName} onChange={e => updateForm("billingContactName", e.target.value)} /></label>
-                <label>Billing email<input value={form.billingContactEmail} onChange={e => updateForm("billingContactEmail", e.target.value)} /></label>
-                <label>Billing phone<input value={form.billingContactPhone} onChange={e => updateForm("billingContactPhone", e.target.value)} /></label>
-                <label>Agreement link<input value={form.agreementUrl} onChange={e => updateForm("agreementUrl", e.target.value)} /></label>
-                <label>Agreement status<input value={form.agreementStatus} onChange={e => updateForm("agreementStatus", e.target.value)} /></label>
-                <label>Signed date<input value={form.agreementSignedAt} onChange={e => updateForm("agreementSignedAt", e.target.value)} /></label>
-                <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
-                <label>Monthly fee<input value={form.monthlyFee} onChange={e => updateForm("monthlyFee", e.target.value)} /></label>
-                <label>Setup fee<input value={form.setupFee} onChange={e => updateForm("setupFee", e.target.value)} /></label>
-                <label>ACH status<input value={form.achMandateStatus} onChange={e => updateForm("achMandateStatus", e.target.value)} /></label>
+              <label>Primary email<input value={form.primaryContactEmail} onChange={e => updateForm("primaryContactEmail", e.target.value)} /></label>
+              <label>Primary phone<input value={form.primaryContactPhone} onChange={e => updateForm("primaryContactPhone", e.target.value)} /></label>
+              <label>Billing contact<input value={form.billingContactName} onChange={e => updateForm("billingContactName", e.target.value)} /></label>
+              <label>Billing email<input value={form.billingContactEmail} onChange={e => updateForm("billingContactEmail", e.target.value)} /></label>
+              <label>Billing phone<input value={form.billingContactPhone} onChange={e => updateForm("billingContactPhone", e.target.value)} /></label>
+              <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
+              <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
+              <label>Dealer lines<input value={form.dealerLines} onChange={e => updateForm("dealerLines", e.target.value)} /></label>
+              <label>Agreement link<input value={form.agreementUrl} onChange={e => updateForm("agreementUrl", e.target.value)} /></label>
+              <label>Agreement status<input value={form.agreementStatus} onChange={e => updateForm("agreementStatus", e.target.value)} /></label>
+              <label>Signed date<input value={form.agreementSignedAt} onChange={e => updateForm("agreementSignedAt", e.target.value)} /></label>
+              <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
+              <label>Monthly fee<input value={form.monthlyFee} onChange={e => updateForm("monthlyFee", e.target.value)} /></label>
+              <label>Setup fee<input value={form.setupFee} onChange={e => updateForm("setupFee", e.target.value)} /></label>
+              <label>Contract term<input value={form.contractTerm} onChange={e => updateForm("contractTerm", e.target.value)} /></label>
+              <label>Billing start<input value={form.billingStart} onChange={e => updateForm("billingStart", e.target.value)} /></label>
+              <label>Onboarding thread<input value={form.onboardingThread} onChange={e => updateForm("onboardingThread", e.target.value)} /></label>
+              <label>ACH status<input value={form.achMandateStatus} onChange={e => updateForm("achMandateStatus", e.target.value)} /></label>
                 <label>Bank last 4<input value={form.bankLast4} onChange={e => updateForm("bankLast4", e.target.value)} /></label>
                 <label>Payment terms<input value={form.paymentTerms} onChange={e => updateForm("paymentTerms", e.target.value)} /></label>
                 <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>

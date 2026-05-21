@@ -27,6 +27,12 @@ export type ActiveClient = {
   billingContactName?: string;
   billingContactEmail?: string;
   billingContactPhone?: string;
+  website?: string;
+  leadVolume?: string;
+  dealerLines?: string;
+  contractTerm?: string;
+  billingStart?: string;
+  onboardingThread?: string;
   agreementUrl?: string;
   agreementStatus?: string;
   agreementSignedAt?: string;
@@ -75,6 +81,12 @@ export async function addActiveClient(input: Partial<ActiveClient> & { dealerNam
     billingContactName: clean(input.billingContactName, 160),
     billingContactEmail: clean(input.billingContactEmail, 180),
     billingContactPhone: clean(input.billingContactPhone, 80),
+    website: clean(input.website, 240),
+    leadVolume: clean(input.leadVolume, 80),
+    dealerLines: clean(input.dealerLines, 120),
+    contractTerm: clean(input.contractTerm, 120),
+    billingStart: clean(input.billingStart, 120),
+    onboardingThread: clean(input.onboardingThread, 240),
     agreementUrl: clean(input.agreementUrl, 500),
     agreementStatus: clean(input.agreementStatus, 80),
     agreementSignedAt: clean(input.agreementSignedAt, 80),
@@ -111,6 +123,12 @@ export async function updateActiveClient(id: string, patch: Partial<ActiveClient
     "billingContactName",
     "billingContactEmail",
     "billingContactPhone",
+    "website",
+    "leadVolume",
+    "dealerLines",
+    "contractTerm",
+    "billingStart",
+    "onboardingThread",
     "agreementUrl",
     "agreementStatus",
     "agreementSignedAt",

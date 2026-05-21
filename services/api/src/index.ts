@@ -26022,6 +26022,12 @@ app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res
     billingContactName: req.body?.billingContactName,
     billingContactEmail: req.body?.billingContactEmail,
     billingContactPhone: req.body?.billingContactPhone,
+    website: req.body?.website,
+    leadVolume: req.body?.leadVolume,
+    dealerLines: req.body?.dealerLines,
+    contractTerm: req.body?.contractTerm,
+    billingStart: req.body?.billingStart,
+    onboardingThread: req.body?.onboardingThread,
     agreementUrl: req.body?.agreementUrl,
     agreementStatus: req.body?.agreementStatus,
     agreementSignedAt: req.body?.agreementSignedAt,
@@ -26055,6 +26061,12 @@ app.patch("/active-clients/:id", requirePermission("canAccessTodos"), async (req
     billingContactName: typeof req.body?.billingContactName === "string" ? req.body.billingContactName : undefined,
     billingContactEmail: typeof req.body?.billingContactEmail === "string" ? req.body.billingContactEmail : undefined,
     billingContactPhone: typeof req.body?.billingContactPhone === "string" ? req.body.billingContactPhone : undefined,
+    website: typeof req.body?.website === "string" ? req.body.website : undefined,
+    leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
+    dealerLines: typeof req.body?.dealerLines === "string" ? req.body.dealerLines : undefined,
+    contractTerm: typeof req.body?.contractTerm === "string" ? req.body.contractTerm : undefined,
+    billingStart: typeof req.body?.billingStart === "string" ? req.body.billingStart : undefined,
+    onboardingThread: typeof req.body?.onboardingThread === "string" ? req.body.onboardingThread : undefined,
     agreementUrl: typeof req.body?.agreementUrl === "string" ? req.body.agreementUrl : undefined,
     agreementStatus: typeof req.body?.agreementStatus === "string" ? req.body.agreementStatus : undefined,
     agreementSignedAt: typeof req.body?.agreementSignedAt === "string" ? req.body.agreementSignedAt : undefined,
@@ -26239,6 +26251,12 @@ function extractPhoneFromText(value: string | null | undefined): string | undefi
   return match?.[0]?.replace(/\s+/g, " ").trim();
 }
 
+function extractLabeledNoteValue(notes: string | null | undefined, label: string): string | undefined {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(notes ?? "").match(new RegExp(`^${escaped}:\\s*(.+)$`, "im"));
+  return match?.[1]?.trim();
+}
+
 async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
   const clients = await listActiveClients(1000);
   const existing = clients.find(client => client.dealerSetupId === setup.id);
@@ -26261,6 +26279,12 @@ async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
     billingContactName: primaryContactName,
     billingContactEmail: primaryContactEmail,
     billingContactPhone: primaryContactPhone,
+    website: setup.website,
+    leadVolume: setup.leadVolume,
+    dealerLines: setup.crmProvider,
+    contractTerm: setup.contractTerm,
+    billingStart: setup.billingStart,
+    onboardingThread: extractLabeledNoteValue(setup.notes, "Onboarding thread"),
     agreementUrl: agreementPacket?.externalUrl || agreementPacket?.agreementUrl,
     agreementStatus: agreementPacket ? agreementPacket.status : undefined,
     agreementSignedAt: agreementPacket?.signedAt,
