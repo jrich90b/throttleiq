@@ -771,6 +771,12 @@ a {
   font-size: 0.86rem;
 }
 
+.lr-ceo-action-stack {
+  display: grid;
+  justify-items: start;
+  gap: 0.35rem;
+}
+
 .lr-ceo-shell .lr-ceo-link-btn {
   min-height: 0;
   border: 0;
@@ -780,6 +786,50 @@ a {
   font-size: 0.82rem;
   font-weight: 800;
   text-decoration: underline;
+}
+
+.lr-ceo-shell .lr-ceo-link-btn:disabled {
+  color: #8fa1bc;
+  text-decoration: none;
+}
+
+.lr-ceo-research-summary {
+  display: grid;
+  gap: 0.48rem;
+  margin-top: 0.72rem;
+  padding: 0.72rem;
+  border: 1px solid rgba(116, 214, 128, 0.26);
+  border-radius: 8px;
+  background: rgba(116, 214, 128, 0.07);
+}
+
+.lr-ceo-research-summary div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.46rem;
+}
+
+.lr-ceo-research-summary div span {
+  color: #74d680;
+}
+
+.lr-ceo-research-summary div strong {
+  color: #dcfce7;
+  font-size: 0.84rem;
+  text-transform: capitalize;
+}
+
+.lr-ceo-research-summary div small,
+.lr-ceo-research-summary p {
+  color: #c9d3e4;
+}
+
+.lr-ceo-research-summary p {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .lr-ceo-form-stack label {

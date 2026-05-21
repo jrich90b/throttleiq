@@ -49,6 +49,21 @@ type ZoomStatus = {
 
 type SalesActionId = "research" | "sales_email" | "schedule_demo" | "agreement" | "onboarding" | "dealer_setup";
 
+type AgentTask = {
+  id: string;
+  provider: "codex" | "claude";
+  kind: string;
+  title: string;
+  clientName?: string;
+  status: "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
+  createdAt: string;
+  updatedAt: string;
+  output?: {
+    summary?: string;
+    links?: string[];
+  };
+};
+
 type ProspectForm = {
   dealerName: string;
   contactName: string;
@@ -200,6 +215,8 @@ export default function SalesFunnelPage() {
   const [zoomBusy, setZoomBusy] = useState(false);
   const [completedActions, setCompletedActions] = useState<string[]>([]);
   const [reopenedActions, setReopenedActions] = useState<string[]>([]);
+  const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [agentTasksBusy, setAgentTasksBusy] = useState(false);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -209,6 +226,7 @@ export default function SalesFunnelPage() {
   useEffect(() => {
     void loadProspects();
     void loadZoomStatus();
+    void loadAgentTasks();
   }, []);
 
   useEffect(() => {
@@ -236,6 +254,15 @@ export default function SalesFunnelPage() {
     const pipeline = open.reduce((sum, row) => sum + moneyValue(row.expectedMonthly), 0);
     return { open: open.length, proposals: proposals.length, won: won.length, pipeline };
   }, [prospects]);
+
+  const latestResearchTask = useMemo(() => {
+    if (!selected) return null;
+    const selectedName = selected.dealerName.trim().toLowerCase();
+    return agentTasks.find(task =>
+      task.kind === "prospect_research" &&
+      (task.clientName || "").trim().toLowerCase() === selectedName
+    ) ?? null;
+  }, [agentTasks, selected]);
 
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
@@ -309,6 +336,10 @@ export default function SalesFunnelPage() {
     );
   }
 
+  function taskStatusLabel(status: AgentTask["status"]) {
+    return status.replace(/_/g, " ");
+  }
+
   async function loadProspects() {
     try {
       const resp = await fetch("/api/sales-prospects?limit=250", { cache: "no-store" });
@@ -319,6 +350,20 @@ export default function SalesFunnelPage() {
       if (rows.length && !selectedId) setSelectedId(rows[0].id);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Sales prospects could not be loaded.");
+    }
+  }
+
+  async function loadAgentTasks() {
+    setAgentTasksBusy(true);
+    try {
+      const resp = await fetch("/api/agent-tasks?limit=100", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent tasks could not be loaded.");
+      setAgentTasks(Array.isArray(data.tasks) ? data.tasks : []);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Agent tasks could not be loaded.");
+    } finally {
+      setAgentTasksBusy(false);
     }
   }
 
@@ -583,6 +628,7 @@ export default function SalesFunnelPage() {
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
+      setAgentTasks(current => [data.task, ...current.filter(task => task.id !== data.task.id)].slice(0, 100));
       setNotice(`Agent task created: ${data.task.title}.`);
       const completedActionByTask: Record<typeof action, SalesActionId> = {
         sales_email: "sales_email",
@@ -840,8 +886,27 @@ export default function SalesFunnelPage() {
                 <div>
                   <strong>Research</strong>
                   <p>Find setup blockers and lead-volume clues.</p>
+                  {latestResearchTask ? (
+                    <div className="lr-ceo-research-summary">
+                      <div>
+                        <span>{latestResearchTask.provider}</span>
+                        <strong>{taskStatusLabel(latestResearchTask.status)}</strong>
+                        <small>Updated {formatDate(latestResearchTask.updatedAt)}</small>
+                      </div>
+                      {latestResearchTask.output?.summary ? (
+                        <p>{latestResearchTask.output.summary}</p>
+                      ) : (
+                        <p>Research task created. The completed summary will appear here after the task output is saved.</p>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-                {renderActionControl("research", "Research", () => createAgentTask("research"), !selected || taskBusy)}
+                <div className="lr-ceo-action-stack">
+                  {renderActionControl("research", "Research", () => createAgentTask("research"), !selected || taskBusy)}
+                  <button type="button" className="lr-ceo-link-btn" onClick={loadAgentTasks} disabled={agentTasksBusy}>
+                    Refresh
+                  </button>
+                </div>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
