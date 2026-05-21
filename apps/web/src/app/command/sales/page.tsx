@@ -272,6 +272,27 @@ export default function SalesFunnelPage() {
     );
   }, [form.website, latestResearchTask, selected?.website]);
 
+  useEffect(() => {
+    if (!selected || latestResearchTask?.kind !== "prospect_research") return;
+    const shouldPoll =
+      latestResearchTask.status === "queued" ||
+      latestResearchTask.status === "running" ||
+      (latestResearchTask.status === "completed" && !latestResearchTask.output?.summary?.trim());
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+    const refresh = () => {
+      if (!cancelled) void loadAgentTasks();
+    };
+    const firstRefresh = window.setTimeout(refresh, 2000);
+    const interval = window.setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(firstRefresh);
+      window.clearInterval(interval);
+    };
+  }, [latestResearchTask?.id, latestResearchTask?.status, latestResearchTask?.output?.summary, selected?.id]);
+
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
     setReopenedActions(nextReopened);
