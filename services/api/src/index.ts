@@ -30545,8 +30545,11 @@ function detectWebsiteProviders(pages: ProspectResearchPage[]) {
     ["Dealer Inspire", /dealerinspire|di-site|di-assets|dealer inspire/i],
     ["DealerOn", /dealeron|dealer\.com\/sites|cdn\.dealeron/i],
     ["Dealer Spike", /dealerspike|psndealer|powersportsnetwork/i],
-    ["ARI / Endeavor", /arinet|endeavor|dx1app|dx1/i],
+    ["DX1 / Dominion", /dx1app|dx1showroom|desktopmodules\/dominion|dominion\/dist/i],
+    ["ARI / Endeavor", /arinet|endeavor/i],
     ["Lightspeed / Dealer Spike inventory", /lightspeed|dealerspike/i],
+    ["TextAccelerator", /textaccelerator|getmypayment|contactform\/code\/js|js-gmptool|js-contacttool/i],
+    ["Shift Digital", /shiftdigital|sdanalytics|tagging\.shiftdigitalapps/i],
     ["Room58", /room58/i],
     ["Traffic Log Pro", /trafficlogpro|traffic log pro/i],
     ["AutoManager", /automanager/i],
@@ -30651,6 +30654,8 @@ function findLocationSignals(pages: ProspectResearchPage[]) {
 function summarizeDetectedForms(pages: ProspectResearchPage[]) {
   const classifyForm = (form: string) => {
     const lower = form.toLowerCase();
+    if (lower.includes("gmp-form") || lower.includes("js-gmptool") || lower.includes("getmypayment")) return "Payment estimator/calculator";
+    if (lower.includes("contact-form") || lower.includes("js-contacttool")) return "Contact form";
     if (lower.includes("r58form16") || lower.includes("test") || lower.includes("ride")) return "Test ride lead form";
     if (lower.includes("r58form14") || lower.includes("service")) return "Service lead form";
     if (lower.includes("trade") || lower.includes("sell")) return "Trade/sell lead form";
@@ -30663,7 +30668,11 @@ function summarizeDetectedForms(pages: ProspectResearchPage[]) {
     page.forms.map(form => ({
       type: classifyForm(form),
       url: page.url,
-      provider: /r58form/i.test(form) || /sd-tracking--form/i.test(form) ? "Room58" : undefined
+      provider: /r58form/i.test(form) || /sd-tracking--form/i.test(form)
+        ? "Room58"
+        : /gmp-form|js-gmptool|getmypayment|contact-form|js-contacttool/i.test(form)
+          ? "TextAccelerator"
+          : undefined
     }))
   );
   return summaries
