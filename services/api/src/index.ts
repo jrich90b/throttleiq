@@ -26205,6 +26205,18 @@ app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), a
   return res.json({ ok: true, setup: updated ?? setup, passed, checks });
 });
 
+app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const client = await upsertActiveClientFromDealerSetup(setup);
+  if (!client) return res.status(500).json({ ok: false, error: "Active client could not be saved." });
+  return res.json({ ok: true, client });
+});
+
 const allowedEsignProviders: EsignPacketProvider[] = ["manual", "docusign", "dropbox_sign", "pandadoc", "signwell"];
 const allowedEsignStatuses: EsignPacketStatus[] = ["draft", "ready", "sent", "signed", "declined", "voided"];
 
@@ -26220,6 +26232,57 @@ function extractNameFromPrimaryContact(value: string | null | undefined): string
   const withoutPhone = withoutEmail.replace(/\+?1?[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{4}/g, "").trim();
   const name = withoutPhone.split(/[,;|]/)[0]?.replace(/\s+/g, " ").trim();
   return name || undefined;
+}
+
+function extractPhoneFromText(value: string | null | undefined): string | undefined {
+  const match = String(value ?? "").match(/\+?1?[\s().-]*\d{3}[\s().-]*\d{3}[\s().-]*\d{4}/);
+  return match?.[0]?.replace(/\s+/g, " ").trim();
+}
+
+async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
+  const clients = await listActiveClients(1000);
+  const existing = clients.find(client => client.dealerSetupId === setup.id);
+  const packets = await listEsignPackets({ dealerSetupId: setup.id, limit: 25 });
+  const agreementPacket =
+    packets.find(packet => packet.status === "signed") ??
+    packets.find(packet => packet.status === "sent") ??
+    packets[0];
+  const primaryContactName = extractNameFromPrimaryContact(setup.primaryContact);
+  const primaryContactEmail = extractEmailFromText(setup.primaryContact);
+  const primaryContactPhone = extractPhoneFromText(setup.primaryContact);
+  const payload = {
+    dealerSetupId: setup.id,
+    dealerName: setup.dealerName,
+    status: setup.status === "live" || setup.status === "ready" ? "active" as ActiveClientStatus : "implementation" as ActiveClientStatus,
+    owner: setup.owner,
+    primaryContactName,
+    primaryContactEmail,
+    primaryContactPhone,
+    billingContactName: primaryContactName,
+    billingContactEmail: primaryContactEmail,
+    billingContactPhone: primaryContactPhone,
+    agreementUrl: agreementPacket?.externalUrl || agreementPacket?.agreementUrl,
+    agreementStatus: agreementPacket ? agreementPacket.status : undefined,
+    agreementSignedAt: agreementPacket?.signedAt,
+    plan: setup.plan,
+    monthlyFee: setup.monthlyFee,
+    setupFee: setup.setupFee,
+    achMandateStatus: existing?.achMandateStatus || "Not started",
+    bankLast4: existing?.bankLast4 || "",
+    paymentTerms: existing?.paymentTerms || "ACH monthly",
+    notes: [
+      existing?.notes || "",
+      setup.notes || "",
+      setup.appUrl ? `App URL: ${setup.appUrl}` : "",
+      setup.apiUrl ? `API URL: ${setup.apiUrl}` : "",
+      setup.includedUsage ? `Included usage: ${setup.includedUsage}` : "",
+      setup.overageTerms ? `Overage terms: ${setup.overageTerms}` : "",
+      setup.contractTerm ? `Contract term: ${setup.contractTerm}` : "",
+      setup.billingStart ? `Billing start: ${setup.billingStart}` : ""
+    ].filter(Boolean).join("\n").slice(0, 3000)
+  };
+  if (existing) return updateActiveClient(existing.id, payload);
+  return addActiveClient({ ...payload, dealerName: setup.dealerName });
 }
 
 app.get("/esign/packets", requirePermission("canAccessTodos"), async (req, res) => {

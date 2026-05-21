@@ -85,6 +85,11 @@ type DocusignStatus = {
   missing?: string[];
 };
 
+type ActiveClient = {
+  id: string;
+  dealerName: string;
+};
+
 const planDefaults = {
   Starter: {
     setupFee: "$1,999",
@@ -187,6 +192,7 @@ export default function NewDealerClientPage() {
   const [esignBusy, setEsignBusy] = useState(false);
   const [docusignStatus, setDocusignStatus] = useState<DocusignStatus | null>(null);
   const [docusignBusy, setDocusignBusy] = useState(false);
+  const [activeClientBusy, setActiveClientBusy] = useState(false);
   const [esignForm, setEsignForm] = useState({
     provider: "manual" as EsignPacket["provider"],
     signerName: "",
@@ -383,8 +389,13 @@ export default function NewDealerClientPage() {
 
   async function runGuidedStep() {
     if (!selected || !currentStep) return;
-    if (currentStep.id === "intake" || currentStep.id === "handoff") {
+    if (currentStep.id === "intake") {
       await updateStep(currentStep.id, "done");
+      return;
+    }
+    if (currentStep.id === "handoff") {
+      await updateStep(currentStep.id, "done");
+      await pushToActiveClient();
       return;
     }
     if (currentStep.id === "agreement") {
@@ -525,6 +536,22 @@ export default function NewDealerClientPage() {
       setNotice(err instanceof Error ? err.message : "Smoke test could not be run.");
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function pushToActiveClient() {
+    if (!selected) return;
+    setActiveClientBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/active-client`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Active client could not be created.");
+      const client = data.client as ActiveClient;
+      setNotice(`${client.dealerName} is ready in Active Clients with setup, agreement, contact, and billing fields prefilled.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Active client could not be created.");
+    } finally {
+      setActiveClientBusy(false);
     }
   }
 
@@ -741,7 +768,7 @@ export default function NewDealerClientPage() {
             </div>
             <div className="lr-ceo-guided-actions">
               <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{currentStep.status.replace(/_/g, " ")}</span>
-              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || esignBusy}>
+              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || esignBusy || activeClientBusy}>
                 {guidedStepButtonLabel(currentStep.id)}
               </button>
               <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "blocked")} disabled={busy}>
@@ -898,6 +925,9 @@ export default function NewDealerClientPage() {
                   </button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
                     Create Codex task
+                  </button>
+                  <button type="button" onClick={pushToActiveClient} disabled={activeClientBusy}>
+                    Send to Active Clients
                   </button>
                 </div>
                 <div className="lr-ceo-esign-panel">
