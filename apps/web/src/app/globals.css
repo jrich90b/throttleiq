@@ -606,6 +606,31 @@ a {
   min-width: 0;
 }
 
+.lr-ceo-user-booking {
+  display: grid;
+  gap: 0.62rem;
+  width: 100%;
+}
+
+.lr-ceo-user-booking label:first-child {
+  display: grid;
+  gap: 0.38rem;
+  color: #dbe6f6;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.lr-ceo-user-booking input {
+  min-width: 0;
+}
+
+.lr-ceo-user-booking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.72rem;
+}
+
 .lr-ceo-inline-check {
   display: inline-flex;
   align-items: center;

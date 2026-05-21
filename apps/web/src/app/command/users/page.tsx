@@ -283,43 +283,48 @@ export default function CommandUsersPage() {
                     <option value="manager">Admin</option>
                     <option value="salesperson">Operator</option>
                   </select>
-                  <div className="lr-ceo-user-password">
-                    <input
-                      value={user.commandCalendarId ?? ""}
-                      onChange={event =>
-                        setUsers(current =>
-                          current.map(row => (row.id === user.id ? { ...row, commandCalendarId: event.target.value } : row))
-                        )
-                      }
-                      placeholder="Command Google Calendar ID"
-                    />
-                    <label className="lr-ceo-inline-check">
+                  <div className="lr-ceo-user-booking">
+                    <label>
+                      Command calendar ID
                       <input
-                        type="checkbox"
-                        checked={user.commandBookingEnabled !== false}
+                        value={user.commandCalendarId ?? ""}
                         onChange={event =>
                           setUsers(current =>
-                            current.map(row =>
-                              row.id === user.id ? { ...row, commandBookingEnabled: event.target.checked } : row
-                            )
+                            current.map(row => (row.id === user.id ? { ...row, commandCalendarId: event.target.value } : row))
                           )
                         }
+                        placeholder="calendar@group.calendar.google.com"
                       />
-                      Booking enabled
                     </label>
-                    <button
-                      type="button"
-                      className="lr-ceo-secondary-btn"
-                      onClick={() =>
-                        updateUser(user, {
-                          commandCalendarId: user.commandCalendarId ?? "",
-                          commandBookingEnabled: user.commandBookingEnabled !== false
-                        })
-                      }
-                      disabled={busy}
-                    >
-                      Save booking
-                    </button>
+                    <div className="lr-ceo-user-booking-actions">
+                      <label className="lr-ceo-inline-check">
+                        <input
+                          type="checkbox"
+                          checked={user.commandBookingEnabled !== false}
+                          onChange={event =>
+                            setUsers(current =>
+                              current.map(row =>
+                                row.id === user.id ? { ...row, commandBookingEnabled: event.target.checked } : row
+                              )
+                            )
+                          }
+                        />
+                        Booking enabled
+                      </label>
+                      <button
+                        type="button"
+                        className="lr-ceo-secondary-btn"
+                        onClick={() =>
+                          updateUser(user, {
+                            commandCalendarId: user.commandCalendarId ?? "",
+                            commandBookingEnabled: user.commandBookingEnabled !== false
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save booking
+                      </button>
+                    </div>
                   </div>
                   <div className="lr-ceo-user-password">
                     <input
