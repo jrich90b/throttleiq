@@ -23859,7 +23859,7 @@ async function processDueFollowUps() {
       : [
           ...buildCadenceCheckInFallbacks(firstName, labelClause)
         ];
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride) {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale) {
       message = selectNonRepeatingCadenceMessage(
         conv,
         message,
