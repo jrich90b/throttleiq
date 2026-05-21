@@ -23020,12 +23020,25 @@ async function processDueFollowUps() {
   const normalizeModelForPostSale = (model: string) => {
     const raw = String(model ?? "").trim();
     if (!raw) return "";
+    const normalizePostSaleModelAcronyms = (value: string) =>
+      normalizeDisplayCase(value)
+        .replace(/\bSt\b/g, "ST")
+        .replace(/\bCvo\b/g, "CVO")
+        .replace(/\bH[-\s]?D\b/gi, "H-D");
+    const catalogLabel = pickCatalogModelLabelFromText(raw, getHarleyModelLexicon());
+    if (catalogLabel) return normalizePostSaleModelAcronyms(catalogLabel);
+    const canonicalLabel = canonicalizeWatchModelLabel(raw);
+    if (canonicalLabel && canonicalLabel !== raw) return normalizePostSaleModelAcronyms(canonicalLabel);
     // Post-sale follow-ups should use clean model names, not parenthetical color/finish suffixes.
     const noParenSuffix = raw
+      .replace(/\b(?:19|20)\d{2}\b/g, " ")
+      .replace(/\bharley[-\s]?davidson\b/gi, " ")
+      .replace(/\bh[-\s]?d\b/gi, " ")
+      .replace(/\b(?:FLHX|FLTRX|FLTRXS|FLTRK|FLHT|FLHXS|FXLRS|FXLRST|RH975|RH1250S|RA1250S?)\b/gi, " ")
       .replace(/\s*\([^)]*\)\s*/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    return normalizeDisplayCase(noParenSuffix);
+    return normalizePostSaleModelAcronyms(noParenSuffix);
   };
   const getPostSaleModel = (conv: any) => {
     const sale = conv?.sale ?? {};
