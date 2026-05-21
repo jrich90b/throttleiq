@@ -580,6 +580,12 @@ export default function SalesFunnelPage() {
     return currentUser?.name || currentUser?.email || "Current LeadRider user";
   }
 
+  function bookingLinkAlreadyInSalesDraft() {
+    const link = commandBookingLink();
+    if (!link) return false;
+    return Boolean(latestSalesEmailTask?.output?.summary?.includes(link));
+  }
+
   async function copyCommandBookingLink() {
     const link = commandBookingLink();
     if (!link) return;
@@ -1597,15 +1603,15 @@ export default function SalesFunnelPage() {
                   <p>
                     {form.zoomLink || selected?.zoomLink
                       ? "Zoom meeting is saved on this prospect."
-                      : "Share the Command booking link, or create Zoom after a demo time is confirmed."}
+                      : "Use the booking link from the sales email, or create a manual Zoom when you already have a time."}
                   </p>
                   <div className={`lr-ceo-action-meta ${commandBookingLink() ? "is-ready" : "is-blocked"}`}>
                     <span>Command booking</span>
                     <small>{currentUserLabel()}</small>
-                    <small>{commandBookingSetupMessage()}</small>
+                    <small>{bookingLinkAlreadyInSalesDraft() ? "Included in the latest sales email." : commandBookingSetupMessage()}</small>
                     {commandBookingLink() ? (
                       <>
-                        <small>{commandBookingLink()}</small>
+                        {bookingLinkAlreadyInSalesDraft() ? null : <small>{commandBookingLink()}</small>}
                         <button type="button" className="lr-ceo-link-btn" onClick={copyCommandBookingLink}>
                           {bookingLinkCopied ? "Copied" : "Copy booking link"}
                         </button>
@@ -1622,11 +1628,11 @@ export default function SalesFunnelPage() {
                     </div>
                   ) : null}
                   <label className="lr-ceo-inline-field">
-                    Confirmed demo time
+                    Manual demo time
                     <input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} />
                   </label>
                 </div>
-                {renderActionControl("schedule_demo", "Create Zoom", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
+                {renderActionControl("schedule_demo", "Create manual Zoom", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
