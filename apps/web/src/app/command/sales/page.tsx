@@ -922,7 +922,10 @@ export default function SalesFunnelPage() {
         })
       });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Email could not be sent.");
+      if (!resp.ok || !data?.ok) {
+        const detail = [data?.error, data?.body ? `Body: ${data.body}` : ""].filter(Boolean).join(" ");
+        throw new Error(detail || "Email could not be sent.");
+      }
       if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
       setDraftEdits(current => ({ ...current, [task.id]: data.task?.output?.summary || edited }));
       markActionCompleted("sales_email");

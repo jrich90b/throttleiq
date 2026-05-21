@@ -16,8 +16,11 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
   try {
     return NextResponse.json(JSON.parse(text), { status: r.status });
   } catch {
+    const contentType = r.headers.get("content-type") ?? "";
+    const body = text.replace(/\s+/g, " ").trim().slice(0, 500);
+    const detail = body ? `Upstream returned ${r.status} ${contentType}: ${body}` : `Upstream returned ${r.status} ${contentType || "with an empty body"}`;
     return NextResponse.json(
-      { ok: false, error: "Upstream not JSON", status: r.status, body: text.slice(0, 200) },
+      { ok: false, error: detail, status: r.status, body },
       { status: 502 }
     );
   }
