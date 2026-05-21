@@ -98,6 +98,16 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "1"
   },
   {
+    id: "spelled_arrival_time_after_pickup_context",
+    text: "be there at nine am",
+    history: [
+      { direction: "in", body: "Let me know when you need me to come and do the paperwork" },
+      { direction: "out", body: "ok I am around tomorrow or Friday just give me a heads up" }
+    ],
+    expectedIntent: "delivery_timing",
+    expectedTimingContains: "9"
+  },
+  {
     id: "post_sale_stock_exhaust_pickup",
     text: "Working on having someone come by for the stock exhaust I just couldn't fit everything yesterday",
     history: [

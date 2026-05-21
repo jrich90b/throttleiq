@@ -1065,7 +1065,7 @@ export function buildHumanModeSchedulingDraft(args: {
   }
 
   if (day && !time) return `Sounds good — what time on ${day} works best?`;
-  if (requestedLabel || time) return "Sounds good — I’ll check that time and follow up.";
+  if (requestedLabel || time) return "Sounds good — I have that time noted. Text me if anything changes.";
   return "Sounds good — what day and time works best?";
 }
 

@@ -91,6 +91,26 @@
     }
   },
   {
+    "id": "post_sale_arrival_time_word_1",
+    "text": "be there at nine am",
+    "history": [
+      {
+        "direction": "in",
+        "body": "Let me know when you need me to come and do the paperwork"
+      },
+      {
+        "direction": "out",
+        "body": "ok I am around tomorrow or Friday just give me a heads up"
+      }
+    ],
+    "expected": {
+      "action": "purchase_delivery_update",
+      "should_reply": true,
+      "should_book": false,
+      "time_contains": "9"
+    }
+  },
+  {
     "id": "signoff_no_response_1",
     "text": "Talk soon!",
     "history": [

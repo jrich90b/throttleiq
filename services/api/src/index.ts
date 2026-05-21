@@ -6133,9 +6133,9 @@ function manualOutboundAppointmentRequestedPhrase(parsed: ManualOutboundAppointm
 function buildAppointmentArrivalAck(parsed: AppointmentTimingParse | null): string {
   const time = String(parsed?.requested?.timeText ?? "").trim();
   const phrase = appointmentTimingRequestedPhrase(parsed);
-  if (time) return `Sounds good — I’ll watch for you ${time}.`;
-  if (phrase) return `Sounds good — I’ll watch for you around then.`;
-  return "Sounds good — I’ll watch for you.";
+  if (time) return `Sounds good — I’ll see you ${formatSeeYouTimePhrase(time)}. Text me if anything changes.`;
+  if (phrase) return `Sounds good — I’ll see you around then. Text me if anything changes.`;
+  return "Sounds good — I’ll see you then. Text me if anything changes.";
 }
 
 function buildTentativeAppointmentWindowAck(parsed: AppointmentTimingParse | null): string {
@@ -16368,6 +16368,8 @@ function formatPurchaseDeliveryArrivalWindow(text: string | null | undefined): s
   if (/\blate\s+afternoon(?:\s*ish)?\b/i.test(raw)) return "late afternoon";
   if (/\bearly\s+morning(?:\s*ish)?\b/i.test(raw)) return "early morning";
   if (/\blate\s+morning(?:\s*ish)?\b/i.test(raw)) return "late morning";
+  const casualArrival = extractCasualArrivalTimeLabel(raw);
+  if (casualArrival) return casualArrival;
   const range = raw.match(
     /\b(\d{1,2}(?::\d{2})?)\s*(?:-|to|and|\/)\s*(\d{1,2}(?::\d{2})?)\s*(am|pm)?(?:\s*o'?clock)?(?:\s*ish)?\b/i
   );
@@ -16384,6 +16386,10 @@ function buildPurchaseDeliveryTimingReply(text: string | null | undefined): stri
   const raw = String(text ?? "");
   if (/\b(early|mid|late)\s+(morning|afternoon|evening)(?:\s*ish)?\b/i.test(raw)) {
     return "Sounds good — just give me a heads up when you know what time you’ll be here, and I’ll make sure everything is lined up before you get here.";
+  }
+  const exactArrival = extractCasualArrivalTimeLabel(raw);
+  if (exactArrival) {
+    return `Sounds good — I’ll see you ${formatSeeYouTimePhrase(exactArrival)}. Text me if anything changes.`;
   }
   const arrival = formatPurchaseDeliveryArrivalWindow(text);
   return `Sounds good — ${arrival} works. I’ll make sure everything is lined up before you get here.`;
@@ -16563,6 +16569,8 @@ function extractArrivalStatusTimeLabel(text: string): string | null {
   if (!/\b(on my way|on the way|en route|headed over|heading over|heading there|coming over|coming now|be there|make it there|get there|arrive there)\b/i.test(t)) {
     return null;
   }
+  const casualArrival = extractCasualArrivalTimeLabel(t);
+  if (casualArrival) return casualArrival;
   const match = t.match(/\b(?:by|around|about|close to|before)?\s*(\d{1,2})(?::?(\d{2}))?\s*(am|pm)?\b/i);
   if (!match) return null;
   const rawHour = Number(match[1]);
@@ -16570,6 +16578,70 @@ function extractArrivalStatusTimeLabel(text: string): string | null {
   if (!Number.isFinite(rawHour) || rawHour < 1 || rawHour > 12) return null;
   const meridiem = match[3]?.toUpperCase() || (rawHour >= 7 && rawHour <= 11 ? "AM" : "PM");
   return `${rawHour}:${rawMinute.padStart(2, "0")} ${meridiem}`;
+}
+
+const CASUAL_TIME_WORD_HOURS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12
+};
+
+function formatCasualTimeLabel(hour: number, minute: string | number | null | undefined, meridiem?: string | null): string | null {
+  if (!Number.isFinite(hour) || hour < 1 || hour > 12) return null;
+  const minuteText = String(minute ?? "00").padStart(2, "0");
+  const suffix = meridiem?.trim()
+    ? meridiem.trim().toUpperCase()
+    : hour >= 7 && hour <= 11
+      ? "AM"
+      : "PM";
+  return `${hour}:${minuteText} ${suffix}`;
+}
+
+function extractCasualArrivalTimeLabel(text: string | null | undefined): string | null {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  const wordMatch = raw.match(
+    /\b(?:at|around|about|by|before|close to)?\s*(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(am|pm|a\.m\.|p\.m\.)\b/i
+  );
+  if (wordMatch) {
+    const hour = CASUAL_TIME_WORD_HOURS[wordMatch[1].toLowerCase()] ?? 0;
+    return formatCasualTimeLabel(hour, "00", wordMatch[2].replace(/\./g, ""));
+  }
+  const digitMatch = raw.match(/\b(?:at|around|about|by|before|close to)?\s*(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i);
+  if (digitMatch) {
+    return formatCasualTimeLabel(Number(digitMatch[1]), digitMatch[2] ?? "00", digitMatch[3].replace(/\./g, ""));
+  }
+  if (/\b(be there|make it there|get there|arrive there|coming over|headed over|heading over|out there)\b/i.test(raw)) {
+    const impliedWordMatch = raw.match(
+      /\b(?:at|around|about|by|before|close to)?\s*(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/i
+    );
+    if (impliedWordMatch) {
+      const hour = CASUAL_TIME_WORD_HOURS[impliedWordMatch[1].toLowerCase()] ?? 0;
+      return formatCasualTimeLabel(hour, "00");
+    }
+    const impliedDigitMatch = raw.match(/\b(?:at|around|about|by|before|close to)?\s*(\d{1,2})(?::?(\d{2}))?\b/i);
+    if (impliedDigitMatch) {
+      return formatCasualTimeLabel(Number(impliedDigitMatch[1]), impliedDigitMatch[2] ?? "00");
+    }
+  }
+  return null;
+}
+
+function formatSeeYouTimePhrase(timeText: string | null | undefined): string {
+  const time = String(timeText ?? "").trim();
+  if (!time) return "then";
+  if (/^(?:at|around|about|by|before)\b/i.test(time)) return normalizeDisplayCase(time);
+  if (/(?:-|\/|\bto\b|\band\b)/i.test(time)) return `around ${time}`;
+  return `at ${normalizeDisplayCase(time)}`;
 }
 
 function buildLogisticsProgressAcknowledgement(text: string): string {
@@ -45077,7 +45149,8 @@ if (authToken && signature) {
     !pricingOrPaymentsIntent &&
     (customerAckActionParse?.action === "accept_tentative_appointment" ||
       customerAckActionParse?.action === "ask_for_available_times" ||
-      customerAckActionParse?.action === "provide_arrival_window")
+      customerAckActionParse?.action === "provide_arrival_window" ||
+      customerAckActionParse?.action === "purchase_delivery_update")
   ) {
     const action = customerAckActionParse.action;
     if (action === "ask_for_available_times") {
@@ -45112,6 +45185,43 @@ if (authToken && signature) {
         const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
         return res.status(200).type("text/xml").send(twiml);
       }
+    }
+    if (action === "purchase_delivery_update") {
+      const reply = buildPurchaseDeliveryTimingReply(
+        customerAckActionRequestedPhrase(customerAckActionParse) || (event.body ?? "")
+      );
+      if (isPostSalePickupCoordinationText(conv, event.body)) {
+        markOpenPostSalePickupScheduleTodosDone(conv);
+      } else {
+        addTodo(
+          conv,
+          "note",
+          `Customer plans pickup/delivery arrival ${formatPurchaseDeliveryArrivalWindow(event.body ?? "")}.`,
+          event.providerMessageId
+        );
+      }
+      setDialogState(conv, "purchase_delivery");
+      setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
+      stopFollowUpCadence(conv, "purchase_delivery");
+      stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
+      recordRouteOutcome("live", "customer_ack_purchase_delivery_update", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null
+      });
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        saveConversation(conv);
+        await flushConversationStore();
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
     }
     const reply =
       action === "accept_tentative_appointment"
