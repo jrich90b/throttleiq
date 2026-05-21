@@ -974,9 +974,9 @@ export default function SalesFunnelPage() {
               <button
                 type="button"
                 onClick={() => createGmailDraftFromSalesTask(latestSalesEmailTask)}
-                disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailDraftCreated}
+                disabled={draftBusy || !(form.contactEmail || selected?.contactEmail)}
               >
-                {gmailDraftCreated ? "Gmail draft created" : "Create Gmail draft"}
+                {gmailDraftCreated ? "Create another Gmail draft" : "Create Gmail draft"}
               </button>
               <button
                 type="button"
