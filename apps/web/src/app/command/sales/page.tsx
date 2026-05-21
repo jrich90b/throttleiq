@@ -555,8 +555,16 @@ export default function SalesFunnelPage() {
         kind: "prospect_research",
         title: `Research ${selected.dealerName} sales opportunity`,
         instructions: [
-          "Research and summarize the sales opportunity for this dealer prospect.",
-          "Focus on lead volume, current website/forms, CRM clues, buying committee, and likely setup blockers.",
+          "Research and summarize the sales opportunity for this dealer prospect. Start with the dealer website from the prospect record when provided. If no website is provided, identify the official dealer website and clearly state how you selected it.",
+          "Capture the exact dealer website URL used and any additional source URLs consulted.",
+          "Count or estimate current inventory listed on the dealer website, separated into new bikes and used/pre-owned bikes. Include the timestamp/date checked and explain if the count is approximate because filters, pagination, or site loading prevented an exact count.",
+          "Capture dealer location, rooftop/address, phone, brand/franchise details, and whether it appears to be single-location or part of a group.",
+          "Capture dealer history and positioning: years in business if available, ownership/group clues, market served, and notable differentiators.",
+          "Capture employee/team clues: managers, sales staff, finance, BDC/marketing contacts, and any leadership names visible on the website or public profiles.",
+          "Capture lead-flow clues: forms, chat/text widgets, trade/sell-my-bike forms, finance/prequal flows, test ride/service forms, inventory provider, CRM/vendor clues, tracking pixels, and any visible integration blockers.",
+          "Assess lead volume potential from inventory size, form surface area, paid/search/social clues if visible, and any public traffic or review signals you can reasonably cite.",
+          "Summarize buying committee, likely pain points, setup blockers, recommended LeadRider plan, and next sales move.",
+          "Return the output in sections: Sources Used, Inventory Count, Dealer Profile, Team/Employees, Lead Capture/Tech Stack, Opportunity Score, Setup Risks, Recommended Next Step.",
           "Do not contact the dealer or change external systems.",
           "",
           facts
