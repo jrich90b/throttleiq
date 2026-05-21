@@ -32325,6 +32325,7 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
     stage: allowedSalesProspectStages.includes(stageRaw as SalesProspectStage) ? (stageRaw as SalesProspectStage) : "new",
     owner: req.body?.owner || creatorName,
     leadVolume: req.body?.leadVolume,
+    dealerLines: req.body?.dealerLines,
     plan: req.body?.plan,
     expectedMonthly: req.body?.expectedMonthly,
     nextStep: req.body?.nextStep,
@@ -32375,6 +32376,7 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
       primaryContact: contact,
       website: prospect.website,
       leadVolume: prospect.leadVolume,
+      crmProvider: prospect.dealerLines ? `${prospect.dealerLines} dealer line${prospect.dealerLines === "1" ? "" : "s"}` : undefined,
       plan: prospect.plan,
       monthlyFee: prospect.expectedMonthly,
       notes
@@ -32415,6 +32417,7 @@ app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (re
     stage: allowedSalesProspectStages.includes(stageRaw as SalesProspectStage) ? (stageRaw as SalesProspectStage) : undefined,
     owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
     leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
+    dealerLines: typeof req.body?.dealerLines === "string" ? req.body.dealerLines : undefined,
     plan: typeof req.body?.plan === "string" ? req.body.plan : undefined,
     expectedMonthly: typeof req.body?.expectedMonthly === "string" ? req.body.expectedMonthly : undefined,
     nextStep: typeof req.body?.nextStep === "string" ? req.body.nextStep : undefined,

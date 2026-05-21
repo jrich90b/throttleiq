@@ -22,6 +22,7 @@ export type SalesProspect = {
   stage: SalesProspectStage;
   owner?: string;
   leadVolume?: string;
+  dealerLines?: string;
   plan?: string;
   expectedMonthly?: string;
   nextStep?: string;
@@ -67,6 +68,7 @@ export async function addSalesProspect(input: Partial<SalesProspect> & { dealerN
     stage: normalizeStage(input.stage) ?? "new",
     owner: clean(input.owner, 120),
     leadVolume: clean(input.leadVolume, 80),
+    dealerLines: clean(input.dealerLines, 40),
     plan: clean(input.plan, 80),
     expectedMonthly: clean(input.expectedMonthly, 80),
     nextStep: clean(input.nextStep, 240),
@@ -103,6 +105,7 @@ export async function updateSalesProspect(id: string, patch: Partial<SalesProspe
     "website",
     "owner",
     "leadVolume",
+    "dealerLines",
     "plan",
     "expectedMonthly",
     "nextStep",

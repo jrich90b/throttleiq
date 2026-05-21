@@ -22,6 +22,7 @@ type SalesProspect = {
   stage: SalesProspectStage;
   owner?: string;
   leadVolume?: string;
+  dealerLines?: string;
   plan?: string;
   expectedMonthly?: string;
   nextStep?: string;
@@ -81,6 +82,7 @@ type ProspectForm = {
   stage: SalesProspectStage;
   owner: string;
   leadVolume: string;
+  dealerLines: string;
   plan: string;
   expectedMonthly: string;
   nextStep: string;
@@ -116,6 +118,7 @@ const emptyForm: ProspectForm = {
   stage: "new",
   owner: "",
   leadVolume: "",
+  dealerLines: "1",
   plan: "Starter",
   expectedMonthly: "$999/month",
   nextStep: "",
@@ -174,6 +177,7 @@ function toForm(prospect: SalesProspect): ProspectForm {
     stage: prospect.stage || "new",
     owner: prospect.owner || "",
     leadVolume: prospect.leadVolume || "",
+    dealerLines: prospect.dealerLines || "1",
     plan: prospect.plan || "",
     expectedMonthly: prospect.expectedMonthly || "",
     nextStep: prospect.nextStep || "",
@@ -255,6 +259,14 @@ function moneyValue(value?: string) {
   return Number(match[0].replace(/,/g, "")) || 0;
 }
 
+function setupFeeForDealerLines(value?: string) {
+  const lines = Math.max(1, Math.floor(Number(String(value ?? "").replace(/[^\d.]/g, "")) || 1));
+  if (lines <= 1) return "$2,500";
+  if (lines <= 3) return "$3,500";
+  if (lines <= 6) return "$5,000";
+  return "$7,500+";
+}
+
 function agreementFormForProspect(prospect: SalesProspect | null): AgreementForm {
   return {
     ...emptyAgreementForm,
@@ -262,6 +274,7 @@ function agreementFormForProspect(prospect: SalesProspect | null): AgreementForm
     dbaName: prospect?.dealerName || "",
     signerName: prospect?.contactName || "",
     signerEmail: prospect?.contactEmail || "",
+    setupFee: setupFeeForDealerLines(prospect?.dealerLines),
     monthlyFee: prospect?.expectedMonthly || emptyAgreementForm.monthlyFee
   };
 }
@@ -823,6 +836,7 @@ export default function SalesFunnelPage() {
       `Plan: ${taskSelected.plan || "not selected"}`,
       `Expected monthly: ${taskSelected.expectedMonthly || "not set"}`,
       `Lead volume: ${taskSelected.leadVolume || "not set"}`,
+      `Dealer lines: ${taskSelected.dealerLines || "not set"}`,
       `Next step: ${taskSelected.nextStep || "not set"}`,
       `Confirmed demo time: ${taskSelected.nextStepAt || "not set"}`,
       `Zoom link: ${taskSelected.zoomLink || "not set"}`,
@@ -980,6 +994,11 @@ export default function SalesFunnelPage() {
     }
   }
 
+  function updateDealerLines(value: string) {
+    setForm(current => ({ ...current, dealerLines: value }));
+    setAgreementForm(current => ({ ...current, setupFee: setupFeeForDealerLines(value) }));
+  }
+
   function updateAgreement(field: keyof AgreementForm, value: string) {
     setAgreementForm(current => ({ ...current, [field]: value }));
   }
@@ -1013,7 +1032,8 @@ export default function SalesFunnelPage() {
           plan: form.plan || selected.plan,
           expectedMonthly: agreementForm.monthlyFee || form.expectedMonthly,
           contactName: form.contactName || agreementForm.signerName,
-          contactEmail: form.contactEmail || agreementForm.signerEmail
+          contactEmail: form.contactEmail || agreementForm.signerEmail,
+          dealerLines: form.dealerLines
         })
       });
       const saveData = await saveResp.json();
@@ -1038,6 +1058,7 @@ export default function SalesFunnelPage() {
           dealerAddress: agreementForm.dealerAddress,
           primaryContact: [agreementForm.signerName, agreementForm.signerEmail].filter(Boolean).join(" - "),
           plan: form.plan,
+          crmProvider: form.dealerLines ? `${form.dealerLines} dealer line${form.dealerLines === "1" ? "" : "s"}` : "",
           setupFee: agreementForm.setupFee,
           monthlyFee: agreementForm.monthlyFee,
           contractTerm: agreementForm.contractTerm,
@@ -1064,6 +1085,7 @@ export default function SalesFunnelPage() {
           agreementUrl: agreementForm.agreementUrl,
           notes: [
             `Plan: ${form.plan || "not selected"}`,
+            `Dealer lines: ${form.dealerLines || "not set"}`,
             `Monthly fee: ${agreementForm.monthlyFee}`,
             agreementForm.setupFee ? `Setup fee: ${agreementForm.setupFee}` : "",
             `Contract term: ${agreementForm.contractTerm}`,
@@ -1416,6 +1438,7 @@ export default function SalesFunnelPage() {
               <label>Contact name<input value={newForm.contactName} onChange={e => updateNew("contactName", e.target.value)} placeholder="Primary contact" /></label>
               <label>Email<input value={newForm.contactEmail} onChange={e => updateNew("contactEmail", e.target.value)} placeholder="name@dealer.com" /></label>
               <label>Website<input value={newForm.website} onChange={e => updateNew("website", e.target.value)} placeholder="https://dealer.com" /></label>
+              <label>Dealer lines<input type="number" min="1" value={newForm.dealerLines} onChange={e => updateNew("dealerLines", e.target.value)} /></label>
               <label>Plan
                 <select value={newForm.plan} onChange={e => updateNewPlan(e.target.value)}>
                   {planOptions.map(option => (
@@ -1495,6 +1518,7 @@ export default function SalesFunnelPage() {
                   <label>Phone<input value={form.contactPhone} onChange={e => updateForm("contactPhone", e.target.value)} /></label>
                   <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
                   <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
+                  <label>Dealer lines<input type="number" min="1" value={form.dealerLines} onChange={e => updateDealerLines(e.target.value)} /></label>
                   <label>Plan
                     <select value={form.plan} onChange={e => updateSelectedPlan(e.target.value)}>
                       <option value="">Select plan</option>
@@ -1614,6 +1638,7 @@ export default function SalesFunnelPage() {
                     <label>Signer name<input value={agreementForm.signerName} onChange={e => updateAgreement("signerName", e.target.value)} /></label>
                     <label>Signer email<input value={agreementForm.signerEmail} onChange={e => updateAgreement("signerEmail", e.target.value)} /></label>
                     <label>Signer title<input value={agreementForm.signerTitle} onChange={e => updateAgreement("signerTitle", e.target.value)} /></label>
+                    <label>Dealer lines<input type="number" min="1" value={form.dealerLines} onChange={e => updateDealerLines(e.target.value)} /></label>
                     <label>Monthly fee<input value={agreementForm.monthlyFee} onChange={e => updateAgreement("monthlyFee", e.target.value)} /></label>
                     <label>Setup fee<input value={agreementForm.setupFee} onChange={e => updateAgreement("setupFee", e.target.value)} /></label>
                     <label>Contract term<input value={agreementForm.contractTerm} onChange={e => updateAgreement("contractTerm", e.target.value)} /></label>
