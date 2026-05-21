@@ -30482,6 +30482,45 @@ function detectLeadWidgets(pages: ProspectResearchPage[]) {
   return [...widgets];
 }
 
+function detectDealerManufacturers(pages: ProspectResearchPage[]) {
+  const haystack = pages
+    .flatMap(page => [page.url, page.title, page.text, page.html.slice(0, 100000)])
+    .join("\n")
+    .toLowerCase();
+  const brands: string[] = [];
+  const checks: Array<[string, RegExp]> = [
+    ["Harley-Davidson", /\bharley[-\s]?davidson\b|\bh-?d\b/i],
+    ["Honda", /\bhonda\b/i],
+    ["Yamaha", /\byamaha\b/i],
+    ["Kawasaki", /\bkawasaki\b/i],
+    ["Suzuki", /\bsuzuki\b/i],
+    ["Indian Motorcycle", /\bindian motorcycle\b|\bindian\b/i],
+    ["BMW Motorrad", /\bbmw motorrad\b|\bbmw\b/i],
+    ["Triumph", /\btriumph\b/i],
+    ["Ducati", /\bducati\b/i],
+    ["KTM", /\bktm\b/i],
+    ["Husqvarna", /\bhusqvarna\b/i],
+    ["Can-Am", /\bcan[-\s]?am\b/i],
+    ["Sea-Doo", /\bsea[-\s]?doo\b/i],
+    ["Ski-Doo", /\bski[-\s]?doo\b/i],
+    ["Polaris", /\bpolaris\b/i],
+    ["Slingshot", /\bslingshot\b/i],
+    ["CFMOTO", /\bcf ?moto\b/i],
+    ["Moto Guzzi", /\bmoto guzzi\b/i],
+    ["Aprilia", /\baprilia\b/i],
+    ["Royal Enfield", /\broyal enfield\b/i],
+    ["Vespa", /\bvespa\b/i],
+    ["Piaggio", /\bpiaggio\b/i],
+    ["Zero Motorcycles", /\bzero motorcycles?\b/i],
+    ["LiveWire", /\blivewire\b/i],
+    ["Stacyc", /\bstacyc\b/i]
+  ];
+  for (const [label, regex] of checks) {
+    if (regex.test(haystack) && !brands.includes(label)) brands.push(label);
+  }
+  return brands;
+}
+
 function estimateInventoryCounts(pages: ProspectResearchPage[]) {
   const inventoryPages = pages.filter(page => /inventory|new|used|pre-owned|preowned|motorcycle/i.test(`${page.url} ${page.title}`));
   const combined = inventoryPages.map(page => page.text).join("\n");
@@ -30558,6 +30597,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
 
   const providers = detectWebsiteProviders(pages);
   const widgets = detectLeadWidgets(pages);
+  const manufacturers = detectDealerManufacturers(pages);
   const inventory = estimateInventoryCounts(pages);
   const location = findLocationSignals(pages);
   const forms = summarizeDetectedForms(pages);
@@ -30581,6 +30621,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
     "Dealer Profile",
     `- Location/address signals: ${location.addresses.length ? location.addresses.join("; ") : "not found in crawled pages"}`,
     `- Phone signals: ${location.phones.length ? location.phones.join(", ") : "not found in crawled pages"}`,
+    `- Manufacturer/brand signals: ${manufacturers.length ? manufacturers.join(", ") : "not detected"}`,
     `- Website/provider clues: ${providers.length ? providers.join(", ") : "not detected"}`,
     `- Single vs group: ${/group|locations|dealerships|our stores/i.test(pages.map(page => page.text).join(" ")) ? "possible group/multi-location clues found" : "not confirmed"}`,
     "",

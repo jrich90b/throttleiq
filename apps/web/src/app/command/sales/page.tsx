@@ -264,6 +264,13 @@ export default function SalesFunnelPage() {
     ) ?? null;
   }, [agentTasks, selected]);
 
+  const latestResearchMissingWebsite = useMemo(() => {
+    return Boolean(
+      selected?.website?.trim() &&
+      latestResearchTask?.output?.summary?.includes("No dealer website was provided")
+    );
+  }, [latestResearchTask, selected?.website]);
+
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
     setReopenedActions(nextReopened);
@@ -308,6 +315,13 @@ export default function SalesFunnelPage() {
   function isActionCompleted(actionId: SalesActionId) {
     if (!selected || isActionReopened(actionId)) return false;
     const key = actionKey(selected.id, actionId);
+    if (actionId === "research") {
+      return (
+        latestResearchTask?.status === "completed" &&
+        Boolean(latestResearchTask.output?.summary?.trim()) &&
+        !latestResearchMissingWebsite
+      );
+    }
     if (completedActions.includes(key)) return true;
     if (actionId === "sales_email") return isAtLeastStage(selected.stage, "contacted");
     if (actionId === "schedule_demo") return Boolean(form.zoomLink || selected.zoomLink);
@@ -527,12 +541,13 @@ export default function SalesFunnelPage() {
     setTaskBusy(true);
     const senderType = form.emailSenderType || selected.emailSenderType || "personal";
     const senderAddress = form.emailSenderAddress || selected.emailSenderAddress || emailAddressForSender(senderType);
+    const currentWebsite = form.website.trim() || selected.website || "not provided";
     const facts = [
       `Dealer prospect: ${selected.dealerName}`,
       `Contact: ${selected.contactName || "not provided"}`,
       `Email: ${selected.contactEmail || "not provided"}`,
       `Phone: ${selected.contactPhone || "not provided"}`,
-      `Website: ${selected.website || "not provided"}`,
+      `Website: ${currentWebsite}`,
       `Stage: ${stageLabels[selected.stage]}`,
       `Owner: ${selected.owner || "not assigned"}`,
       `Plan: ${selected.plan || "not selected"}`,
@@ -604,6 +619,7 @@ export default function SalesFunnelPage() {
           "Capture the exact dealer website URL used and any additional source URLs consulted.",
           "Count or estimate current inventory listed on the dealer website, separated into new bikes and used/pre-owned bikes. Include the timestamp/date checked and explain if the count is approximate because filters, pagination, or site loading prevented an exact count.",
           "Capture dealer location, rooftop/address, phone, brand/franchise details, and whether it appears to be single-location or part of a group.",
+          "Capture all visible manufacturer/franchise lines the dealer appears to sell, including non-Harley motorcycle, powersports, side-by-side, marine, scooter, and electric brands if present.",
           "Capture dealer history and positioning: years in business if available, ownership/group clues, market served, and notable differentiators.",
           "Capture employee/team clues: managers, sales staff, finance, BDC/marketing contacts, and any leadership names visible on the website or public profiles.",
           "Capture lead-flow clues: forms, chat/text widgets, trade/sell-my-bike forms, finance/prequal flows, test ride/service forms, inventory provider, CRM/vendor clues, tracking pixels, and any visible integration blockers.",
@@ -637,7 +653,7 @@ export default function SalesFunnelPage() {
         docusign: "agreement",
         research: "research"
       };
-      markActionCompleted(completedActionByTask[action]);
+      if (action !== "research") markActionCompleted(completedActionByTask[action]);
       const autoStageByAction: Partial<Record<typeof action, SalesProspectStage>> = {
         sales_email: "contacted",
         docusign: "proposal"
@@ -894,7 +910,11 @@ export default function SalesFunnelPage() {
                         <small>Updated {formatDate(latestResearchTask.updatedAt)}</small>
                       </div>
                       {latestResearchTask.output?.summary ? (
-                        <p>{latestResearchTask.output.summary}</p>
+                        <p>
+                          {latestResearchMissingWebsite
+                            ? `${latestResearchTask.output.summary}\n\nThis result is from an older task. Run Research again to use the saved website.`
+                            : latestResearchTask.output.summary}
+                        </p>
                       ) : (
                         <p>Research task created. The completed summary will appear here after the task output is saved.</p>
                       )}
