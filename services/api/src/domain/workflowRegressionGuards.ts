@@ -438,6 +438,38 @@ export function isDealerLeadAppPostDemoRideAdfText(textRaw: string | null | unde
   );
 }
 
+function titleCaseDealerLeadAppToken(raw: string): string {
+  const normalized = String(raw ?? "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "";
+  return normalized.replace(/\b[a-z0-9]+(?:'[a-z]+)?\b/g, token => {
+    if (/^hd$/i.test(token)) return "H-D";
+    if (/^\d+$/.test(token)) return token;
+    return token.charAt(0).toUpperCase() + token.slice(1);
+  });
+}
+
+export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "");
+  if (!text) return null;
+  const match = text.match(/\bdemo bikes ridden\s*:\s*([\s\S]*?)(?:\bemail opt-?in\s*:|\bphone opt-?in\s*:|\btext opt-?in\s*:|\bclient_id\s*:|$)/i);
+  const rawValue = String(match?.[1] ?? "").trim();
+  if (!rawValue) return null;
+  const parts = rawValue
+    .split(/[,\n\r]+/)
+    .map(part => titleCaseDealerLeadAppToken(part))
+    .filter(Boolean);
+  if (!parts.length) return null;
+  const yearIndex = parts.findIndex(part => /^(?:19|20)\d{2}$/.test(part));
+  const year = yearIndex >= 0 ? parts[yearIndex] : "";
+  const labelParts = parts.filter((_, index) => index !== yearIndex);
+  const label = [year, ...labelParts].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  return label || null;
+}
+
 export function extractInventoryStockIdMention(textRaw: string | null | undefined): string | null {
   const match = String(textRaw ?? "").match(/\b[A-Z0-9]{1,5}-\d{1,4}\b/i);
   return match?.[0] ? match[0].toUpperCase() : null;

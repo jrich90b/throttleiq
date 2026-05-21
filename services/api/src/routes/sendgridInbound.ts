@@ -112,6 +112,7 @@ import {
   isInventoryOnlineCompletenessQuestionText,
   isTakeOffMilwaukeeEightEngineRequestText,
   isDealerLeadAppPostDemoRideAdfText,
+  extractDealerLeadAppDemoBikeLabel,
   isDemoDayEventQuestionText,
   isRideChallengeLeadSignal,
   isTimingOnlyFollowUpTopic,
@@ -1392,7 +1393,16 @@ function buildDealerLeadAppPostRideReply(args: {
   const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
   const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
   const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const dealerLeadAppText = [
+    args.conv?.lead?.comment,
+    args.conv?.latestLead?.comment,
+    ...(Array.isArray(args.conv?.messages) ? args.conv.messages.map((m: any) => m?.body) : [])
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const demoBikeLabel = extractDealerLeadAppDemoBikeLabel(dealerLeadAppText);
   const modelLabel =
+    demoBikeLabel ||
     formatModelLabel(
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
