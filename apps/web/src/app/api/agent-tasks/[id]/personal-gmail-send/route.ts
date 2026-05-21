@@ -16,7 +16,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
   let r = await apiFetch(`${base}${path}`, requestOptions);
   let text = await r.text();
   const canonicalBase = "https://api.leadrider.ai";
-  if (r.status === 404 && /Cannot POST/i.test(text) && base.replace(/\/$/, "") !== canonicalBase) {
+  if (r.status === 404 && /Cannot POST/i.test(text)) {
     r = await apiFetch(`${canonicalBase}${path}`, requestOptions);
     text = await r.text();
   }
