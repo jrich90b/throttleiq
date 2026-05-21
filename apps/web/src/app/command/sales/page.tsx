@@ -700,7 +700,7 @@ export default function SalesFunnelPage() {
                   <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
                   <label>Plan<input value={form.plan} onChange={e => updateForm("plan", e.target.value)} /></label>
                   <label>Expected monthly<input value={form.expectedMonthly} onChange={e => updateForm("expectedMonthly", e.target.value)} /></label>
-                  <label>Next step date<input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} /></label>
+                  <label>Demo meeting time<input type="datetime-local" value={form.nextStepAt} onChange={e => updateForm("nextStepAt", e.target.value)} /></label>
                   <label>Zoom/Fathom link<input value={form.zoomLink} onChange={e => updateForm("zoomLink", e.target.value)} placeholder="Meeting link" /></label>
                   <label>DocuSign packet<input value={form.docusignPacketId} onChange={e => updateForm("docusignPacketId", e.target.value)} placeholder="Packet id or URL" /></label>
                   <label>Onboarding email thread<input value={form.onboardingEmailThread} onChange={e => updateForm("onboardingEmailThread", e.target.value)} placeholder="onboarding@leadrider.ai thread" /></label>
