@@ -146,11 +146,17 @@ function main() {
   const tasks: TaskCandidate[] = [];
   const stuckCount = num(routeWatchdog?.stuckTurns?.count);
   const noResponseCount = num(routeWatchdog?.routeOutcomes?.noResponseOutcomeCount);
-  const tonePassRateResponded =
-    toneSummary?.respondedPassRate != null ? num(toneSummary.respondedPassRate, 100) : num(toneSummary?.passRate, 100);
-  const tonePassRateAll = num(toneSummary?.passRate, 100);
-  const toneMissing = num(toneSummary?.missingResponseCount);
-  const toneAvg = num(toneSummary?.avgScore, 1);
+  const toneTotalInbound = num(toneSummary?.totalInboundTurns);
+  const toneTotalResponded = num(toneSummary?.respondedTurns);
+  const hasToneData = toneTotalInbound > 0 || toneTotalResponded > 0;
+  const tonePassRateResponded = hasToneData
+    ? toneSummary?.respondedPassRate != null
+      ? num(toneSummary.respondedPassRate, 100)
+      : num(toneSummary?.passRate, 100)
+    : null;
+  const tonePassRateAll = hasToneData ? num(toneSummary?.passRate, 100) : null;
+  const toneMissing = hasToneData ? num(toneSummary?.missingResponseCount) : 0;
+  const toneAvg = hasToneData ? num(toneSummary?.avgScore, 1) : null;
   const fixtureFailNow = num(editSummary?.fixtureFailNow);
   const negativeSeeds = Array.isArray(languageSummary?.seedExports?.negativeFeedback)
     ? languageSummary.seedExports.negativeFeedback.length
@@ -232,7 +238,7 @@ function main() {
     });
   }
 
-  if (tonePassRateResponded < 92 || toneAvg < 0.82) {
+  if (hasToneData && tonePassRateResponded != null && toneAvg != null && (tonePassRateResponded < 92 || toneAvg < 0.82)) {
     pushTask(tasks, {
       id: "tone-quality-regression",
       priority: tonePassRateResponded < 85 || toneAvg < 0.75 ? "P1" : "P2",
