@@ -31024,6 +31024,7 @@ async function runProspectResearch(task: AgentTask): Promise<{ summary: string; 
       }),
       24000
     )) ?? fallbackBrief;
+  brief.confidence = Math.min(0.94, Math.max(0.35, Number(brief.confidence) || fallbackBrief.confidence));
   const research = {
     ...deterministicResearch,
     brief
