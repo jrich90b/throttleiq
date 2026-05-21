@@ -235,6 +235,7 @@ import {
   listSupportInboxMessages,
   listPersonalInboxMessages,
   createSupportGmailDraftReply,
+  createPersonalGmailDraftEmail,
   trashSupportGmailMessage,
   trashPersonalGmailMessage,
   queryFreeBusy,
@@ -31647,6 +31648,32 @@ app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, r
   const task = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, summary ? { summary } : undefined);
   if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
   return res.json({ ok: true, task });
+});
+
+app.post("/agent-tasks/:id/personal-gmail-draft", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const tasks = await listAgentTasks(1000);
+  const task = tasks.find(row => row.id === req.params.id);
+  if (!task) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  if (task.kind !== "email") return res.status(400).json({ ok: false, error: "Only email tasks can create Gmail drafts." });
+  const to = String(req.body?.to ?? "").trim().slice(0, 240);
+  const subject = String(req.body?.subject ?? "").trim().slice(0, 240);
+  const bodyText = String(req.body?.bodyText ?? "").trim().slice(0, 8000);
+  if (!to) return res.status(400).json({ ok: false, error: "Recipient email is required." });
+  if (!bodyText) return res.status(400).json({ ok: false, error: "Draft body is required." });
+  try {
+    const draft = await createPersonalGmailDraftEmail({ to, subject, bodyText });
+    const updated = await updateAgentTaskStatus(task.id, "needs_approval", {
+      summary: task.output?.summary,
+      links: [...(task.output?.links ?? []), `personal-gmail-draft:${draft.id ?? "created"}`]
+    });
+    return res.json({ ok: true, draft, task: updated ?? task });
+  } catch (err: any) {
+    return res.status(502).json({ ok: false, error: err?.message ?? "Gmail draft could not be created." });
+  }
 });
 
 const allowedSalesProspectStages: SalesProspectStage[] = [

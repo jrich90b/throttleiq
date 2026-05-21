@@ -177,6 +177,20 @@ function visibleSenderAddress(prospect: SalesProspect | null, form: ProspectForm
   return form.emailSenderAddress || prospect?.emailSenderAddress || "joe.hartrich@leadrider.ai";
 }
 
+function parseEmailDraft(text: string) {
+  const cleaned = text.trim();
+  const subject =
+    cleaned.match(/(?:^|\n)\s*(?:#+\s*)?(?:subject|email subject)\s*:?\s*(.+)/i)?.[1]?.trim() ||
+    "LeadRider follow-up";
+  const bodyStart =
+    cleaned.match(/(?:^|\n)\s*(?:#+\s*)?(?:body|draft reply|email body)\s*:?\s*\n([\s\S]+)/i)?.[1]?.trim() ||
+    cleaned;
+  const body = bodyStart
+    .replace(/(?:^|\n)\s*(?:#+\s*)?(?:short note|why this email is appropriate|approval needed)\s*:?\s*[\s\S]*$/i, "")
+    .trim();
+  return { subject, body };
+}
+
 function formatDate(value?: string) {
   if (!value) return "No date";
   const date = new Date(value);
@@ -221,6 +235,8 @@ export default function SalesFunnelPage() {
   const [reopenedActions, setReopenedActions] = useState<string[]>([]);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
   const [agentTasksBusy, setAgentTasksBusy] = useState(false);
+  const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
+  const [draftBusy, setDraftBusy] = useState(false);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -268,6 +284,16 @@ export default function SalesFunnelPage() {
     ) ?? null;
   }, [agentTasks, selected]);
 
+  const latestSalesEmailTask = useMemo(() => {
+    if (!selected) return null;
+    const selectedName = selected.dealerName.trim().toLowerCase();
+    return agentTasks.find(task =>
+      task.kind === "email" &&
+      /^Draft sales follow-up/i.test(task.title) &&
+      (task.clientName || "").trim().toLowerCase() === selectedName
+    ) ?? null;
+  }, [agentTasks, selected]);
+
   const latestResearchMissingWebsite = useMemo(() => {
     const currentWebsite = form.website.trim() || selected?.website?.trim();
     return Boolean(
@@ -296,6 +322,36 @@ export default function SalesFunnelPage() {
       window.clearInterval(interval);
     };
   }, [latestResearchTask?.id, latestResearchTask?.status, latestResearchTask?.output?.summary, selected?.id]);
+
+  useEffect(() => {
+    if (!selected || latestSalesEmailTask?.kind !== "email") return;
+    const shouldPoll =
+      latestSalesEmailTask.status === "queued" ||
+      latestSalesEmailTask.status === "running" ||
+      (latestSalesEmailTask.status === "completed" && !latestSalesEmailTask.output?.summary?.trim());
+    if (!shouldPoll) return;
+
+    let cancelled = false;
+    const refresh = () => {
+      if (!cancelled) void loadAgentTasks();
+    };
+    const firstRefresh = window.setTimeout(refresh, 2000);
+    const interval = window.setInterval(refresh, 5000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(firstRefresh);
+      window.clearInterval(interval);
+    };
+  }, [latestSalesEmailTask?.id, latestSalesEmailTask?.status, latestSalesEmailTask?.output?.summary, selected?.id]);
+
+  useEffect(() => {
+    if (!latestSalesEmailTask?.id || !latestSalesEmailTask.output?.summary) return;
+    setDraftEdits(current =>
+      current[latestSalesEmailTask.id] == null
+        ? { ...current, [latestSalesEmailTask.id]: latestSalesEmailTask.output?.summary ?? "" }
+        : current
+    );
+  }, [latestSalesEmailTask?.id, latestSalesEmailTask?.output?.summary]);
 
   function persistActionState(nextCompleted: string[], nextReopened: string[]) {
     setCompletedActions(nextCompleted);
@@ -349,7 +405,7 @@ export default function SalesFunnelPage() {
       );
     }
     if (completedActions.includes(key)) return true;
-    if (actionId === "sales_email") return isAtLeastStage(selected.stage, "contacted");
+    if (actionId === "sales_email") return Boolean(latestSalesEmailTask?.output?.summary?.trim());
     if (actionId === "schedule_demo") return Boolean(form.zoomLink || selected.zoomLink);
     if (actionId === "agreement") return isAtLeastStage(selected.stage, "proposal") || Boolean(form.docusignPacketId || selected.docusignPacketId);
     if (actionId === "onboarding") return Boolean(form.onboardingEmailThread || selected.onboardingEmailThread);
@@ -707,7 +763,7 @@ export default function SalesFunnelPage() {
         docusign: "agreement",
         research: "research"
       };
-      if (action !== "research") markActionCompleted(completedActionByTask[action]);
+      if (action !== "research" && action !== "sales_email") markActionCompleted(completedActionByTask[action]);
       const autoStageByAction: Partial<Record<typeof action, SalesProspectStage>> = {
         sales_email: "contacted",
         docusign: "proposal"
@@ -729,6 +785,120 @@ export default function SalesFunnelPage() {
 
   function updateForm(field: keyof ProspectForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
+  }
+
+  async function updateSalesDraftTask(task: AgentTask, status: AgentTask["status"], summary: string, noticeText: string) {
+    setDraftBusy(true);
+    try {
+      const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, summary })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Draft could not be updated.");
+      setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
+      setDraftEdits(current => ({ ...current, [task.id]: data.task.output?.summary || summary }));
+      if (status === "completed") markActionCompleted("sales_email");
+      setNotice(noticeText);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Draft could not be updated.");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
+  async function createGmailDraftFromSalesTask(task: AgentTask) {
+    if (!selected) return;
+    const edited = draftEdits[task.id] ?? task.output?.summary ?? "";
+    const parsed = parseEmailDraft(edited);
+    setDraftBusy(true);
+    try {
+      const resp = await fetch(`/api/agent-tasks/${encodeURIComponent(task.id)}/personal-gmail-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: form.contactEmail || selected.contactEmail,
+          subject: parsed.subject,
+          bodyText: parsed.body || edited
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Gmail draft could not be created.");
+      if (data.task) setAgentTasks(current => current.map(row => (row.id === data.task.id ? data.task : row)));
+      setNotice("Gmail draft created in the connected personal sales inbox.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Gmail draft could not be created.");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
+
+  function renderSalesDraftReview() {
+    if (!latestSalesEmailTask) return null;
+    const draftText = draftEdits[latestSalesEmailTask.id] ?? latestSalesEmailTask.output?.summary ?? "";
+    const hasOutput = Boolean(latestSalesEmailTask.output?.summary?.trim());
+    const gmailDraftCreated = latestSalesEmailTask.output?.links?.some(link => link.startsWith("personal-gmail-draft:"));
+    return (
+      <div className="lr-ceo-draft-review">
+        <div className="lr-ceo-draft-review-head">
+          <span>{latestSalesEmailTask.provider}</span>
+          <strong>{taskStatusLabel(latestSalesEmailTask.status)}</strong>
+          <small>Updated {formatDate(latestSalesEmailTask.updatedAt)}</small>
+        </div>
+        {hasOutput ? (
+          <>
+            <textarea
+              value={draftText}
+              onChange={event => setDraftEdits(current => ({ ...current, [latestSalesEmailTask.id]: event.target.value }))}
+              aria-label="Sales email draft"
+            />
+            <div className="lr-ceo-action-row">
+              <button
+                type="button"
+                className="lr-ceo-secondary-btn"
+                onClick={() => updateSalesDraftTask(latestSalesEmailTask, "needs_approval", draftText, "Sales draft edits saved.")}
+                disabled={draftBusy}
+              >
+                Save edits
+              </button>
+              <button
+                type="button"
+                onClick={() => createGmailDraftFromSalesTask(latestSalesEmailTask)}
+                disabled={draftBusy || !(form.contactEmail || selected?.contactEmail) || gmailDraftCreated}
+              >
+                {gmailDraftCreated ? "Gmail draft created" : "Create Gmail draft"}
+              </button>
+              <button
+                type="button"
+                className="lr-ceo-secondary-btn"
+                onClick={() => updateSalesDraftTask(latestSalesEmailTask, "completed", draftText, "Sales draft approved.")}
+                disabled={draftBusy}
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                className="lr-ceo-link-btn"
+                onClick={() =>
+                  updateSalesDraftTask(
+                    latestSalesEmailTask,
+                    "completed",
+                    `${draftText}\n\nDiscarded by operator.`,
+                    "Sales draft discarded."
+                  )
+                }
+                disabled={draftBusy}
+              >
+                Discard
+              </button>
+            </div>
+          </>
+        ) : (
+          <p>Draft task created. The draft will appear here after Claude finishes.</p>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -980,6 +1150,7 @@ export default function SalesFunnelPage() {
                     <span>{labelForSender(form.emailSenderType || selected?.emailSenderType || "personal")}</span>
                     <small>{visibleSenderAddress(selected, form)}</small>
                   </div>
+                  {renderSalesDraftReview()}
                 </div>
                 {renderActionControl("sales_email", "Draft", () => createAgentTask("sales_email"), !selected || taskBusy)}
               </div>

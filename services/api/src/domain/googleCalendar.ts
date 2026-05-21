@@ -185,6 +185,30 @@ export async function createSupportGmailDraftReply(messageId: string, bodyText: 
   return draft.data;
 }
 
+export async function createPersonalGmailDraftEmail(input: { to: string; subject: string; bodyText: string }) {
+  const gmail = await getAuthedPersonalGmailClient();
+  const to = input.to.replace(/\s+/g, " ").trim();
+  const subject = input.subject.replace(/\s+/g, " ").trim() || "LeadRider follow-up";
+  const bodyText = input.bodyText.trim();
+  if (!to) throw new Error("Recipient email is required.");
+  if (!bodyText) throw new Error("Draft body is required.");
+  const lines = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    bodyText
+  ];
+  const raw = Buffer.from(lines.join("\r\n")).toString("base64url");
+  const draft = await gmail.users.drafts.create({
+    userId: "me",
+    requestBody: {
+      message: { raw }
+    }
+  });
+  return draft.data;
+}
+
 export async function trashSupportGmailMessage(messageId: string) {
   const gmail = await getAuthedSupportGmailClient();
   const resp = await gmail.users.messages.trash({
