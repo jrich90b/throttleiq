@@ -47,6 +47,8 @@ type ZoomStatus = {
   missing?: string[];
 };
 
+type SalesActionId = "research" | "sales_email" | "schedule_demo" | "agreement" | "onboarding" | "dealer_setup";
+
 type ProspectForm = {
   dealerName: string;
   contactName: string;
@@ -102,6 +104,7 @@ const stageLabels: Record<SalesProspectStage, string> = {
 
 const funnelStages: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent"];
 const stageProgression: SalesProspectStage[] = ["new", "contacted", "discovery", "demo_scheduled", "proposal", "agreement_sent", "closed_won"];
+const actionStateStorageKey = "lr.salesFunnel.actionState.v1";
 
 function toForm(prospect: SalesProspect): ProspectForm {
   return {
@@ -195,6 +198,8 @@ export default function SalesFunnelPage() {
   const [taskBusy, setTaskBusy] = useState(false);
   const [zoomStatus, setZoomStatus] = useState<ZoomStatus | null>(null);
   const [zoomBusy, setZoomBusy] = useState(false);
+  const [completedActions, setCompletedActions] = useState<string[]>([]);
+  const [reopenedActions, setReopenedActions] = useState<string[]>([]);
 
   const selected = useMemo(
     () => prospects.find(prospect => prospect.id === selectedId) ?? prospects[0] ?? null,
@@ -204,6 +209,17 @@ export default function SalesFunnelPage() {
   useEffect(() => {
     void loadProspects();
     void loadZoomStatus();
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(actionStateStorageKey) || "{}");
+      setCompletedActions(Array.isArray(saved.completed) ? saved.completed : []);
+      setReopenedActions(Array.isArray(saved.reopened) ? saved.reopened : []);
+    } catch {
+      setCompletedActions([]);
+      setReopenedActions([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -220,6 +236,78 @@ export default function SalesFunnelPage() {
     const pipeline = open.reduce((sum, row) => sum + moneyValue(row.expectedMonthly), 0);
     return { open: open.length, proposals: proposals.length, won: won.length, pipeline };
   }, [prospects]);
+
+  function persistActionState(nextCompleted: string[], nextReopened: string[]) {
+    setCompletedActions(nextCompleted);
+    setReopenedActions(nextReopened);
+    window.localStorage.setItem(actionStateStorageKey, JSON.stringify({ completed: nextCompleted, reopened: nextReopened }));
+  }
+
+  function actionKey(prospectId: string, actionId: SalesActionId) {
+    return `${prospectId}:${actionId}`;
+  }
+
+  function markActionCompleted(actionId: SalesActionId, prospectId = selected?.id) {
+    if (!prospectId) return;
+    const key = actionKey(prospectId, actionId);
+    const nextCompleted = completedActions.includes(key) ? completedActions : [...completedActions, key];
+    const nextReopened = reopenedActions.filter(row => row !== key);
+    persistActionState(nextCompleted, nextReopened);
+  }
+
+  function reopenAction(actionId: SalesActionId) {
+    if (!selected) return;
+    const key = actionKey(selected.id, actionId);
+    const nextReopened = reopenedActions.includes(key) ? reopenedActions : [...reopenedActions, key];
+    persistActionState(completedActions, nextReopened);
+    setNotice(`${selected.dealerName}: ${actionLabel(actionId)} reopened.`);
+  }
+
+  function actionLabel(actionId: SalesActionId) {
+    return {
+      research: "Research",
+      sales_email: "Sales follow-up",
+      schedule_demo: "Schedule demo",
+      agreement: "Agreement",
+      onboarding: "Draft onboarding",
+      dealer_setup: "Dealer setup"
+    }[actionId];
+  }
+
+  function isActionReopened(actionId: SalesActionId) {
+    return !!selected && reopenedActions.includes(actionKey(selected.id, actionId));
+  }
+
+  function isActionCompleted(actionId: SalesActionId) {
+    if (!selected || isActionReopened(actionId)) return false;
+    const key = actionKey(selected.id, actionId);
+    if (completedActions.includes(key)) return true;
+    if (actionId === "sales_email") return isAtLeastStage(selected.stage, "contacted");
+    if (actionId === "schedule_demo") return Boolean(form.zoomLink || selected.zoomLink);
+    if (actionId === "agreement") return isAtLeastStage(selected.stage, "proposal") || Boolean(form.docusignPacketId || selected.docusignPacketId);
+    if (actionId === "onboarding") return Boolean(form.onboardingEmailThread || selected.onboardingEmailThread);
+    if (actionId === "dealer_setup") return selected.stage === "closed_won";
+    return false;
+  }
+
+  function renderActionControl(actionId: SalesActionId, buttonLabel: string, onClick: () => void, disabled: boolean) {
+    if (isActionCompleted(actionId)) {
+      return (
+        <div className="lr-ceo-action-complete">
+          <span aria-hidden="true">✓</span>
+          <strong>Done</strong>
+          <button type="button" className="lr-ceo-link-btn" onClick={() => reopenAction(actionId)}>
+            Reopen
+          </button>
+        </div>
+      );
+    }
+    return (
+      <button type="button" className="lr-ceo-secondary-btn" onClick={onClick} disabled={disabled}>
+        {buttonLabel}
+      </button>
+    );
+  }
 
   async function loadProspects() {
     try {
@@ -358,6 +446,7 @@ export default function SalesFunnelPage() {
       setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
       setForm(toForm(data.prospect));
       setNotice(`Zoom meeting created for ${data.prospect.dealerName}.`);
+      markActionCompleted("schedule_demo", data.prospect.id);
       await advanceProspectStage(data.prospect, "demo_scheduled", `Zoom meeting created for ${data.prospect.dealerName}.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Zoom meeting could not be created.");
@@ -376,6 +465,7 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be created.");
       if (data.prospect) setProspects(current => current.map(row => (row.id === data.prospect.id ? data.prospect : row)));
+      if (data.prospect) markActionCompleted("dealer_setup", data.prospect.id);
       if (data.prospect) await advanceProspectStage(data.prospect, "closed_won", `${data.setup.dealerName} is in Dealer Setup.`);
       const setupUrl = `/command/clients/new?setup=${encodeURIComponent(data.setup.id)}`;
       setNotice(`${data.setup.dealerName} is in Dealer Setup. ${data.existing ? "Opening existing setup." : "Opening new setup."}`);
@@ -486,6 +576,14 @@ export default function SalesFunnelPage() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Agent task could not be created.");
       setNotice(`Agent task created: ${data.task.title}.`);
+      const completedActionByTask: Record<typeof action, SalesActionId> = {
+        sales_email: "sales_email",
+        zoom: "schedule_demo",
+        onboarding: "onboarding",
+        docusign: "agreement",
+        research: "research"
+      };
+      markActionCompleted(completedActionByTask[action]);
       const autoStageByAction: Partial<Record<typeof action, SalesProspectStage>> = {
         sales_email: "contacted",
         docusign: "proposal"
@@ -735,14 +833,14 @@ export default function SalesFunnelPage() {
                   <strong>Research</strong>
                   <p>Find setup blockers and lead-volume clues.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("research")} disabled={!selected || taskBusy}>Research</button>
+                {renderActionControl("research", "Research", () => createAgentTask("research"), !selected || taskBusy)}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Sales follow-up</strong>
                   <p>Draft from {form.emailSenderAddress || "joe.hartrich@leadrider.ai"}.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("sales_email")} disabled={!selected || taskBusy}>Draft</button>
+                {renderActionControl("sales_email", "Draft", () => createAgentTask("sales_email"), !selected || taskBusy)}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
@@ -754,28 +852,28 @@ export default function SalesFunnelPage() {
                   </label>
                   {(form.zoomLink || selected?.zoomLink) ? <small>{form.zoomLink || selected?.zoomLink}</small> : null}
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt)}>Schedule</button>
+                {renderActionControl("schedule_demo", "Schedule", createZoomMeeting, !selected || zoomBusy || !zoomStatus?.connected || (!form.nextStepAt && !selected?.nextStepAt))}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Agreement</strong>
                   <p>Prepare missing legal and pricing fields.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("docusign")} disabled={!selected || taskBusy}>Prepare</button>
+                {renderActionControl("agreement", "Prepare", () => createAgentTask("docusign"), !selected || taskBusy)}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Draft onboarding</strong>
                   <p>Prepare dealer onboarding copy after proposal stage.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy || !isAtLeastStage(selected.stage, "proposal")}>Draft</button>
+                {renderActionControl("onboarding", "Draft", () => createAgentTask("onboarding"), !selected || taskBusy || !isAtLeastStage(selected.stage, "proposal"))}
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Dealer setup</strong>
                   <p>Push a won dealer into the onboarding setup checklist.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={pushToDealerSetup} disabled={busy || !selected}>Push</button>
+                {renderActionControl("dealer_setup", "Push", pushToDealerSetup, busy || !selected)}
               </div>
             </div>
           </article>

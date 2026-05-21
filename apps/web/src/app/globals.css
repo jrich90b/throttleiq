@@ -742,6 +742,46 @@ a {
   color: #f7fbff;
 }
 
+.lr-ceo-action-complete {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.42rem;
+  min-height: 38px;
+  padding: 0.35rem 0.48rem 0.35rem 0.42rem;
+  border: 1px solid rgba(116, 214, 128, 0.42);
+  border-radius: 999px;
+  background: rgba(116, 214, 128, 0.12);
+}
+
+.lr-ceo-action-complete span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #74d680;
+  color: #052e16;
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.lr-ceo-action-complete strong {
+  color: #dcfce7;
+  font-size: 0.86rem;
+}
+
+.lr-ceo-shell .lr-ceo-link-btn {
+  min-height: 0;
+  border: 0;
+  padding: 0.2rem 0.35rem;
+  background: transparent;
+  color: #ffd7ad;
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
 .lr-ceo-form-stack label {
   display: grid;
   gap: 0.42rem;
