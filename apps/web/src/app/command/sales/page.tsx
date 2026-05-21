@@ -1574,7 +1574,7 @@ export default function SalesFunnelPage() {
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_lost" })} disabled={busy}>Mark lost</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Mark won</button>
-                  <button type="button" className="lr-ceo-link-btn" onClick={deleteProspect} disabled={busy}>Delete mistake</button>
+                  <button type="button" className="lr-ceo-danger-btn" onClick={deleteProspect} disabled={busy}>Delete bad entry</button>
                 </div>
               </>
             ) : (

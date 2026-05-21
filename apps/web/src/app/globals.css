@@ -338,6 +338,12 @@ a {
   color: #eef4ff;
 }
 
+.lr-ceo-shell .lr-ceo-danger-btn {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+}
+
 .lr-ceo-button-link {
   display: inline-flex;
   align-items: center;
