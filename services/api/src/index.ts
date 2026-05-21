@@ -26353,11 +26353,14 @@ app.get("/public/booking/config", async (req, res) => {
 });
 
 function commandBookingBaseUrl(req: express.Request) {
-  const configured = String(process.env.LEADRIDER_WEB_BASE_URL ?? process.env.PUBLIC_BASE_URL ?? "").trim();
+  const configured = String(process.env.LEADRIDER_WEB_BASE_URL ?? process.env.COMMAND_BOOKING_BASE_URL ?? "").trim();
   if (configured) return configured.replace(/\/$/, "");
-  const proto = String(req.get("x-forwarded-proto") ?? req.protocol ?? "https").split(",")[0].trim() || "https";
-  const host = String(req.get("x-forwarded-host") ?? req.get("host") ?? "www.leadrider.ai").split(",")[0].trim();
-  return `${proto}://${host}`.replace(/\/$/, "");
+  const forwardedHost = String(req.get("x-forwarded-host") ?? req.get("host") ?? "").split(",")[0].trim();
+  if (/(\.|^)leadrider\.ai$/i.test(forwardedHost) && !/^api\./i.test(forwardedHost)) {
+    const proto = String(req.get("x-forwarded-proto") ?? req.protocol ?? "https").split(",")[0].trim() || "https";
+    return `${proto}://${forwardedHost}`.replace(/\/$/, "");
+  }
+  return "https://leadrider.ai";
 }
 
 function commandBookingUrlForUser(req: express.Request, userId: string) {
