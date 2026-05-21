@@ -30759,8 +30759,33 @@ function extractStaffPeople(pages: ProspectResearchPage[]) {
     /\b(owner|principal|president|general manager|manager|sales|salesman|salesperson|finance|business manager|accounting|office|assistant|events?|service|parts|accessories|motorclothes|marketing|bdc|internet|director|controller)\b/i;
   const departmentOnlyRe = /^(sales|finance|parts(?:\s*&\s*accessories)?|motorclothes®?|service|office|management)$/i;
   const badNameRe = /\b(home|models|motorcycles|shop|service|parts|financing|dealer|contact|street|syracuse|performance|harley|davidson|welcome|previous|next)\b/i;
+  const cleanStaffName = (value: string) => {
+    let cleaned = compactWhitespace(value.replace(/&reg;/gi, "®"));
+    for (let i = 0; i < 4; i += 1) {
+      const next = cleaned.replace(/^(?:team|sales|finance|parts|accessories|parts\s*&\s*accessories|motorclothes®?|motor\s*clothes|service|office|management|sales associate|service advisor|advisor|associate)\s+/i, "");
+      if (next === cleaned) break;
+      cleaned = compactWhitespace(next);
+    }
+    return cleaned;
+  };
   const people: Array<{ name: string; role: string | null; sourceUrl: string | null }> = [];
   for (const page of staffPages) {
+    const compactText = compactWhitespace(page.text);
+    const rolePattern =
+      "(?:Dealer Principal|General Manager|Motorcycle Salesman|Motorcycle Salesperson|Finance Manager|Business Manager|Parts Manager|Chrome Consultant|Parts Associate|MotorClothes(?:®|&reg;)? Sales Associate|Title Clerk\\/?\\s*Motor Clothes|Service Manager|Service Advisor|Service Parts Liaison|Motorcycle Technician|Detailer|Accounting|Office Assistant\\/?\\s*Events?|Office Assistant|Sales Manager|Internet Sales|Marketing Manager|BDC Manager|Controller|Owner|President)";
+    const staffPairRe = new RegExp(`\\b([A-Z][A-Za-z.'-]+(?:\\s+[A-Z][A-Za-z.'-]+){1,3})\\s+(${rolePattern})\\b`, "g");
+    let staffPair: RegExpExecArray | null;
+    while ((staffPair = staffPairRe.exec(compactText))) {
+      const name = cleanStaffName(staffPair[1]);
+      const role = compactWhitespace(staffPair[2].replace(/&reg;/gi, "®"));
+      if (!nameRe.test(name) || badNameRe.test(name)) continue;
+      people.push({
+        name,
+        role,
+        sourceUrl: page.url
+      });
+    }
+
     const lines = page.text
       .split(/\n+/)
       .map(line => compactWhitespace(line))
@@ -30777,13 +30802,14 @@ function extractStaffPeople(pages: ProspectResearchPage[]) {
       const next = lines[i + 1] || "";
       const afterNext = lines[i + 2] || "";
       const roleLine = next === line ? afterNext : next;
+      const name = cleanStaffName(line);
       const role =
         roleLine && roleRe.test(roleLine) && !nameRe.test(roleLine)
           ? roleLine
           : currentDepartment || null;
       if (!role) continue;
       people.push({
-        name: line,
+        name,
         role,
         sourceUrl: page.url
       });
