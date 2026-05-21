@@ -4173,6 +4173,83 @@ app.put("/inventory", async (req, res) => {
   }
 });
 
+function inventoryAvailabilityRecordMatches(
+  record: any,
+  stockId?: string | null,
+  vin?: string | null
+): boolean {
+  const stock = String(stockId ?? "").trim().toLowerCase();
+  const v = String(vin ?? "").trim().toLowerCase();
+  const recordStock = String(record?.stockId ?? "").trim().toLowerCase();
+  const recordVin = String(record?.vin ?? "").trim().toLowerCase();
+  const recordId = String(record?.id ?? "").trim().toLowerCase();
+  return !!((stock && (recordStock === stock || recordId === stock)) || (v && (recordVin === v || recordId === v)));
+}
+
+async function clearLinkedInventoryAvailabilityConversations(
+  stockId?: string | null,
+  vin?: string | null
+): Promise<number> {
+  const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+  const linked = new Map<string, { hold: boolean; sold: boolean }>();
+  for (const hold of Object.values(holds ?? {})) {
+    if (!inventoryAvailabilityRecordMatches(hold, stockId, vin)) continue;
+    const convId = String(hold?.convId ?? "").trim();
+    if (!convId) continue;
+    linked.set(convId, { ...(linked.get(convId) ?? { hold: false, sold: false }), hold: true });
+  }
+  for (const sold of Object.values(solds ?? {})) {
+    if (!inventoryAvailabilityRecordMatches(sold, stockId, vin)) continue;
+    const convId = String(sold?.convId ?? "").trim();
+    if (!convId) continue;
+    linked.set(convId, { ...(linked.get(convId) ?? { hold: false, sold: false }), sold: true });
+  }
+
+  let updated = 0;
+  for (const [convId, flags] of linked) {
+    const conv = getConversation(convId);
+    if (!conv) continue;
+    let changed = false;
+    if (flags.hold && conv.hold && inventoryAvailabilityRecordMatches(conv.hold, stockId, vin)) {
+      conv.hold = undefined;
+      if (/\bhold\b/i.test(String(conv.closedReason ?? ""))) {
+        conv.status = "open";
+        conv.closedAt = undefined;
+        conv.closedReason = undefined;
+      }
+      if (conv.followUp?.reason === "unit_hold" || conv.followUp?.reason === "order_hold") {
+        setFollowUpMode(conv, "active", "inventory_marked_available");
+      }
+      changed = true;
+    }
+    if (flags.sold && conv.sale && inventoryAvailabilityRecordMatches(conv.sale, stockId, vin)) {
+      conv.sale = undefined;
+      if (String(conv.closedReason ?? "").trim().toLowerCase() === "sold") {
+        conv.status = "open";
+        conv.closedAt = undefined;
+        conv.closedReason = undefined;
+      }
+      if (conv.followUp?.reason === "post_sale" || conv.followUpCadence?.kind === "post_sale") {
+        stopFollowUpCadence(conv, "inventory_marked_available");
+        setFollowUpMode(conv, "active", "inventory_marked_available");
+      }
+      changed = true;
+    }
+    if (changed) {
+      appendOutbound(
+        conv,
+        "system",
+        conv.leadKey,
+        `Inventory status cleared: ${[stockId, vin].filter(Boolean).join(" / ")} marked available.`,
+        "human"
+      );
+      saveConversation(conv);
+      updated += 1;
+    }
+  }
+  return updated;
+}
+
 async function clearInventoryAvailabilityRefs(stockId?: string | null, vin?: string | null): Promise<void> {
   const stock = String(stockId ?? "").trim();
   const v = String(vin ?? "").trim();
@@ -4208,8 +4285,9 @@ app.post("/inventory/availability", async (req, res) => {
     const actorName = String(user?.name ?? user?.email ?? "").trim() || undefined;
 
     if (status === "available") {
+      const linkedConversationUpdates = await clearLinkedInventoryAvailabilityConversations(stockId, vin);
       await clearInventoryAvailabilityRefs(stockId, vin);
-      return res.json({ ok: true, status: "available", stockId, vin });
+      return res.json({ ok: true, status: "available", stockId, vin, linkedConversationUpdates });
     }
 
     if (status === "hold") {
