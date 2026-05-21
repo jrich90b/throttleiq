@@ -300,7 +300,6 @@ import {
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
 import {
-  DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT,
   buildNoResponseFallbackReply,
   buildRouteDecisionSnapshot,
   evaluateNoResponseFallback,
@@ -9934,6 +9933,18 @@ function isFinanceOutcomeTokenForConversation(conv: any, token: string): boolean
   return String((conv as any)?.financeOutcomeNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized;
 }
 
+function isAppointmentOutcomeTokenForConversation(conv: any, token: string): boolean {
+  const normalized = String(token ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return String(conv?.appointment?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized;
+}
+
+function isDealerRideOutcomeTokenForConversation(conv: any, token: string): boolean {
+  const normalized = String(token ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return String(conv?.dealerRide?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized;
+}
+
 type StaffOutcomeTokenMatch = {
   conv: any;
   kind: "appointment" | "dealer_ride" | "finance";
@@ -10213,6 +10224,155 @@ function buildDealerLeadAppPostRideReply(args: {
     return `${intro} That ${modelLabel} is no longer available, but I can help you compare similar options if you want.`;
   }
   return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
+}
+
+function normalizeOutcomeCustomerModelLabel(raw: string): string {
+  const source = String(raw ?? "").trim();
+  if (!source) return "";
+  const normalizeAcronyms = (value: string) =>
+    normalizeDisplayCase(value)
+      .replace(/\bSt\b/g, "ST")
+      .replace(/\bCvo\b/g, "CVO")
+      .replace(/\bH[-\s]?D\b/gi, "H-D");
+  const catalogLabel = pickCatalogModelLabelFromText(source, getHarleyModelLexicon());
+  if (catalogLabel) return normalizeAcronyms(catalogLabel);
+  const canonicalLabel = canonicalizeWatchModelLabel(source);
+  if (canonicalLabel && canonicalLabel !== source) return normalizeAcronyms(canonicalLabel);
+  const cleaned = source
+    .replace(/\b(?:19|20)\d{2}\b/g, " ")
+    .replace(/\bharley[-\s]?davidson\b/gi, " ")
+    .replace(/\bh[-\s]?d\b/gi, " ")
+    .replace(/\b(?:FLHX|FLTRX|FLTRXS|FLTRK|FLHT|FLHXS|FXLRS|FXLRST|XL1200T|RH975|RH1250S|RA1250S?)\b/gi, " ")
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalizeAcronyms(cleaned);
+}
+
+function getDealerRideOutcomeModelLabel(conv: any, unit?: OutcomeUnitInput | null): string {
+  const unitLabel = normalizeOutcomeCustomerModelLabel(String(unit?.label ?? unit?.model ?? "").trim());
+  if (unitLabel) return unitLabel;
+  const sale = conv?.sale ?? {};
+  const saleLabel =
+    String(sale?.label ?? "").trim() ||
+    [sale?.year, sale?.make, sale?.model, sale?.trim, sale?.color].filter(Boolean).join(" ").trim();
+  const soldLabel = normalizeOutcomeCustomerModelLabel(saleLabel);
+  if (soldLabel) return soldLabel;
+  const dealerLeadAppText = [
+    conv?.lead?.comment,
+    conv?.latestLead?.comment,
+    ...(Array.isArray(conv?.messages) ? conv.messages.map((m: any) => m?.body) : [])
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const demoBikeLabel = normalizeOutcomeCustomerModelLabel(extractDealerLeadAppDemoBikeLabel(dealerLeadAppText) ?? "");
+  if (demoBikeLabel) return demoBikeLabel;
+  const leadVehicle = conv?.lead?.vehicle ?? {};
+  return (
+    normalizeOutcomeCustomerModelLabel(
+      [leadVehicle?.year, leadVehicle?.model ?? leadVehicle?.description].filter(Boolean).join(" ")
+    ) || "bike"
+  );
+}
+
+function buildDealerRideOutcomeCustomerDraft(args: {
+  conv: any;
+  unit?: OutcomeUnitInput | null;
+  outcome: LegacyAppointmentOutcomeStatus;
+  primaryStatus?: AppointmentPrimaryOutcome;
+  secondaryStatus?: AppointmentSecondaryOutcome;
+  note?: string | null;
+  dealerName?: string | null;
+  agentName?: string | null;
+}): string {
+  const firstName = normalizeDisplayCase(args.conv?.lead?.firstName);
+  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+  const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+  const senderFull =
+    String(args.conv?.leadOwner?.name ?? "").trim() ||
+    String(args.agentName ?? "").trim() ||
+    "Alexandra";
+  const senderFirst = normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
+  const modelLabel = getDealerRideOutcomeModelLabel(args.conv, args.unit);
+  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in today.`;
+
+  if (args.secondaryStatus === "sold" || args.outcome === "sold") {
+    return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;
+  }
+  if (args.secondaryStatus === "hold" || args.outcome === "hold") {
+    return `${intro} I have the ${modelLabel} noted while we work through the next steps. I’ll keep you posted.`;
+  }
+  if (args.secondaryStatus === "finance_not_approved" || args.outcome === "financing_declined") {
+    return `${intro} I’ll follow up with you about the finance options and next steps.`;
+  }
+  if (args.secondaryStatus === "finance_needs_info" || args.outcome === "financing_needs_info") {
+    return `${intro} I’ll follow up with you about what else we need for finance.`;
+  }
+  if (args.secondaryStatus === "lost" || args.outcome === "lost" || args.outcome === "bought_elsewhere") {
+    return `${intro} I appreciate you giving us the chance to help. If anything changes, just text me anytime.`;
+  }
+  if (args.secondaryStatus === "needs_follow_up" || args.outcome === "follow_up") {
+    return `${intro} I’ll follow up with the next steps we talked about.`;
+  }
+  return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
+}
+
+async function queueDealerRideOutcomeCustomerDraft(args: {
+  conv: any;
+  unit?: OutcomeUnitInput | null;
+  outcome: LegacyAppointmentOutcomeStatus;
+  primaryStatus?: AppointmentPrimaryOutcome;
+  secondaryStatus?: AppointmentSecondaryOutcome;
+  note?: string | null;
+  source?: string;
+}): Promise<{ queued: boolean; reason?: string; draft?: string }> {
+  const conv = args.conv;
+  if (!conv) return { queued: false, reason: "missing_conversation" };
+  conv.dealerRide = conv.dealerRide ?? {};
+  conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+  if (conv.dealerRide.staffNotify.customerFollowUpDraftedAt) {
+    return { queued: false, reason: "already_drafted" };
+  }
+  const profile = await getDealerProfileHot();
+  const draft = buildDealerRideOutcomeCustomerDraft({
+    conv,
+    unit: args.unit,
+    outcome: args.outcome,
+    primaryStatus: args.primaryStatus,
+    secondaryStatus: args.secondaryStatus,
+    note: args.note,
+    dealerName: profile?.dealerName,
+    agentName: profile?.agentName
+  });
+  const preferredMethod = String(conv?.lead?.preferredContactMethod ?? "").trim().toLowerCase();
+  if (preferredMethod === "phone") {
+    addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer with the dealer ride outcome follow-up.");
+    return { queued: false, reason: "phone_preferred", draft };
+  }
+  if (preferredMethod === "email") {
+    conv.emailDraft = formatEmailBodyForConversation(draft, conv);
+  } else {
+    const toNumber = normalizePhone(conv?.lead?.phone ?? conv?.leadKey ?? "");
+    if (!toNumber.startsWith("+")) return { queued: false, reason: "missing_phone", draft };
+    if (
+      isRecentDuplicateOutbound(conv, toNumber, draft, {
+        providers: ["draft_ai", "twilio", "human"],
+        windowMs: 24 * 60 * 60 * 1000
+      })
+    ) {
+      return { queued: false, reason: "duplicate", draft };
+    }
+    appendOutbound(conv, "salesperson", toNumber, draft, "draft_ai");
+  }
+  conv.dealerRide.staffNotify.customerFollowUpDraftedAt = new Date().toISOString();
+  recordRouteOutcome("live", "dealer_ride_outcome_customer_draft", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    source: args.source ?? "unknown",
+    outcome: args.outcome,
+    secondaryStatus: args.secondaryStatus
+  });
+  return { queued: true, draft };
 }
 
 function isGenericMetaOfferModel(model?: string | null): boolean {
@@ -27887,7 +28047,16 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
     await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", note || undefined);
   }
 
-  const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
+  const isDealerRideOutcome = isDealerRideOutcomeTokenForConversation(conv, token);
+  const isAppointmentOutcome = isAppointmentOutcomeTokenForConversation(conv, token);
+  const outcomeTarget =
+    isDealerRideOutcome && !isAppointmentOutcome
+      ? (() => {
+          conv.dealerRide = conv.dealerRide ?? {};
+          conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
+          return conv.dealerRide.staffNotify;
+        })()
+      : getOutcomeStaffNotifyTarget(conv);
   outcomeTarget.outcome = {
     status: outcome as any,
     primaryStatus: normalizedOutcome.primaryStatus,
@@ -27928,6 +28097,17 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
     plan: appointmentFollowUpPlan,
     actor: { name: "public outcome form" }
   });
+  if (isDealerRideOutcome && !isAppointmentOutcome) {
+    await queueDealerRideOutcomeCustomerDraft({
+      conv,
+      unit,
+      outcome,
+      primaryStatus: normalizedOutcome.primaryStatus,
+      secondaryStatus: normalizedOutcome.secondaryStatus,
+      note,
+      source: "public_outcome_form"
+    });
+  }
   markOutcomeRelatedTodosDone(conv, {
     includeFinance: outcome === "financing_declined" || outcome === "financing_needs_info"
   });
@@ -39427,7 +39607,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       String(conv.leadOwner?.name ?? "").trim() ||
       "salesperson";
     const ownerPhone = pickUserPhone(owner);
-    if (ownerPhone && !appointmentOutcomeWins) {
+    const dealerRideOutcomeAlreadyRequested = !!conv.dealerRide?.staffNotify?.followUpSentAt;
+    if (ownerPhone && !appointmentOutcomeWins && !dealerRideOutcomeAlreadyRequested) {
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
@@ -39457,7 +39638,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         conv.dealerRide.staffNotify.followUpSentAt =
           conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
       }
-    } else if (!appointmentOutcomeWins) {
+    } else if (!appointmentOutcomeWins && !dealerRideOutcomeAlreadyRequested) {
       addTodo(
         conv,
         "note",
@@ -39467,23 +39648,28 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
     saveConversation(conv);
-    return respondRegenerateSkipped(
-      regenPreRouteDecision.note,
-      regenPreRouteDecision.draft ?? DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT
-    );
+    return respondRegenerateSkipped("dealer_ride_outcome_pending");
   }
   if (regenDealerRideEventLead) {
-    const inventoryStatus = await getLeadInventoryMatchStatusForDealerLeadApp(conv);
-    const reply = buildDealerLeadAppPostRideReply({
+    const dealerRideOutcome: any = conv?.dealerRide?.staffNotify?.outcome ?? null;
+    if (!dealerRideOutcome?.status) {
+      setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
+      stopFollowUpCadence(conv, "manual_handoff");
+      saveConversation(conv);
+      return respondRegenerateSkipped("dealer_ride_outcome_pending");
+    }
+    const reply = buildDealerRideOutcomeCustomerDraft({
       conv,
+      outcome: dealerRideOutcome.status,
+      primaryStatus: dealerRideOutcome.primaryStatus,
+      secondaryStatus: dealerRideOutcome.secondaryStatus,
+      note: dealerRideOutcome.note,
       dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
-      agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
-      inventoryStatus
+      agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra")
     });
-    recordRouteOutcome("regen", "dealer_ride_post_test_ride_ack", {
+    recordRouteOutcome("regen", "dealer_ride_outcome_customer_draft", {
       convId: conv.id,
-      leadKey: conv.leadKey,
-      inventoryStatus
+      leadKey: conv.leadKey
     });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);

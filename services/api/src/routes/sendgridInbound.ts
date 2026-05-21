@@ -4716,7 +4716,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       sent: false,
       reason: appointmentOutcomeWins ? "appointment_outcome_wins" : "not_sent"
     };
-    if (!appointmentOutcomeWins) {
+    const dealerRideOutcomeAlreadyRequested = !!conv.dealerRide?.staffNotify?.followUpSentAt;
+    if (dealerRideOutcomeAlreadyRequested) {
+      staffSms.reason = "outcome_prompt_already_sent";
+    }
+    if (!appointmentOutcomeWins && !dealerRideOutcomeAlreadyRequested) {
       const token = ensureDealerRideOutcomeToken(conv);
       const outcomeLink = buildStaffOutcomeLink(token);
       addDealerRideOutcomeTodo(conv, { customerName, token, outcomeLink });
@@ -4746,40 +4750,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           conv.dealerRide.staffNotify.followUpSentAt ?? new Date().toISOString();
       }
     }
-    const profile = await getDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const ownerDisplayRaw =
-      String(owner?.firstName ?? "").trim() ||
-      String(owner?.name ?? "").trim() ||
-      String(conv.leadOwner?.name ?? "").trim() ||
-      String(profile?.agentName ?? "Alexandra").trim();
-    const ownerDisplay = normalizeDisplayCase(ownerDisplayRaw);
-    const ownerFirst = normalizeDisplayCase(ownerDisplay.split(/\s+/).filter(Boolean)[0] ?? ownerDisplay);
-    const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const customerAck =
-      `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${ownerFirst} at ${dealerName}. ` +
-      "Thanks again for coming in for the test ride. " +
-      "If any questions come up or you’d like to discuss options further, just text me anytime.";
-    const shouldSendCustomerReply = shouldSendDealerLeadCustomerReply(conv, event);
-    if (shouldSendCustomerReply.allow) {
-      const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
-      if (preferredMethod === "email") {
-        setEmailDraft(conv, customerAck);
-      } else if (preferredMethod === "phone") {
-        addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
-      } else {
-        appendOutbound(conv, "dealership", leadKey, customerAck, "draft_ai");
-      }
-    } else {
-      addTodo(
-        conv,
-        "note",
-        `Suppressed repeat Dealer Lead App customer auto-reply (${shouldSendCustomerReply.reason}).`
-      );
-    }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
-    const shouldIncludeDraft = shouldSendCustomerReply.allow;
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -4791,52 +4763,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_no_purchase_manual_handoff",
-      draft: shouldIncludeDraft ? customerAck : undefined,
+      note: "dealer_ride_outcome_pending_no_customer_reply",
       staffSms
     });
   }
   if (isDealerRideEventLead) {
-    const profile = await getDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Alexandra";
-    const inventoryStatus = await getLeadInventoryMatchStatus(conv);
-    const customerAck = buildDealerLeadAppPostRideReply({
-      conv,
-      dealerName,
-      agentName,
-      inventoryStatus
-    });
-    const shouldSendCustomerReply = shouldSendDealerLeadCustomerReply(conv, event);
-    let mediaUrls: string[] | undefined;
-    if (inventoryStatus === "in_stock") {
-      const mediaPick = await pickLeadInventoryMedia(conv);
-      mediaUrls = mediaPick?.mediaUrls;
-    }
-    if (shouldSendCustomerReply.allow) {
-      const preferredMethod = String(conv.lead?.preferredContactMethod ?? "").trim().toLowerCase();
-      if (preferredMethod === "email") {
-        setEmailDraft(conv, customerAck);
-      } else if (preferredMethod === "phone") {
-        addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
-      } else {
-        appendOutbound(
-          conv,
-          "dealership",
-          leadKey,
-          customerAck,
-          "draft_ai",
-          undefined,
-          mediaUrls
-        );
-      }
-    } else {
-      addTodo(
-        conv,
-        "note",
-        `Suppressed repeat Dealer Lead App customer auto-reply (${shouldSendCustomerReply.reason}).`
-      );
-    }
+    setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
+    stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -4848,8 +4781,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_post_test_ride_ack",
-      draft: shouldSendCustomerReply.allow ? customerAck : undefined
+      note: "dealer_ride_outcome_pending_no_customer_reply"
     });
   }
 
