@@ -844,6 +844,23 @@ a {
   grid-column: 1 / -1;
 }
 
+.lr-ceo-compact-add {
+  margin-bottom: 0.9rem;
+}
+
+.lr-ceo-add-prospect-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+
+.lr-ceo-add-prospect-form .lr-ceo-action-row {
+  align-self: end;
+}
+
+.lr-ceo-sales-layout {
+  grid-template-columns: 1fr;
+}
+
 .lr-ceo-email-lanes {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1588,6 +1605,7 @@ a {
   .lr-ceo-facts,
   .lr-ceo-funnel-board,
   .lr-ceo-sales-form,
+  .lr-ceo-add-prospect-form,
   .lr-ceo-email-lanes,
   .lr-ceo-agent-composer,
   .lr-ceo-integration-strip,

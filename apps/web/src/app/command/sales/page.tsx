@@ -183,6 +183,7 @@ export default function SalesFunnelPage() {
   const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<ProspectForm>(emptyForm);
   const [newForm, setNewForm] = useState<ProspectForm>(emptyForm);
+  const [showAddProspect, setShowAddProspect] = useState(false);
   const [notice, setNotice] = useState("Sales Funnel is ready.");
   const [busy, setBusy] = useState(false);
   const [taskBusy, setTaskBusy] = useState(false);
@@ -244,6 +245,7 @@ export default function SalesFunnelPage() {
       setProspects(current => [data.prospect, ...current]);
       setSelectedId(data.prospect.id);
       setNewForm(emptyForm);
+      setShowAddProspect(false);
       setNotice(`${data.prospect.dealerName} added to the sales funnel.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Prospect could not be created.");
@@ -521,7 +523,9 @@ export default function SalesFunnelPage() {
           </div>
           <div className="lr-ceo-header-actions">
             <button type="button" className="lr-ceo-secondary-btn" onClick={loadProspects} disabled={busy}>Refresh</button>
-            <button type="button" onClick={createProspect} disabled={busy}>Add prospect</button>
+            <button type="button" onClick={() => setShowAddProspect(current => !current)} disabled={busy}>
+              {showAddProspect ? "Close add form" : "Add prospect"}
+            </button>
           </div>
         </header>
 
@@ -577,19 +581,18 @@ export default function SalesFunnelPage() {
           </article>
         </section>
 
-        <section className="lr-ceo-grid">
-          <article className="lr-ceo-panel">
+        {showAddProspect ? (
+          <section className="lr-ceo-panel lr-ceo-compact-add">
             <div className="lr-ceo-panel-title">
               <div>
                 <p className="lr-ceo-kicker">New prospect</p>
                 <h3>Add dealer</h3>
               </div>
             </div>
-            <div className="lr-ceo-form-stack">
+            <div className="lr-ceo-form-stack lr-ceo-add-prospect-form">
               <label>Dealer name<input value={newForm.dealerName} onChange={e => updateNew("dealerName", e.target.value)} placeholder="Dealer name" /></label>
               <label>Contact name<input value={newForm.contactName} onChange={e => updateNew("contactName", e.target.value)} placeholder="Primary contact" /></label>
               <label>Email<input value={newForm.contactEmail} onChange={e => updateNew("contactEmail", e.target.value)} placeholder="name@dealer.com" /></label>
-              <label>Phone<input value={newForm.contactPhone} onChange={e => updateNew("contactPhone", e.target.value)} placeholder="Phone" /></label>
               <label>Website<input value={newForm.website} onChange={e => updateNew("website", e.target.value)} placeholder="https://dealer.com" /></label>
               <label>Owner<input value={newForm.owner} onChange={e => updateNew("owner", e.target.value)} placeholder="Salesperson" /></label>
               <label>Plan
@@ -601,18 +604,16 @@ export default function SalesFunnelPage() {
                 </select>
               </label>
               <label>Expected monthly<input value={newForm.expectedMonthly} onChange={e => updateNew("expectedMonthly", e.target.value)} placeholder="$999/month" /></label>
-              <label>Email sender
-                <select
-                  value={newForm.emailSenderType}
-                  onChange={e => setNewForm(current => ({ ...current, emailSenderType: e.target.value as ProspectForm["emailSenderType"], emailSenderAddress: emailAddressForSender(e.target.value as ProspectForm["emailSenderType"]) }))}
-                >
-                  {emailSenderOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-              </label>
-              <label>Next step<textarea value={newForm.nextStep} onChange={e => updateNew("nextStep", e.target.value)} placeholder="Next step" /></label>
+              <label>Next step<input value={newForm.nextStep} onChange={e => updateNew("nextStep", e.target.value)} placeholder="Next step" /></label>
+              <div className="lr-ceo-action-row">
+                <button type="button" onClick={createProspect} disabled={busy || !newForm.dealerName.trim()}>Create prospect</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => setShowAddProspect(false)} disabled={busy}>Cancel</button>
+              </div>
             </div>
-          </article>
+          </section>
+        ) : null}
 
+        <section className="lr-ceo-grid lr-ceo-sales-layout">
           <article className="lr-ceo-panel lr-ceo-panel-wide">
             <div className="lr-ceo-panel-title">
               <div>
@@ -690,22 +691,12 @@ export default function SalesFunnelPage() {
                   <label>Next step<textarea value={form.nextStep} onChange={e => updateForm("nextStep", e.target.value)} /></label>
                   <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
                 </div>
-                <div className="lr-ceo-email-lanes">
-                  {emailSenderOptions.map(option => (
-                    <article className={form.emailSenderType === option.value ? "is-selected" : ""} key={option.value}>
-                      <strong>{option.label}</strong>
-                      <span>{option.email}</span>
-                      <small>{option.managedBy}</small>
-                    </article>
-                  ))}
-                </div>
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => saveProspect()} disabled={busy}>Save prospect</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "proposal" })} disabled={busy}>Move to proposal</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "agreement_sent" })} disabled={busy}>Agreement sent</button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => saveProspect({ stage: "closed_won" })} disabled={busy}>Closed won</button>
                   <button type="button" onClick={pushToDealerSetup} disabled={busy || !selected}>Push to dealer setup</button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={zoomBusy || !selected}>Create Zoom meeting</button>
                 </div>
               </>
             ) : (
@@ -716,53 +707,53 @@ export default function SalesFunnelPage() {
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
-                <p className="lr-ceo-kicker">Agent actions</p>
-                <h3>Sales ops</h3>
+                <p className="lr-ceo-kicker">Next actions</p>
+                <h3>Work this prospect</h3>
               </div>
               <span className="lr-ceo-status-attention">Approval gated</span>
             </div>
             <div className="lr-ceo-agent-list lr-ceo-sales-actions">
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Personal sales email</strong>
-                  <p>Ask Claude to draft from {form.emailSenderAddress || "joe.hartrich@leadrider.ai"} for approval before sending.</p>
+                  <strong>Draft email</strong>
+                  <p>From {form.emailSenderAddress || "joe.hartrich@leadrider.ai"}.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("sales_email")} disabled={!selected || taskBusy}>Draft sales email</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("sales_email")} disabled={!selected || taskBusy}>Draft</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Zoom and Fathom</strong>
-                  <p>Create a Zoom meeting link from the connected Zoom account and store it on the prospect.</p>
+                  <strong>Zoom meeting</strong>
+                  <p>Create and save a meeting link.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected}>Create meeting</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={createZoomMeeting} disabled={!selected || zoomBusy || !zoomStatus?.connected}>Create</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Onboarding email</strong>
-                  <p>Draft dealer communications from onboarding@leadrider.ai for review before sending.</p>
+                  <p>Prepare dealer onboarding copy.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy}>Draft email task</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("onboarding")} disabled={!selected || taskBusy}>Draft</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>DocuSign agreement</strong>
-                  <p>Prepare the agreement packet and missing legal fields without sending it.</p>
+                  <strong>Agreement</strong>
+                  <p>Prepare missing legal and pricing fields.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("docusign")} disabled={!selected || taskBusy}>Prepare packet</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("docusign")} disabled={!selected || taskBusy}>Prepare</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Texting platform</strong>
-                  <p>Plan Twilio, compliance, routing, and smoke tests for the future client.</p>
+                  <strong>Texting setup</strong>
+                  <p>Plan Twilio, compliance, and routing.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("texting")} disabled={!selected || taskBusy}>Create setup task</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("texting")} disabled={!selected || taskBusy}>Plan</button>
               </div>
               <div className="lr-ceo-agent-row">
                 <div>
-                  <strong>Prospect research</strong>
-                  <p>Ask Codex to gather setup blockers, lead volume clues, and sales context.</p>
+                  <strong>Research</strong>
+                  <p>Find setup blockers and lead-volume clues.</p>
                 </div>
-                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("research")} disabled={!selected || taskBusy}>Research task</button>
+                <button type="button" className="lr-ceo-secondary-btn" onClick={() => createAgentTask("research")} disabled={!selected || taskBusy}>Research</button>
               </div>
             </div>
           </article>
