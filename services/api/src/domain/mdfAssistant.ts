@@ -14,6 +14,15 @@ export type MdfUploadedFile = {
 
 type MdfFileRole = "invoice" | "proof_of_performance" | "creative" | "receipt" | "supporting_only" | "unknown";
 
+export type MdfInvoicePacket = {
+  vendorName: string;
+  invoiceDate: string;
+  invoiceNumber: string;
+  amount: string;
+  fileNames: string[];
+  description: string;
+};
+
 export type MdfClaimPacket = {
   claimType: "media" | "event" | "map_only" | "unknown";
   activityType: string;
@@ -32,6 +41,7 @@ export type MdfClaimPacket = {
     motorcyclesSold: string;
     paAlSales: string;
   };
+  invoices: MdfInvoicePacket[];
   descriptionDraft: string;
   eligibility: {
     status: "likely_eligible" | "review_needed" | "likely_ineligible" | "unknown";
@@ -61,6 +71,7 @@ const MDF_SCHEMA = {
     "activityType",
     "confidence",
     "extractedFields",
+    "invoices",
     "descriptionDraft",
     "eligibility",
     "requiredDocumentation",
@@ -103,6 +114,22 @@ const MDF_SCHEMA = {
         attendance: { type: "string" },
         motorcyclesSold: { type: "string" },
         paAlSales: { type: "string" }
+      }
+    },
+    invoices: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["vendorName", "invoiceDate", "invoiceNumber", "amount", "fileNames", "description"],
+        properties: {
+          vendorName: { type: "string" },
+          invoiceDate: { type: "string" },
+          invoiceNumber: { type: "string" },
+          amount: { type: "string" },
+          fileNames: { type: "array", items: { type: "string" } },
+          description: { type: "string" }
+        }
       }
     },
     descriptionDraft: { type: "string" },
@@ -181,6 +208,7 @@ function fallbackPacket(files: MdfUploadedFile[], reason: string): MdfClaimPacke
       motorcyclesSold: "",
       paAlSales: ""
     },
+    invoices: [],
     descriptionDraft: "",
     eligibility: {
       status: "unknown",
@@ -266,24 +294,56 @@ function openAiSafeFileName(name: string, fallback: string) {
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
+  const invoices = Array.isArray(packet.invoices)
+    ? packet.invoices
+        .map((row: any) => ({
+          vendorName: String(row?.vendorName ?? row?.vendor ?? "").trim(),
+          invoiceDate: String(row?.invoiceDate ?? row?.invoice_date ?? "").trim(),
+          invoiceNumber: String(row?.invoiceNumber ?? row?.invoice_number ?? "").trim(),
+          amount: String(row?.amount ?? row?.spend ?? row?.invoiceAmount ?? "").trim(),
+          fileNames: Array.isArray(row?.fileNames)
+            ? row.fileNames.map((v: unknown) => String(v)).filter(Boolean).slice(0, 12)
+            : [],
+          description: String(row?.description ?? "").trim()
+        }))
+        .filter((row: MdfInvoicePacket) => row.vendorName || row.invoiceDate || row.invoiceNumber || row.amount || row.fileNames.length)
+        .slice(0, 12)
+    : [];
+  const extractedFields = {
+    campaignName: String(packet.extractedFields?.campaignName ?? ""),
+    eventName: String(packet.extractedFields?.eventName ?? ""),
+    vendorName: String(packet.extractedFields?.vendorName ?? ""),
+    invoiceDate: String(packet.extractedFields?.invoiceDate ?? ""),
+    invoiceNumber: String(packet.extractedFields?.invoiceNumber ?? ""),
+    spend: String(packet.extractedFields?.spend ?? ""),
+    activityStartDate: String(packet.extractedFields?.activityStartDate ?? ""),
+    activityEndDate: String(packet.extractedFields?.activityEndDate ?? ""),
+    totalLeads: String(packet.extractedFields?.totalLeads ?? ""),
+    attendance: String(packet.extractedFields?.attendance ?? ""),
+    motorcyclesSold: String(packet.extractedFields?.motorcyclesSold ?? ""),
+    paAlSales: String(packet.extractedFields?.paAlSales ?? "")
+  };
+  if (!invoices.length && (extractedFields.vendorName || extractedFields.invoiceDate || extractedFields.invoiceNumber || extractedFields.spend)) {
+    invoices.push({
+      vendorName: extractedFields.vendorName,
+      invoiceDate: extractedFields.invoiceDate,
+      invoiceNumber: extractedFields.invoiceNumber,
+      amount: extractedFields.spend,
+      fileNames: files
+        .filter(file => {
+          const role = file.providedRole || inferRoleFromName(file.name);
+          return role === "invoice" || role === "receipt";
+        })
+        .map(file => file.name),
+      description: "Primary invoice"
+    });
+  }
   return {
     claimType: ["media", "event", "map_only", "unknown"].includes(packet.claimType) ? packet.claimType : fallback.claimType,
     activityType: String(packet.activityType ?? ""),
     confidence: Math.max(0, Math.min(1, Number(packet.confidence ?? 0))),
-    extractedFields: {
-      campaignName: String(packet.extractedFields?.campaignName ?? ""),
-      eventName: String(packet.extractedFields?.eventName ?? ""),
-      vendorName: String(packet.extractedFields?.vendorName ?? ""),
-      invoiceDate: String(packet.extractedFields?.invoiceDate ?? ""),
-      invoiceNumber: String(packet.extractedFields?.invoiceNumber ?? ""),
-      spend: String(packet.extractedFields?.spend ?? ""),
-      activityStartDate: String(packet.extractedFields?.activityStartDate ?? ""),
-      activityEndDate: String(packet.extractedFields?.activityEndDate ?? ""),
-      totalLeads: String(packet.extractedFields?.totalLeads ?? ""),
-      attendance: String(packet.extractedFields?.attendance ?? ""),
-      motorcyclesSold: String(packet.extractedFields?.motorcyclesSold ?? ""),
-      paAlSales: String(packet.extractedFields?.paAlSales ?? "")
-    },
+    extractedFields,
+    invoices,
     descriptionDraft: String(packet.descriptionDraft ?? ""),
     eligibility: {
       status: ["likely_eligible", "review_needed", "likely_ineligible", "unknown"].includes(packet.eligibility?.status)
@@ -378,6 +438,7 @@ function mergeInvoiceFields(packet: MdfClaimPacket, invoicePacket: MdfClaimPacke
     ...packet,
     confidence: Math.max(packet.confidence || 0, invoicePacket.confidence || 0),
     extractedFields,
+    invoices: invoicePacket.invoices.length ? invoicePacket.invoices : packet.invoices,
     missingFields
   };
 }
@@ -393,7 +454,9 @@ async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Pr
   const prompt = [
     "Extract ONLY invoice/payment fields from these MDF invoice or receipt files.",
     "Return the same MDF claim packet schema.",
-    "Fill vendorName, invoiceDate, invoiceNumber, and spend when visible.",
+    "Create one invoices[] item for every distinct invoice or receipt. Do not merge multiple invoices into one invoice.",
+    "Fill each invoice item with vendorName, invoiceDate, invoiceNumber, amount, and the matching uploaded file name(s).",
+    "Also mirror the first/primary invoice into extractedFields.vendorName, invoiceDate, invoiceNumber, and spend for backwards compatibility.",
     "Do not use artwork, tear sheets, magazine cover dates, or proof screenshots as invoice facts.",
     "Leave unknown fields blank and list missing invoice fields in missingFields.",
     "Set uploadedFiles roles to invoice or receipt based on the provided role."
@@ -460,6 +523,9 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "Use this file manifest and respect the user-selected roles:",
     fileManifest(files),
     "- Extract vendor, invoice date, invoice number, and spend only from files marked invoice or receipt.",
+    "- Create one invoices[] entry for every distinct invoice or receipt. Multiple invoices for the same claim are allowed and should stay separate.",
+    "- For each invoices[] entry, include the invoice/receipt file names that support that invoice. Do not assign proof, creative, tear sheet, or support-only files to invoices[].",
+    "- Mirror the first/primary invoice into extractedFields.vendorName, extractedFields.invoiceDate, extractedFields.invoiceNumber, and extractedFields.spend so older draft views still show a summary.",
     "- Use files marked creative, proof_of_performance, or supporting_only only for campaign description, proof, eligibility, documentation, and concerns.",
     "- If a magazine cover, tear sheet, screenshot, artwork, or proof file contains unrelated dates/prices/numbers, do not treat those as invoice fields.",
     "- If no invoice or receipt is provided, leave invoice/spend fields blank and list them as missing.",

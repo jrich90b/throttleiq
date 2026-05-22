@@ -1747,6 +1747,14 @@ type MdfClaimPacket = {
     motorcyclesSold: string;
     paAlSales: string;
   };
+  invoices?: Array<{
+    vendorName: string;
+    invoiceDate: string;
+    invoiceNumber: string;
+    amount: string;
+    fileNames: string[];
+    description: string;
+  }>;
   descriptionDraft: string;
   eligibility: {
     status: "likely_eligible" | "review_needed" | "likely_ineligible" | "unknown";
@@ -7414,6 +7422,23 @@ export default function Home() {
       }
     }
     const mergeList = (left: string[], right: string[]) => Array.from(new Set([...left, ...right].filter(Boolean)));
+    const invoiceKey = (invoice: NonNullable<MdfClaimPacket["invoices"]>[number]) =>
+      [
+        String(invoice.vendorName || "").toLowerCase(),
+        String(invoice.invoiceDate || "").toLowerCase(),
+        String(invoice.invoiceNumber || "").toLowerCase(),
+        String(invoice.amount || "").toLowerCase(),
+        ...(invoice.fileNames || []).map(name => String(name).toLowerCase())
+      ].join("|");
+    const invoices = [...(existing.invoices ?? [])];
+    const seenInvoices = new Set(invoices.map(invoiceKey));
+    for (const invoice of incoming.invoices ?? []) {
+      const key = invoiceKey(invoice);
+      if (!seenInvoices.has(key)) {
+        invoices.push(invoice);
+        seenInvoices.add(key);
+      }
+    }
     const extractedFields = { ...existing.extractedFields };
     for (const [key, value] of Object.entries(incoming.extractedFields) as Array<[keyof MdfClaimPacket["extractedFields"], string]>) {
       if (!String(extractedFields[key] ?? "").trim() && String(value ?? "").trim()) {
@@ -7433,6 +7458,7 @@ export default function Home() {
       },
       requiredDocumentation: mergeList(existing.requiredDocumentation, incoming.requiredDocumentation),
       uploadedFiles,
+      invoices,
       missingFields: mergeList(existing.missingFields, incoming.missingFields),
       portalSteps: mergeList(existing.portalSteps, incoming.portalSteps),
       browserAutomation: incoming.browserAutomation.status !== "not_ready" ? incoming.browserAutomation : existing.browserAutomation
@@ -14730,6 +14756,39 @@ export default function Home() {
                         ))}
                       </div>
                     </div>
+
+                    {(mdfPacket.invoices ?? []).length ? (
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-semibold">Invoices</div>
+                        <div className="mt-3 space-y-2">
+                          {(mdfPacket.invoices ?? []).map((invoice, index) => (
+                            <div
+                              key={`${invoice.invoiceNumber || index}-${invoice.amount || ""}`}
+                              className="rounded border bg-gray-50 px-3 py-2 text-sm"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="font-semibold text-gray-800">
+                                    Invoice {index + 1}: {invoice.vendorName || "Vendor missing"}
+                                  </div>
+                                  <div className="mt-1 text-xs text-gray-500">
+                                    {[invoice.invoiceDate, invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : "", invoice.amount]
+                                      .filter(Boolean)
+                                      .join(" • ") || "Needs review"}
+                                  </div>
+                                </div>
+                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                                  {(invoice.fileNames ?? []).length} file{(invoice.fileNames ?? []).length === 1 ? "" : "s"}
+                                </span>
+                              </div>
+                              {invoice.fileNames?.length ? (
+                                <div className="mt-2 text-xs text-gray-600">{invoice.fileNames.join(", ")}</div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="rounded-lg border p-3">
                       <div className="text-sm font-semibold">Saved files</div>

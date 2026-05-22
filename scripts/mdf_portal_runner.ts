@@ -32,6 +32,15 @@ type MdfUploadedFile = {
   providedRole?: string;
 };
 
+type MdfPortalInvoice = {
+  vendorName?: string;
+  invoiceDate?: string;
+  invoiceNumber?: string;
+  amount?: string;
+  fileNames?: string[];
+  description?: string;
+};
+
 type MdfClaimEntry = {
   id: string;
   title: string;
@@ -45,6 +54,7 @@ type MdfClaimEntry = {
     missingFields?: string[];
     requiredDocumentation?: string[];
     uploadedFiles?: MdfUploadedFile[];
+    invoices?: MdfPortalInvoice[];
     extractedFields?: Record<string, string>;
     eligibility?: {
       status?: string;
@@ -314,6 +324,7 @@ function updateTask(tasks: AgentTask[], id: string, status: AgentTaskStatus, sum
 function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptions): string {
   const fields = claim.packet.extractedFields ?? {};
   const files = claim.packet.uploadedFiles ?? [];
+  const invoices = invoiceRecordsForClaim(claim);
   const missing = claim.packet.missingFields ?? [];
   const docs = claim.packet.requiredDocumentation ?? [];
   const concerns = claim.packet.eligibility?.concerns ?? [];
@@ -347,6 +358,20 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "",
     "## Extracted Fields",
     ...Object.entries(fields).map(([key, value]) => `- ${humanizeKey(key)}: ${value || "missing"}`),
+    "",
+    "## Invoices",
+    ...(invoices.length
+      ? invoices.map((invoice, index) => {
+          const bits = [
+            `vendor=${invoice.vendorName || "missing"}`,
+            `date=${invoice.invoiceDate || "missing"}`,
+            `number=${invoice.invoiceNumber || "missing"}`,
+            `amount=${invoice.amount || "missing"}`,
+            `files=${(invoice.fileNames ?? []).join(", ") || "not matched"}`
+          ];
+          return `- Invoice ${index + 1}: ${bits.join("; ")}`;
+        })
+      : ["- no separate invoice records; use extracted fields if present"]),
     "",
     "## Description Draft",
     claim.packet.descriptionDraft || "missing",
@@ -389,6 +414,7 @@ function htmlEscape(value: string) {
 function renderGuidedHtml(prompt: string, claim: MdfClaimEntry) {
   const files = claim.packet.uploadedFiles ?? [];
   const fields = claim.packet.extractedFields ?? {};
+  const invoices = invoiceRecordsForClaim(claim);
   return `<!doctype html>
 <html>
 <head>
@@ -426,6 +452,25 @@ function renderGuidedHtml(prompt: string, claim: MdfClaimEntry) {
           .map(([key, value]) => `<dt>${htmlEscape(humanizeKey(key))}</dt><dd>${htmlEscape(value || "missing")}</dd>`)
           .join("\n")}
       </dl>
+    </section>
+    <section>
+      <h2>Invoices</h2>
+      <ul>
+        ${
+          invoices.length
+            ? invoices
+                .map(
+                  (invoice, index) =>
+                    `<li>Invoice ${index + 1}: ${htmlEscape(invoice.vendorName || "Vendor missing")} / ${htmlEscape(
+                      invoice.invoiceDate || "date missing"
+                    )} / ${htmlEscape(invoice.invoiceNumber || "number missing")} / ${htmlEscape(
+                      invoice.amount || "amount missing"
+                    )}<br />Files: ${htmlEscape((invoice.fileNames ?? []).join(", ") || "not matched")}</li>`
+                )
+                .join("\n")
+            : "<li>No separate invoice records found.</li>"
+        }
+      </ul>
     </section>
     <section>
       <h2>Files</h2>
@@ -572,7 +617,66 @@ function roleForFile(file: MdfUploadedFile): string {
 
 function isInvoiceFile(file: MdfUploadedFile): boolean {
   const role = roleForFile(file);
-  return role.includes("invoice") || /invoice|inv[_\s-]?\d+/i.test(file.name);
+  return role.includes("invoice") || role.includes("receipt") || /invoice|receipt|inv[_\s-]?\d+/i.test(file.name);
+}
+
+function normalizeFileName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\w.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseMoneyAmount(value: string): number {
+  const cleaned = String(value || "").replace(/[^0-9.-]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function moneyFromNumber(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return value.toFixed(2);
+}
+
+function fallbackInvoiceFromFlatFields(claim: MdfClaimEntry): MdfPortalInvoice | null {
+  const vendorName = extractedField(claim, ["vendorName", "vendor", "vendor_name"]);
+  const invoiceDate = extractedField(claim, ["invoiceDate", "invoice_date"]);
+  const invoiceNumber = extractedField(claim, ["invoiceNumber", "invoice_number"]);
+  const amount = extractedField(claim, ["spend", "amount", "invoiceAmount", "invoice_amount"]);
+  if (!vendorName && !invoiceDate && !invoiceNumber && !amount) return null;
+  return { vendorName, invoiceDate, invoiceNumber, amount, fileNames: [], description: "" };
+}
+
+function invoiceRecordsForClaim(claim: MdfClaimEntry): MdfPortalInvoice[] {
+  const fromPacket = Array.isArray(claim.packet.invoices)
+    ? claim.packet.invoices
+        .map(row => ({
+          vendorName: String(row.vendorName ?? "").trim(),
+          invoiceDate: String(row.invoiceDate ?? "").trim(),
+          invoiceNumber: String(row.invoiceNumber ?? "").trim(),
+          amount: String(row.amount ?? "").trim(),
+          fileNames: Array.isArray(row.fileNames) ? row.fileNames.map(name => String(name)).filter(Boolean) : [],
+          description: String(row.description ?? "").trim()
+        }))
+        .filter(row => row.vendorName || row.invoiceDate || row.invoiceNumber || row.amount || row.fileNames.length)
+    : [];
+  if (fromPacket.length) return fromPacket;
+  const fallback = fallbackInvoiceFromFlatFields(claim);
+  return fallback ? [fallback] : [];
+}
+
+function filesForInvoice(invoice: MdfPortalInvoice, files: MdfUploadedFile[], assignedNames: Set<string>): MdfUploadedFile[] {
+  const requested = new Set((invoice.fileNames ?? []).map(normalizeFileName).filter(Boolean));
+  const exactMatches = requested.size
+    ? files.filter(file => {
+        const normalized = normalizeFileName(file.name);
+        return requested.has(normalized) || [...requested].some(name => normalized.includes(name) || name.includes(normalized));
+      })
+    : [];
+  const matches = exactMatches.length ? exactMatches : files.filter(file => isInvoiceFile(file) && !assignedNames.has(file.name));
+  for (const file of matches) assignedNames.add(file.name);
+  return matches;
 }
 
 async function downloadPortalFile(file: MdfUploadedFile, dir: string): Promise<string | null> {
@@ -608,6 +712,37 @@ async function selectOptionByText(page: any, selector: string, text: string) {
   if (!value) throw new Error(`Could not find option "${text}" in ${selector}`);
   await page.selectOption(selector, value);
   await page.locator(selector).dispatchEvent("change");
+}
+
+async function ensureInvoiceSection(page: any, index: number) {
+  if (index <= 1) return;
+  const vendorSelector = `input[name="invoices[${index}][vendor_name]"]`;
+  if (await page.locator(vendorSelector).count()) return;
+  await page.locator("#app-add-invoice").scrollIntoViewIfNeeded();
+  await page.locator("#app-add-invoice").click();
+  await page.locator(vendorSelector).waitFor({ timeout: 10_000 });
+}
+
+async function setInvoiceFileCategories(page: any, invoiceIndex: number) {
+  const count = await page.locator(`select[name^="invoices[${invoiceIndex}][files]"][name$="[file_category]"]`).count();
+  for (let i = 0; i < count; i += 1) {
+    const selector = `select[name="invoices[${invoiceIndex}][files][${i}][file_category]"]`;
+    if (await page.locator(selector).count()) {
+      await selectOptionByText(page, selector, "Invoice").catch(() => {});
+    }
+  }
+}
+
+async function fillInvoiceSection(page: any, index: number, invoice: MdfPortalInvoice) {
+  await ensureInvoiceSection(page, index);
+  const vendor = String(invoice.vendorName ?? "").trim();
+  const invoiceDate = toUsDate(String(invoice.invoiceDate ?? "").trim());
+  const invoiceNumber = String(invoice.invoiceNumber ?? "").trim();
+  const amount = moneyValue(String(invoice.amount ?? "").trim());
+  if (vendor) await fillText(page, `input[name="invoices[${index}][vendor_name]"]`, vendor);
+  if (invoiceDate) await fillText(page, `input[name="invoices[${index}][invoice_date]"]`, invoiceDate);
+  if (invoiceNumber) await fillText(page, `input[name="invoices[${index}][invoice_number]"]`, invoiceNumber);
+  if (amount) await fillText(page, `input[name="invoices[${index}][invoice_amount]"]`, amount);
 }
 
 async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
@@ -657,10 +792,10 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     });
   }
 
-  const vendor = extractedField(claim, ["vendorName", "vendor", "vendor_name"]);
-  const invoiceDate = toUsDate(extractedField(claim, ["invoiceDate", "invoice_date"]));
-  const invoiceNumber = extractedField(claim, ["invoiceNumber", "invoice_number"]);
-  const spend = moneyValue(extractedField(claim, ["spend", "amount", "invoiceAmount", "invoice_amount"]));
+  const invoices = invoiceRecordsForClaim(claim);
+  const flatSpend = moneyValue(extractedField(claim, ["spend", "amount", "invoiceAmount", "invoice_amount"]));
+  const invoiceTotal = invoices.reduce((sum, invoice) => sum + parseMoneyAmount(String(invoice.amount ?? "")), 0);
+  const claimedAmount = moneyFromNumber(invoiceTotal) || flatSpend;
   const totalLeads = extractedField(claim, ["totalLeads", "total_leads"]);
   const description = claim.packet.descriptionDraft || "";
 
@@ -674,31 +809,40 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   await selectOptionByText(page, "#activity-sub-detail", "MEDIA - Magazine / Newspaper Ad");
   await fillText(page, "#activity-summary", description.slice(0, 2000));
   if (totalLeads) await fillText(page, "#cl-budget", totalLeads);
-  if (vendor) await fillText(page, 'input[name="invoices[1][vendor_name]"]', vendor);
-  if (invoiceDate) await fillText(page, 'input[name="invoices[1][invoice_date]"]', invoiceDate);
-  if (invoiceNumber) await fillText(page, 'input[name="invoices[1][invoice_number]"]', invoiceNumber);
-  if (spend) {
-    await fillText(page, 'input[name="invoices[1][invoice_amount]"]', spend);
-    await fillText(page, "#app-claimed-amount", spend);
+  for (let i = 0; i < invoices.length; i += 1) {
+    await fillInvoiceSection(page, i + 1, invoices[i]);
+  }
+  if (claimedAmount) {
+    await fillText(page, "#app-claimed-amount", claimedAmount);
   }
 
   const files = claim.packet.uploadedFiles ?? [];
-  const invoiceFiles = files.filter(isInvoiceFile);
-  const supportFiles = files.filter(file => !isInvoiceFile(file));
+  const assignedInvoiceNames = new Set<string>();
+  const invoiceFileGroups = invoices.map(invoice => filesForInvoice(invoice, files, assignedInvoiceNames));
+  if (!invoiceFileGroups.length) {
+    const invoiceFiles = files.filter(isInvoiceFile);
+    if (invoiceFiles.length) invoiceFileGroups.push(invoiceFiles);
+    for (const file of invoiceFiles) assignedInvoiceNames.add(file.name);
+  }
+  const supportFiles = files.filter(file => !assignedInvoiceNames.has(file.name));
   const tempDir = path.join(os.tmpdir(), `leadrider-mdf-${claim.id}-${Date.now()}`);
   await mkdir(tempDir, { recursive: true });
   try {
-    const invoicePaths = (await Promise.all(invoiceFiles.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[];
+    const invoicePathGroups = await Promise.all(
+      invoiceFileGroups.map(async group => (await Promise.all(group.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[])
+    );
     const supportPaths = (await Promise.all(supportFiles.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[];
     const fileInputs = await page.locator('input[type="file"][name="files[]"]').all();
-    if (invoicePaths.length && fileInputs[0]) {
-      await fileInputs[0].setInputFiles(invoicePaths.length === 1 ? invoicePaths[0] : invoicePaths);
+    for (let i = 0; i < invoicePathGroups.length; i += 1) {
+      const paths = invoicePathGroups[i];
+      if (!paths.length || !fileInputs[i]) continue;
+      await fileInputs[i].setInputFiles(paths.length === 1 ? paths[0] : paths);
       await page.waitForTimeout(5000);
-      const invoiceCategory = page.locator('select[name="invoices[1][files][0][file_category]"]');
-      if (await invoiceCategory.count()) await selectOptionByText(page, 'select[name="invoices[1][files][0][file_category]"]', "Invoice");
+      await setInvoiceFileCategories(page, i + 1);
     }
-    if (supportPaths.length && fileInputs[1]) {
-      await fileInputs[1].setInputFiles(supportPaths);
+    const supportInput = fileInputs[invoicePathGroups.length] ?? fileInputs[1];
+    if (supportPaths.length && supportInput) {
+      await supportInput.setInputFiles(supportPaths);
       await page.waitForTimeout(8000);
       const supportCategoryCount = await page.locator('select[name^="files["][name$="[file_category]"]').count();
       for (let i = 0; i < supportCategoryCount; i += 1) {
@@ -707,9 +851,8 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
       }
     }
 
-    if (spend) {
-      await fillText(page, 'input[name="invoices[1][invoice_amount]"]', spend);
-      await fillText(page, "#app-claimed-amount", spend);
+    if (claimedAmount) {
+      await fillText(page, "#app-claimed-amount", claimedAmount);
     }
 
     await page.locator("#app-draft-submit-btn").scrollIntoViewIfNeeded();
@@ -725,7 +868,8 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
       claimId ? `Claim ID: ${claimId}.` : "Claim ID was not detected.",
       `Status: ${status}.`,
       `Filled ${claim.packet.claimType || "media"} claim for ${claim.title}.`,
-      `Uploaded ${invoicePaths.length} invoice file(s) and ${supportPaths.length} supporting file(s).`,
+      `Filled ${Math.max(invoices.length, invoicePathGroups.length)} invoice section(s).`,
+      `Uploaded ${invoicePathGroups.flat().length} invoice file(s) and ${supportPaths.length} supporting file(s).`,
       "Did not click final Submit.",
       "Human review still needed before final submission."
     ].join(" ");

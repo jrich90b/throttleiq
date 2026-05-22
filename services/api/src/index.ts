@@ -35673,7 +35673,7 @@ function consumeMdfUploadToken(token: string): boolean {
 
 async function buildMdfPacketFromUploads(files: RawMdfUpload[], notes: string) {
   if (!files.length) throw new Error("Upload at least one MDF file.");
-  if (files.length > 8) throw new Error("Upload 8 MDF files or fewer.");
+  if (files.length > 16) throw new Error("Upload 16 MDF files or fewer.");
   const maxBytesPerFile = 25 * 1024 * 1024;
   const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
   const normalized: MdfUploadedFile[] = [];
@@ -35825,6 +35825,16 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
     })
     .join("\n");
   const fields = claim.packet.extractedFields;
+  const invoiceLines = Array.isArray((claim.packet as any).invoices) && (claim.packet as any).invoices.length
+    ? (claim.packet as any).invoices
+        .map((invoice: any, index: number) => {
+          const files = Array.isArray(invoice.fileNames) && invoice.fileNames.length
+            ? ` files: ${invoice.fileNames.join(", ")}`
+            : " files: not matched";
+          return `- Invoice ${index + 1}: vendor=${invoice.vendorName || "missing"}; date=${invoice.invoiceDate || "missing"}; number=${invoice.invoiceNumber || "missing"}; amount=${invoice.amount || "missing"};${files}`;
+        })
+        .join("\n")
+    : "- No separate invoice records found; use the flat extracted fields as the primary invoice if present.";
   const task = await addAgentTask({
     provider: "codex",
     kind: "mdf_portal",
@@ -35867,6 +35877,9 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
       `- Attendance: ${fields.attendance || "missing"}`,
       `- Motorcycles sold: ${fields.motorcyclesSold || "missing"}`,
       `- P&A/A&L sales: ${fields.paAlSales || "missing"}`,
+      "",
+      "Invoices:",
+      invoiceLines,
       "",
       "Description draft:",
       claim.packet.descriptionDraft || "missing",
