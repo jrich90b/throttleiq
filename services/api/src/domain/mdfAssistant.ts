@@ -323,6 +323,109 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   };
 }
 
+function parseJsonObject(text: unknown): any | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function parsedResponsePayload(resp: any): any | null {
+  if (resp?.output_parsed) return resp.output_parsed;
+  const output = Array.isArray(resp?.output) ? resp.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const block of content) {
+      if (block?.parsed) return block.parsed;
+      const parsed = parseJsonObject(block?.text);
+      if (parsed) return parsed;
+    }
+  }
+  return parseJsonObject(resp?.output_text);
+}
+
+function mergeInvoiceFields(packet: MdfClaimPacket, invoicePacket: MdfClaimPacket): MdfClaimPacket {
+  const invoiceKeys: Array<keyof MdfClaimPacket["extractedFields"]> = [
+    "vendorName",
+    "invoiceDate",
+    "invoiceNumber",
+    "spend"
+  ];
+  const extractedFields = { ...packet.extractedFields };
+  for (const key of invoiceKeys) {
+    const value = String(invoicePacket.extractedFields[key] ?? "").trim();
+    if (value) extractedFields[key] = value;
+  }
+  const missingFields = packet.missingFields.filter(field => {
+    const normalized = field.toLowerCase();
+    if (extractedFields.vendorName && normalized.includes("vendor")) return false;
+    if (extractedFields.invoiceDate && normalized.includes("invoice date")) return false;
+    if (extractedFields.invoiceNumber && normalized.includes("invoice number")) return false;
+    if (extractedFields.spend && normalized.includes("spend")) return false;
+    return true;
+  });
+  return {
+    ...packet,
+    confidence: Math.max(packet.confidence || 0, invoicePacket.confidence || 0),
+    extractedFields,
+    missingFields
+  };
+}
+
+async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Promise<MdfClaimPacket | null> {
+  const invoiceFiles = files.filter(file => {
+    const role = file.providedRole || inferRoleFromName(file.name);
+    return role === "invoice" || role === "receipt";
+  });
+  if (!invoiceFiles.length) return null;
+  const inputs = fileContentInputs(invoiceFiles);
+  if (!inputs.length) return null;
+  const prompt = [
+    "Extract ONLY invoice/payment fields from these MDF invoice or receipt files.",
+    "Return the same MDF claim packet schema.",
+    "Fill vendorName, invoiceDate, invoiceNumber, and spend when visible.",
+    "Do not use artwork, tear sheets, magazine cover dates, or proof screenshots as invoice facts.",
+    "Leave unknown fields blank and list missing invoice fields in missingFields.",
+    "Set uploadedFiles roles to invoice or receipt based on the provided role."
+  ].join("\n");
+  const resp = await client.responses.parse({
+    model,
+    input: [
+      {
+        role: "user",
+        content: [{ type: "input_text", text: prompt }, ...inputs] as any[]
+      }
+    ],
+    max_output_tokens: 1200,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "mdf_invoice_fields",
+        schema: MDF_SCHEMA,
+        strict: true
+      }
+    }
+  });
+  recordOpenAIUsage(resp, {
+    feature: "mdf_assistant",
+    operation: "extract_invoice_fields",
+    requestKind: "responses.parse",
+    model,
+    metadata: { fileCount: invoiceFiles.length }
+  });
+  return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
+}
+
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
   if (!files.length) return fallbackPacket(files, "Upload at least one invoice, receipt, creative, or proof file.");
   const supportedInputs = fileContentInputs(files);
@@ -381,7 +484,9 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       model,
       metadata: { fileCount: files.length }
     });
-    return normalizePacket((resp as any)?.output_parsed, files);
+    const packet = normalizePacket(parsedResponsePayload(resp), files);
+    const invoicePacket = await extractInvoiceFields(files, model).catch(() => null);
+    return invoicePacket ? mergeInvoiceFields(packet, invoicePacket) : packet;
   } catch (err: any) {
     return fallbackPacket(files, err?.message ? `Extractor failed: ${err.message}` : "Extractor failed.");
   }
