@@ -212,11 +212,22 @@ function fileInput(file: MdfUploadedFile) {
   if (mime === "application/pdf") {
     return {
       type: "input_file",
-      filename: file.name,
+      filename: openAiSafeFileName(file.name, "mdf-file.pdf"),
       file_data: `data:application/pdf;base64,${data}`
     };
   }
   return null;
+}
+
+function openAiSafeFileName(name: string, fallback: string) {
+  const ext = (name.match(/\.[a-z0-9]{1,8}$/i)?.[0] ?? ".pdf").toLowerCase();
+  const base = name
+    .replace(/\.[a-z0-9]{1,8}$/i, "")
+    .normalize("NFKD")
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${base || fallback.replace(/\.[a-z0-9]{1,8}$/i, "")}${ext}`;
 }
 
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
