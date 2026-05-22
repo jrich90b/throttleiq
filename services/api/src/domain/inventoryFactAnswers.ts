@@ -87,9 +87,9 @@ function parseRequestedApr(text: string): number | null {
 }
 
 function parseRequestedPriceCap(text: string): number | null {
-  const match =
-    text.match(/\b(?:under|below|less than|up to|max(?:imum)?|cap(?:ped)? at)\s*\$?\s*([1-9]\d{1,2}(?:,\d{3})+|[1-9]\d{3,5}|[1-9]\d?)\s*k?\b/i) ??
-    text.match(/\b\$?\s*([1-9]\d{1,2}(?:,\d{3})+|[1-9]\d{4,5})\b/);
+  const match = text.match(
+    /\b(?:under|below|less than|up to|max(?:imum)?|cap(?:ped)? at)\s*\$?\s*([1-9]\d{1,2}(?:,\d{3})+|[1-9]\d{3,5}|[1-9]\d?)\s*k?\b/i
+  );
   if (!match?.[1]) return null;
   const raw = match[1].replace(/,/g, "");
   const value = Number(raw);
@@ -208,14 +208,25 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   const aprText = apr ? `${apr}%` : "the low-interest";
   const capText = priceCap ? ` and the under-${formatMoney(priceCap)} price cap` : "";
 
+  if (!apr && !priceCap) {
+    return {
+      handled: true,
+      reply: `I don’t want to guess on finance eligibility for the ${unitLabel}. I’ll have the team confirm the current program and follow up.`,
+      needsTodo: true,
+      todoReason: "pricing",
+      todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      item
+    };
+  }
+
   if (!eligibility.modelYearEligible) {
     const yearText = eligibility.year ? `${eligibility.year} ` : "";
     return {
       handled: true,
-      reply: `I don’t want to guess on that. The ${yearText}${unitLabel.replace(/^\d{4}\s+/, "")} does not clearly match the new 2024/2025 low-APR group in the inventory feed, so I’ll have the team verify the current program before quoting it.`,
+      reply: `I don’t want to guess on that. The ${yearText}${unitLabel.replace(/^\d{4}\s+/, "")} does not clearly match the basic new 2024/2025 inventory criteria, so I’ll have the team verify the current program before quoting it.`,
       needsTodo: true,
       todoReason: "pricing",
-      todoSummary: `Verify finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
       item
     };
   }
@@ -223,10 +234,10 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   if (priceCap && !priceText) {
     return {
       handled: true,
-      reply: `The ${unitLabel} appears to be in the new 2024/2025 group for ${aprText} APR, but I don’t see a published price in the inventory feed to verify the under-${formatMoney(priceCap)} part. I’ll have the team confirm both.`,
+      reply: `The ${unitLabel} matches the basic new 2024/2025 inventory criteria for ${aprText} APR, but I don’t see a published price in the inventory feed to verify the under-${formatMoney(priceCap)} part. I’ll have the team confirm both.`,
       needsTodo: true,
       todoReason: "pricing",
-      todoSummary: `Confirm price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
       item
     };
   }
@@ -234,20 +245,20 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   if (priceCap && price && price > priceCap) {
     return {
       handled: true,
-      reply: `The ${unitLabel} appears to be in the new 2024/2025 low-APR group, but the listed price I see is ${priceText}, which is over ${formatMoney(priceCap)}. I’ll confirm the current program details before quoting it.`,
+      reply: `The ${unitLabel} matches the basic new 2024/2025 inventory criteria, but the listed price I see is ${priceText}, which is over ${formatMoney(priceCap)}. I’ll confirm the current program details before quoting it.`,
       needsTodo: true,
       todoReason: "pricing",
-      todoSummary: `Confirm finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
       item
     };
   }
 
   return {
     handled: true,
-    reply: `Yes, based on the inventory feed, the ${unitLabel} appears to fit the new 2024/2025 ${aprText} APR program${capText}${priceText ? ` with a listed price of ${priceText}` : ""}. I’ll still have the team confirm the current program details.`,
+    reply: `Based on the inventory feed, the ${unitLabel} matches the basic new 2024/2025 criteria for ${aprText} APR${capText}${priceText ? ` with a listed price of ${priceText}` : ""}. I’ll still have the team confirm the current program details before quoting it as eligible.`,
     needsTodo: true,
     todoReason: "pricing",
-    todoSummary: `Confirm finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+    todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
     item
   };
 }
