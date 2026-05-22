@@ -22246,6 +22246,75 @@ function isWatchConfirmationIntentText(text: string): boolean {
   return intent && trigger;
 }
 
+function isOutboundInventoryWatchOfferText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim() || isDemoDayEventQuestionText(t)) return false;
+  const offer =
+    /\b(?:i(?:'|’)?ll|i will|we(?:'|’)?ll|we will)\s+(?:let you know|keep you posted|notify you|text you|reach out)\b/.test(
+      t
+    ) ||
+    /\b(?:let you know|keep you posted|notify you|text you)\b/.test(t);
+  const arrival =
+    /\b(?:when|once|as soon as|if)\b[\s\S]{0,100}\b(?:arrives?|comes? in|lands?|receiv(?:e|ing)|get(?:ting)?(?: another| one)?|in stock|available)\b/.test(
+      t
+    ) ||
+    /\b(?:arrives?|comes? in|lands?|receiv(?:e|ing)|in stock|available)\b/.test(t);
+  const hasVehicleCue =
+    /\b(?:20\d{2}|road glide|street glide|low rider|softail|sportster|nightster|pan america|fat boy|heritage|breakout|trike|tri glide|freewheeler|rh975|fxlrs|fltrx|flhx)\b/.test(
+      t
+    );
+  return offer && arrival && hasVehicleCue;
+}
+
+function isOutboundInventoryWatchOfferConfirmation(inboundText: string, lastOutboundText: string): boolean {
+  const inbound = String(inboundText ?? "").toLowerCase().trim();
+  if (!inbound || isDemoDayEventQuestionText(inbound)) return false;
+  if (!isOutboundInventoryWatchOfferText(lastOutboundText)) return false;
+  if (/\b(maybe|not sure|let me|lemme|talk to|check with|get back to you)\b/.test(inbound)) return false;
+  return /\b(yes|yep|yeah|yup|please|yes please|ok|okay|sure|sounds good|perfect|that works|do that)\b/.test(
+    inbound
+  );
+}
+
+async function buildInventoryWatchFromConfirmedOutboundOffer(
+  conv: Conversation,
+  lastOutboundText: string,
+  inboundText: string
+): Promise<InventoryWatch | null> {
+  const sourceText = `${lastOutboundText}\n${inboundText}`;
+  const sourceLower = sourceText.toLowerCase();
+  const leadVehicle = conv.lead?.vehicle ?? {};
+  const model = await resolveWatchModelFromText(
+    sourceLower,
+    leadVehicle.model ?? leadVehicle.description ?? null
+  );
+  if (!model) return null;
+  const leadYearNum = Number(leadVehicle.year ?? "");
+  const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+  const year = extractYearSingle(sourceLower) ?? leadYear;
+  const color = sanitizeColorPhrase(extractColorToken(sourceLower) ?? leadVehicle.color ?? undefined);
+  const trim = formatWatchTrimLabel(extractFinishToken(sourceLower));
+  const condition =
+    normalizeWatchCondition(sourceLower) ??
+    normalizeWatchCondition(leadVehicle.condition) ??
+    inferWatchCondition(model, year, conv);
+  const watch: InventoryWatch = {
+    model,
+    year,
+    color,
+    trim,
+    make: String(leadVehicle.make ?? "").trim() || "Harley-Davidson",
+    condition,
+    exactness: "model_only",
+    status: "active",
+    createdAt: new Date().toISOString(),
+    note: "confirmed_staff_watch_offer"
+  };
+  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
+  else if (watch.year) watch.exactness = "year_model";
+  return watch;
+}
+
 async function resolveWatchModelFromText(
   textLower: string,
   fallbackModel?: string | null
@@ -42579,6 +42648,33 @@ if (authToken && signature) {
       /\b(yes|yep|yeah|yup|ok|okay|alright|all right|sure|confirmed|confirm|that works|works|works for me|sounds good|book it|perfect)\b/i.test(
         humanModeText
       );
+    const humanModeLastOutboundText = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+    if (isOutboundInventoryWatchOfferConfirmation(humanModeText, humanModeLastOutboundText)) {
+      const confirmedWatch = await buildInventoryWatchFromConfirmedOutboundOffer(
+        conv,
+        humanModeLastOutboundText,
+        humanModeText
+      );
+      if (confirmedWatch) {
+        conv.inventoryWatch = confirmedWatch;
+        conv.inventoryWatches = [confirmedWatch];
+        conv.inventoryWatchPending = undefined;
+        setDialogState(conv, "inventory_watch_active");
+        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+        stopFollowUpCadence(conv, "inventory_watch");
+        recordRouteOutcome("live", "human_mode_staff_watch_offer_confirmed", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          model: confirmedWatch.model ?? null,
+          year: confirmedWatch.year ?? null,
+          color: confirmedWatch.color ?? null
+        });
+        saveConversation(conv);
+        await flushConversationStore();
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+    }
     const humanModeBookingParserHint =
       llmExplicitScheduleIntent ||
       humanModeHasScheduleKeyword ||
@@ -49046,11 +49142,15 @@ if (authToken && signature) {
   const watchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
   );
+  const confirmedOutboundWatchOffer = isOutboundInventoryWatchOfferConfirmation(
+    String(event.body ?? ""),
+    lastOutboundText
+  );
   const watchIntentText =
     !semanticWatchParserBlocksNewWatch && isWatchConfirmationIntentText(String(event.body ?? ""));
   const promptedWatchAffirm =
     !watchBlockedByDemoDayQuestion &&
-    watchPrompted &&
+    (watchPrompted || confirmedOutboundWatchOffer) &&
     isAffirmative(event.body) &&
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyAvailability &&
@@ -49058,7 +49158,7 @@ if (authToken && signature) {
     !schedulingExplicit;
   const explicitWatchIntent =
     !watchBlockedByDemoDayQuestion &&
-    (semanticWatchAction === "set_watch" || watchIntentText || promptedWatchAffirm);
+    (semanticWatchAction === "set_watch" || watchIntentText || promptedWatchAffirm || confirmedOutboundWatchOffer);
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
@@ -49124,8 +49224,11 @@ if (authToken && signature) {
     const semanticWatchYearNum = Number(semanticWatch?.year ?? NaN);
     const semanticWatchYear = Number.isFinite(semanticWatchYearNum) ? semanticWatchYearNum : undefined;
     const semanticWatchColor = sanitizeColorPhrase(semanticWatch?.color ?? undefined);
+    const watchSourceText = confirmedOutboundWatchOffer
+      ? `${lastOutboundText}\n${String(event.body ?? "")}`.toLowerCase()
+      : textLower;
     const resolvedModel = await resolveWatchModelFromText(
-      textLower,
+      watchSourceText,
       semanticWatch?.model ??
         inventoryEntityModelHint ??
         leadVehicle.model ??
@@ -49167,14 +49270,14 @@ if (authToken && signature) {
       );
       const pending: InventoryWatchPending = {
         model: resolvedModel,
-        year: inventoryEntityYearHint ?? extractYearSingle(textLower) ?? semanticWatchYear ?? leadYear,
+        year: inventoryEntityYearHint ?? extractYearSingle(watchSourceText) ?? semanticWatchYear ?? leadYear,
         ...splitWatchColorAndTrim(
           inventoryEntityColorHint ??
-            extractColorToken(textLower) ??
+            extractColorToken(watchSourceText) ??
             semanticWatchColor ??
             leadVehicle.color ??
             undefined,
-          extractFinishToken(textLower)
+          extractFinishToken(watchSourceText)
         ),
         minPrice: budgetSeed.minPrice,
         maxPrice: budgetSeed.maxPrice,
