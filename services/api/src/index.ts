@@ -45,6 +45,14 @@ import {
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
 import { extractMdfClaimPacket } from "./domain/mdfAssistant.js";
+import {
+  addMdfClaim,
+  deleteMdfClaim,
+  getMdfClaim,
+  listMdfClaims,
+  updateMdfClaim,
+  type MdfClaimStatus
+} from "./domain/mdfClaimStore.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -35621,6 +35629,10 @@ app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
 });
 
+app.get("/mdf/claims", requireManager, (_req, res) => {
+  return res.json({ ok: true, claims: listMdfClaims() });
+});
+
 app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
   const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
   if (!files.length) return res.status(400).json({ ok: false, error: "Upload at least one MDF file." });
@@ -35647,6 +35659,39 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
   const notes = String(req.body?.notes ?? "");
   const packet = await extractMdfClaimPacket(normalized, notes);
   return res.json({ ok: true, packet });
+});
+
+app.post("/mdf/claims", requireManager, (req, res) => {
+  const packet = req.body?.packet;
+  if (!packet || typeof packet !== "object") {
+    return res.status(400).json({ ok: false, error: "Missing MDF packet." });
+  }
+  const user = (req as any).user ?? null;
+  const created = addMdfClaim({
+    packet,
+    title: req.body?.title,
+    status: req.body?.status as MdfClaimStatus | undefined,
+    notes: req.body?.notes,
+    createdByUserId: user?.id,
+    createdByUserName: user?.name || user?.email
+  });
+  return res.json({ ok: true, claim: created });
+});
+
+app.patch("/mdf/claims/:id", requireManager, (req, res) => {
+  const patch: Record<string, unknown> = {};
+  if (req.body?.title !== undefined) patch.title = req.body.title;
+  if (req.body?.status !== undefined) patch.status = req.body.status;
+  if (req.body?.notes !== undefined) patch.notes = req.body.notes;
+  if (req.body?.packet !== undefined) patch.packet = req.body.packet;
+  const updated = updateMdfClaim(req.params.id, patch as any);
+  if (!updated) return res.status(404).json({ ok: false, error: "MDF claim not found." });
+  return res.json({ ok: true, claim: updated });
+});
+
+app.delete("/mdf/claims/:id", requireManager, (req, res) => {
+  const existed = deleteMdfClaim(req.params.id);
+  return res.json({ ok: true, deleted: existed });
 });
 
 app.post("/campaigns/media", requireManager, upload.single("file"), async (req, res) => {

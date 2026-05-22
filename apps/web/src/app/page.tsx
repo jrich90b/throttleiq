@@ -1767,6 +1767,19 @@ type MdfClaimPacket = {
   };
 };
 
+type MdfClaimStatus = "draft" | "needs_info" | "ready_for_portal" | "portal_draft" | "submitted" | "completed";
+
+type MdfClaimEntry = {
+  id: string;
+  title: string;
+  status: MdfClaimStatus;
+  notes?: string;
+  packet: MdfClaimPacket;
+  createdByUserName?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type CampaignSocialPublishOptions = {
   linkUrl?: string;
   mentionHandles?: string;
@@ -2648,6 +2661,11 @@ export default function Home() {
   const [mdfFiles, setMdfFiles] = useState<File[]>([]);
   const [mdfNotes, setMdfNotes] = useState("");
   const [mdfPacket, setMdfPacket] = useState<MdfClaimPacket | null>(null);
+  const [mdfClaims, setMdfClaims] = useState<MdfClaimEntry[]>([]);
+  const [mdfSelectedClaimId, setMdfSelectedClaimId] = useState("");
+  const [mdfClaimsLoading, setMdfClaimsLoading] = useState(false);
+  const [mdfClaimSaving, setMdfClaimSaving] = useState(false);
+  const [mdfClaimActionBusy, setMdfClaimActionBusy] = useState("");
   const [mdfLoading, setMdfLoading] = useState(false);
   const [mdfError, setMdfError] = useState<string | null>(null);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -7197,6 +7215,11 @@ export default function Home() {
     void loadMetaStatus();
   }, [section, isManager]);
 
+  useEffect(() => {
+    if (!isManager || section !== "mdf") return;
+    void loadMdfClaims();
+  }, [section, isManager]);
+
   function openConversation(id: string) {
     setSelectedId(id);
     setMobilePanel("detail");
@@ -7235,6 +7258,109 @@ export default function Home() {
     }
   }
 
+  function mdfStatusLabel(status: MdfClaimStatus) {
+    if (status === "needs_info") return "Needs info";
+    if (status === "ready_for_portal") return "Ready for portal";
+    if (status === "portal_draft") return "Portal draft";
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
+  async function loadMdfClaims() {
+    setMdfClaimsLoading(true);
+    try {
+      const resp = await fetch("/api/mdf/claims", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF claims could not be loaded.");
+      const claims = Array.isArray(data.claims) ? data.claims : [];
+      setMdfClaims(claims);
+      if (!mdfSelectedClaimId && claims[0]?.id) {
+        setMdfSelectedClaimId(claims[0].id);
+        setMdfPacket(claims[0].packet ?? null);
+        setMdfNotes(String(claims[0].notes ?? ""));
+      }
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF claims could not be loaded.");
+    } finally {
+      setMdfClaimsLoading(false);
+    }
+  }
+
+  async function saveMdfClaim(status: MdfClaimStatus = "draft") {
+    if (!mdfPacket) {
+      setMdfError("Create an MDF packet before saving.");
+      return;
+    }
+    setMdfClaimSaving(true);
+    setMdfError(null);
+    try {
+      const existingId = String(mdfSelectedClaimId ?? "").trim();
+      const resp = await fetch(existingId ? `/api/mdf/claims/${encodeURIComponent(existingId)}` : "/api/mdf/claims", {
+        method: existingId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          packet: mdfPacket,
+          status,
+          notes: mdfNotes
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF claim could not be saved.");
+      const claim = data.claim as MdfClaimEntry;
+      setMdfSelectedClaimId(claim.id);
+      setMdfPacket(claim.packet);
+      setMdfNotes(String(claim.notes ?? ""));
+      setMdfClaims(prev => {
+        const others = prev.filter(row => row.id !== claim.id);
+        return [claim, ...others].sort(
+          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+      });
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF claim could not be saved.");
+    } finally {
+      setMdfClaimSaving(false);
+    }
+  }
+
+  async function updateMdfClaimStatus(id: string, status: MdfClaimStatus) {
+    setMdfClaimActionBusy(`${id}:${status}`);
+    setMdfError(null);
+    try {
+      const resp = await fetch(`/api/mdf/claims/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF claim could not be updated.");
+      const claim = data.claim as MdfClaimEntry;
+      setMdfClaims(prev => prev.map(row => (row.id === claim.id ? claim : row)));
+      if (mdfSelectedClaimId === claim.id) {
+        setMdfPacket(claim.packet);
+        setMdfNotes(String(claim.notes ?? ""));
+      }
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF claim could not be updated.");
+    } finally {
+      setMdfClaimActionBusy("");
+    }
+  }
+
+  function openMdfClaim(claim: MdfClaimEntry) {
+    setMdfSelectedClaimId(claim.id);
+    setMdfPacket(claim.packet);
+    setMdfNotes(String(claim.notes ?? ""));
+    setMdfError(null);
+  }
+
+  function startNewMdfClaim() {
+    setMdfSelectedClaimId("");
+    setMdfPacket(null);
+    setMdfNotes("");
+    setMdfFiles([]);
+    setMdfError(null);
+  }
+
   async function extractMdfPacket() {
     if (!mdfFiles.length) {
       setMdfError("Upload at least one invoice, receipt, flyer, artwork file, or proof screenshot.");
@@ -7253,6 +7379,7 @@ export default function Home() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF packet could not be created.");
       setMdfPacket(data.packet);
+      setMdfSelectedClaimId("");
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF packet could not be created.");
     } finally {
@@ -14228,6 +14355,65 @@ export default function Home() {
               </span>
             </div>
 
+            <section className="rounded-xl border bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Claims</div>
+                  <h3 className="mt-1 text-lg font-semibold">MDF claim workspace</h3>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border px-3 py-2 text-sm font-semibold hover:bg-gray-50"
+                    onClick={() => void loadMdfClaims()}
+                    disabled={mdfClaimsLoading}
+                  >
+                    {mdfClaimsLoading ? "Refreshing..." : "Refresh"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border bg-gray-900 px-3 py-2 text-sm font-semibold text-white"
+                    onClick={startNewMdfClaim}
+                  >
+                    New claim
+                  </button>
+                </div>
+              </div>
+              {mdfClaims.length ? (
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {mdfClaims.slice(0, 9).map(claim => (
+                    <button
+                      key={claim.id}
+                      type="button"
+                      className={`rounded-lg border p-3 text-left hover:bg-gray-50 ${
+                        mdfSelectedClaimId === claim.id ? "border-[var(--accent)] bg-orange-50/60" : "bg-white"
+                      }`}
+                      onClick={() => openMdfClaim(claim)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-gray-900">{claim.title}</div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Updated {new Date(claim.updatedAt).toLocaleString()}
+                          </div>
+                        </div>
+                        <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                          {mdfStatusLabel(claim.status)}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-600">
+                        {claim.packet.activityType || claim.packet.claimType.replace("_", " ")}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-dashed bg-gray-50 p-4 text-sm text-gray-500">
+                  No saved MDF claims yet. Upload files below and save the generated packet.
+                </div>
+              )}
+            </section>
+
             <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-4">
               <section className="rounded-xl border bg-white p-4 shadow-sm">
                 <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Upload</div>
@@ -14277,6 +14463,26 @@ export default function Home() {
                 >
                   {mdfLoading ? "Creating packet..." : "Create MDF packet"}
                 </button>
+                {mdfPacket ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      className="rounded-lg border px-3 py-2 text-sm font-semibold hover:bg-gray-50 disabled:opacity-60"
+                      onClick={() => void saveMdfClaim("draft")}
+                      disabled={mdfClaimSaving}
+                    >
+                      {mdfClaimSaving ? "Saving..." : mdfSelectedClaimId ? "Save changes" : "Save draft"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+                      onClick={() => void saveMdfClaim("ready_for_portal")}
+                      disabled={mdfClaimSaving}
+                    >
+                      Mark ready
+                    </button>
+                  </div>
+                ) : null}
               </section>
 
               <section className="rounded-xl border bg-white p-4 shadow-sm">
@@ -14366,9 +14572,35 @@ export default function Home() {
                     <div className="rounded-lg border bg-gray-50 p-3">
                       <div className="text-sm font-semibold">Browser-use portal automation</div>
                       <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
-                      <button className="mt-3 rounded-lg border px-3 py-2 text-sm font-semibold text-gray-500" disabled>
-                        Fill MDF portal draft coming next
-                      </button>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {mdfSelectedClaimId ? (
+                          <>
+                            <button
+                              className="rounded-lg border px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-60"
+                              disabled={
+                                mdfClaimActionBusy === `${mdfSelectedClaimId}:needs_info` ||
+                                mdfClaimActionBusy === `${mdfSelectedClaimId}:ready_for_portal`
+                              }
+                              onClick={() => void updateMdfClaimStatus(mdfSelectedClaimId, "needs_info")}
+                            >
+                              Needs more info
+                            </button>
+                            <button
+                              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 disabled:opacity-60"
+                              disabled={
+                                mdfClaimActionBusy === `${mdfSelectedClaimId}:ready_for_portal` ||
+                                mdfClaimActionBusy === `${mdfSelectedClaimId}:needs_info`
+                              }
+                              onClick={() => void updateMdfClaimStatus(mdfSelectedClaimId, "ready_for_portal")}
+                            >
+                              Ready for portal
+                            </button>
+                          </>
+                        ) : null}
+                        <button className="rounded-lg border px-3 py-2 text-sm font-semibold text-gray-500" disabled>
+                          Fill MDF portal draft coming next
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
