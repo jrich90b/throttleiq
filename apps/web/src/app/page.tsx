@@ -1757,6 +1757,7 @@ type MdfClaimPacket = {
     name: string;
     type: string;
     size: number;
+    url?: string;
     inferredRole: "invoice" | "proof_of_performance" | "creative" | "receipt" | "unknown";
   }>;
   missingFields: string[];
@@ -14523,9 +14524,35 @@ export default function Home() {
                       <div className="text-sm font-semibold">Extracted fields</div>
                       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                         {Object.entries(mdfPacket.extractedFields).map(([key, value]) => (
-                          <div key={key} className="rounded border bg-gray-50 px-3 py-2">
+                      <div key={key} className="rounded border bg-gray-50 px-3 py-2">
                             <div className="text-[11px] uppercase tracking-wide text-gray-500">{key.replace(/([A-Z])/g, " $1")}</div>
                             <div className="mt-1 text-gray-800">{value || "—"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border p-3">
+                      <div className="text-sm font-semibold">Saved files</div>
+                      <div className="mt-3 space-y-2">
+                        {mdfPacket.uploadedFiles.map(file => (
+                          <div key={`${file.name}-${file.size}-${file.url ?? ""}`} className="flex items-center justify-between gap-3 rounded border bg-gray-50 px-3 py-2 text-sm">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-gray-800">{file.name}</div>
+                              <div className="text-xs text-gray-500">
+                                {file.inferredRole.replace(/_/g, " ")} • {(file.size / 1024 / 1024).toFixed(2)} MB
+                              </div>
+                            </div>
+                            {file.url ? (
+                              <a
+                                className="shrink-0 rounded border bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                href={file.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            ) : null}
                           </div>
                         ))}
                       </div>

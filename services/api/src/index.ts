@@ -35633,6 +35633,15 @@ app.get("/mdf/claims", requireManager, (_req, res) => {
   return res.json({ ok: true, claims: listMdfClaims() });
 });
 
+function mdfUploadExt(originalName: string, mimeType: string): string {
+  const originalExt = path.extname(originalName || "").toLowerCase();
+  if ([".pdf", ".png", ".jpg", ".jpeg", ".webp"].includes(originalExt)) return originalExt;
+  if (mimeType === "application/pdf") return ".pdf";
+  if (mimeType === "image/png") return ".png";
+  if (mimeType === "image/webp") return ".webp";
+  return ".jpg";
+}
+
 app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
   const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
   if (!files.length) return res.status(400).json({ ok: false, error: "Upload at least one MDF file." });
@@ -35640,6 +35649,9 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
   const maxBytesPerFile = 25 * 1024 * 1024;
   const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
   const normalized = [];
+  const uploadDir = path.resolve(getDataDir(), "uploads", "mdf");
+  await fs.promises.mkdir(uploadDir, { recursive: true });
+  const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   for (const file of files) {
     const mimeType = String(file.mimetype ?? "").toLowerCase();
     if (!allowed.has(mimeType)) {
@@ -35648,11 +35660,23 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
     if (Number(file.size ?? 0) > maxBytesPerFile) {
       return res.status(400).json({ ok: false, error: "Each MDF file must be 25MB or smaller." });
     }
+    const ext = mdfUploadExt(file.originalname || "", mimeType);
+    const safeBase = path
+      .basename(file.originalname || "mdf-file", path.extname(file.originalname || ""))
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "mdf-file";
+    const fileName = `mdf_${Date.now()}_${crypto.randomBytes(4).toString("hex")}_${safeBase}${ext}`;
+    await fs.promises.writeFile(path.join(uploadDir, fileName), file.buffer);
+    const url = publicBase
+      ? `${publicBase.replace(/\/$/, "")}/uploads/mdf/${fileName}`
+      : `/uploads/mdf/${fileName}`;
     normalized.push({
       name: file.originalname || "uploaded-file",
       mimeType,
       size: Number(file.size ?? file.buffer.length ?? 0),
-      buffer: file.buffer
+      buffer: file.buffer,
+      url
     });
   }
 

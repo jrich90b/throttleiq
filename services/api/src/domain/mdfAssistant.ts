@@ -8,6 +8,7 @@ export type MdfUploadedFile = {
   mimeType: string;
   size: number;
   buffer: Buffer;
+  url?: string;
 };
 
 export type MdfClaimPacket = {
@@ -38,6 +39,7 @@ export type MdfClaimPacket = {
     name: string;
     type: string;
     size: number;
+    url?: string;
     inferredRole: "invoice" | "proof_of_performance" | "creative" | "receipt" | "unknown";
   }>;
   missingFields: string[];
@@ -180,6 +182,7 @@ function fallbackPacket(files: MdfUploadedFile[], reason: string): MdfClaimPacke
       name: file.name,
       type: file.mimeType,
       size: file.size,
+      url: (file as any).url,
       inferredRole: inferRoleFromName(file.name)
     })),
     missingFields: ["Claim type", "Activity type", "Dates of activity", "Vendor", "Invoice date", "Invoice number", "Spend"],
@@ -254,6 +257,7 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
           name: String(row?.name ?? files[index]?.name ?? "Uploaded file"),
           type: String(row?.type ?? files[index]?.mimeType ?? ""),
           size: Number(row?.size ?? files[index]?.size ?? 0),
+          url: String((files[index] as any)?.url ?? row?.url ?? "").trim() || undefined,
           inferredRole: ["invoice", "proof_of_performance", "creative", "receipt", "unknown"].includes(row?.inferredRole)
             ? row.inferredRole
             : inferRoleFromName(String(row?.name ?? files[index]?.name ?? ""))
