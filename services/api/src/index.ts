@@ -2337,6 +2337,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/marketing") ||
     pathname.startsWith("/public/inventory") ||
+    pathname.startsWith("/public/mdf") ||
     pathname.startsWith("/public/widget") ||
     pathname.startsWith("/integrations/google") ||
     pathname.startsWith("/integrations/docusign/callback") ||
@@ -35654,6 +35655,21 @@ type RawMdfUpload = {
   buffer: Buffer;
 };
 
+const mdfUploadTokens = new Map<string, number>();
+const MDF_UPLOAD_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+function createMdfUploadToken(): string {
+  const token = crypto.randomBytes(24).toString("hex");
+  mdfUploadTokens.set(token, Date.now() + MDF_UPLOAD_TOKEN_TTL_MS);
+  return token;
+}
+
+function consumeMdfUploadToken(token: string): boolean {
+  const expiresAt = mdfUploadTokens.get(token);
+  mdfUploadTokens.delete(token);
+  return Boolean(expiresAt && expiresAt > Date.now());
+}
+
 async function buildMdfPacketFromUploads(files: RawMdfUpload[], notes: string) {
   if (!files.length) throw new Error("Upload at least one MDF file.");
   if (files.length > 8) throw new Error("Upload 8 MDF files or fewer.");
@@ -35716,6 +35732,19 @@ app.post("/mdf/extract-json", requireManager, async (req, res) => {
   }
 });
 
+app.post("/public/mdf/extract-json", async (req, res) => {
+  const token = String(req.header("x-mdf-upload-token") ?? "");
+  if (!consumeMdfUploadToken(token)) {
+    return res.status(401).json({ ok: false, error: "MDF upload session expired. Refresh and try again." });
+  }
+  try {
+    const packet = await buildMdfPacketFromUploads(parseMdfJsonUploads(req.body), String(req.body?.notes ?? ""));
+    return res.json({ ok: true, packet });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: err instanceof Error ? err.message : "MDF packet could not be created." });
+  }
+});
+
 app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
   const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
   try {
@@ -35732,6 +35761,18 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
   } catch (err) {
     return res.status(400).json({ ok: false, error: err instanceof Error ? err.message : "MDF packet could not be created." });
   }
+});
+
+app.post("/mdf/upload-token", requireManager, (req, res) => {
+  const host = String(req.get("host") ?? "").trim();
+  const forwardedProto = String(req.get("x-forwarded-proto") ?? "").split(",")[0].trim();
+  const protocol = forwardedProto || (host.includes("leadrider.ai") ? "https" : req.protocol);
+  const apiBase = `${protocol}://${host}`;
+  return res.json({
+    ok: true,
+    token: createMdfUploadToken(),
+    uploadUrl: `${apiBase}/public/mdf/extract-json`
+  });
 });
 
 app.post("/mdf/claims", requireManager, (req, res) => {

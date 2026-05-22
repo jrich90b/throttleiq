@@ -7462,6 +7462,15 @@ export default function Home() {
     });
   }
 
+  async function readJsonResponse(resp: Response, fallback: string) {
+    const text = await resp.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(text.trim() || fallback);
+    }
+  }
+
   async function extractMdfPacket() {
     if (!mdfFiles.length) {
       setMdfError("Upload at least one invoice, receipt, flyer, artwork file, or proof screenshot.");
@@ -7478,12 +7487,23 @@ export default function Home() {
           dataBase64: await readFileBase64(file)
         }))
       );
-      const resp = await fetch("/api/mdf/extract", {
+      const tokenResp = await fetch("/api/mdf/upload-token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        cache: "no-store"
+      });
+      const tokenData = await readJsonResponse(tokenResp, "MDF upload session could not be created.");
+      if (!tokenResp.ok || !tokenData?.ok || !tokenData?.token || !tokenData?.uploadUrl) {
+        throw new Error(tokenData?.error || "MDF upload session could not be created.");
+      }
+      const resp = await fetch(String(tokenData.uploadUrl), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-mdf-upload-token": String(tokenData.token)
+        },
         body: JSON.stringify({ files, notes: mdfNotes })
       });
-      const data = await resp.json();
+      const data = await readJsonResponse(resp, "MDF packet could not be created.");
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF packet could not be created.");
       const mergedPacket = mergeMdfPackets(mdfPacket, data.packet);
       const existingId = String(mdfSelectedClaimId ?? "").trim();
