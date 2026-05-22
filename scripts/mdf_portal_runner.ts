@@ -66,6 +66,9 @@ type RunnerOptions = {
   maxSteps: string;
 };
 
+const hDNetMdfSsoUrl =
+  "https://launcher.myapps.microsoft.com/api/signin/6fed78a2-dbcb-4685-a0b9-3033ab4a4dd1?tenantId=625f2ee0-190f-4e6f-9cbb-be276a887c4d";
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadEnvFile(path.join(rootDir, ".env"));
 loadEnvFile(path.join(rootDir, "services", "api", ".env"));
@@ -112,7 +115,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     list: false,
     run: false,
     guided: false,
-    portalUrl: process.env.MDF_PORTAL_URL?.trim() || "",
+    portalUrl: process.env.MDF_PORTAL_URL?.trim() || hDNetMdfSsoUrl,
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
     token: process.env.MDF_PORTAL_RUNNER_TOKEN?.trim() || process.env.AUTOMATION_RUN_WRITE_TOKEN?.trim() || "",
@@ -179,13 +182,13 @@ function printHelp() {
 Usage:
   npm run mdf:portal -- --list
   npm run mdf:portal -- --dry-run --task-id <agent_task_id>
-  MDF_PORTAL_URL="https://..." npm run mdf:portal -- --run --task-id <agent_task_id>
+  npm run mdf:portal -- --run --task-id <agent_task_id>
 
 Options:
   --list                    Show pending MDF portal tasks.
   --task-id <id>            Run a specific agent task.
   --claim-id <id>           Run the newest task for a specific MDF claim.
-  --portal-url <url>        H-D MDF portal URL. Also supported: MDF_PORTAL_URL.
+  --portal-url <url>        H-D MDF portal or SSO URL. Also supported: MDF_PORTAL_URL.
   --cdp-url <url>           Logged-in Chrome CDP URL. Also supported: MDF_PORTAL_CDP_URL.
   --api-base <url>          Optional live API base. Also supported: MDF_PORTAL_API_BASE_URL.
   --token <token>           Optional runner token. Also supported: MDF_PORTAL_RUNNER_TOKEN.
@@ -330,6 +333,8 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Do not click final submit.",
     "- Stop at the final review/save-draft step.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
+    "- If the start URL lands on H-DNet instead of Ansira, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
+    "- If the start URL lands on an Ansira login page, return to H-DNet and use the toolbox SSO path instead of entering credentials directly.",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,

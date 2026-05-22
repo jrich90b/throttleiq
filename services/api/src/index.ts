@@ -35795,6 +35795,8 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
       "",
       "Browser automation rules:",
       "- Use the user's logged-in session when possible.",
+      "- MDF is accessed through H-DNet SSO: click the H-DNet header toolbox icon and choose Marketing Development Fund from My Toolbox if the browser is not already in Ansira.",
+      "- Do not type portal credentials into the direct Ansira login page; use the H-DNet toolbox SSO route instead.",
       "- If login, MFA, missing files, or an uncertain field blocks progress, stop and report the blocker.",
       "- Never click final submit. Save as draft or stop at the review page."
     ]

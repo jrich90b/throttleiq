@@ -132,7 +132,8 @@ https://api.americanharley.leadrider.ai/integrations/meta/callback
   - Optional but required when `MDF_PORTAL_API_BASE_URL` is used.
   - The API accepts this token, or falls back to `AUTOMATION_RUN_WRITE_TOKEN`.
 - `MDF_PORTAL_URL`
-  - Required when running the MDF portal automation. Points to the H-D MDF portal or starting page.
+  - Optional. Points to the H-D MDF portal or starting page.
+  - When unset, the runner starts from the H-DNet Microsoft MyApps SSO entry for Marketing Development Fund. If a run lands on H-DNet, it should use the header toolbox icon and choose `Marketing Development Fund` from `My Toolbox`.
 - `MDF_PORTAL_CDP_URL`
   - Optional. Chrome DevTools Protocol URL for a logged-in Chrome session, for example `http://127.0.0.1:9222`.
   - When set and reachable, the runner uses the user's authenticated Chrome session.

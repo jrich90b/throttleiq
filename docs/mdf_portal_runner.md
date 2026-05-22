@@ -21,7 +21,7 @@ npm run mdf:portal -- --dry-run --task-id <agent_task_id>
 ```
 
 ```bash
-MDF_PORTAL_URL="https://portal-url.example" npm run mdf:portal -- --run --task-id <agent_task_id>
+npm run mdf:portal -- --run --task-id <agent_task_id>
 ```
 
 For the live API, point the runner at the API bridge:
@@ -29,13 +29,14 @@ For the live API, point the runner at the API bridge:
 ```bash
 MDF_PORTAL_API_BASE_URL="https://api.americanharley.leadrider.ai" \
 MDF_PORTAL_RUNNER_TOKEN="..." \
-MDF_PORTAL_URL="https://portal-url.example" \
 npm run mdf:portal -- --run --task-id <agent_task_id>
 ```
 
+By default, the runner starts with the H-DNet Microsoft MyApps SSO entry for Marketing Development Fund. If the browser is on H-DNet, the automation should click the header toolbox icon and choose `Marketing Development Fund` from `My Toolbox`. Direct Ansira login pages should be treated as a blocker or avoided through the H-DNet SSO path.
+
 ## Logged-In Chrome
 
-For the automatic path, use a Chrome session that is already logged into the MDF portal and expose it through Chrome DevTools Protocol:
+For the automatic path, use a Chrome session that is already logged into H-DNet and expose it through Chrome DevTools Protocol:
 
 ```bash
 MDF_PORTAL_CDP_URL="http://127.0.0.1:9222"

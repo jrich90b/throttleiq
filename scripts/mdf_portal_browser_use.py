@@ -70,6 +70,13 @@ async def run() -> int:
     task = "\n\n".join(
         [
             f"Open this MDF portal URL first: {args.portal_url}",
+            (
+                "Navigation rule: the correct authenticated route is H-DNet SSO. "
+                "If you are on H-DNet, click the header toolbox icon with CSS selector "
+                "`.avaQuickLinksExtension.headerExtension`, then choose `Marketing Development Fund` "
+                "from My Toolbox. If you land on an Ansira login page, go back to H-DNet and use "
+                "the toolbox SSO route instead of typing credentials."
+            ),
             prompt,
             "Important final rule: do not click final submit. Stop at draft/review and report what remains.",
         ]
