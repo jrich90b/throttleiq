@@ -63,6 +63,7 @@
     "edit_feedback:email": "npx tsx scripts/send_feedback_report_email.ts",
     "automation_run:record": "npx tsx scripts/record_automation_run.ts",
     "support_mail:poll": "npx tsx scripts/support_mail_poll.ts",
+    "mdf:portal": "npx tsx scripts/mdf_portal_runner.ts",
     "tlp_debug:email": "npx tsx scripts/send_tlp_debug_email.ts",
     "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "feedback:nightly": "bash scripts/feedback_loop_nightly.sh",

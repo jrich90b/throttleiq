@@ -123,6 +123,27 @@ https://api.americanharley.leadrider.ai/integrations/meta/callback
 - `LINEAR_LABEL_IDS`
 - `LINEAR_ISSUE_PRIORITY=2`
 
+## MDF Portal Runner
+
+- `MDF_PORTAL_API_BASE_URL`
+  - Optional. Points the local runner at the live API, for example `https://api.americanharley.leadrider.ai`.
+  - When unset, the runner reads local `DATA_DIR` JSON files.
+- `MDF_PORTAL_RUNNER_TOKEN`
+  - Optional but required when `MDF_PORTAL_API_BASE_URL` is used.
+  - The API accepts this token, or falls back to `AUTOMATION_RUN_WRITE_TOKEN`.
+- `MDF_PORTAL_URL`
+  - Required when running the MDF portal automation. Points to the H-D MDF portal or starting page.
+- `MDF_PORTAL_CDP_URL`
+  - Optional. Chrome DevTools Protocol URL for a logged-in Chrome session, for example `http://127.0.0.1:9222`.
+  - When set and reachable, the runner uses the user's authenticated Chrome session.
+- `MDF_BROWSER_USE_PYTHON`
+  - Optional. Defaults to `python3`.
+  - Use this when `browser-use` is installed in a specific virtual environment.
+- `MDF_BROWSER_USE_MODEL`
+  - Optional. Defaults to `gpt-5` inside the Browser Use runner.
+- `MDF_BROWSER_USE_MAX_STEPS`
+  - Optional. Defaults to `35`.
+
 ## Feedback Loop
 
 - `REPORT_ROOT`

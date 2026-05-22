@@ -35807,6 +35807,53 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
   return res.json({ ok: true, task, claim: updated ?? claim });
 });
 
+function canUseMdfPortalRunner(req: any) {
+  const configured = String(process.env.MDF_PORTAL_RUNNER_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
+  const provided = String(req.header("x-mdf-portal-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "") || "").trim();
+  return !!configured && !!provided && configured === provided;
+}
+
+function mdfPortalClaimIdFromTask(task: AgentTask): string {
+  const match = task.instructions.match(/\[mdf-portal:([^\]]+)\]/);
+  return match?.[1] ?? "";
+}
+
+app.get("/mdf/portal-runner/tasks", async (req, res) => {
+  if (!canUseMdfPortalRunner(req)) return res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
+  const limit = Number(req.query.limit ?? "50");
+  const tasks = (await listAgentTasks(Number.isFinite(limit) ? limit : 50))
+    .filter(task => task.kind === "mdf_portal")
+    .map(task => {
+      const claimId = mdfPortalClaimIdFromTask(task);
+      return {
+        task,
+        claim: claimId ? getMdfClaim(claimId) : null
+      };
+    });
+  return res.json({ ok: true, tasks });
+});
+
+app.patch("/mdf/portal-runner/tasks/:id", async (req, res) => {
+  if (!canUseMdfPortalRunner(req)) return res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!allowedAgentStatuses.includes(statusRaw as AgentTaskStatus)) {
+    return res.status(400).json({ ok: false, error: "Invalid task status." });
+  }
+  const tasks = await listAgentTasks(1000);
+  const existing = tasks.find(task => task.id === req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  if (existing.kind !== "mdf_portal") return res.status(400).json({ ok: false, error: "Only MDF portal tasks can use this runner." });
+  const summary = String(req.body?.summary ?? "").trim().slice(0, 6000);
+  const links = Array.isArray(req.body?.links)
+    ? req.body.links.map((link: unknown) => String(link ?? "").trim()).filter(Boolean).slice(0, 20)
+    : undefined;
+  const updated = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, {
+    summary: summary || existing.output?.summary,
+    links: links ?? existing.output?.links
+  });
+  return res.json({ ok: true, task: updated ?? existing });
+});
+
 app.post("/campaigns/media", requireManager, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: "missing file" });
 
