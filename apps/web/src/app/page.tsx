@@ -11440,6 +11440,8 @@ export default function Home() {
   }
 
   const isCampaignSection = section === "campaigns";
+  const isMdfSection = section === "mdf";
+  const isMessagingWorkspace = !isMdfSection;
   const rootThemeClass = isCampaignSection ? "lr-campaign-theme" : "lr-app-theme";
   const sideNavButtonClass = (active: boolean) =>
     [
@@ -11454,7 +11456,7 @@ export default function Home() {
 
   return (
     <main
-      className={`h-screen flex flex-col md:flex-row bg-[var(--background)] text-[var(--foreground)] ${rootThemeClass}`}
+      className={`h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)] ${rootThemeClass}`}
       data-campaign-theme={isCampaignSection ? "true" : "false"}
     >
       {crmLogToast ? (
@@ -11576,6 +11578,49 @@ export default function Home() {
           onClick={() => setMobileNavOpen(false)}
         />
       ) : null}
+      <header className="shrink-0 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.5)]">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+              LeadRider
+            </div>
+            <div className="truncate text-lg font-semibold">
+              {isMdfSection ? "MDF Assistant" : "Dealer Workspace"}
+            </div>
+          </div>
+          <div className="flex w-full gap-2 md:w-auto">
+            <button
+              type="button"
+              className={[
+                "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none",
+                isMessagingWorkspace
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-sm"
+                  : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--surface)]"
+              ].join(" ")}
+              onClick={() => {
+                if (isMdfSection) goToSection("inbox");
+              }}
+            >
+              Messaging Platform
+            </button>
+            {isManager ? (
+              <button
+                type="button"
+                className={[
+                  "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none",
+                  isMdfSection
+                    ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-sm"
+                    : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--surface)]"
+                ].join(" ")}
+                onClick={() => goToSection("mdf")}
+              >
+                MDF Assistant
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </header>
+      {isMessagingWorkspace ? (
       <div className="md:hidden w-full flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
         <div className="w-[60px] shrink-0">
           <button
@@ -11598,8 +11643,10 @@ export default function Home() {
           ) : null}
         </div>
       </div>
+      ) : null}
       <div className="flex-1 flex md:flex-row flex-col min-h-0">
-      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-screen border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
+      {isMessagingWorkspace ? (
+      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-full border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
         <div className="text-lg font-semibold shrink-0">TI</div>
         <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
@@ -11689,15 +11736,6 @@ export default function Home() {
         ) : null}
         {!isDepartmentUser && authUser?.role === "manager" ? (
           <button
-            className={sideNavButtonClass(section === "mdf")}
-            title="MDF Assistant"
-            onClick={() => goToSection("mdf")}
-          >
-            <SideNavIcon name="mdf" />
-          </button>
-        ) : null}
-        {!isDepartmentUser && authUser?.role === "manager" ? (
-          <button
             className={sideNavButtonClass(section === "kpi")}
             title="KPI Overview"
             onClick={() => goToSection("kpi")}
@@ -11736,6 +11774,7 @@ export default function Home() {
           </div>
         </div>
       </aside>
+      ) : null}
 
       {settingsOpen && typeof document !== "undefined"
         ? createPortal(
@@ -11826,7 +11865,7 @@ export default function Home() {
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
         } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] lr-app-sidebar-panel ${
           isCampaignSection ? "lr-campaign-sidebar" : ""
-        } ${section === "calendar" ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        } ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
         data-campaign-sidebar={isCampaignSection ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
