@@ -386,7 +386,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
 
 function hasRecentUnansweredPriceQuestion(conv: any): boolean {
   const messages = Array.isArray(conv?.messages) ? conv.messages : [];
-  const recent = messages.slice(-8);
+  const recent = messages.slice(-24);
   let sawCurrentFinanceQuestion = false;
   for (let i = recent.length - 1; i >= 0; i -= 1) {
     const msg = recent[i];
