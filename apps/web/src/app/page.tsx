@@ -7450,6 +7450,19 @@ export default function Home() {
     return `${base || "mdf-upload"}${ext}`;
   }
 
+  function safeMdfUploadFile(file: File, index: number) {
+    const safeName = safeMdfUploadName(file.name || `mdf-upload-${index + 1}`, file.type);
+    if (file.name === safeName) return file;
+    try {
+      return new File([file], safeName, {
+        type: file.type || "application/octet-stream",
+        lastModified: file.lastModified
+      });
+    } catch {
+      return file;
+    }
+  }
+
   async function extractMdfPacket() {
     if (!mdfFiles.length) {
       setMdfError("Upload at least one invoice, receipt, flyer, artwork file, or proof screenshot.");
@@ -7459,7 +7472,7 @@ export default function Home() {
     setMdfError(null);
     try {
       const form = new FormData();
-      mdfFiles.forEach(file => form.append("files", file, safeMdfUploadName(file.name, file.type)));
+      mdfFiles.forEach(file => form.append("files", file));
       form.append("notes", mdfNotes);
       const resp = await fetch("/api/mdf/extract", {
         method: "POST",
@@ -14538,7 +14551,9 @@ export default function Home() {
                     multiple
                     accept="application/pdf,image/png,image/jpeg,image/webp"
                     onChange={event => {
-                      const nextFiles = Array.from(event.target.files ?? []);
+                      const nextFiles = Array.from(event.target.files ?? []).map((file, index) =>
+                        safeMdfUploadFile(file, index)
+                      );
                       setMdfFiles(prev => [...prev, ...nextFiles]);
                       setMdfError(null);
                       event.currentTarget.value = "";
