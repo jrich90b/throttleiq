@@ -4,6 +4,7 @@ import {
   getInventoryFeed,
   type InventoryFeedItem
 } from "./inventoryFeed.js";
+import { isInventoryNoteExpired, listInventoryNotes, type InventoryNoteItem } from "./inventoryNotes.js";
 
 type VehicleFactDecisionLike = {
   questionType: string;
@@ -96,6 +97,45 @@ function parseRequestedPriceCap(text: string): number | null {
   if (!Number.isFinite(value) || value <= 0) return null;
   if (/\bk\b/i.test(match[0]) && value < 1000) return value * 1000;
   return value;
+}
+
+function inventoryKey(stockId?: string | null, vin?: string | null): string | null {
+  const stock = normalizeText(stockId).toLowerCase();
+  if (stock) return stock;
+  const v = normalizeText(vin).toLowerCase();
+  if (v) return v;
+  return null;
+}
+
+async function getActiveInventoryNotesForUnit(
+  item: InventoryFeedItem | null,
+  sourceVehicle: any
+): Promise<InventoryNoteItem[]> {
+  const key = inventoryKey(
+    item?.stockId ?? sourceVehicle?.stockId ?? sourceVehicle?.stock,
+    item?.vin ?? sourceVehicle?.vin
+  );
+  if (!key) return [];
+  const notes = await listInventoryNotes();
+  const entry = notes?.[key];
+  return (entry?.notes ?? []).filter(note => !isInventoryNoteExpired(note.expiresAt) && normalizeText(note.note));
+}
+
+function noteContainsFinancePromo(note: InventoryNoteItem, requestedApr: number | null): boolean {
+  const text = `${note.label ?? ""} ${note.note ?? ""}`.toLowerCase();
+  const hasFinanceSignal = /\b(financ|apr|interest|rate)\b/.test(text);
+  if (!hasFinanceSignal) return false;
+  if (requestedApr == null) return true;
+  const escapedApr = String(requestedApr).replace(".", "\\.");
+  return new RegExp(`\\b${escapedApr}\\s*%?\\b`).test(text);
+}
+
+function describePromoNote(note: InventoryNoteItem): string {
+  const label = normalizeText(note.label);
+  const body = normalizeText(note.note);
+  const exp = normalizeText(note.expiresAt);
+  const core = [label, body].filter(Boolean).join(": ");
+  return exp ? `${core} through ${exp}` : core;
 }
 
 async function resolveConversationInventoryItem(conv: any): Promise<{
@@ -205,8 +245,47 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   const apr = parseRequestedApr(args.text);
   const priceCap = parseRequestedPriceCap(args.text);
   const eligibility = isLikelyLowAprEligible(item, args.conv);
+  const activeNotes = await getActiveInventoryNotesForUnit(item, sourceVehicle);
+  const financePromo = activeNotes.find(note => noteContainsFinancePromo(note, apr));
   const aprText = apr ? `${apr}%` : "the low-interest";
   const capText = priceCap ? ` and the under-${formatMoney(priceCap)} price cap` : "";
+
+  if (financePromo && (!priceCap || (price && price <= priceCap))) {
+    const promoText = describePromoNote(financePromo);
+    const priceClause = priceText ? ` The listed price I see is ${priceText} before tax and fees.` : "";
+    return {
+      handled: true,
+      reply: `Yes — the ${unitLabel} has a current ${promoText}.${priceClause} I’ll still have the team confirm final finance eligibility before quoting exact terms.`,
+      needsTodo: true,
+      todoReason: "pricing",
+      todoSummary: `Confirm final finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      item
+    };
+  }
+
+  if (financePromo && priceCap && !priceText) {
+    const promoText = describePromoNote(financePromo);
+    return {
+      handled: true,
+      reply: `Yes — the ${unitLabel} has a current ${promoText}, but I don’t see a published price in the inventory feed to verify the under-${formatMoney(priceCap)} part. I’ll have the team confirm the price and final eligibility.`,
+      needsTodo: true,
+      todoReason: "pricing",
+      todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      item
+    };
+  }
+
+  if (financePromo && priceCap && price && price > priceCap) {
+    const promoText = describePromoNote(financePromo);
+    return {
+      handled: true,
+      reply: `The ${unitLabel} has a current ${promoText}, but the listed price I see is ${priceText}, which is over ${formatMoney(priceCap)}. I’ll confirm whether any price-cap rule applies before quoting it as eligible.`,
+      needsTodo: true,
+      todoReason: "pricing",
+      todoSummary: `Turn over price-cap finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      item
+    };
+  }
 
   if (!apr && !priceCap) {
     return {

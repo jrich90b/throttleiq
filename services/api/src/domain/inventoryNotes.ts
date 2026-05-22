@@ -51,6 +51,10 @@ async function loadStore(): Promise<InventoryNotesStore> {
   }
 }
 
+export function isInventoryNoteExpired(expiresAt?: string): boolean {
+  return isExpired(expiresAt);
+}
+
 async function saveStore(store: InventoryNotesStore): Promise<void> {
   const filePath = dataPath(FILE_NAME);
   const payload = {
