@@ -2345,6 +2345,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/support-mail/poll") ||
     pathname.startsWith("/personal-mail/poll") ||
+    pathname.startsWith("/mdf/portal-runner") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/debug/incidents") ||
     pathname.startsWith("/auth/login") ||
