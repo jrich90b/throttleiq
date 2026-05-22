@@ -104,6 +104,16 @@ function personalMailRecommendation(task: AgentTask) {
   return "Review";
 }
 
+function readableTaskSummary(task: AgentTask) {
+  const summary = task.output?.summary || "";
+  return summary
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`[\]]/g, "")
+    .replace(/\s+-\s+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const defaultPersonalMailInstructions =
   "Review Joe's personal email. Auto-trash safe spam, promos, expired codes, and routine no-reply vendor mail. Draft replies for real business conversations. Ask approval before sending, archiving important mail, or making account changes.";
 const autoTrashLogRetentionMs = 24 * 60 * 60 * 1000;
@@ -280,7 +290,7 @@ export default function PersonalEmailCommandPage() {
   }
 
   return (
-    <main className="lr-ceo-shell">
+    <main className="lr-ceo-shell lr-personal-email-shell">
       <aside className="lr-ceo-sidebar">
         <div className="lr-ceo-brand">
           <div className="lr-ceo-mark">LR</div>
@@ -408,7 +418,54 @@ export default function PersonalEmailCommandPage() {
           </article>
         </section>
 
-        <section className="lr-ceo-grid">
+        <section className="lr-ceo-grid lr-personal-email-grid">
+          <article className="lr-ceo-panel lr-personal-review-panel">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Review queue</p>
+                <h3>Needs your decision</h3>
+              </div>
+              <span className="lr-ceo-status-attention">{pendingPersonalTasks.length} pending</span>
+            </div>
+            <div className="lr-ceo-task-list">
+              {pendingPersonalTasks.length ? (
+                pendingPersonalTasks.map(task => {
+                  const summary = readableTaskSummary(task);
+                  return (
+                    <div key={task.id} className="lr-ceo-task-row lr-personal-review-card">
+                      <div className="lr-personal-review-meta">
+                        <span>{task.provider}</span>
+                        <small>{formatTime(task.createdAt)}</small>
+                        <small>{taskStatusLabel(task.status)}</small>
+                      </div>
+                      <div className="lr-personal-review-body">
+                        <strong>{task.title}</strong>
+                        <small>Recommendation: {personalMailRecommendation(task)}</small>
+                        {task.approval?.reason ? <small>{task.approval.reason}</small> : null}
+                        {summary ? <p className="lr-personal-review-summary">{summary}</p> : null}
+                      </div>
+                      <div className="lr-ceo-run-actions lr-personal-review-actions">
+                        <button type="button" onClick={() => trashPersonalMailFromTask(task)} disabled={busyId === task.id}>
+                          Trash email
+                        </button>
+                        <button
+                          type="button"
+                          className="lr-ceo-secondary-btn"
+                          onClick={() => updateAgentTask(task, "completed", "Reviewed personal email and kept it in the inbox.")}
+                          disabled={busyId === task.id}
+                        >
+                          Keep
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="lr-ceo-note">No personal email decisions waiting.</p>
+              )}
+            </div>
+          </article>
+
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
@@ -440,55 +497,12 @@ export default function PersonalEmailCommandPage() {
                         disabled={agentBusy}
                       >
                         Draft reply
-                      </button>
+                        </button>
                     </div>
                   </div>
                 ))
               ) : (
                 <p className="lr-ceo-note">No personal emails loaded.</p>
-              )}
-            </div>
-          </article>
-
-          <article className="lr-ceo-panel">
-            <div className="lr-ceo-panel-title">
-              <div>
-                <p className="lr-ceo-kicker">Review queue</p>
-                <h3>Needs your decision</h3>
-              </div>
-              <span className="lr-ceo-status-attention">{pendingPersonalTasks.length} pending</span>
-            </div>
-            <div className="lr-ceo-task-list">
-              {pendingPersonalTasks.length ? (
-                pendingPersonalTasks.map(task => (
-                  <div key={task.id} className="lr-ceo-task-row">
-                    <span>{task.provider}</span>
-                    <p>
-                      <strong>{task.title}</strong>
-                      <small>
-                        {formatTime(task.createdAt)} • {taskStatusLabel(task.status)}
-                        {task.approval?.required ? ` • ${task.approval.reason}` : ""}
-                      </small>
-                      <small>Recommendation: {personalMailRecommendation(task)}</small>
-                      {task.output?.summary ? <small>{task.output.summary}</small> : null}
-                    </p>
-                    <div className="lr-ceo-run-actions">
-                      <button type="button" onClick={() => trashPersonalMailFromTask(task)} disabled={busyId === task.id}>
-                        Trash email
-                      </button>
-                      <button
-                        type="button"
-                        className="lr-ceo-secondary-btn"
-                        onClick={() => updateAgentTask(task, "completed", "Reviewed personal email and kept it in the inbox.")}
-                        disabled={busyId === task.id}
-                      >
-                        Keep
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <p className="lr-ceo-note">No personal email decisions waiting.</p>
               )}
             </div>
           </article>

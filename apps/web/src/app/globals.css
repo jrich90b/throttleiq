@@ -1954,6 +1954,95 @@ a {
   font-weight: 800;
 }
 
+.lr-personal-email-shell .lr-ceo-grid {
+  grid-template-columns: minmax(420px, 0.95fr) minmax(520px, 1.05fr);
+  align-items: start;
+}
+
+.lr-personal-email-grid .lr-personal-review-panel {
+  grid-column: 1 / -1;
+}
+
+.lr-personal-review-panel {
+  min-width: 0;
+}
+
+.lr-personal-review-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.72rem;
+  padding: 0.9rem;
+}
+
+.lr-personal-review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.lr-personal-review-meta span {
+  display: inline-flex;
+  justify-content: center;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(251, 127, 4, 0.16);
+  color: #ffca92;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.lr-personal-review-meta small {
+  display: inline-flex;
+  padding: 0.24rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 999px;
+  color: #aebbd2;
+  line-height: 1;
+}
+
+.lr-personal-review-body {
+  min-width: 0;
+}
+
+.lr-personal-review-body strong,
+.lr-personal-review-body small {
+  display: block;
+}
+
+.lr-personal-review-body strong {
+  color: #f7fbff;
+}
+
+.lr-personal-review-body small {
+  margin-top: 0.26rem;
+  color: #aebbd2;
+  line-height: 1.45;
+}
+
+.lr-personal-review-summary {
+  max-height: 260px;
+  margin: 0.75rem 0 0;
+  padding: 0.78rem;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 9, 15, 0.42);
+  color: #dce6f6;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lr-personal-review-actions {
+  justify-content: flex-start;
+}
+
+.lr-personal-review-actions button {
+  min-width: 132px;
+}
+
 @media (max-width: 1050px) {
   .lr-ceo-shell {
     grid-template-columns: 1fr;
@@ -1971,6 +2060,10 @@ a {
   .lr-ceo-grid,
   .lr-ceo-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lr-personal-email-shell .lr-ceo-grid {
+    grid-template-columns: 1fr;
   }
 
   .lr-ceo-funnel-board {
