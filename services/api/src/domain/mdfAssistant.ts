@@ -398,7 +398,25 @@ async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Pr
     "Leave unknown fields blank and list missing invoice fields in missingFields.",
     "Set uploadedFiles roles to invoice or receipt based on the provided role."
   ].join("\n");
-  const resp = await client.responses.parse({
+  const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 2400);
+  recordOpenAIUsage(resp, {
+    feature: "mdf_assistant",
+    operation: "extract_invoice_fields",
+    requestKind: "responses.create",
+    model,
+    metadata: { fileCount: invoiceFiles.length }
+  });
+  return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
+}
+
+async function createMdfJsonResponse(
+  model: string,
+  prompt: string,
+  inputs: any[],
+  schemaName: string,
+  maxOutputTokens: number
+) {
+  return (client.responses as any).create({
     model,
     input: [
       {
@@ -406,24 +424,16 @@ async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Pr
         content: [{ type: "input_text", text: prompt }, ...inputs] as any[]
       }
     ],
-    max_output_tokens: 1200,
+    max_output_tokens: maxOutputTokens,
     text: {
       format: {
         type: "json_schema",
-        name: "mdf_invoice_fields",
+        name: schemaName,
         schema: MDF_SCHEMA,
         strict: true
       }
     }
   });
-  recordOpenAIUsage(resp, {
-    feature: "mdf_assistant",
-    operation: "extract_invoice_fields",
-    requestKind: "responses.parse",
-    model,
-    metadata: { fileCount: invoiceFiles.length }
-  });
-  return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
 }
 
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
@@ -459,28 +469,11 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
   ].join("\\n");
 
   try {
-    const resp = await client.responses.parse({
-      model,
-      input: [
-        {
-          role: "user",
-          content: [{ type: "input_text", text: prompt }, ...supportedInputs] as any[]
-        }
-      ],
-      max_output_tokens: 2200,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "mdf_claim_packet",
-          schema: MDF_SCHEMA,
-          strict: true
-        }
-      }
-    });
+    const resp = await createMdfJsonResponse(model, prompt, supportedInputs, "mdf_claim_packet", 5000);
     recordOpenAIUsage(resp, {
       feature: "mdf_assistant",
       operation: "extract_claim_packet",
-      requestKind: "responses.parse",
+      requestKind: "responses.create",
       model,
       metadata: { fileCount: files.length }
     });
