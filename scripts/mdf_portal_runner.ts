@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as http from "node:http";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,6 +29,7 @@ type MdfUploadedFile = {
   size?: number;
   url?: string;
   inferredRole?: string;
+  providedRole?: string;
 };
 
 type MdfClaimEntry = {
@@ -199,7 +201,7 @@ Options:
   --guided                  Open a guided checklist fallback instead of browser-use.
   --idle-ok                 Exit cleanly when no MDF portal task is available.
   --dry-run                 Build the packet and prompt without opening a browser.
-  --run                     Actually start browser-use or guided browser mode.
+  --run                     Actually start the portal runner or guided browser mode.
 `);
 }
 
@@ -541,6 +543,199 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
   return { code: 0, summary };
 }
 
+function extractedField(claim: MdfClaimEntry, keys: string[]): string {
+  const fields = claim.packet.extractedFields ?? {};
+  for (const key of keys) {
+    const value = String(fields[key] ?? "").trim();
+    if (value && !/^missing$/i.test(value)) return value;
+  }
+  return "";
+}
+
+function toUsDate(value: string): string {
+  const trimmed = value.trim();
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+  const us = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (us) return `${us[1].padStart(2, "0")}/${us[2].padStart(2, "0")}/${us[3]}`;
+  return trimmed;
+}
+
+function moneyValue(value: string): string {
+  const cleaned = value.replace(/[^0-9.]/g, "");
+  return cleaned || value.trim();
+}
+
+function roleForFile(file: MdfUploadedFile): string {
+  return String(file.providedRole || file.inferredRole || "").trim().toLowerCase();
+}
+
+function isInvoiceFile(file: MdfUploadedFile): boolean {
+  const role = roleForFile(file);
+  return role.includes("invoice") || /invoice|inv[_\s-]?\d+/i.test(file.name);
+}
+
+async function downloadPortalFile(file: MdfUploadedFile, dir: string): Promise<string | null> {
+  if (!file.url) return null;
+  const safeName = file.name.replace(/[^\w.\-() ]+/g, "_").slice(0, 160) || "upload";
+  const target = path.join(dir, safeName);
+  const resp = await fetch(file.url);
+  if (!resp.ok) throw new Error(`Could not download ${file.name}: ${resp.status}`);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  await writeFile(target, buffer);
+  return target;
+}
+
+async function fillText(page: any, selector: string, value: string) {
+  const locator = page.locator(selector).first();
+  await locator.scrollIntoViewIfNeeded().catch(() => {});
+  await locator.click({ force: true }).catch(() => {});
+  await locator.fill("").catch(() => {});
+  await locator.fill(value).catch(async () => {
+    await locator.evaluate((el: HTMLInputElement | HTMLTextAreaElement, next: string) => {
+      el.value = next;
+    }, value);
+  });
+  await locator.evaluate((el: HTMLElement) => {
+    for (const name of ["input", "keyup", "change", "blur"]) {
+      el.dispatchEvent(new Event(name, { bubbles: true }));
+    }
+  });
+}
+
+async function selectOptionByText(page: any, selector: string, text: string) {
+  const value = await page.locator(`${selector} option`, { hasText: text }).first().getAttribute("value");
+  if (!value) throw new Error(`Could not find option "${text}" in ${selector}`);
+  await page.selectOption(selector, value);
+  await page.locator(selector).dispatchEvent("change");
+}
+
+async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
+  if (!options.cdpUrl) return { code: 2, summary: "Playwright portal runner needs MDF_PORTAL_CDP_URL for a logged-in Chrome session." };
+  if ((claim.packet.claimType || "").toLowerCase() !== "media") {
+    return { code: 2, summary: `Playwright portal runner currently supports media claims. Claim type was "${claim.packet.claimType || "missing"}".` };
+  }
+
+  const { chromium } = await import("playwright");
+  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const page =
+    browser
+      .contexts()
+      .flatMap(context => context.pages())
+      .find(openPage => openPage.url().includes("app.ansira.com")) ??
+    (await browser.contexts()[0]?.newPage());
+  if (!page) throw new Error("No Chrome page available for the MDF portal runner.");
+
+  await page.bringToFront();
+  await page.goto("https://app.ansira.com/member/reimbursements/claims/create", {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000
+  });
+  await page.waitForTimeout(3000);
+  const bodyText = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+  if (/sign in|password|microsoft/i.test(bodyText) && !/Create Claim/i.test(bodyText)) {
+    await browser.close();
+    return { code: 2, summary: "The MDF runner Chrome session is not logged in to Ansira/H-DNet. Sign in, then create a fresh portal draft task." };
+  }
+
+  await selectOptionByText(page, "#app-marketing-activity", "2026 Media Claim");
+  await page.waitForTimeout(1500);
+
+  const startDate = toUsDate(extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]));
+  const endDate = toUsDate(extractedField(claim, ["activityEndDate", "activity_end_date", "endDate"]));
+  if (startDate) await fillText(page, "#app-claim-start-date", startDate);
+  if (endDate) await fillText(page, "#app-claim-end-date", endDate);
+  await page.waitForTimeout(2500);
+
+  const standalone = page.locator("#app-radio-btn-standalone-claim");
+  if (await standalone.count()) {
+    await standalone.check({ force: true }).catch(async () => {
+      await standalone.evaluate((el: HTMLInputElement) => {
+        el.checked = true;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    });
+  }
+
+  const vendor = extractedField(claim, ["vendorName", "vendor", "vendor_name"]);
+  const invoiceDate = toUsDate(extractedField(claim, ["invoiceDate", "invoice_date"]));
+  const invoiceNumber = extractedField(claim, ["invoiceNumber", "invoice_number"]);
+  const spend = moneyValue(extractedField(claim, ["spend", "amount", "invoiceAmount", "invoice_amount"]));
+  const totalLeads = extractedField(claim, ["totalLeads", "total_leads"]);
+  const description = claim.packet.descriptionDraft || "";
+
+  await fillText(page, "#app-claim-name", claim.title);
+  const reviewNotes = [
+    "LeadRider draft. Human review needed before submission.",
+    ...(claim.packet.missingFields ?? []).length ? [`Missing/needs review: ${(claim.packet.missingFields ?? []).join(", ")}.`] : [],
+    ...(claim.packet.eligibility?.concerns ?? []).slice(0, 3)
+  ].join(" ");
+  await fillText(page, "#app-additional-notes", reviewNotes.slice(0, 1200));
+  await selectOptionByText(page, "#activity-sub-detail", "MEDIA - Magazine / Newspaper Ad");
+  await fillText(page, "#activity-summary", description.slice(0, 2000));
+  if (totalLeads) await fillText(page, "#cl-budget", totalLeads);
+  if (vendor) await fillText(page, 'input[name="invoices[1][vendor_name]"]', vendor);
+  if (invoiceDate) await fillText(page, 'input[name="invoices[1][invoice_date]"]', invoiceDate);
+  if (invoiceNumber) await fillText(page, 'input[name="invoices[1][invoice_number]"]', invoiceNumber);
+  if (spend) {
+    await fillText(page, 'input[name="invoices[1][invoice_amount]"]', spend);
+    await fillText(page, "#app-claimed-amount", spend);
+  }
+
+  const files = claim.packet.uploadedFiles ?? [];
+  const invoiceFiles = files.filter(isInvoiceFile);
+  const supportFiles = files.filter(file => !isInvoiceFile(file));
+  const tempDir = path.join(os.tmpdir(), `leadrider-mdf-${claim.id}-${Date.now()}`);
+  await mkdir(tempDir, { recursive: true });
+  try {
+    const invoicePaths = (await Promise.all(invoiceFiles.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[];
+    const supportPaths = (await Promise.all(supportFiles.map(file => downloadPortalFile(file, tempDir)))).filter(Boolean) as string[];
+    const fileInputs = await page.locator('input[type="file"][name="files[]"]').all();
+    if (invoicePaths.length && fileInputs[0]) {
+      await fileInputs[0].setInputFiles(invoicePaths.length === 1 ? invoicePaths[0] : invoicePaths);
+      await page.waitForTimeout(5000);
+      const invoiceCategory = page.locator('select[name="invoices[1][files][0][file_category]"]');
+      if (await invoiceCategory.count()) await selectOptionByText(page, 'select[name="invoices[1][files][0][file_category]"]', "Invoice");
+    }
+    if (supportPaths.length && fileInputs[1]) {
+      await fileInputs[1].setInputFiles(supportPaths);
+      await page.waitForTimeout(8000);
+      const supportCategoryCount = await page.locator('select[name^="files["][name$="[file_category]"]').count();
+      for (let i = 0; i < supportCategoryCount; i += 1) {
+        const selector = `select[name="files[${i}][file_category]"]`;
+        if (await page.locator(selector).count()) await selectOptionByText(page, selector, "Supporting Documentation").catch(() => {});
+      }
+    }
+
+    if (spend) {
+      await fillText(page, 'input[name="invoices[1][invoice_amount]"]', spend);
+      await fillText(page, "#app-claimed-amount", spend);
+    }
+
+    await page.locator("#app-draft-submit-btn").scrollIntoViewIfNeeded();
+    await page.locator("#app-draft-submit-btn").click();
+    await page.waitForLoadState("domcontentloaded", { timeout: 45_000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+    const resultText = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+    const claimId = resultText.match(/Claim ID:\s*([A-Z0-9]+)/i)?.[1] || "";
+    const status = resultText.match(/Status:\s*([^\n]+)/i)?.[1]?.trim() || "unknown";
+    const saved = /successfully saved|Status:\s*Incomplete/i.test(resultText);
+    const summary = [
+      saved ? "Ansira MDF draft saved successfully." : "Ansira MDF draft run finished, but save confirmation was not detected.",
+      claimId ? `Claim ID: ${claimId}.` : "Claim ID was not detected.",
+      `Status: ${status}.`,
+      `Filled ${claim.packet.claimType || "media"} claim for ${claim.title}.`,
+      `Uploaded ${invoicePaths.length} invoice file(s) and ${supportPaths.length} supporting file(s).`,
+      "Did not click final Submit.",
+      "Human review still needed before final submission."
+    ].join(" ");
+    await browser.close();
+    return { code: saved ? 0 : 2, summary, links: [page.url()] };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function isCdpReachable(cdpUrl: string): Promise<boolean> {
   if (!cdpUrl) return false;
   try {
@@ -629,9 +824,11 @@ async function main() {
   const browserUseInstalled = !options.guided && (await canImportBrowserUse(python));
   const browserUseCloud = osFlag("MDF_BROWSER_USE_CLOUD");
   const allowFreshBrowser = osFlag("MDF_BROWSER_USE_ALLOW_FRESH_BROWSER");
+  const browserUseEnabled = osFlag("MDF_PORTAL_USE_BROWSER_USE");
   const browserUseAvailable = browserUseInstalled && (cdpOk || browserUseCloud || allowFreshBrowser);
+  const playwrightAvailable = cdpOk && !browserUseEnabled && !options.guided;
 
-  if (!browserUseAvailable) {
+  if (!playwrightAvailable && !browserUseAvailable) {
     const cdpNote =
       options.cdpUrl && !cdpOk
         ? " The configured Chrome CDP URL was not reachable, so the guided fallback opened the normal desktop browser."
@@ -663,14 +860,17 @@ async function main() {
     return;
   }
 
-  const result = await runBrowserUse(promptPath, resultPath, options);
+  const result =
+    playwrightAvailable
+      ? await runPlaywrightPortalDraft(claim, options)
+      : await runBrowserUse(promptPath, resultPath, options);
   if (result.code === 0) {
     updateTask(
       tasks,
       task.id,
       "needs_approval",
-      `browser-use completed the MDF draft run. Review the portal before any final submit.\n\n${result.summary}`,
-      [promptPath, resultPath, options.portalUrl]
+      `MDF portal draft run completed. Review the portal before any final submit.\n\n${result.summary}`,
+      [promptPath, resultPath, options.portalUrl, ...(result.links ?? [])]
     );
   } else {
     updateTask(
@@ -678,7 +878,7 @@ async function main() {
       task.id,
       "blocked",
       `MDF portal runner blocked before completion.\n\n${result.summary}`,
-      [promptPath, resultPath, options.portalUrl]
+      [promptPath, resultPath, options.portalUrl, ...(result.links ?? [])]
     );
   }
   if (remoteBundles) {
