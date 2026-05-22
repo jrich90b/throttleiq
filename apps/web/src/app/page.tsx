@@ -7520,6 +7520,22 @@ export default function Home() {
     return "unknown";
   }
 
+  function updateMdfExtractedField(key: keyof MdfClaimPacket["extractedFields"], value: string) {
+    setMdfPacket(prev => {
+      if (!prev) return prev;
+      const label = key.replace(/([A-Z])/g, " $1").toLowerCase();
+      const missingFields = prev.missingFields.filter(item => !item.toLowerCase().includes(label));
+      return {
+        ...prev,
+        extractedFields: {
+          ...prev.extractedFields,
+          [key]: value
+        },
+        missingFields
+      };
+    });
+  }
+
   function readFileBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -14772,14 +14788,49 @@ export default function Home() {
                       </div>
                     </div>
 
+                    {mdfPacket.claimType === "event" || /event/i.test(mdfPacket.activityType || "") ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                        <div className="text-sm font-semibold text-amber-950">Event numbers</div>
+                        <p className="mt-1 text-xs text-amber-900">
+                          Fill these in if they were not visible in the invoice, flyer, artwork, or notes.
+                        </p>
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                          {[
+                            ["attendance", "Attendance"],
+                            ["motorcyclesSold", "Motorcycles sold"],
+                            ["paAlSales", "P&A / A&L sales"]
+                          ].map(([key, label]) => (
+                            <label key={key} className="block text-xs font-semibold uppercase tracking-wide text-amber-950">
+                              {label}
+                              <input
+                                className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-gray-900"
+                                value={mdfPacket.extractedFields[key as keyof MdfClaimPacket["extractedFields"]] || ""}
+                                onChange={event =>
+                                  updateMdfExtractedField(key as keyof MdfClaimPacket["extractedFields"], event.target.value)
+                                }
+                                placeholder={key === "paAlSales" ? "$0.00" : "Enter value"}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
                     <div className="rounded-lg border p-3">
                       <div className="text-sm font-semibold">Extracted fields</div>
                       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                         {Object.entries(mdfPacket.extractedFields).map(([key, value]) => (
-                      <div key={key} className="rounded border bg-gray-50 px-3 py-2">
+                          <label key={key} className="rounded border bg-gray-50 px-3 py-2">
                             <div className="text-[11px] uppercase tracking-wide text-gray-500">{key.replace(/([A-Z])/g, " $1")}</div>
-                            <div className="mt-1 text-gray-800">{value || "—"}</div>
-                          </div>
+                            <input
+                              className="mt-1 w-full rounded border bg-white px-2 py-1.5 text-sm text-gray-900"
+                              value={value || ""}
+                              onChange={event =>
+                                updateMdfExtractedField(key as keyof MdfClaimPacket["extractedFields"], event.target.value)
+                              }
+                              placeholder="—"
+                            />
+                          </label>
                         ))}
                       </div>
                     </div>
