@@ -128,7 +128,9 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   const provider = String(inbound?.provider ?? "").trim().toLowerCase();
   const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
   const convMode = String(conv?.mode ?? "").trim().toLowerCase();
+  const leadEmail = String(conv?.lead?.email ?? "").trim().toLowerCase();
   if (provider === "voice_transcript") return "provider_voice_transcript";
+  if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isCloseoutUpdateNoReplyNeeded(inboundText)) return "closeout_update_no_reply";
