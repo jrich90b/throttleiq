@@ -48,8 +48,31 @@ function formatMoney(value: unknown): string | null {
   }).format(numeric);
 }
 
-function formatUnitLabel(conv: any, item?: InventoryFeedItem | null): string {
-  const leadVehicle = conv?.lead?.vehicle ?? {};
+function scoreVehicleForLookup(vehicle: any): number {
+  if (!vehicle) return 0;
+  let score = 0;
+  if (normalizeText(vehicle.stockId ?? vehicle.stock)) score += 8;
+  if (normalizeText(vehicle.vin)) score += 8;
+  if (normalizeText(vehicle.year)) score += 2;
+  if (normalizeModelForMatch(vehicle.model ?? vehicle.description)) score += 2;
+  if (normalizeText(vehicle.color)) score += 1;
+  if (normalizeCondition(vehicle.condition) && normalizeCondition(vehicle.condition) !== "new_model_interest") score += 1;
+  return score;
+}
+
+function pickBestVehicleForLookup(conv: any): any {
+  const candidates = [
+    conv?.latestLead?.vehicle,
+    conv?.lead?.vehicle,
+    conv?.originalLead?.vehicle
+  ].filter(Boolean);
+  return candidates
+    .map((vehicle, index) => ({ vehicle, index, score: scoreVehicleForLookup(vehicle) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.vehicle ?? {};
+}
+
+function formatUnitLabel(conv: any, item?: InventoryFeedItem | null, sourceVehicle?: any): string {
+  const leadVehicle = sourceVehicle ?? pickBestVehicleForLookup(conv);
   const year = normalizeText(item?.year ?? leadVehicle?.year);
   const model =
     normalizeModelForMatch(item?.model ?? leadVehicle?.model ?? leadVehicle?.description) ||
@@ -78,8 +101,9 @@ function parseRequestedPriceCap(text: string): number | null {
 async function resolveConversationInventoryItem(conv: any): Promise<{
   item: InventoryFeedItem | null;
   price: number | null;
+  sourceVehicle: any;
 }> {
-  const leadVehicle = conv?.lead?.vehicle ?? {};
+  const leadVehicle = pickBestVehicleForLookup(conv);
   const stockId = normalizeText(leadVehicle?.stockId ?? leadVehicle?.stock);
   const vin = normalizeText(leadVehicle?.vin);
   const year = normalizeText(leadVehicle?.year);
@@ -92,7 +116,7 @@ async function resolveConversationInventoryItem(conv: any): Promise<{
     model: model || null
   });
   if (exact?.item) {
-    return { item: exact.item, price: exact.price ?? exact.item.price ?? null };
+    return { item: exact.item, price: exact.price ?? exact.item.price ?? null, sourceVehicle: leadVehicle };
   }
 
   const items = await getInventoryFeed();
@@ -101,20 +125,21 @@ async function resolveConversationInventoryItem(conv: any): Promise<{
       items.find(item => stockId && normalizeText(item.stockId).toLowerCase() === stockId.toLowerCase()) ??
       items.find(item => vin && normalizeText(item.vin).toLowerCase() === vin.toLowerCase()) ??
       null;
-    if (direct) return { item: direct, price: direct.price ?? null };
+    if (direct) return { item: direct, price: direct.price ?? null, sourceVehicle: leadVehicle };
   }
 
   if (model) {
     const matches =
       (await findInventoryMatches({ year: year || null, model })) ??
       [];
-    if (matches.length) return { item: matches[0], price: matches[0].price ?? null };
+    if (matches.length) return { item: matches[0], price: matches[0].price ?? null, sourceVehicle: leadVehicle };
   }
 
   const leadPrice = Number(leadVehicle?.listPrice ?? leadVehicle?.price);
   return {
     item: null,
-    price: Number.isFinite(leadPrice) && leadPrice > 0 ? leadPrice : null
+    price: Number.isFinite(leadPrice) && leadPrice > 0 ? leadPrice : null,
+    sourceVehicle: leadVehicle
   };
 }
 
@@ -145,8 +170,8 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     return { handled: false };
   }
 
-  const { item, price } = await resolveConversationInventoryItem(args.conv);
-  const unitLabel = formatUnitLabel(args.conv, item);
+  const { item, price, sourceVehicle } = await resolveConversationInventoryItem(args.conv);
+  const unitLabel = formatUnitLabel(args.conv, item, sourceVehicle);
   const priceText = formatMoney(price);
 
   if (questionType === "price" || questionType === "otd_total") {
