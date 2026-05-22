@@ -59,6 +59,7 @@ type RunnerOptions = {
   list: boolean;
   run: boolean;
   guided: boolean;
+  idleOk: boolean;
   portalUrl: string;
   cdpUrl: string;
   apiBase: string;
@@ -115,6 +116,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     list: false,
     run: false,
     guided: false,
+    idleOk: false,
     portalUrl: process.env.MDF_PORTAL_URL?.trim() || hDNetMdfSsoUrl,
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
@@ -168,6 +170,8 @@ function parseArgs(argv: string[]): RunnerOptions {
       out.run = true;
     } else if (arg === "--guided") {
       out.guided = true;
+    } else if (arg === "--idle-ok") {
+      out.idleOk = true;
     } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -193,6 +197,7 @@ Options:
   --api-base <url>          Optional live API base. Also supported: MDF_PORTAL_API_BASE_URL.
   --token <token>           Optional runner token. Also supported: MDF_PORTAL_RUNNER_TOKEN.
   --guided                  Open a guided checklist fallback instead of browser-use.
+  --idle-ok                 Exit cleanly when no MDF portal task is available.
   --dry-run                 Build the packet and prompt without opening a browser.
   --run                     Actually start browser-use or guided browser mode.
 `);
@@ -289,11 +294,7 @@ function chooseTask(tasks: AgentTask[], options: RunnerOptions): AgentTask | nul
   const rows = pendingMdfTasks(tasks);
   if (options.taskId) return rows.find(task => task.id === options.taskId) ?? null;
   if (options.claimId) return rows.find(task => claimIdFromTask(task) === options.claimId) ?? null;
-  return (
-    rows.find(task => task.status === "needs_approval" || task.status === "queued") ??
-    rows[0] ??
-    null
-  );
+  return rows.find(task => task.status === "needs_approval" || task.status === "queued") ?? null;
 }
 
 function updateTask(tasks: AgentTask[], id: string, status: AgentTaskStatus, summary: string, links: string[] = []) {
@@ -451,20 +452,37 @@ async function canImportBrowserUse(python: string): Promise<boolean> {
 async function runProcess(
   command: string,
   args: string[],
-  options: { quiet?: boolean; env?: NodeJS.ProcessEnv } = {}
+  options: { quiet?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return await new Promise(resolve => {
+    let settled = false;
     const child = spawn(command, args, {
       cwd: rootDir,
       env: { ...process.env, ...(options.env ?? {}) },
       stdio: options.quiet ? ["ignore", "pipe", "pipe"] : "inherit"
     });
+    const finish = (code: number, extraStderr = "") => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr: `${stderr}${extraStderr}` });
+    };
+    const timer =
+      options.timeoutMs && options.timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill("SIGTERM");
+            setTimeout(() => {
+              if (!settled) child.kill("SIGKILL");
+            }, 3000).unref();
+            finish(124, `\nProcess timed out after ${Math.round(options.timeoutMs! / 1000)}s.`);
+          }, options.timeoutMs).unref()
+        : null;
     let stdout = "";
     let stderr = "";
     if (child.stdout) child.stdout.on("data", chunk => (stdout += String(chunk)));
     if (child.stderr) child.stderr.on("data", chunk => (stderr += String(chunk)));
-    child.on("close", code => resolve({ code: code ?? 1, stdout, stderr }));
-    child.on("error", err => resolve({ code: 1, stdout, stderr: String(err) }));
+    child.on("close", code => finish(code ?? 1));
+    child.on("error", err => finish(1, String(err)));
   });
 }
 
@@ -515,7 +533,8 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
     options.maxSteps
   ];
   if (options.cdpUrl) args.push("--cdp-url", options.cdpUrl);
-  const result = await runProcess(python, args);
+  const timeoutSeconds = Math.max(60, Number(process.env.MDF_BROWSER_USE_TIMEOUT_SECONDS ?? "600"));
+  const result = await runProcess(python, args, { timeoutMs: timeoutSeconds * 1000 });
   const payload = await readJson<{ ok?: boolean; blocked?: boolean; summary?: string; error?: string }>(resultPath, {});
   const summary = payload.summary || result.stderr || result.stdout || "browser-use finished without a summary.";
   if (result.code !== 0 || payload.blocked) return { code: result.code || 2, summary };
@@ -560,7 +579,13 @@ async function main() {
   }
 
   const task = chooseTask(tasks, options);
-  if (!task) throw new Error("No MDF portal task found. Create one from the MDF Assistant first.");
+  if (!task) {
+    if (options.idleOk) {
+      console.log("No MDF portal task found.");
+      return;
+    }
+    throw new Error("No MDF portal task found. Create one from the MDF Assistant first.");
+  }
 
   const claimId = claimIdFromTask(task);
   if (!claimId) throw new Error(`Task ${task.id} does not include an MDF claim marker.`);
