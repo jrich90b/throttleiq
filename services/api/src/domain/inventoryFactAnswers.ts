@@ -123,7 +123,7 @@ async function getActiveInventoryNotesForUnit(
 
 function noteContainsFinancePromo(note: InventoryNoteItem, requestedApr: number | null): boolean {
   const text = `${note.label ?? ""} ${note.note ?? ""}`.toLowerCase();
-  const hasFinanceSignal = /\b(financ|apr|interest|rate)\b/.test(text);
+  const hasFinanceSignal = /\b(financ(?:e|ing|ial)?|apr|interest|rate)\b/.test(text);
   if (!hasFinanceSignal) return false;
   if (requestedApr == null) return true;
   const escapedApr = String(requestedApr).replace(".", "\\.");
