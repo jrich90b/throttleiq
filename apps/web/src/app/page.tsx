@@ -7364,6 +7364,33 @@ export default function Home() {
     }
   }
 
+  async function deleteMdfClaim(id: string) {
+    const claim = mdfClaims.find(row => row.id === id);
+    const title = claim?.title || "this MDF claim";
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
+    setMdfClaimActionBusy(`${id}:delete`);
+    setMdfError(null);
+    try {
+      const resp = await fetch(`/api/mdf/claims/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF claim could not be deleted.");
+      const remaining = mdfClaims.filter(row => row.id !== id);
+      setMdfClaims(remaining);
+      if (mdfSelectedClaimId === id) {
+        const next = remaining[0] ?? null;
+        setMdfSelectedClaimId(next?.id ?? "");
+        setMdfPacket(next?.packet ?? null);
+        setMdfNotes(String(next?.notes ?? ""));
+        setMdfFiles([]);
+        setMdfPortalTaskNotice("");
+      }
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF claim could not be deleted.");
+    } finally {
+      setMdfClaimActionBusy("");
+    }
+  }
+
   async function createMdfPortalTask() {
     const id = String(mdfSelectedClaimId ?? "").trim();
     if (!id) {
@@ -14891,6 +14918,15 @@ export default function Home() {
                             ? "Creating task..."
                             : "Start portal draft"}
                         </button>
+                        {mdfSelectedClaimId ? (
+                          <button
+                            className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+                            disabled={mdfClaimActionBusy === `${mdfSelectedClaimId}:delete`}
+                            onClick={() => void deleteMdfClaim(mdfSelectedClaimId)}
+                          >
+                            {mdfClaimActionBusy === `${mdfSelectedClaimId}:delete` ? "Deleting..." : "Delete claim"}
+                          </button>
+                        ) : null}
                       </div>
                       {mdfPortalTaskNotice ? (
                         <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
