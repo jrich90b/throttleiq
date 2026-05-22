@@ -7392,6 +7392,45 @@ export default function Home() {
     setMdfPortalTaskNotice("");
   }
 
+  function mergeMdfPackets(existing: MdfClaimPacket | null, incoming: MdfClaimPacket): MdfClaimPacket {
+    if (!existing) return incoming;
+    const uploadedFileKey = (file: MdfClaimPacket["uploadedFiles"][number]) =>
+      [file.url || "", file.name || "", String(file.size || 0)].join("|");
+    const uploadedFiles = [...existing.uploadedFiles];
+    const seenFiles = new Set(uploadedFiles.map(uploadedFileKey));
+    for (const file of incoming.uploadedFiles) {
+      const key = uploadedFileKey(file);
+      if (!seenFiles.has(key)) {
+        uploadedFiles.push(file);
+        seenFiles.add(key);
+      }
+    }
+    const mergeList = (left: string[], right: string[]) => Array.from(new Set([...left, ...right].filter(Boolean)));
+    const extractedFields = { ...existing.extractedFields };
+    for (const [key, value] of Object.entries(incoming.extractedFields) as Array<[keyof MdfClaimPacket["extractedFields"], string]>) {
+      if (!String(extractedFields[key] ?? "").trim() && String(value ?? "").trim()) {
+        extractedFields[key] = value;
+      }
+    }
+    return {
+      ...existing,
+      claimType: existing.claimType !== "unknown" ? existing.claimType : incoming.claimType,
+      activityType: existing.activityType || incoming.activityType,
+      confidence: Math.max(existing.confidence || 0, incoming.confidence || 0),
+      extractedFields,
+      descriptionDraft: existing.descriptionDraft || incoming.descriptionDraft,
+      eligibility: {
+        status: existing.eligibility.status !== "unknown" ? existing.eligibility.status : incoming.eligibility.status,
+        concerns: mergeList(existing.eligibility.concerns, incoming.eligibility.concerns)
+      },
+      requiredDocumentation: mergeList(existing.requiredDocumentation, incoming.requiredDocumentation),
+      uploadedFiles,
+      missingFields: mergeList(existing.missingFields, incoming.missingFields),
+      portalSteps: mergeList(existing.portalSteps, incoming.portalSteps),
+      browserAutomation: incoming.browserAutomation.status !== "not_ready" ? incoming.browserAutomation : existing.browserAutomation
+    };
+  }
+
   async function extractMdfPacket() {
     if (!mdfFiles.length) {
       setMdfError("Upload at least one invoice, receipt, flyer, artwork file, or proof screenshot.");
@@ -7409,8 +7448,25 @@ export default function Home() {
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF packet could not be created.");
-      setMdfPacket(data.packet);
-      setMdfSelectedClaimId("");
+      const mergedPacket = mergeMdfPackets(mdfPacket, data.packet);
+      const existingId = String(mdfSelectedClaimId ?? "").trim();
+      if (existingId) {
+        const saveResp = await fetch(`/api/mdf/claims/${encodeURIComponent(existingId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ packet: mergedPacket, notes: mdfNotes })
+        });
+        const saveData = await saveResp.json();
+        if (!saveResp.ok || !saveData?.ok) throw new Error(saveData?.error || "MDF claim could not be updated.");
+        const claim = saveData.claim as MdfClaimEntry;
+        setMdfPacket(claim.packet);
+        setMdfNotes(String(claim.notes ?? ""));
+        setMdfClaims(prev => prev.map(row => (row.id === claim.id ? claim : row)));
+      } else {
+        setMdfPacket(mergedPacket);
+        setMdfSelectedClaimId("");
+      }
+      setMdfFiles([]);
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF packet could not be created.");
     } finally {
@@ -14453,7 +14509,9 @@ export default function Home() {
                   PDFs and images are supported. Use invoices, billing summaries, receipts, live ad screenshots, flyers, scripts, keyword lists, or event photos.
                 </p>
                 <label className="mt-4 flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center hover:bg-gray-100">
-                  <span className="text-sm font-semibold text-gray-800">Upload MDF files</span>
+                  <span className="text-sm font-semibold text-gray-800">
+                    {mdfPacket ? "Add files to this claim" : "Upload MDF files"}
+                  </span>
                   <span className="mt-1 text-xs text-gray-500">PDF, PNG, JPG, or WebP</span>
                   <input
                     className="hidden"
@@ -14461,9 +14519,10 @@ export default function Home() {
                     multiple
                     accept="application/pdf,image/png,image/jpeg,image/webp"
                     onChange={event => {
-                      setMdfFiles(Array.from(event.target.files ?? []));
-                      setMdfPacket(null);
+                      const nextFiles = Array.from(event.target.files ?? []);
+                      setMdfFiles(prev => [...prev, ...nextFiles]);
                       setMdfError(null);
+                      event.currentTarget.value = "";
                     }}
                   />
                 </label>
@@ -14492,7 +14551,7 @@ export default function Home() {
                   onClick={() => void extractMdfPacket()}
                   disabled={mdfLoading || !mdfFiles.length}
                 >
-                  {mdfLoading ? "Creating packet..." : "Create MDF packet"}
+                  {mdfLoading ? "Creating packet..." : mdfPacket ? "Add files to packet" : "Create MDF packet"}
                 </button>
                 {mdfPacket ? (
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
