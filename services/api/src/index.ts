@@ -44,7 +44,7 @@ import {
   type AgentTaskProvider,
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
-import { extractMdfClaimPacket } from "./domain/mdfAssistant.js";
+import { extractMdfClaimPacket, type MdfUploadedFile } from "./domain/mdfAssistant.js";
 import {
   addMdfClaim,
   deleteMdfClaim,
@@ -1317,8 +1317,8 @@ app.get("/debug/route-watchdog", (req, res) => {
   });
 });
 
-app.use(express.json({ limit: "30mb" }));
-app.use(express.urlencoded({ extended: false, limit: "30mb" }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: false, limit: "100mb" }));
 
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? "false").toLowerCase() === "true";
 
@@ -35647,27 +35647,33 @@ function mdfUploadExt(originalName: string, mimeType: string): string {
   return ".jpg";
 }
 
-app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
-  const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
-  if (!files.length) return res.status(400).json({ ok: false, error: "Upload at least one MDF file." });
+type RawMdfUpload = {
+  originalName: string;
+  mimeType: string;
+  size: number;
+  buffer: Buffer;
+};
 
+async function buildMdfPacketFromUploads(files: RawMdfUpload[], notes: string) {
+  if (!files.length) throw new Error("Upload at least one MDF file.");
+  if (files.length > 8) throw new Error("Upload 8 MDF files or fewer.");
   const maxBytesPerFile = 25 * 1024 * 1024;
   const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
-  const normalized = [];
+  const normalized: MdfUploadedFile[] = [];
   const uploadDir = path.resolve(getDataDir(), "uploads", "mdf");
   await fs.promises.mkdir(uploadDir, { recursive: true });
   const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   for (const file of files) {
-    const mimeType = String(file.mimetype ?? "").toLowerCase();
+    const mimeType = String(file.mimeType ?? "").toLowerCase();
     if (!allowed.has(mimeType)) {
-      return res.status(400).json({ ok: false, error: "Only PDF, PNG, JPG, and WebP files are supported." });
+      throw new Error("Only PDF, PNG, JPG, and WebP files are supported.");
     }
     if (Number(file.size ?? 0) > maxBytesPerFile) {
-      return res.status(400).json({ ok: false, error: "Each MDF file must be 25MB or smaller." });
+      throw new Error("Each MDF file must be 25MB or smaller.");
     }
-    const ext = mdfUploadExt(file.originalname || "", mimeType);
+    const ext = mdfUploadExt(file.originalName || "", mimeType);
     const safeBase = path
-      .basename(file.originalname || "mdf-file", path.extname(file.originalname || ""))
+      .basename(file.originalName || "mdf-file", path.extname(file.originalName || ""))
       .replace(/[^a-z0-9_-]+/gi, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 48) || "mdf-file";
@@ -35677,17 +35683,55 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
       ? `${publicBase.replace(/\/$/, "")}/uploads/mdf/${fileName}`
       : `/uploads/mdf/${fileName}`;
     normalized.push({
-      name: file.originalname || "uploaded-file",
+      name: file.originalName || "uploaded-file",
       mimeType,
       size: Number(file.size ?? file.buffer.length ?? 0),
       buffer: file.buffer,
       url
     });
   }
+  return extractMdfClaimPacket(normalized, notes);
+}
 
-  const notes = String(req.body?.notes ?? "");
-  const packet = await extractMdfClaimPacket(normalized, notes);
-  return res.json({ ok: true, packet });
+function parseMdfJsonUploads(body: any): RawMdfUpload[] {
+  const files = Array.isArray(body?.files) ? body.files : [];
+  return files.map((file: any, index: number) => {
+    const base64 = String(file?.dataBase64 ?? "");
+    if (!base64) throw new Error(`MDF file ${index + 1} is missing data.`);
+    return {
+      originalName: String(file?.name || `mdf-upload-${index + 1}`),
+      mimeType: String(file?.mimeType || file?.type || ""),
+      size: Number(file?.size ?? Buffer.byteLength(base64, "base64")),
+      buffer: Buffer.from(base64, "base64")
+    };
+  });
+}
+
+app.post("/mdf/extract-json", requireManager, async (req, res) => {
+  try {
+    const packet = await buildMdfPacketFromUploads(parseMdfJsonUploads(req.body), String(req.body?.notes ?? ""));
+    return res.json({ ok: true, packet });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: err instanceof Error ? err.message : "MDF packet could not be created." });
+  }
+});
+
+app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
+  const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+  try {
+    const packet = await buildMdfPacketFromUploads(
+      files.map(file => ({
+        originalName: file.originalname || "uploaded-file",
+        mimeType: String(file.mimetype ?? ""),
+        size: Number(file.size ?? file.buffer.length ?? 0),
+        buffer: file.buffer
+      })),
+      String(req.body?.notes ?? "")
+    );
+    return res.json({ ok: true, packet });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: err instanceof Error ? err.message : "MDF packet could not be created." });
+  }
 });
 
 app.post("/mdf/claims", requireManager, (req, res) => {

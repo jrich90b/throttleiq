@@ -7450,17 +7450,16 @@ export default function Home() {
     return `${base || "mdf-upload"}${ext}`;
   }
 
-  function safeMdfUploadFile(file: File, index: number) {
-    const safeName = safeMdfUploadName(file.name || `mdf-upload-${index + 1}`, file.type);
-    if (file.name === safeName) return file;
-    try {
-      return new File([file], safeName, {
-        type: file.type || "application/octet-stream",
-        lastModified: file.lastModified
-      });
-    } catch {
-      return file;
-    }
+  function readFileBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result ?? "");
+        resolve(value.includes(",") ? value.slice(value.indexOf(",") + 1) : value);
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read MDF file."));
+      reader.readAsDataURL(file);
+    });
   }
 
   async function extractMdfPacket() {
@@ -7471,12 +7470,18 @@ export default function Home() {
     setMdfLoading(true);
     setMdfError(null);
     try {
-      const form = new FormData();
-      mdfFiles.forEach(file => form.append("files", file));
-      form.append("notes", mdfNotes);
+      const files = await Promise.all(
+        mdfFiles.map(async (file, index) => ({
+          name: safeMdfUploadName(file.name || `mdf-upload-${index + 1}`, file.type),
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          dataBase64: await readFileBase64(file)
+        }))
+      );
       const resp = await fetch("/api/mdf/extract", {
         method: "POST",
-        body: form
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files, notes: mdfNotes })
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF packet could not be created.");
@@ -14551,9 +14556,7 @@ export default function Home() {
                     multiple
                     accept="application/pdf,image/png,image/jpeg,image/webp"
                     onChange={event => {
-                      const nextFiles = Array.from(event.target.files ?? []).map((file, index) =>
-                        safeMdfUploadFile(file, index)
-                      );
+                      const nextFiles = Array.from(event.target.files ?? []);
                       setMdfFiles(prev => [...prev, ...nextFiles]);
                       setMdfError(null);
                       event.currentTarget.value = "";

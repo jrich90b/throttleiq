@@ -7,6 +7,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
   }
 
+  const contentType = req.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const payload = await req.json();
+    const r = await apiFetch(`${base}/mdf/extract-json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return jsonFromUpstream(r);
+  }
+
   const body = await req.formData();
   const forwarded = new FormData();
   for (const [key, value] of body.entries()) {
@@ -20,6 +31,10 @@ export async function POST(req: Request) {
     method: "POST",
     body: forwarded
   });
+  return jsonFromUpstream(r);
+}
+
+async function jsonFromUpstream(r: Response) {
   const text = await r.text();
   try {
     const data = JSON.parse(text);
