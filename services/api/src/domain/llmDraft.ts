@@ -1687,6 +1687,7 @@ export type VehicleFactQuestionParse = {
     | "service_records"
     | "availability"
     | "hold_timing"
+    | "finance_program_eligibility"
     | "none";
   explicitRequest: boolean;
   requestedFields?: string[];
@@ -2606,6 +2607,7 @@ const VEHICLE_FACT_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "service_records",
         "availability",
         "hold_timing",
+        "finance_program_eligibility",
         "none"
       ]
     },
@@ -5718,6 +5720,12 @@ output: {"question_type":"availability","explicit_request":true,"requested_field
     `EXAMPLE I2
 inbound: "Really? How long is it on hold for"
 output: {"question_type":"hold_timing","explicit_request":true,"requested_fields":["hold_timing"],"confidence":0.97}`,
+    `EXAMPLE I3
+inbound: "Does this bike qualify for low interest?"
+output: {"question_type":"finance_program_eligibility","explicit_request":true,"requested_fields":["finance_program_eligibility"],"confidence":0.97}`,
+    `EXAMPLE I4
+inbound: "Do you have any new bikes that qualify for 2.99 interest under 25000"
+output: {"question_type":"finance_program_eligibility","explicit_request":true,"requested_fields":["finance_program_eligibility","apr","price_cap"],"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Tuesday around 11am would work great"
 output: {"question_type":"none","explicit_request":false,"requested_fields":[],"confidence":0.98}`,
@@ -5741,6 +5749,7 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     "- service_records: asks for service history/records, tire/battery age, maintenance records.",
     "- availability: asks whether the currently discussed unit is still available/in stock/on hold.",
     "- hold_timing: asks how long a currently-held unit is on hold for, when the hold expires, or when it may free up.",
+    "- finance_program_eligibility: asks whether a specific unit or inventory set qualifies for a finance/APR/interest program, rate, or price-capped finance special.",
     "- none: scheduling, trade appraisal, finance, generic acknowledgements, jokes, or broad inventory shopping.",
     "",
     "Rules:",
@@ -5791,7 +5800,8 @@ output: {"question_type":"none","explicit_request":false,"requested_fields":[],"
     raw === "service_status" ||
     raw === "service_records" ||
     raw === "availability" ||
-    raw === "hold_timing"
+    raw === "hold_timing" ||
+    raw === "finance_program_eligibility"
       ? raw
       : "none";
   const confidence =

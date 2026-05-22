@@ -12,6 +12,7 @@ type ExpectedType =
   | "service_records"
   | "availability"
   | "hold_timing"
+  | "finance_program_eligibility"
   | "none";
 
 type Fixture = {
@@ -108,6 +109,20 @@ const fixtures: Fixture[] = [
     expectedType: "hold_timing",
     expectedExplicit: true,
     expectedFieldContains: "hold"
+  },
+  {
+    id: "finance_program_eligibility_question_1",
+    text: "Does this bike qualify for low interest?",
+    expectedType: "finance_program_eligibility",
+    expectedExplicit: true,
+    expectedFieldContains: "finance"
+  },
+  {
+    id: "finance_program_price_cap_question_1",
+    text: "Do you have any new bikes that qualify for 2.99 interest under 25000",
+    expectedType: "finance_program_eligibility",
+    expectedExplicit: true,
+    expectedFieldContains: "price_cap"
   },
   {
     id: "schedule_not_vehicle_fact_1",

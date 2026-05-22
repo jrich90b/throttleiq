@@ -81,6 +81,7 @@ import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
+import { buildInventoryBackedVehicleFactAnswer } from "../domain/inventoryFactAnswers.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
@@ -2681,6 +2682,12 @@ function resolveAdfVehicleFactDecision(
     confidence: 0,
     source: "fallback" as const
   });
+  if (
+    /\b(?:qualif(?:y|ies)|eligible|eligibility)\b[\s\S]{0,80}\b(?:apr|interest|rate|finance|financing|program|special)\b/.test(lower) ||
+    /\b(?:apr|interest|rate|finance|financing|program|special)\b[\s\S]{0,80}\b(?:qualif(?:y|ies)|eligible|eligibility)\b/.test(lower)
+  ) {
+    return fallback("finance_program_eligibility", ["finance_program_eligibility"]);
+  }
   if (isPriceOnlyInquiryText(text)) return fallback("price", ["price"]);
   if (/\bout\s*the\s*door\b|\botd\b/.test(lower)) return fallback("otd_total", ["out_the_door_total"]);
   if (/^year\s*\??$|\bwhat\s+year\b/.test(lower)) return fallback("year", ["year"]);
@@ -2835,11 +2842,11 @@ function buildCompositeSalesInquiryReply(conv: any, decision: CompositeSalesInqu
   return parts.join(" ").trim() || `I’ll have our team check the details on the ${bikeLabel} and follow up.`;
 }
 
-function buildInitialAdfVehicleFactReply(args: {
+async function buildInitialAdfVehicleFactReply(args: {
   conv: any;
   decision: AdfVehicleFactDecision;
   text: string;
-}): { reply: string; needsTodo: boolean; todoReason: string; todoSummary: string } {
+}): Promise<{ reply: string; needsTodo: boolean; todoReason: string; todoSummary: string }> {
   const vehicle = args.conv?.lead?.vehicle ?? {};
   const year = String(vehicle.year ?? "").trim();
   const model =
@@ -2848,6 +2855,19 @@ function buildInitialAdfVehicleFactReply(args: {
   const bikeLabel = [year, model && model !== "the bike" ? model : ""].filter(Boolean).join(" ").trim() || "the bike";
   const color = cleanVehicleColorForReply(vehicle.color ?? null);
   const confirmExact = `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
+  const inventoryBacked = await buildInventoryBackedVehicleFactAnswer({
+    conv: args.conv,
+    decision: args.decision,
+    text: args.text
+  });
+  if (inventoryBacked.handled) {
+    return {
+      reply: inventoryBacked.reply ?? confirmExact,
+      needsTodo: !!inventoryBacked.needsTodo,
+      todoReason: inventoryBacked.todoReason ?? "other",
+      todoSummary: inventoryBacked.todoSummary ?? ""
+    };
+  }
 
   switch (args.decision.questionType) {
     case "price":
@@ -2920,6 +2940,13 @@ function buildInitialAdfVehicleFactReply(args: {
         needsTodo: true,
         todoReason: "other",
         todoSummary: `Check hold timing for ${bikeLabel}. Customer asked: ${args.text}`
+      };
+    case "finance_program_eligibility":
+      return {
+        reply: `I’ll confirm the current finance program eligibility on the ${bikeLabel} and follow up shortly.`,
+        needsTodo: true,
+        todoReason: "pricing",
+        todoSummary: `Confirm finance program eligibility for ${bikeLabel}. Customer asked: ${args.text}`
       };
   }
 }
@@ -4945,6 +4972,53 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
   };
+  const followUpAdfVehicleFactDecision =
+    event.provider === "sendgrid_adf" && !isInitialAdf
+      ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
+      : null;
+  if (followUpAdfVehicleFactDecision) {
+    const vehicleFactReply = await buildInitialAdfVehicleFactReply({
+      conv,
+      decision: followUpAdfVehicleFactDecision,
+      text: effectiveInquiry
+    });
+    if (vehicleFactReply.reply) {
+      queueInitialDraftForPreferredContact(vehicleFactReply.reply);
+      if (vehicleFactReply.needsTodo) {
+        addTodo(
+          conv,
+          vehicleFactReply.todoReason as any,
+          vehicleFactReply.todoSummary || `Confirm vehicle fact. Customer asked: ${effectiveInquiry}`,
+          event.providerMessageId
+        );
+        if (
+          followUpAdfVehicleFactDecision.questionType === "price" ||
+          followUpAdfVehicleFactDecision.questionType === "otd_total" ||
+          followUpAdfVehicleFactDecision.questionType === "finance_program_eligibility"
+        ) {
+          setFollowUpMode(conv, "manual_handoff", "adf_vehicle_fact_pricing");
+          markPricingEscalated(conv);
+        } else {
+          setFollowUpMode(conv, "manual_handoff", "adf_vehicle_fact_followup");
+        }
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead,
+        leadSource,
+        bucket: inferredBucket,
+        cta: inferredCta,
+        channel,
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        note: "adf_vehicle_fact_answer",
+        draft: vehicleFactReply.reply
+      });
+    }
+  }
   if (suppressInitialAutoDraftForTimedCallback) {
     addTodo(
       conv,
@@ -6958,7 +7032,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       initialAdfVehicleFactDecision.questionType === "otd_total") &&
     /\btrade(?:[\s-]?in)?\b/i.test(inquiryText);
   if (initialAdfVehicleFactDecision && !skipInitialAdfVehicleFactForTrade) {
-    const vehicleFactReply = buildInitialAdfVehicleFactReply({
+    const vehicleFactReply = await buildInitialAdfVehicleFactReply({
       conv,
       decision: initialAdfVehicleFactDecision,
       text: effectiveInquiry

@@ -283,6 +283,7 @@ import {
   hasInventoryForModelYear,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import { buildInventoryBackedVehicleFactAnswer } from "./domain/inventoryFactAnswers.js";
 import { getInventoryNote, listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 import {
   listInventoryHolds,
@@ -5584,7 +5585,7 @@ function isVehicleFactQuestionParserAccepted(parsed: VehicleFactQuestionParse | 
 function hasVehicleFactQuestionParserHint(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
-  return /\b(year|price|asking|total|otd|out\s+the\s+door|fuel\s+injection|injected|mileage|miles|color|paint|serviced|service\s+records?|records?|tires?|battery|available|still\s+there|still\s+available|on\s+hold|how\s+long|hold\s+for|held\s+for|hold\s+expire|hold\s+expires|free\s+up)\b/i.test(
+  return /\b(year|price|asking|total|otd|out\s+the\s+door|fuel\s+injection|injected|mileage|miles|color|paint|serviced|service\s+records?|records?|tires?|battery|available|still\s+there|still\s+available|on\s+hold|how\s+long|hold\s+for|held\s+for|hold\s+expire|hold\s+expires|free\s+up|apr|interest|rate|qualif(?:y|ies)|eligible|eligibility|low\s+interest|low\s+apr)\b/i.test(
     lower
   );
 }
@@ -5658,6 +5659,12 @@ function resolveVehicleFactQuestionDecision(
     confidence: 0,
     source: "fallback" as const
   });
+  if (
+    /\b(?:qualif(?:y|ies)|eligible|eligibility)\b[\s\S]{0,80}\b(?:apr|interest|rate|finance|financing|program|special)\b/.test(lower) ||
+    /\b(?:apr|interest|rate|finance|financing|program|special)\b[\s\S]{0,80}\b(?:qualif(?:y|ies)|eligible|eligibility)\b/.test(lower)
+  ) {
+    return fallback("finance_program_eligibility", ["finance_program_eligibility"]);
+  }
   if (/^year\s*\??$|\bwhat\s+year\b/.test(lower)) return fallback("year", ["year"]);
   if (/\bout\s*the\s*door\b|\botd\b/.test(lower)) return fallback("otd_total", ["out_the_door_total"]);
   if (/^total\s+price\s*\??$|\b(asking|total|sale)?\s*price\b/.test(lower)) return fallback("price", ["price"]);
@@ -5894,8 +5901,21 @@ async function buildVehicleFactQuestionReply(args: {
   conv: Conversation;
   decision: VehicleFactQuestionDecision;
   receivedAt?: string | null;
+  text?: string | null;
 }): Promise<{ reply: string; needsTodo: boolean; todoSummary?: string }> {
   const conv = args.conv;
+  const inventoryBacked = await buildInventoryBackedVehicleFactAnswer({
+    conv,
+    decision: args.decision,
+    text: args.text ?? ""
+  });
+  if (inventoryBacked.handled) {
+    return {
+      reply: inventoryBacked.reply ?? "I’ll confirm that for you and follow up shortly.",
+      needsTodo: !!inventoryBacked.needsTodo,
+      todoSummary: inventoryBacked.todoSummary
+    };
+  }
   const year = extractVehicleYearFromContext(conv);
   const model = extractVehicleModelFromContext(conv);
   const approxPrice = extractApproxVehiclePriceFromContext(conv);
@@ -6009,7 +6029,8 @@ async function applyVehicleFactQuestionDecision(args: {
   const result = await buildVehicleFactQuestionReply({
     conv: args.conv,
     decision: args.decision,
-    receivedAt: args.receivedAt
+    receivedAt: args.receivedAt,
+    text: args.text
   });
   if (result.needsTodo) {
     addTodo(
