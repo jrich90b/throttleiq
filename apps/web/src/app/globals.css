@@ -2210,6 +2210,7 @@ input[type="reset"],
 .lr-campaign-theme .lr-app-main-panel [data-actions-menu] input::placeholder,
 .lr-campaign-theme .lr-app-main-panel [data-actions-menu] textarea::placeholder {
   color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
   opacity: 1 !important;
 }
 
@@ -2217,7 +2218,8 @@ input[type="reset"],
 .lr-app-theme .lr-app-sidebar-panel textarea::placeholder,
 .lr-app-theme .lr-app-main-panel input::placeholder,
 .lr-app-theme .lr-app-main-panel textarea::placeholder {
-  color: rgba(142, 160, 187, 0.58);
+  color: rgba(142, 160, 187, 0.42);
+  -webkit-text-fill-color: rgba(142, 160, 187, 0.42);
 }
 
 .lr-app-theme .lr-app-sidebar-panel input:focus,
@@ -2441,6 +2443,7 @@ input[type="reset"],
 .lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal input::placeholder,
 .lr-campaign-theme .lr-app-sidebar-panel .lr-light-modal textarea::placeholder {
   color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
   opacity: 1;
 }
 
@@ -2547,7 +2550,8 @@ input[type="reset"],
 
 .lr-app-theme .lr-app-modal input::placeholder,
 .lr-app-theme .lr-app-modal textarea::placeholder {
-  color: rgba(174, 187, 208, 0.56) !important;
+  color: rgba(174, 187, 208, 0.36) !important;
+  -webkit-text-fill-color: rgba(174, 187, 208, 0.36) !important;
   opacity: 1 !important;
 }
 
