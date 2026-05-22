@@ -81,7 +81,10 @@ import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
 import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
-import { buildInventoryBackedVehicleFactAnswer } from "../domain/inventoryFactAnswers.js";
+import {
+  buildInventoryBackedVehicleFactAnswer,
+  mergeRecentPriceQuestionIntoFinanceAnswer
+} from "../domain/inventoryFactAnswers.js";
 import { resolveInventoryUrlByStock } from "../domain/inventoryUrlResolver.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "../domain/inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "../domain/inventorySolds.js";
@@ -2861,11 +2864,15 @@ async function buildInitialAdfVehicleFactReply(args: {
     text: args.text
   });
   if (inventoryBacked.handled) {
+    const mergedInventoryBacked =
+      args.decision.questionType === "finance_program_eligibility"
+        ? mergeRecentPriceQuestionIntoFinanceAnswer({ conv: args.conv, answer: inventoryBacked })
+        : inventoryBacked;
     return {
-      reply: inventoryBacked.reply ?? confirmExact,
-      needsTodo: !!inventoryBacked.needsTodo,
-      todoReason: inventoryBacked.todoReason ?? "other",
-      todoSummary: inventoryBacked.todoSummary ?? ""
+      reply: mergedInventoryBacked.reply ?? confirmExact,
+      needsTodo: !!mergedInventoryBacked.needsTodo,
+      todoReason: mergedInventoryBacked.todoReason ?? "other",
+      todoSummary: mergedInventoryBacked.todoSummary ?? ""
     };
   }
 

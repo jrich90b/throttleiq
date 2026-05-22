@@ -283,7 +283,10 @@ import {
   hasInventoryForModelYear,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
-import { buildInventoryBackedVehicleFactAnswer } from "./domain/inventoryFactAnswers.js";
+import {
+  buildInventoryBackedVehicleFactAnswer,
+  mergeRecentPriceQuestionIntoFinanceAnswer
+} from "./domain/inventoryFactAnswers.js";
 import { getInventoryNote, listInventoryNotes, setInventoryNote } from "./domain/inventoryNotes.js";
 import {
   listInventoryHolds,
@@ -5910,10 +5913,14 @@ async function buildVehicleFactQuestionReply(args: {
     text: args.text ?? ""
   });
   if (inventoryBacked.handled) {
+    const mergedInventoryBacked =
+      args.decision.questionType === "finance_program_eligibility"
+        ? mergeRecentPriceQuestionIntoFinanceAnswer({ conv, answer: inventoryBacked })
+        : inventoryBacked;
     return {
-      reply: inventoryBacked.reply ?? "I’ll confirm that for you and follow up shortly.",
-      needsTodo: !!inventoryBacked.needsTodo,
-      todoSummary: inventoryBacked.todoSummary
+      reply: mergedInventoryBacked.reply ?? "I’ll confirm that for you and follow up shortly.",
+      needsTodo: !!mergedInventoryBacked.needsTodo,
+      todoSummary: mergedInventoryBacked.todoSummary
     };
   }
   const year = extractVehicleYearFromContext(conv);
@@ -39612,34 +39619,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const withPrefix = (body: string) =>
         `${greeting}This is ${agentName} at ${dealerName}. ${body}`.trim();
-      const priceQuestion =
-        adfVehicleFactDecision.questionType === "price" ||
-        adfVehicleFactDecision.questionType === "otd_total";
-      let reply: string;
-      if (priceQuestion) {
-        reply = withPrefix(
-          `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`
-        );
-        addTodo(
-          conv,
-          "pricing",
-          `Confirm sale price for ${bikeLabel}. Customer asked: ${String(event.body ?? "").trim()}`,
-          event.providerMessageId
-        );
-        setFollowUpMode(conv, "manual_handoff", "price_confirm");
-        stopFollowUpCadence(conv, "manual_handoff");
-        markPricingEscalated(conv);
-      } else {
-        const factReply = await applyVehicleFactQuestionDecision({
-          conv,
-          text: event.body ?? "",
-          providerMessageId: event.providerMessageId,
-          receivedAt: event.receivedAt,
-          decision: adfVehicleFactDecision,
-          scope: "regen"
-        });
-        reply = withPrefix(factReply);
-      }
+      const factReply = await applyVehicleFactQuestionDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: event.providerMessageId,
+        receivedAt: event.receivedAt,
+        decision: adfVehicleFactDecision,
+        scope: "regen"
+      });
+      const reply = withPrefix(factReply);
       recordRouteOutcome("regen", "adf_vehicle_fact_handoff", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -39648,10 +39636,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: adfVehicleFactDecision.confidence
       });
       return respondWithSmsRegeneratedDraft(reply, undefined, {
-        turnFinanceIntent: priceQuestion,
+        turnFinanceIntent:
+          adfVehicleFactDecision.questionType === "price" ||
+          adfVehicleFactDecision.questionType === "otd_total" ||
+          adfVehicleFactDecision.questionType === "finance_program_eligibility",
         turnAvailabilityIntent: false,
         turnSchedulingIntent: false,
-        financeContextIntent: priceQuestion
+        financeContextIntent:
+          adfVehicleFactDecision.questionType === "price" ||
+          adfVehicleFactDecision.questionType === "otd_total" ||
+          adfVehicleFactDecision.questionType === "finance_program_eligibility"
       });
     }
   }

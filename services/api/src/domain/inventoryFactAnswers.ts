@@ -18,6 +18,10 @@ type InventoryFactAnswer = {
   todoReason?: string;
   todoSummary?: string;
   item?: InventoryFeedItem | null;
+  priceText?: string | null;
+  unitLabel?: string;
+  missingPrice?: boolean;
+  financePromoText?: string | null;
 };
 
 function normalizeText(value: unknown): string {
@@ -229,7 +233,10 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
           questionType === "otd_total"
             ? `Confirm exact out-the-door total for ${unitLabel}. Customer asked: ${args.text}`
             : undefined,
-        item
+        item,
+        priceText,
+        unitLabel,
+        missingPrice: false
       };
     }
     return {
@@ -238,7 +245,10 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Confirm sale price for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText: null,
+      unitLabel,
+      missingPrice: true
     };
   }
 
@@ -259,7 +269,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Confirm final finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText,
+      unitLabel,
+      missingPrice: !priceText,
+      financePromoText: promoText
     };
   }
 
@@ -271,7 +285,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText: null,
+      unitLabel,
+      missingPrice: true,
+      financePromoText: promoText
     };
   }
 
@@ -283,7 +301,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over price-cap finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText,
+      unitLabel,
+      missingPrice: false,
+      financePromoText: promoText
     };
   }
 
@@ -294,7 +316,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText,
+      unitLabel,
+      missingPrice: !priceText,
+      financePromoText: null
     };
   }
 
@@ -306,7 +332,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText,
+      unitLabel,
+      missingPrice: !priceText,
+      financePromoText: null
     };
   }
 
@@ -317,7 +347,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText: null,
+      unitLabel,
+      missingPrice: true,
+      financePromoText: null
     };
   }
 
@@ -328,7 +362,11 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-      item
+      item,
+      priceText,
+      unitLabel,
+      missingPrice: false,
+      financePromoText: null
     };
   }
 
@@ -338,6 +376,64 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     needsTodo: true,
     todoReason: "pricing",
     todoSummary: `Turn over finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
-    item
+    item,
+    priceText,
+    unitLabel,
+    missingPrice: !priceText,
+    financePromoText: null
+  };
+}
+
+function hasRecentUnansweredPriceQuestion(conv: any): boolean {
+  const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+  const recent = messages.slice(-8);
+  let sawCurrentFinanceQuestion = false;
+  for (let i = recent.length - 1; i >= 0; i -= 1) {
+    const msg = recent[i];
+    const body = normalizeText(msg?.body);
+    if (!body) continue;
+    if (msg?.direction === "out" && /\b(price|sale price|published price|listed price|confirm the price|confirm the sale price)\b/i.test(body)) {
+      return false;
+    }
+    if (
+      msg?.direction === "in" &&
+      msg?.provider === "sendgrid_adf" &&
+      /\b(qualif(?:y|ies)|eligible|low\s+interest|apr|financ(?:e|ing)|program)\b/i.test(body)
+    ) {
+      sawCurrentFinanceQuestion = true;
+      continue;
+    }
+    if (
+      sawCurrentFinanceQuestion &&
+      msg?.direction === "in" &&
+      msg?.provider === "sendgrid_adf" &&
+      /\bwhat\s+is\s+the\s+price\b|\bprice\s*\??\s*$/i.test(body)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function mergeRecentPriceQuestionIntoFinanceAnswer(args: {
+  conv: any;
+  answer: InventoryFactAnswer;
+}): InventoryFactAnswer {
+  if (!hasRecentUnansweredPriceQuestion(args.conv)) return args.answer;
+  const unitLabel = args.answer.unitLabel ?? "bike";
+  const priceSentence = args.answer.priceText
+    ? `The listed price I see on the ${unitLabel} is ${args.answer.priceText} before tax and fees.`
+    : `I don’t see a published price in the inventory feed for the ${unitLabel}, so I’ll have the team confirm the price and send it over.`;
+  const financeReply = normalizeText(args.answer.reply);
+  const reply = [priceSentence, financeReply].filter(Boolean).join(" ");
+  const summaryPrefix = args.answer.missingPrice
+    ? `Confirm price and final finance eligibility for ${unitLabel}.`
+    : `Confirm final finance eligibility for ${unitLabel}.`;
+  return {
+    ...args.answer,
+    reply,
+    needsTodo: true,
+    todoReason: "pricing",
+    todoSummary: `${summaryPrefix} ${args.answer.todoSummary ?? ""}`.trim()
   };
 }
