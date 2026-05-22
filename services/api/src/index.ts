@@ -35653,6 +35653,7 @@ type RawMdfUpload = {
   mimeType: string;
   size: number;
   buffer: Buffer;
+  role?: MdfUploadedFile["providedRole"];
 };
 
 const mdfUploadTokens = new Map<string, number>();
@@ -35703,6 +35704,7 @@ async function buildMdfPacketFromUploads(files: RawMdfUpload[], notes: string) {
       mimeType,
       size: Number(file.size ?? file.buffer.length ?? 0),
       buffer: file.buffer,
+      providedRole: file.role,
       url
     });
   }
@@ -35718,7 +35720,10 @@ function parseMdfJsonUploads(body: any): RawMdfUpload[] {
       originalName: String(file?.name || `mdf-upload-${index + 1}`),
       mimeType: String(file?.mimeType || file?.type || ""),
       size: Number(file?.size ?? Buffer.byteLength(base64, "base64")),
-      buffer: Buffer.from(base64, "base64")
+      buffer: Buffer.from(base64, "base64"),
+      role: ["invoice", "proof_of_performance", "creative", "receipt", "supporting_only", "unknown"].includes(String(file?.role))
+        ? String(file.role) as MdfUploadedFile["providedRole"]
+        : undefined
     };
   });
 }
@@ -35753,7 +35758,8 @@ app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, r
         originalName: file.originalname || "uploaded-file",
         mimeType: String(file.mimetype ?? ""),
         size: Number(file.size ?? file.buffer.length ?? 0),
-        buffer: file.buffer
+        buffer: file.buffer,
+        role: undefined
       })),
       String(req.body?.notes ?? "")
     );

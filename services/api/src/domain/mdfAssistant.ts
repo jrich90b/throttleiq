@@ -9,7 +9,10 @@ export type MdfUploadedFile = {
   size: number;
   buffer: Buffer;
   url?: string;
+  providedRole?: MdfFileRole;
 };
+
+type MdfFileRole = "invoice" | "proof_of_performance" | "creative" | "receipt" | "supporting_only" | "unknown";
 
 export type MdfClaimPacket = {
   claimType: "media" | "event" | "map_only" | "unknown";
@@ -40,7 +43,7 @@ export type MdfClaimPacket = {
     type: string;
     size: number;
     url?: string;
-    inferredRole: "invoice" | "proof_of_performance" | "creative" | "receipt" | "unknown";
+    inferredRole: MdfFileRole;
   }>;
   missingFields: string[];
   portalSteps: string[];
@@ -125,7 +128,7 @@ const MDF_SCHEMA = {
           size: { type: "number" },
           inferredRole: {
             type: "string",
-            enum: ["invoice", "proof_of_performance", "creative", "receipt", "unknown"]
+            enum: ["invoice", "proof_of_performance", "creative", "receipt", "supporting_only", "unknown"]
           }
         }
       }
@@ -144,7 +147,13 @@ const MDF_SCHEMA = {
   }
 };
 
-function inferRoleFromName(name: string): MdfClaimPacket["uploadedFiles"][number]["inferredRole"] {
+function validMdfFileRole(value: unknown): MdfFileRole | null {
+  return ["invoice", "proof_of_performance", "creative", "receipt", "supporting_only", "unknown"].includes(String(value))
+    ? (String(value) as MdfFileRole)
+    : null;
+}
+
+function inferRoleFromName(name: string): MdfFileRole {
   const lower = name.toLowerCase();
   if (/\binvoice|bill|statement\b/.test(lower)) return "invoice";
   if (/\breceipt|paid|payment\b/.test(lower)) return "receipt";
@@ -183,7 +192,7 @@ function fallbackPacket(files: MdfUploadedFile[], reason: string): MdfClaimPacke
       type: file.mimeType,
       size: file.size,
       url: (file as any).url,
-      inferredRole: inferRoleFromName(file.name)
+      inferredRole: file.providedRole || inferRoleFromName(file.name)
     })),
     missingFields: ["Claim type", "Activity type", "Dates of activity", "Vendor", "Invoice date", "Invoice number", "Spend"],
     portalSteps: [
@@ -217,6 +226,30 @@ function fileInput(file: MdfUploadedFile) {
     };
   }
   return null;
+}
+
+function fileManifest(files: MdfUploadedFile[]): string {
+  return files
+    .map((file, index) => {
+      const role = file.providedRole || inferRoleFromName(file.name);
+      return `${index + 1}. ${file.name} — role: ${role}; type: ${file.mimeType}; size: ${file.size}`;
+    })
+    .join("\n");
+}
+
+function fileContentInputs(files: MdfUploadedFile[]) {
+  const content: any[] = [];
+  files.forEach((file, index) => {
+    const input = fileInput(file);
+    if (!input) return;
+    const role = file.providedRole || inferRoleFromName(file.name);
+    content.push({
+      type: "input_text",
+      text: `File ${index + 1}: ${file.name}. User-selected role: ${role}.`
+    });
+    content.push(input);
+  });
+  return content;
 }
 
 function openAiSafeFileName(name: string, fallback: string) {
@@ -269,9 +302,10 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
           type: String(row?.type ?? files[index]?.mimeType ?? ""),
           size: Number(row?.size ?? files[index]?.size ?? 0),
           url: String((files[index] as any)?.url ?? row?.url ?? "").trim() || undefined,
-          inferredRole: ["invoice", "proof_of_performance", "creative", "receipt", "unknown"].includes(row?.inferredRole)
-            ? row.inferredRole
-            : inferRoleFromName(String(row?.name ?? files[index]?.name ?? ""))
+          inferredRole:
+            files[index]?.providedRole ||
+            validMdfFileRole(row?.inferredRole) ||
+            inferRoleFromName(String(row?.name ?? files[index]?.name ?? ""))
         }))
       : fallback.uploadedFiles,
     missingFields: Array.isArray(packet.missingFields)
@@ -291,7 +325,7 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
 
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
   if (!files.length) return fallbackPacket(files, "Upload at least one invoice, receipt, creative, or proof file.");
-  const supportedInputs = files.map(fileInput).filter(Boolean);
+  const supportedInputs = fileContentInputs(files);
   if (!supportedInputs.length) {
     return fallbackPacket(files, "No supported PDF or image files were uploaded.");
   }
@@ -310,6 +344,12 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "- Event claims need event name, event description, attendance, motorcycles sold, P&A/A&L sales, vendor, invoice date, invoice number, spend, invoice, and event proof/creative/photos when applicable.",
     "- Common media documentation: social requires invoice or billing summary and screenshot of live asset; email/text marketing requires invoice plus screenshots of campaign texts/emails; search needs invoice and keyword list; display/video needs invoice plus live screenshots/video/link; direct mail needs invoice and final creative.",
     "- Exclusions include transactional email/text, AI fees, mail fees, creative development, alcohol/tobacco/cannabis, permanent facility signage, business cards, and operational support tools.",
+    "Use this file manifest and respect the user-selected roles:",
+    fileManifest(files),
+    "- Extract vendor, invoice date, invoice number, and spend only from files marked invoice or receipt.",
+    "- Use files marked creative, proof_of_performance, or supporting_only only for campaign description, proof, eligibility, documentation, and concerns.",
+    "- If a magazine cover, tear sheet, screenshot, artwork, or proof file contains unrelated dates/prices/numbers, do not treat those as invoice fields.",
+    "- If no invoice or receipt is provided, leave invoice/spend fields blank and list them as missing.",
     "- If evidence is missing or uncertain, do not guess. Put it in missingFields or eligibility.concerns.",
     "The portal should only be filled as a saved draft after human review. Never indicate final submit is automatic.",
     notes.trim() ? `Dealer notes: ${notes.trim()}` : "Dealer notes: none."

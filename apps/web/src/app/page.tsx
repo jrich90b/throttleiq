@@ -1758,7 +1758,7 @@ type MdfClaimPacket = {
     type: string;
     size: number;
     url?: string;
-    inferredRole: "invoice" | "proof_of_performance" | "creative" | "receipt" | "unknown";
+    inferredRole: MdfUploadRole;
   }>;
   missingFields: string[];
   portalSteps: string[];
@@ -1766,6 +1766,14 @@ type MdfClaimPacket = {
     status: "ready_for_draft" | "needs_review" | "not_ready";
     nextStep: string;
   };
+};
+
+type MdfUploadRole = "invoice" | "receipt" | "creative" | "proof_of_performance" | "supporting_only" | "unknown";
+
+type MdfUploadFile = {
+  id: string;
+  file: File;
+  role: MdfUploadRole;
 };
 
 type MdfClaimStatus = "draft" | "needs_info" | "ready_for_portal" | "portal_draft" | "submitted" | "completed";
@@ -2659,7 +2667,7 @@ export default function Home() {
   const [campaignEmailIncludePrimaryImage, setCampaignEmailIncludePrimaryImage] = useState(true);
   const [campaignEmailContextPickerId, setCampaignEmailContextPickerId] = useState("");
   const [campaignEmailContextCampaignIds, setCampaignEmailContextCampaignIds] = useState<string[]>([]);
-  const [mdfFiles, setMdfFiles] = useState<File[]>([]);
+  const [mdfFiles, setMdfFiles] = useState<MdfUploadFile[]>([]);
   const [mdfNotes, setMdfNotes] = useState("");
   const [mdfPacket, setMdfPacket] = useState<MdfClaimPacket | null>(null);
   const [mdfClaims, setMdfClaims] = useState<MdfClaimEntry[]>([]);
@@ -7450,6 +7458,15 @@ export default function Home() {
     return `${base || "mdf-upload"}${ext}`;
   }
 
+  function inferMdfUploadRole(file: File): MdfUploadRole {
+    const lower = `${file.name} ${file.type}`.toLowerCase();
+    if (/\binvoice|bill|statement\b/.test(lower)) return "invoice";
+    if (/\breceipt|paid|payment\b/.test(lower)) return "receipt";
+    if (/\bflyer|creative|artwork|ad|mailer|poster\b/.test(lower)) return "creative";
+    if (/\bscreenshot|proof|live|tear|script|keyword|performance\b/.test(lower)) return "proof_of_performance";
+    return "unknown";
+  }
+
   function readFileBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -7480,11 +7497,12 @@ export default function Home() {
     setMdfError(null);
     try {
       const files = await Promise.all(
-        mdfFiles.map(async (file, index) => ({
-          name: safeMdfUploadName(file.name || `mdf-upload-${index + 1}`, file.type),
-          mimeType: file.type || "application/octet-stream",
-          size: file.size,
-          dataBase64: await readFileBase64(file)
+        mdfFiles.map(async (entry, index) => ({
+          name: safeMdfUploadName(entry.file.name || `mdf-upload-${index + 1}`, entry.file.type),
+          mimeType: entry.file.type || "application/octet-stream",
+          size: entry.file.size,
+          role: entry.role,
+          dataBase64: await readFileBase64(entry.file)
         }))
       );
       const tokenResp = await fetch("/api/mdf/upload-token", {
@@ -14576,7 +14594,11 @@ export default function Home() {
                     multiple
                     accept="application/pdf,image/png,image/jpeg,image/webp"
                     onChange={event => {
-                      const nextFiles = Array.from(event.target.files ?? []);
+                      const nextFiles = Array.from(event.target.files ?? []).map((file, index) => ({
+                        id: `${Date.now()}-${index}-${file.name}-${file.size}`,
+                        file,
+                        role: inferMdfUploadRole(file)
+                      }));
                       setMdfFiles(prev => [...prev, ...nextFiles]);
                       setMdfError(null);
                       event.currentTarget.value = "";
@@ -14585,10 +14607,41 @@ export default function Home() {
                 </label>
                 {mdfFiles.length ? (
                   <div className="mt-3 space-y-2">
-                    {mdfFiles.map(file => (
-                      <div key={`${file.name}-${file.size}`} className="rounded-lg border bg-white px-3 py-2 text-sm">
-                        <div className="font-medium text-gray-800">{file.name}</div>
-                        <div className="text-xs text-gray-500">{file.type || "file"} • {(file.size / 1024 / 1024).toFixed(2)} MB</div>
+                    {mdfFiles.map(entry => (
+                      <div key={entry.id} className="rounded-lg border bg-white px-3 py-2 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-gray-800">{entry.file.name}</div>
+                            <div className="text-xs text-gray-500">
+                              {entry.file.type || "file"} • {(entry.file.size / 1024 / 1024).toFixed(2)} MB
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded border px-2 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50"
+                            onClick={() => setMdfFiles(prev => prev.filter(file => file.id !== entry.id))}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <label className="mt-2 block text-xs font-semibold text-gray-600">
+                          File role
+                          <select
+                            className="mt-1 w-full rounded border bg-white px-2 py-2 text-sm text-gray-800"
+                            value={entry.role}
+                            onChange={event => {
+                              const role = event.target.value as MdfUploadRole;
+                              setMdfFiles(prev => prev.map(file => (file.id === entry.id ? { ...file, role } : file)));
+                            }}
+                          >
+                            <option value="invoice">Invoice / bill</option>
+                            <option value="receipt">Receipt / proof paid</option>
+                            <option value="creative">Creative / artwork</option>
+                            <option value="proof_of_performance">Proof / tear sheet / screenshot</option>
+                            <option value="supporting_only">Supporting only, do not extract invoice fields</option>
+                            <option value="unknown">Not sure</option>
+                          </select>
+                        </label>
                       </div>
                     ))}
                   </div>
