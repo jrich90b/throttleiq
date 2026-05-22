@@ -40,6 +40,7 @@ type SideNavIconName =
   | "inventory"
   | "watches"
   | "campaigns"
+  | "mdf"
   | "kpi"
   | "questions"
   | "settings";
@@ -124,6 +125,15 @@ function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIconName; c
         <path d="M4 13.5V10l10-4v12L4 14z" />
         <path d="M14 10h2.2a3.8 3.8 0 0 1 0 7.6H14" />
         <path d="M7.5 14.5 9 20h3" />
+      </svg>
+    );
+  }
+  if (name === "mdf") {
+    return (
+      <svg {...commonProps}>
+        <path d="M6 3.5h8l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20z" />
+        <path d="M14 3.5V8h4" />
+        <path d="M8.5 12h7M8.5 15h7M8.5 18h4" />
       </svg>
     );
   }
@@ -1719,6 +1729,44 @@ type MetaIntegrationStatus = {
   error?: string;
 };
 
+type MdfClaimPacket = {
+  claimType: "media" | "event" | "map_only" | "unknown";
+  activityType: string;
+  confidence: number;
+  extractedFields: {
+    campaignName: string;
+    eventName: string;
+    vendorName: string;
+    invoiceDate: string;
+    invoiceNumber: string;
+    spend: string;
+    activityStartDate: string;
+    activityEndDate: string;
+    totalLeads: string;
+    attendance: string;
+    motorcyclesSold: string;
+    paAlSales: string;
+  };
+  descriptionDraft: string;
+  eligibility: {
+    status: "likely_eligible" | "review_needed" | "likely_ineligible" | "unknown";
+    concerns: string[];
+  };
+  requiredDocumentation: string[];
+  uploadedFiles: Array<{
+    name: string;
+    type: string;
+    size: number;
+    inferredRole: "invoice" | "proof_of_performance" | "creative" | "receipt" | "unknown";
+  }>;
+  missingFields: string[];
+  portalSteps: string[];
+  browserAutomation: {
+    status: "ready_for_draft" | "needs_review" | "not_ready";
+    nextStep: string;
+  };
+};
+
 type CampaignSocialPublishOptions = {
   linkUrl?: string;
   mentionHandles?: string;
@@ -2515,6 +2563,7 @@ export default function Home() {
     | "watches"
     | "inventory"
     | "campaigns"
+    | "mdf"
     | "kpi"
     | "settings"
     | "calendar"
@@ -2596,6 +2645,11 @@ export default function Home() {
   const [campaignEmailIncludePrimaryImage, setCampaignEmailIncludePrimaryImage] = useState(true);
   const [campaignEmailContextPickerId, setCampaignEmailContextPickerId] = useState("");
   const [campaignEmailContextCampaignIds, setCampaignEmailContextCampaignIds] = useState<string[]>([]);
+  const [mdfFiles, setMdfFiles] = useState<File[]>([]);
+  const [mdfNotes, setMdfNotes] = useState("");
+  const [mdfPacket, setMdfPacket] = useState<MdfClaimPacket | null>(null);
+  const [mdfLoading, setMdfLoading] = useState(false);
+  const [mdfError, setMdfError] = useState<string | null>(null);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignInspirationUploadInputRef = useRef<HTMLInputElement | null>(null);
   const campaignAssetUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -6329,6 +6383,7 @@ export default function Home() {
       "watches",
       "inventory",
       "campaigns",
+      "mdf",
       "settings",
       "calendar"
     ]);
@@ -6342,6 +6397,7 @@ export default function Home() {
         | "watches"
         | "inventory"
         | "campaigns"
+        | "mdf"
         | "settings"
         | "calendar";
       setSection(next);
@@ -6350,7 +6406,8 @@ export default function Home() {
         next === "settings" ||
         next === "inventory" ||
         next === "suppressions" ||
-        next === "campaigns"
+        next === "campaigns" ||
+        next === "mdf"
       ) {
         setMobilePanel("detail");
       } else {
@@ -7043,6 +7100,8 @@ export default function Home() {
               ? "Vehicle Watches"
               : section === "campaigns"
                 ? "Campaign Studio"
+              : section === "mdf"
+                ? "MDF Assistant"
               : section === "kpi"
                 ? "KPI Overview"
               : section === "calendar"
@@ -7065,6 +7124,8 @@ export default function Home() {
               ? `${visibleWatchItems.length} active`
               : section === "campaigns"
                 ? `${campaigns.length} campaigns`
+              : section === "mdf"
+                ? "Claims, recaps, and pre-approvals"
               : section === "kpi"
                 ? "Manager analytics"
               : section === "calendar"
@@ -7090,6 +7151,7 @@ export default function Home() {
       section === "inventory" ||
       section === "suppressions" ||
       section === "campaigns" ||
+      section === "mdf" ||
       section === "kpi"
     ) {
       setMobilePanel("detail");
@@ -7107,7 +7169,7 @@ export default function Home() {
   }, [isDepartmentUser, section]);
 
   useEffect(() => {
-    if ((section === "kpi" || section === "campaigns") && !isManager) {
+    if ((section === "kpi" || section === "campaigns" || section === "mdf") && !isManager) {
       setSection("inbox");
       setMobilePanel("list");
     }
@@ -7150,6 +7212,7 @@ export default function Home() {
       | "watches"
       | "inventory"
       | "campaigns"
+      | "mdf"
       | "kpi"
       | "settings"
       | "calendar"
@@ -7163,11 +7226,37 @@ export default function Home() {
       target === "inventory" ||
       target === "suppressions" ||
       target === "campaigns" ||
+      target === "mdf" ||
       target === "kpi"
     ) {
       setMobilePanel("detail");
     } else {
       setMobilePanel("list");
+    }
+  }
+
+  async function extractMdfPacket() {
+    if (!mdfFiles.length) {
+      setMdfError("Upload at least one invoice, receipt, flyer, artwork file, or proof screenshot.");
+      return;
+    }
+    setMdfLoading(true);
+    setMdfError(null);
+    try {
+      const form = new FormData();
+      mdfFiles.forEach(file => form.append("files", file));
+      form.append("notes", mdfNotes);
+      const resp = await fetch("/api/mdf/extract", {
+        method: "POST",
+        body: form
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF packet could not be created.");
+      setMdfPacket(data.packet);
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF packet could not be created.");
+    } finally {
+      setMdfLoading(false);
     }
   }
 
@@ -11600,6 +11689,15 @@ export default function Home() {
         ) : null}
         {!isDepartmentUser && authUser?.role === "manager" ? (
           <button
+            className={sideNavButtonClass(section === "mdf")}
+            title="MDF Assistant"
+            onClick={() => goToSection("mdf")}
+          >
+            <SideNavIcon name="mdf" />
+          </button>
+        ) : null}
+        {!isDepartmentUser && authUser?.role === "manager" ? (
+          <button
             className={sideNavButtonClass(section === "kpi")}
             title="KPI Overview"
             onClick={() => goToSection("kpi")}
@@ -12056,6 +12154,23 @@ export default function Home() {
                 </div>
               </div>
             )}
+          </div>
+        ) : section === "mdf" ? (
+          <div className="mt-4 space-y-3">
+            <div className="rounded-lg border bg-[var(--surface-2)] p-3 text-sm">
+              <div className="font-semibold">MDF workflow</div>
+              <p className="mt-1 text-xs text-gray-600">
+                Extract a claim packet first, then use browser automation only after review.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-[var(--surface)] p-3 text-xs text-gray-600">
+              <div className="font-semibold text-gray-800">Supported files</div>
+              <div className="mt-2">PDF invoices, receipts, billing summaries, screenshots, flyers, and artwork.</div>
+            </div>
+            <div className="rounded-lg border bg-[var(--surface)] p-3 text-xs text-gray-600">
+              <div className="font-semibold text-gray-800">Guardrail</div>
+              <div className="mt-2">The assistant can prepare a draft, but final MDF submission should stay human-approved.</div>
+            </div>
           </div>
         ) : section === "kpi" ? (
           <div className="mt-4 space-y-3">
@@ -14058,6 +14173,167 @@ export default function Home() {
                   Open Email Builder
                 </a>
               </div>
+            </div>
+          </div>
+        ) : section === "mdf" ? (
+          <div className="max-w-6xl mx-auto space-y-5">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold">MDF Assistant</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  Build a reviewed MDF claim packet from invoices, receipts, proof screenshots, and campaign artwork.
+                </p>
+              </div>
+              <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                Approval gated
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-[0.9fr_1.1fr] gap-4">
+              <section className="rounded-xl border bg-white p-4 shadow-sm">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Upload</div>
+                <h3 className="mt-1 text-lg font-semibold">Claim source files</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  PDFs and images are supported. Use invoices, billing summaries, receipts, live ad screenshots, flyers, scripts, keyword lists, or event photos.
+                </p>
+                <label className="mt-4 flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center hover:bg-gray-100">
+                  <span className="text-sm font-semibold text-gray-800">Upload MDF files</span>
+                  <span className="mt-1 text-xs text-gray-500">PDF, PNG, JPG, or WebP</span>
+                  <input
+                    className="hidden"
+                    type="file"
+                    multiple
+                    accept="application/pdf,image/png,image/jpeg,image/webp"
+                    onChange={event => {
+                      setMdfFiles(Array.from(event.target.files ?? []));
+                      setMdfPacket(null);
+                      setMdfError(null);
+                    }}
+                  />
+                </label>
+                {mdfFiles.length ? (
+                  <div className="mt-3 space-y-2">
+                    {mdfFiles.map(file => (
+                      <div key={`${file.name}-${file.size}`} className="rounded-lg border bg-white px-3 py-2 text-sm">
+                        <div className="font-medium text-gray-800">{file.name}</div>
+                        <div className="text-xs text-gray-500">{file.type || "file"} • {(file.size / 1024 / 1024).toFixed(2)} MB</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <label className="mt-4 block text-sm font-medium text-gray-700">
+                  Notes for the claim
+                  <textarea
+                    className="mt-1 min-h-28 w-full rounded-lg border px-3 py-2 text-sm"
+                    value={mdfNotes}
+                    onChange={event => setMdfNotes(event.target.value)}
+                    placeholder="Example: Meta ads for May Street Glide promo. Need recap, not pre-approval."
+                  />
+                </label>
+                {mdfError ? <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{mdfError}</div> : null}
+                <button
+                  className="mt-4 w-full rounded-lg border bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  onClick={() => void extractMdfPacket()}
+                  disabled={mdfLoading || !mdfFiles.length}
+                >
+                  {mdfLoading ? "Creating packet..." : "Create MDF packet"}
+                </button>
+              </section>
+
+              <section className="rounded-xl border bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Review</div>
+                    <h3 className="mt-1 text-lg font-semibold">Claim packet</h3>
+                  </div>
+                  {mdfPacket ? (
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700">
+                      {Math.round((mdfPacket.confidence || 0) * 100)}% confidence
+                    </span>
+                  ) : null}
+                </div>
+
+                {!mdfPacket ? (
+                  <div className="mt-4 rounded-lg border border-dashed bg-gray-50 p-6 text-sm text-gray-500">
+                    Upload files and create a packet. The assistant will extract claim fields, list required documents, and show what still needs review before browser automation.
+                  </div>
+                ) : (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="rounded-lg border bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Claim type</div>
+                        <div className="mt-1 font-semibold capitalize">{mdfPacket.claimType.replace("_", " ")}</div>
+                      </div>
+                      <div className="rounded-lg border bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Activity type</div>
+                        <div className="mt-1 font-semibold">{mdfPacket.activityType || "Needs review"}</div>
+                      </div>
+                      <div className="rounded-lg border bg-gray-50 p-3">
+                        <div className="text-xs text-gray-500">Automation</div>
+                        <div className="mt-1 font-semibold capitalize">{mdfPacket.browserAutomation.status.replace(/_/g, " ")}</div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border p-3">
+                      <div className="text-sm font-semibold">Extracted fields</div>
+                      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                        {Object.entries(mdfPacket.extractedFields).map(([key, value]) => (
+                          <div key={key} className="rounded border bg-gray-50 px-3 py-2">
+                            <div className="text-[11px] uppercase tracking-wide text-gray-500">{key.replace(/([A-Z])/g, " $1")}</div>
+                            <div className="mt-1 text-gray-800">{value || "—"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border p-3">
+                      <div className="text-sm font-semibold">Description draft</div>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700">
+                        {mdfPacket.descriptionDraft || "No description drafted yet."}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-semibold">Missing fields</div>
+                        {mdfPacket.missingFields.length ? (
+                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-700">
+                            {mdfPacket.missingFields.map(item => <li key={item}>{item}</li>)}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-sm text-emerald-700">No required fields flagged.</p>
+                        )}
+                      </div>
+                      <div className="rounded-lg border p-3">
+                        <div className="text-sm font-semibold">Required documentation</div>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                          {mdfPacket.requiredDocumentation.map(item => <li key={item}>{item}</li>)}
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border p-3">
+                      <div className="text-sm font-semibold">Eligibility review</div>
+                      <div className="mt-2 inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 capitalize">
+                        {mdfPacket.eligibility.status.replace(/_/g, " ")}
+                      </div>
+                      {mdfPacket.eligibility.concerns.length ? (
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                          {mdfPacket.eligibility.concerns.map(item => <li key={item}>{item}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-lg border bg-gray-50 p-3">
+                      <div className="text-sm font-semibold">Browser-use portal automation</div>
+                      <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
+                      <button className="mt-3 rounded-lg border px-3 py-2 text-sm font-semibold text-gray-500" disabled>
+                        Fill MDF portal draft coming next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
             </div>
           </div>
         ) : section === "kpi" ? (

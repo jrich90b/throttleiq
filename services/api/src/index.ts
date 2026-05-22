@@ -44,6 +44,7 @@ import {
   type AgentTaskProvider,
   type AgentTaskStatus
 } from "./domain/agentTaskStore.js";
+import { extractMdfClaimPacket } from "./domain/mdfAssistant.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -35618,6 +35619,34 @@ async function generateCampaignEmailImageVariantsWithNanoBanana(args: {
 
 app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
+});
+
+app.post("/mdf/extract", requireManager, upload.array("files", 8), async (req, res) => {
+  const files = (Array.isArray(req.files) ? req.files : []) as Express.Multer.File[];
+  if (!files.length) return res.status(400).json({ ok: false, error: "Upload at least one MDF file." });
+
+  const maxBytesPerFile = 25 * 1024 * 1024;
+  const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
+  const normalized = [];
+  for (const file of files) {
+    const mimeType = String(file.mimetype ?? "").toLowerCase();
+    if (!allowed.has(mimeType)) {
+      return res.status(400).json({ ok: false, error: "Only PDF, PNG, JPG, and WebP files are supported." });
+    }
+    if (Number(file.size ?? 0) > maxBytesPerFile) {
+      return res.status(400).json({ ok: false, error: "Each MDF file must be 25MB or smaller." });
+    }
+    normalized.push({
+      name: file.originalname || "uploaded-file",
+      mimeType,
+      size: Number(file.size ?? file.buffer.length ?? 0),
+      buffer: file.buffer
+    });
+  }
+
+  const notes = String(req.body?.notes ?? "");
+  const packet = await extractMdfClaimPacket(normalized, notes);
+  return res.json({ ok: true, packet });
 });
 
 app.post("/campaigns/media", requireManager, upload.single("file"), async (req, res) => {
