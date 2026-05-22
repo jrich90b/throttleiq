@@ -594,21 +594,28 @@ async function main() {
     await saveTasks(tasks);
   }
 
-  const python = process.env.MDF_BROWSER_USE_PYTHON?.trim() || "python3";
-  const browserUseAvailable = !options.guided && (await canImportBrowserUse(python));
   const cdpOk = options.cdpUrl ? await isCdpReachable(options.cdpUrl) : false;
+  const python = process.env.MDF_BROWSER_USE_PYTHON?.trim() || "python3";
+  const browserUseInstalled = !options.guided && (await canImportBrowserUse(python));
+  const browserUseCloud = osFlag("MDF_BROWSER_USE_CLOUD");
+  const allowFreshBrowser = osFlag("MDF_BROWSER_USE_ALLOW_FRESH_BROWSER");
+  const browserUseAvailable = browserUseInstalled && (cdpOk || browserUseCloud || allowFreshBrowser);
 
   if (!browserUseAvailable) {
     const cdpNote =
       options.cdpUrl && !cdpOk
         ? " The configured Chrome CDP URL was not reachable, so the guided fallback opened the normal desktop browser."
         : "";
+    const browserUseNote =
+      browserUseInstalled && !cdpOk && !browserUseCloud && !allowFreshBrowser
+        ? " Browser Use is installed, but automatic mode needs MDF_PORTAL_CDP_URL for the logged-in Chrome session."
+        : " browser-use is not installed/configured, so this run is guided and still needs manual portal completion.";
     const summary = await openGuidedBrowser(htmlPath, options.portalUrl);
     updateTask(
       tasks,
       task.id,
       "needs_approval",
-      `${summary}${cdpNote} browser-use is not installed/configured, so this run is guided and still needs manual portal completion. Prompt: ${promptPath}`,
+      `${summary}${cdpNote}${browserUseNote} Prompt: ${promptPath}`,
       [promptPath, htmlPath, options.portalUrl]
     );
     if (remoteBundles) {
@@ -616,7 +623,7 @@ async function main() {
         options,
         task.id,
         "needs_approval",
-        `${summary}${cdpNote} browser-use is not installed/configured, so this run is guided and still needs manual portal completion. Prompt: ${promptPath}`,
+        `${summary}${cdpNote}${browserUseNote} Prompt: ${promptPath}`,
         [promptPath, htmlPath, options.portalUrl]
       );
     } else {
@@ -656,6 +663,10 @@ async function main() {
   } else {
     await saveTasks(tasks);
   }
+}
+
+function osFlag(name: string) {
+  return ["1", "true", "yes", "on"].includes(String(process.env[name] ?? "").trim().toLowerCase());
 }
 
 main().catch(err => {

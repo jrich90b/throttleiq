@@ -41,7 +41,7 @@ For the automatic path, use a Chrome session that is already logged into the MDF
 MDF_PORTAL_CDP_URL="http://127.0.0.1:9222"
 ```
 
-The runner checks that URL before connecting. If it cannot connect, it opens the guided fallback in the normal desktop browser.
+The runner checks that URL before connecting. If it cannot connect, or if no CDP URL is configured, it opens the guided fallback in the normal desktop browser. Browser Use will not run against a fresh unauthenticated browser unless `MDF_BROWSER_USE_ALLOW_FRESH_BROWSER=1` is set.
 
 ## Browser Use
 
