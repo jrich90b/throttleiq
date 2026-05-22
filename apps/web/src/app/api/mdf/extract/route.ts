@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { apiFetch } from "../../../../lib/apiFetch";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 export async function POST(req: Request) {
   const base = process.env.API_BASE_URL;
   if (!base) {

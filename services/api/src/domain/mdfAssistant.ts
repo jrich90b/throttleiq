@@ -472,6 +472,20 @@ async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Pr
   return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
 }
 
+function shouldRunInvoiceOnlyPass(packet: MdfClaimPacket, files: MdfUploadedFile[]): boolean {
+  const hasInvoiceFiles = files.some(file => {
+    const role = file.providedRole || inferRoleFromName(file.name);
+    return role === "invoice" || role === "receipt";
+  });
+  if (!hasInvoiceFiles) return false;
+  if (!packet.invoices.length) return true;
+  const anyIncompleteInvoice = packet.invoices.some(invoice => {
+    return !invoice.vendorName || !invoice.invoiceDate || !invoice.invoiceNumber || !invoice.amount;
+  });
+  if (anyIncompleteInvoice) return true;
+  return !packet.extractedFields.vendorName || !packet.extractedFields.invoiceDate || !packet.extractedFields.invoiceNumber || !packet.extractedFields.spend;
+}
+
 async function createMdfJsonResponse(
   model: string,
   prompt: string,
@@ -544,7 +558,9 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       metadata: { fileCount: files.length }
     });
     const packet = normalizePacket(parsedResponsePayload(resp), files);
-    const invoicePacket = await extractInvoiceFields(files, model).catch(() => null);
+    const invoicePacket = shouldRunInvoiceOnlyPass(packet, files)
+      ? await extractInvoiceFields(files, model).catch(() => null)
+      : null;
     return invoicePacket ? mergeInvoiceFields(packet, invoicePacket) : packet;
   } catch (err: any) {
     return fallbackPacket(files, err?.message ? `Extractor failed: ${err.message}` : "Extractor failed.");
