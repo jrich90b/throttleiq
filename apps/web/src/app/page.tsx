@@ -2667,6 +2667,7 @@ export default function Home() {
   const [mdfClaimsLoading, setMdfClaimsLoading] = useState(false);
   const [mdfClaimSaving, setMdfClaimSaving] = useState(false);
   const [mdfClaimActionBusy, setMdfClaimActionBusy] = useState("");
+  const [mdfPortalTaskNotice, setMdfPortalTaskNotice] = useState("");
   const [mdfLoading, setMdfLoading] = useState(false);
   const [mdfError, setMdfError] = useState<string | null>(null);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -7347,11 +7348,39 @@ export default function Home() {
     }
   }
 
+  async function createMdfPortalTask() {
+    const id = String(mdfSelectedClaimId ?? "").trim();
+    if (!id) {
+      setMdfError("Save this MDF claim before creating a portal draft task.");
+      return;
+    }
+    setMdfClaimActionBusy(`${id}:portal-task`);
+    setMdfPortalTaskNotice("");
+    setMdfError(null);
+    try {
+      const resp = await fetch(`/api/mdf/claims/${encodeURIComponent(id)}/portal-task`, {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Portal draft task could not be created.");
+      const claim = data.claim as MdfClaimEntry;
+      setMdfClaims(prev => prev.map(row => (row.id === claim.id ? claim : row)));
+      setMdfPacket(claim.packet);
+      setMdfNotes(String(claim.notes ?? ""));
+      setMdfPortalTaskNotice(`Portal draft task created: ${data.task?.id ?? "queued"}`);
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "Portal draft task could not be created.");
+    } finally {
+      setMdfClaimActionBusy("");
+    }
+  }
+
   function openMdfClaim(claim: MdfClaimEntry) {
     setMdfSelectedClaimId(claim.id);
     setMdfPacket(claim.packet);
     setMdfNotes(String(claim.notes ?? ""));
     setMdfError(null);
+    setMdfPortalTaskNotice("");
   }
 
   function startNewMdfClaim() {
@@ -7360,6 +7389,7 @@ export default function Home() {
     setMdfNotes("");
     setMdfFiles([]);
     setMdfError(null);
+    setMdfPortalTaskNotice("");
   }
 
   async function extractMdfPacket() {
@@ -14624,10 +14654,21 @@ export default function Home() {
                             </button>
                           </>
                         ) : null}
-                        <button className="rounded-lg border px-3 py-2 text-sm font-semibold text-gray-500" disabled>
-                          Fill MDF portal draft coming next
+                        <button
+                          className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-900 disabled:opacity-60"
+                          disabled={!mdfSelectedClaimId || mdfClaimActionBusy === `${mdfSelectedClaimId}:portal-task`}
+                          onClick={() => void createMdfPortalTask()}
+                        >
+                          {mdfClaimActionBusy === `${mdfSelectedClaimId}:portal-task`
+                            ? "Creating task..."
+                            : "Start portal draft"}
                         </button>
                       </div>
+                      {mdfPortalTaskNotice ? (
+                        <div className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+                          {mdfPortalTaskNotice}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 )}

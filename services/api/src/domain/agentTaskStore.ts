@@ -10,6 +10,7 @@ export type AgentTaskKind =
   | "email"
   | "quickbooks"
   | "prospect_research"
+  | "mdf_portal"
   | "linear_ticket"
   | "sop"
   | "other";

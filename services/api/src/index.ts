@@ -31207,6 +31207,7 @@ const allowedAgentKinds: AgentTaskKind[] = [
   "email",
   "quickbooks",
   "prospect_research",
+  "mdf_portal",
   "linear_ticket",
   "sop",
   "other"
@@ -31432,6 +31433,8 @@ function agentKindDefaultTitle(kind: AgentTaskKind): string {
       return "Review QuickBooks item";
     case "prospect_research":
       return "Research prospect";
+    case "mdf_portal":
+      return "Prepare MDF portal draft";
     case "linear_ticket":
       return "Create Linear task";
     case "sop":
@@ -31445,6 +31448,7 @@ function agentTaskApprovalReason(kind: AgentTaskKind, instructions: string): str
   const text = `${kind} ${instructions}`.toLowerCase();
   if (kind === "quickbooks") return "QuickBooks work can affect billing/accounting, so review is required first.";
   if (kind === "agreement") return "Agreement work can affect legal/commercial terms, so review is required before sending.";
+  if (kind === "mdf_portal") return "MDF portal work uploads files and fills an external portal, so human approval is required before execution.";
   if (kind === "email") return "Customer or prospect emails should be approved before sending.";
   if (text.match(/\b(send|invoice|charge|refund|pay|payment|sign|execute|delete|cancel subscription|change subscription)\b/)) {
     return "This task includes an external action that should be approved before execution.";
@@ -35716,6 +35720,91 @@ app.patch("/mdf/claims/:id", requireManager, (req, res) => {
 app.delete("/mdf/claims/:id", requireManager, (req, res) => {
   const existed = deleteMdfClaim(req.params.id);
   return res.json({ ok: true, deleted: existed });
+});
+
+app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
+  const claim = getMdfClaim(req.params.id);
+  if (!claim) return res.status(404).json({ ok: false, error: "MDF claim not found." });
+  const user = (req as any).user ?? null;
+  const fileLines = (claim.packet.uploadedFiles ?? [])
+    .map(file => {
+      const role = String(file.inferredRole ?? "unknown").replace(/_/g, " ");
+      return `- ${file.name} (${role})${file.url ? `: ${file.url}` : ""}`;
+    })
+    .join("\n");
+  const fields = claim.packet.extractedFields;
+  const task = await addAgentTask({
+    provider: "codex",
+    kind: "mdf_portal",
+    title: `Fill MDF portal draft: ${claim.title}`,
+    clientName: "American Harley-Davidson",
+    priority: "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: "Open the H-D MDF portal, fill a draft from this packet, upload files, and stop before final submit."
+    },
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    },
+    instructions: [
+      `[mdf-portal:${claim.id}]`,
+      "Use browser-use or logged-in Chrome browser control to prepare an H-D MDF portal draft from this saved LeadRider MDF packet.",
+      "Do not submit the claim. Stop at the final review/save-draft step and report exactly what was filled, uploaded, and what still needs human review.",
+      "",
+      `MDF claim ID: ${claim.id}`,
+      `Title: ${claim.title}`,
+      `Status: ${claim.status}`,
+      `Claim type: ${claim.packet.claimType}`,
+      `Activity type: ${claim.packet.activityType || "needs review"}`,
+      `Confidence: ${Math.round((claim.packet.confidence || 0) * 100)}%`,
+      "",
+      "Extracted fields:",
+      `- Campaign name: ${fields.campaignName || "missing"}`,
+      `- Event name: ${fields.eventName || "missing"}`,
+      `- Vendor: ${fields.vendorName || "missing"}`,
+      `- Invoice date: ${fields.invoiceDate || "missing"}`,
+      `- Invoice number: ${fields.invoiceNumber || "missing"}`,
+      `- Spend: ${fields.spend || "missing"}`,
+      `- Activity start: ${fields.activityStartDate || "missing"}`,
+      `- Activity end: ${fields.activityEndDate || "missing"}`,
+      `- Total leads: ${fields.totalLeads || "missing"}`,
+      `- Attendance: ${fields.attendance || "missing"}`,
+      `- Motorcycles sold: ${fields.motorcyclesSold || "missing"}`,
+      `- P&A/A&L sales: ${fields.paAlSales || "missing"}`,
+      "",
+      "Description draft:",
+      claim.packet.descriptionDraft || "missing",
+      "",
+      "Missing fields:",
+      claim.packet.missingFields.length ? claim.packet.missingFields.map(item => `- ${item}`).join("\n") : "- none flagged",
+      "",
+      "Required documentation:",
+      claim.packet.requiredDocumentation.length
+        ? claim.packet.requiredDocumentation.map(item => `- ${item}`).join("\n")
+        : "- none listed",
+      "",
+      "Uploaded files:",
+      fileLines || "- no saved files",
+      "",
+      claim.notes ? `Dealer notes:\n${claim.notes}` : "",
+      "",
+      "Browser automation rules:",
+      "- Use the user's logged-in session when possible.",
+      "- If login, MFA, missing files, or an uncertain field blocks progress, stop and report the blocker.",
+      "- Never click final submit. Save as draft or stop at the review page."
+    ]
+      .filter(Boolean)
+      .join("\n")
+  });
+  const updated = updateMdfClaim(claim.id, {
+    status: "portal_draft",
+    notes: [claim.notes, `Portal draft task created: ${task.id}`].filter(Boolean).join("\n")
+  });
+  return res.json({ ok: true, task, claim: updated ?? claim });
 });
 
 app.post("/campaigns/media", requireManager, upload.single("file"), async (req, res) => {
