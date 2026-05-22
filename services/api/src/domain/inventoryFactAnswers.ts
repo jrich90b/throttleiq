@@ -392,7 +392,11 @@ function hasRecentUnansweredPriceQuestion(conv: any): boolean {
     const msg = recent[i];
     const body = normalizeText(msg?.body);
     if (!body) continue;
-    if (msg?.direction === "out" && /\b(price|sale price|published price|listed price|confirm the price|confirm the sale price)\b/i.test(body)) {
+    if (
+      msg?.direction === "out" &&
+      msg?.provider !== "draft_ai" &&
+      /\b(price|sale price|published price|listed price|confirm the price|confirm the sale price)\b/i.test(body)
+    ) {
       return false;
     }
     if (
