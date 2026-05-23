@@ -7338,13 +7338,13 @@ export default function Home() {
   }
 
   function downloadMdfRunnerInstaller() {
-    setMdfPortalTaskNotice("Downloading MDF runner installer. Install it on one trusted Mac only.");
+    setMdfPortalTaskNotice("Downloading MDF runner installer. Install it on one trusted computer only.");
     window.location.href = "/api/mdf/portal-runner/install";
   }
 
   async function resetMdfRunnerRegistration() {
     const confirmed = window.confirm(
-      "Reset the MDF runner computer? Only do this when replacing the runner Mac or intentionally moving H-DNet automation to another computer."
+      "Reset the MDF runner computer? Only do this when replacing the runner computer or intentionally moving H-DNet automation to another computer."
     );
     if (!confirmed) return;
     setMdfRunnerActionBusy("reset");
@@ -14691,7 +14691,7 @@ export default function Home() {
 	                  <p className="mt-2 text-sm text-gray-500">
 	                    {mdfRunnerStatus?.registration?.lastSeenAt
 	                      ? `Last check-in: ${new Date(mdfRunnerStatus.registration.lastSeenAt).toLocaleString()}`
-	                      : "Install this on one trusted Mac that can log into H-DNet. A second active runner computer will be blocked."}
+	                      : "Install this on one trusted computer that can log into H-DNet. A second active runner computer will be blocked."}
 	                  </p>
 	                </div>
 	                <div className="flex flex-wrap gap-2">
