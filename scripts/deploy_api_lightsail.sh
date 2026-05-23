@@ -254,6 +254,9 @@ for raw in open(path):
     print(f"export {key}={shlex.quote(value)}")
 PY
 )"
+mkdir -p "$DEPLOY_DATA_DIR"
+export DATA_DIR="$DEPLOY_DATA_DIR"
+export NODE_ENV="${NODE_ENV:-production}"
 
 if [[ "$DEPLOY_REPLACE_PM2" == "1" ]] && pm2 describe "$DEPLOY_PM2_PROCESS" >/dev/null 2>&1; then
   echo "Replacing PM2 process so it runs from $DEPLOY_REPO..."
