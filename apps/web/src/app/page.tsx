@@ -1797,6 +1797,18 @@ type MdfClaimEntry = {
   updatedAt: string;
 };
 
+type MdfRunnerRegistrationStatus = {
+  registration: {
+    machineId: string;
+    machineName?: string;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    lastIp?: string;
+  } | null;
+  active: boolean;
+  heartbeatTtlMs: number;
+};
+
 type CampaignSocialPublishOptions = {
   linkUrl?: string;
   mentionHandles?: string;
@@ -2684,6 +2696,9 @@ export default function Home() {
   const [mdfClaimSaving, setMdfClaimSaving] = useState(false);
   const [mdfClaimActionBusy, setMdfClaimActionBusy] = useState("");
   const [mdfPortalTaskNotice, setMdfPortalTaskNotice] = useState("");
+  const [mdfRunnerStatus, setMdfRunnerStatus] = useState<MdfRunnerRegistrationStatus | null>(null);
+  const [mdfRunnerStatusLoading, setMdfRunnerStatusLoading] = useState(false);
+  const [mdfRunnerActionBusy, setMdfRunnerActionBusy] = useState("");
   const [mdfLoading, setMdfLoading] = useState(false);
   const [mdfError, setMdfError] = useState<string | null>(null);
   const campaignBriefUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -7236,6 +7251,7 @@ export default function Home() {
   useEffect(() => {
     if (!isManager || section !== "mdf") return;
     void loadMdfClaims();
+    void loadMdfRunnerStatus();
   }, [section, isManager]);
 
   function openConversation(id: string) {
@@ -7300,6 +7316,49 @@ export default function Home() {
       setMdfError(err instanceof Error ? err.message : "MDF claims could not be loaded.");
     } finally {
       setMdfClaimsLoading(false);
+    }
+  }
+
+  async function loadMdfRunnerStatus() {
+    setMdfRunnerStatusLoading(true);
+    try {
+      const resp = await fetch("/api/mdf/portal-runner/registration", { cache: "no-store" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF runner status could not be loaded.");
+      setMdfRunnerStatus({
+        registration: data.registration ?? null,
+        active: !!data.active,
+        heartbeatTtlMs: Number(data.heartbeatTtlMs ?? 0)
+      });
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF runner status could not be loaded.");
+    } finally {
+      setMdfRunnerStatusLoading(false);
+    }
+  }
+
+  function downloadMdfRunnerInstaller() {
+    setMdfPortalTaskNotice("Downloading MDF runner installer. Install it on one trusted Mac only.");
+    window.location.href = "/api/mdf/portal-runner/install";
+  }
+
+  async function resetMdfRunnerRegistration() {
+    const confirmed = window.confirm(
+      "Reset the MDF runner computer? Only do this when replacing the runner Mac or intentionally moving H-DNet automation to another computer."
+    );
+    if (!confirmed) return;
+    setMdfRunnerActionBusy("reset");
+    setMdfError(null);
+    try {
+      const resp = await fetch("/api/mdf/portal-runner/registration", { method: "DELETE" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "MDF runner registration could not be reset.");
+      setMdfRunnerStatus({ registration: null, active: false, heartbeatTtlMs: mdfRunnerStatus?.heartbeatTtlMs ?? 0 });
+      setMdfPortalTaskNotice("MDF runner registration reset. The next installed runner computer can register.");
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "MDF runner registration could not be reset.");
+    } finally {
+      setMdfRunnerActionBusy("");
     }
   }
 
@@ -7413,6 +7472,24 @@ export default function Home() {
       setMdfPortalTaskNotice(`Portal draft task created: ${data.task?.id ?? "queued"}`);
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "Portal draft task could not be created.");
+    } finally {
+      setMdfClaimActionBusy("");
+    }
+  }
+
+  async function createMdfPortalLoginTask() {
+    setMdfClaimActionBusy("mdf:portal-login");
+    setMdfPortalTaskNotice("");
+    setMdfError(null);
+    try {
+      const resp = await fetch("/api/mdf/portal-login-task", {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "H-DNet login task could not be created.");
+      setMdfPortalTaskNotice(`H-DNet login task created: ${data.task?.id ?? "queued"}. Log in there, then click Start portal draft.`);
+    } catch (err) {
+      setMdfError(err instanceof Error ? err.message : "H-DNet login task could not be created.");
     } finally {
       setMdfClaimActionBusy("");
     }
@@ -14574,22 +14651,81 @@ export default function Home() {
           </div>
         ) : section === "mdf" ? (
           <div className="max-w-6xl mx-auto space-y-5">
-            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-              <div>
-                <h2 className="text-2xl font-semibold">MDF Assistant</h2>
-                <p className="mt-1 text-sm text-gray-500">
-                  Build a reviewed MDF claim packet from invoices, receipts, proof screenshots, and campaign artwork.
+	            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+	              <div>
+	                <h2 className="text-2xl font-semibold">MDF Assistant</h2>
+	                <p className="mt-1 text-sm text-gray-500">
+	                  Build a reviewed MDF claim packet from invoices, receipts, proof screenshots, and campaign artwork.
                 </p>
               </div>
               <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-                Approval gated
-              </span>
-            </div>
+	                Approval gated
+	              </span>
+	            </div>
 
-            <section className="rounded-xl border bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Claims</div>
+	            <section className="rounded-xl border bg-white p-4 shadow-sm">
+	              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+	                <div>
+	                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">MDF runner computer</div>
+	                  <h3 className="mt-1 text-lg font-semibold">Portal runner</h3>
+	                  <div className="mt-2 flex flex-wrap items-center gap-2">
+	                    <span
+	                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+	                        mdfRunnerStatus?.active
+	                          ? "bg-emerald-100 text-emerald-800"
+	                          : "bg-amber-100 text-amber-800"
+	                      }`}
+	                    >
+	                      {mdfRunnerStatusLoading
+	                        ? "Checking..."
+	                        : mdfRunnerStatus?.active
+	                          ? "Runner active"
+	                          : "No active runner"}
+	                    </span>
+	                    {mdfRunnerStatus?.registration?.machineName ? (
+	                      <span className="text-sm font-semibold text-gray-800">
+	                        {mdfRunnerStatus.registration.machineName}
+	                      </span>
+	                    ) : null}
+	                  </div>
+	                  <p className="mt-2 text-sm text-gray-500">
+	                    {mdfRunnerStatus?.registration?.lastSeenAt
+	                      ? `Last check-in: ${new Date(mdfRunnerStatus.registration.lastSeenAt).toLocaleString()}`
+	                      : "Install this on one trusted Mac that can log into H-DNet. A second active runner computer will be blocked."}
+	                  </p>
+	                </div>
+	                <div className="flex flex-wrap gap-2">
+	                  <button
+	                    type="button"
+	                    className="rounded-lg border bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+	                    onClick={() => void loadMdfRunnerStatus()}
+	                    disabled={mdfRunnerStatusLoading}
+	                  >
+	                    {mdfRunnerStatusLoading ? "Checking..." : "Refresh runner"}
+	                  </button>
+	                  <button
+	                    type="button"
+	                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-800 hover:bg-blue-100"
+	                    onClick={downloadMdfRunnerInstaller}
+	                  >
+	                    Download runner
+	                  </button>
+	                  <button
+	                    type="button"
+	                    className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"
+	                    onClick={() => void resetMdfRunnerRegistration()}
+	                    disabled={mdfRunnerActionBusy === "reset"}
+	                  >
+	                    {mdfRunnerActionBusy === "reset" ? "Resetting..." : "Reset computer"}
+	                  </button>
+	                </div>
+	              </div>
+	            </section>
+
+	            <section className="rounded-xl border bg-white p-4 shadow-sm">
+	              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+	                <div>
+	                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Claims</div>
                   <h3 className="mt-1 text-lg font-semibold">MDF claim workspace</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -14932,10 +15068,10 @@ export default function Home() {
                       ) : null}
                     </div>
 
-                    <div className="rounded-lg border bg-gray-50 p-3">
-                      <div className="text-sm font-semibold">Browser-use portal automation</div>
-                      <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
+	                    <div className="rounded-lg border bg-gray-50 p-3">
+	                      <div className="text-sm font-semibold">Browser-use portal automation</div>
+	                      <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
+	                      <div className="mt-3 flex flex-wrap gap-2">
                         {mdfSelectedClaimId ? (
                           <>
                             <button
@@ -14960,6 +15096,13 @@ export default function Home() {
                             </button>
                           </>
                         ) : null}
+                        <button
+                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-800 disabled:opacity-60"
+                          disabled={mdfClaimActionBusy === "mdf:portal-login"}
+                          onClick={() => void createMdfPortalLoginTask()}
+                        >
+                          {mdfClaimActionBusy === "mdf:portal-login" ? "Opening login..." : "Open H-DNet login"}
+                        </button>
                         <button
                           className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-900 disabled:opacity-60"
                           disabled={!mdfSelectedClaimId || mdfClaimActionBusy === `${mdfSelectedClaimId}:portal-task`}

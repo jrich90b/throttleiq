@@ -35814,6 +35814,35 @@ app.delete("/mdf/claims/:id", requireManager, (req, res) => {
   return res.json({ ok: true, deleted: existed });
 });
 
+app.post("/mdf/portal-login-task", requireManager, async (req, res) => {
+  const user = (req as any).user ?? null;
+  const task = await addAgentTask({
+    provider: "codex",
+    kind: "mdf_portal",
+    title: "Open H-DNet login",
+    clientName: "American Harley-Davidson",
+    priority: "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: "Open the H-DNet login page in the managed MDF runner browser so the user can sign in manually."
+    },
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    },
+    instructions: [
+      "[mdf-login]",
+      "Open https://h-dnet.com in the managed MDF runner browser.",
+      "If login is required, stop on the H-DNet/Microsoft login screen so the user can enter password/MFA.",
+      "Do not open the direct Ansira login page and do not fill any MDF claim from this task."
+    ].join("\n")
+  });
+  return res.json({ ok: true, task });
+});
+
 app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
   const claim = getMdfClaim(req.params.id);
   if (!claim) return res.status(404).json({ ok: false, error: "MDF claim not found." });
@@ -35920,13 +35949,254 @@ function canUseMdfPortalRunner(req: any) {
   return !!configured && !!provided && configured === provided;
 }
 
+type MdfRunnerRegistration = {
+  machineId: string;
+  machineName?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastIp?: string;
+};
+
+const MDF_RUNNER_REGISTRY_PATH = process.env.MDF_PORTAL_RUNNER_REGISTRY_PATH || path.join(getDataDir(), "mdf_runner_registry.json");
+const MDF_RUNNER_HEARTBEAT_TTL_MS = Math.max(60_000, Number(process.env.MDF_PORTAL_RUNNER_HEARTBEAT_TTL_MS ?? 10 * 60_000));
+
+async function readMdfRunnerRegistry(): Promise<MdfRunnerRegistration | null> {
+  try {
+    const raw = await fs.promises.readFile(MDF_RUNNER_REGISTRY_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.machineId === "string") return parsed as MdfRunnerRegistration;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function writeMdfRunnerRegistry(registry: MdfRunnerRegistration) {
+  await fs.promises.mkdir(path.dirname(MDF_RUNNER_REGISTRY_PATH), { recursive: true });
+  await fs.promises.writeFile(MDF_RUNNER_REGISTRY_PATH, `${JSON.stringify(registry, null, 2)}\n`, "utf8");
+}
+
+async function clearMdfRunnerRegistry() {
+  await fs.promises.rm(MDF_RUNNER_REGISTRY_PATH, { force: true }).catch(() => {});
+}
+
+async function validateMdfPortalRunnerMachine(req: any): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const machineId = String(req.header("x-mdf-runner-machine-id") || "").trim();
+  const machineName = String(req.header("x-mdf-runner-machine-name") || "").trim().slice(0, 120);
+  if (!machineId) {
+    return {
+      ok: false,
+      status: 428,
+      error: "MDF runner machine is not registered. Reinstall or update the runner so it sends a machine ID."
+    };
+  }
+
+  const now = new Date();
+  const existing = await readMdfRunnerRegistry();
+  const active =
+    existing?.lastSeenAt &&
+    Number.isFinite(Date.parse(existing.lastSeenAt)) &&
+    now.getTime() - Date.parse(existing.lastSeenAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
+
+  if (existing && existing.machineId !== machineId && active) {
+    return {
+      ok: false,
+      status: 409,
+      error: `Another MDF runner is already active on ${existing.machineName || "another computer"}. Disable it or reset the runner registration before installing on this computer.`
+    };
+  }
+
+  await writeMdfRunnerRegistry({
+    machineId,
+    machineName: machineName || existing?.machineName || "MDF Runner",
+    firstSeenAt: existing?.machineId === machineId ? existing.firstSeenAt : now.toISOString(),
+    lastSeenAt: now.toISOString(),
+    lastIp: String(req.ip || req.socket?.remoteAddress || "").slice(0, 120)
+  });
+  return { ok: true };
+}
+
+async function requireMdfPortalRunner(req: any, res: any): Promise<boolean> {
+  if (!canUseMdfPortalRunner(req)) {
+    res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
+    return false;
+  }
+  const machine = await validateMdfPortalRunnerMachine(req);
+  if (!machine.ok) {
+    res.status(machine.status).json({ ok: false, error: machine.error });
+    return false;
+  }
+  return true;
+}
+
 function mdfPortalClaimIdFromTask(task: AgentTask): string {
   const match = task.instructions.match(/\[mdf-portal:([^\]]+)\]/);
   return match?.[1] ?? "";
 }
 
+app.get("/mdf/portal-runner/registration", requireManager, async (_req, res) => {
+  const registration = await readMdfRunnerRegistry();
+  const active =
+    !!registration?.lastSeenAt &&
+    Number.isFinite(Date.parse(registration.lastSeenAt)) &&
+    Date.now() - Date.parse(registration.lastSeenAt) < MDF_RUNNER_HEARTBEAT_TTL_MS;
+  return res.json({ ok: true, registration, active, heartbeatTtlMs: MDF_RUNNER_HEARTBEAT_TTL_MS });
+});
+
+app.delete("/mdf/portal-runner/registration", requireManager, async (_req, res) => {
+  await clearMdfRunnerRegistry();
+  return res.json({ ok: true, reset: true });
+});
+
+function shellSingleQuote(value: string): string {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function externalApiBase(req: any): string {
+  const configured =
+    process.env.MDF_PORTAL_PUBLIC_API_BASE_URL ||
+    process.env.LEADRIDER_API_BASE_URL ||
+    process.env.PUBLIC_API_BASE_URL ||
+    "";
+  if (configured.trim()) return configured.trim().replace(/\/$/, "");
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  return host ? `${proto}://${host}` : "";
+}
+
+app.get("/mdf/portal-runner/install.sh", requireManager, async (req, res) => {
+  const runnerToken = String(process.env.MDF_PORTAL_RUNNER_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? "").trim();
+  if (!runnerToken) return res.status(500).type("text/plain").send("MDF portal runner token is not configured.");
+  const apiBase = externalApiBase(req);
+  if (!apiBase) return res.status(500).type("text/plain").send("Could not determine API base URL for installer.");
+  const repoUrl = String(process.env.MDF_PORTAL_RUNNER_REPO_URL || "https://github.com/jrich90b/throttleiq.git").trim();
+  const branch = String(process.env.MDF_PORTAL_RUNNER_REPO_BRANCH || "main").trim();
+  const appDir = "${HOME}/.leadrider/mdf-runner";
+  const script = `#!/bin/zsh
+set -euo pipefail
+
+APP_DIR="${appDir}"
+PROFILE_DIR="\${HOME}/.leadrider/mdf-chrome-profile"
+LOG_DIR="\${HOME}/Library/Logs"
+PLIST_RUNNER="\${HOME}/Library/LaunchAgents/ai.leadrider.mdf-portal-runner.plist"
+PLIST_CHROME="\${HOME}/Library/LaunchAgents/ai.leadrider.mdf-chrome.plist"
+
+echo "Installing LeadRider MDF runner..."
+mkdir -p "\${APP_DIR}" "\${PROFILE_DIR}" "\${LOG_DIR}" "\${HOME}/Library/LaunchAgents"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "Git is required. Install Xcode Command Line Tools when prompted, then rerun this installer."
+  xcode-select --install || true
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "Node.js/npm is required. Install Node.js LTS from https://nodejs.org/ then rerun this installer."
+  exit 1
+fi
+
+if [ -d "\${APP_DIR}/.git" ]; then
+  git -C "\${APP_DIR}" fetch --all --prune
+  git -C "\${APP_DIR}" checkout ${shellSingleQuote(branch)}
+  git -C "\${APP_DIR}" pull --ff-only
+else
+  rm -rf "\${APP_DIR}"
+  git clone --branch ${shellSingleQuote(branch)} --depth 1 ${shellSingleQuote(repoUrl)} "\${APP_DIR}"
+fi
+
+cd "\${APP_DIR}"
+npm install
+
+cat > "\${APP_DIR}/.env" <<ENV
+MDF_PORTAL_API_BASE_URL=${apiBase}
+MDF_PORTAL_RUNNER_TOKEN=${runnerToken}
+MDF_PORTAL_CDP_URL=http://127.0.0.1:9222
+MDF_HDNET_URL=https://h-dnet.com
+MDF_PORTAL_USE_BROWSER_HARNESS_RESCUE=1
+ENV
+
+if [ -x "\${HOME}/bin/browser-harness" ]; then
+  echo "browser-harness already installed."
+elif command -v python3 >/dev/null 2>&1; then
+  echo "Installing browser-harness fallback..."
+  mkdir -p "\${HOME}/Developer"
+  if [ -d "\${HOME}/Developer/browser-harness/.git" ]; then
+    git -C "\${HOME}/Developer/browser-harness" pull --ff-only || true
+  else
+    git clone https://github.com/browser-use/browser-harness.git "\${HOME}/Developer/browser-harness" || true
+  fi
+  if [ -d "\${HOME}/Developer/browser-harness" ]; then
+    python3 -m venv "\${HOME}/Developer/browser-harness/.venv" || true
+    "\${HOME}/Developer/browser-harness/.venv/bin/python" -m pip install -U pip >/dev/null 2>&1 || true
+    "\${HOME}/Developer/browser-harness/.venv/bin/pip" install -e "\${HOME}/Developer/browser-harness" >/dev/null 2>&1 || true
+    mkdir -p "\${HOME}/.local/bin" "\${HOME}/bin" "\${HOME}/.codex/skills/browser-harness"
+    ln -sf "\${HOME}/Developer/browser-harness/.venv/bin/browser-harness" "\${HOME}/.local/bin/browser-harness"
+    ln -sf "\${HOME}/.local/bin/browser-harness" "\${HOME}/bin/browser-harness"
+    ln -sf "\${HOME}/Developer/browser-harness/SKILL.md" "\${HOME}/.codex/skills/browser-harness/SKILL.md" || true
+  fi
+fi
+
+cat > "\${PLIST_CHROME}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.leadrider.mdf-chrome</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</string>
+    <string>--remote-debugging-port=9222</string>
+    <string>--user-data-dir=\${PROFILE_DIR}</string>
+    <string>https://h-dnet.com</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><false/>
+  <key>StandardOutPath</key><string>\${LOG_DIR}/leadrider-mdf-chrome.out.log</string>
+  <key>StandardErrorPath</key><string>\${LOG_DIR}/leadrider-mdf-chrome.err.log</string>
+</dict>
+</plist>
+PLIST
+
+cat > "\${PLIST_RUNNER}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.leadrider.mdf-portal-runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "\${APP_DIR}" &amp;&amp; /usr/bin/env npm run mdf:portal:daemon</string>
+  </array>
+  <key>WorkingDirectory</key><string>\${APP_DIR}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>\${LOG_DIR}/leadrider-mdf-runner.out.log</string>
+  <key>StandardErrorPath</key><string>\${LOG_DIR}/leadrider-mdf-runner.err.log</string>
+</dict>
+</plist>
+PLIST
+
+launchctl unload "\${PLIST_RUNNER}" >/dev/null 2>&1 || true
+launchctl unload "\${PLIST_CHROME}" >/dev/null 2>&1 || true
+launchctl load "\${PLIST_CHROME}"
+launchctl load "\${PLIST_RUNNER}"
+
+echo ""
+echo "LeadRider MDF runner installed."
+echo "A dedicated Chrome window should open to H-DNet. Log into H-DNet there, then use MDF Assistant > Start portal draft."
+echo "Runner logs:"
+echo "  \${LOG_DIR}/leadrider-mdf-runner.out.log"
+echo "  \${LOG_DIR}/leadrider-mdf-runner.err.log"
+`;
+  res.setHeader("Content-Type", "text/x-shellscript; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="leadrider-mdf-runner-install.sh"');
+  return res.send(script);
+});
+
 app.get("/mdf/portal-runner/tasks", async (req, res) => {
-  if (!canUseMdfPortalRunner(req)) return res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
+  if (!(await requireMdfPortalRunner(req, res))) return;
   const limit = Number(req.query.limit ?? "50");
   const tasks = (await listAgentTasks(Number.isFinite(limit) ? limit : 50))
     .filter(task => task.kind === "mdf_portal")
@@ -35941,7 +36211,7 @@ app.get("/mdf/portal-runner/tasks", async (req, res) => {
 });
 
 app.patch("/mdf/portal-runner/tasks/:id", async (req, res) => {
-  if (!canUseMdfPortalRunner(req)) return res.status(401).json({ ok: false, error: "invalid MDF portal runner token" });
+  if (!(await requireMdfPortalRunner(req, res))) return;
   const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
   if (!allowedAgentStatuses.includes(statusRaw as AgentTaskStatus)) {
     return res.status(400).json({ ok: false, error: "Invalid task status." });

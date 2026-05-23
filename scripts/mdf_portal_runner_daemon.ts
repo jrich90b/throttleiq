@@ -50,7 +50,11 @@ function runOnce(): Promise<number> {
       ],
       {
         cwd: rootDir,
-        env: process.env,
+        env: {
+          ...process.env,
+          MDF_PORTAL_USE_BROWSER_USE: process.env.MDF_PORTAL_USE_BROWSER_USE?.trim() || "0",
+          MDF_HDNET_URL: process.env.MDF_HDNET_URL?.trim() || "https://h-dnet.com"
+        },
         stdio: "inherit"
       }
     );

@@ -2,6 +2,25 @@
 
 The MDF Assistant can create an approval-gated `mdf_portal` Codex task. The local runner turns that task into a browser workflow for the Harley-Davidson MDF portal.
 
+## Client Runner Install Model
+
+For a dealer, install the MDF portal runner on **one trusted computer only**. That computer needs the logged-in H-DNet browser session and should normally be an office/admin machine, not every salesperson's laptop.
+
+The runner now registers a stable machine ID from:
+
+```bash
+~/.leadrider/mdf-runner-machine.json
+```
+
+Every API poll sends that machine ID. The API stores the active runner in `mdf_runner_registry.json` and rejects a second active machine with HTTP `409`. This prevents two computers from trying to draft the same MDF claim or competing for the same H-DNet/Ansira session.
+
+If the dealer replaces the runner computer, reset the runner registration on the API side first, then install the runner on the new computer. Do not copy the same install/token to multiple machines.
+
+Manager-only API helpers:
+
+- `GET /mdf/portal-runner/registration` shows the currently registered runner computer and whether it is active.
+- `DELETE /mdf/portal-runner/registration` clears the registration so a replacement computer can become the active runner.
+
 ## What It Does
 
 - Reads the saved MDF claim packet and uploaded file links.
@@ -52,6 +71,9 @@ Useful environment variables:
 
 - `MDF_PORTAL_API_BASE_URL`
 - `MDF_PORTAL_RUNNER_TOKEN`
+- `MDF_PORTAL_RUNNER_MACHINE_PATH`
+- `MDF_PORTAL_RUNNER_REGISTRY_PATH`
+- `MDF_PORTAL_RUNNER_HEARTBEAT_TTL_MS`
 - `MDF_BROWSER_USE_PYTHON`
 - `MDF_BROWSER_USE_MODEL`
 - `MDF_BROWSER_USE_MAX_STEPS`

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as http from "node:http";
@@ -79,8 +80,7 @@ type RunnerOptions = {
   maxSteps: string;
 };
 
-const hDNetMdfSsoUrl =
-  "https://launcher.myapps.microsoft.com/api/signin/6fed78a2-dbcb-4685-a0b9-3033ab4a4dd1?tenantId=625f2ee0-190f-4e6f-9cbb-be276a887c4d";
+const hDNetHomeUrl = "https://h-dnet.com";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadEnvFile(path.join(rootDir, ".env"));
@@ -101,6 +101,9 @@ const claimsPath = process.env.MDF_CLAIMS_DB_PATH?.trim()
   : path.join(dataDir, "mdf_claims.json");
 
 const runsDir = path.join(dataDir, "mdf_portal_runs");
+const runnerMachinePath = process.env.MDF_PORTAL_RUNNER_MACHINE_PATH?.trim()
+  ? path.resolve(process.env.MDF_PORTAL_RUNNER_MACHINE_PATH.trim())
+  : path.join(os.homedir(), ".leadrider", "mdf-runner-machine.json");
 
 function loadEnvFile(filePath: string) {
   if (!existsSync(filePath)) return;
@@ -129,7 +132,7 @@ function parseArgs(argv: string[]): RunnerOptions {
     run: false,
     guided: false,
     idleOk: false,
-    portalUrl: process.env.MDF_PORTAL_URL?.trim() || hDNetMdfSsoUrl,
+    portalUrl: process.env.MDF_HDNET_URL?.trim() || hDNetHomeUrl,
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
     token: process.env.MDF_PORTAL_RUNNER_TOKEN?.trim() || process.env.AUTOMATION_RUN_WRITE_TOKEN?.trim() || "",
@@ -204,7 +207,7 @@ Options:
   --list                    Show pending MDF portal tasks.
   --task-id <id>            Run a specific agent task.
   --claim-id <id>           Run the newest task for a specific MDF claim.
-  --portal-url <url>        H-D MDF portal or SSO URL. Also supported: MDF_PORTAL_URL.
+  --portal-url <url>        H-DNet start URL. Also supported: MDF_HDNET_URL.
   --cdp-url <url>           Logged-in Chrome CDP URL. Also supported: MDF_PORTAL_CDP_URL.
   --api-base <url>          Optional live API base. Also supported: MDF_PORTAL_API_BASE_URL.
   --token <token>           Optional runner token. Also supported: MDF_PORTAL_RUNNER_TOKEN.
@@ -247,7 +250,10 @@ async function loadRemoteBundles(options: RunnerOptions): Promise<{ task: AgentT
   if (!options.token) throw new Error("MDF_PORTAL_RUNNER_TOKEN or --token is required with --api-base.");
   const base = options.apiBase.replace(/\/$/, "");
   const resp = await fetch(`${base}/mdf/portal-runner/tasks?limit=100`, {
-    headers: { Authorization: `Bearer ${options.token}` },
+    headers: {
+      Authorization: `Bearer ${options.token}`,
+      ...await runnerIdentityHeaders()
+    },
     cache: "no-store"
   });
   const text = await resp.text();
@@ -272,12 +278,38 @@ async function updateRemoteTask(
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${options.token}`
+      Authorization: `Bearer ${options.token}`,
+      ...await runnerIdentityHeaders()
     },
     body: JSON.stringify({ status, summary, links })
   });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`Could not update remote MDF portal task (${resp.status}): ${text.slice(0, 500)}`);
+}
+
+async function runnerIdentityHeaders(): Promise<Record<string, string>> {
+  const identity = await loadRunnerMachineIdentity();
+  return {
+    "x-mdf-runner-machine-id": identity.id,
+    "x-mdf-runner-machine-name": identity.name
+  };
+}
+
+async function loadRunnerMachineIdentity(): Promise<{ id: string; name: string }> {
+  try {
+    const parsed = JSON.parse(await readFile(runnerMachinePath, "utf8")) as { id?: string; name?: string };
+    const id = String(parsed.id ?? "").trim();
+    if (id) return { id, name: String(parsed.name ?? "").trim() || os.hostname() || "MDF Runner" };
+  } catch {
+    // Create a stable ID for this installed runner.
+  }
+  const identity = {
+    id: randomUUID(),
+    name: os.hostname() || "MDF Runner"
+  };
+  await mkdir(path.dirname(runnerMachinePath), { recursive: true });
+  await writeFile(runnerMachinePath, `${JSON.stringify(identity, null, 2)}\n`, "utf8");
+  return identity;
 }
 
 function isAgentTask(row: any): row is AgentTask {
@@ -294,6 +326,10 @@ function isAgentTask(row: any): row is AgentTask {
 function claimIdFromTask(task: AgentTask): string {
   const match = task.instructions.match(/\[mdf-portal:([^\]]+)\]/);
   return match?.[1] ?? "";
+}
+
+function isHNetLoginTask(task: AgentTask): boolean {
+  return /\[mdf-login\]/.test(task.instructions);
 }
 
 function pendingMdfTasks(tasks: AgentTask[]) {
@@ -347,8 +383,10 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Do not click final submit.",
     "- Stop at the final review/save-draft step.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
-    "- If the start URL lands on H-DNet instead of Ansira, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
-    "- If the start URL lands on an Ansira login page, return to H-DNet and use the toolbox SSO path instead of entering credentials directly.",
+      "- Start at h-dnet.com. Do not open the saved Marketing Development Fund launcher URL directly.",
+      "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
+      "- If the browser is not logged into H-DNet, stop on the H-DNet/Microsoft login screen and let the user sign in manually.",
+      "- If the browser lands on an Ansira login page, stop and go back to h-dnet.com; do not enter credentials directly into Ansira.",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,
@@ -499,14 +537,14 @@ async function canImportBrowserUse(python: string): Promise<boolean> {
 async function runProcess(
   command: string,
   args: string[],
-  options: { quiet?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}
+  options: { quiet?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number; input?: string } = {}
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return await new Promise(resolve => {
     let settled = false;
     const child = spawn(command, args, {
       cwd: rootDir,
       env: { ...process.env, ...(options.env ?? {}) },
-      stdio: options.quiet ? ["ignore", "pipe", "pipe"] : "inherit"
+      stdio: options.input ? ["pipe", "pipe", "pipe"] : options.quiet ? ["ignore", "pipe", "pipe"] : "inherit"
     });
     const finish = (code: number, extraStderr = "") => {
       if (settled) return;
@@ -528,6 +566,10 @@ async function runProcess(
     let stderr = "";
     if (child.stdout) child.stdout.on("data", chunk => (stdout += String(chunk)));
     if (child.stderr) child.stderr.on("data", chunk => (stderr += String(chunk)));
+    if (options.input && child.stdin) {
+      child.stdin.write(options.input);
+      child.stdin.end();
+    }
     child.on("close", code => finish(code ?? 1));
     child.on("error", err => finish(1, String(err)));
   });
@@ -586,6 +628,140 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
   const summary = payload.summary || result.stderr || result.stdout || "browser-use finished without a summary.";
   if (result.code !== 0 || payload.blocked) return { code: result.code || 2, summary };
   return { code: 0, summary };
+}
+
+async function runBrowserHarnessRescue(
+  promptPath: string,
+  htmlPath: string,
+  options: RunnerOptions,
+  blockedSummary: string
+): Promise<{ code: number; summary: string; links: string[] }> {
+  if (!options.cdpUrl) {
+    return { code: 2, summary: "browser-harness rescue needs MDF_PORTAL_CDP_URL for the runner browser.", links: [] };
+  }
+
+  const defaultBrowserHarness = path.join(os.homedir(), "bin", "browser-harness");
+  const browserHarness = process.env.MDF_BROWSER_HARNESS_BIN?.trim() || (existsSync(defaultBrowserHarness) ? defaultBrowserHarness : "browser-harness");
+  const htmlUrl = `file://${htmlPath}`;
+  const portalUrl = options.portalUrl || hDNetHomeUrl;
+  const script = `
+import json
+import time
+
+portal_url = ${JSON.stringify(portalUrl)}
+html_url = ${JSON.stringify(htmlUrl)}
+prompt_path = ${JSON.stringify(promptPath)}
+blocked_summary = ${JSON.stringify(blockedSummary.slice(0, 1200))}
+
+def safe_js(expr):
+    try:
+        return js(expr)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+try:
+    tid = new_tab(portal_url)
+    cdp("Target.activateTarget", targetId=tid)
+    switch_tab(tid)
+    wait_for_load()
+    time.sleep(2)
+    before = page_info()
+    text_info = safe_js("""
+(() => {
+  const text = document.body?.innerText || '';
+  return {
+    login: /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text),
+    hasToolbox: !!document.querySelector('.avaQuickLinksExtension.headerExtension'),
+    hasCreateClaim: /Create Claim/i.test(text),
+    url: location.href,
+    title: document.title
+  };
+})()
+""")
+    toolbox_clicked = False
+    mdf_clicked = False
+    if isinstance(text_info, dict) and text_info.get("hasToolbox") and not text_info.get("login"):
+        toolbox_clicked = bool(safe_js("""
+(() => {
+  const el = document.querySelector('.avaQuickLinksExtension.headerExtension');
+  if (!el) return false;
+  el.click();
+  return true;
+})()
+"""))
+        time.sleep(2)
+        mdf_clicked = bool(safe_js("""
+(() => {
+  const nodes = [...document.querySelectorAll('a, button, [role="button"], div, span')];
+  const el = nodes.find(node => /^\\s*Marketing Development Fund\\s*$/i.test(node.textContent || ''));
+  if (!el) return false;
+  el.click();
+  return true;
+})()
+"""))
+        time.sleep(5)
+    packet_tid = new_tab(html_url)
+    cdp("Target.activateTarget", targetId=packet_tid)
+    switch_tab(packet_tid)
+    wait_for_load()
+    packet_info = page_info()
+    print(json.dumps({
+        "ok": True,
+        "portalBefore": before,
+        "portalProbe": text_info,
+        "toolboxClicked": toolbox_clicked,
+        "mdfClicked": mdf_clicked,
+        "packet": packet_info,
+        "promptPath": prompt_path,
+        "htmlUrl": html_url,
+        "blockedSummary": blocked_summary,
+    }))
+except Exception as exc:
+    print(json.dumps({"ok": False, "error": str(exc), "htmlUrl": html_url, "promptPath": prompt_path}))
+`;
+
+  const timeoutSeconds = Math.max(30, Number(process.env.MDF_BROWSER_HARNESS_TIMEOUT_SECONDS ?? "90"));
+  const result = await runProcess(browserHarness, [], {
+    quiet: true,
+    timeoutMs: timeoutSeconds * 1000,
+    input: script,
+    env: {
+      BU_CDP_URL: options.cdpUrl,
+      BH_AGENT_WORKSPACE: path.join(os.homedir(), "Developer", "browser-harness", "agent-workspace")
+    }
+  });
+  const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean);
+  const lastLine = lines[lines.length - 1] ?? "";
+  let payload: any = null;
+  try {
+    payload = lastLine ? JSON.parse(lastLine) : null;
+  } catch {
+    payload = null;
+  }
+  if (result.code !== 0 || !payload?.ok) {
+    const error = payload?.error || result.stderr || result.stdout || "browser-harness rescue did not return a usable result.";
+    return { code: result.code || 2, summary: `browser-harness rescue failed: ${error}`, links: [htmlUrl, promptPath] };
+  }
+  const probe = payload.portalProbe && typeof payload.portalProbe === "object" ? payload.portalProbe : {};
+  const state = probe.login
+    ? "The runner browser is on the H-DNet/Microsoft login path."
+    : payload.mdfClicked
+      ? "The runner clicked the H-DNet toolbox MDF link and opened the packet checklist."
+      : probe.hasToolbox
+        ? "The runner opened H-DNet and found the toolbox, but did not confirm the MDF link click."
+        : "The runner opened the packet checklist and left H-DNet/Ansira visible for manual recovery.";
+  return {
+    code: 0,
+    summary: [
+      "Deterministic MDF portal runner blocked before completion.",
+      state,
+      "A browser-harness recovery tab opened the LeadRider MDF packet checklist in the same runner Chrome session.",
+      "Use the visible packet to finish/save the Ansira draft manually. Do not final-submit without review.",
+      "",
+      `Original blocker: ${blockedSummary.slice(0, 1200)}`
+    ].join("\n"),
+    links: [htmlUrl, promptPath, String(probe.url || portalUrl)]
+  };
 }
 
 function extractedField(claim: MdfClaimEntry, keys: string[]): string {
@@ -745,15 +921,214 @@ async function fillInvoiceSection(page: any, index: number, invoice: MdfPortalIn
   if (amount) await fillText(page, `input[name="invoices[${index}][invoice_amount]"]`, amount);
 }
 
+function portalClaimTypeLabel(claim: MdfClaimEntry): string | null {
+  const claimType = String(claim.packet.claimType || "").toLowerCase();
+  if (claimType === "media") return "2026 Media Claim";
+  if (claimType === "event") return "2026 Event Claim";
+  if (claimType === "map_only") return "Minimum Advertised Price (MAP) Only";
+  return null;
+}
+
+function eventSubType(claim: MdfClaimEntry): string {
+  const source = `${claim.packet.activityType || ""} ${claim.title || ""} ${claim.packet.descriptionDraft || ""}`.toLowerCase();
+  if (/demo|test\s*ride|ride\s*event/.test(source)) return "Event - Dealer Demo Ride";
+  if (/sponsor/.test(source)) return "Event - Sponsorships";
+  if (/off[\s-]?site|remote|fair|festival|show|outside/.test(source)) return "Event - Local Off-Site";
+  if (/national|corporate/.test(source)) return "Event - National / Corporate Led";
+  return "Event - Local On Site";
+}
+
+function mediaSubType(claim: MdfClaimEntry): string {
+  const source = `${claim.packet.activityType || ""} ${claim.title || ""} ${claim.packet.descriptionDraft || ""}`.toLowerCase();
+  if (/email|text|sms/.test(source)) return "MEDIA - Email & Text Marketing Campaigns";
+  if (/direct\s*mail|mailer/.test(source)) return "MEDIA - Direct Mail";
+  if (/social|facebook|instagram|meta/.test(source)) return "MEDIA - Social Media Advertising";
+  if (/google|search|sem/.test(source)) return "MEDIA - Search Engine Marketing";
+  if (/billboard|ooh|wrap|transit/.test(source)) return "MEDIA - OOH (Billboards / Transit/ Vehicle Wraps)";
+  if (/video|pre[\s-]?roll|ott|ctv/.test(source)) return "MEDIA - Digital Video Ads / Pre-Roll / OLV / OTT / CTV";
+  if (/website|trade/.test(source)) return "MEDIA - Website Trade Tools";
+  if (/radio/.test(source)) return source.includes("internet") ? "MEDIA - Internet Radio" : "MEDIA - Terrestrial Radio";
+  if (/banner|display|mobile/.test(source)) return "MEDIA - Internet Display / Banner Ad / Mobile";
+  if (/sign|printed|print|flyer|poster/.test(source)) return "MEDIA - Campaign Signage & Printed Materials";
+  return "MEDIA - Magazine / Newspaper Ad";
+}
+
+async function fillClaimDetails(page: any, claim: MdfClaimEntry) {
+  const claimType = String(claim.packet.claimType || "").toLowerCase();
+  const fields = claim.packet.extractedFields ?? {};
+  const description = claim.packet.descriptionDraft || "";
+
+  if (claimType === "media") {
+    await selectOptionByText(page, "#activity-sub-detail", mediaSubType(claim));
+    await fillText(page, "#activity-summary", description.slice(0, 2000));
+    const totalLeads = extractedField(claim, ["totalLeads", "total_leads"]);
+    if (totalLeads) await fillText(page, "#cl-budget", totalLeads);
+    return;
+  }
+
+  if (claimType === "event") {
+    await selectOptionByText(page, "#activity-sub-detail", eventSubType(claim));
+    const eventName = extractedField(claim, ["eventName", "campaignName", "name"]) || claim.title;
+    const eventDescription = description || String(fields.description || fields.eventDescription || "");
+    const motorcyclesSold = extractedField(claim, ["motorcyclesSold", "motorcycles_sold", "unitsSold"]);
+    const paAlSales = extractedField(claim, ["paAlSales", "pa_al_sales", "partsApparelSales", "partsAndApparelSales"]);
+    const attendance = extractedField(claim, ["attendance", "attendees", "eventAttendance"]);
+    if (eventName) await fillText(page, "#activity-summary", eventName.slice(0, 500));
+    if (eventDescription) await fillText(page, "#brand", eventDescription.slice(0, 2000));
+    if (motorcyclesSold) await fillText(page, "#category", motorcyclesSold);
+    if (paAlSales) await fillText(page, "#cl-region", moneyValue(paAlSales));
+    if (attendance) await fillText(page, "#cl-season", attendance);
+  }
+}
+
+const ansiraClaimCreateUrl = "https://app.ansira.com/member/reimbursements/claims/create";
+
+async function pageBodyText(page: any): Promise<string> {
+  return page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+}
+
+function isLoginPage(text: string): boolean {
+  return /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text);
+}
+
+async function openMdfSsoEntry(page: any, portalUrl: string): Promise<any> {
+  const startUrl = /h-?dnet\.com/i.test(portalUrl || "") ? portalUrl : hDNetHomeUrl;
+  await page.goto(startUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000
+  });
+  await page.waitForTimeout(5000);
+  const text = await pageBodyText(page);
+  if (isLoginPage(text)) return page;
+
+  const toolbox = page.locator(".avaQuickLinksExtension.headerExtension").first();
+  if (!(await toolbox.count())) return page;
+
+  await toolbox.click({ force: true }).catch(() => {});
+  await page.waitForTimeout(2000);
+  const toolboxPanel = page.locator(".ms-Panel.is-open").first();
+  const mdfLink = toolboxPanel
+    .locator("a")
+    .filter({ hasText: /^Marketing Development Fund$/i })
+    .first();
+  if (await mdfLink.count()) {
+    const popupPromise = page.waitForEvent("popup", { timeout: 8000 }).catch(() => null);
+    await mdfLink.click({ force: true }).catch(() => {});
+    const popup = await popupPromise;
+    const activePage = popup ?? page;
+    await activePage.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => {});
+    await activePage.waitForTimeout(5000);
+    return activePage;
+  }
+  return page;
+}
+
+async function openAnsiraClaimFormThroughHNet(page: any, portalUrl: string): Promise<{ page: any; blocker: string | null }> {
+  if (!/app\.ansira\.com\/member/i.test(page.url())) {
+    page = await openMdfSsoEntry(page, portalUrl);
+  }
+  let text = await pageBodyText(page);
+  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
+    return {
+      page,
+      blocker: "The MDF runner is at the H-DNet/Microsoft sign-in screen. Sign in through H-DNet, then create a fresh portal draft task."
+    };
+  }
+
+  if (!/app\.ansira\.com\/member/i.test(page.url())) {
+    return {
+      page,
+      blocker: "The MDF runner did not reach Ansira through the H-DNet toolbox route. Log into h-dnet.com and open MDF from the toolbox once, then run the portal draft again."
+    };
+  }
+
+  await page.goto(ansiraClaimCreateUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000
+  });
+  await page.waitForTimeout(3000);
+  text = await pageBodyText(page);
+  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
+    page = await openMdfSsoEntry(page, portalUrl);
+    text = await pageBodyText(page);
+    if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url()) || !/app\.ansira\.com\/member/i.test(page.url())) {
+      return {
+        page,
+        blocker: "The MDF runner reached an Ansira login page instead of the H-DNet SSO session. Log into h-dnet.com and open MDF from the toolbox once, then run the portal draft again."
+      };
+    }
+    await page.goto(ansiraClaimCreateUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000
+    });
+    await page.waitForTimeout(3000);
+    text = await pageBodyText(page);
+  }
+  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url()) || !/Create Claim/i.test(text)) {
+    return {
+      page,
+      blocker: "The MDF runner could not reach the Ansira claim form through the H-DNet SSO route. Open H-DNet, use the toolbox MDF link once, then run the portal draft again."
+    };
+  }
+  return { page, blocker: null };
+}
+
+async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
+  if (!options.cdpUrl) return { code: 2, summary: "H-DNet login opener needs MDF_PORTAL_CDP_URL for the runner browser." };
+  const { chromium } = await import("playwright");
+  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const page =
+    context
+      .pages()
+      .find(openPage => /h-?dnet\.com|login\.microsoftonline\.com/i.test(openPage.url())) ??
+    context.pages().find(openPage => openPage.url() === "about:blank" || openPage.url().startsWith("chrome://newtab")) ??
+    (await context.newPage());
+
+  await page.bringToFront();
+  await page.goto(hDNetHomeUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000
+  });
+  await page.waitForTimeout(4000);
+  const text = await pageBodyText(page);
+  const url = page.url();
+  await browser.close();
+
+  if (/app\.ansira\.com/i.test(url)) {
+    return {
+      code: 2,
+      summary: "The runner opened an Ansira page instead of H-DNet. Close the Ansira tab and use Open H-DNet login again.",
+      links: [url]
+    };
+  }
+  if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(url)) {
+    return {
+      code: 0,
+      summary: "H-DNet login page is open in the MDF runner browser. Enter your password/MFA there, then click Start portal draft again.",
+      links: [url]
+    };
+  }
+  return {
+    code: 0,
+    summary: "H-DNet is open in the MDF runner browser. If you are logged in, click Start portal draft to continue through the toolbox.",
+    links: [url]
+  };
+}
+
 async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
   if (!options.cdpUrl) return { code: 2, summary: "Playwright portal runner needs MDF_PORTAL_CDP_URL for a logged-in Chrome session." };
-  if ((claim.packet.claimType || "").toLowerCase() !== "media") {
-    return { code: 2, summary: `Playwright portal runner currently supports media claims. Claim type was "${claim.packet.claimType || "missing"}".` };
+  const portalClaimLabel = portalClaimTypeLabel(claim);
+  if (!portalClaimLabel || !["media", "event"].includes(String(claim.packet.claimType || "").toLowerCase())) {
+    return {
+      code: 2,
+      summary: `Playwright portal runner currently supports media and event claims. Claim type was "${claim.packet.claimType || "missing"}".`
+    };
   }
 
   const { chromium } = await import("playwright");
   const browser = await chromium.connectOverCDP(options.cdpUrl);
-  const page =
+  let page =
     browser
       .contexts()
       .flatMap(context => context.pages())
@@ -762,18 +1137,15 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   if (!page) throw new Error("No Chrome page available for the MDF portal runner.");
 
   await page.bringToFront();
-  await page.goto("https://app.ansira.com/member/reimbursements/claims/create", {
-    waitUntil: "domcontentloaded",
-    timeout: 45_000
-  });
-  await page.waitForTimeout(3000);
-  const bodyText = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
-  if (/sign in|password|microsoft/i.test(bodyText) && !/Create Claim/i.test(bodyText)) {
+  const ansiraResult = await openAnsiraClaimFormThroughHNet(page, options.portalUrl);
+  page = ansiraResult.page;
+  const loginBlocker = ansiraResult.blocker;
+  if (loginBlocker) {
     await browser.close();
-    return { code: 2, summary: "The MDF runner Chrome session is not logged in to Ansira/H-DNet. Sign in, then create a fresh portal draft task." };
+    return { code: 2, summary: loginBlocker };
   }
 
-  await selectOptionByText(page, "#app-marketing-activity", "2026 Media Claim");
+  await selectOptionByText(page, "#app-marketing-activity", portalClaimLabel);
   await page.waitForTimeout(1500);
 
   const startDate = toUsDate(extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]));
@@ -796,8 +1168,6 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   const flatSpend = moneyValue(extractedField(claim, ["spend", "amount", "invoiceAmount", "invoice_amount"]));
   const invoiceTotal = invoices.reduce((sum, invoice) => sum + parseMoneyAmount(String(invoice.amount ?? "")), 0);
   const claimedAmount = moneyFromNumber(invoiceTotal) || flatSpend;
-  const totalLeads = extractedField(claim, ["totalLeads", "total_leads"]);
-  const description = claim.packet.descriptionDraft || "";
 
   await fillText(page, "#app-claim-name", claim.title);
   const reviewNotes = [
@@ -806,9 +1176,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     ...(claim.packet.eligibility?.concerns ?? []).slice(0, 3)
   ].join(" ");
   await fillText(page, "#app-additional-notes", reviewNotes.slice(0, 1200));
-  await selectOptionByText(page, "#activity-sub-detail", "MEDIA - Magazine / Newspaper Ad");
-  await fillText(page, "#activity-summary", description.slice(0, 2000));
-  if (totalLeads) await fillText(page, "#cl-budget", totalLeads);
+  await fillClaimDetails(page, claim);
   for (let i = 0; i < invoices.length; i += 1) {
     await fillInvoiceSection(page, i + 1, invoices[i]);
   }
@@ -912,7 +1280,7 @@ async function main() {
       return;
     }
     for (const task of mdfTasks.slice(0, 20)) {
-      console.log(`${task.id} | ${task.status} | ${claimIdFromTask(task)} | ${task.title}`);
+      console.log(`${task.id} | ${task.status} | ${isHNetLoginTask(task) ? "h-dnet-login" : claimIdFromTask(task)} | ${task.title}`);
     }
     return;
   }
@@ -924,6 +1292,26 @@ async function main() {
       return;
     }
     throw new Error("No MDF portal task found. Create one from the MDF Assistant first.");
+  }
+
+  if (isHNetLoginTask(task)) {
+    if (!options.run) {
+      console.log(`Prepared H-DNet login task: ${task.id}`);
+      console.log("Pass --run to open H-DNet in the runner browser.");
+      return;
+    }
+    updateTask(tasks, task.id, "running", "Opening H-DNet login in the MDF runner browser.");
+    if (remoteBundles) await updateRemoteTask(options, task.id, "running", "Opening H-DNet login in the MDF runner browser.");
+    const result = await runPlaywrightOpenHNet(options);
+    const status: AgentTaskStatus = result.code === 0 ? "completed" : "blocked";
+    updateTask(tasks, task.id, status, result.summary, result.links ?? []);
+    if (remoteBundles) {
+      await updateRemoteTask(options, task.id, status, result.summary, result.links ?? []);
+    } else {
+      await saveTasks(tasks);
+    }
+    console.log(result.summary);
+    return;
   }
 
   const claimId = claimIdFromTask(task);
@@ -1004,10 +1392,17 @@ async function main() {
     return;
   }
 
-  const result =
-    playwrightAvailable
+  let result: { code: number; summary: string; links?: string[] };
+  try {
+    result = playwrightAvailable
       ? await runPlaywrightPortalDraft(claim, options)
       : await runBrowserUse(promptPath, resultPath, options);
+  } catch (err: any) {
+    result = {
+      code: 2,
+      summary: `Automatic MDF portal runner failed before completion: ${err?.message ?? err}`
+    };
+  }
   if (result.code === 0) {
     updateTask(
       tasks,
@@ -1017,13 +1412,26 @@ async function main() {
       [promptPath, resultPath, options.portalUrl, ...(result.links ?? [])]
     );
   } else {
+    const rescueEnabled = !options.guided && osFlag("MDF_PORTAL_USE_BROWSER_HARNESS_RESCUE", true);
+    const rescue = rescueEnabled && cdpOk ? await runBrowserHarnessRescue(promptPath, htmlPath, options, result.summary) : null;
+    if (rescue?.code === 0) {
+      updateTask(
+        tasks,
+        task.id,
+        "needs_approval",
+        rescue.summary,
+        [promptPath, htmlPath, options.portalUrl, ...(result.links ?? []), ...rescue.links]
+      );
+    } else {
+      const rescueNote = rescue ? `\n\n${rescue.summary}` : "";
     updateTask(
       tasks,
       task.id,
       "blocked",
-      `MDF portal runner blocked before completion.\n\n${result.summary}`,
+      `MDF portal runner blocked before completion.\n\n${result.summary}${rescueNote}`,
       [promptPath, resultPath, options.portalUrl, ...(result.links ?? [])]
     );
+    }
   }
   if (remoteBundles) {
     const latest = tasks.find(row => row.id === task.id) ?? task;
@@ -1039,8 +1447,10 @@ async function main() {
   }
 }
 
-function osFlag(name: string) {
-  return ["1", "true", "yes", "on"].includes(String(process.env[name] ?? "").trim().toLowerCase());
+function osFlag(name: string, defaultValue = false) {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
+  return ["1", "true", "yes", "on"].includes(String(raw).trim().toLowerCase());
 }
 
 main().catch(err => {
