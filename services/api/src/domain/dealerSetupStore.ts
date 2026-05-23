@@ -13,6 +13,27 @@ export type DealerSetupStep = {
   note?: string;
 };
 
+export type DealerSetupChecklistStatus = "pending" | "working" | "blocked" | "ready" | "optional";
+
+export type DealerLaunchChecklistItem = {
+  id: string;
+  label: string;
+  status: DealerSetupChecklistStatus;
+  detail: string;
+  stepId?: string;
+};
+
+export type DealerRemoteEnvItem = {
+  key: string;
+  label: string;
+  category: string;
+  required: boolean;
+  secret: boolean;
+  status: DealerSetupChecklistStatus;
+  description: string;
+  valueHint?: string;
+};
+
 export type DealerApiDeployment = {
   repoUrl: string;
   repoPath: string;
@@ -60,6 +81,9 @@ export type DealerSetup = {
   notes?: string;
   steps: DealerSetupStep[];
   apiDeployment?: DealerApiDeployment;
+  launchChecklist?: DealerLaunchChecklistItem[];
+  remoteEnvChecklist?: DealerRemoteEnvItem[];
+  remoteEnvTemplate?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -87,6 +111,7 @@ function defaultSteps(): DealerSetupStep[] {
     { id: "vercel", label: "Vercel domain/project ready", status: "pending" },
     { id: "dns", label: "DNS records validated", status: "pending" },
     { id: "api", label: "API dealer config created", status: "pending" },
+    { id: "remote_env", label: "Remote API env confirmed", status: "pending" },
     { id: "google", label: "Google calendars and support mail connected", status: "pending" },
     { id: "twilio", label: "Twilio numbers and messaging configured", status: "pending" },
     { id: "sendgrid", label: "SendGrid sender/domain configured", status: "pending" },
@@ -103,6 +128,13 @@ function buildUrls(slug: string) {
     appUrl: `https://${clean}.leadrider.ai`,
     apiUrl: `https://api.${clean}.leadrider.ai`
   };
+}
+
+function mergeDefaultSteps(existing: DealerSetupStep[] | undefined): DealerSetupStep[] {
+  const current = Array.isArray(existing) ? existing : [];
+  const defaults = defaultSteps();
+  const byId = new Map(current.map(step => [step.id, step]));
+  return defaults.map(step => byId.get(step.id) ?? step);
 }
 
 function safeHostname(url: string, fallback: string) {
@@ -165,10 +197,155 @@ export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "appU
   };
 }
 
+function stepStatus(setup: Pick<DealerSetup, "steps">, stepId: string): DealerSetupStepStatus {
+  return mergeDefaultSteps(setup.steps).find(step => step.id === stepId)?.status ?? "pending";
+}
+
+function checklistStatusFromStep(status: DealerSetupStepStatus): DealerSetupChecklistStatus {
+  if (status === "done") return "ready";
+  if (status === "in_progress") return "working";
+  if (status === "blocked") return "blocked";
+  return "pending";
+}
+
+function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
+  const deployment = buildDealerApiDeployment(setup);
+  const item = (id: string, label: string, stepId: string, detail: string): DealerLaunchChecklistItem => ({
+    id,
+    label,
+    stepId,
+    status: checklistStatusFromStep(stepStatus(setup, stepId)),
+    detail
+  });
+  return [
+    item("intake", "Dealer intake", "intake", setup.website ? `Website captured: ${setup.website}` : "Dealer website/contact fields still need review."),
+    item("agreement", "Agreement", "agreement", "Pricing, term, legal name, signer, and e-sign packet are approved."),
+    item("vercel", "Vercel web domain", "vercel", `${deployment.webHostname} is added to the Vercel project and verified.`),
+    item("dns", "DNS records", "dns", `Point ${deployment.webHostname} to Vercel and ${deployment.apiHostname} to the API server.`),
+    item("api_profile", "API deploy profile", "api", `${deployment.deployProfileLocalPath} uses isolated checkout/env/data/PM2 paths.`),
+    item("remote_env", "Remote API env", "remote_env", `Required variables are present in ${deployment.envFile}; secret values stay on the server.`),
+    item("google", "Google mail/calendar", "google", "OAuth credentials and support/calendar token paths are configured for this dealer."),
+    item("twilio", "Twilio messaging", "twilio", "Phone number, webhook URLs, compliance, and routing are configured."),
+    item("sendgrid", "SendGrid email", "sendgrid", "Sender/domain, inbound parse, and reply-to fields are configured."),
+    item("meta", "Meta connection", "meta", "App ID/secret, callback URL, permissions, and active app status are verified."),
+    item("smoke", "Launch smoke test", "smoke", "Web app, API health, inventory, conversation, and provider routes have been checked."),
+    {
+      id: "runner",
+      label: "Runner computer",
+      status: "optional",
+      detail: "Needed only for MDF, DMS, or other browser automation. Register one trusted runner computer per dealer."
+    },
+    item("handoff", "Dealer handoff", "handoff", "Client record is live with URLs, owner, billing, and support details.")
+  ];
+}
+
+function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
+  const deployment = buildDealerApiDeployment(setup);
+  const remoteEnvStatus = checklistStatusFromStep(stepStatus(setup, "remote_env"));
+  const requiredStatus = remoteEnvStatus === "ready" || remoteEnvStatus === "blocked" || remoteEnvStatus === "working"
+    ? remoteEnvStatus
+    : "pending";
+  const required = (
+    key: string,
+    category: string,
+    label: string,
+    description: string,
+    opts: { secret?: boolean; valueHint?: string } = {}
+  ): DealerRemoteEnvItem => ({
+    key,
+    category,
+    label,
+    required: true,
+    secret: !!opts.secret,
+    status: requiredStatus,
+    description,
+    valueHint: opts.valueHint
+  });
+  const optional = (
+    key: string,
+    category: string,
+    label: string,
+    description: string,
+    opts: { secret?: boolean; valueHint?: string } = {}
+  ): DealerRemoteEnvItem => ({
+    key,
+    category,
+    label,
+    required: false,
+    secret: !!opts.secret,
+    status: "optional",
+    description,
+    valueHint: opts.valueHint
+  });
+  return [
+    required("NODE_ENV", "Core", "Production mode", "Run the API in production mode.", { valueHint: "production" }),
+    required("DATA_DIR", "Core", "Dealer runtime data", "Dealer-specific JSON stores, uploads, OAuth tokens, and generated state.", {
+      valueHint: deployment.dataDir
+    }),
+    required("PUBLIC_BASE_URL", "Core", "Public API URL", "Public base URL used for callbacks, media links, and webhooks.", {
+      valueHint: setup.apiUrl
+    }),
+    required("APP_BASE_URL", "Core", "Dealer web URL", "Dealer web application URL used in links back to the UI.", {
+      valueHint: setup.appUrl
+    }),
+    required("API_BASE_URL", "Core", "API URL", "Canonical API URL for server-generated links and internal route references.", {
+      valueHint: setup.apiUrl
+    }),
+    required("DEALER_SLUG", "Core", "Dealer slug", "Stable dealer identifier used in logs and usage records.", { valueHint: setup.slug }),
+    required("DEALER_PROFILE_PATH", "Core", "Dealer profile path", "Dealer-specific profile config file inside the runtime data directory.", {
+      valueHint: `${deployment.dataDir}/dealer_profile.json`
+    }),
+    required("AUTH_DISABLED", "Core", "Authentication enabled", "Must be false for production dealer workspaces.", { valueHint: "false" }),
+    required("OPENAI_API_KEY", "AI", "OpenAI key", "LLM drafting, parsing, campaign generation, and usage logging.", { secret: true }),
+    required("LLM_ENABLED", "AI", "LLM enabled", "Enables parser-first draft and routing behavior.", { valueHint: "1" }),
+    required("SENDGRID_API_KEY", "Email", "SendGrid key", "Outbound and inbound email handling.", { secret: true }),
+    required("SENDGRID_FROM_EMAIL", "Email", "Sender email", "Dealer-approved outbound sender address."),
+    optional("SENDGRID_REPLY_TO", "Email", "Reply-to email", "Dealer reply-to address when different from the sender."),
+    required("TWILIO_ACCOUNT_SID", "Messaging", "Twilio account", "Dealer messaging account SID.", { secret: true }),
+    required("TWILIO_AUTH_TOKEN", "Messaging", "Twilio auth token", "Dealer messaging auth token.", { secret: true }),
+    required("TWILIO_PHONE_NUMBER", "Messaging", "Twilio phone", "Primary dealer texting number."),
+    optional("TWILIO_FROM_NUMBER", "Messaging", "Twilio from number", "Fallback sender for older inbound/email bridge paths."),
+    required("GOOGLE_CLIENT_ID", "Google", "Google OAuth client", "Calendar and Gmail OAuth client ID.", { secret: true }),
+    required("GOOGLE_CLIENT_SECRET", "Google", "Google OAuth secret", "Calendar and Gmail OAuth client secret.", { secret: true }),
+    required("GOOGLE_REDIRECT_URI", "Google", "Google redirect URI", "OAuth redirect URL for the dealer API.", {
+      valueHint: `${setup.apiUrl.replace(/\/$/, "")}/integrations/google/callback`
+    }),
+    optional("GOOGLE_SUPPORT_MAIL_TOKEN_PATH", "Google", "Support mail token path", "Token file path for support mailbox access.", {
+      valueHint: `${deployment.dataDir}/google_support_mail_tokens.json`
+    }),
+    required("META_APP_ID", "Meta", "Meta app ID", "Meta app used for lead/campaign integration."),
+    required("META_APP_SECRET", "Meta", "Meta app secret", "Meta app secret for OAuth callbacks.", { secret: true }),
+    required("META_REDIRECT_URI", "Meta", "Meta redirect URI", "Callback URL registered in Meta.", {
+      valueHint: `${setup.apiUrl.replace(/\/$/, "")}/integrations/meta/callback`
+    }),
+    optional("SENTRY_DSN", "Ops", "Sentry DSN", "API error reporting."),
+    optional("SLACK_INCIDENT_WEBHOOK_URL", "Ops", "Slack incident webhook", "Incident notifications."),
+    optional("LINEAR_API_KEY", "Ops", "Linear key", "Ticket creation for production incidents.", { secret: true }),
+    optional("AUTOMATION_RUN_WRITE_TOKEN", "Ops", "Automation token", "Closed-loop automation ingest and runner callbacks.", { secret: true }),
+    optional("MDF_PORTAL_RUNNER_TOKEN", "Runner", "MDF runner token", "Required if the dealer uses a managed MDF/browser runner.", { secret: true })
+  ];
+}
+
+function buildRemoteEnvTemplate(setup: DealerSetup): string {
+  return buildRemoteEnvChecklist(setup)
+    .map(item => {
+      const value = item.secret ? "" : item.valueHint ?? "";
+      return [`# ${item.category}: ${item.description}`, `${item.key}=${value}`].join("\n");
+    })
+    .join("\n\n") + "\n";
+}
+
 function withGeneratedFields(setup: DealerSetup): DealerSetup {
-  return {
+  const normalized = {
     ...setup,
-    apiDeployment: buildDealerApiDeployment(setup)
+    steps: mergeDefaultSteps(setup.steps)
+  };
+  return {
+    ...normalized,
+    apiDeployment: buildDealerApiDeployment(normalized),
+    launchChecklist: buildLaunchChecklist(normalized),
+    remoteEnvChecklist: buildRemoteEnvChecklist(normalized),
+    remoteEnvTemplate: buildRemoteEnvTemplate(normalized)
   };
 }
 
@@ -306,6 +483,15 @@ export async function updateDealerSetup(
     if (step) {
       step.status = patch.stepStatus;
       if (typeof patch.stepNote === "string") step.note = patch.stepNote.trim().slice(0, 600) || undefined;
+    } else {
+      const defaultStep = defaultSteps().find(row => row.id === patch.stepId);
+      if (defaultStep) {
+        setup.steps.push({
+          ...defaultStep,
+          status: patch.stepStatus,
+          note: typeof patch.stepNote === "string" ? patch.stepNote.trim().slice(0, 600) || undefined : defaultStep.note
+        });
+      }
     }
   }
   setup.updatedAt = new Date().toISOString();

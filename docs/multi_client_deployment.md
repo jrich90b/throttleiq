@@ -126,3 +126,20 @@ After the profile is created, deploy with:
 ```bash
 npm run deploy:api -- --profile infra/deploy/<dealer-slug>.api.env
 ```
+
+## Dealer Launch Checklist
+
+The Command Dealer Setup page now shows a generated launch checklist for each setup record. Use it as the go-live gate before sending the dealer into Active Clients:
+
+- dealer intake
+- agreement and e-sign status
+- Vercel web domain
+- DNS records
+- API deploy profile
+- remote API env
+- Google, Twilio, SendGrid, and Meta setup
+- launch smoke test
+- optional runner computer
+- dealer handoff
+
+The API deploy profile only defines where the app should run. The remote API `.env` still has to exist on the server and contain the dealer's real secrets. Use the **Remote API env** section in Dealer Setup to copy a safe template, fill secret values directly on the server, then mark **Remote API env confirmed**.

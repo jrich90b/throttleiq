@@ -3,6 +3,26 @@
 import { useEffect, useMemo, useState } from "react";
 
 type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "done";
+type DealerSetupChecklistStatus = "pending" | "working" | "blocked" | "ready" | "optional";
+
+type DealerLaunchChecklistItem = {
+  id: string;
+  label: string;
+  status: DealerSetupChecklistStatus;
+  detail: string;
+  stepId?: string;
+};
+
+type DealerRemoteEnvItem = {
+  key: string;
+  label: string;
+  category: string;
+  required: boolean;
+  secret: boolean;
+  status: DealerSetupChecklistStatus;
+  description: string;
+  valueHint?: string;
+};
 
 type DealerSetup = {
   id: string;
@@ -30,6 +50,9 @@ type DealerSetup = {
   billingStart?: string;
   notes?: string;
   apiDeployment?: DealerApiDeployment;
+  launchChecklist?: DealerLaunchChecklistItem[];
+  remoteEnvChecklist?: DealerRemoteEnvItem[];
+  remoteEnvTemplate?: string;
   steps: Array<{
     id: string;
     label: string;
@@ -233,6 +256,15 @@ export default function NewDealerClientPage() {
     return selected.steps.find(step => step.status === "blocked") ?? selected.steps.find(step => step.status !== "done") ?? selected.steps[0];
   }, [selected]);
   const currentApiDeployment = apiDeployment ?? selected?.apiDeployment ?? null;
+  const groupedRemoteEnv = useMemo(() => {
+    const groups = new Map<string, DealerRemoteEnvItem[]>();
+    for (const item of selected?.remoteEnvChecklist ?? []) {
+      const group = groups.get(item.category) ?? [];
+      group.push(item);
+      groups.set(item.category, group);
+    }
+    return [...groups.entries()];
+  }, [selected?.remoteEnvChecklist]);
 
   useEffect(() => {
     setApiDeployment(selected?.apiDeployment ?? null);
@@ -399,6 +431,8 @@ export default function NewDealerClientPage() {
         return "Generate DNS checklist";
       case "api":
         return "Create API config task";
+      case "remote_env":
+        return "Mark remote env confirmed";
       case "google":
       case "sendgrid":
       case "meta":
@@ -441,6 +475,10 @@ export default function NewDealerClientPage() {
     if (currentStep.id === "api") {
       await generateApiDeployProfile();
       await createSetupTask("api");
+      return;
+    }
+    if (currentStep.id === "remote_env") {
+      await updateStep(currentStep.id, "done");
       return;
     }
     if (currentStep.id === "twilio") {
@@ -580,6 +618,16 @@ export default function NewDealerClientPage() {
       setNotice("API deploy profile copied.");
     } catch {
       setNotice("Could not copy the API deploy profile from this browser.");
+    }
+  }
+
+  async function copyRemoteEnvTemplate() {
+    if (!selected?.remoteEnvTemplate) return;
+    try {
+      await navigator.clipboard.writeText(selected.remoteEnvTemplate);
+      setNotice("Remote API env template copied. Fill secret values only on the server.");
+    } catch {
+      setNotice("Could not copy the remote API env template from this browser.");
     }
   }
 
@@ -962,6 +1010,28 @@ export default function NewDealerClientPage() {
                   <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
                   <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
                 </dl>
+                {selected.launchChecklist?.length ? (
+                  <section className="lr-ceo-launch-card">
+                    <div className="lr-ceo-panel-title">
+                      <div>
+                        <p className="lr-ceo-kicker">Launch checklist</p>
+                        <h3>Go-live readiness</h3>
+                      </div>
+                      <span className={`lr-ceo-status-pill ${completion >= 100 ? "is-ready" : completion > 0 ? "is-working" : ""}`}>
+                        {completion}% complete
+                      </span>
+                    </div>
+                    <div className="lr-ceo-launch-grid">
+                      {selected.launchChecklist.map(item => (
+                        <div key={item.id} className={`lr-ceo-launch-item is-${item.status}`}>
+                          <span>{item.status}</span>
+                          <strong>{item.label}</strong>
+                          <small>{item.detail}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
                 {currentApiDeployment ? (
                   <div className="lr-ceo-dns-records">
                     <div>
@@ -997,6 +1067,43 @@ export default function NewDealerClientPage() {
                       </button>
                     </div>
                   </div>
+                ) : null}
+                {groupedRemoteEnv.length ? (
+                  <section className="lr-ceo-env-card">
+                    <div className="lr-ceo-panel-title">
+                      <div>
+                        <p className="lr-ceo-kicker">Remote API env</p>
+                        <h3>Required server settings</h3>
+                        <p className="lr-ceo-note">This shows key names and safe defaults only. Secret values should be filled on the API server.</p>
+                      </div>
+                      <div className="lr-ceo-action-row">
+                        <button type="button" className="lr-ceo-secondary-btn" onClick={copyRemoteEnvTemplate}>
+                          Copy env template
+                        </button>
+                        <button type="button" onClick={() => updateStep("remote_env", "done")} disabled={busy}>
+                          Mark env confirmed
+                        </button>
+                      </div>
+                    </div>
+                    <div className="lr-ceo-env-groups">
+                      {groupedRemoteEnv.map(([category, items]) => (
+                        <div key={category} className="lr-ceo-env-group">
+                          <h4>{category}</h4>
+                          {items.map(item => (
+                            <div key={item.key} className={`lr-ceo-env-row is-${item.status}`}>
+                              <span>{item.required ? "Required" : "Optional"}</span>
+                              <div>
+                                <strong>{item.key}</strong>
+                                <small>{item.description}</small>
+                                {item.valueHint && !item.secret ? <code>{item.valueHint}</code> : null}
+                              </div>
+                              <em>{item.secret ? "Secret" : item.status}</em>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 ) : null}
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
