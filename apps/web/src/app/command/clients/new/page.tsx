@@ -29,6 +29,7 @@ type DealerSetup = {
   contractTerm?: string;
   billingStart?: string;
   notes?: string;
+  apiDeployment?: DealerApiDeployment;
   steps: Array<{
     id: string;
     label: string;
@@ -51,6 +52,26 @@ type DnsRecord = {
   name: string;
   value: string;
   purpose: string;
+};
+
+type DealerApiDeployment = {
+  repoUrl: string;
+  repoPath: string;
+  envFile: string;
+  dataDir: string;
+  pm2Process: string;
+  healthUrl: string;
+  deployProfileLocalPath: string;
+  deployCommand: string;
+  webHostname: string;
+  apiHostname: string;
+  dnsRecords: Array<{
+    type: string;
+    name: string;
+    value: string;
+    purpose: string;
+  }>;
+  profileText: string;
 };
 
 type SmokeCheck = {
@@ -187,6 +208,7 @@ export default function NewDealerClientPage() {
   const [actionBusy, setActionBusy] = useState(false);
   const [vercelDomains, setVercelDomains] = useState<VercelDomain[]>([]);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
+  const [apiDeployment, setApiDeployment] = useState<DealerApiDeployment | null>(null);
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
   const [esignPackets, setEsignPackets] = useState<EsignPacket[]>([]);
   const [esignBusy, setEsignBusy] = useState(false);
@@ -210,6 +232,11 @@ export default function NewDealerClientPage() {
     if (!selected?.steps.length) return null;
     return selected.steps.find(step => step.status === "blocked") ?? selected.steps.find(step => step.status !== "done") ?? selected.steps[0];
   }, [selected]);
+  const currentApiDeployment = apiDeployment ?? selected?.apiDeployment ?? null;
+
+  useEffect(() => {
+    setApiDeployment(selected?.apiDeployment ?? null);
+  }, [selected?.id, selected?.apiDeployment]);
 
   useEffect(() => {
     let active = true;
@@ -412,8 +439,8 @@ export default function NewDealerClientPage() {
       return;
     }
     if (currentStep.id === "api") {
+      await generateApiDeployProfile();
       await createSetupTask("api");
-      await updateStep(currentStep.id, "in_progress");
       return;
     }
     if (currentStep.id === "twilio") {
@@ -459,7 +486,14 @@ export default function NewDealerClientPage() {
             `Notes: ${selected.notes || "none"}`
           ].join("\n")
         : kind === "api"
-          ? `Create the API dealer setup work for ${selected.dealerName}. Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}. Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps. Do not overwrite existing clients.`
+          ? [
+              `Create the API dealer setup work for ${selected.dealerName}.`,
+              `Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}.`,
+              `Use the clean multi-client API pattern: repo path ${selected.apiDeployment?.repoPath || apiDeployment?.repoPath || `/home/ubuntu/leadrider-api/${selected.slug}`}, env file ${selected.apiDeployment?.envFile || apiDeployment?.envFile || `/home/ubuntu/leadrider-runtime/${selected.slug}/api.env`}, data dir ${selected.apiDeployment?.dataDir || apiDeployment?.dataDir || `/home/ubuntu/leadrider-runtime/${selected.slug}/data`}, PM2 process ${selected.apiDeployment?.pm2Process || apiDeployment?.pm2Process || `leadrider-api-${selected.slug}`}.`,
+              `Deploy profile: ${selected.apiDeployment?.deployProfileLocalPath || apiDeployment?.deployProfileLocalPath || `infra/deploy/${selected.slug}.api.env`}.`,
+              "Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps.",
+              "Do not overwrite existing clients or shared American Harley paths."
+            ].join("\n")
         : kind === "providers"
           ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Meta app/callback, Sentry, Linear, Slack, and OpenAI usage logging. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
         : kind === "texting"
@@ -519,6 +553,33 @@ export default function NewDealerClientPage() {
       setNotice(err instanceof Error ? err.message : "DNS checklist could not be generated.");
     } finally {
       setActionBusy(false);
+    }
+  }
+
+  async function generateApiDeployProfile() {
+    if (!selected) return;
+    setActionBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/api/deploy-profile`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "API deploy profile could not be generated.");
+      if (data.deployment) setApiDeployment(data.deployment);
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setNotice("API deploy profile generated with the clean checkout, env, data, PM2, and health-check paths.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "API deploy profile could not be generated.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function copyApiDeployProfile() {
+    if (!currentApiDeployment?.profileText) return;
+    try {
+      await navigator.clipboard.writeText(currentApiDeployment.profileText);
+      setNotice("API deploy profile copied.");
+    } catch {
+      setNotice("Could not copy the API deploy profile from this browser.");
     }
   }
 
@@ -901,6 +962,42 @@ export default function NewDealerClientPage() {
                   <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
                   <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
                 </dl>
+                {currentApiDeployment ? (
+                  <div className="lr-ceo-dns-records">
+                    <div>
+                      <span>Code checkout</span>
+                      <strong>{currentApiDeployment.repoPath}</strong>
+                      <small>{currentApiDeployment.repoUrl}</small>
+                    </div>
+                    <div>
+                      <span>Runtime env</span>
+                      <strong>{currentApiDeployment.envFile}</strong>
+                      <small>Secrets stay on the server, outside the repo.</small>
+                    </div>
+                    <div>
+                      <span>Runtime data</span>
+                      <strong>{currentApiDeployment.dataDir}</strong>
+                      <small>Dealer JSON, uploads, tokens, and generated state.</small>
+                    </div>
+                    <div>
+                      <span>PM2 process</span>
+                      <strong>{currentApiDeployment.pm2Process}</strong>
+                      <small>{currentApiDeployment.healthUrl}</small>
+                    </div>
+                    <div>
+                      <span>Deploy profile</span>
+                      <strong>{currentApiDeployment.deployProfileLocalPath}</strong>
+                      <code>{currentApiDeployment.deployCommand}</code>
+                    </div>
+                    <div className="lr-ceo-deploy-profile">
+                      <span>Profile text</span>
+                      <pre>{currentApiDeployment.profileText}</pre>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={copyApiDeployProfile}>
+                        Copy profile
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="lr-ceo-action-row">
                   <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
                     Draft agreement
@@ -916,6 +1013,9 @@ export default function NewDealerClientPage() {
                   </button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
                     DNS checklist
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={generateApiDeployProfile} disabled={actionBusy}>
+                    API deploy profile
                   </button>
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("api")} disabled={taskBusy}>
                     API config task

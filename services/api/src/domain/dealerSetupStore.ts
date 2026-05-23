@@ -13,6 +13,26 @@ export type DealerSetupStep = {
   note?: string;
 };
 
+export type DealerApiDeployment = {
+  repoUrl: string;
+  repoPath: string;
+  envFile: string;
+  dataDir: string;
+  pm2Process: string;
+  healthUrl: string;
+  deployProfileLocalPath: string;
+  deployCommand: string;
+  webHostname: string;
+  apiHostname: string;
+  dnsRecords: Array<{
+    type: "A" | "CNAME";
+    name: string;
+    value: string;
+    purpose: string;
+  }>;
+  profileText: string;
+};
+
 export type DealerSetup = {
   id: string;
   dealerName: string;
@@ -39,6 +59,7 @@ export type DealerSetup = {
   billingStart?: string;
   notes?: string;
   steps: DealerSetupStep[];
+  apiDeployment?: DealerApiDeployment;
   createdAt: string;
   updatedAt: string;
 };
@@ -84,17 +105,86 @@ function buildUrls(slug: string) {
   };
 }
 
+function safeHostname(url: string, fallback: string) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return fallback;
+  }
+}
+
+export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "appUrl" | "apiUrl">): DealerApiDeployment {
+  const clean = slugify(setup.slug || "newdealer") || "newdealer";
+  const repoUrl = String(process.env.LEADRIDER_DEPLOY_REPO_URL ?? "https://github.com/jrich90b/throttleiq.git").trim();
+  const apiAddress = String(process.env.LEADRIDER_API_STATIC_IP ?? "44.194.249.46").trim();
+  const repoPath = `/home/ubuntu/leadrider-api/${clean}`;
+  const runtimeRoot = `/home/ubuntu/leadrider-runtime/${clean}`;
+  const pm2Process = `leadrider-api-${clean}`.slice(0, 80);
+  const healthUrl = `${setup.apiUrl.replace(/\/$/, "")}/health`;
+  const deployProfileLocalPath = `infra/deploy/${clean}.api.env`;
+  const webHostname = safeHostname(setup.appUrl, `${clean}.leadrider.ai`);
+  const apiHostname = safeHostname(setup.apiUrl, `api.${clean}.leadrider.ai`);
+  const profileLines = [
+    `DEPLOY_HOST=ubuntu@api.leadrider.ai`,
+    `DEPLOY_REPO_URL=${repoUrl}`,
+    `DEPLOY_REPO=${repoPath}`,
+    `DEPLOY_BRANCH=main`,
+    `DEPLOY_DATA_DIR=${runtimeRoot}/data`,
+    `DEPLOY_ENV_FILE=${runtimeRoot}/api.env`,
+    `DEPLOY_PM2_PROCESS=${pm2Process}`,
+    `DEPLOY_HEALTH_URL=${healthUrl}`,
+    `DEPLOY_REPLACE_PM2=1`,
+    `DEPLOY_ALLOW_DIRTY_REMOTE=0`
+  ];
+  return {
+    repoUrl,
+    repoPath,
+    envFile: `${runtimeRoot}/api.env`,
+    dataDir: `${runtimeRoot}/data`,
+    pm2Process,
+    healthUrl,
+    deployProfileLocalPath,
+    deployCommand: `npm run deploy:api -- --profile ${deployProfileLocalPath}`,
+    webHostname,
+    apiHostname,
+    dnsRecords: [
+      {
+        type: "CNAME",
+        name: webHostname,
+        value: "cname.vercel-dns.com",
+        purpose: "Dealer web app on Vercel"
+      },
+      {
+        type: "A",
+        name: apiHostname,
+        value: apiAddress,
+        purpose: "Dealer API on Lightsail"
+      }
+    ],
+    profileText: `${profileLines.join("\n")}\n`
+  };
+}
+
+function withGeneratedFields(setup: DealerSetup): DealerSetup {
+  return {
+    ...setup,
+    apiDeployment: buildDealerApiDeployment(setup)
+  };
+}
+
 export async function listDealerSetups(limit = 100): Promise<DealerSetup[]> {
   await ensureLoaded();
   const bounded = Math.max(1, Math.min(500, Math.floor(limit)));
   return [...rows]
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
-    .slice(0, bounded);
+    .slice(0, bounded)
+    .map(withGeneratedFields);
 }
 
 export async function getDealerSetup(id: string): Promise<DealerSetup | null> {
   await ensureLoaded();
-  return rows.find(row => row.id === id) ?? null;
+  const setup = rows.find(row => row.id === id) ?? null;
+  return setup ? withGeneratedFields(setup) : null;
 }
 
 export async function addDealerSetup(input: {
@@ -153,7 +243,7 @@ export async function addDealerSetup(input: {
   const maxRows = Number.isFinite(MAX_ROWS) && MAX_ROWS > 0 ? Math.floor(MAX_ROWS) : 500;
   if (rows.length > maxRows) rows = rows.slice(0, maxRows);
   scheduleSave();
-  return setup;
+  return withGeneratedFields(setup);
 }
 
 export async function updateDealerSetup(
@@ -220,7 +310,7 @@ export async function updateDealerSetup(
   }
   setup.updatedAt = new Date().toISOString();
   scheduleSave();
-  return setup;
+  return withGeneratedFields(setup);
 }
 
 function isDealerSetup(row: any): row is DealerSetup {

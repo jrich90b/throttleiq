@@ -63,6 +63,7 @@ import {
 import {
   addDealerSetup,
   getDealerSetup,
+  buildDealerApiDeployment,
   listDealerSetups,
   updateDealerSetup,
   type DealerSetupStage,
@@ -26243,25 +26244,10 @@ app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"
 });
 
 function buildDealerDnsChecklist(setup: DealerSetup) {
-  const appDomain = new URL(setup.appUrl).hostname;
-  const apiDomain = new URL(setup.apiUrl).hostname;
-  const apiAddress = String(process.env.LEADRIDER_API_STATIC_IP ?? "44.194.249.46").trim();
-  return [
-    {
-      id: "app-domain",
-      type: "CNAME",
-      name: appDomain,
-      value: "cname.vercel-dns.com",
-      purpose: "Dealer web app on Vercel"
-    },
-    {
-      id: "api-domain",
-      type: "A",
-      name: apiDomain,
-      value: apiAddress,
-      purpose: "Dealer API on Lightsail"
-    }
-  ];
+  return buildDealerApiDeployment(setup).dnsRecords.map((record, index) => ({
+    id: index === 0 ? "app-domain" : "api-domain",
+    ...record
+  }));
 }
 
 app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos"), async (req, res) => {
@@ -26280,6 +26266,24 @@ app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos")
     stepNote: records.map(row => `${row.type} ${row.name} -> ${row.value}`).join("; ")
   });
   return res.json({ ok: true, setup: updated ?? setup, records });
+});
+
+app.post("/dealer-setups/:id/api/deploy-profile", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const deployment = buildDealerApiDeployment(setup);
+  const updated = await updateDealerSetup(setup.id, {
+    stage: "api_config",
+    status: "in_progress",
+    stepId: "api",
+    stepStatus: "in_progress",
+    stepNote: `API deploy profile ready: ${deployment.deployProfileLocalPath}; PM2 ${deployment.pm2Process}; data ${deployment.dataDir}`
+  });
+  return res.json({ ok: true, setup: updated ?? setup, deployment });
 });
 
 async function checkUrl(url: string) {

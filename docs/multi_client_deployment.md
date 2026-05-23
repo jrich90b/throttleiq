@@ -89,7 +89,21 @@ Until then, Vercel is the right place for the UI and lightweight proxy routes; t
 
 ## Dealer Setup Profile Template
 
-For each dealer, create a local deploy profile from the example:
+For each dealer, the Command Dealer Setup flow can generate the clean API deployment shape from the dealer slug:
+
+- checkout: `/home/ubuntu/leadrider-api/<dealer-slug>`
+- runtime data: `/home/ubuntu/leadrider-runtime/<dealer-slug>/data`
+- runtime env: `/home/ubuntu/leadrider-runtime/<dealer-slug>/api.env`
+- PM2 process: `leadrider-api-<dealer-slug>`
+- health check: `https://api.<dealer-slug>.leadrider.ai/health`
+
+Use the **API deploy profile** button in Dealer Setup to copy the generated profile text, then save it locally as:
+
+```text
+infra/deploy/<dealer-slug>.api.env
+```
+
+If you are creating it manually, start from the American Harley example:
 
 ```bash
 cp infra/deploy/americanharley.api.env.example infra/deploy/<dealer-slug>.api.env
@@ -106,3 +120,9 @@ Set:
 - `DEPLOY_HEALTH_URL`
 
 Do not store API keys, Twilio tokens, SendGrid keys, or Google secrets in the deploy profile. Those belong in the remote API `.env`.
+
+After the profile is created, deploy with:
+
+```bash
+npm run deploy:api -- --profile infra/deploy/<dealer-slug>.api.env
+```
