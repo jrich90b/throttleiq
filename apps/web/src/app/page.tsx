@@ -2695,6 +2695,7 @@ export default function Home() {
   const [mdfClaimsLoading, setMdfClaimsLoading] = useState(false);
   const [mdfClaimSaving, setMdfClaimSaving] = useState(false);
   const [mdfClaimActionBusy, setMdfClaimActionBusy] = useState("");
+  const [mdfLastPortalAction, setMdfLastPortalAction] = useState("");
   const [mdfPortalTaskNotice, setMdfPortalTaskNotice] = useState("");
   const [mdfRunnerStatus, setMdfRunnerStatus] = useState<MdfRunnerRegistrationStatus | null>(null);
   const [mdfRunnerStatusLoading, setMdfRunnerStatusLoading] = useState(false);
@@ -2709,6 +2710,10 @@ export default function Home() {
       parseCampaignUrlsText(campaignForm.inspirationImageUrlsText)
         .filter(looksLikeCampaignImageUrl),
     [campaignForm.inspirationImageUrlsText]
+  );
+  const mdfSelectedClaim = useMemo(
+    () => mdfClaims.find(claim => claim.id === mdfSelectedClaimId) ?? null,
+    [mdfClaims, mdfSelectedClaimId]
   );
   const campaignBriefPreviewUrls = useMemo(
     () => parseCampaignUrlsText(campaignForm.briefDocumentUrlsText),
@@ -7416,6 +7421,7 @@ export default function Home() {
         setMdfPacket(claim.packet);
         setMdfNotes(String(claim.notes ?? ""));
       }
+      setMdfLastPortalAction(`${claim.id}:${status}`);
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF claim could not be updated.");
     } finally {
@@ -7442,6 +7448,7 @@ export default function Home() {
         setMdfNotes(String(next?.notes ?? ""));
         setMdfFiles([]);
         setMdfPortalTaskNotice("");
+        setMdfLastPortalAction("");
       }
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "MDF claim could not be deleted.");
@@ -7469,6 +7476,7 @@ export default function Home() {
       setMdfClaims(prev => prev.map(row => (row.id === claim.id ? claim : row)));
       setMdfPacket(claim.packet);
       setMdfNotes(String(claim.notes ?? ""));
+      setMdfLastPortalAction(`${claim.id}:portal-task`);
       setMdfPortalTaskNotice(`Portal draft task created: ${data.task?.id ?? "queued"}`);
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "Portal draft task could not be created.");
@@ -7487,6 +7495,7 @@ export default function Home() {
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "H-DNet login task could not be created.");
+      setMdfLastPortalAction("mdf:portal-login");
       setMdfPortalTaskNotice(`H-DNet login task created: ${data.task?.id ?? "queued"}. Log in there, then click Start portal draft.`);
     } catch (err) {
       setMdfError(err instanceof Error ? err.message : "H-DNet login task could not be created.");
@@ -7501,6 +7510,7 @@ export default function Home() {
     setMdfNotes(String(claim.notes ?? ""));
     setMdfError(null);
     setMdfPortalTaskNotice("");
+    setMdfLastPortalAction("");
   }
 
   function startNewMdfClaim() {
@@ -7510,6 +7520,7 @@ export default function Home() {
     setMdfFiles([]);
     setMdfError(null);
     setMdfPortalTaskNotice("");
+    setMdfLastPortalAction("");
   }
 
   function mergeMdfPackets(existing: MdfClaimPacket | null, incoming: MdfClaimPacket): MdfClaimPacket {
@@ -15068,48 +15079,87 @@ export default function Home() {
                       ) : null}
                     </div>
 
-	                    <div className="rounded-lg border bg-gray-50 p-3">
-	                      <div className="text-sm font-semibold">Browser-use portal automation</div>
-	                      <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
-	                      <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="rounded-lg border bg-gray-50 p-3">
+                      <div className="text-sm font-semibold">Browser-use portal automation</div>
+                      <p className="mt-1 text-sm text-gray-600">{mdfPacket.browserAutomation.nextStep}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
                         {mdfSelectedClaimId ? (
                           <>
                             <button
-                              className="rounded-lg border px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-60"
+                              aria-pressed={mdfSelectedClaim?.status === "needs_info"}
+                              className={`rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
+                                mdfSelectedClaim?.status === "needs_info"
+                                  ? "border-amber-400 bg-amber-100 text-amber-950 shadow-inner"
+                                  : "bg-white text-gray-700 hover:bg-gray-50"
+                              }`}
                               disabled={
                                 mdfClaimActionBusy === `${mdfSelectedClaimId}:needs_info` ||
                                 mdfClaimActionBusy === `${mdfSelectedClaimId}:ready_for_portal`
                               }
                               onClick={() => void updateMdfClaimStatus(mdfSelectedClaimId, "needs_info")}
                             >
-                              Needs more info
+                              {mdfClaimActionBusy === `${mdfSelectedClaimId}:needs_info`
+                                ? "Marking..."
+                                : mdfSelectedClaim?.status === "needs_info"
+                                  ? "✓ Needs more info"
+                                  : "Needs more info"}
                             </button>
                             <button
-                              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 disabled:opacity-60"
+                              aria-pressed={mdfSelectedClaim?.status === "ready_for_portal"}
+                              className={`rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
+                                mdfSelectedClaim?.status === "ready_for_portal"
+                                  ? "border-emerald-500 bg-emerald-600 text-white shadow-inner"
+                                  : "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                              }`}
                               disabled={
                                 mdfClaimActionBusy === `${mdfSelectedClaimId}:ready_for_portal` ||
                                 mdfClaimActionBusy === `${mdfSelectedClaimId}:needs_info`
                               }
                               onClick={() => void updateMdfClaimStatus(mdfSelectedClaimId, "ready_for_portal")}
                             >
-                              Ready for portal
+                              {mdfClaimActionBusy === `${mdfSelectedClaimId}:ready_for_portal`
+                                ? "Marking..."
+                                : mdfSelectedClaim?.status === "ready_for_portal"
+                                  ? "✓ Ready for portal"
+                                  : "Ready for portal"}
                             </button>
                           </>
                         ) : null}
                         <button
-                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-800 disabled:opacity-60"
+                          aria-pressed={mdfLastPortalAction === "mdf:portal-login"}
+                          className={`rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
+                            mdfLastPortalAction === "mdf:portal-login"
+                              ? "border-blue-500 bg-blue-600 text-white shadow-inner"
+                              : "border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100"
+                          }`}
                           disabled={mdfClaimActionBusy === "mdf:portal-login"}
                           onClick={() => void createMdfPortalLoginTask()}
                         >
-                          {mdfClaimActionBusy === "mdf:portal-login" ? "Opening login..." : "Open H-DNet login"}
+                          {mdfClaimActionBusy === "mdf:portal-login"
+                            ? "Opening login..."
+                            : mdfLastPortalAction === "mdf:portal-login"
+                              ? "✓ Login task created"
+                              : "Open H-DNet login"}
                         </button>
                         <button
-                          className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-900 disabled:opacity-60"
+                          aria-pressed={
+                            mdfSelectedClaim?.status === "portal_draft" ||
+                            mdfLastPortalAction === `${mdfSelectedClaimId}:portal-task`
+                          }
+                          className={`rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-60 ${
+                            mdfSelectedClaim?.status === "portal_draft" ||
+                            mdfLastPortalAction === `${mdfSelectedClaimId}:portal-task`
+                              ? "border-orange-500 bg-[var(--accent)] text-white shadow-inner"
+                              : "border-orange-300 bg-orange-50 text-orange-900 hover:bg-orange-100"
+                          }`}
                           disabled={!mdfSelectedClaimId || mdfClaimActionBusy === `${mdfSelectedClaimId}:portal-task`}
                           onClick={() => void createMdfPortalTask()}
                         >
                           {mdfClaimActionBusy === `${mdfSelectedClaimId}:portal-task`
                             ? "Creating task..."
+                            : mdfSelectedClaim?.status === "portal_draft" ||
+                                mdfLastPortalAction === `${mdfSelectedClaimId}:portal-task`
+                              ? "✓ Portal task created"
                             : "Start portal draft"}
                         </button>
                         {mdfSelectedClaimId ? (
