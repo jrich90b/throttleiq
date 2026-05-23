@@ -63,14 +63,14 @@ scripts/deploy_api_lightsail.sh --profile infra/deploy/americanharley.api.env
 
 ## First Cleanup Needed On The Existing Server
 
-The current production server has accumulated source and generated-file drift from manual patches. Before the guarded deploy path can be used normally, reconcile that drift once:
+The current production server has accumulated source and generated-file drift from manual patches. Do not clean it up by resetting the folder in place. The safer first step is to move PM2 to a clean release checkout and leave the old folder intact as a rollback/source backup:
 
-1. Inspect `git status --short` on the server.
-2. Move runtime/generated files out of the repo into `DATA_DIR` or backups.
-3. Commit any real source changes that must survive.
-4. Remove or stash temporary production-only patches after they are represented in git.
-5. Run `scripts/deploy_api_lightsail.sh --profile ... --dry-run`.
-6. Run the real deploy only when the dry run is clean.
+1. Keep the existing `/home/ubuntu/throttleiq` folder untouched.
+2. Deploy a clean checkout to `/home/ubuntu/leadrider-api/current`.
+3. Point PM2 at the clean checkout with `DEPLOY_REPLACE_PM2=1`.
+4. Keep using the existing remote `.env` until secrets are moved out of the old repo folder.
+5. Verify health, webhook delivery, and one representative conversation.
+6. After production is stable, move the dealer `.env` to a neutral runtime path such as `/home/ubuntu/leadrider-runtime/americanharley/api.env`.
 
 The goal is that production is always reproducible from Git plus the dealer `.env` and `DATA_DIR`.
 

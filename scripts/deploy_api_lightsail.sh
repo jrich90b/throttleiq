@@ -11,6 +11,7 @@ Usage:
 Common options:
   --profile PATH              Load deploy settings from a shell env file.
   --host USER@HOST            SSH target. Default: ubuntu@api.leadrider.ai
+  --repo-url URL              Git repo URL. Default: https://github.com/jrich90b/throttleiq.git
   --repo PATH                 Remote repo path. Default: /home/ubuntu/throttleiq
   --branch BRANCH             Git branch to deploy. Default: main
   --data-dir PATH             Runtime DATA_DIR to back up before deploy.
@@ -18,13 +19,15 @@ Common options:
   --pm2 NAME                  PM2 process name. Default: throttleiq-api
   --health-url URL            Public API health URL to check after restart.
   --allow-dirty-remote        Allow deploying over a dirty remote worktree.
+  --replace-pm2               Replace the PM2 process so it runs from this repo path.
   --skip-local-checks         Skip local API typecheck before SSH deploy.
   --dry-run                   Check local/remote readiness without changing server.
 
 Environment variable equivalents:
   DEPLOY_HOST, DEPLOY_REPO, DEPLOY_BRANCH, DEPLOY_DATA_DIR,
-  DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
-  DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_DRY_RUN
+  DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
+  DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
+  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_DRY_RUN
 USAGE
 }
 
@@ -43,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo)
       DEPLOY_REPO="${2:-}"
+      shift 2
+      ;;
+    --repo-url)
+      DEPLOY_REPO_URL="${2:-}"
       shift 2
       ;;
     --branch)
@@ -67,6 +74,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allow-dirty-remote)
       DEPLOY_ALLOW_DIRTY_REMOTE=1
+      shift
+      ;;
+    --replace-pm2)
+      DEPLOY_REPLACE_PM2=1
       shift
       ;;
     --skip-local-checks)
@@ -99,6 +110,7 @@ if [[ -n "$profile" ]]; then
 fi
 
 DEPLOY_HOST="${DEPLOY_HOST:-ubuntu@api.leadrider.ai}"
+DEPLOY_REPO_URL="${DEPLOY_REPO_URL:-https://github.com/jrich90b/throttleiq.git}"
 DEPLOY_REPO="${DEPLOY_REPO:-/home/ubuntu/throttleiq}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 DEPLOY_DATA_DIR="${DEPLOY_DATA_DIR:-/home/ubuntu/throttleiq-runtime/data}"
@@ -106,6 +118,7 @@ DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$DEPLOY_REPO/services/api/.env}"
 DEPLOY_PM2_PROCESS="${DEPLOY_PM2_PROCESS:-throttleiq-api}"
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-https://api.leadrider.ai/health}"
 DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
+DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
@@ -128,12 +141,14 @@ cd "$repo_root"
 
 echo "LeadRider API deploy"
 echo "  host:       $DEPLOY_HOST"
+echo "  repo url:   $DEPLOY_REPO_URL"
 echo "  branch:     $DEPLOY_BRANCH"
 echo "  repo:       $DEPLOY_REPO"
 echo "  data dir:   $DEPLOY_DATA_DIR"
 echo "  env file:   $DEPLOY_ENV_FILE"
 echo "  pm2:        $DEPLOY_PM2_PROCESS"
 echo "  health:     $DEPLOY_HEALTH_URL"
+echo "  replace pm2:$DEPLOY_REPLACE_PM2"
 echo
 
 if [[ "$DEPLOY_SKIP_LOCAL_CHECKS" != "1" ]]; then
@@ -143,12 +158,14 @@ fi
 
 remote_env=(
   "DEPLOY_REPO=$(shell_quote "$DEPLOY_REPO")"
+  "DEPLOY_REPO_URL=$(shell_quote "$DEPLOY_REPO_URL")"
   "DEPLOY_BRANCH=$(shell_quote "$DEPLOY_BRANCH")"
   "DEPLOY_DATA_DIR=$(shell_quote "$DEPLOY_DATA_DIR")"
   "DEPLOY_ENV_FILE=$(shell_quote "$DEPLOY_ENV_FILE")"
   "DEPLOY_PM2_PROCESS=$(shell_quote "$DEPLOY_PM2_PROCESS")"
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
+  "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
   "DEPLOY_DRY_RUN=$(shell_quote "$DEPLOY_DRY_RUN")"
 )
 
@@ -157,8 +174,14 @@ set -euo pipefail
 
 echo "Checking remote repo..."
 if [[ ! -d "$DEPLOY_REPO/.git" ]]; then
-  echo "Remote repo missing or not a git checkout: $DEPLOY_REPO" >&2
-  exit 20
+  if [[ "$DEPLOY_DRY_RUN" == "1" ]]; then
+    echo "Remote repo missing. Dry run would clone $DEPLOY_REPO_URL into $DEPLOY_REPO."
+    echo "Dry run complete. No server changes made."
+    exit 0
+  fi
+  echo "Remote repo missing. Cloning $DEPLOY_REPO_URL into $DEPLOY_REPO"
+  mkdir -p "$(dirname "$DEPLOY_REPO")"
+  git clone --branch "$DEPLOY_BRANCH" "$DEPLOY_REPO_URL" "$DEPLOY_REPO"
 fi
 
 cd "$DEPLOY_REPO"
@@ -232,10 +255,15 @@ for raw in open(path):
 PY
 )"
 
+if [[ "$DEPLOY_REPLACE_PM2" == "1" ]] && pm2 describe "$DEPLOY_PM2_PROCESS" >/dev/null 2>&1; then
+  echo "Replacing PM2 process so it runs from $DEPLOY_REPO..."
+  pm2 delete "$DEPLOY_PM2_PROCESS"
+fi
+
 if pm2 describe "$DEPLOY_PM2_PROCESS" >/dev/null 2>&1; then
   pm2 restart "$DEPLOY_PM2_PROCESS" --update-env
 else
-  pm2 start npm --name "$DEPLOY_PM2_PROCESS" -- --workspace @throttleiq/api run start
+  pm2 start npm --name "$DEPLOY_PM2_PROCESS" --cwd "$DEPLOY_REPO" -- --workspace @throttleiq/api run start
 fi
 pm2 save >/dev/null
 
