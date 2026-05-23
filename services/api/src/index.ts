@@ -26403,6 +26403,67 @@ function dealerSetupCompletionNote(stepId: string) {
   }
 }
 
+function providerBrowserStartUrl(stepId: string) {
+  switch (stepId) {
+    case "twilio":
+      return "https://console.twilio.com/";
+    case "sendgrid":
+      return "https://app.sendgrid.com/";
+    case "google":
+      return "https://admin.google.com/";
+    case "meta":
+      return "https://developers.facebook.com/apps/";
+    default:
+      return "";
+  }
+}
+
+function providerBrowserSetupInstructions(setup: DealerSetup, stepId: string, providerInstructions: string, coreFacts: string) {
+  const startUrl = providerBrowserStartUrl(stepId);
+  const providerName =
+    stepId === "twilio"
+      ? "Twilio"
+      : stepId === "sendgrid"
+        ? "SendGrid"
+        : stepId === "google"
+          ? "Google Workspace"
+          : stepId === "meta"
+            ? "Meta"
+            : "provider";
+  return [
+    "Use browser-use/browser-harness with the registered LeadRider provider runner browser.",
+    `Provider: ${providerName}`,
+    startUrl ? `Start URL: ${startUrl}` : "",
+    "",
+    "Goal",
+    providerInstructions,
+    "",
+    "Allowed actions",
+    "- Navigate the provider website in the runner browser.",
+    "- Use the logged-in browser session when available.",
+    "- Inspect setup screens and fill reversible draft/configuration fields when the values are known from the task.",
+    "- Save reversible configuration only when it does not submit billing, legal, compliance, app review, carrier registration, or credential rotation.",
+    "- If login, password, MFA, account selection, CAPTCHA, or human identity verification is required, stop and report needs_login.",
+    "",
+    "Hard stops",
+    "- Do not inspect saved passwords, cookies, local storage, or browser profile files.",
+    "- Do not purchase phone numbers, change billing, submit A2P/10DLC, submit legal/compliance attestations, submit Meta app review, rotate/delete credentials, or send real customer messages.",
+    "- Do not expose API keys, secrets, tokens, verification codes, account IDs that are not needed for setup status, or private customer data in the output.",
+    "- Stop at review/approval screens and report needs_approval.",
+    "",
+    "Return a concise structured result with these fields:",
+    "status: complete | needs_login | needs_approval | blocked",
+    `provider: ${stepId}`,
+    "completed: one-line summary of safe steps completed",
+    "needs: missing human inputs, approvals, credentials, or provider blockers",
+    "next_action: the single next action the user should take",
+    "",
+    coreFacts
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
   provider: AgentTaskProvider;
   kind: AgentTaskKind;
@@ -26410,7 +26471,8 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
   instructions: string;
   message: string;
   nextStep: string;
-  approvalReason: string;
+  approvalReason?: string;
+  approvalRequired?: boolean;
 } {
   const coreFacts = [
     `Dealer: ${setup.dealerName}`,
@@ -26523,12 +26585,21 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
   };
   return {
     provider: "codex",
-    kind: "dealer_setup",
+    kind: ["google", "twilio", "sendgrid", "meta"].includes(stepId) ? "provider_browser" : "dealer_setup",
     title: copy.title,
-    message: copy.message,
-    nextStep: copy.nextStep,
-    approvalReason: "This setup step can affect external provider accounts or production routing, so review is required.",
-    instructions: [copy.instructions, "", coreFacts].join("\n")
+    message: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+      ? `${providerCopy[stepId]?.title.replace(/^Configure |^Connect |^Verify /, "") || "Provider"} browser task created.`
+      : copy.message,
+    nextStep: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+      ? "The provider runner will open the site, pause for login/MFA if needed, and stop before sensitive submissions."
+      : copy.nextStep,
+    approvalRequired: !["google", "twilio", "sendgrid", "meta"].includes(stepId),
+    approvalReason: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+      ? undefined
+      : "This setup step can affect external provider accounts or production routing, so review is required.",
+    instructions: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+      ? providerBrowserSetupInstructions(setup, stepId, copy.instructions, coreFacts)
+      : [copy.instructions, "", coreFacts].join("\n")
   };
 }
 
@@ -26550,9 +26621,9 @@ async function ensureDealerSetupAgentTask(setup: DealerSetup, stepId: string) {
     instructions: `${marker}\n${spec.instructions}`,
     clientName: setup.dealerName,
     priority: "high",
-    risk: "approval_required",
+    risk: spec.approvalRequired === false ? "low" : "approval_required",
     approval: {
-      required: true,
+      required: spec.approvalRequired !== false,
       reason: spec.approvalReason
     },
     requestedBy: {
@@ -31635,6 +31706,7 @@ const allowedAgentKinds: AgentTaskKind[] = [
   "quickbooks",
   "prospect_research",
   "mdf_portal",
+  "provider_browser",
   "linear_ticket",
   "sop",
   "other"
@@ -31862,6 +31934,8 @@ function agentKindDefaultTitle(kind: AgentTaskKind): string {
       return "Research prospect";
     case "mdf_portal":
       return "Prepare MDF portal draft";
+    case "provider_browser":
+      return "Run provider browser setup";
     case "linear_ticket":
       return "Create Linear task";
     case "sop":
@@ -31876,6 +31950,7 @@ function agentTaskApprovalReason(kind: AgentTaskKind, instructions: string): str
   if (kind === "quickbooks") return "QuickBooks work can affect billing/accounting, so review is required first.";
   if (kind === "agreement") return "Agreement work can affect legal/commercial terms, so review is required before sending.";
   if (kind === "mdf_portal") return "MDF portal work uploads files and fills an external portal, so human approval is required before execution.";
+  if (kind === "provider_browser") return "Provider browser work can affect external accounts, so the runner must stop before billing, compliance, credential, or final-submit actions.";
   if (kind === "email") return "Customer or prospect emails should be approved before sending.";
   if (text.match(/\b(send|invoice|charge|refund|pay|payment|sign|execute|delete|cancel subscription|change subscription)\b/)) {
     return "This task includes an external action that should be approved before execution.";
@@ -36661,6 +36736,63 @@ app.patch("/mdf/portal-runner/tasks/:id", async (req, res) => {
   const existing = tasks.find(task => task.id === req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Agent task not found" });
   if (existing.kind !== "mdf_portal") return res.status(400).json({ ok: false, error: "Only MDF portal tasks can use this runner." });
+  const summary = String(req.body?.summary ?? "").trim().slice(0, 6000);
+  const links = Array.isArray(req.body?.links)
+    ? req.body.links.map((link: unknown) => String(link ?? "").trim()).filter(Boolean).slice(0, 20)
+    : undefined;
+  const updated = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, {
+    summary: summary || existing.output?.summary,
+    links: links ?? existing.output?.links
+  });
+  return res.json({ ok: true, task: updated ?? existing });
+});
+
+function canUseProviderBrowserRunner(req: any) {
+  const configured = String(
+    process.env.PROVIDER_BROWSER_RUNNER_TOKEN ??
+      process.env.MDF_PORTAL_RUNNER_TOKEN ??
+      process.env.AUTOMATION_RUN_WRITE_TOKEN ??
+      ""
+  ).trim();
+  const provided = String(
+    req.header("x-provider-browser-token") ||
+      req.header("authorization")?.replace(/^Bearer\s+/i, "") ||
+      ""
+  ).trim();
+  return !!configured && !!provided && configured === provided;
+}
+
+function providerBrowserStepFromTask(task: AgentTask): string {
+  const match = task.instructions.match(/\[dealer-setup:[^\]]+:([a-z0-9_-]+)\]/i);
+  if (match?.[1]) return match[1];
+  const provider = task.instructions.match(/^provider:\s*([a-z0-9_-]+)/im)?.[1];
+  return provider ?? "provider";
+}
+
+app.get("/provider-browser-runner/tasks", async (req, res) => {
+  if (!canUseProviderBrowserRunner(req)) return res.status(401).json({ ok: false, error: "invalid provider browser runner token" });
+  const limit = Number(req.query.limit ?? "25");
+  const includeRunning = String(req.query.includeRunning ?? "0").trim() === "1";
+  const tasks = (await listAgentTasks(Number.isFinite(limit) ? limit : 25))
+    .filter(task => task.kind === "provider_browser")
+    .filter(task => task.status === "queued" || (includeRunning && task.status === "running"))
+    .map(task => ({
+      task,
+      providerStep: providerBrowserStepFromTask(task)
+    }));
+  return res.json({ ok: true, tasks });
+});
+
+app.patch("/provider-browser-runner/tasks/:id", async (req, res) => {
+  if (!canUseProviderBrowserRunner(req)) return res.status(401).json({ ok: false, error: "invalid provider browser runner token" });
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!allowedAgentStatuses.includes(statusRaw as AgentTaskStatus)) {
+    return res.status(400).json({ ok: false, error: "Invalid task status." });
+  }
+  const tasks = await listAgentTasks(1000);
+  const existing = tasks.find(task => task.id === req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  if (existing.kind !== "provider_browser") return res.status(400).json({ ok: false, error: "Only provider browser tasks can use this runner." });
   const summary = String(req.body?.summary ?? "").trim().slice(0, 6000);
   const links = Array.isArray(req.body?.links)
     ? req.body.links.map((link: unknown) => String(link ?? "").trim()).filter(Boolean).slice(0, 20)

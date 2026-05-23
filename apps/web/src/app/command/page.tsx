@@ -43,6 +43,7 @@ type AgentTaskKind =
   | "email"
   | "quickbooks"
   | "prospect_research"
+  | "provider_browser"
   | "linear_ticket"
   | "sop"
   | "other";
@@ -231,6 +232,12 @@ const agentTaskKinds: { value: AgentTaskKind; label: string; provider: AgentTask
     label: "Prospect research",
     provider: "claude",
     template: "Research this prospect, summarize dealership fit, likely lead volume, decision makers, and recommended next action."
+  },
+  {
+    value: "provider_browser",
+    label: "Provider browser setup",
+    provider: "codex",
+    template: "Use Browser Harness with the trusted runner browser to prepare provider setup. Stop for login, MFA, billing, compliance, app review, or final-submit approval."
   },
   {
     value: "linear_ticket",
