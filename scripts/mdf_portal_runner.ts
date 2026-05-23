@@ -953,10 +953,28 @@ function mediaSubType(claim: MdfClaimEntry): string {
   return "MEDIA - Magazine / Newspaper Ad";
 }
 
+function sanitizeMdfPortalText(value: unknown): string {
+  let text = String(value ?? "").trim();
+  if (!text) return "";
+  text = text
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(line => {
+      if (!line) return false;
+      return !/^(missing|missing\/needs review|needs review|required documentation|eligibility concerns?|concerns?|internal note|review note)\s*[:\-]/i.test(line);
+    })
+    .join("\n");
+  text = text.replace(
+    /\s+(Missing|Missing\/needs review|Needs review|Required documentation|Eligibility concerns?|Concerns?)\s*:\s*[\s\S]*$/i,
+    ""
+  );
+  return text.trim();
+}
+
 async function fillClaimDetails(page: any, claim: MdfClaimEntry) {
   const claimType = String(claim.packet.claimType || "").toLowerCase();
   const fields = claim.packet.extractedFields ?? {};
-  const description = claim.packet.descriptionDraft || "";
+  const description = sanitizeMdfPortalText(claim.packet.descriptionDraft);
 
   if (claimType === "media") {
     await selectOptionByText(page, "#activity-sub-detail", mediaSubType(claim));
@@ -1170,12 +1188,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   const claimedAmount = moneyFromNumber(invoiceTotal) || flatSpend;
 
   await fillText(page, "#app-claim-name", claim.title);
-  const reviewNotes = [
-    "LeadRider draft. Human review needed before submission.",
-    ...(claim.packet.missingFields ?? []).length ? [`Missing/needs review: ${(claim.packet.missingFields ?? []).join(", ")}.`] : [],
-    ...(claim.packet.eligibility?.concerns ?? []).slice(0, 3)
-  ].join(" ");
-  await fillText(page, "#app-additional-notes", reviewNotes.slice(0, 1200));
+  await fillText(page, "#app-additional-notes", "LeadRider draft prepared from uploaded documents. Human review required before final submission.");
   await fillClaimDetails(page, claim);
   for (let i = 0; i < invoices.length; i += 1) {
     await fillInvoiceSection(page, i + 1, invoices[i]);

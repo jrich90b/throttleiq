@@ -291,6 +291,24 @@ function openAiSafeFileName(name: string, fallback: string) {
   return `${base || fallback.replace(/\.[a-z0-9]{1,8}$/i, "")}${ext}`;
 }
 
+function sanitizeMdfSubmissionText(value: unknown): string {
+  let text = String(value ?? "").trim();
+  if (!text) return "";
+  text = text
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(line => {
+      if (!line) return false;
+      return !/^(missing|missing\/needs review|needs review|required documentation|eligibility concerns?|concerns?|internal note|review note)\s*[:\-]/i.test(line);
+    })
+    .join("\n");
+  text = text.replace(
+    /\s+(Missing|Missing\/needs review|Needs review|Required documentation|Eligibility concerns?|Concerns?)\s*:\s*[\s\S]*$/i,
+    ""
+  );
+  return text.trim();
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
@@ -344,7 +362,7 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
     confidence: Math.max(0, Math.min(1, Number(packet.confidence ?? 0))),
     extractedFields,
     invoices,
-    descriptionDraft: String(packet.descriptionDraft ?? ""),
+    descriptionDraft: sanitizeMdfSubmissionText(packet.descriptionDraft),
     eligibility: {
       status: ["likely_eligible", "review_needed", "likely_ineligible", "unknown"].includes(packet.eligibility?.status)
         ? packet.eligibility.status
@@ -544,6 +562,7 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "- If a magazine cover, tear sheet, screenshot, artwork, or proof file contains unrelated dates/prices/numbers, do not treat those as invoice fields.",
     "- If no invoice or receipt is provided, leave invoice/spend fields blank and list them as missing.",
     "- If evidence is missing or uncertain, do not guess. Put it in missingFields or eligibility.concerns.",
+    "- Do not put missing fields, proof gaps, review notes, or internal concerns in descriptionDraft. descriptionDraft must contain only clean claim/activity description text that is safe to enter into the MDF portal.",
     "The portal should only be filled as a saved draft after human review. Never indicate final submit is automatic.",
     notes.trim() ? `Dealer notes: ${notes.trim()}` : "Dealer notes: none."
   ].join("\\n");
