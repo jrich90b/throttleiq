@@ -98,6 +98,7 @@ export async function addVercelProjectDomain(domain: string): Promise<VercelDoma
   const cleanDomain = domain.trim().toLowerCase();
   const { projectId, teamId } = vercelConfig();
   const existing = await getVercelDomainStatus(cleanDomain);
+  if (!existing.configured) return { ...existing, error: "Vercel connection is not configured yet." };
   if (existing.exists) return existing;
   await vercelFetch(`/v10/projects/${encodeURIComponent(projectId)}/domains`, {
     method: "POST",

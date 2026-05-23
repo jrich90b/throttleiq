@@ -123,6 +123,18 @@ type ActiveClient = {
   dealerName: string;
 };
 
+type StepRunSummary = {
+  message: string;
+  nextStep?: string;
+  task?: {
+    id: string;
+    title: string;
+    status: string;
+    provider: string;
+  };
+  blocked?: boolean;
+};
+
 const planDefaults = {
   Starter: {
     setupFee: "$1,999",
@@ -299,32 +311,39 @@ function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness
 function guidedStepDescription(stepId: string) {
   switch (stepId) {
     case "intake":
-      return "Confirm the dealer record brought over from Sales Funnel has the right website, contact, legal name, plan, and billing terms.";
+      return "Confirm the dealer record has the right website, contact, legal name, plan, and billing terms.";
     case "agreement":
-      return "Only use this if the agreement was not already handled in Sales Funnel. Otherwise this step should already be complete.";
+      return "Prepare the agreement only if it was not already handled in Sales Funnel.";
     case "vercel":
-      return "Add the dealer web and API hostnames to the Vercel project.";
+      return "Add the dealer web domain to the LeadRider web project.";
     case "dns":
-      return "Generate and validate the DNS records for the dealer workspace.";
+      return "Generate the DNS records, then enter them where the dealer domain is hosted.";
     case "api":
-      return "Create the dealer-specific API deployment profile and setup task.";
+      return "Prepare the dealer API deployment task and profile.";
     case "remote_env":
-      return "Confirm the remote API environment values are present on the server.";
+      return "Confirm the required server settings and secret values are in place.";
     case "google":
-      return "Connect the dealer Google mail/calendar setup or create the provider task.";
+      return "Connect dealer Gmail, support mail, and calendars.";
     case "twilio":
-      return "Plan and configure the dealer phone, compliance, and messaging routes.";
+      return "Configure dealer texting, compliance, and message routing.";
     case "sendgrid":
-      return "Configure sender/domain, inbound parse, and email routing.";
+      return "Configure the dealer email sender, domain, and inbound routing.";
     case "meta":
       return "Verify the Meta app, callback, permissions, and app status.";
     case "smoke":
-      return "Run the launch smoke test after web/API/connectors are configured.";
+      return "Check the dealer app and API before launch.";
     case "handoff":
-      return "Send the live-ready dealer into Active Clients after the smoke test passes.";
+      return "Move the live-ready dealer into Active Clients.";
     default:
       return "Work the next setup item.";
   }
+}
+
+function canMarkStepComplete(step: DealerSetupStep) {
+  return (
+    step.status === "in_progress" &&
+    ["agreement", "dns", "api", "remote_env", "google", "twilio", "sendgrid", "meta"].includes(step.id)
+  );
 }
 
 export default function NewDealerClientPage() {
@@ -341,6 +360,7 @@ export default function NewDealerClientPage() {
   const [apiDeployment, setApiDeployment] = useState<DealerApiDeployment | null>(null);
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
   const [activeClientBusy, setActiveClientBusy] = useState(false);
+  const [stepResult, setStepResult] = useState<StepRunSummary | null>(null);
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const selectedReadiness = useMemo(() => (selected ? selected.deployReadiness ?? buildFallbackDeployReadiness(selected) : null), [selected]);
@@ -351,9 +371,15 @@ export default function NewDealerClientPage() {
   }, [selectedSteps]);
   const currentStep = useMemo(() => {
     if (!selectedSteps.length) return null;
-    return selectedSteps.find(step => step.status === "blocked") ?? selectedSteps.find(step => step.status !== "done") ?? selectedSteps[0];
+    return selectedSteps.find(step => step.status === "blocked") ?? selectedSteps.find(step => step.status !== "done") ?? null;
   }, [selectedSteps]);
   const currentApiDeployment = apiDeployment ?? selected?.apiDeployment ?? null;
+  const setupStillNeeded = useMemo(() => {
+    if (!selectedReadiness) return [];
+    return [...selectedReadiness.blockers, ...selectedReadiness.missing]
+      .filter((item, index, list) => item && list.indexOf(item) === index)
+      .slice(0, 5);
+  }, [selectedReadiness]);
   const groupedRemoteEnv = useMemo(() => {
     const groups = new Map<string, DealerRemoteEnvItem[]>();
     for (const item of selected?.remoteEnvChecklist ?? []) {
@@ -363,6 +389,7 @@ export default function NewDealerClientPage() {
     }
     return [...groups.entries()];
   }, [selected?.remoteEnvChecklist]);
+  const hasTechnicalDetails = Boolean(currentApiDeployment || groupedRemoteEnv.length || vercelDomains.length || dnsRecords.length || smokeChecks.length);
 
   useEffect(() => {
     setApiDeployment(selected?.apiDeployment ?? null);
@@ -495,30 +522,34 @@ export default function NewDealerClientPage() {
     }
   }
 
-  function guidedStepButtonLabel(stepId: string) {
-    switch (stepId) {
+  function guidedStepButtonLabel(step: DealerSetupStep) {
+    if (canMarkStepComplete(step)) return `Mark ${step.label} complete`;
+    if (step.status === "blocked") return `Retry ${step.label}`;
+    switch (step.id) {
       case "intake":
         return "Mark intake complete";
       case "agreement":
-        return "Draft agreement";
+        return "Start agreement";
       case "vercel":
-        return "Add Vercel domains";
+        return "Add web domain";
       case "dns":
-        return "Generate DNS checklist";
+        return "Prepare DNS";
       case "api":
-        return "Create API config task";
+        return "Prepare API";
       case "remote_env":
-        return "Mark remote env confirmed";
+        return "Prepare server settings";
       case "google":
+        return "Start Google setup";
       case "sendgrid":
+        return "Start SendGrid setup";
       case "meta":
-        return "Create provider task";
+        return "Start Meta setup";
       case "twilio":
-        return "Plan texting setup";
+        return "Start texting setup";
       case "smoke":
         return "Run smoke test";
       case "handoff":
-        return "Mark handoff complete";
+        return "Send to Active Clients";
       default:
         return "Start step";
     }
@@ -526,52 +557,39 @@ export default function NewDealerClientPage() {
 
   async function runGuidedStep() {
     if (!selected || !currentStep) return;
-    if (currentStep.id === "intake") {
-      await updateStep(currentStep.id, "done");
-      return;
+    setActionBusy(true);
+    setStepResult(null);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/run-step`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stepId: currentStep.id,
+          action: canMarkStepComplete(currentStep) ? "complete" : "run"
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Setup step could not be run.");
+      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      if (Array.isArray(data.domains)) setVercelDomains(data.domains);
+      if (Array.isArray(data.records)) setDnsRecords(data.records);
+      if (data.deployment) setApiDeployment(data.deployment);
+      if (Array.isArray(data.checks)) setSmokeChecks(data.checks);
+      const result = {
+        message: String(data.message || "Setup step updated."),
+        nextStep: typeof data.nextStep === "string" ? data.nextStep : undefined,
+        task: data.task,
+        blocked: false
+      };
+      setStepResult(result);
+      setNotice(result.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Setup step could not be run.";
+      setStepResult({ message, blocked: true });
+      setNotice(message);
+    } finally {
+      setActionBusy(false);
     }
-    if (currentStep.id === "handoff") {
-      const pushed = await pushToActiveClient();
-      if (pushed) await updateStep(currentStep.id, "done");
-      return;
-    }
-    if (currentStep.id === "agreement") {
-      await createSetupTask("agreement");
-      await updateStep(currentStep.id, "in_progress");
-      return;
-    }
-    if (currentStep.id === "vercel") {
-      await addVercelDomains();
-      return;
-    }
-    if (currentStep.id === "dns") {
-      await generateDnsChecklist();
-      return;
-    }
-    if (currentStep.id === "api") {
-      await generateApiDeployProfile();
-      await createSetupTask("api");
-      return;
-    }
-    if (currentStep.id === "remote_env") {
-      await updateStep(currentStep.id, "done");
-      return;
-    }
-    if (currentStep.id === "twilio") {
-      await createSetupTask("texting");
-      await updateStep(currentStep.id, "in_progress");
-      return;
-    }
-    if (["google", "sendgrid", "meta"].includes(currentStep.id)) {
-      await createSetupTask("providers");
-      await updateStep(currentStep.id, "in_progress");
-      return;
-    }
-    if (currentStep.id === "smoke") {
-      await runSmokeTest();
-      return;
-    }
-    await updateStep(currentStep.id, "in_progress");
   }
 
   async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers" | "texting") {
@@ -825,17 +843,32 @@ export default function NewDealerClientPage() {
               <p className="lr-ceo-kicker">Guided setup</p>
               <h3>{currentStep.status === "blocked" ? "Blocked step" : "Next step"}: {currentStep.label}</h3>
               <p>{guidedStepDescription(currentStep.id)}</p>
-              {currentStep.note ? <small>{currentStep.note}</small> : null}
             </div>
             <div className="lr-ceo-guided-actions">
               <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{currentStep.status.replace(/_/g, " ")}</span>
               <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || activeClientBusy}>
-                {guidedStepButtonLabel(currentStep.id)}
+                {guidedStepButtonLabel(currentStep)}
               </button>
               <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "blocked")} disabled={busy}>
                 Mark blocked
               </button>
             </div>
+          </section>
+        ) : selected ? (
+          <section className="lr-ceo-guided-setup">
+            <div>
+              <p className="lr-ceo-kicker">Guided setup</p>
+              <h3>Setup checklist complete</h3>
+              <p>All setup steps are marked complete for this dealer.</p>
+            </div>
+          </section>
+        ) : null}
+
+        {stepResult ? (
+          <section className={`lr-ceo-step-result ${stepResult.blocked ? "is-blocked" : "is-ready"}`}>
+            <strong>{stepResult.message}</strong>
+            {stepResult.nextStep ? <span>{stepResult.nextStep}</span> : null}
+            {stepResult.task ? <small>Task: {stepResult.task.title}</small> : null}
           </section>
         ) : null}
 
@@ -967,140 +1000,17 @@ export default function NewDealerClientPage() {
                 {selectedReadiness ? (
                   <section className={`lr-ceo-readiness-card ${readinessClass(selectedReadiness.status)}`}>
                     <div>
-                      <p className="lr-ceo-kicker">Deployment gate</p>
+                      <p className="lr-ceo-kicker">Launch readiness</p>
                       <h3>{selectedReadiness.label}</h3>
                       <p>{selectedReadiness.summary}</p>
                     </div>
-                    <div className="lr-ceo-readiness-columns">
-                      <div>
-                        <strong>Missing</strong>
-                        {selectedReadiness.missing.length ? (
-                          selectedReadiness.missing.map(item => <span key={item}>{item}</span>)
-                        ) : (
-                          <span>Nothing required is missing.</span>
-                        )}
+                    {setupStillNeeded.length ? (
+                      <div className="lr-ceo-readiness-list">
+                        <strong>Still needed</strong>
+                        {setupStillNeeded.map(item => <span key={item}>{item}</span>)}
                       </div>
-                      <div>
-                        <strong>Blocked</strong>
-                        {selectedReadiness.blockers.length ? (
-                          selectedReadiness.blockers.map(item => <span key={item}>{item}</span>)
-                        ) : (
-                          <span>No blocked setup steps.</span>
-                        )}
-                      </div>
-                      <div>
-                        <strong>Watch</strong>
-                        {selectedReadiness.warnings.length ? (
-                          selectedReadiness.warnings.map(item => <span key={item}>{item}</span>)
-                        ) : (
-                          <span>No warnings.</span>
-                        )}
-                      </div>
-                    </div>
+                    ) : null}
                   </section>
-                ) : null}
-                {currentApiDeployment ? (
-                  <div className="lr-ceo-dns-records">
-                    <div>
-                      <span>Code checkout</span>
-                      <strong>{currentApiDeployment.repoPath}</strong>
-                      <small>{currentApiDeployment.repoUrl}</small>
-                    </div>
-                    <div>
-                      <span>Runtime env</span>
-                      <strong>{currentApiDeployment.envFile}</strong>
-                      <small>Secrets stay on the server, outside the repo.</small>
-                    </div>
-                    <div>
-                      <span>Runtime data</span>
-                      <strong>{currentApiDeployment.dataDir}</strong>
-                      <small>Dealer JSON, uploads, tokens, and generated state.</small>
-                    </div>
-                    <div>
-                      <span>PM2 process</span>
-                      <strong>{currentApiDeployment.pm2Process}</strong>
-                      <small>{currentApiDeployment.healthUrl}</small>
-                    </div>
-                    <div>
-                      <span>Deploy profile</span>
-                      <strong>{currentApiDeployment.deployProfileLocalPath}</strong>
-                      <code>{currentApiDeployment.deployCommand}</code>
-                    </div>
-                    <div className="lr-ceo-deploy-profile">
-                      <span>Profile text</span>
-                      <pre>{currentApiDeployment.profileText}</pre>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={copyApiDeployProfile}>
-                        Copy profile
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-                {groupedRemoteEnv.length ? (
-                  <section className="lr-ceo-env-card">
-                    <div className="lr-ceo-panel-title">
-                      <div>
-                        <p className="lr-ceo-kicker">Remote API env</p>
-                        <h3>Required server settings</h3>
-                        <p className="lr-ceo-note">This shows key names and safe defaults only. Secret values should be filled on the API server.</p>
-                      </div>
-                      <div className="lr-ceo-action-row">
-                        <button type="button" className="lr-ceo-secondary-btn" onClick={copyRemoteEnvTemplate}>
-                          Copy env template
-                        </button>
-                        <button type="button" onClick={() => updateStep("remote_env", "done")} disabled={busy}>
-                          Mark env confirmed
-                        </button>
-                      </div>
-                    </div>
-                    <div className="lr-ceo-env-groups">
-                      {groupedRemoteEnv.map(([category, items]) => (
-                        <div key={category} className="lr-ceo-env-group">
-                          <h4>{category}</h4>
-                          {items.map(item => (
-                            <div key={item.key} className={`lr-ceo-env-row is-${item.status}`}>
-                              <span>{item.required ? "Required" : "Optional"}</span>
-                              <div>
-                                <strong>{item.key}</strong>
-                                <small>{item.description}</small>
-                                {item.valueHint && !item.secret ? <code>{item.valueHint}</code> : null}
-                              </div>
-                              <em>{item.secret ? "Secret" : item.status}</em>
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-                {vercelDomains.length ? (
-                  <div className="lr-ceo-vercel-status">
-                    {vercelDomains.map(domain => (
-                      <span key={domain.domain} className={domain.exists && domain.verified ? "is-ready" : domain.error ? "is-blocked" : "is-working"}>
-                        {domain.domain}: {domain.error || (domain.exists ? (domain.verified ? "verified" : "pending DNS") : "not added")}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                {dnsRecords.length ? (
-                  <div className="lr-ceo-dns-records">
-                    {dnsRecords.map(record => (
-                      <div key={record.id}>
-                        <span>{record.type}</span>
-                        <strong>{record.name}</strong>
-                        <code>{record.value}</code>
-                        <small>{record.purpose}</small>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {smokeChecks.length ? (
-                  <div className="lr-ceo-vercel-status">
-                    {smokeChecks.map(check => (
-                      <span key={check.url} className={check.ok ? "is-ready" : "is-blocked"}>
-                        {check.url}: {check.status || check.error} ({check.ms}ms)
-                      </span>
-                    ))}
-                  </div>
                 ) : null}
                 <div className="lr-ceo-setup-steps">
                   {selectedSteps.map(step => (
@@ -1108,12 +1018,108 @@ export default function NewDealerClientPage() {
                       <span className={statusClass(step.status)}>{step.status.replace(/_/g, " ")}</span>
                       <div>
                         <strong>{step.label}</strong>
-                        {step.note ? <p>{step.note}</p> : null}
                       </div>
                       {currentStep?.id === step.id ? <em>Current</em> : <em />}
                     </div>
                   ))}
                 </div>
+                {hasTechnicalDetails ? (
+                  <details className="lr-ceo-technical-details">
+                    <summary>Technical details</summary>
+                    {vercelDomains.length ? (
+                      <div className="lr-ceo-vercel-status">
+                        {vercelDomains.map(domain => (
+                          <span key={domain.domain} className={domain.exists && domain.verified ? "is-ready" : domain.error ? "is-blocked" : "is-working"}>
+                            {domain.domain}: {domain.error || (domain.exists ? (domain.verified ? "verified" : "pending DNS") : "not added")}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {dnsRecords.length ? (
+                      <div className="lr-ceo-dns-records">
+                        {dnsRecords.map(record => (
+                          <div key={record.id}>
+                            <span>{record.type}</span>
+                            <strong>{record.name}</strong>
+                            <code>{record.value}</code>
+                            <small>{record.purpose}</small>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {smokeChecks.length ? (
+                      <div className="lr-ceo-vercel-status">
+                        {smokeChecks.map(check => (
+                          <span key={check.url} className={check.ok ? "is-ready" : "is-blocked"}>
+                            {check.url}: {check.status || check.error} ({check.ms}ms)
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {currentApiDeployment ? (
+                      <div className="lr-ceo-dns-records">
+                        <div>
+                          <span>Repo</span>
+                          <strong>{currentApiDeployment.repoPath}</strong>
+                          <small>{currentApiDeployment.repoUrl}</small>
+                        </div>
+                        <div>
+                          <span>Env</span>
+                          <strong>{currentApiDeployment.envFile}</strong>
+                          <small>Secrets stay on the server.</small>
+                        </div>
+                        <div>
+                          <span>Data</span>
+                          <strong>{currentApiDeployment.dataDir}</strong>
+                          <small>Dealer runtime data.</small>
+                        </div>
+                        <div>
+                          <span>PM2</span>
+                          <strong>{currentApiDeployment.pm2Process}</strong>
+                          <small>{currentApiDeployment.healthUrl}</small>
+                        </div>
+                        <div className="lr-ceo-deploy-profile">
+                          <span>Profile</span>
+                          <pre>{currentApiDeployment.profileText}</pre>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={copyApiDeployProfile}>
+                            Copy profile
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {groupedRemoteEnv.length ? (
+                      <section className="lr-ceo-env-card">
+                        <div className="lr-ceo-panel-title">
+                          <div>
+                            <p className="lr-ceo-kicker">Server settings</p>
+                            <h3>Environment checklist</h3>
+                          </div>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={copyRemoteEnvTemplate}>
+                            Copy env template
+                          </button>
+                        </div>
+                        <div className="lr-ceo-env-groups">
+                          {groupedRemoteEnv.map(([category, items]) => (
+                            <div key={category} className="lr-ceo-env-group">
+                              <h4>{category}</h4>
+                              {items.map(item => (
+                                <div key={item.key} className={`lr-ceo-env-row is-${item.status}`}>
+                                  <span>{item.required ? "Required" : "Optional"}</span>
+                                  <div>
+                                    <strong>{item.key}</strong>
+                                    <small>{item.description}</small>
+                                    {item.valueHint && !item.secret ? <code>{item.valueHint}</code> : null}
+                                  </div>
+                                  <em>{item.secret ? "Secret" : item.status}</em>
+                                </div>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
+                  </details>
+                ) : null}
               </>
             ) : (
               <p className="lr-ceo-note">Create the first dealer setup to start the onboarding workflow.</p>

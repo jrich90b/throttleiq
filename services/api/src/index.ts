@@ -26368,6 +26368,372 @@ app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos")
   return res.json({ ok: true, client });
 });
 
+function dealerSetupStageForStep(stepId: string): DealerSetupStage {
+  if (stepId === "vercel") return "vercel";
+  if (stepId === "dns") return "dns";
+  if (stepId === "api" || stepId === "remote_env") return "api_config";
+  if (["google", "twilio", "sendgrid", "meta"].includes(stepId)) return "connectors";
+  if (stepId === "agreement") return "agreement";
+  if (stepId === "smoke" || stepId === "handoff") return "live";
+  return "intake";
+}
+
+function dealerSetupCompletionNote(stepId: string) {
+  switch (stepId) {
+    case "agreement":
+      return "Agreement and pricing confirmed.";
+    case "dns":
+      return "DNS records entered and confirmed.";
+    case "api":
+      return "API deployment completed.";
+    case "remote_env":
+      return "Remote API environment confirmed.";
+    case "google":
+      return "Google mail and calendar connected.";
+    case "twilio":
+      return "Twilio messaging configured.";
+    case "sendgrid":
+      return "SendGrid sender/domain configured.";
+    case "meta":
+      return "Meta connection verified.";
+    case "handoff":
+      return "Dealer handoff completed.";
+    default:
+      return "Step completed.";
+  }
+}
+
+function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
+  provider: AgentTaskProvider;
+  kind: AgentTaskKind;
+  title: string;
+  instructions: string;
+  message: string;
+  nextStep: string;
+  approvalReason: string;
+} {
+  const coreFacts = [
+    `Dealer: ${setup.dealerName}`,
+    `Website: ${setup.website || "not provided"}`,
+    `App URL: ${setup.appUrl}`,
+    `API URL: ${setup.apiUrl}`,
+    `Primary contact: ${setup.primaryContact || "not provided"}`,
+    `Plan: ${setup.plan || "not provided"}`,
+    `Monthly fee: ${setup.monthlyFee || "not provided"}`,
+    `Setup fee: ${setup.setupFee || "not provided"}`
+  ].join("\n");
+  if (stepId === "agreement") {
+    return {
+      provider: "claude",
+      kind: "agreement",
+      title: `Draft ${setup.dealerName} agreement`,
+      message: "Agreement draft started.",
+      nextStep: "Review the draft before sending it for signature.",
+      approvalReason: "Agreement work can affect legal/commercial terms, so review is required before sending.",
+      instructions: [
+        "Draft a dealer agreement packet using only the structured facts below for business terms.",
+        "Do not invent pricing, usage, contract dates, legal names, signer details, or overage terms that are not provided.",
+        "Flag missing fields clearly for human review. Do not send the agreement.",
+        "",
+        `Dealer legal name: ${setup.legalName || "not provided"}`,
+        `DBA name: ${setup.dbaName || setup.dealerName || "not provided"}`,
+        `Dealer address: ${setup.dealerAddress || "not provided"}`,
+        `Included usage: ${setup.includedUsage || setup.leadVolume || "not provided"}`,
+        `Overage terms: ${setup.overageTerms || "not provided"}`,
+        `Contract term: ${setup.contractTerm || "not provided"}`,
+        `Billing start: ${setup.billingStart || "not provided"}`,
+        `Notes: ${setup.notes || "none"}`,
+        "",
+        coreFacts
+      ].join("\n")
+    };
+  }
+  if (stepId === "api") {
+    const deployment = buildDealerApiDeployment(setup);
+    return {
+      provider: "codex",
+      kind: "dealer_setup",
+      title: `Prepare ${setup.dealerName} API deployment`,
+      message: "API deployment task created.",
+      nextStep: "Run the API deploy after the server values are confirmed.",
+      approvalReason: "API deployment can change production infrastructure, so review is required before execution.",
+      instructions: [
+        "Prepare the dealer API deployment using the generated deployment profile.",
+        "Do not overwrite existing clients or shared American Harley paths.",
+        "Do not deploy until the operator approves.",
+        "",
+        `Repo path: ${deployment.repoPath}`,
+        `Env file: ${deployment.envFile}`,
+        `Data dir: ${deployment.dataDir}`,
+        `PM2 process: ${deployment.pm2Process}`,
+        `Deploy profile: ${deployment.deployProfileLocalPath}`,
+        "",
+        coreFacts
+      ].join("\n")
+    };
+  }
+  if (stepId === "remote_env") {
+    return {
+      provider: "codex",
+      kind: "dealer_setup",
+      title: `Confirm ${setup.dealerName} server settings`,
+      message: "Server settings checklist prepared.",
+      nextStep: "Add secret values on the server, then mark this step complete.",
+      approvalReason: "Server environment work can expose or change credentials, so review is required.",
+      instructions: [
+        "Prepare the remote API environment checklist for this dealer.",
+        "Keep secret values out of the repo and out of task output.",
+        "Confirm which values require human login, billing, or credentials.",
+        "",
+        coreFacts
+      ].join("\n")
+    };
+  }
+  const providerCopy: Record<string, { title: string; message: string; nextStep: string; instructions: string }> = {
+    google: {
+      title: `Connect ${setup.dealerName} Google mail and calendars`,
+      message: "Google setup task created.",
+      nextStep: "Complete Google login/OAuth, then mark this step complete.",
+      instructions: "Prepare Google Workspace/Gmail/calendar setup for this dealer. Separate OAuth/login steps from code/config steps. Do not use personal credentials in task output."
+    },
+    twilio: {
+      title: `Configure ${setup.dealerName} Twilio messaging`,
+      message: "Twilio setup task created.",
+      nextStep: "Finish phone, compliance, and routing setup, then mark this step complete.",
+      instructions: "Prepare Twilio number, A2P/10DLC, webhook, opt-in, STOP/HELP, routing, and smoke-test steps. Separate what can be prepared from what needs human billing or carrier approval."
+    },
+    sendgrid: {
+      title: `Configure ${setup.dealerName} SendGrid email`,
+      message: "SendGrid setup task created.",
+      nextStep: "Finish sender/domain authentication, then mark this step complete.",
+      instructions: "Prepare SendGrid sender/domain authentication, inbound parse, reply-to, and smoke-test steps. Do not expose API keys or DNS secrets."
+    },
+    meta: {
+      title: `Verify ${setup.dealerName} Meta connection`,
+      message: "Meta setup task created.",
+      nextStep: "Confirm app status, callback, and permissions, then mark this step complete.",
+      instructions: "Prepare Meta app/callback/permissions verification for this dealer. Identify human login or app-review blockers. Do not change production settings without approval."
+    }
+  };
+  const copy = providerCopy[stepId] ?? {
+    title: `Work ${setup.dealerName} setup step`,
+    message: "Setup task created.",
+    nextStep: "Review the task and mark complete when finished.",
+    instructions: "Prepare the next setup task for this dealer."
+  };
+  return {
+    provider: "codex",
+    kind: "dealer_setup",
+    title: copy.title,
+    message: copy.message,
+    nextStep: copy.nextStep,
+    approvalReason: "This setup step can affect external provider accounts or production routing, so review is required.",
+    instructions: [copy.instructions, "", coreFacts].join("\n")
+  };
+}
+
+async function ensureDealerSetupAgentTask(setup: DealerSetup, stepId: string) {
+  const spec = dealerSetupTaskSpec(setup, stepId);
+  const marker = `[dealer-setup:${setup.id}:${stepId}]`;
+  const existing = (await listAgentTasks(1000)).find(task => {
+    if (!task.instructions.includes(marker)) return false;
+    return task.status !== "completed" && task.status !== "failed";
+  });
+  if (existing) {
+    if (existing.provider === "claude") queueClaudeTaskExecution(existing);
+    return { task: existing, spec, reused: true };
+  }
+  const task = await addAgentTask({
+    provider: spec.provider,
+    kind: spec.kind,
+    title: spec.title,
+    instructions: `${marker}\n${spec.instructions}`,
+    clientName: setup.dealerName,
+    priority: "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: spec.approvalReason
+    },
+    requestedBy: {
+      name: "Dealer Setup Runner",
+      role: "system"
+    }
+  });
+  if (task.provider === "claude") queueClaudeTaskExecution(task);
+  return { task, spec, reused: false };
+}
+
+app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "Manager access is required." });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const stepId = String(req.body?.stepId ?? "").trim() || setup.steps.find(step => step.status === "blocked")?.id || setup.steps.find(step => step.status !== "done")?.id || "handoff";
+  const action = String(req.body?.action ?? "run").trim().toLowerCase();
+  if (action === "complete") {
+    const updated = await updateDealerSetup(setup.id, {
+      stage: dealerSetupStageForStep(stepId),
+      status: stepId === "handoff" ? "live" : "in_progress",
+      stepId,
+      stepStatus: "done",
+      stepNote: dealerSetupCompletionNote(stepId)
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      message: `${(updated ?? setup).dealerName}: ${dealerSetupCompletionNote(stepId)}`,
+      nextStep: "Continue to the next setup step."
+    });
+  }
+
+  if (stepId === "intake") {
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "intake",
+      status: "in_progress",
+      stepId,
+      stepStatus: "done",
+      stepNote: "Dealer intake confirmed."
+    });
+    return res.json({ ok: true, setup: updated ?? setup, stepId, message: "Dealer intake confirmed.", nextStep: "Continue to agreement and pricing." });
+  }
+
+  if (stepId === "vercel") {
+    const appDomain = new URL(setup.appUrl).hostname;
+    const domains = await Promise.all([addVercelProjectDomain(appDomain)]);
+    const domainSummary = domains.map(domain => `${domain.domain}${domain.verified ? " verified" : " pending DNS"}`).join(", ");
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "vercel",
+      status: "in_progress",
+      stepId,
+      stepStatus: domains.every(domain => domain.exists) ? "done" : "in_progress",
+      stepNote: `Vercel domain checked: ${domainSummary}`
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      domains,
+      message: domains.every(domain => domain.exists) ? "Vercel domain is added." : "Vercel domain still needs attention.",
+      nextStep: domains.every(domain => domain.verified) ? "Continue to DNS records." : "Point DNS if needed, then continue."
+    });
+  }
+
+  if (stepId === "dns") {
+    const records = buildDealerDnsChecklist(setup);
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "dns",
+      status: "in_progress",
+      stepId,
+      stepStatus: "in_progress",
+      stepNote: "DNS records generated and ready to enter."
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      records,
+      message: "DNS records are ready.",
+      nextStep: "Add these records where the dealer domain is hosted, then mark DNS complete."
+    });
+  }
+
+  if (stepId === "api") {
+    const deployment = buildDealerApiDeployment(setup);
+    const { task, spec, reused } = await ensureDealerSetupAgentTask(setup, stepId);
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "api_config",
+      status: "in_progress",
+      stepId,
+      stepStatus: "in_progress",
+      stepNote: reused ? "API deployment task is already open." : "API deployment task created."
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      deployment,
+      task: { id: task.id, title: task.title, status: task.status, provider: task.provider },
+      message: reused ? "API deployment task is already open." : spec.message,
+      nextStep: spec.nextStep
+    });
+  }
+
+  if (["agreement", "remote_env", "google", "twilio", "sendgrid", "meta"].includes(stepId)) {
+    const { task, spec, reused } = await ensureDealerSetupAgentTask(setup, stepId);
+    const updated = await updateDealerSetup(setup.id, {
+      stage: dealerSetupStageForStep(stepId),
+      status: "in_progress",
+      stepId,
+      stepStatus: "in_progress",
+      stepNote: reused ? "Setup task is already open." : spec.nextStep
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      task: { id: task.id, title: task.title, status: task.status, provider: task.provider },
+      message: reused ? "That setup task is already open." : spec.message,
+      nextStep: spec.nextStep
+    });
+  }
+
+  if (stepId === "smoke") {
+    const checks = await Promise.all([
+      checkUrl(setup.appUrl),
+      checkUrl(`${setup.apiUrl.replace(/\/$/, "")}/health`)
+    ]);
+    const passed = checks.every(check => check.ok);
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "live",
+      status: passed ? "ready" : "blocked",
+      stepId,
+      stepStatus: passed ? "done" : "blocked",
+      stepNote: passed ? "Smoke test passed." : "Smoke test needs attention."
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      checks,
+      message: passed ? "Smoke test passed." : "Smoke test found a blocker.",
+      nextStep: passed ? "Push the dealer to Active Clients." : "Review the failed check, then run the smoke test again."
+    });
+  }
+
+  if (stepId === "handoff") {
+    if (!setup.deployReadiness?.canPushToActiveClient) {
+      return res.status(409).json({
+        ok: false,
+        error: setup.deployReadiness?.summary || "Dealer setup is not live-ready yet.",
+        deployReadiness: setup.deployReadiness
+      });
+    }
+    const client = await upsertActiveClientFromDealerSetup(setup);
+    if (!client) return res.status(500).json({ ok: false, error: "Active client could not be saved." });
+    const updated = await updateDealerSetup(setup.id, {
+      stage: "live",
+      status: "live",
+      stepId,
+      stepStatus: "done",
+      stepNote: "Dealer pushed to Active Clients."
+    });
+    return res.json({
+      ok: true,
+      setup: updated ?? setup,
+      stepId,
+      client,
+      message: "Dealer is now in Active Clients.",
+      nextStep: "Use Active Clients for ongoing account management."
+    });
+  }
+
+  return res.status(400).json({ ok: false, error: "Unsupported setup step." });
+});
+
 const allowedEsignProviders: EsignPacketProvider[] = ["manual", "docusign", "dropbox_sign", "pandadoc", "signwell"];
 const allowedEsignStatuses: EsignPacketStatus[] = ["draft", "ready", "sent", "signed", "declined", "voided"];
 

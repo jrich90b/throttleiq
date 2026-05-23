@@ -453,6 +453,34 @@ a {
   gap: 0.62rem;
 }
 
+.lr-ceo-step-result {
+  display: grid;
+  gap: 0.28rem;
+  margin-bottom: 1rem;
+  padding: 0.92rem 1rem;
+  border: 1px solid rgba(116, 214, 128, 0.32);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(12, 43, 28, 0.94), rgba(8, 17, 24, 0.96));
+  color: #dfffe5;
+}
+
+.lr-ceo-step-result.is-blocked {
+  border-color: rgba(255, 99, 99, 0.34);
+  background: linear-gradient(180deg, rgba(52, 20, 24, 0.94), rgba(18, 12, 16, 0.96));
+  color: #ffe0e0;
+}
+
+.lr-ceo-step-result strong,
+.lr-ceo-step-result span,
+.lr-ceo-step-result small {
+  margin: 0;
+}
+
+.lr-ceo-step-result span,
+.lr-ceo-step-result small {
+  color: #b8c6dc;
+}
+
 .lr-ceo-panel {
   min-width: 0;
   padding: 1rem;
@@ -1513,6 +1541,33 @@ a {
   line-height: 1.35;
 }
 
+.lr-ceo-readiness-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.lr-ceo-readiness-list strong {
+  color: #ffca92;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lr-ceo-readiness-list span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0.22rem 0.56rem;
+  border: 1px solid rgba(251, 127, 4, 0.28);
+  border-radius: 999px;
+  background: rgba(251, 127, 4, 0.12);
+  color: #ffca92;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .lr-ceo-launch-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1787,6 +1842,38 @@ a {
 .lr-ceo-dns-records .lr-ceo-deploy-profile {
   grid-template-columns: 78px minmax(0, 1fr) auto;
   align-items: start;
+}
+
+.lr-ceo-technical-details {
+  margin-top: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.26);
+  overflow: hidden;
+}
+
+.lr-ceo-technical-details summary {
+  cursor: pointer;
+  padding: 0.8rem 0.9rem;
+  color: #ffca92;
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lr-ceo-technical-details[open] {
+  padding-bottom: 0.9rem;
+}
+
+.lr-ceo-technical-details[open] summary {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lr-ceo-technical-details > .lr-ceo-vercel-status,
+.lr-ceo-technical-details > .lr-ceo-dns-records,
+.lr-ceo-technical-details > .lr-ceo-env-card {
+  margin: 0.85rem 0.9rem 0;
 }
 
 .lr-ceo-deploy-profile pre {
