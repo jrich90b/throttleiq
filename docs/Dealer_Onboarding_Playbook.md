@@ -57,6 +57,12 @@ api.<dealer-slug>.leadrider.ai  A      <dealer-api-server-ip>
 
 Do not move the API DNS record to Vercel unless the API has been explicitly moved off the server.
 
+For the current multi-client deployment path and guarded API deploy command, see:
+
+```text
+docs/multi_client_deployment.md
+```
+
 ---
 
 **Step 1: Provision the API Server**
@@ -409,5 +415,6 @@ pm2 logs throttleiq-api --lines 200 | grep -i "TLP log"
 3. Use website‑provider subdomain if root DNS not editable.
 4. Store dealer‑specific lead source overlays in runtime.
 5. Keep per‑dealer inventory feeds.
-6. For the next dealer, repeat the checklist instead of changing American Harley records.
-7. Move to multi-tenant hosting only after the isolated client flow is stable and documented.
+6. Deploy API changes through `scripts/deploy_api_lightsail.sh` instead of manual server edits.
+7. For the next dealer, repeat the checklist instead of changing American Harley records.
+8. Move to multi-tenant hosting only after the isolated client flow is stable and documented.
