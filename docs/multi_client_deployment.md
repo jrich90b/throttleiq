@@ -68,9 +68,9 @@ The current production server has accumulated source and generated-file drift fr
 1. Keep the existing `/home/ubuntu/throttleiq` folder untouched.
 2. Deploy a clean checkout to a dealer-specific path such as `/home/ubuntu/leadrider-api/americanharley`.
 3. Point PM2 at the clean checkout with `DEPLOY_REPLACE_PM2=1`.
-4. Keep using the existing remote `.env` until secrets are moved out of the old repo folder.
+4. Move the dealer `.env` to a neutral runtime path such as `/home/ubuntu/leadrider-runtime/americanharley/api.env`.
 5. Verify health, webhook delivery, and one representative conversation.
-6. After production is stable, move the dealer `.env` to a neutral runtime path such as `/home/ubuntu/leadrider-runtime/americanharley/api.env`.
+6. After production is stable, leave the old dirty repo folder untouched until all runtime/state dependencies have been audited.
 
 The goal is that production is always reproducible from Git plus the dealer `.env` and `DATA_DIR`.
 
