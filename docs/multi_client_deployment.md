@@ -18,7 +18,7 @@ Use the same product repo, but keep dealer runtime separated.
 | --- | --- |
 | Web UI | Vercel project/domain per dealer, or a shared project only after host-based API routing exists |
 | API | PM2 process per dealer or server per dealer |
-| Runtime data | one `DATA_DIR` per dealer |
+| Runtime data | one `DATA_DIR` per dealer, for example `/home/ubuntu/leadrider-runtime/<dealer>/data` |
 | Secrets | one remote `.env` per dealer API process |
 | Webhooks | Twilio/SendGrid/Google/Meta point to that dealer's API hostname |
 | Browser/MDF runners | one registered runner computer per dealer where needed |
@@ -69,8 +69,9 @@ The current production server has accumulated source and generated-file drift fr
 2. Deploy a clean checkout to a dealer-specific path such as `/home/ubuntu/leadrider-api/americanharley`.
 3. Point PM2 at the clean checkout with `DEPLOY_REPLACE_PM2=1`.
 4. Move the dealer `.env` to a neutral runtime path such as `/home/ubuntu/leadrider-runtime/americanharley/api.env`.
-5. Verify health, webhook delivery, and one representative conversation.
-6. After production is stable, leave the old dirty repo folder untouched until all runtime/state dependencies have been audited.
+5. Move the dealer `DATA_DIR` to a neutral runtime path such as `/home/ubuntu/leadrider-runtime/americanharley/data`.
+6. Verify health, webhook delivery, and one representative conversation.
+7. After production is stable, leave the old dirty repo and data folders untouched until all runtime/state dependencies have been audited.
 
 The goal is that production is always reproducible from Git plus the dealer `.env` and `DATA_DIR`.
 
