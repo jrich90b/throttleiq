@@ -1443,12 +1443,70 @@ a {
 }
 
 .lr-ceo-launch-card,
+.lr-ceo-readiness-card,
 .lr-ceo-env-card {
   margin-top: 1rem;
   padding: 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 8px;
   background: rgba(8, 14, 24, 0.56);
+}
+
+.lr-ceo-readiness-card {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.lr-ceo-readiness-card.is-ready {
+  border-color: rgba(116, 214, 128, 0.32);
+  background: rgba(116, 214, 128, 0.07);
+}
+
+.lr-ceo-readiness-card.is-working {
+  border-color: rgba(251, 127, 4, 0.32);
+  background: rgba(251, 127, 4, 0.07);
+}
+
+.lr-ceo-readiness-card.is-blocked {
+  border-color: rgba(255, 99, 99, 0.34);
+  background: rgba(255, 99, 99, 0.08);
+}
+
+.lr-ceo-readiness-card h3,
+.lr-ceo-readiness-card p {
+  margin: 0;
+}
+
+.lr-ceo-readiness-card p {
+  color: #bfd0e7;
+  line-height: 1.45;
+}
+
+.lr-ceo-readiness-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.62rem;
+}
+
+.lr-ceo-readiness-columns div {
+  display: grid;
+  align-content: start;
+  gap: 0.34rem;
+  min-height: 112px;
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.32);
+}
+
+.lr-ceo-readiness-columns strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-readiness-columns span {
+  color: #aebbd2;
+  font-size: 0.86rem;
+  line-height: 1.35;
 }
 
 .lr-ceo-launch-grid {
@@ -2274,6 +2332,7 @@ a {
   .lr-ceo-connector-grid,
   .lr-ceo-facts,
   .lr-ceo-launch-grid,
+  .lr-ceo-readiness-columns,
   .lr-ceo-env-row,
   .lr-ceo-funnel-board,
   .lr-ceo-sales-form,

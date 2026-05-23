@@ -14,6 +14,7 @@ export type DealerSetupStep = {
 };
 
 export type DealerSetupChecklistStatus = "pending" | "working" | "blocked" | "ready" | "optional";
+export type DealerDeployReadinessStatus = "blocked" | "not_ready" | "ready_to_deploy" | "live_ready";
 
 export type DealerLaunchChecklistItem = {
   id: string;
@@ -32,6 +33,17 @@ export type DealerRemoteEnvItem = {
   status: DealerSetupChecklistStatus;
   description: string;
   valueHint?: string;
+};
+
+export type DealerDeployReadiness = {
+  status: DealerDeployReadinessStatus;
+  label: string;
+  summary: string;
+  canDeployApi: boolean;
+  canPushToActiveClient: boolean;
+  missing: string[];
+  blockers: string[];
+  warnings: string[];
 };
 
 export type DealerApiDeployment = {
@@ -84,6 +96,7 @@ export type DealerSetup = {
   launchChecklist?: DealerLaunchChecklistItem[];
   remoteEnvChecklist?: DealerRemoteEnvItem[];
   remoteEnvTemplate?: string;
+  deployReadiness?: DealerDeployReadiness;
   createdAt: string;
   updatedAt: string;
 };
@@ -206,6 +219,79 @@ function checklistStatusFromStep(status: DealerSetupStepStatus): DealerSetupChec
   if (status === "in_progress") return "working";
   if (status === "blocked") return "blocked";
   return "pending";
+}
+
+function stepLabel(setup: Pick<DealerSetup, "steps">, stepId: string): string {
+  return mergeDefaultSteps(setup.steps).find(step => step.id === stepId)?.label ?? stepId;
+}
+
+function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
+  const requiredDone = ["vercel", "dns", "remote_env"];
+  const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
+  const blockingSteps = [...requiredDone, ...requiredStarted, "smoke"];
+  const missing: string[] = [];
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  for (const stepId of requiredDone) {
+    const status = stepStatus(setup, stepId);
+    if (status !== "done") missing.push(stepLabel(setup, stepId));
+  }
+
+  for (const stepId of requiredStarted) {
+    const status = stepStatus(setup, stepId);
+    if (status !== "done" && status !== "in_progress") missing.push(stepLabel(setup, stepId));
+  }
+
+  for (const stepId of blockingSteps) {
+    const status = stepStatus(setup, stepId);
+    if (status === "blocked") blockers.push(stepLabel(setup, stepId));
+  }
+
+  if (stepStatus(setup, "smoke") === "pending") warnings.push("Launch smoke test has not run yet.");
+  if (!setup.website) warnings.push("Dealer website is not captured.");
+  if (!setup.primaryContact) warnings.push("Primary contact is not captured.");
+
+  const canDeployApi = missing.length === 0 && blockers.length === 0;
+  const canPushToActiveClient = canDeployApi && stepStatus(setup, "smoke") === "done";
+  const status: DealerDeployReadinessStatus = blockers.length
+    ? "blocked"
+    : canPushToActiveClient
+      ? "live_ready"
+      : canDeployApi
+        ? "ready_to_deploy"
+        : "not_ready";
+
+  const label =
+    status === "blocked"
+      ? "Blocked"
+      : status === "live_ready"
+        ? "Live-ready"
+        : status === "ready_to_deploy"
+          ? "Ready to deploy"
+          : "Not ready";
+
+  const summary =
+    status === "blocked"
+      ? `Resolve ${blockers.length} blocked setup step${blockers.length === 1 ? "" : "s"} before deployment.`
+      : status === "live_ready"
+        ? "Smoke test passed. This dealer can be pushed to Active Clients."
+        : status === "ready_to_deploy"
+          ? "Required setup is ready. Deploy the API, then run the launch smoke test."
+          : missing.length
+            ? `Complete ${missing.length} required item${missing.length === 1 ? "" : "s"} before deployment.`
+            : "Review setup readiness before deployment.";
+
+  return {
+    status,
+    label,
+    summary,
+    canDeployApi,
+    canPushToActiveClient,
+    missing,
+    blockers,
+    warnings
+  };
 }
 
 function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
@@ -345,7 +431,8 @@ function withGeneratedFields(setup: DealerSetup): DealerSetup {
     apiDeployment: buildDealerApiDeployment(normalized),
     launchChecklist: buildLaunchChecklist(normalized),
     remoteEnvChecklist: buildRemoteEnvChecklist(normalized),
-    remoteEnvTemplate: buildRemoteEnvTemplate(normalized)
+    remoteEnvTemplate: buildRemoteEnvTemplate(normalized),
+    deployReadiness: buildDeployReadiness(normalized)
   };
 }
 

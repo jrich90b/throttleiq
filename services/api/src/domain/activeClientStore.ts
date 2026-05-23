@@ -28,6 +28,16 @@ export type ActiveClient = {
   billingContactEmail?: string;
   billingContactPhone?: string;
   website?: string;
+  appUrl?: string;
+  apiUrl?: string;
+  apiHealthUrl?: string;
+  apiPm2Process?: string;
+  apiDataDir?: string;
+  apiEnvFile?: string;
+  apiDeployProfilePath?: string;
+  launchStatus?: string;
+  providerStatuses?: string;
+  runnerStatus?: string;
   leadVolume?: string;
   dealerLines?: string;
   contractTerm?: string;
@@ -82,6 +92,16 @@ export async function addActiveClient(input: Partial<ActiveClient> & { dealerNam
     billingContactEmail: clean(input.billingContactEmail, 180),
     billingContactPhone: clean(input.billingContactPhone, 80),
     website: clean(input.website, 240),
+    appUrl: clean(input.appUrl, 240),
+    apiUrl: clean(input.apiUrl, 240),
+    apiHealthUrl: clean(input.apiHealthUrl, 240),
+    apiPm2Process: clean(input.apiPm2Process, 160),
+    apiDataDir: clean(input.apiDataDir, 300),
+    apiEnvFile: clean(input.apiEnvFile, 300),
+    apiDeployProfilePath: clean(input.apiDeployProfilePath, 240),
+    launchStatus: clean(input.launchStatus, 160),
+    providerStatuses: clean(input.providerStatuses, 1200),
+    runnerStatus: clean(input.runnerStatus, 240),
     leadVolume: clean(input.leadVolume, 80),
     dealerLines: clean(input.dealerLines, 120),
     contractTerm: clean(input.contractTerm, 120),
@@ -124,6 +144,16 @@ export async function updateActiveClient(id: string, patch: Partial<ActiveClient
     "billingContactEmail",
     "billingContactPhone",
     "website",
+    "appUrl",
+    "apiUrl",
+    "apiHealthUrl",
+    "apiPm2Process",
+    "apiDataDir",
+    "apiEnvFile",
+    "apiDeployProfilePath",
+    "launchStatus",
+    "providerStatuses",
+    "runnerStatus",
     "leadVolume",
     "dealerLines",
     "contractTerm",
@@ -140,7 +170,10 @@ export async function updateActiveClient(id: string, patch: Partial<ActiveClient
     "paymentTerms",
     "notes"
   ] as const) {
-    if (typeof patch[key] === "string") (client as any)[key] = clean(patch[key], key === "notes" ? 3000 : 500);
+    if (typeof patch[key] === "string") {
+      const max = key === "notes" ? 3000 : key === "providerStatuses" ? 1200 : 500;
+      (client as any)[key] = clean(patch[key], max);
+    }
   }
   client.updatedAt = new Date().toISOString();
   scheduleSave();

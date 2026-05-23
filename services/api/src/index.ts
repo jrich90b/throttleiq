@@ -26132,6 +26132,16 @@ app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res
     billingContactEmail: req.body?.billingContactEmail,
     billingContactPhone: req.body?.billingContactPhone,
     website: req.body?.website,
+    appUrl: req.body?.appUrl,
+    apiUrl: req.body?.apiUrl,
+    apiHealthUrl: req.body?.apiHealthUrl,
+    apiPm2Process: req.body?.apiPm2Process,
+    apiDataDir: req.body?.apiDataDir,
+    apiEnvFile: req.body?.apiEnvFile,
+    apiDeployProfilePath: req.body?.apiDeployProfilePath,
+    launchStatus: req.body?.launchStatus,
+    providerStatuses: req.body?.providerStatuses,
+    runnerStatus: req.body?.runnerStatus,
     leadVolume: req.body?.leadVolume,
     dealerLines: req.body?.dealerLines,
     contractTerm: req.body?.contractTerm,
@@ -26171,6 +26181,16 @@ app.patch("/active-clients/:id", requirePermission("canAccessTodos"), async (req
     billingContactEmail: typeof req.body?.billingContactEmail === "string" ? req.body.billingContactEmail : undefined,
     billingContactPhone: typeof req.body?.billingContactPhone === "string" ? req.body.billingContactPhone : undefined,
     website: typeof req.body?.website === "string" ? req.body.website : undefined,
+    appUrl: typeof req.body?.appUrl === "string" ? req.body.appUrl : undefined,
+    apiUrl: typeof req.body?.apiUrl === "string" ? req.body.apiUrl : undefined,
+    apiHealthUrl: typeof req.body?.apiHealthUrl === "string" ? req.body.apiHealthUrl : undefined,
+    apiPm2Process: typeof req.body?.apiPm2Process === "string" ? req.body.apiPm2Process : undefined,
+    apiDataDir: typeof req.body?.apiDataDir === "string" ? req.body.apiDataDir : undefined,
+    apiEnvFile: typeof req.body?.apiEnvFile === "string" ? req.body.apiEnvFile : undefined,
+    apiDeployProfilePath: typeof req.body?.apiDeployProfilePath === "string" ? req.body.apiDeployProfilePath : undefined,
+    launchStatus: typeof req.body?.launchStatus === "string" ? req.body.launchStatus : undefined,
+    providerStatuses: typeof req.body?.providerStatuses === "string" ? req.body.providerStatuses : undefined,
+    runnerStatus: typeof req.body?.runnerStatus === "string" ? req.body.runnerStatus : undefined,
     leadVolume: typeof req.body?.leadVolume === "string" ? req.body.leadVolume : undefined,
     dealerLines: typeof req.body?.dealerLines === "string" ? req.body.dealerLines : undefined,
     contractTerm: typeof req.body?.contractTerm === "string" ? req.body.contractTerm : undefined,
@@ -26336,6 +26356,13 @@ app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos")
   }
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  if (!setup.deployReadiness?.canPushToActiveClient) {
+    return res.status(409).json({
+      ok: false,
+      error: setup.deployReadiness?.summary || "Dealer setup is not live-ready yet.",
+      deployReadiness: setup.deployReadiness
+    });
+  }
   const client = await upsertActiveClientFromDealerSetup(setup);
   if (!client) return res.status(500).json({ ok: false, error: "Active client could not be saved." });
   return res.json({ ok: true, client });
@@ -26369,9 +26396,20 @@ function extractLabeledNoteValue(notes: string | null | undefined, label: string
   return match?.[1]?.trim();
 }
 
+function providerStatusSummary(setup: DealerSetup) {
+  const providerIds = ["google", "twilio", "sendgrid", "meta"];
+  return providerIds
+    .map(id => {
+      const step = setup.steps.find(row => row.id === id);
+      return `${step?.label ?? id}: ${step?.status ?? "pending"}${step?.note ? ` (${step.note})` : ""}`;
+    })
+    .join("\n");
+}
+
 async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
   const clients = await listActiveClients(1000);
   const existing = clients.find(client => client.dealerSetupId === setup.id);
+  const deployment = buildDealerApiDeployment(setup);
   const packets = await listEsignPackets({ dealerSetupId: setup.id, limit: 25 });
   const agreementPacket =
     packets.find(packet => packet.status === "signed") ??
@@ -26392,6 +26430,16 @@ async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
     billingContactEmail: primaryContactEmail,
     billingContactPhone: primaryContactPhone,
     website: setup.website,
+    appUrl: setup.appUrl,
+    apiUrl: setup.apiUrl,
+    apiHealthUrl: deployment.healthUrl,
+    apiPm2Process: deployment.pm2Process,
+    apiDataDir: deployment.dataDir,
+    apiEnvFile: deployment.envFile,
+    apiDeployProfilePath: deployment.deployProfileLocalPath,
+    launchStatus: setup.deployReadiness?.label,
+    providerStatuses: providerStatusSummary(setup),
+    runnerStatus: setup.launchChecklist?.find(item => item.id === "runner")?.detail,
     leadVolume: setup.leadVolume,
     dealerLines: setup.crmProvider,
     contractTerm: setup.contractTerm,
@@ -26411,6 +26459,13 @@ async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
       setup.notes || "",
       setup.appUrl ? `App URL: ${setup.appUrl}` : "",
       setup.apiUrl ? `API URL: ${setup.apiUrl}` : "",
+      deployment.healthUrl ? `API health URL: ${deployment.healthUrl}` : "",
+      deployment.pm2Process ? `PM2 process: ${deployment.pm2Process}` : "",
+      deployment.dataDir ? `Data dir: ${deployment.dataDir}` : "",
+      deployment.envFile ? `Env file: ${deployment.envFile}` : "",
+      deployment.deployProfileLocalPath ? `Deploy profile: ${deployment.deployProfileLocalPath}` : "",
+      setup.deployReadiness?.label ? `Launch status: ${setup.deployReadiness.label}` : "",
+      providerStatusSummary(setup) ? `Provider statuses:\n${providerStatusSummary(setup)}` : "",
       setup.includedUsage ? `Included usage: ${setup.includedUsage}` : "",
       setup.overageTerms ? `Overage terms: ${setup.overageTerms}` : "",
       setup.contractTerm ? `Contract term: ${setup.contractTerm}` : "",

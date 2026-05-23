@@ -28,6 +28,16 @@ type ActiveClient = {
   billingContactEmail?: string;
   billingContactPhone?: string;
   website?: string;
+  appUrl?: string;
+  apiUrl?: string;
+  apiHealthUrl?: string;
+  apiPm2Process?: string;
+  apiDataDir?: string;
+  apiEnvFile?: string;
+  apiDeployProfilePath?: string;
+  launchStatus?: string;
+  providerStatuses?: string;
+  runnerStatus?: string;
   leadVolume?: string;
   dealerLines?: string;
   contractTerm?: string;
@@ -69,6 +79,16 @@ const emptyClientForm: ClientForm = {
   billingContactEmail: "",
   billingContactPhone: "",
   website: "",
+  appUrl: "",
+  apiUrl: "",
+  apiHealthUrl: "",
+  apiPm2Process: "",
+  apiDataDir: "",
+  apiEnvFile: "",
+  apiDeployProfilePath: "",
+  launchStatus: "",
+  providerStatuses: "",
+  runnerStatus: "",
   leadVolume: "",
   dealerLines: "",
   contractTerm: "",
@@ -114,6 +134,16 @@ function toForm(client: ActiveClient): ClientForm {
     billingContactEmail: client.billingContactEmail || "",
     billingContactPhone: client.billingContactPhone || "",
     website: client.website || "",
+    appUrl: client.appUrl || "",
+    apiUrl: client.apiUrl || "",
+    apiHealthUrl: client.apiHealthUrl || "",
+    apiPm2Process: client.apiPm2Process || "",
+    apiDataDir: client.apiDataDir || "",
+    apiEnvFile: client.apiEnvFile || "",
+    apiDeployProfilePath: client.apiDeployProfilePath || "",
+    launchStatus: client.launchStatus || "",
+    providerStatuses: client.providerStatuses || "",
+    runnerStatus: client.runnerStatus || "",
     leadVolume: client.leadVolume || "",
     dealerLines: client.dealerLines || "",
     contractTerm: client.contractTerm || "",
@@ -389,6 +419,12 @@ export default function ActiveClientsPage() {
                 </div>
                 <span className={`lr-ceo-status-pill ${statusClass(selected.status)}`}>{statusLabels[selected.status]}</span>
               </div>
+              <dl className="lr-ceo-facts">
+                <div><dt>Web app</dt><dd>{selected.appUrl || selected.website || "Not captured"}</dd></div>
+                <div><dt>API</dt><dd>{selected.apiUrl || "Not captured"}</dd></div>
+                <div><dt>Health</dt><dd>{selected.apiHealthUrl || "Not captured"}</dd></div>
+                <div><dt>Launch</dt><dd>{selected.launchStatus || "Not captured"}</dd></div>
+              </dl>
               <div className="lr-ceo-form-stack lr-ceo-active-client-form">
                 <label>Dealer name<input value={form.dealerName} onChange={e => updateForm("dealerName", e.target.value)} /></label>
                 <label>Status
@@ -407,6 +443,15 @@ export default function ActiveClientsPage() {
               <label>Billing email<input value={form.billingContactEmail} onChange={e => updateForm("billingContactEmail", e.target.value)} /></label>
               <label>Billing phone<input value={form.billingContactPhone} onChange={e => updateForm("billingContactPhone", e.target.value)} /></label>
               <label>Website<input value={form.website} onChange={e => updateForm("website", e.target.value)} /></label>
+              <label>Web app URL<input value={form.appUrl} onChange={e => updateForm("appUrl", e.target.value)} /></label>
+              <label>API URL<input value={form.apiUrl} onChange={e => updateForm("apiUrl", e.target.value)} /></label>
+              <label>API health URL<input value={form.apiHealthUrl} onChange={e => updateForm("apiHealthUrl", e.target.value)} /></label>
+              <label>PM2 process<input value={form.apiPm2Process} onChange={e => updateForm("apiPm2Process", e.target.value)} /></label>
+              <label>API data dir<input value={form.apiDataDir} onChange={e => updateForm("apiDataDir", e.target.value)} /></label>
+              <label>API env file<input value={form.apiEnvFile} onChange={e => updateForm("apiEnvFile", e.target.value)} /></label>
+              <label>Deploy profile<input value={form.apiDeployProfilePath} onChange={e => updateForm("apiDeployProfilePath", e.target.value)} /></label>
+              <label>Launch status<input value={form.launchStatus} onChange={e => updateForm("launchStatus", e.target.value)} /></label>
+              <label>Runner status<input value={form.runnerStatus} onChange={e => updateForm("runnerStatus", e.target.value)} /></label>
               <label>Lead volume<input value={form.leadVolume} onChange={e => updateForm("leadVolume", e.target.value)} /></label>
               <label>Dealer lines<input value={form.dealerLines} onChange={e => updateForm("dealerLines", e.target.value)} /></label>
               <label>Agreement link<input value={form.agreementUrl} onChange={e => updateForm("agreementUrl", e.target.value)} /></label>
@@ -421,6 +466,7 @@ export default function ActiveClientsPage() {
               <label>ACH status<input value={form.achMandateStatus} onChange={e => updateForm("achMandateStatus", e.target.value)} /></label>
                 <label>Bank last 4<input value={form.bankLast4} onChange={e => updateForm("bankLast4", e.target.value)} /></label>
                 <label>Payment terms<input value={form.paymentTerms} onChange={e => updateForm("paymentTerms", e.target.value)} /></label>
+                <label>Provider statuses<textarea value={form.providerStatuses} onChange={e => updateForm("providerStatuses", e.target.value)} /></label>
                 <label>Notes<textarea value={form.notes} onChange={e => updateForm("notes", e.target.value)} /></label>
               </div>
               <div className="lr-ceo-action-row">

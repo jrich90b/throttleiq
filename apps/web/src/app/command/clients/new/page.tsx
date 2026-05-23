@@ -24,6 +24,17 @@ type DealerRemoteEnvItem = {
   valueHint?: string;
 };
 
+type DealerDeployReadiness = {
+  status: "blocked" | "not_ready" | "ready_to_deploy" | "live_ready";
+  label: string;
+  summary: string;
+  canDeployApi: boolean;
+  canPushToActiveClient: boolean;
+  missing: string[];
+  blockers: string[];
+  warnings: string[];
+};
+
 type DealerSetup = {
   id: string;
   dealerName: string;
@@ -53,6 +64,7 @@ type DealerSetup = {
   launchChecklist?: DealerLaunchChecklistItem[];
   remoteEnvChecklist?: DealerRemoteEnvItem[];
   remoteEnvTemplate?: string;
+  deployReadiness?: DealerDeployReadiness;
   steps: Array<{
     id: string;
     label: string;
@@ -218,6 +230,12 @@ function statusClass(value: string) {
   if (value === "blocked") return "is-blocked";
   if (value === "in_progress") return "is-working";
   return "";
+}
+
+function readinessClass(status?: DealerDeployReadiness["status"]) {
+  if (status === "live_ready" || status === "ready_to_deploy") return "is-ready";
+  if (status === "blocked") return "is-blocked";
+  return "is-working";
 }
 
 export default function NewDealerClientPage() {
@@ -455,8 +473,8 @@ export default function NewDealerClientPage() {
       return;
     }
     if (currentStep.id === "handoff") {
-      await updateStep(currentStep.id, "done");
-      await pushToActiveClient();
+      const pushed = await pushToActiveClient();
+      if (pushed) await updateStep(currentStep.id, "done");
       return;
     }
     if (currentStep.id === "agreement") {
@@ -648,8 +666,8 @@ export default function NewDealerClientPage() {
     }
   }
 
-  async function pushToActiveClient() {
-    if (!selected) return;
+  async function pushToActiveClient(): Promise<boolean> {
+    if (!selected) return false;
     setActiveClientBusy(true);
     try {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/active-client`, { method: "POST" });
@@ -657,8 +675,10 @@ export default function NewDealerClientPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Active client could not be created.");
       const client = data.client as ActiveClient;
       setNotice(`${client.dealerName} is ready in Active Clients with setup, agreement, contact, and billing fields prefilled.`);
+      return true;
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Active client could not be created.");
+      return false;
     } finally {
       setActiveClientBusy(false);
     }
@@ -1010,6 +1030,41 @@ export default function NewDealerClientPage() {
                   <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
                   <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
                 </dl>
+                {selected.deployReadiness ? (
+                  <section className={`lr-ceo-readiness-card ${readinessClass(selected.deployReadiness.status)}`}>
+                    <div>
+                      <p className="lr-ceo-kicker">Deployment gate</p>
+                      <h3>{selected.deployReadiness.label}</h3>
+                      <p>{selected.deployReadiness.summary}</p>
+                    </div>
+                    <div className="lr-ceo-readiness-columns">
+                      <div>
+                        <strong>Missing</strong>
+                        {selected.deployReadiness.missing.length ? (
+                          selected.deployReadiness.missing.map(item => <span key={item}>{item}</span>)
+                        ) : (
+                          <span>Nothing required is missing.</span>
+                        )}
+                      </div>
+                      <div>
+                        <strong>Blocked</strong>
+                        {selected.deployReadiness.blockers.length ? (
+                          selected.deployReadiness.blockers.map(item => <span key={item}>{item}</span>)
+                        ) : (
+                          <span>No blocked setup steps.</span>
+                        )}
+                      </div>
+                      <div>
+                        <strong>Watch</strong>
+                        {selected.deployReadiness.warnings.length ? (
+                          selected.deployReadiness.warnings.map(item => <span key={item}>{item}</span>)
+                        ) : (
+                          <span>No warnings.</span>
+                        )}
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
                 {selected.launchChecklist?.length ? (
                   <section className="lr-ceo-launch-card">
                     <div className="lr-ceo-panel-title">
@@ -1133,7 +1188,16 @@ export default function NewDealerClientPage() {
                   <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
                     Create Codex task
                   </button>
-                  <button type="button" onClick={pushToActiveClient} disabled={activeClientBusy}>
+                  <button
+                    type="button"
+                    onClick={pushToActiveClient}
+                    disabled={activeClientBusy || !selected.deployReadiness?.canPushToActiveClient}
+                    title={
+                      selected.deployReadiness?.canPushToActiveClient
+                        ? "Push this live-ready setup to Active Clients"
+                        : selected.deployReadiness?.summary || "Setup is not live-ready yet"
+                    }
+                  >
                     Send to Active Clients
                   </button>
                 </div>
