@@ -66,7 +66,7 @@ scripts/deploy_api_lightsail.sh --profile infra/deploy/americanharley.api.env
 The current production server has accumulated source and generated-file drift from manual patches. Do not clean it up by resetting the folder in place. The safer first step is to move PM2 to a clean release checkout and leave the old folder intact as a rollback/source backup:
 
 1. Keep the existing `/home/ubuntu/throttleiq` folder untouched.
-2. Deploy a clean checkout to `/home/ubuntu/leadrider-api/current`.
+2. Deploy a clean checkout to a dealer-specific path such as `/home/ubuntu/leadrider-api/americanharley`.
 3. Point PM2 at the clean checkout with `DEPLOY_REPLACE_PM2=1`.
 4. Keep using the existing remote `.env` until secrets are moved out of the old repo folder.
 5. Verify health, webhook delivery, and one representative conversation.
