@@ -409,6 +409,10 @@ a {
   margin-bottom: 0.9rem;
 }
 
+.lr-ceo-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .lr-ceo-email-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
@@ -1812,6 +1816,11 @@ a {
   background: linear-gradient(180deg, rgba(18, 28, 43, 0.98), rgba(8, 14, 24, 0.98));
 }
 
+.lr-ceo-setup-step.is-current {
+  border-color: rgba(251, 127, 4, 0.48);
+  background: linear-gradient(180deg, rgba(38, 28, 18, 0.98), rgba(10, 17, 26, 0.98));
+}
+
 .lr-ceo-setup-step > span {
   display: inline-flex;
   justify-content: center;
@@ -1845,19 +1854,22 @@ a {
 }
 
 .lr-ceo-setup-step p {
-  grid-column: 2 / -1;
   color: #9aa8bc;
+  font-size: 0.86rem;
+  line-height: 1.38;
 }
 
 .lr-ceo-setup-step div {
-  display: flex;
-  gap: 0.42rem;
-  justify-content: flex-end;
+  display: grid;
+  gap: 0.22rem;
 }
 
-.lr-ceo-setup-step button {
-  min-height: 34px;
-  padding: 0.36rem 0.62rem;
+.lr-ceo-setup-step em {
+  color: #ffca92;
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .lr-ceo-command-box {

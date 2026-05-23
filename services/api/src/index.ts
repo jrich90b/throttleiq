@@ -32771,13 +32771,29 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
       notes
     }));
 
-  if (!existing) {
-    await updateDealerSetup(setup.id, {
+  const agreementHandled =
+    prospect.stage === "agreement_sent" ||
+    prospect.stage === "closed_won" ||
+    Boolean(prospect.docusignPacketId);
+  let setupForResponse =
+    (await updateDealerSetup(setup.id, {
       status: "in_progress",
+      stage: agreementHandled ? "vercel" : "agreement",
       stepId: "intake",
-      stepStatus: "in_progress",
-      stepNote: "Created from Sales Funnel prospect."
-    });
+      stepStatus: "done",
+      stepNote: "Completed from Sales Funnel handoff."
+    })) ?? setup;
+  if (agreementHandled) {
+    setupForResponse =
+      (await updateDealerSetup(setup.id, {
+        status: "in_progress",
+        stage: "vercel",
+        stepId: "agreement",
+        stepStatus: "done",
+        stepNote: prospect.docusignPacketId
+          ? `Handled in Sales Funnel. DocuSign packet: ${prospect.docusignPacketId}.`
+          : "Handled in Sales Funnel before dealer setup."
+      })) ?? setupForResponse;
   }
 
   const updatedProspect = await updateSalesProspect(prospect.id, {
@@ -32786,7 +32802,7 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
     notes: notes.slice(0, 3000)
   });
 
-  return res.json({ ok: true, setup: (await getDealerSetup(setup.id)) ?? setup, prospect: updatedProspect, existing: !!existing });
+  return res.json({ ok: true, setup: (await getDealerSetup(setupForResponse.id)) ?? setupForResponse, prospect: updatedProspect, existing: !!existing });
 });
 
 app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {

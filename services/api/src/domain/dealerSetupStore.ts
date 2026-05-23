@@ -119,18 +119,18 @@ function slugify(value: string) {
 
 function defaultSteps(): DealerSetupStep[] {
   return [
-    { id: "intake", label: "Dealer intake complete", status: "pending" },
-    { id: "agreement", label: "Agreement and pricing approved", status: "pending" },
-    { id: "vercel", label: "Vercel domain/project ready", status: "pending" },
-    { id: "dns", label: "DNS records validated", status: "pending" },
-    { id: "api", label: "API dealer config created", status: "pending" },
-    { id: "remote_env", label: "Remote API env confirmed", status: "pending" },
-    { id: "google", label: "Google calendars and support mail connected", status: "pending" },
-    { id: "twilio", label: "Twilio numbers and messaging configured", status: "pending" },
-    { id: "sendgrid", label: "SendGrid sender/domain configured", status: "pending" },
-    { id: "meta", label: "Meta app and callback verified", status: "pending" },
-    { id: "smoke", label: "Smoke test passed", status: "pending" },
-    { id: "handoff", label: "Dealer handoff complete", status: "pending" }
+    { id: "intake", label: "Dealer intake", status: "pending" },
+    { id: "agreement", label: "Agreement and pricing", status: "pending" },
+    { id: "vercel", label: "Vercel domains", status: "pending" },
+    { id: "dns", label: "DNS records", status: "pending" },
+    { id: "api", label: "API dealer config", status: "pending" },
+    { id: "remote_env", label: "Remote API env", status: "pending" },
+    { id: "google", label: "Google mail and calendars", status: "pending" },
+    { id: "twilio", label: "Twilio messaging", status: "pending" },
+    { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
+    { id: "meta", label: "Meta connection", status: "pending" },
+    { id: "smoke", label: "Smoke test", status: "pending" },
+    { id: "handoff", label: "Active client handoff", status: "pending" }
   ];
 }
 
@@ -147,7 +147,10 @@ function mergeDefaultSteps(existing: DealerSetupStep[] | undefined): DealerSetup
   const current = Array.isArray(existing) ? existing : [];
   const defaults = defaultSteps();
   const byId = new Map(current.map(step => [step.id, step]));
-  return defaults.map(step => byId.get(step.id) ?? step);
+  return defaults.map(step => {
+    const existingStep = byId.get(step.id);
+    return existingStep ? { ...existingStep, label: step.label } : step;
+  });
 }
 
 function safeHostname(url: string, fallback: string) {

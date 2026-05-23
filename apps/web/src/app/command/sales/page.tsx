@@ -836,6 +836,10 @@ export default function SalesFunnelPage() {
 
   async function pushToDealerSetup() {
     if (!selected) return;
+    if (selected.stage !== "closed_won") {
+      setNotice("Move the prospect to Closed won before pushing it into Dealer Setup.");
+      return;
+    }
     setBusy(true);
     try {
       const resp = await fetch(`/api/sales-prospects/${encodeURIComponent(selected.id)}/dealer-setup`, {
@@ -1758,7 +1762,7 @@ export default function SalesFunnelPage() {
               <div className="lr-ceo-agent-row">
                 <div>
                   <strong>Dealer setup</strong>
-                  <p>Push a won dealer into the onboarding setup checklist.</p>
+                  <p>Push a closed-won dealer into the onboarding setup checklist.</p>
                   {dealerSetupLink ? (
                     <div className="lr-ceo-action-meta is-ready">
                       <span>Setup checklist</span>
@@ -1767,7 +1771,7 @@ export default function SalesFunnelPage() {
                     </div>
                   ) : null}
                 </div>
-                {renderActionControl("dealer_setup", "Push", pushToDealerSetup, busy || !selected)}
+                {renderActionControl("dealer_setup", "Push", pushToDealerSetup, busy || !selected || selected.stage !== "closed_won")}
               </div>
             </div>
           </article>

@@ -118,31 +118,6 @@ type SmokeCheck = {
   ms: number;
   error?: string;
 };
-type EsignPacket = {
-  id: string;
-  dealerSetupId?: string;
-  dealerName: string;
-  provider: "manual" | "docusign" | "dropbox_sign" | "pandadoc" | "signwell";
-  status: "draft" | "ready" | "sent" | "signed" | "declined" | "voided";
-  agreementTitle: string;
-  signerName?: string;
-  signerEmail?: string;
-  agreementUrl?: string;
-  externalUrl?: string;
-  updatedAt: string;
-  sentAt?: string;
-  signedAt?: string;
-};
-
-type DocusignStatus = {
-  configured: boolean;
-  connected: boolean;
-  accountId?: string;
-  basePath?: string;
-  connectedAt?: string;
-  missing?: string[];
-};
-
 type ActiveClient = {
   id: string;
   dealerName: string;
@@ -241,23 +216,26 @@ function readinessClass(status?: DealerDeployReadiness["status"]) {
 }
 
 const fallbackDealerSteps: DealerSetupStep[] = [
-  { id: "intake", label: "Dealer intake complete", status: "pending" },
-  { id: "agreement", label: "Agreement and pricing approved", status: "pending" },
-  { id: "vercel", label: "Vercel domain/project ready", status: "pending" },
-  { id: "dns", label: "DNS records validated", status: "pending" },
-  { id: "api", label: "API dealer config created", status: "pending" },
-  { id: "remote_env", label: "Remote API env confirmed", status: "pending" },
-  { id: "google", label: "Google calendars and support mail connected", status: "pending" },
-  { id: "twilio", label: "Twilio numbers and messaging configured", status: "pending" },
-  { id: "sendgrid", label: "SendGrid sender/domain configured", status: "pending" },
-  { id: "meta", label: "Meta app and callback verified", status: "pending" },
-  { id: "smoke", label: "Smoke test passed", status: "pending" },
-  { id: "handoff", label: "Dealer handoff complete", status: "pending" }
+  { id: "intake", label: "Dealer intake", status: "pending" },
+  { id: "agreement", label: "Agreement and pricing", status: "pending" },
+  { id: "vercel", label: "Vercel domains", status: "pending" },
+  { id: "dns", label: "DNS records", status: "pending" },
+  { id: "api", label: "API dealer config", status: "pending" },
+  { id: "remote_env", label: "Remote API env", status: "pending" },
+  { id: "google", label: "Google mail and calendars", status: "pending" },
+  { id: "twilio", label: "Twilio messaging", status: "pending" },
+  { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
+  { id: "meta", label: "Meta connection", status: "pending" },
+  { id: "smoke", label: "Smoke test", status: "pending" },
+  { id: "handoff", label: "Active client handoff", status: "pending" }
 ];
 
 function mergedSetupSteps(steps: DealerSetupStep[] = []) {
   const byId = new Map(steps.map(step => [step.id, step]));
-  const merged = fallbackDealerSteps.map(step => ({ ...step, ...(byId.get(step.id) ?? {}) }));
+  const merged = fallbackDealerSteps.map(step => {
+    const existing = byId.get(step.id);
+    return existing ? { ...existing, label: step.label } : step;
+  });
   const known = new Set(merged.map(step => step.id));
   return merged.concat(steps.filter(step => !known.has(step.id)));
 }
@@ -318,6 +296,37 @@ function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness
   return { status, label, summary, canDeployApi, canPushToActiveClient, missing, blockers, warnings };
 }
 
+function guidedStepDescription(stepId: string) {
+  switch (stepId) {
+    case "intake":
+      return "Confirm the dealer record brought over from Sales Funnel has the right website, contact, legal name, plan, and billing terms.";
+    case "agreement":
+      return "Only use this if the agreement was not already handled in Sales Funnel. Otherwise this step should already be complete.";
+    case "vercel":
+      return "Add the dealer web and API hostnames to the Vercel project.";
+    case "dns":
+      return "Generate and validate the DNS records for the dealer workspace.";
+    case "api":
+      return "Create the dealer-specific API deployment profile and setup task.";
+    case "remote_env":
+      return "Confirm the remote API environment values are present on the server.";
+    case "google":
+      return "Connect the dealer Google mail/calendar setup or create the provider task.";
+    case "twilio":
+      return "Plan and configure the dealer phone, compliance, and messaging routes.";
+    case "sendgrid":
+      return "Configure sender/domain, inbound parse, and email routing.";
+    case "meta":
+      return "Verify the Meta app, callback, permissions, and app status.";
+    case "smoke":
+      return "Run the launch smoke test after web/API/connectors are configured.";
+    case "handoff":
+      return "Send the live-ready dealer into Active Clients after the smoke test passes.";
+    default:
+      return "Work the next setup item.";
+  }
+}
+
 export default function NewDealerClientPage() {
   const [form, setForm] = useState(emptyForm);
   const [setups, setSetups] = useState<DealerSetup[]>([]);
@@ -331,29 +340,19 @@ export default function NewDealerClientPage() {
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
   const [apiDeployment, setApiDeployment] = useState<DealerApiDeployment | null>(null);
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
-  const [esignPackets, setEsignPackets] = useState<EsignPacket[]>([]);
-  const [esignBusy, setEsignBusy] = useState(false);
-  const [docusignStatus, setDocusignStatus] = useState<DocusignStatus | null>(null);
-  const [docusignBusy, setDocusignBusy] = useState(false);
   const [activeClientBusy, setActiveClientBusy] = useState(false);
-  const [esignForm, setEsignForm] = useState({
-    provider: "manual" as EsignPacket["provider"],
-    signerName: "",
-    signerEmail: "",
-    agreementUrl: "",
-    externalUrl: ""
-  });
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const selectedReadiness = useMemo(() => (selected ? selected.deployReadiness ?? buildFallbackDeployReadiness(selected) : null), [selected]);
+  const selectedSteps = useMemo(() => (selected ? mergedSetupSteps(selected.steps) : []), [selected]);
   const completion = useMemo(() => {
-    if (!selected?.steps.length) return 0;
-    return Math.round((selected.steps.filter(step => step.status === "done").length / selected.steps.length) * 100);
-  }, [selected]);
+    if (!selectedSteps.length) return 0;
+    return Math.round((selectedSteps.filter(step => step.status === "done").length / selectedSteps.length) * 100);
+  }, [selectedSteps]);
   const currentStep = useMemo(() => {
-    if (!selected?.steps.length) return null;
-    return selected.steps.find(step => step.status === "blocked") ?? selected.steps.find(step => step.status !== "done") ?? selected.steps[0];
-  }, [selected]);
+    if (!selectedSteps.length) return null;
+    return selectedSteps.find(step => step.status === "blocked") ?? selectedSteps.find(step => step.status !== "done") ?? selectedSteps[0];
+  }, [selectedSteps]);
   const currentApiDeployment = apiDeployment ?? selected?.apiDeployment ?? null;
   const groupedRemoteEnv = useMemo(() => {
     const groups = new Map<string, DealerRemoteEnvItem[]>();
@@ -388,28 +387,6 @@ export default function NewDealerClientPage() {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    loadDocusignStatus();
-  }, []);
-
-  useEffect(() => {
-    if (!selected?.id) {
-      setEsignPackets([]);
-      return;
-    }
-    let active = true;
-    fetch(`/api/esign/packets?dealerSetupId=${encodeURIComponent(selected.id)}&limit=10`, { cache: "no-store" })
-      .then(resp => resp.json())
-      .then(data => {
-        if (!active) return;
-        if (data?.ok && Array.isArray(data.packets)) setEsignPackets(data.packets);
-      })
-      .catch(() => null);
-    return () => {
-      active = false;
-    };
-  }, [selected?.id]);
 
   function updateField(field: keyof DealerSetupForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
@@ -769,92 +746,6 @@ export default function NewDealerClientPage() {
     }
   }
 
-  async function createEsignPacket() {
-    if (!selected) return;
-    setEsignBusy(true);
-    try {
-      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/esign/packet`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(esignForm)
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "E-sign packet could not be created.");
-      setEsignPackets(current => [data.packet, ...current.filter(row => row.id !== data.packet.id)]);
-      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
-      setNotice(
-        data.missing?.length
-          ? `E-sign packet created. Missing: ${data.missing.join(", ")}.`
-          : "E-sign packet created and ready for review."
-      );
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "E-sign packet could not be created.");
-    } finally {
-      setEsignBusy(false);
-    }
-  }
-
-  async function loadDocusignStatus() {
-    try {
-      const resp = await fetch("/api/integrations/docusign/status", { cache: "no-store" });
-      const data = await resp.json();
-      if (data?.ok) setDocusignStatus(data);
-    } catch {
-      setDocusignStatus(null);
-    }
-  }
-
-  async function connectDocusign() {
-    setDocusignBusy(true);
-    try {
-      const resp = await fetch("/api/integrations/docusign/start", { cache: "no-store" });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok || !data.url) throw new Error(data?.error || "DocuSign connect could not start.");
-      window.open(data.url, "_blank", "noopener,noreferrer");
-      setNotice("DocuSign opened in a new tab. After approving access, return here and refresh status.");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "DocuSign connect could not start.");
-    } finally {
-      setDocusignBusy(false);
-    }
-  }
-
-  async function sendDocusignPacket(packet: EsignPacket) {
-    setEsignBusy(true);
-    try {
-      const resp = await fetch(`/api/esign/packets/${encodeURIComponent(packet.id)}/docusign/send`, { method: "POST" });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "DocuSign envelope could not be sent.");
-      setEsignPackets(current => current.map(row => (row.id === data.packet.id ? data.packet : row)));
-      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
-      setNotice("DocuSign envelope sent to the dealer signer.");
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "DocuSign envelope could not be sent.");
-    } finally {
-      setEsignBusy(false);
-    }
-  }
-
-  async function updateEsignPacket(packet: EsignPacket, status: EsignPacket["status"]) {
-    setEsignBusy(true);
-    try {
-      const resp = await fetch(`/api/esign/packets/${encodeURIComponent(packet.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "E-sign packet could not be updated.");
-      setEsignPackets(current => current.map(row => (row.id === data.packet.id ? data.packet : row)));
-      if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
-      setNotice(`E-sign packet marked ${data.packet.status}.`);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "E-sign packet could not be updated.");
-    } finally {
-      setEsignBusy(false);
-    }
-  }
-
   async function checkVercelDomains() {
     if (!selected) return;
     setVercelBusy(true);
@@ -921,68 +812,24 @@ export default function NewDealerClientPage() {
         <header className="lr-ceo-header">
           <div>
             <p className="lr-ceo-kicker">Client onboarding</p>
-            <h2>New Dealer Client</h2>
-            <p>Create the setup record, track Vercel/DNS/API/connectors, and generate the Codex work needed to bring a dealer live.</p>
-          </div>
-          <div className="lr-ceo-header-actions">
-            <button type="button" onClick={() => createSetupTask("codex")} disabled={!selected || taskBusy}>
-              Run setup review
-            </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("vercel")} disabled={!selected || taskBusy}>
-              Prepare Vercel
-            </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("stack")} disabled={!selected || taskBusy}>
-              Tech stack plan
-            </button>
-            <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("providers")} disabled={!selected || taskBusy}>
-              Provider tasks
-            </button>
+            <h2>Dealer Setup</h2>
+            <p>Move a won Sales Funnel prospect through one launch checklist, then hand it off to Active Clients.</p>
           </div>
         </header>
 
         <section className="lr-ceo-notice" aria-live="polite">{notice}</section>
-
-        <section className="lr-ceo-integration-strip">
-          <div>
-            <p className="lr-ceo-kicker">E-sign connector</p>
-            <strong>DocuSign</strong>
-            <span>
-              {docusignStatus?.connected
-                ? "Connected and ready to send agreements."
-                : docusignStatus?.configured
-                  ? "Configured. Connect once before sending agreements."
-                  : docusignStatus
-                    ? "Server settings are missing before DocuSign can connect."
-                    : "Checking DocuSign settings."}
-            </span>
-          </div>
-          <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured || !docusignStatus ? "is-working" : "is-blocked"}`}>
-            {docusignStatus?.connected ? "DocuSign connected" : docusignStatus?.configured ? "Ready to connect" : docusignStatus ? "Not configured" : "Checking"}
-          </span>
-          {!docusignStatus?.connected ? (
-            <button type="button" onClick={connectDocusign} disabled={docusignBusy || docusignStatus?.configured === false}>
-              Connect DocuSign
-            </button>
-          ) : null}
-          <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
-            Refresh
-          </button>
-        </section>
 
         {selected && currentStep ? (
           <section className="lr-ceo-guided-setup">
             <div>
               <p className="lr-ceo-kicker">Guided setup</p>
               <h3>{currentStep.status === "blocked" ? "Blocked step" : "Next step"}: {currentStep.label}</h3>
-              <p>
-                Work through one step at a time. Buttons either update the setup record directly or create the Codex/Claude task
-                needed for that setup step.
-              </p>
+              <p>{guidedStepDescription(currentStep.id)}</p>
               {currentStep.note ? <small>{currentStep.note}</small> : null}
             </div>
             <div className="lr-ceo-guided-actions">
               <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{currentStep.status.replace(/_/g, " ")}</span>
-              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || esignBusy || activeClientBusy}>
+              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || activeClientBusy}>
                 {guidedStepButtonLabel(currentStep.id)}
               </button>
               <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "blocked")} disabled={busy}>
@@ -992,7 +839,8 @@ export default function NewDealerClientPage() {
           </section>
         ) : null}
 
-        <section className="lr-ceo-grid">
+        <section className={`lr-ceo-grid ${selected ? "lr-ceo-grid-single" : ""}`}>
+          {!selected ? (
           <article className="lr-ceo-panel">
             <div className="lr-ceo-panel-title">
               <div>
@@ -1092,11 +940,12 @@ export default function NewDealerClientPage() {
               </button>
             </div>
           </article>
+          ) : null}
 
           <article className="lr-ceo-panel lr-ceo-panel-wide">
             <div className="lr-ceo-panel-title">
               <div>
-                <p className="lr-ceo-kicker">Build pipeline</p>
+                <p className="lr-ceo-kicker">Setup checklist</p>
                 <h3>{selected ? selected.dealerName : "No dealer selected"}</h3>
               </div>
               <select value={selected?.id || ""} onChange={event => setSelectedId(event.target.value)}>
@@ -1147,28 +996,6 @@ export default function NewDealerClientPage() {
                           <span>No warnings.</span>
                         )}
                       </div>
-                    </div>
-                  </section>
-                ) : null}
-                {selected.launchChecklist?.length ? (
-                  <section className="lr-ceo-launch-card">
-                    <div className="lr-ceo-panel-title">
-                      <div>
-                        <p className="lr-ceo-kicker">Launch checklist</p>
-                        <h3>Go-live readiness</h3>
-                      </div>
-                      <span className={`lr-ceo-status-pill ${completion >= 100 ? "is-ready" : completion > 0 ? "is-working" : ""}`}>
-                        {completion}% complete
-                      </span>
-                    </div>
-                    <div className="lr-ceo-launch-grid">
-                      {selected.launchChecklist.map(item => (
-                        <div key={item.id} className={`lr-ceo-launch-item is-${item.status}`}>
-                          <span>{item.status}</span>
-                          <strong>{item.label}</strong>
-                          <small>{item.detail}</small>
-                        </div>
-                      ))}
                     </div>
                   </section>
                 ) : null}
@@ -1245,158 +1072,6 @@ export default function NewDealerClientPage() {
                     </div>
                   </section>
                 ) : null}
-                <div className="lr-ceo-action-row">
-                  <button type="button" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
-                    Draft agreement
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={createEsignPacket} disabled={esignBusy}>
-                    Create e-sign packet
-                  </button>
-                  <button type="button" onClick={addVercelDomains} disabled={vercelBusy}>
-                    Add Vercel domains
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
-                    Check Vercel
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
-                    DNS checklist
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={generateApiDeployProfile} disabled={actionBusy}>
-                    API deploy profile
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("api")} disabled={taskBusy}>
-                    API config task
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={runSmokeTest} disabled={actionBusy}>
-                    Smoke test
-                  </button>
-                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
-                    Create Codex task
-                  </button>
-                  <button
-                    type="button"
-                    onClick={pushToActiveClient}
-                    disabled={activeClientBusy || !selectedReadiness?.canPushToActiveClient}
-                    title={
-                      selectedReadiness?.canPushToActiveClient
-                        ? "Push this live-ready setup to Active Clients"
-                        : selectedReadiness?.summary || "Setup is not live-ready yet"
-                    }
-                  >
-                    Send to Active Clients
-                  </button>
-                </div>
-                <div className="lr-ceo-esign-panel">
-                  <div className="lr-ceo-panel-title">
-                    <div>
-                      <p className="lr-ceo-kicker">Agreement signature</p>
-                      <h3>E-sign packet</h3>
-                    </div>
-                    <span className={`lr-ceo-status-pill ${docusignStatus?.connected ? "is-ready" : docusignStatus?.configured ? "is-working" : "is-blocked"}`}>
-                      {docusignStatus?.connected ? "DocuSign connected" : docusignStatus?.configured ? "DocuSign ready to connect" : "DocuSign not configured"}
-                    </span>
-                  </div>
-                  <div className="lr-ceo-action-row">
-                    {!docusignStatus?.connected ? (
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={connectDocusign} disabled={docusignBusy || !docusignStatus?.configured}>
-                        Connect DocuSign
-                      </button>
-                    ) : null}
-                    <button type="button" className="lr-ceo-secondary-btn" onClick={loadDocusignStatus} disabled={docusignBusy}>
-                      Refresh DocuSign
-                    </button>
-                  </div>
-                  {!docusignStatus?.configured && docusignStatus?.missing?.length ? (
-                    <p className="lr-ceo-note">Missing DocuSign settings: {docusignStatus.missing.join(", ")}.</p>
-                  ) : null}
-                  <div className="lr-ceo-form-stack">
-                    <label>
-                      Provider
-                      <select
-                        value={esignForm.provider}
-                        onChange={event => setEsignForm(current => ({ ...current, provider: event.target.value as EsignPacket["provider"] }))}
-                      >
-                        <option value="manual">Manual upload/link</option>
-                        <option value="docusign">DocuSign</option>
-                        <option value="dropbox_sign">Dropbox Sign</option>
-                        <option value="pandadoc">PandaDoc</option>
-                        <option value="signwell">SignWell</option>
-                      </select>
-                    </label>
-                    <label>
-                      Signer name
-                      <input
-                        value={esignForm.signerName}
-                        onChange={event => setEsignForm(current => ({ ...current, signerName: event.target.value }))}
-                        placeholder="Dealer signer"
-                      />
-                    </label>
-                    <label>
-                      Signer email
-                      <input
-                        value={esignForm.signerEmail}
-                        onChange={event => setEsignForm(current => ({ ...current, signerEmail: event.target.value }))}
-                        placeholder="owner@dealer.com"
-                      />
-                    </label>
-                    <label>
-                      Agreement PDF or document link
-                      <input
-                        value={esignForm.agreementUrl}
-                        onChange={event => setEsignForm(current => ({ ...current, agreementUrl: event.target.value }))}
-                        placeholder="Google Drive, DocuSign, Dropbox Sign, or PDF URL"
-                      />
-                    </label>
-                    <label>
-                      E-sign envelope link
-                      <input
-                        value={esignForm.externalUrl}
-                        onChange={event => setEsignForm(current => ({ ...current, externalUrl: event.target.value }))}
-                        placeholder="Optional signing/envelope link"
-                      />
-                    </label>
-                  </div>
-                  <div className="lr-ceo-action-row">
-                    <button type="button" onClick={createEsignPacket} disabled={esignBusy}>
-                      Create packet
-                    </button>
-                  </div>
-                  {esignPackets.length ? (
-                    <div className="lr-ceo-esign-list">
-                      {esignPackets.map(packet => (
-                        <div key={packet.id} className="lr-ceo-esign-row">
-                          <div>
-                            <strong>{packet.agreementTitle}</strong>
-                            <p>
-                              {packet.provider.replace(/_/g, " ")} · {packet.status}
-                              {packet.signerEmail ? ` · ${packet.signerEmail}` : ""}
-                            </p>
-                            {packet.externalUrl ? <a href={packet.externalUrl} target="_blank" rel="noreferrer">Open e-sign link</a> : null}
-                          </div>
-                          <div>
-                            {packet.provider === "docusign" ? (
-                              <button
-                                type="button"
-                                onClick={() => sendDocusignPacket(packet)}
-                                disabled={esignBusy || !docusignStatus?.connected || packet.status === "signed"}
-                              >
-                                Send DocuSign
-                              </button>
-                            ) : null}
-                            <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateEsignPacket(packet, "sent")} disabled={esignBusy || packet.status === "sent" || packet.status === "signed"}>
-                              Mark sent
-                            </button>
-                            <button type="button" onClick={() => updateEsignPacket(packet, "signed")} disabled={esignBusy || packet.status === "signed"}>
-                              Mark signed
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="lr-ceo-note">No e-sign packets yet.</p>
-                  )}
-                </div>
                 {vercelDomains.length ? (
                   <div className="lr-ceo-vercel-status">
                     {vercelDomains.map(domain => (
@@ -1428,22 +1103,14 @@ export default function NewDealerClientPage() {
                   </div>
                 ) : null}
                 <div className="lr-ceo-setup-steps">
-                  {selected.steps.map(step => (
-                    <div key={step.id} className="lr-ceo-setup-step">
+                  {selectedSteps.map(step => (
+                    <div key={step.id} className={`lr-ceo-setup-step ${currentStep?.id === step.id ? "is-current" : ""}`}>
                       <span className={statusClass(step.status)}>{step.status.replace(/_/g, " ")}</span>
-                      <strong>{step.label}</strong>
-                      {step.note ? <p>{step.note}</p> : null}
                       <div>
-                        <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(step.id, "in_progress")} disabled={busy}>
-                          Start
-                        </button>
-                        <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(step.id, "blocked")} disabled={busy}>
-                          Block
-                        </button>
-                        <button type="button" onClick={() => updateStep(step.id, "done")} disabled={busy}>
-                          Done
-                        </button>
+                        <strong>{step.label}</strong>
+                        {step.note ? <p>{step.note}</p> : null}
                       </div>
+                      {currentStep?.id === step.id ? <em>Current</em> : <em />}
                     </div>
                   ))}
                 </div>
