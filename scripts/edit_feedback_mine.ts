@@ -86,6 +86,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const conversationsPath =
     args.get("--conversations") ??
     process.env.CONVERSATIONS_PATH ??
+    process.env.CONVERSATIONS_DB_PATH ??
     path.resolve(process.cwd(), "data", "conversations.json");
   const outDir =
     args.get("--out-dir") ??
