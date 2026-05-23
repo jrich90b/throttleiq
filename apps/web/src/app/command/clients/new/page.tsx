@@ -35,6 +35,13 @@ type DealerDeployReadiness = {
   warnings: string[];
 };
 
+type DealerSetupStep = {
+  id: string;
+  label: string;
+  status: DealerSetupStepStatus;
+  note?: string;
+};
+
 type DealerSetup = {
   id: string;
   dealerName: string;
@@ -65,12 +72,7 @@ type DealerSetup = {
   remoteEnvChecklist?: DealerRemoteEnvItem[];
   remoteEnvTemplate?: string;
   deployReadiness?: DealerDeployReadiness;
-  steps: Array<{
-    id: string;
-    label: string;
-    status: DealerSetupStepStatus;
-    note?: string;
-  }>;
+  steps: DealerSetupStep[];
   updatedAt: string;
 };
 
@@ -238,6 +240,84 @@ function readinessClass(status?: DealerDeployReadiness["status"]) {
   return "is-working";
 }
 
+const fallbackDealerSteps: DealerSetupStep[] = [
+  { id: "intake", label: "Dealer intake complete", status: "pending" },
+  { id: "agreement", label: "Agreement and pricing approved", status: "pending" },
+  { id: "vercel", label: "Vercel domain/project ready", status: "pending" },
+  { id: "dns", label: "DNS records validated", status: "pending" },
+  { id: "api", label: "API dealer config created", status: "pending" },
+  { id: "remote_env", label: "Remote API env confirmed", status: "pending" },
+  { id: "google", label: "Google calendars and support mail connected", status: "pending" },
+  { id: "twilio", label: "Twilio numbers and messaging configured", status: "pending" },
+  { id: "sendgrid", label: "SendGrid sender/domain configured", status: "pending" },
+  { id: "meta", label: "Meta app and callback verified", status: "pending" },
+  { id: "smoke", label: "Smoke test passed", status: "pending" },
+  { id: "handoff", label: "Dealer handoff complete", status: "pending" }
+];
+
+function mergedSetupSteps(steps: DealerSetupStep[] = []) {
+  const byId = new Map(steps.map(step => [step.id, step]));
+  const merged = fallbackDealerSteps.map(step => ({ ...step, ...(byId.get(step.id) ?? {}) }));
+  const known = new Set(merged.map(step => step.id));
+  return merged.concat(steps.filter(step => !known.has(step.id)));
+}
+
+function setupStepStatus(setup: DealerSetup, stepId: string): DealerSetupStepStatus {
+  return mergedSetupSteps(setup.steps).find(step => step.id === stepId)?.status ?? "pending";
+}
+
+function setupStepLabel(setup: DealerSetup, stepId: string) {
+  return mergedSetupSteps(setup.steps).find(step => step.id === stepId)?.label ?? stepId;
+}
+
+function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
+  const requiredDone = ["vercel", "dns", "remote_env"];
+  const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
+  const blockingSteps = [...requiredDone, ...requiredStarted, "smoke"];
+  const missing: string[] = [];
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  for (const stepId of requiredDone) {
+    if (setupStepStatus(setup, stepId) !== "done") missing.push(setupStepLabel(setup, stepId));
+  }
+  for (const stepId of requiredStarted) {
+    const status = setupStepStatus(setup, stepId);
+    if (status !== "done" && status !== "in_progress") missing.push(setupStepLabel(setup, stepId));
+  }
+  for (const stepId of blockingSteps) {
+    if (setupStepStatus(setup, stepId) === "blocked") blockers.push(setupStepLabel(setup, stepId));
+  }
+
+  if (setupStepStatus(setup, "smoke") === "pending") warnings.push("Launch smoke test has not run yet.");
+  if (!setup.website) warnings.push("Dealer website is not captured.");
+  if (!setup.primaryContact) warnings.push("Primary contact is not captured.");
+
+  const canDeployApi = missing.length === 0 && blockers.length === 0;
+  const canPushToActiveClient = canDeployApi && setupStepStatus(setup, "smoke") === "done";
+  const status = blockers.length
+    ? "blocked"
+    : canPushToActiveClient
+      ? "live_ready"
+      : canDeployApi
+        ? "ready_to_deploy"
+        : "not_ready";
+  const label =
+    status === "blocked" ? "Blocked" : status === "live_ready" ? "Live-ready" : status === "ready_to_deploy" ? "Ready to deploy" : "Not ready";
+  const summary =
+    status === "blocked"
+      ? `Resolve ${blockers.length} blocked setup step${blockers.length === 1 ? "" : "s"} before deployment.`
+      : status === "live_ready"
+        ? "Smoke test passed. This dealer can be pushed to Active Clients."
+        : status === "ready_to_deploy"
+          ? "Required setup is ready. Deploy the API, then run the launch smoke test."
+          : missing.length
+            ? `Complete ${missing.length} required item${missing.length === 1 ? "" : "s"} before deployment.`
+            : "Review setup readiness before deployment.";
+
+  return { status, label, summary, canDeployApi, canPushToActiveClient, missing, blockers, warnings };
+}
+
 export default function NewDealerClientPage() {
   const [form, setForm] = useState(emptyForm);
   const [setups, setSetups] = useState<DealerSetup[]>([]);
@@ -265,6 +345,7 @@ export default function NewDealerClientPage() {
   });
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
+  const selectedReadiness = useMemo(() => (selected ? selected.deployReadiness ?? buildFallbackDeployReadiness(selected) : null), [selected]);
   const completion = useMemo(() => {
     if (!selected?.steps.length) return 0;
     return Math.round((selected.steps.filter(step => step.status === "done").length / selected.steps.length) * 100);
@@ -668,6 +749,10 @@ export default function NewDealerClientPage() {
 
   async function pushToActiveClient(): Promise<boolean> {
     if (!selected) return false;
+    if (!selectedReadiness?.canPushToActiveClient) {
+      setNotice(selectedReadiness?.summary || "Setup is not live-ready yet.");
+      return false;
+    }
     setActiveClientBusy(true);
     try {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/active-client`, { method: "POST" });
@@ -1030,34 +1115,34 @@ export default function NewDealerClientPage() {
                   <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
                   <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
                 </dl>
-                {selected.deployReadiness ? (
-                  <section className={`lr-ceo-readiness-card ${readinessClass(selected.deployReadiness.status)}`}>
+                {selectedReadiness ? (
+                  <section className={`lr-ceo-readiness-card ${readinessClass(selectedReadiness.status)}`}>
                     <div>
                       <p className="lr-ceo-kicker">Deployment gate</p>
-                      <h3>{selected.deployReadiness.label}</h3>
-                      <p>{selected.deployReadiness.summary}</p>
+                      <h3>{selectedReadiness.label}</h3>
+                      <p>{selectedReadiness.summary}</p>
                     </div>
                     <div className="lr-ceo-readiness-columns">
                       <div>
                         <strong>Missing</strong>
-                        {selected.deployReadiness.missing.length ? (
-                          selected.deployReadiness.missing.map(item => <span key={item}>{item}</span>)
+                        {selectedReadiness.missing.length ? (
+                          selectedReadiness.missing.map(item => <span key={item}>{item}</span>)
                         ) : (
                           <span>Nothing required is missing.</span>
                         )}
                       </div>
                       <div>
                         <strong>Blocked</strong>
-                        {selected.deployReadiness.blockers.length ? (
-                          selected.deployReadiness.blockers.map(item => <span key={item}>{item}</span>)
+                        {selectedReadiness.blockers.length ? (
+                          selectedReadiness.blockers.map(item => <span key={item}>{item}</span>)
                         ) : (
                           <span>No blocked setup steps.</span>
                         )}
                       </div>
                       <div>
                         <strong>Watch</strong>
-                        {selected.deployReadiness.warnings.length ? (
-                          selected.deployReadiness.warnings.map(item => <span key={item}>{item}</span>)
+                        {selectedReadiness.warnings.length ? (
+                          selectedReadiness.warnings.map(item => <span key={item}>{item}</span>)
                         ) : (
                           <span>No warnings.</span>
                         )}
@@ -1191,11 +1276,11 @@ export default function NewDealerClientPage() {
                   <button
                     type="button"
                     onClick={pushToActiveClient}
-                    disabled={activeClientBusy || !selected.deployReadiness?.canPushToActiveClient}
+                    disabled={activeClientBusy || !selectedReadiness?.canPushToActiveClient}
                     title={
-                      selected.deployReadiness?.canPushToActiveClient
+                      selectedReadiness?.canPushToActiveClient
                         ? "Push this live-ready setup to Active Clients"
-                        : selected.deployReadiness?.summary || "Setup is not live-ready yet"
+                        : selectedReadiness?.summary || "Setup is not live-ready yet"
                     }
                   >
                     Send to Active Clients
