@@ -4074,11 +4074,19 @@ async function processInventoryHolds() {
   }
 }
 
+function runBackgroundTask(label: string, task: () => Promise<unknown> | unknown) {
+  void Promise.resolve()
+    .then(task)
+    .catch((error: any) => {
+      console.warn(`[${label}] failed:`, error?.message ?? error);
+    });
+}
+
 setInterval(() => {
-  void processDueFollowUps();
-  void processAppointmentConfirmations();
-  void processStaffAppointmentNotifications();
-  void processAppointmentQuestions();
+  runBackgroundTask("follow-ups", processDueFollowUps);
+  runBackgroundTask("appt-confirm", processAppointmentConfirmations);
+  runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
+  runBackgroundTask("appt-questions", processAppointmentQuestions);
 }, 60_000);
 
 setTimeout(() => {
@@ -24888,7 +24896,15 @@ async function processStaffAppointmentNotifications() {
   const now = new Date();
   const convs = getAllConversations();
   let changed = false;
-  const cal = await getAuthedCalendarClient();
+  let cal: Awaited<ReturnType<typeof getAuthedCalendarClient>>;
+  try {
+    cal = await getAuthedCalendarClient();
+  } catch (e: any) {
+    if (/google not connected/i.test(String(e?.message ?? e))) {
+      return;
+    }
+    throw e;
+  }
 
   const resolveCalendarId = (appt: any): string | null => {
     if (appt?.bookedCalendarId) return appt.bookedCalendarId;
