@@ -16226,8 +16226,26 @@ function appendBusinessHoursAppointmentContext(replyRaw: string, textRaw: string
   if (!reply || !timeToken || /^we[’']?re closed\b/i.test(reply)) return reply;
   const day = parseDayOfWeek(text)?.day;
   const dayLabel = day ? day.replace(/^\w/, c => c.toUpperCase()) : "that day";
-  const timeLabel = formatTime12h(timeToken);
+  const timeLabel = formatBusinessHoursProposalTime(timeToken);
   return `${reply} ${dayLabel} at ${timeLabel} is during open hours, but I still need to check appointment availability before locking it in.`;
+}
+
+function formatBusinessHoursProposalTime(timeToken: string): string {
+  const m = String(timeToken ?? "").match(/^(\d{1,2}):(\d{2})(am|pm)?$/i);
+  if (!m) return timeToken;
+  const rawHour = Number(m[1]);
+  const minute = m[2] ?? "00";
+  const meridiem = String(m[3] ?? "").toLowerCase();
+  let hour24 = rawHour;
+  if (meridiem === "am") {
+    hour24 = rawHour === 12 ? 0 : rawHour;
+  } else if (meridiem === "pm") {
+    hour24 = rawHour === 12 ? 12 : rawHour + 12;
+  } else if (rawHour >= 1 && rawHour <= 6) {
+    // In dealer scheduling, bare "1" through "6" almost always means PM.
+    hour24 = rawHour + 12;
+  }
+  return formatTime12h(`${String(hour24).padStart(2, "0")}:${minute}`);
 }
 
 function escapeRegex(s: string): string {
