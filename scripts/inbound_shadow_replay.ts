@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 type Provider = "twilio" | "sendgrid_adf";
-type Verdict = "candidate_safe" | "review" | "no_response" | "error";
+type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
 
 type ReplayArgs = {
   dataDir: string;
@@ -581,6 +581,17 @@ function latestOutboundAfter(conv: Conversation | null, beforeCount: number): Co
   return [...added].reverse().find(message => message.direction === "out") ?? null;
 }
 
+function isExpectedNoCustomerReply(inbound: string): boolean {
+  const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text) return false;
+  if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|ty|👍)[.!?\s]*$/i.test(text)) return true;
+  const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
+  if (hasQuestion) return false;
+  if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
+  if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
+  return false;
+}
+
 function classifyDraft(provider: Provider, inbound: string, draft: string | null): {
   verdict: Verdict;
   reasons: string[];
@@ -589,7 +600,15 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const inboundLower = inbound.toLowerCase();
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
-  if (!draftText) return { verdict: "no_response", reasons: ["no customer-facing draft/reply produced"] };
+  if (!draftText) {
+    if (isExpectedNoCustomerReply(inbound)) {
+      return {
+        verdict: "expected_no_response",
+        reasons: ["acknowledgement/signoff where no customer-facing reply is expected"]
+      };
+    }
+    return { verdict: "no_response", reasons: ["no customer-facing draft/reply produced"] };
+  }
   if (draftText.length < 12) reasons.push("very short draft");
   if (/\b(and|or|to|the|when|if|with|for)$/i.test(draftText)) reasons.push("draft appears truncated");
   if (/\b(i don'?t want to guess|i'?ll have (the )?(team|manager|finance)|confirm .*follow up|verify .*follow up)\b/i.test(draftText)) {
@@ -761,6 +780,7 @@ function buildMarkdownReport(report: any): string {
   lines.push(`- Cases replayed: ${report.summary.total}`);
   lines.push(`- Candidate safe: ${report.summary.candidateSafe}`);
   lines.push(`- Needs review: ${report.summary.review}`);
+  lines.push(`- Expected no response: ${report.summary.expectedNoResponse}`);
   lines.push(`- No response: ${report.summary.noResponse}`);
   lines.push(`- Errors: ${report.summary.error}`);
   lines.push("");
@@ -806,6 +826,7 @@ async function main() {
     total: cases.length,
     candidateSafe: cases.filter(row => row.verdict === "candidate_safe").length,
     review: cases.filter(row => row.verdict === "review").length,
+    expectedNoResponse: cases.filter(row => row.verdict === "expected_no_response").length,
     noResponse: cases.filter(row => row.verdict === "no_response").length,
     error: cases.filter(row => row.verdict === "error").length
   };
@@ -826,7 +847,7 @@ async function main() {
   console.log(`Wrote ${jsonPath}`);
   console.log(`Wrote ${mdPath}`);
   console.log(
-    `Summary: ${summary.candidateSafe} safe, ${summary.review} review, ${summary.noResponse} no response, ${summary.error} error.`
+    `Summary: ${summary.candidateSafe} safe, ${summary.review} review, ${summary.expectedNoResponse} expected no response, ${summary.noResponse} no response, ${summary.error} error.`
   );
 }
 
