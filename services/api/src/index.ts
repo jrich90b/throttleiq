@@ -16219,6 +16219,17 @@ async function buildBusinessHoursQuestionReply(text: string): Promise<string> {
   return "Our hours vary by day. What day are you thinking?";
 }
 
+function appendBusinessHoursAppointmentContext(replyRaw: string, textRaw: string): string {
+  const reply = String(replyRaw ?? "").trim();
+  const text = String(textRaw ?? "");
+  const timeToken = extractTimeToken(text);
+  if (!reply || !timeToken || /^we[’']?re closed\b/i.test(reply)) return reply;
+  const day = parseDayOfWeek(text)?.day;
+  const dayLabel = day ? day.replace(/^\w/, c => c.toUpperCase()) : "that day";
+  const timeLabel = formatTime12h(timeToken);
+  return `${reply} ${dayLabel} at ${timeLabel} is during open hours, but I still need to check appointment availability before locking it in.`;
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -44123,6 +44134,28 @@ if (authToken && signature) {
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_RESPONSE_CONTROL_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY;
+  if (event.provider === "twilio" && isBusinessHoursQuestionText(event.body ?? "")) {
+    const reply = appendBusinessHoursAppointmentContext(
+      await buildBusinessHoursQuestionReply(event.body ?? ""),
+      event.body ?? ""
+    );
+    recordRouteOutcome("live", "business_hours_question_pre_parser", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      hasTimeProposal: !!extractTimeToken(event.body ?? "")
+    });
+    const hoursWebhookMode = getSystemMode() === "suggest" ? "suggest" : "autopilot";
+    if (hoursWebhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const responseControlParse = responseControlParserEligible
     ? await safeLlmParse("response_control_parser", () =>
         parseResponseControlWithLLM({

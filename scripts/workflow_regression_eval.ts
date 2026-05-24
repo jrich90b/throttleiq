@@ -171,6 +171,11 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "open_plus_time_proposal_detected_as_hours_question",
+    actual: isBusinessHoursQuestionText("Is the dealership open on Monday? If so, would 1 work?"),
+    expected: true
+  },
+  {
     id: "open_to_options_not_hours_question",
     actual: isBusinessHoursQuestionText("I am open to either color tomorrow"),
     expected: false
