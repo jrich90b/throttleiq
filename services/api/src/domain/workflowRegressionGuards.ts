@@ -7,11 +7,8 @@ function normalizeScheduleLabel(raw?: string | null): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export function extractDayLabelFromText(textRaw: string | null | undefined): string | null {
-  const text = String(textRaw ?? "");
-  const day = text.match(
-    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week)\b/i
-  )?.[1];
+function normalizeDayToken(raw?: string | null): string | null {
+  const day = String(raw ?? "").trim();
   if (!day) return null;
   if (/^mon$/i.test(day)) return "Monday";
   if (/^tue|tues$/i.test(day)) return "Tuesday";
@@ -23,13 +20,26 @@ export function extractDayLabelFromText(textRaw: string | null | undefined): str
   return normalizeScheduleLabel(day);
 }
 
+function dayTokenPattern(): RegExp {
+  return /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week)\b/i;
+}
+
+export function extractDayLabelFromText(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "");
+  return normalizeDayToken(text.match(dayTokenPattern())?.[1]);
+}
+
 function wantsReminder(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(text);
 }
 
 export function extractReminderFollowUpLabel(textRaw: string | null | undefined): string | null {
-  return extractDayLabelFromText(textRaw);
+  const text = String(textRaw ?? "");
+  const reminderDay = text.match(
+    /\b(?:remind|reminder|follow up|follow-up|check back|reach out|touch base)\b[\s\S]{0,100}?\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week)\b/i
+  )?.[1];
+  return normalizeDayToken(reminderDay) ?? extractDayLabelFromText(textRaw);
 }
 
 export function isFollowUpReminderOnlyText(textRaw: string | null | undefined): boolean {
@@ -77,6 +87,50 @@ export function buildConditionalPickupPlanAck(textRaw: string | null | undefined
   return label
     ? `Sounds good — just give me a heads up if you end up ${action} ${label}.`
     : `Sounds good — just give me a heads up if that ends up being the plan.`;
+}
+
+export function isServiceStatusUpdateQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const asksUpdate = /\b(any updates?|update on|status|where (?:do )?we stand|where.*at|what(?:'s| is) going on|did .* hear|have .* heard)\b/.test(
+    text
+  );
+  const serviceSignal = /\b(service|servicing|service department|servicing department|logged in|checked in|repair|inspection|work order|notice)\b/.test(
+    text
+  );
+  return asksUpdate && serviceSignal;
+}
+
+export function buildServiceStatusUpdateHandoffReply(): string {
+  return "Got it — I’ll check with service on the status and follow up.";
+}
+
+export function extractRequestedVehicleFactFieldsFromText(textRaw: string | null | undefined): string[] {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return [];
+  const fields: string[] = [];
+  const add = (field: string) => {
+    if (!fields.includes(field)) fields.push(field);
+  };
+  if (/\b(year|yr)\b/.test(text)) add("year");
+  if (/\b(miles?|mileage|odometer)\b/.test(text)) add("mileage");
+  if (/\b(price|priced|pricing|asking|cost|total|otd|out the door)\b/.test(text)) add("price");
+  if (/\b(color|paint)\b/.test(text)) add("color");
+  if (/\b(vin|stock)\b/.test(text)) add("stock/VIN");
+  return fields;
+}
+
+function formatList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+export function buildMultiVehicleFactFollowupReply(fields: string[]): string {
+  const fieldText = formatList(fields);
+  return fieldText
+    ? `Got it — I’ll confirm the ${fieldText} on that bike and follow up shortly.`
+    : "Got it — I’ll confirm the details on that bike and follow up shortly.";
 }
 
 export function formatServiceScheduleTimeLabel(

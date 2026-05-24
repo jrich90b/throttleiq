@@ -8,6 +8,9 @@ import {
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
   buildFollowUpReminderOnlyReply,
+  buildMultiVehicleFactFollowupReply,
+  buildServiceStatusUpdateHandoffReply,
+  extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
@@ -35,6 +38,7 @@ import {
   isFactoryOrderTimingQuestionText,
   isFollowUpReminderOnlyText,
   isConditionalPickupPlanText,
+  isServiceStatusUpdateQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   getScheduleDayOptionsLabel,
@@ -211,6 +215,13 @@ const cases: Case[] = [
     expected: "Tuesday"
   },
   {
+    id: "touch_base_statement_prefers_day_after_reminder_phrase",
+    actual: extractReminderFollowUpLabel(
+      "hey brother appreciate you taking the time today beautiful bike have a great day and let's touch base on Tuesday thank you"
+    ),
+    expected: "Tuesday"
+  },
+  {
     id: "touch_base_statement_builds_ack_not_time_request",
     actual: buildFollowUpReminderOnlyReply("Hey brother, let’s touch base on Tuesday. Thank you."),
     expected: "Sounds good — I’ll touch base Tuesday."
@@ -229,6 +240,28 @@ const cases: Case[] = [
     id: "conditional_pickup_plan_ack_does_not_ask_time",
     actual: buildConditionalPickupPlanAck("Great. if not I'll pick it up tuesday."),
     expected: "Sounds good — just give me a heads up if you end up picking it up Tuesday."
+  },
+  {
+    id: "service_status_update_question_detected",
+    actual: isServiceStatusUpdateQuestionText(
+      "Any updates on the bike? I got a notice it hit the servicing department last week."
+    ),
+    expected: true
+  },
+  {
+    id: "service_status_update_reply_is_handoff_not_compliment",
+    actual: buildServiceStatusUpdateHandoffReply(),
+    expected: "Got it — I’ll check with service on the status and follow up."
+  },
+  {
+    id: "multi_vehicle_fact_fields_detect_miles_year_price",
+    actual: JSON.stringify(extractRequestedVehicleFactFieldsFromText("can you give me all the details on this again Miles Year Price")),
+    expected: JSON.stringify(["year", "mileage", "price"])
+  },
+  {
+    id: "multi_vehicle_fact_followup_does_not_answer_only_one_field",
+    actual: buildMultiVehicleFactFollowupReply(["year", "mileage", "price"]),
+    expected: "Got it — I’ll confirm the year, mileage, and price on that bike and follow up shortly."
   },
   {
     id: "service_time_330_defaults_to_pm_when_no_meridiem",

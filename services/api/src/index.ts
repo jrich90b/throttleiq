@@ -377,6 +377,9 @@ import {
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
   buildFollowUpReminderOnlyReply,
+  buildMultiVehicleFactFollowupReply,
+  buildServiceStatusUpdateHandoffReply,
+  extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
@@ -398,6 +401,7 @@ import {
   isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
   isFollowUpReminderOnlyText,
+  isServiceStatusUpdateQuestionText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -6183,6 +6187,14 @@ async function buildVehicleFactQuestionReply(args: {
       reply: mergedInventoryBacked.reply ?? "I’ll confirm that for you and follow up shortly.",
       needsTodo: !!mergedInventoryBacked.needsTodo,
       todoSummary: mergedInventoryBacked.todoSummary
+    };
+  }
+  const requestedFactFields = extractRequestedVehicleFactFieldsFromText(args.text);
+  if (requestedFactFields.length >= 2) {
+    return {
+      reply: buildMultiVehicleFactFollowupReply(requestedFactFields),
+      needsTodo: true,
+      todoSummary: `Confirm ${requestedFactFields.join(", ")} for that bike.`
     };
   }
   const year = extractVehicleYearFromContext(conv);
@@ -43220,6 +43232,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
+    if (isServiceStatusUpdateQuestionText(event.body)) {
+      const hasServiceTodo = listOpenTodos().some(
+        todo => todo.convId === conv.id && todo.reason === "service"
+      );
+      if (!hasServiceTodo) {
+        addTodo(
+          conv,
+          "service",
+          `Check service status/update: ${event.body ?? "customer requested service status"}`,
+          event.providerMessageId,
+          serviceTodoOwner
+        );
+      }
+      setDialogState(conv, "service_handoff");
+      setFollowUpMode(conv, "manual_handoff", "service_status_update");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
+      const reply = buildServiceStatusUpdateHandoffReply();
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
       /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
@@ -45969,6 +46004,34 @@ if (authToken && signature) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
     const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
     const t = String(event.body ?? "").toLowerCase();
+    if (isServiceStatusUpdateQuestionText(event.body)) {
+      const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+      if (!hasServiceTodo) {
+        addTodo(
+          conv,
+          "service",
+          `Check service status/update: ${event.body ?? "customer requested service status"}`,
+          event.providerMessageId,
+          serviceTodoOwner
+        );
+      }
+      setDialogState(conv, "service_handoff");
+      setFollowUpMode(conv, "manual_handoff", "service_status_update");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
+      const reply = buildServiceStatusUpdateHandoffReply();
+      const systemMode = webhookMode;
+      if (systemMode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
       /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
@@ -46097,6 +46160,7 @@ if (authToken && signature) {
     conv.appointment?.bookedEventId &&
     hasBookedAppointmentForReschedule &&
     conv.scheduler?.pendingSlot?.reschedule &&
+    !isServiceDepartmentSchedulingRequest(conv, event.body) &&
     !suppressAutoBookForMediaRequest
   ) {
     if (isDeferral(event.body)) {
@@ -46295,6 +46359,7 @@ if (authToken && signature) {
     !conv.appointment?.bookedEventId &&
     Array.isArray(conv.scheduler?.lastSuggestedSlots) &&
     conv.scheduler.lastSuggestedSlots.length > 0 &&
+    !isServiceDepartmentSchedulingRequest(conv, event.body) &&
     !suppressAutoBookForMediaRequest
   ) {
     console.log("[auto-book] inbound:", JSON.stringify(event.body));
