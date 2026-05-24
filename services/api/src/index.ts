@@ -61,6 +61,13 @@ import {
   type AutomationRunStatus
 } from "./domain/automationRunStore.js";
 import {
+  enqueueTwilioInboundJob,
+  flushTwilioInboundJobs,
+  getTwilioInboundJob,
+  listPendingTwilioInboundJobs,
+  updateTwilioInboundJob
+} from "./domain/twilioInboundJobStore.js";
+import {
   addDealerSetup,
   getDealerSetup,
   buildDealerApiDeployment,
@@ -43704,6 +43711,127 @@ app.post("/conversations/:id/call", async (req, res) => {
   }
 });
 
+const asyncTwilioWorkerSecret =
+  String(process.env.ASYNC_TWILIO_WORKER_SECRET ?? "").trim() || crypto.randomBytes(24).toString("hex");
+const asyncTwilioInFlight = new Set<string>();
+
+function emptyTwilioWebhookResponse(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+}
+
+function isAsyncTwilioInboundEnabled(): boolean {
+  const raw = String(process.env.ASYNC_TWILIO_WEBHOOK_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function isAsyncTwilioSuggestOnly(): boolean {
+  const raw = String(process.env.ASYNC_TWILIO_WEBHOOK_SUGGEST_ONLY ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "no";
+}
+
+function isAsyncTwilioWorkerRequest(req: any): boolean {
+  return String(req.header?.("x-leadrider-twilio-worker") ?? "") === asyncTwilioWorkerSecret;
+}
+
+function shouldQueueTwilioInboundAsync(req: any): boolean {
+  if (!isAsyncTwilioInboundEnabled()) return false;
+  if (isAsyncTwilioWorkerRequest(req)) return false;
+  if (isAsyncTwilioSuggestOnly() && getSystemMode() !== "suggest") return false;
+  return true;
+}
+
+function getAsyncTwilioInternalUrl(): string {
+  const configured = String(process.env.ASYNC_TWILIO_INTERNAL_URL ?? "").trim();
+  if (configured) return configured;
+  const localPort = Number.parseInt(process.env.PORT ?? "3001", 10);
+  return `http://127.0.0.1:${Number.isFinite(localPort) ? localPort : 3001}/webhooks/twilio`;
+}
+
+function scheduleTwilioInboundJobProcessing(jobId: string, delayMs = 0) {
+  if (asyncTwilioInFlight.has(jobId)) return;
+  const timer = setTimeout(() => {
+    void processTwilioInboundJob(jobId);
+  }, Math.max(0, delayMs));
+  (timer as any).unref?.();
+}
+
+async function processTwilioInboundJob(jobId: string) {
+  if (asyncTwilioInFlight.has(jobId)) return;
+  asyncTwilioInFlight.add(jobId);
+  try {
+    const job = await getTwilioInboundJob(jobId);
+    if (!job || job.status === "completed") return;
+    const now = new Date().toISOString();
+    await updateTwilioInboundJob(job.id, {
+      status: "processing",
+      attempts: job.attempts + 1,
+      startedAt: now,
+      lastError: undefined,
+      nextAttemptAt: undefined
+    });
+
+    const body = new URLSearchParams();
+    for (const [key, value] of Object.entries(job.payload)) body.set(key, value);
+    body.set("LeadriderAsyncJobId", job.id);
+
+    const startedMs = Date.now();
+    const response = await fetch(getAsyncTwilioInternalUrl(), {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-leadrider-twilio-worker": asyncTwilioWorkerSecret
+      },
+      body: body.toString()
+    });
+    const responseBody = await response.text();
+    if (!response.ok) {
+      throw new Error(`worker replay failed (${response.status}): ${responseBody.slice(0, 180)}`);
+    }
+    await updateTwilioInboundJob(job.id, {
+      status: "completed",
+      responseStatus: response.status,
+      responseBodySnippet: responseBody.slice(0, 500),
+      completedAt: new Date().toISOString(),
+      lastError: undefined
+    });
+    console.log("[twilio async] job completed", {
+      jobId: job.id,
+      providerMessageId: job.providerMessageId ?? null,
+      ms: Date.now() - startedMs
+    });
+  } catch (err: any) {
+    const current = await getTwilioInboundJob(jobId);
+    const attempts = current?.attempts ?? 0;
+    const maxAttemptsRaw = Number(process.env.ASYNC_TWILIO_WEBHOOK_MAX_ATTEMPTS ?? "3");
+    const maxAttempts = Number.isFinite(maxAttemptsRaw) && maxAttemptsRaw > 0 ? Math.floor(maxAttemptsRaw) : 3;
+    const retryDelayMs = Math.min(60_000, Math.max(2_000, attempts * 5_000));
+    const finalFailure = attempts >= maxAttempts;
+    await updateTwilioInboundJob(jobId, {
+      status: "failed",
+      lastError: String(err?.message ?? err),
+      nextAttemptAt: finalFailure ? undefined : new Date(Date.now() + retryDelayMs).toISOString()
+    });
+    console.warn("[twilio async] job failed", {
+      jobId,
+      attempts,
+      finalFailure,
+      error: err?.message ?? err
+    });
+    if (!finalFailure) scheduleTwilioInboundJobProcessing(jobId, retryDelayMs);
+  } finally {
+    asyncTwilioInFlight.delete(jobId);
+  }
+}
+
+async function resumePendingTwilioInboundJobs() {
+  if (!isAsyncTwilioInboundEnabled()) return;
+  const pending = await listPendingTwilioInboundJobs(50);
+  if (pending.length) {
+    console.log(`[twilio async] resuming ${pending.length} queued job(s)`);
+    for (const job of pending) scheduleTwilioInboundJobProcessing(job.id, 500);
+  }
+}
+
 app.post("/webhooks/twilio", async (req, res) => {
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const signature = req.header("x-twilio-signature");
@@ -43761,6 +43889,44 @@ if (authToken && signature) {
     }
   }
   const providerMessageId = String(MessageSid ?? SmsSid ?? "").trim();
+  const receivedAt = new Date().toISOString();
+  const preliminaryEvent: InboundMessageEvent = {
+    channel: "sms",
+    provider: "twilio",
+    from,
+    to,
+    body: String(Body ?? ""),
+    providerMessageId,
+    receivedAt
+  };
+
+  const internalOutcomeHandled = await maybeHandleStaffOutcomeSms(preliminaryEvent);
+  if (internalOutcomeHandled.handled) {
+    const body = String(internalOutcomeHandled.replyBody ?? "").trim();
+    const twiml = body
+      ? `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(body)}</Message>\n</Response>`
+      : `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+
+  if (shouldQueueTwilioInboundAsync(req)) {
+    const { job, created } = await enqueueTwilioInboundJob({
+      payload: (req.body ?? {}) as Record<string, unknown>,
+      receivedAt
+    });
+    if (created || (job.status !== "completed" && job.status !== "processing")) {
+      scheduleTwilioInboundJobProcessing(job.id);
+    }
+    await flushTwilioInboundJobs();
+    console.log("[twilio async] webhook acknowledged", {
+      jobId: job.id,
+      created,
+      status: job.status,
+      providerMessageId: job.providerMessageId ?? null
+    });
+    return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
+  }
+
   const mediaUrlsForConversation =
     mediaUrls.length > 0
       ? await materializeInboundTwilioMedia(
@@ -43771,24 +43937,9 @@ if (authToken && signature) {
       : undefined;
 
   const event: InboundMessageEvent = {
-    channel: "sms",
-    provider: "twilio",
-    from,
-    to,
-    body: String(Body ?? ""),
-    mediaUrls: mediaUrlsForConversation && mediaUrlsForConversation.length ? mediaUrlsForConversation : undefined,
-    providerMessageId,
-    receivedAt: new Date().toISOString()
+    ...preliminaryEvent,
+    mediaUrls: mediaUrlsForConversation && mediaUrlsForConversation.length ? mediaUrlsForConversation : undefined
   };
-
-  const internalOutcomeHandled = await maybeHandleStaffOutcomeSms(event);
-  if (internalOutcomeHandled.handled) {
-    const body = String(internalOutcomeHandled.replyBody ?? "").trim();
-    const twiml = body
-      ? `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(body)}</Message>\n</Response>`
-      : `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
 
   console.log("[twilio inbound]", event);
 
@@ -53819,6 +53970,15 @@ const server = app.listen(port, () => {
   console.log("   - POST   /crm/tlp/log-contact");
   console.log("   - POST   /webhooks/twilio");
 
+  if (isAsyncTwilioInboundEnabled()) {
+    console.log(
+      `[twilio async] webhook queue enabled${isAsyncTwilioSuggestOnly() ? " (suggest mode only)" : ""}`
+    );
+    setTimeout(() => {
+      void resumePendingTwilioInboundJobs();
+    }, 10_000).unref?.();
+  }
+
   const keepaliveEnabled =
     (process.env.GOOGLE_KEEPALIVE_ENABLED ?? "true").toLowerCase() === "true";
   const keepaliveMinutesRaw = Number(process.env.GOOGLE_KEEPALIVE_MINUTES ?? "720");
@@ -53914,6 +54074,7 @@ async function shutdown(signal: string) {
   console.log(`[shutdown] received ${signal}`);
   server.close(async () => {
     try {
+      await flushTwilioInboundJobs();
       await shutdownLangfuse();
     } catch (err: any) {
       console.warn("[langfuse] shutdown failed:", err?.message ?? err);
