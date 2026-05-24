@@ -25,6 +25,7 @@
     "faq_topic:eval": "LLM_ENABLED=1 LLM_FAQ_TOPIC_PARSER_ENABLED=1 npx tsx scripts/dealership_faq_topic_eval.ts",
     "inventory_entity:eval": "LLM_ENABLED=1 LLM_INVENTORY_ENTITY_PARSER_ENABLED=1 npx tsx scripts/inventory_entity_eval.ts",
     "inventory_status:eval": "LLM_ENABLED=1 LLM_INVENTORY_STATUS_PARSER_ENABLED=1 npx tsx scripts/inventory_status_eval.ts",
+    "inventory_fact_answer:eval": "npx tsx scripts/inventory_fact_answer_eval.ts",
     "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 node -r dotenv/config ./node_modules/.bin/tsx scripts/appointment_timing_eval.ts",
     "customer_ack_action:eval": "LLM_ENABLED=1 LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED=1 npx tsx scripts/customer_ack_action_eval.ts",
     "manual_outbound_appointment:eval": "LLM_ENABLED=1 LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED=1 npx tsx scripts/manual_outbound_appointment_eval.ts",
@@ -70,7 +71,7 @@
     "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "feedback:nightly": "bash scripts/feedback_loop_nightly.sh",
     "feedback:hourly": "bash scripts/feedback_loop_hourly.sh",
-    "ci:eval": "npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval"
+    "ci:eval": "npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run inventory_fact_answer:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

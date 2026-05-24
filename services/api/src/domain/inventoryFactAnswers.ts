@@ -103,6 +103,19 @@ function parseRequestedPriceCap(text: string): number | null {
   return value;
 }
 
+function hasFinanceProgramEligibilitySignal(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  return (
+    /\b(?:qualif(?:y|ies)|eligible|eligibility)\b[\s\S]{0,100}\b(?:apr|interest|rate|finance|financing|program|special)\b/.test(lower) ||
+    /\b(?:apr|interest|rate|finance|financing|program|special|low\s+interest|low\s+apr)\b[\s\S]{0,100}\b(?:qualif(?:y|ies)|eligible|eligibility)\b/.test(lower)
+  );
+}
+
+function hasPriceQuestionSignal(text: string): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  return /\b(price|sale price|listed price|published price|asking|total|out\s+the\s+door|otd)\b/.test(lower);
+}
+
 function inventoryKey(stockId?: string | null, vin?: string | null): string | null {
   const stock = normalizeText(stockId).toLowerCase();
   if (stock) return stock;
@@ -205,7 +218,14 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   decision: VehicleFactDecisionLike;
   text: string;
 }): Promise<InventoryFactAnswer> {
-  const questionType = String(args.decision?.questionType ?? "");
+  const rawQuestionType = String(args.decision?.questionType ?? "");
+  const text = String(args.text ?? "");
+  const combinesPriceAndFinanceEligibility =
+    (rawQuestionType === "price" || rawQuestionType === "otd_total") &&
+    hasFinanceProgramEligibilitySignal(text);
+  const questionType = combinesPriceAndFinanceEligibility
+    ? "finance_program_eligibility"
+    : rawQuestionType;
   if (
     questionType !== "price" &&
     questionType !== "otd_total" &&
@@ -254,6 +274,10 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
 
   const apr = parseRequestedApr(args.text);
   const priceCap = parseRequestedPriceCap(args.text);
+  const asksPriceInFinanceQuestion =
+    combinesPriceAndFinanceEligibility ||
+    hasPriceQuestionSignal(text) ||
+    (args.decision?.requestedFields ?? []).some(field => /price|total|otd|out_the_door/i.test(String(field)));
   const eligibility = isLikelyLowAprEligible(item, args.conv);
   const activeNotes = await getActiveInventoryNotesForUnit(item, sourceVehicle);
   const financePromo = activeNotes.find(note => noteContainsFinancePromo(note, apr));
@@ -263,12 +287,18 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   if (financePromo && (!priceCap || (price && price <= priceCap))) {
     const promoText = describePromoNote(financePromo);
     const priceClause = priceText ? ` The listed price I see is ${priceText} before tax and fees.` : "";
+    const missingPriceClause =
+      !priceText && asksPriceInFinanceQuestion
+        ? " I don’t see a published price in the inventory feed, so I’ll have the team confirm the price and final eligibility."
+        : " I’ll still have the team confirm final finance eligibility before quoting exact terms.";
     return {
       handled: true,
-      reply: `Yes — the ${unitLabel} has a current ${promoText}.${priceClause} I’ll still have the team confirm final finance eligibility before quoting exact terms.`,
+      reply: `Yes — the ${unitLabel} has a current ${promoText}.${priceClause}${missingPriceClause}`,
       needsTodo: true,
       todoReason: "pricing",
-      todoSummary: `Confirm final finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
+      todoSummary: asksPriceInFinanceQuestion && !priceText
+        ? `Confirm price and final finance eligibility for ${unitLabel}. Customer asked: ${args.text}`
+        : `Confirm final finance eligibility for ${unitLabel}. Customer asked: ${args.text}`,
       item,
       priceText,
       unitLabel,
