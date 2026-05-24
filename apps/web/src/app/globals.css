@@ -1476,12 +1476,43 @@ a {
 
 .lr-ceo-launch-card,
 .lr-ceo-readiness-card,
-.lr-ceo-env-card {
+.lr-ceo-env-card,
+.lr-ceo-manual-card {
   margin-top: 1rem;
   padding: 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.13);
   border-radius: 8px;
   background: rgba(8, 14, 24, 0.56);
+}
+
+.lr-ceo-manual-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.9rem;
+  border-color: rgba(251, 127, 4, 0.22);
+  background: linear-gradient(135deg, rgba(18, 28, 43, 0.94), rgba(8, 14, 24, 0.94));
+}
+
+.lr-ceo-manual-card h3,
+.lr-ceo-manual-card p {
+  margin: 0;
+}
+
+.lr-ceo-manual-card p {
+  color: #aebbd2;
+  line-height: 1.45;
+}
+
+.lr-ceo-manual-card > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.lr-ceo-manual-card a {
+  text-decoration: none;
 }
 
 .lr-ceo-readiness-card {
@@ -2429,6 +2460,7 @@ a {
   .lr-ceo-email-workspace,
   .lr-ceo-guided-setup,
   .lr-ceo-connector-grid,
+  .lr-ceo-manual-card,
   .lr-ceo-facts,
   .lr-ceo-launch-grid,
   .lr-ceo-readiness-columns,

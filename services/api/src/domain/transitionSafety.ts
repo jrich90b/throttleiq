@@ -126,6 +126,24 @@ export function isFirstTimeRiderGuidanceParserAccepted(parsed: {
   return !!parsed?.explicitRequest && parsed?.intent !== "none" && confidence >= confidenceMin;
 }
 
+export function isDealerTransactionPolicyParserAccepted(parsed: {
+  explicitRequest?: boolean;
+  intent?: string | null;
+  asksRiderToRiderFinancing?: boolean;
+  asksPrivateSellerFacilitation?: boolean;
+  asksExternalDealerFacilitation?: boolean;
+  confidence?: number;
+} | null): boolean {
+  const confidenceMin = Number(process.env.LLM_DEALER_TRANSACTION_POLICY_CONFIDENCE_MIN ?? 0.74);
+  const confidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? parsed.confidence : 0;
+  const hasActionableFlag =
+    !!parsed?.asksRiderToRiderFinancing ||
+    !!parsed?.asksPrivateSellerFacilitation ||
+    !!parsed?.asksExternalDealerFacilitation;
+  return !!parsed?.explicitRequest && parsed?.intent !== "none" && hasActionableFlag && confidence >= confidenceMin;
+}
+
 export function isResponseControlParserAccepted(parsed: {
   explicitRequest?: boolean;
   intent?: string | null;

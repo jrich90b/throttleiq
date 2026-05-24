@@ -5989,7 +5989,7 @@ export default function Home() {
     ) {
       return "electra_glide";
     }
-    if (tokensExactly(tokens, ["springer", "softail"])) return "springer_softail";
+    if (tokens.includes("springer")) return "springer_softail";
     if (tokensExactly(tokens, ["wide", "glide"])) return "wide_glide";
     return null;
   }

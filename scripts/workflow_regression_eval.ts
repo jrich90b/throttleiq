@@ -188,6 +188,13 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "after_hours_courtesy_not_hours_question",
+    actual: isBusinessHoursQuestionText(
+      "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a trade for a used bike I found with a private seller?"
+    ),
+    expected: false
+  },
+  {
     id: "voice_callback_suppressed_when_call_books_appointment",
     actual: shouldSuppressVoiceCallbackTodoForAppointment({
       callbackRequested: true,

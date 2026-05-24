@@ -43,6 +43,7 @@ export type DealerDeployReadiness = {
   canPushToActiveClient: boolean;
   missing: string[];
   blockers: string[];
+  goLiveMissing: string[];
   warnings: string[];
 };
 
@@ -167,7 +168,7 @@ export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "appU
   const apiAddress = String(process.env.LEADRIDER_API_STATIC_IP ?? "44.194.249.46").trim();
   const repoPath = `/home/ubuntu/leadrider-api/${clean}`;
   const runtimeRoot = `/home/ubuntu/leadrider-runtime/${clean}`;
-  const pm2Process = `leadrider-api-${clean}`.slice(0, 80);
+  const pm2Process = clean === "americanharley" ? "throttleiq-api" : `leadrider-api-${clean}`.slice(0, 80);
   const healthUrl = `${setup.apiUrl.replace(/\/$/, "")}/health`;
   const deployProfileLocalPath = `infra/deploy/${clean}.api.env`;
   const webHostname = safeHostname(setup.appUrl, `${clean}.leadrider.ai`);
@@ -231,9 +232,10 @@ function stepLabel(setup: Pick<DealerSetup, "steps">, stepId: string): string {
 function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
   const requiredDone = ["vercel", "dns", "remote_env"];
   const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
-  const blockingSteps = [...requiredDone, ...requiredStarted, "smoke"];
+  const goLiveRequiredDone = ["intake", "agreement", ...requiredDone, ...requiredStarted, "smoke"];
   const missing: string[] = [];
   const blockers: string[] = [];
+  const goLiveMissing: string[] = [];
   const warnings: string[] = [];
 
   for (const stepId of requiredDone) {
@@ -246,18 +248,25 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
     if (status !== "done" && status !== "in_progress") missing.push(stepLabel(setup, stepId));
   }
 
-  for (const stepId of blockingSteps) {
+  for (const stepId of goLiveRequiredDone) {
     const status = stepStatus(setup, stepId);
     if (status === "blocked") blockers.push(stepLabel(setup, stepId));
+    if (status !== "done") goLiveMissing.push(stepLabel(setup, stepId));
   }
 
   if (stepStatus(setup, "smoke") === "pending") warnings.push("Launch smoke test has not run yet.");
+  if (goLiveMissing.length) {
+    warnings.push(
+      `Setup can continue in parallel. Go-live waits on ${goLiveMissing.length} item${goLiveMissing.length === 1 ? "" : "s"}.`
+    );
+  }
   if (!setup.website) warnings.push("Dealer website is not captured.");
   if (!setup.primaryContact) warnings.push("Primary contact is not captured.");
 
-  const canDeployApi = missing.length === 0 && blockers.length === 0;
-  const canPushToActiveClient = canDeployApi && stepStatus(setup, "smoke") === "done";
-  const status: DealerDeployReadinessStatus = blockers.length
+  const coreBlockers = requiredDone.filter(stepId => stepStatus(setup, stepId) === "blocked");
+  const canDeployApi = missing.length === 0 && coreBlockers.length === 0;
+  const canPushToActiveClient = canDeployApi && goLiveMissing.length === 0 && blockers.length === 0;
+  const status: DealerDeployReadinessStatus = coreBlockers.length
     ? "blocked"
     : canPushToActiveClient
       ? "live_ready"
@@ -276,11 +285,13 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
 
   const summary =
     status === "blocked"
-      ? `Resolve ${blockers.length} blocked setup step${blockers.length === 1 ? "" : "s"} before deployment.`
+      ? `Resolve ${coreBlockers.length} core blocked item${coreBlockers.length === 1 ? "" : "s"} before deployment. Other setup steps can continue.`
       : status === "live_ready"
         ? "Smoke test passed. This dealer can be pushed to Active Clients."
         : status === "ready_to_deploy"
-          ? "Required setup is ready. Deploy the API, then run the launch smoke test."
+          ? goLiveMissing.length
+            ? `Core setup can continue. Go-live is waiting on ${goLiveMissing.length} item${goLiveMissing.length === 1 ? "" : "s"}.`
+            : "Required setup is ready. Deploy the API, then run the launch smoke test."
           : missing.length
             ? `Complete ${missing.length} required item${missing.length === 1 ? "" : "s"} before deployment.`
             : "Review setup readiness before deployment.";
@@ -293,6 +304,7 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
     canPushToActiveClient,
     missing,
     blockers,
+    goLiveMissing,
     warnings
   };
 }

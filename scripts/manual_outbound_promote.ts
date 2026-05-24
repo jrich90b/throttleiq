@@ -82,6 +82,24 @@ function normText(input: unknown): string {
     .trim();
 }
 
+function sanitizeManualReplyExampleReply(input: string): string {
+  // Manual reply exemplars are used as tone references. They should not contain absolute calendar dates
+  // (which go stale and can leak into future drafts). Keep weekday + time, but strip month/day/year
+  // when a weekday is present (e.g. "Wed, Feb 25, 3:30 PM" -> "Wed, 3:30 PM").
+  const months =
+    "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
+  const weekdays =
+    "(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:r(?:s(?:day)?)?)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)";
+
+  let text = normText(input);
+  const weekdayMonthDay = new RegExp(
+    `\\b(${weekdays})\\b\\s*,?\\s*\\b${months}\\b\\s+\\d{1,2}(?:st|nd|rd|th)?(?:\\s*,?\\s*\\d{4})?\\s*,?\\s*`,
+    "gi"
+  );
+  text = text.replace(weekdayMonthDay, (_match, weekday: string) => `${weekday}, `);
+  return normText(text);
+}
+
 function normKey(input: unknown): string {
   return normText(input).toLowerCase();
 }
@@ -104,7 +122,7 @@ function run() {
   const buckets = new Map<string, Map<string, { inboundText: string; reply: string; count: number; observedAt?: string }>>();
   for (const row of rows) {
     const inboundText = normText(row.inboundText);
-    const reply = normText(row.preferredDraft);
+    const reply = sanitizeManualReplyExampleReply(normText(row.preferredDraft));
     if (!inboundText || !reply) continue;
     if (reply.length < 10) continue;
     if (reply.length > 500) continue;

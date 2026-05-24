@@ -1595,6 +1595,20 @@ export type FirstTimeRiderGuidanceParse = {
   confidence?: number;
 };
 
+export type DealerTransactionPolicyParse = {
+  intent:
+    | "rider_to_rider_financing"
+    | "private_seller_facilitation"
+    | "external_dealer_facilitation"
+    | "rider_to_rider_and_third_party"
+    | "none";
+  explicitRequest: boolean;
+  asksRiderToRiderFinancing?: boolean;
+  asksPrivateSellerFacilitation?: boolean;
+  asksExternalDealerFacilitation?: boolean;
+  confidence?: number;
+};
+
 export type TradePayoffParse = {
   payoffStatus: "unknown" | "no_lien" | "has_lien";
   needsLienHolderInfo: boolean;
@@ -2430,6 +2444,36 @@ const FIRST_TIME_RIDER_GUIDANCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
     asks_test_ride: { type: "boolean" },
     asks_beginner_bike: { type: "boolean" },
     asks_rider_course: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const DEALER_TRANSACTION_POLICY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "intent",
+    "explicit_request",
+    "asks_rider_to_rider_financing",
+    "asks_private_seller_facilitation",
+    "asks_external_dealer_facilitation",
+    "confidence"
+  ],
+  properties: {
+    intent: {
+      type: "string",
+      enum: [
+        "rider_to_rider_financing",
+        "private_seller_facilitation",
+        "external_dealer_facilitation",
+        "rider_to_rider_and_third_party",
+        "none"
+      ]
+    },
+    explicit_request: { type: "boolean" },
+    asks_rider_to_rider_financing: { type: "boolean" },
+    asks_private_seller_facilitation: { type: "boolean" },
+    asks_external_dealer_facilitation: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -4445,6 +4489,12 @@ inbound: "I'll pass man. I just like to ride the new models and check them out. 
 output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
     `EXAMPLE J
 inbound: "I have to cancel coming to you Tuesday. I'm having service done on the bike and inspection. I need to do a few more things before I can sell. I'll get back to you."
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`,
+    `EXAMPLE K
+inbound: "Thanks Joe. I'm all set on the bike search for the time being. Appreciate your help. I'll reach out when I'm looking again."
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE L
+inbound: "I'm not looking right now but I'll get a hold of you when I'm ready."
 output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`
   ];
 
@@ -4634,6 +4684,117 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     asksTestRide: !!parsed.asks_test_ride,
     asksBeginnerBike: !!parsed.asks_beginner_bike,
     asksRiderCourse: !!parsed.asks_rider_course,
+    confidence
+  };
+}
+
+export async function parseDealerTransactionPolicyWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<DealerTransactionPolicyParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEALER_TRANSACTION_POLICY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEALER_TRANSACTION_POLICY_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEALER_TRANSACTION_POLICY_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEALER_TRANSACTION_POLICY_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a trade for a used bike I found with a private seller? Would the rider to rider program work for something like this?"
+output: {"intent":"rider_to_rider_and_third_party","explicit_request":true,"asks_rider_to_rider_financing":true,"asks_private_seller_facilitation":true,"asks_external_dealer_facilitation":false,"confidence":0.98}`,
+    `EXAMPLE B
+inbound: "Do you participate in Rider to Rider financing?"
+output: {"intent":"rider_to_rider_financing","explicit_request":true,"asks_rider_to_rider_financing":true,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.97}`,
+    `EXAMPLE C
+inbound: "Can you broker a private party sale for a bike I found on marketplace?"
+output: {"intent":"private_seller_facilitation","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":true,"asks_external_dealer_facilitation":false,"confidence":0.96}`,
+    `EXAMPLE D
+inbound: "Can you facilitate getting me a used bike from another dealer?"
+output: {"intent":"external_dealer_facilitation","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":true,"confidence":0.95}`,
+    `EXAMPLE E
+inbound: "Can I trade my bike in on that Street Glide?"
+output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.95}`,
+    `EXAMPLE F
+inbound: "Can I finance a used bike you have in stock?"
+output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.95}`
+  ];
+
+  const prompt = [
+    "You are a strict parser for dealership transaction-policy questions.",
+    "Return only JSON matching the schema.",
+    "",
+    "Intent rules:",
+    "- rider_to_rider_financing: customer asks whether the dealership participates in Rider to Rider, R2R, or rider-to-rider financing.",
+    "- private_seller_facilitation: customer asks whether the dealership can broker, handle, facilitate, process, finance, or trade a bike owned by a private seller/private party/marketplace seller.",
+    "- external_dealer_facilitation: customer asks whether the dealership can facilitate a trade, purchase, or transfer for a used bike owned by another dealer.",
+    "- rider_to_rider_and_third_party: both Rider to Rider financing and a private-seller/third-party/external-dealer facilitation request appear in the same message.",
+    "- none: normal financing, trade-in, price, inventory, or appointment questions on dealership-owned inventory.",
+    "",
+    "Important:",
+    "- Do not classify a normal trade-in question as private_seller_facilitation.",
+    "- Do not classify a normal financing/payment question as rider_to_rider_financing unless Rider to Rider/R2R is explicitly mentioned.",
+    "- explicit_request=true when the customer asks what the dealership can do or whether a program/process applies.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dealer_transaction_policy_parser",
+      schema: DEALER_TRANSACTION_POLICY_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-dealer-transaction-policy-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
+  const intent: DealerTransactionPolicyParse["intent"] =
+    rawIntent === "rider_to_rider_financing" ||
+    rawIntent === "private_seller_facilitation" ||
+    rawIntent === "external_dealer_facilitation" ||
+    rawIntent === "rider_to_rider_and_third_party"
+      ? rawIntent
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    explicitRequest: !!parsed.explicit_request,
+    asksRiderToRiderFinancing: !!parsed.asks_rider_to_rider_financing,
+    asksPrivateSellerFacilitation: !!parsed.asks_private_seller_facilitation,
+    asksExternalDealerFacilitation: !!parsed.asks_external_dealer_facilitation,
     confidence
   };
 }

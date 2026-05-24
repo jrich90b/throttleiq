@@ -78,6 +78,7 @@ import {
   type DealerSetupStepStatus,
   type DealerSetup
 } from "./domain/dealerSetupStore.js";
+import { buildDealerDeploymentManual } from "./domain/dealerDeploymentManual.js";
 import {
   addSalesProspect,
   deleteSalesProspect,
@@ -154,6 +155,7 @@ import {
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
+  parseDealerTransactionPolicyWithLLM,
   parseResponseControlWithLLM,
   parsePurchaseDeliveryLogisticsWithLLM,
   parseSalespersonMentionWithLLM,
@@ -178,6 +180,7 @@ import type {
   ConversationStateParse,
   CustomerAckActionParse,
   CustomerDispositionParse,
+  DealerTransactionPolicyParse,
   FirstTimeRiderGuidanceParse,
   EmpathySupportReplyParse,
   WebFallbackReplyParse,
@@ -323,6 +326,7 @@ import {
   canApplyDispositionCloseout,
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
+  isDealerTransactionPolicyParserAccepted,
   isDispositionParserAccepted,
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted,
@@ -341,6 +345,14 @@ import {
   resolveRoutingParserDecision,
   shouldTreatInboundAsTestRideBikeSelection
 } from "./domain/routerV2.js";
+import {
+  canInviteScheduleAfterBusinessHours,
+  classifyInboundPreParserTurn,
+  decorateBusinessHoursReply,
+  resolveDealerTransactionPolicyRoute,
+  resolveInboundTerminalRoute,
+  type InboundPreParserDecision
+} from "./domain/inboundPipeline.js";
 import {
   SOFT_SCHEDULE_COOLDOWN_MS,
   detectSchedulingSignals,
@@ -2655,6 +2667,150 @@ function buildRiderToRiderFinanceRegenReply(args: {
   ).trim();
 }
 
+type DealerTransactionPolicyDecision = DealerTransactionPolicyParse & {
+  source: "parser" | "fallback";
+};
+
+function hasDealerTransactionPolicyParserHint(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const riderToRider = /\brider\s*(?:to|2|-)?\s*rider\b/.test(t) || /\br2r\b/.test(t);
+  const thirdParty =
+    /\b(private\s+(?:seller|party)|third[-\s]?party|outside seller|facebook marketplace|marketplace seller|craigslist)\b/.test(
+      t
+    ) ||
+    /\b(another|other)\s+dealer\b/.test(t) ||
+    /\bdealer\s+trade\b/.test(t) ||
+    /\b(?:facilitate|facilitating|broker|handle|process)\b[\s\S]{0,90}\b(?:private|seller|party|marketplace|another dealer|other dealer|third[-\s]?party|used bike)\b/.test(
+      t
+    );
+  return riderToRider || thirdParty;
+}
+
+function parseDealerTransactionPolicyFallback(text: string): DealerTransactionPolicyDecision | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!hasDealerTransactionPolicyParserHint(t)) return null;
+  const asksRiderToRiderFinancing =
+    (/\brider\s*(?:to|2|-)?\s*rider\b/.test(t) || /\br2r\b/.test(t)) &&
+    /\b(finance|financing|program|work|participate|offer)\b/.test(t);
+  const asksPrivateSellerFacilitation =
+    /\b(private\s+(?:seller|party)|third[-\s]?party|outside seller|facebook marketplace|marketplace seller|craigslist)\b/.test(
+      t
+    );
+  const asksExternalDealerFacilitation =
+    /\b(another|other)\s+dealer\b/.test(t) || /\bdealer\s+trade\b/.test(t);
+  if (!asksRiderToRiderFinancing && !asksPrivateSellerFacilitation && !asksExternalDealerFacilitation) {
+    return null;
+  }
+  const intent: DealerTransactionPolicyParse["intent"] =
+    asksRiderToRiderFinancing && (asksPrivateSellerFacilitation || asksExternalDealerFacilitation)
+      ? "rider_to_rider_and_third_party"
+      : asksRiderToRiderFinancing
+        ? "rider_to_rider_financing"
+        : asksPrivateSellerFacilitation
+          ? "private_seller_facilitation"
+          : "external_dealer_facilitation";
+  return {
+    intent,
+    explicitRequest: true,
+    asksRiderToRiderFinancing,
+    asksPrivateSellerFacilitation,
+    asksExternalDealerFacilitation,
+    confidence: 0.76,
+    source: "fallback"
+  };
+}
+
+function resolveDealerTransactionPolicyDecision(
+  text: string,
+  parsed: DealerTransactionPolicyParse | null
+): DealerTransactionPolicyDecision | null {
+  if (parsed && isDealerTransactionPolicyParserAccepted(parsed)) {
+    return { ...parsed, source: "parser" };
+  }
+  const confidence =
+    typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_DEALER_TRANSACTION_POLICY_CONFIDENCE_MIN ?? 0.74);
+  if (parsed && confidence >= min && parsed.intent === "none") return null;
+  return parseDealerTransactionPolicyFallback(text);
+}
+
+function buildDealerTransactionPolicyReply(args: {
+  decision: DealerTransactionPolicyDecision;
+  dealerProfile: any;
+}): string {
+  const dealerOffersProgram = dealerOffersRiderToRiderFinancing(args.dealerProfile);
+  const asksRider = !!args.decision.asksRiderToRiderFinancing;
+  const asksPrivate = !!args.decision.asksPrivateSellerFacilitation;
+  const asksExternal = !!args.decision.asksExternalDealerFacilitation;
+  const thirdPartyLabel =
+    asksPrivate && asksExternal
+      ? "a private seller or another dealer"
+      : asksPrivate
+        ? "a private seller"
+        : "another dealer";
+
+  if (asksRider && (asksPrivate || asksExternal)) {
+    if (dealerOffersProgram) {
+      return `Good question. We can help with Rider to Rider financing if the program applies, but we generally cannot facilitate a trade or purchase for a bike owned by ${thirdPartyLabel}. I'll have the business manager confirm the program details.`;
+    }
+    return `Good question. We do not participate in Rider to Rider financing, and we generally cannot facilitate a trade or purchase for a bike owned by ${thirdPartyLabel}. If you want, I can still help look at financing options on bikes we sell here.`;
+  }
+
+  if (asksRider) {
+    if (dealerOffersProgram) {
+      return "Good question. We can help with Rider to Rider financing if the program applies. I'll have the business manager confirm the details and next steps.";
+    }
+    return "Good question. We do not participate in Rider to Rider financing, but I can still help look at financing options on bikes we sell here.";
+  }
+
+  return `Good question. We generally cannot facilitate a trade or purchase for a bike owned by ${thirdPartyLabel}. We can help with financing and trade options on bikes we sell here.`;
+}
+
+function applyDealerTransactionPolicyDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  decision: DealerTransactionPolicyDecision;
+  dealerProfile: any;
+  scope: "live" | "regen";
+}): string {
+  const reply = buildDealerTransactionPolicyReply({
+    decision: args.decision,
+    dealerProfile: args.dealerProfile
+  });
+  const dealerOffersProgram = dealerOffersRiderToRiderFinancing(args.dealerProfile);
+  if (dealerOffersProgram && args.decision.asksRiderToRiderFinancing) {
+    const hasApprovalTodo = listOpenTodos().some(
+      t => t.convId === args.conv.id && t.reason === "approval" && /rider\s*to\s*rider|r2r/i.test(t.summary)
+    );
+    if (!hasApprovalTodo) {
+      addTodo(
+        args.conv,
+        "approval",
+        `Confirm Rider to Rider financing policy before replying. Customer asked: ${String(args.text ?? "").trim()}`,
+        args.providerMessageId ?? undefined
+      );
+    }
+    setFollowUpMode(args.conv, "manual_handoff", "dealer_transaction_policy");
+    stopFollowUpCadence(args.conv, "manual_handoff");
+    stopRelatedCadences(args.conv, "dealer_transaction_policy", { setMode: "manual_handoff" });
+  } else {
+    setFollowUpMode(args.conv, "active", "dealer_transaction_policy_answered");
+  }
+  recordRouteOutcome(args.scope, "dealer_transaction_policy", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    source: args.decision.source,
+    intent: args.decision.intent,
+    asksRiderToRiderFinancing: !!args.decision.asksRiderToRiderFinancing,
+    asksPrivateSellerFacilitation: !!args.decision.asksPrivateSellerFacilitation,
+    asksExternalDealerFacilitation: !!args.decision.asksExternalDealerFacilitation,
+    dealerOffersProgram
+  });
+  return reply;
+}
+
 function isServiceConversation(conv: any): boolean {
   return getConversationDepartment(conv) === "service";
 }
@@ -3307,7 +3463,7 @@ function detectGenericWatchFamilyLabel(model: string | null | undefined): Invent
   if (hasSeq(["road", "glide", "limited"])) return "road_glide_limited";
   if (hasSeq(["ultra", "limited"])) return "ultra_limited";
   if (hasSeq(["softail", "deluxe"])) return "softail_deluxe";
-  if (hasSeq(["springer", "softail"])) return "springer_softail";
+  if (tokens.includes("springer")) return "springer_softail";
   if (hasSeq(["street", "bob"])) return "street_bob";
   if (hasSeq(["fat", "bob"])) return "fat_bob";
   if (hasSeq(["fat", "boy"])) return "fat_boy";
@@ -16248,6 +16404,70 @@ function formatBusinessHoursProposalTime(timeToken: string): string {
   return formatTime12h(`${String(hour24).padStart(2, "0")}:${minute}`);
 }
 
+function isSalesLeadForBusinessHours(conv: any, isServiceLeadOverride?: boolean): boolean {
+  if (isServiceLeadOverride === true) return false;
+  const department = getConversationDepartment(conv);
+  if (department === "service" || department === "parts" || department === "apparel") return false;
+  const bucket = String(conv?.classification?.bucket ?? "").toLowerCase();
+  if (bucket === "service" || bucket === "parts" || bucket === "apparel" || bucket === "other") {
+    return false;
+  }
+  return (
+    !!conv?.lead?.vehicle?.model ||
+    !!conv?.lead?.vehicle?.year ||
+    !!conv?.lead?.tradeVehicle?.model ||
+    !!conv?.lead?.tradeVehicle?.description ||
+    (!!bucket && !["service", "parts", "apparel", "other"].includes(bucket))
+  );
+}
+
+async function buildBusinessHoursPipelineReply(
+  conv: any,
+  text: string | null | undefined,
+  opts?: {
+    decision?: InboundPreParserDecision | null;
+    isServiceLead?: boolean;
+    schedulingAllowed?: boolean;
+    outboundHoldNotice?: boolean;
+  }
+): Promise<string> {
+  const rawText = String(text ?? "");
+  let reply = await buildBusinessHoursQuestionReply(rawText);
+  const textLower = rawText.toLowerCase();
+  const confirmBike =
+    /\b(that'?s (it|the one|the bike)|that one|yep|yup|yes)\b/i.test(textLower);
+  const contextModel = conv?.inventoryContext?.model ?? conv?.lead?.vehicle?.model ?? null;
+  const contextYear = conv?.inventoryContext?.year ?? conv?.lead?.vehicle?.year ?? null;
+  const contextColor = conv?.inventoryContext?.color ?? null;
+  if (confirmBike && contextModel) {
+    const label = `${contextYear ? `${contextYear} ` : ""}${contextModel}`.trim();
+    const colorText = contextColor ? ` in ${contextColor}` : "";
+    reply = `Yes, the ${label}${colorText} is in stock. ${reply}`;
+  }
+
+  const decision =
+    opts?.decision ??
+    classifyInboundPreParserTurn({
+      provider: "twilio",
+      channel: "sms",
+      text: rawText
+    });
+  if (!decision) return reply;
+
+  const isSalesLead = isSalesLeadForBusinessHours(conv, opts?.isServiceLead);
+  const canInviteSchedule = canInviteScheduleAfterBusinessHours({
+    isSalesLead,
+    schedulingAllowed: opts?.schedulingAllowed,
+    followUpMode: conv?.followUp?.mode,
+    outboundHoldNotice: opts?.outboundHoldNotice
+  });
+  return decorateBusinessHoursReply({
+    baseReply: reply,
+    decision,
+    canInviteSchedule
+  });
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -26247,6 +26467,25 @@ app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req,
   return res.json({ ok: true, setup });
 });
 
+app.get("/dealer-setups/:id/manual", requirePermission("canAccessTodos"), async (req, res) => {
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const format = String(req.query.format ?? "html").toLowerCase() === "markdown" ? "markdown" : "html";
+  const manual = buildDealerDeploymentManual(setup, format);
+  const download = String(req.query.download ?? "") === "1" || String(req.query.download ?? "").toLowerCase() === "true";
+  const slug = setup.slug || "dealer";
+  if (download) {
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${slug}-deployment-manual.${format === "html" ? "html" : "md"}"`
+    );
+  }
+  res.setHeader("Cache-Control", "no-store");
+  return res
+    .type(format === "html" ? "html" : "text/markdown; charset=utf-8")
+    .send(manual.body);
+});
+
 const allowedActiveClientStatuses: ActiveClientStatus[] = ["active", "implementation", "paused", "canceled"];
 const allowedActiveClientPaymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "other"];
 
@@ -26739,7 +26978,7 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
       ? `${providerCopy[stepId]?.title.replace(/^Configure |^Connect |^Verify /, "") || "Provider"} browser task created.`
       : copy.message,
     nextStep: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
-      ? "The provider runner will open the site, pause for login/MFA if needed, and stop before sensitive submissions."
+      ? "The provider runner will open the site and pause for login, MFA, approvals, or sensitive submissions. Continue the other setup steps while this waits."
       : copy.nextStep,
     approvalRequired: !["google", "twilio", "sendgrid", "meta"].includes(stepId),
     approvalReason: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
@@ -26783,6 +27022,17 @@ async function ensureDealerSetupAgentTask(setup: DealerSetup, stepId: string) {
   return { task, spec, reused: false };
 }
 
+function nextDealerSetupStepId(setup: DealerSetup) {
+  const steps = Array.isArray(setup.steps) ? setup.steps : [];
+  return (
+    steps.find(step => step.status === "pending" && step.id !== "handoff")?.id ||
+    steps.find(step => step.status === "blocked")?.id ||
+    steps.find(step => step.status === "in_progress")?.id ||
+    steps.find(step => step.status === "pending")?.id ||
+    "handoff"
+  );
+}
+
 app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -26790,7 +27040,7 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
   }
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
-  const stepId = String(req.body?.stepId ?? "").trim() || setup.steps.find(step => step.status === "blocked")?.id || setup.steps.find(step => step.status !== "done")?.id || "handoff";
+  const stepId = String(req.body?.stepId ?? "").trim() || nextDealerSetupStepId(setup);
   const action = String(req.body?.action ?? "run").trim().toLowerCase();
   if (action === "complete") {
     const updated = await updateDealerSetup(setup.id, {
@@ -26856,7 +27106,7 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
       stepId,
       records,
       message: "DNS records are ready.",
-      nextStep: "Add these records where the dealer domain is hosted, then mark DNS complete."
+      nextStep: "Add these records where the dealer domain is hosted. Continue other setup steps while DNS is waiting or propagating."
     });
   }
 
@@ -40702,6 +40952,49 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   if (
     (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
+    hasDealerTransactionPolicyParserHint(event.body ?? "")
+  ) {
+    const dealerTransactionPolicyParse = await safeLlmParse("regen_dealer_transaction_policy_parser", () =>
+      parseDealerTransactionPolicyWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const dealerTransactionPolicyDecision = resolveDealerTransactionPolicyDecision(
+      event.body ?? "",
+      dealerTransactionPolicyParse
+    );
+    const dealerTransactionPolicyRoute = resolveDealerTransactionPolicyRoute({
+      provider: event.provider,
+      channel,
+      hasDecision: !!dealerTransactionPolicyDecision,
+      source: dealerTransactionPolicyDecision?.source ?? null,
+      asksRiderToRiderFinancing: dealerTransactionPolicyDecision?.asksRiderToRiderFinancing,
+      asksPrivateSellerFacilitation: dealerTransactionPolicyDecision?.asksPrivateSellerFacilitation,
+      asksExternalDealerFacilitation: dealerTransactionPolicyDecision?.asksExternalDealerFacilitation
+    });
+    if (dealerTransactionPolicyRoute && dealerTransactionPolicyDecision) {
+      const dealerProfile = await getDealerProfileHot();
+      const reply = applyDealerTransactionPolicyDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: (inbound as any)?.providerMessageId,
+        decision: dealerTransactionPolicyDecision,
+        dealerProfile,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: !!dealerTransactionPolicyDecision.asksRiderToRiderFinancing
+      });
+    }
+  }
+
+  if (
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
     hasCompositeSalesInquiryParserHint(event.body ?? "")
   ) {
     const compositeParse = await safeLlmParse("regen_composite_sales_inquiry_parser", () =>
@@ -41986,22 +42279,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   }
   const regenAppointmentTimingAcceptedForRouting = isAppointmentTimingParserAccepted(regenAppointmentTimingParse);
-  if (event.provider === "twilio" && isBusinessHoursQuestionText(event.body ?? "")) {
-    const reply = await buildBusinessHoursQuestionReply(event.body ?? "");
-    const isSalesLead =
-      !!conv.lead?.vehicle?.model ||
-      !!conv.lead?.vehicle?.year ||
-      !!conv.lead?.tradeVehicle?.model ||
-      !!conv.lead?.tradeVehicle?.description ||
-      (conv.classification?.bucket &&
-        !["service", "other"].includes(String(conv.classification.bucket)));
-    const canInviteSchedule =
-      isSalesLead &&
-      conv.followUp?.mode !== "manual_handoff" &&
-      conv.followUp?.mode !== "holding_inventory";
-    const withScheduleInvite = canInviteSchedule
-      ? `${reply} If you’re thinking about coming in, what time works best? I can put you down on the schedule.`
-      : reply;
+  const regenPreParserDecision = classifyInboundPreParserTurn({
+    provider: event.provider,
+    channel,
+    text: event.body
+  });
+  if (regenPreParserDecision?.kind === "business_hours_question") {
+    const withScheduleInvite = await buildBusinessHoursPipelineReply(conv, event.body ?? "", {
+      decision: regenPreParserDecision
+    });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(withScheduleInvite);
     }
@@ -42652,7 +42938,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
   const regenCustomerDispositionParserHint =
-    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|hold off|pass for now|not ready|let you know|get back to you|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
+    /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set|hold off|pass for now|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|let you know|get back to you|reach out when|looking again|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
       regenTextLower
     );
   const regenCustomerDispositionParse =
@@ -42705,17 +42991,52 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenCustomerDispositionParse
   );
   const regenParsedDispositionAccepted = isDispositionParserAccepted(regenCustomerDispositionParse);
-  if (
-    canApplyDispositionCloseout({
-      conv,
-      text: event.body ?? "",
-      parsedAccepted: regenParsedDispositionAccepted,
-      hasDecision: !!regenDispositionDecision
-    }) &&
-    regenDispositionDecision
-  ) {
+  const regenDispositionCloseoutAllowed = canApplyDispositionCloseout({
+    conv,
+    text: event.body ?? "",
+    parsedAccepted: regenParsedDispositionAccepted,
+    hasDecision: !!regenDispositionDecision
+  });
+  const regenTerminalRouteDecision = resolveInboundTerminalRoute({
+    provider: event.provider,
+    channel: channel === "email" ? "email" : "sms",
+    hasInventoryWatchStopContext: regenHasInventoryWatch,
+    watchStopRequested:
+      isWatchAlertStopIntent(event.body ?? "") ||
+      isWatchSearchPauseIntent(event.body ?? "") ||
+      regenSemanticWatchAction === "stop_watch",
+    watchStopSource: regenSemanticWatchAction === "stop_watch" ? "semantic_slot" : "lexical",
+    customerDispositionDecision: regenDispositionDecision,
+    customerDispositionAllowed: regenDispositionCloseoutAllowed,
+    responseControlNotInterested:
+      regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested"
+  });
+  if (regenTerminalRouteDecision?.kind === "inventory_watch_optout") {
+    await clearInventoryWatchState(conv, "inventory_watch_optout");
+    const regenReply = buildInventoryWatchStopReply(conv, event.body ?? "");
+    recordRouteOutcome("regen", regenTerminalRouteDecision.routeOutcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parser: regenTerminalRouteDecision.parser
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenReply);
+    }
+    return respondWithSmsRegeneratedDraft(regenReply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
+  if (regenTerminalRouteDecision?.kind === "customer_disposition_closeout" && regenDispositionDecision) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
     const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body, conv), conv);
+    recordRouteOutcome("regen", regenTerminalRouteDecision.routeOutcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reason: regenTerminalRouteDecision.dispositionReason,
+      responseControlNotInterested: regenTerminalRouteDecision.responseControlNotInterested
+    });
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(regenReply);
     }
@@ -44147,6 +44468,52 @@ if (authToken && signature) {
       mediaCount: event.mediaUrls?.length ?? 0
     });
   }
+  const systemMode = getSystemMode();
+  const webhookMode =
+    systemMode === "suggest" ? "suggest" : event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
+  const livePreParserDecision = classifyInboundPreParserTurn({
+    provider: event.provider,
+    channel: event.channel === "email" ? "email" : "sms",
+    text: event.body
+  });
+  if (
+    livePreParserDecision?.kind === "business_hours_question" &&
+    conv.mode !== "human" &&
+    conv.contactPreference !== "call_only" &&
+    !isOptOut(event.body) &&
+    !isNotInterested(event.body)
+  ) {
+    if (systemMode === "suggest") {
+      discardPendingDrafts(conv, "new_inbound");
+    }
+    await resetFollowUpCadenceOnInbound(conv, event.body ?? "");
+    const lastOutboundForHours = getLastNonVoiceOutbound(conv);
+    const outboundHoldNoticeForHours =
+      !!lastOutboundForHours?.body &&
+      /(on hold|hold with deposit|deposit|sale pending|pending|sold|already sold)/i.test(
+        lastOutboundForHours.body
+      );
+    const reply = await buildBusinessHoursPipelineReply(conv, event.body ?? "", {
+      decision: livePreParserDecision,
+      outboundHoldNotice: outboundHoldNoticeForHours
+    });
+    recordRouteOutcome("live", livePreParserDecision.routeOutcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      hasScheduleTimeSignal: livePreParserDecision.hasScheduleTimeSignal,
+      hasScheduleDaySignal: livePreParserDecision.hasScheduleDaySignal
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   const responseControlParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -44701,9 +45068,6 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  const systemMode = getSystemMode();
-  const webhookMode =
-    systemMode === "suggest" ? "suggest" : event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
   const liveEarlyPurchaseDeliveryLogisticsParse =
     event.provider === "twilio" &&
     hasPurchaseDeliveryLogisticsParserHint(
@@ -44839,32 +45203,6 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (llmNotInterested || isNotInterested(event.body)) {
-    const watchPauseRequested =
-      hasInventoryWatchStopContext(conv) && isWatchSearchPauseIntent(event.body ?? "");
-    if (watchPauseRequested) {
-      await clearInventoryWatchState(conv, "inventory_watch_optout");
-    } else {
-      stopFollowUpCadence(conv, "not_interested");
-      closeConversation(conv, "not_interested");
-      stopRelatedCadences(conv, "not_interested", { close: true });
-    }
-    const reply = watchPauseRequested
-      ? buildInventoryWatchStopReply(conv, event.body ?? "")
-      : ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body ?? "", conv), conv);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
   const semanticInboundText = String(event.body ?? "");
   const semanticTextLower = semanticInboundText.toLowerCase();
   const semanticShortAck = isShortAckText(semanticInboundText) || isEmojiOnlyText(semanticInboundText);
@@ -44910,6 +45248,50 @@ if (authToken && signature) {
       reply
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  if (event.provider === "twilio" && !semanticShortAck && hasDealerTransactionPolicyParserHint(semanticInboundText)) {
+    const dealerTransactionPolicyParse = await safeLlmParse("dealer_transaction_policy_parser", () =>
+      parseDealerTransactionPolicyWithLLM({
+        text: semanticInboundText,
+        history: buildHistory(conv, 12),
+        lead: conv.lead
+      })
+    );
+    const dealerTransactionPolicyDecision = resolveDealerTransactionPolicyDecision(
+      semanticInboundText,
+      dealerTransactionPolicyParse
+    );
+    const dealerTransactionPolicyRoute = resolveDealerTransactionPolicyRoute({
+      provider: event.provider,
+      channel: event.channel === "email" ? "email" : "sms",
+      hasDecision: !!dealerTransactionPolicyDecision,
+      source: dealerTransactionPolicyDecision?.source ?? null,
+      asksRiderToRiderFinancing: dealerTransactionPolicyDecision?.asksRiderToRiderFinancing,
+      asksPrivateSellerFacilitation: dealerTransactionPolicyDecision?.asksPrivateSellerFacilitation,
+      asksExternalDealerFacilitation: dealerTransactionPolicyDecision?.asksExternalDealerFacilitation
+    });
+    if (dealerTransactionPolicyRoute && dealerTransactionPolicyDecision) {
+      const dealerProfile = await getDealerProfileHot();
+      const reply = applyDealerTransactionPolicyDecision({
+        conv,
+        text: semanticInboundText,
+        providerMessageId: event.providerMessageId,
+        decision: dealerTransactionPolicyDecision,
+        dealerProfile,
+        scope: "live"
+      });
+      const mode = webhookMode;
+      if (mode === "suggest") {
+        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+        return res.status(200).type("text/xml").send(twiml);
+      }
+      appendOutbound(conv, event.to, event.from, reply, "twilio");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+        reply
+      )}</Message>\n</Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
   const unifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
   const unifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
@@ -45088,27 +45470,6 @@ if (authToken && signature) {
     debugLabel: "live"
     });
 
-  if (
-    (isWatchAlertStopIntent(event.body) ||
-      isWatchSearchPauseIntent(event.body) ||
-      semanticWatchAction === "stop_watch") &&
-    hasInventoryWatchStopContext(conv)
-  ) {
-    await clearInventoryWatchState(conv, "inventory_watch_optout");
-    const reply = buildInventoryWatchStopReply(conv, semanticInboundText);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
   const customerDispositionParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -45133,17 +45494,54 @@ if (authToken && signature) {
     customerDispositionParse
   );
   const parsedDispositionAccepted = isDispositionParserAccepted(customerDispositionParse);
-  if (
-    canApplyDispositionCloseout({
-      conv,
-      text: semanticInboundText,
-      parsedAccepted: parsedDispositionAccepted,
-      hasDecision: !!dispositionDecision
-    }) &&
-    dispositionDecision
-  ) {
+  const dispositionCloseoutAllowed = canApplyDispositionCloseout({
+    conv,
+    text: semanticInboundText,
+    parsedAccepted: parsedDispositionAccepted,
+    hasDecision: !!dispositionDecision
+  });
+  const terminalRouteDecision = resolveInboundTerminalRoute({
+    provider: event.provider,
+    channel: event.channel === "email" ? "email" : "sms",
+    hasInventoryWatchStopContext: hasInventoryWatchStopContext(conv),
+    watchStopRequested:
+      isWatchAlertStopIntent(event.body) ||
+      isWatchSearchPauseIntent(event.body) ||
+      semanticWatchAction === "stop_watch",
+    watchStopSource: semanticWatchAction === "stop_watch" ? "semantic_slot" : "lexical",
+    customerDispositionDecision: dispositionDecision,
+    customerDispositionAllowed: dispositionCloseoutAllowed,
+    responseControlNotInterested: llmNotInterested
+  });
+  if (terminalRouteDecision?.kind === "inventory_watch_optout") {
+    await clearInventoryWatchState(conv, "inventory_watch_optout");
+    const reply = buildInventoryWatchStopReply(conv, semanticInboundText);
+    recordRouteOutcome("live", terminalRouteDecision.routeOutcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parser: terminalRouteDecision.parser
+    });
+    const mode = webhookMode;
+    if (mode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (terminalRouteDecision?.kind === "customer_disposition_closeout" && dispositionDecision) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
     const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText, conv), conv);
+    recordRouteOutcome("live", terminalRouteDecision.routeOutcome, {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reason: terminalRouteDecision.dispositionReason,
+      responseControlNotInterested: terminalRouteDecision.responseControlNotInterested
+    });
     const mode = webhookMode;
     if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -49390,34 +49788,23 @@ if (authToken && signature) {
     isBusinessHoursQuestionText(textLower);
 
   if (event.provider === "twilio" && hoursQuestion) {
-    let reply = await buildBusinessHoursQuestionReply(textLower);
-    const confirmBike =
-      /\b(that'?s (it|the one|the bike)|that one|yep|yup|yes)\b/i.test(textLower);
-    const contextModel = conv.inventoryContext?.model ?? conv.lead?.vehicle?.model ?? null;
-    const contextYear = conv.inventoryContext?.year ?? conv.lead?.vehicle?.year ?? null;
-    const contextColor = conv.inventoryContext?.color ?? null;
-    if (confirmBike && contextModel) {
-      const label = `${contextYear ? `${contextYear} ` : ""}${contextModel}`.trim();
-      const colorText = contextColor ? ` in ${contextColor}` : "";
-      reply = `Yes — the ${label}${colorText} is in stock. ${reply}`;
-    }
-    const isSalesLead =
-      !isServiceLead &&
-      (!!conv.lead?.vehicle?.model ||
-        !!conv.lead?.vehicle?.year ||
-        !!conv.lead?.tradeVehicle?.model ||
-        !!conv.lead?.tradeVehicle?.description ||
-        (conv.classification?.bucket &&
-          !["service", "other"].includes(String(conv.classification.bucket))));
-    const canInviteSchedule =
-      isSalesLead &&
-      schedulingAllowed &&
-      conv.followUp?.mode !== "manual_handoff" &&
-      conv.followUp?.mode !== "holding_inventory" &&
-      !outboundHoldNotice;
-    if (canInviteSchedule) {
-      reply = `${reply} If you’re thinking about coming in, what time works best? I can put you down on the schedule.`;
-    }
+    const decision =
+      classifyInboundPreParserTurn({
+        provider: event.provider,
+        channel: event.channel === "email" ? "email" : "sms",
+        text: event.body
+      }) ??
+      classifyInboundPreParserTurn({
+        provider: "twilio",
+        channel: "sms",
+        text: textLower
+      });
+    const reply = await buildBusinessHoursPipelineReply(conv, textLower, {
+      decision,
+      isServiceLead,
+      schedulingAllowed,
+      outboundHoldNotice: !!outboundHoldNotice
+    });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;

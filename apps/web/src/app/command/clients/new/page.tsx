@@ -32,6 +32,7 @@ type DealerDeployReadiness = {
   canPushToActiveClient: boolean;
   missing: string[];
   blockers: string[];
+  goLiveMissing?: string[];
   warnings: string[];
 };
 
@@ -263,9 +264,10 @@ function setupStepLabel(setup: DealerSetup, stepId: string) {
 function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
   const requiredDone = ["vercel", "dns", "remote_env"];
   const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
-  const blockingSteps = [...requiredDone, ...requiredStarted, "smoke"];
+  const goLiveRequiredDone = ["intake", "agreement", ...requiredDone, ...requiredStarted, "smoke"];
   const missing: string[] = [];
   const blockers: string[] = [];
+  const goLiveMissing: string[] = [];
   const warnings: string[] = [];
 
   for (const stepId of requiredDone) {
@@ -275,17 +277,25 @@ function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness
     const status = setupStepStatus(setup, stepId);
     if (status !== "done" && status !== "in_progress") missing.push(setupStepLabel(setup, stepId));
   }
-  for (const stepId of blockingSteps) {
-    if (setupStepStatus(setup, stepId) === "blocked") blockers.push(setupStepLabel(setup, stepId));
+  for (const stepId of goLiveRequiredDone) {
+    const status = setupStepStatus(setup, stepId);
+    if (status === "blocked") blockers.push(setupStepLabel(setup, stepId));
+    if (status !== "done") goLiveMissing.push(setupStepLabel(setup, stepId));
   }
 
   if (setupStepStatus(setup, "smoke") === "pending") warnings.push("Launch smoke test has not run yet.");
+  if (goLiveMissing.length) {
+    warnings.push(
+      `Setup can continue in parallel. Go-live waits on ${goLiveMissing.length} item${goLiveMissing.length === 1 ? "" : "s"}.`
+    );
+  }
   if (!setup.website) warnings.push("Dealer website is not captured.");
   if (!setup.primaryContact) warnings.push("Primary contact is not captured.");
 
-  const canDeployApi = missing.length === 0 && blockers.length === 0;
-  const canPushToActiveClient = canDeployApi && setupStepStatus(setup, "smoke") === "done";
-  const status = blockers.length
+  const coreBlockers = requiredDone.filter(stepId => setupStepStatus(setup, stepId) === "blocked");
+  const canDeployApi = missing.length === 0 && coreBlockers.length === 0;
+  const canPushToActiveClient = canDeployApi && goLiveMissing.length === 0 && blockers.length === 0;
+  const status = coreBlockers.length
     ? "blocked"
     : canPushToActiveClient
       ? "live_ready"
@@ -296,16 +306,18 @@ function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness
     status === "blocked" ? "Blocked" : status === "live_ready" ? "Live-ready" : status === "ready_to_deploy" ? "Ready to deploy" : "Not ready";
   const summary =
     status === "blocked"
-      ? `Resolve ${blockers.length} blocked setup step${blockers.length === 1 ? "" : "s"} before deployment.`
+      ? `Resolve ${coreBlockers.length} core blocked item${coreBlockers.length === 1 ? "" : "s"} before deployment. Other setup steps can continue.`
       : status === "live_ready"
         ? "Smoke test passed. This dealer can be pushed to Active Clients."
         : status === "ready_to_deploy"
-          ? "Required setup is ready. Deploy the API, then run the launch smoke test."
+          ? goLiveMissing.length
+            ? `Core setup can continue. Go-live is waiting on ${goLiveMissing.length} item${goLiveMissing.length === 1 ? "" : "s"}.`
+            : "Required setup is ready. Deploy the API, then run the launch smoke test."
           : missing.length
             ? `Complete ${missing.length} required item${missing.length === 1 ? "" : "s"} before deployment.`
             : "Review setup readiness before deployment.";
 
-  return { status, label, summary, canDeployApi, canPushToActiveClient, missing, blockers, warnings };
+  return { status, label, summary, canDeployApi, canPushToActiveClient, missing, blockers, goLiveMissing, warnings };
 }
 
 function guidedStepDescription(stepId: string) {
@@ -371,12 +383,19 @@ export default function NewDealerClientPage() {
   }, [selectedSteps]);
   const currentStep = useMemo(() => {
     if (!selectedSteps.length) return null;
-    return selectedSteps.find(step => step.status === "blocked") ?? selectedSteps.find(step => step.status !== "done") ?? null;
+    return (
+      selectedSteps.find(step => step.status === "pending" && step.id !== "handoff") ??
+      selectedSteps.find(step => step.status === "blocked") ??
+      selectedSteps.find(step => step.status === "in_progress") ??
+      selectedSteps.find(step => step.status === "pending") ??
+      null
+    );
   }, [selectedSteps]);
   const currentApiDeployment = apiDeployment ?? selected?.apiDeployment ?? null;
+  const manualBaseHref = selected ? `/api/dealer-setups/${encodeURIComponent(selected.id)}/manual` : "";
   const setupStillNeeded = useMemo(() => {
     if (!selectedReadiness) return [];
-    return [...selectedReadiness.blockers, ...selectedReadiness.missing]
+    return [...selectedReadiness.blockers, ...(selectedReadiness.goLiveMissing ?? []), ...selectedReadiness.missing]
       .filter((item, index, list) => item && list.indexOf(item) === index)
       .slice(0, 5);
   }, [selectedReadiness]);
@@ -509,7 +528,7 @@ export default function NewDealerClientPage() {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stepId, stepStatus, status: stepStatus === "blocked" ? "blocked" : "in_progress" })
+        body: JSON.stringify({ stepId, stepStatus, status: "in_progress" })
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Setup step could not be updated.");
@@ -988,6 +1007,21 @@ export default function NewDealerClientPage() {
 
             {selected ? (
               <>
+                <section className="lr-ceo-manual-card">
+                  <div>
+                    <p className="lr-ceo-kicker">Deployment manual</p>
+                    <h3>{selected.dealerName} runbook</h3>
+                    <p>Open the current start-to-finish deployment manual generated from this setup record.</p>
+                  </div>
+                  <div>
+                    <a className="lr-ceo-secondary-btn" href={`${manualBaseHref}?format=html`} target="_blank" rel="noreferrer">
+                      Open manual
+                    </a>
+                    <a className="lr-ceo-secondary-btn" href={`${manualBaseHref}?format=markdown&download=1`}>
+                      Download
+                    </a>
+                  </div>
+                </section>
                 <div className="lr-ceo-progress">
                   <span style={{ width: `${completion}%` }} />
                 </div>

@@ -4450,19 +4450,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       /\b\d{1,2}(?::\d{2})?\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)\b/i.test(callbackInquiryText));
   const callbackTimeFromParserUsable = usableCallbackTimeHint(callbackTimeFromParser);
   const preferredCallbackTime = usableCallbackTimeHint(lead.preferredTime);
+  const preferredTimeBelongsToSchedulingLead =
+    inferredBucket === "test_ride" ||
+    inferredCta === "schedule_test_ride" ||
+    inferredBucket === "service" ||
+    inferredCta === "service_request";
   const callbackIntentFromExplicitLeadText =
     callbackIntentFromParser &&
     (callbackCueInInquiry ||
       !!callbackTimeFromParserUsable ||
-      !!preferredCallbackTime);
+      (!!preferredCallbackTime && !preferredTimeBelongsToSchedulingLead));
   const callbackRequestedInLead =
     callbackIntentFromExplicitLeadText ||
     callbackRequestedByLeadHeuristic ||
-    !!preferredCallbackTime;
+    (!!preferredCallbackTime && !preferredTimeBelongsToSchedulingLead);
   const callbackTimeHintFromText = extractCallbackTimeHintFromText(callbackInquiryText);
   const callbackTimeHint =
     callbackTimeFromParserUsable ||
-    preferredCallbackTime ||
+    (preferredTimeBelongsToSchedulingLead ? "" : preferredCallbackTime) ||
     callbackTimeHintFromText ||
     (inquiryDayPart ? `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}` : "");
   const callbackTz = callbackRequestedInLead

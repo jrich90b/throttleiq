@@ -97,6 +97,8 @@ For each dealer, the Command Dealer Setup flow can generate the clean API deploy
 - PM2 process: `leadrider-api-<dealer-slug>`
 - health check: `https://api.<dealer-slug>.leadrider.ai/health`
 
+American Harley is the first client and currently keeps the PM2 process name `throttleiq-api` while running from the clean checkout `/home/ubuntu/leadrider-api/americanharley`. New dealers should use the `leadrider-api-<dealer-slug>` process name unless there is a documented migration reason not to.
+
 Use the **API deploy profile** button in Dealer Setup to copy the generated profile text, then save it locally as:
 
 ```text
