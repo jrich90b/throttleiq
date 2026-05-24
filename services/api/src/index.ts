@@ -5357,6 +5357,77 @@ type ExternalDealerApprovalTransferDecision = {
   confidence: number;
 };
 
+type ThirdPartyFinanceFacilitationDecision = {
+  source: "parser";
+  confidence: number;
+  asksRiderToRiderFinancing: boolean;
+  asksThirdPartyPurchaseFacilitation: boolean;
+};
+
+function resolveThirdPartyFinanceFacilitationDecision(
+  parsed: PricingPaymentsIntentParse | null
+): ThirdPartyFinanceFacilitationDecision | null {
+  if (!isPricingPaymentsIntentParserAccepted(parsed) || parsed?.intent !== "payments") return null;
+  const asksRiderToRiderFinancing = !!parsed.asksRiderToRiderFinancing;
+  const asksThirdPartyPurchaseFacilitation = !!parsed.asksThirdPartyPurchaseFacilitation;
+  if (!asksRiderToRiderFinancing && !asksThirdPartyPurchaseFacilitation) return null;
+  return {
+    source: "parser",
+    confidence: parsed.confidence ?? 1,
+    asksRiderToRiderFinancing,
+    asksThirdPartyPurchaseFacilitation
+  };
+}
+
+function buildThirdPartyFinanceFacilitationReply(args: {
+  dealerOffersRiderToRider: boolean;
+  asksRiderToRiderFinancing: boolean;
+  asksThirdPartyPurchaseFacilitation: boolean;
+}): string {
+  const pieces: string[] = ["Thanks for checking."];
+  if (args.asksRiderToRiderFinancing) {
+    pieces.push(
+      args.dealerOffersRiderToRider
+        ? "We do participate in Rider-to-Rider financing, so I can have our business manager review what is possible."
+        : "We do not participate in Rider-to-Rider financing."
+    );
+  }
+  if (args.asksThirdPartyPurchaseFacilitation) {
+    pieces.push(
+      "We also cannot broker or facilitate a private-seller or other-dealer used-bike transaction through our store."
+    );
+  }
+  pieces.push(
+    "What we can help with is financing, trade, and paperwork on bikes we sell from our inventory."
+  );
+  return pieces.join(" ");
+}
+
+function applyThirdPartyFinanceFacilitationDecision(args: {
+  conv: Conversation;
+  dealerProfile: any;
+  decision: ThirdPartyFinanceFacilitationDecision;
+  scope: "live" | "regen";
+}): string {
+  setDialogState(args.conv, "payments_handoff");
+  setFollowUpMode(args.conv, "manual_handoff", "third_party_finance_facilitation");
+  stopFollowUpCadence(args.conv, "manual_handoff");
+  stopRelatedCadences(args.conv, "manual_handoff", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "third_party_finance_facilitation", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    source: args.decision.source,
+    confidence: args.decision.confidence,
+    asksRiderToRiderFinancing: args.decision.asksRiderToRiderFinancing,
+    asksThirdPartyPurchaseFacilitation: args.decision.asksThirdPartyPurchaseFacilitation
+  });
+  return buildThirdPartyFinanceFacilitationReply({
+    dealerOffersRiderToRider: dealerOffersRiderToRiderFinancing(args.dealerProfile),
+    asksRiderToRiderFinancing: args.decision.asksRiderToRiderFinancing,
+    asksThirdPartyPurchaseFacilitation: args.decision.asksThirdPartyPurchaseFacilitation
+  });
+}
+
 function resolveExternalDealerApprovalTransferDecision(
   text: string | null | undefined,
   parsed: PricingPaymentsIntentParse | null
@@ -40634,6 +40705,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       event.body ?? "",
       pricingPaymentsParse
     );
+    const thirdPartyFinanceFacilitationDecision =
+      resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse);
+    if (thirdPartyFinanceFacilitationDecision) {
+      const dealerProfile = await getDealerProfileHot();
+      const reply = applyThirdPartyFinanceFacilitationDecision({
+        conv,
+        dealerProfile,
+        decision: thirdPartyFinanceFacilitationDecision,
+        scope: "regen"
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
     if (externalApprovalTransferDecision) {
       const dealerProfile = await getDealerProfileHot();
       const reply = applyExternalDealerApprovalTransferDecision({
@@ -47044,6 +47133,27 @@ if (authToken && signature) {
     event.body ?? "",
     pricingPaymentsParse
   );
+  const thirdPartyFinanceFacilitationDecision =
+    resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse);
+  if (event.provider === "twilio" && thirdPartyFinanceFacilitationDecision) {
+    const dealerProfile = await getDealerProfileHot();
+    const reply = applyThirdPartyFinanceFacilitationDecision({
+      conv,
+      dealerProfile,
+      decision: thirdPartyFinanceFacilitationDecision,
+      scope: "live"
+    });
+    if (webhookMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (event.provider === "twilio" && externalDealerApprovalTransferDecision) {
     const dealerProfile = await getDealerProfileHot();
     const reply = applyExternalDealerApprovalTransferDecision({

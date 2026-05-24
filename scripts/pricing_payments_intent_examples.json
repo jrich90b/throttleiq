@@ -260,5 +260,35 @@
       "explicit_request": true,
       "asks_external_approval_transfer": true
     }
+  },
+  {
+    "id": "payments_rider_to_rider_private_seller_facilitation",
+    "text": "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a \"trade\" for a used bike I found with a private seller? Would the rider to rider program work for something like this?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_rider_to_rider_financing": true,
+      "asks_third_party_purchase_facilitation": true
+    }
+  },
+  {
+    "id": "payments_private_seller_paperwork_facilitation",
+    "text": "Can your dealership handle the paperwork if I buy a used bike from a private seller?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_rider_to_rider_financing": false,
+      "asks_third_party_purchase_facilitation": true
+    }
+  },
+  {
+    "id": "payments_r2r_only_question",
+    "text": "Do you guys do R2R financing?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_rider_to_rider_financing": true,
+      "asks_third_party_purchase_facilitation": false
+    }
   }
 ]

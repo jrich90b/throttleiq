@@ -176,6 +176,13 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "after_hours_context_not_hours_question",
+    actual: isBusinessHoursQuestionText(
+      "Sorry to text after hours but had a quick question. Would Rider to Rider work for a private seller bike?"
+    ),
+    expected: false
+  },
+  {
     id: "voice_callback_suppressed_when_call_books_appointment",
     actual: shouldSuppressVoiceCallbackTodoForAppointment({
       callbackRequested: true,

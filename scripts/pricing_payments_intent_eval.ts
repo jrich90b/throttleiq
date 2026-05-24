@@ -18,6 +18,8 @@ type Example = {
     asks_down_payment?: boolean;
     asks_apr_or_term?: boolean;
     asks_external_approval_transfer?: boolean;
+    asks_rider_to_rider_financing?: boolean;
+    asks_third_party_purchase_facilitation?: boolean;
   };
 };
 
@@ -44,12 +46,16 @@ let monthlyOk = 0;
 let downOk = 0;
 let aprTermOk = 0;
 let externalApprovalOk = 0;
+let riderToRiderOk = 0;
+let thirdPartyOk = 0;
 let total = 0;
 let nullCount = 0;
 let monthlyAsserts = 0;
 let downAsserts = 0;
 let aprTermAsserts = 0;
 let externalApprovalAsserts = 0;
+let riderToRiderAsserts = 0;
+let thirdPartyAsserts = 0;
 
 const mismatches: string[] = [];
 
@@ -105,7 +111,32 @@ for (const ex of examples) {
     if (externalApprovalMatch) externalApprovalOk += 1;
   }
 
-  if (!intentMatch || !explicitMatch || !monthlyMatch || !downMatch || !aprTermMatch || !externalApprovalMatch) {
+  let riderToRiderMatch = true;
+  if (typeof ex.expected.asks_rider_to_rider_financing === "boolean") {
+    riderToRiderAsserts += 1;
+    riderToRiderMatch =
+      result.asksRiderToRiderFinancing === ex.expected.asks_rider_to_rider_financing;
+    if (riderToRiderMatch) riderToRiderOk += 1;
+  }
+
+  let thirdPartyMatch = true;
+  if (typeof ex.expected.asks_third_party_purchase_facilitation === "boolean") {
+    thirdPartyAsserts += 1;
+    thirdPartyMatch =
+      result.asksThirdPartyPurchaseFacilitation === ex.expected.asks_third_party_purchase_facilitation;
+    if (thirdPartyMatch) thirdPartyOk += 1;
+  }
+
+  if (
+    !intentMatch ||
+    !explicitMatch ||
+    !monthlyMatch ||
+    !downMatch ||
+    !aprTermMatch ||
+    !externalApprovalMatch ||
+    !riderToRiderMatch ||
+    !thirdPartyMatch
+  ) {
     mismatches.push(
       [
         `[${ex.id}]`,
@@ -124,12 +155,20 @@ for (const ex of examples) {
         typeof ex.expected.asks_external_approval_transfer === "boolean"
           ? `expected asks_external_approval_transfer=${ex.expected.asks_external_approval_transfer}`
           : "",
+        typeof ex.expected.asks_rider_to_rider_financing === "boolean"
+          ? `expected asks_rider_to_rider_financing=${ex.expected.asks_rider_to_rider_financing}`
+          : "",
+        typeof ex.expected.asks_third_party_purchase_facilitation === "boolean"
+          ? `expected asks_third_party_purchase_facilitation=${ex.expected.asks_third_party_purchase_facilitation}`
+          : "",
         `got intent=${result.intent}`,
         `got explicit=${result.explicitRequest}`,
         `got asks_monthly_target=${result.asksMonthlyTarget}`,
         `got asks_down_payment=${result.asksDownPayment}`,
         `got asks_apr_or_term=${result.asksAprOrTerm}`,
         `got asks_external_approval_transfer=${result.asksExternalApprovalTransfer}`,
+        `got asks_rider_to_rider_financing=${result.asksRiderToRiderFinancing}`,
+        `got asks_third_party_purchase_facilitation=${result.asksThirdPartyPurchaseFacilitation}`,
         `got confidence=${String(result.confidence ?? null)}`
       ]
         .filter(Boolean)
@@ -154,6 +193,16 @@ if (aprTermAsserts > 0) {
 if (externalApprovalAsserts > 0) {
   console.log(
     `asks_external_approval_transfer match: ${externalApprovalOk}/${externalApprovalAsserts} (${pct(externalApprovalOk, externalApprovalAsserts)}%)`
+  );
+}
+if (riderToRiderAsserts > 0) {
+  console.log(
+    `asks_rider_to_rider_financing match: ${riderToRiderOk}/${riderToRiderAsserts} (${pct(riderToRiderOk, riderToRiderAsserts)}%)`
+  );
+}
+if (thirdPartyAsserts > 0) {
+  console.log(
+    `asks_third_party_purchase_facilitation match: ${thirdPartyOk}/${thirdPartyAsserts} (${pct(thirdPartyOk, thirdPartyAsserts)}%)`
   );
 }
 console.log(`Null parses: ${nullCount}/${total}`);

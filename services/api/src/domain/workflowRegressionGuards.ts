@@ -127,6 +127,12 @@ export function isBusinessHoursQuestionText(textRaw: string | null | undefined):
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return false;
+  const incidentalAfterHours =
+    /\b(after|outside of|past)\s+(?:business\s+|store\s+)?hours\b/.test(text) &&
+    !/\b(?:what|when|how late|how long|until|til|till|open|close|closed|closing|business hours|store hours)\b/.test(
+      text.replace(/\b(after|outside of|past)\s+(?:business\s+|store\s+)?hours\b/g, "")
+    );
+  if (incidentalAfterHours) return false;
   const hasQuestionShape =
     /[?]/.test(String(textRaw ?? "")) ||
     /\b(what|when|how late|how long|until|til|till|thru|through)\b/.test(text);

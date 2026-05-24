@@ -1656,6 +1656,8 @@ export type PricingPaymentsIntentParse = {
   asksDownPayment: boolean;
   asksAprOrTerm: boolean;
   asksExternalApprovalTransfer: boolean;
+  asksRiderToRiderFinancing: boolean;
+  asksThirdPartyPurchaseFacilitation: boolean;
   confidence?: number;
 };
 
@@ -2541,6 +2543,8 @@ const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "asks_down_payment",
     "asks_apr_or_term",
     "asks_external_approval_transfer",
+    "asks_rider_to_rider_financing",
+    "asks_third_party_purchase_facilitation",
     "confidence"
   ],
   properties: {
@@ -2553,6 +2557,8 @@ const PRICING_PAYMENTS_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     asks_down_payment: { type: "boolean" },
     asks_apr_or_term: { type: "boolean" },
     asks_external_approval_transfer: { type: "boolean" },
+    asks_rider_to_rider_financing: { type: "boolean" },
+    asks_third_party_purchase_facilitation: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -5236,55 +5242,61 @@ export async function parsePricingPaymentsIntentWithLLM(args: {
   const examples = [
     `EXAMPLE A
 inbound: "What would payments be on this bike?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.97}`,
     `EXAMPLE B
 inbound: "I want to stay under $500/month."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.98}`,
     `EXAMPLE C
 inbound: "I have $2,500 down and want under $500/mo."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":true,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.98}`,
     `EXAMPLE D
 inbound: "Can you run it for 72 months?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"confidence":0.97}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.97}`,
     `EXAMPLE D2
 inbound: "What is the longest term I can go with on the loan?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":true,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.98}`,
     `EXAMPLE E
 inbound: "I don't want to put anything down."
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.96}`,
     `EXAMPLE F
 inbound: "Any deals or finance specials right now?"
-output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.95}`,
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.95}`,
     `EXAMPLE G
 inbound: "What is your best out-the-door price?"
-output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
+output: {"intent":"pricing","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.97}`,
     `EXAMPLE H
 inbound: "Do you have any black street glides in stock?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.96}`,
     `EXAMPLE I
 inbound: "Can I come in Wednesday at 1?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.97}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Before I come in, what do I need to bring for financing?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.94}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.94}`,
     `EXAMPLE K
 inbound: "I'm already approved through my credit union."
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.96}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.96}`,
     `EXAMPLE L
 inbound: "I can put down 5000"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.94}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":true,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.94}`,
     `EXAMPLE M
 inbound: "How much to switch my headlight bulb to LED?"
-output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.95}`,
+output: {"intent":"none","explicit_request":false,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.95}`,
     `EXAMPLE N
 inbound: "If financing approved at Buffalo Harley is it good at your store?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.98}`,
     `EXAMPLE O
 inbound: "I got approved at another Harley dealer. Does that transfer to you?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"confidence":0.98}`,
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":true,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.98}`,
+    `EXAMPLE O2
+inbound: "Would you be able to facilitate a trade for a used bike I found with a private seller? Would the rider to rider program work for something like this?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":true,"asks_third_party_purchase_facilitation":true,"confidence":0.98}`,
+    `EXAMPLE O3
+inbound: "Can your store handle the paperwork if I buy a bike from a private seller?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":true,"confidence":0.96}`,
     `EXAMPLE P
 inbound: "Did G run the numbers yet?"
-output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"confidence":0.92}`
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.92}`
   ];
   const prompt = [
     "You parse dealership inbound intent for pricing/payments routing.",
@@ -5298,6 +5310,9 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false
     "Rules:",
     "- If user asks 'how much down', '$300/month', 'monthly', 'APR', longest/max loan term, or term => payments.",
     "- If user asks whether a financing approval from another Harley-Davidson dealer/store transfers or is good at this store, choose payments and asks_external_approval_transfer=true.",
+    "- If user asks about Rider-to-Rider / rider 2 rider / R2R financing, choose payments and asks_rider_to_rider_financing=true.",
+    "- If user asks whether the dealership can broker, facilitate, trade for, or handle paperwork/financing on a private-seller or other-dealer used bike, choose payments and asks_third_party_purchase_facilitation=true.",
+    "- Do not let phrases like 'after hours' turn a concrete finance/private-seller question into an hours question.",
     "- In payment context, a customer-provided down-payment number is an explicit payments turn.",
     "- A statement that the customer is already approved through their own bank/credit union is not a pricing/payments request by itself.",
     "- Do not classify scheduling/appointment messages as pricing/payments.",
@@ -5348,6 +5363,8 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false
     asksDownPayment: !!parsed.asks_down_payment,
     asksAprOrTerm: !!parsed.asks_apr_or_term,
     asksExternalApprovalTransfer: !!parsed.asks_external_approval_transfer,
+    asksRiderToRiderFinancing: !!parsed.asks_rider_to_rider_financing,
+    asksThirdPartyPurchaseFacilitation: !!parsed.asks_third_party_purchase_facilitation,
     confidence
   };
 }
@@ -5421,6 +5438,9 @@ output: {"primary_intent":"general","explicit_request":true,"fallback_action":"n
     `EXAMPLE K
 inbound: "Any deals or finance specials right now?"
 output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.96}`,
+    `EXAMPLE K1
+inbound: "Sorry to text after hours but quick question. Would you be able to facilitate a trade for a used bike I found with a private seller? Would rider to rider work?"
+output: {"primary_intent":"pricing_payments","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.98}`,
     `EXAMPLE K2
 inbound: "I have cash. coming to look at the orange street glide tomorrow. let's make a deal"
 output: {"primary_intent":"scheduling","explicit_request":true,"fallback_action":"none","clarify_prompt":"","confidence":0.97}`,
@@ -5498,6 +5518,8 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     "Rules:",
     "- Use the latest inbound ask as source of truth even if prior turns were different.",
     "- If inbound is a short acknowledgment or an informational finance/context update with no ask, use primary_intent=none and fallback_action=no_response.",
+    "- If a message mentions 'after hours' but then asks a finance/private-seller/Rider-to-Rider question, route the real ask, not business hours.",
+    "- Rider-to-Rider, R2R, private-seller financing/paperwork, or dealership-facilitated third-party purchase questions route to pricing_payments.",
     "- Use fallback_action=clarify only when message is ambiguous and not safely routable.",
     "- Only choose callback when the customer explicitly asks for a phone call (e.g., call me, have X call me, can you call) or says they are available/free to chat/talk right now.",
     "- If message says cash-ready / ready to buy / make a deal and includes a visit timing cue (today/tomorrow/day/time/coming in), choose scheduling, not callback.",
