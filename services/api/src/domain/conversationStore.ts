@@ -294,6 +294,7 @@ export type DialogStateName =
   | "inventory_init"
   | "inventory_watch_prompted"
   | "inventory_watch_active"
+  | "inventory_watch_matched"
   | "inventory_answered"
   | "compare_request"
   | "compare_answered"

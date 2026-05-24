@@ -10,6 +10,9 @@ type Example = {
   id: string;
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
+  inventoryWatch?: any;
+  inventoryWatchPending?: any;
+  dialogState?: string;
   expected: {
     watch_action: WatchAction;
     watch_action_any?: WatchAction[];
@@ -85,7 +88,10 @@ for (const ex of examples) {
   total += 1;
   const result = await parseSemanticSlotsWithLLM({
     text: ex.text,
-    history: ex.history
+    history: ex.history,
+    inventoryWatch: ex.inventoryWatch,
+    inventoryWatchPending: ex.inventoryWatchPending,
+    dialogState: ex.dialogState
   });
 
   if (!result) {

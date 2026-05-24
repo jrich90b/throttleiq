@@ -6,6 +6,7 @@ type Example = {
   id: string;
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
+  appointment?: any;
   expected: {
     intent: string;
     explicit_request: boolean;
@@ -48,6 +49,7 @@ for (const ex of examples) {
   const result = await parseAppointmentTimingWithLLM({
     text: ex.text,
     history: ex.history,
+    appointment: ex.appointment,
     lastSuggestedSlots: [
       { startLocal: "Fri, May 8, 11:00 AM" },
       { startLocal: "Sat, May 9, 9:30 AM" }

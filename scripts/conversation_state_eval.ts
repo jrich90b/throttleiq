@@ -98,6 +98,14 @@ const fixtures: Fixture[] = [
     expectedExplicit: true
   },
   {
+    id: "customer_cancel_with_service_context_not_service_request_1",
+    text: "I have to cancel coming to you Tuesday. I'm having service done on the bike and inspection. I need to do a few more things before I can sell. I'll get back to you.",
+    expectedState: "general",
+    expectedDepartment: "none",
+    expectedHandoff: "none",
+    expectedExplicit: false
+  },
+  {
     id: "used_low_mileage_watch_1",
     text: "I don't want to waste your time as I'm looking for a low mileage used one, not new.",
     expectedState: "used_low_mileage_watch",

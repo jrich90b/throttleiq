@@ -275,6 +275,27 @@
     }
   },
   {
+    "id": "test_ride_multiple_model_choices_context_1",
+    "history": [
+      {
+        "direction": "in",
+        "body": "I want to test ride something similar."
+      },
+      {
+        "direction": "out",
+        "body": "Which bike would you want to ride?"
+      }
+    ],
+    "text": "Road King, any Street Glide, OR Large CC Pan American, would be great.",
+    "expected": {
+      "intent": "test_ride",
+      "explicit_request": true,
+      "availability": {
+        "model": "Street Glide"
+      }
+    }
+  },
+  {
     "id": "none_1",
     "text": "I can't do tomorrow. Do you have time Friday?",
     "expected": {

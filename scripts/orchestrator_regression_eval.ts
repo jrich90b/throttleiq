@@ -84,7 +84,7 @@ const cases: Case[] = [
       provider: "twilio",
       from: "+17168619251",
       to: "+17166927200",
-      body: "Very interested in thw T10-26 street glide !!",
+      body: "Very interested in thw T8-26 street glide !!",
       providerMessageId: "orchestrator-regression-2",
       receivedAt: now
     },

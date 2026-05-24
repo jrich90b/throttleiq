@@ -126,6 +126,36 @@
     }
   },
   {
+    "id": "cool_short_ack_no_response_1",
+    "text": "Cool",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Sounds good — thanks for the update."
+      }
+    ],
+    "expected": {
+      "action": "no_response_needed",
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
+    "id": "ok_great_short_ack_no_response_1",
+    "text": "Ok great!",
+    "history": [
+      {
+        "direction": "out",
+        "body": "I’ll keep you posted."
+      }
+    ],
+    "expected": {
+      "action": "no_response_needed",
+      "should_reply": false,
+      "should_book": false
+    }
+  },
+  {
     "id": "document_proof_ack_not_photo_flow_1",
     "text": "Like I said. I'm 💯 legit",
     "history": [

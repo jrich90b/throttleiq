@@ -238,5 +238,26 @@
       "watch_action": "stop_watch",
       "department_intent": "none"
     }
+  },
+  {
+    "id": "watch_stop_all_set_bike_search",
+    "text": "Thanks Joe. I'm all set on the bike search for the time being. I appreciate your help and I'll reach out when I'm looking again.",
+    "inventoryWatch": {
+      "model": "Breakout",
+      "condition": "used"
+    },
+    "dialogState": "inventory_watch_matched",
+    "expected": {
+      "watch_action": "stop_watch",
+      "department_intent": "none"
+    }
+  },
+  {
+    "id": "service_words_in_cancel_not_department",
+    "text": "I have to cancel coming to you Tuesday. I'm having service done on the bike and inspection. I need to do a few more things before I can sell. I'll get back to you.",
+    "expected": {
+      "watch_action": "none",
+      "department_intent": "none"
+    }
   }
 ]

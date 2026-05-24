@@ -3210,6 +3210,7 @@ export async function parseBookingIntentWithLLM(args: {
     'input: "Customer: Thanks for info. And any appointments later this month same time." output: {"intent":"availability","explicit_request":true,"requested":{"day":"later this month","time_text":"same time","time_window":"range"},"reference":"last_suggested","normalized_text":"later this month same time","confidence":0.92}',
     'input: "Customer: can we move that to saturday morning?" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"saturday","time_text":"morning","time_window":"range"},"reference":"last_appointment","normalized_text":"saturday morning","confidence":0.94}',
     'input: "Customer: I will have to reschedule unfortunately" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"","confidence":0.94}',
+    'input: "Customer: I couldn’t make it yesterday. How does half an hour sound? I can get there before the weather gets bad." output: {"intent":"schedule","explicit_request":true,"requested":{"day":"","time_text":"in half an hour","time_window":"range"},"reference":"none","normalized_text":"in half an hour","confidence":0.93}',
     'input: "Customer: wrong place actually. Supposed to be Cartersville, Georgia" output: {"intent":"cancel","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"wrong location","confidence":0.95}',
     'input: "Customer: that appointment is for the wrong dealership" output: {"intent":"cancel","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"wrong dealership","confidence":0.95}',
     'input: "Customer: hey! Could we do 9:30-10" output: {"intent":"reschedule","explicit_request":true,"requested":{"day":"","time_text":"9:30-10","time_window":"range"},"reference":"last_appointment","normalized_text":"9:30-10","confidence":0.94}',
@@ -3434,6 +3435,8 @@ export async function parseAppointmentTimingWithLLM(args: {
     'input: "Customer: Thanks for info. And any appointments later this month same time." output: {"intent":"ask_for_times","explicit_request":true,"requested":{"day":"later this month","time_text":"same time","time_window":"range"},"reference":"last_suggested","normalized_text":"later this month same time","confidence":0.94}',
     'input: "Customer: Friday morning, early afternoon, or anytime Saturday I can come out and take a look" output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"friday","time_text":"morning or early afternoon","time_window":"range"},"reference":"none","normalized_text":"friday morning or early afternoon, or saturday any time","confidence":0.94}',
     'input: "Customer: I can’t do that time" output: {"intent":"decline_time","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_suggested","normalized_text":"","confidence":0.9}',
+    'input: "Customer: It is raining" history: "out: You’re scheduled for today at 2:00 PM." output: {"intent":"decline_time","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"weather issue for appointment","confidence":0.9}',
+    'input: "Customer: I couldn’t make it yesterday. How does half an hour sound? I can get there before the weather gets bad." output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"","time_text":"in half an hour","time_window":"range"},"reference":"last_appointment","normalized_text":"in half an hour","confidence":0.93}',
     'input: "Customer: Let me know because I start driving on Friday morning" output: {"intent":"arrival_update","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"driving friday morning","confidence":0.93}',
     'input: "Customer: Can you send pictures?" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
   ];
@@ -3566,6 +3569,8 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"9:00 AM","time_window":"exact"},"reference":"last_outbound","normalized_text":"be there at 9:00 AM","confidence":0.96}',
     'input: "Customer: On my way doing my best to be there by 530" output: {"action":"provide_arrival_window","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.95}',
     'input: "Customer: Talk soon!" history: "out: You’re welcome — happy to help, talk soon!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.97}',
+    'input: "Customer: Cool" history: "out: Sounds good — thanks for the update." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
+    'input: "Customer: Ok great!" history: "out: I’ll keep you posted." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
     'input: "Customer: Perfect." history: "out: Awesome, glad that works for you!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}',
     'input: "Customer: Ok 👍" history: "out: Sounds good. Thanks for letting me know." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
     'input: "Customer: Thanks, can you send photos?" output: {"action":"none","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.9}'
@@ -3857,6 +3862,7 @@ export async function parseIntentWithLLM(args: {
     'input: "Customer: I begin my riding academy next Monday and was told you do the jumpstart experience prior." output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: how about a triglycerides instead. it would have to be on a saturday." output: {"intent":"none","explicit_request":false,"availability":{"model":"Tri Glide","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
     'input: "Customer: saturday works for me on a tri glide. does the morning work?" output: {"intent":"none","explicit_request":false,"availability":{"model":"Tri Glide","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
+    'input: "Customer: Road King, any Street Glide, OR Large CC Pan American, would be great." history: "in: I want to test ride something similar." output: {"intent":"test_ride","explicit_request":true,"availability":{"model":"Street Glide","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.94}',
     'input: "Customer: 11am can you send photos of street glide limited" output: {"intent":"none","explicit_request":false,"availability":{"model":"Street Glide Limited","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.95}',
     'input: "Customer: do you have brake pads in stock for a 2018 street glide?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
     'input: "Customer: is the orange hoodie in stock in xl?" output: {"intent":"none","explicit_request":false,"availability":{"model":"","year":"","color":"","stock_id":"","condition":"unknown"},"callback":{"requested":false,"time_text":"","phone":""},"confidence":0.96}',
@@ -4424,7 +4430,16 @@ inbound: "Do you have any black Street Glides in stock?"
 output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.96}`,
     `EXAMPLE G
 inbound: "I'm going to keep mine for now, but can you call me next month?"
-output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"next month","confidence":0.92}`
+output: {"disposition":"keep_current_bike","explicit_disposition":true,"timeframe_text":"next month","confidence":0.92}`,
+    `EXAMPLE H
+inbound: "You can hold off. Thanks"
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`,
+    `EXAMPLE I
+inbound: "I'll pass man. I just like to ride the new models and check them out. Not a big deal. Thx"
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE J
+inbound: "I have to cancel coming to you Tuesday. I'm having service done on the bike and inspection. I need to do a few more things before I can sell. I'll get back to you."
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`
   ];
 
   const prompt = [
@@ -4915,6 +4930,10 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Ok 👍" output: {"intent":"no_response","explicit_request":false,"confidence":0.96}',
     'input: "Perfect" output: {"intent":"no_response","explicit_request":false,"confidence":0.96}',
     'input: "Perfect." output: {"intent":"no_response","explicit_request":false,"confidence":0.94}',
+    'input: "Cool" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
+    'input: "Ok great!" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
+    'input: "You can hold off. Thanks" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
+    'input: "I’ll pass man. I just like to ride the new models and check them out. Not a big deal. Thx" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
     'input: "Here is my insurance card" output: {"intent":"none","explicit_request":false,"confidence":0.91}',
     "",
     `Known lead info: ${JSON.stringify({
@@ -6629,6 +6648,7 @@ export async function parseConversationStateWithLLM(args: {
     'input: "Customer: saturday morning works. does 9:30 work for you?" output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: how about a tri glide instead. it has to be saturday morning." output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: how about a triglycerides instead. let me know about saturday." output: {"state_intent":"scheduling","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.93}',
+    'input: "Customer: I have to cancel coming to you Tuesday. I am having service done on the bike and inspection. I need to do a few more things before I can sell. I will get back to you." output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.92}',
     'input: "Customer: we still have to service and detail the bike before delivery" output: {"state_intent":"general","corporate_topic":"none","department_intent":"none","explicit_request":false,"clear_inventory_watch_pending":false,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.9}',
     'input: "Customer: i can do 2500 down and want to stay under 500 monthly" output: {"state_intent":"pricing","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":false,"manual_handoff_reason":"none","confidence":0.95}',
     'input: "Customer: i had a bad experience at another harley dealer and need corporate to step in" output: {"state_intent":"corporate_misroute","corporate_topic":"other_dealer_experience","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"none","confidence":0.95}',
@@ -7266,8 +7286,11 @@ export async function parseSemanticSlotsWithLLM(args: {
     'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
     'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: Thanks Joe. I am all set on the bike search for now. I will reach out when I am looking again." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I am all set on the bike search for the time being. I appreciate your help and will reach out later." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
     'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: I have to cancel coming to you Tuesday. I am having service done on the bike and inspection. I need to do a few more things before I can sell. I will get back to you." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
     'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: 11am can you send photos of street glide limited" output: {"watch_action":"none","watch":{"model":"Street Glide Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"photos","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"watch_action":"none","watch":{"model":"Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
@@ -7295,6 +7318,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     "- Explicit 'watch for fxlrs/lrs' is set_watch and should normalize the model to Low Rider S.",
     "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
     "- Phrases like 'found one already, stop looking' mean stop_watch.",
+    "- In an existing watch context, phrases like 'all set on the bike search', 'set for the time being', or 'I will reach out when I am looking again' mean stop_watch.",
     "- watch_action=none for general inventory questions without watch request.",
     "- Never set watch_action from standalone time tokens or media requests. For 'send photos/video' requests, keep watch_action=none and set media_intent accordingly.",
     "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
@@ -7396,6 +7420,7 @@ export async function parseSemanticSlotsWithLLM(args: {
     );
   const hasWatchStopContext =
     /\b(watch|alerts?|updates?|notifications?|inventory|availability|looking)\b/.test(textLower) ||
+    /\b(bike search|all set|set for (the )?time being|looking again|reach out when)\b/.test(textLower) ||
     /\b(keep(?:ing)? an eye out|watch for|notify me|text me)\b/.test(textLower) ||
     /\bfound one already\b/.test(textLower) ||
     /\b(if|when|once|as soon as)\b[\s\w-]{0,28}\b(comes in|in stock|available|lands)\b/.test(
@@ -7419,6 +7444,10 @@ export async function parseSemanticSlotsWithLLM(args: {
     /\b(service|inspection|oil change|maintenance|repair|service department|service writer|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/.test(
       textLower
     );
+  const serviceContextOnlyCue =
+    /\b(cancel|can't come|cannot come|won't make|will not make|have to reschedule)\b/.test(textLower) &&
+    /\b(service done|having service done|inspection)\b/.test(textLower) &&
+    /\b(before i can sell|before selling|i'll get back|i will get back|let you know)\b/.test(textLower);
   const hasPartsCue =
     /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|brake pads?|tires?|accessory fitment|fitment)\b/.test(
       textLower
@@ -7432,10 +7461,11 @@ export async function parseSemanticSlotsWithLLM(args: {
       textLower
     );
   if (departmentIntent === "service" && !hasServiceCue) departmentIntent = "none";
+  if (departmentIntent === "service" && serviceContextOnlyCue) departmentIntent = "none";
   if (departmentIntent === "parts" && !hasPartsCue) departmentIntent = "none";
   if (departmentIntent === "apparel" && !hasApparelCue) departmentIntent = "none";
   if (departmentIntent === "none" && hasPartsCue) departmentIntent = "parts";
-  if (departmentIntent === "none" && hasServiceCue) departmentIntent = "service";
+  if (departmentIntent === "none" && hasServiceCue && !serviceContextOnlyCue) departmentIntent = "service";
   if (departmentIntent === "none" && hasApparelCue) departmentIntent = "apparel";
   if (watchAction === "set_watch" && !model) {
     const historyText = history.join("\n").toLowerCase();

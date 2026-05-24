@@ -297,6 +297,32 @@
     }
   },
   {
+    "id": "schedule_missed_yesterday_half_hour_1",
+    "history": [
+      {
+        "direction": "out",
+        "body": "We had you down yesterday afternoon."
+      }
+    ],
+    "appointment": {
+      "status": "missed",
+      "whenIso": "2026-05-20T18:00:00.000Z"
+    },
+    "text": "I couldn't make it yesterday. How does half an hour sound? I can get there before the weather gets bad.",
+    "expected": {
+      "intent": "schedule",
+      "intent_any": [
+        "schedule",
+        "reschedule"
+      ],
+      "explicit_request": true,
+      "requested": {
+        "time_text": "half",
+        "time_window": "range"
+      }
+    }
+  },
+  {
     "id": "availability_tomorrow_after5_1",
     "text": "Any time tomorrow after 5?",
     "expected": {

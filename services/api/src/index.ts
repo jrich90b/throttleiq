@@ -3748,6 +3748,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       matchedWatch.lastNotifiedAt = nowIso;
       matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
+      setDialogState(conv, "inventory_watch_matched");
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
         conv.followUpCadence = undefined;
         startFollowUpCadence(conv, nowIso, tz);
@@ -3839,6 +3840,7 @@ async function notifyInventoryWatchersForAvailableItem(
     matchedWatch.lastNotifiedAt = nowIsoValue;
     matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
     setFollowUpMode(conv, "holding_inventory", opts?.reason ?? "inventory_watch_match");
+    setDialogState(conv, "inventory_watch_matched");
     if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
       conv.followUpCadence = undefined;
       startFollowUpCadence(conv, nowIsoValue, tz);
@@ -11888,6 +11890,22 @@ function isWatchAlertStopIntent(text: string): boolean {
   );
 }
 
+function isWatchSearchPauseIntent(text: string): boolean {
+  const t = String(text ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’]/g, "'");
+  if (!t) return false;
+  return (
+    /\ball set\b[\s\S]{0,80}\b(bike search|search|looking|shopping)\b/.test(t) ||
+    /\b(bike search|search|looking|shopping)\b[\s\S]{0,80}\ball set\b/.test(t) ||
+    /\bset for (?:the )?time being\b/.test(t) ||
+    /\breach out\b[\s\S]{0,80}\b(looking again|ready|start looking|in the market)\b/.test(t) ||
+    /\bwhen i(?:'|’)m looking again\b/.test(t) ||
+    /\bwhen i am looking again\b/.test(t)
+  );
+}
+
 function isNotInterested(text: string): boolean {
   const t = text.trim().toLowerCase();
   return /not interested|no longer interested|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|no longer shopping|not looking/.test(
@@ -12769,40 +12787,51 @@ function markOutcomeRelatedTodosDone(conv: any, opts?: { includeFinance?: boolea
 
 async function clearInventoryWatchState(conv: any, reason = "inventory_watch_clear"): Promise<void> {
   const nowIso = new Date().toISOString();
-  const cfg = await getSchedulerConfigHot();
-  const tz = cfg.timezone || "America/New_York";
-
   conv.inventoryWatch = undefined;
   conv.inventoryWatches = undefined;
   conv.inventoryWatchPending = undefined;
-  if (conv.followUp?.mode === "holding_inventory") {
-    setFollowUpMode(conv, "active", reason);
-  }
-  if (conv.followUpCadence) {
-    if (conv.followUpCadence.status === "stopped") {
-      conv.followUpCadence.status = "active";
-      conv.followUpCadence.stopReason = undefined;
-    }
-    conv.followUpCadence.pausedUntil = undefined;
-    conv.followUpCadence.pauseReason = undefined;
-    if (!conv.followUpCadence.nextDueAt) {
-      const idx = Math.min(
-        conv.followUpCadence.stepIndex ?? 0,
-        FOLLOW_UP_DAY_OFFSETS.length - 1
-      );
-      conv.followUpCadence.nextDueAt = computeFollowUpDueAt(
-        conv.followUpCadence.anchorAt ?? nowIso,
-        FOLLOW_UP_DAY_OFFSETS[idx],
-        tz
-      );
-    }
-  } else {
-    startFollowUpCadence(conv, nowIso, tz);
-  }
-  if (getDialogState(conv) === "inventory_watch_active") {
-    setDialogState(conv, "inventory_init");
+  setFollowUpMode(conv, "paused_indefinite", reason);
+  stopFollowUpCadence(conv, reason);
+  if (
+    getDialogState(conv) === "inventory_watch_active" ||
+    getDialogState(conv) === "inventory_watch_prompted" ||
+    getDialogState(conv) === "inventory_watch_matched"
+  ) {
+    setDialogState(conv, "customer_stepping_back");
   }
   conv.updatedAt = nowIso;
+}
+
+function buildInventoryWatchStopReply(conv: any, inboundText: string): string {
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName) || "there";
+  const lower = String(inboundText ?? "").toLowerCase();
+  const thanks = /\b(thanks|thank you|appreciate)\b/.test(lower) ? "Thanks for the update" : "No problem";
+  return `Alright ${firstName}, ${thanks}. You have my number, just get a hold of me when you’re ready.`;
+}
+
+function hasInventoryWatchStopContext(conv: any): boolean {
+  if (
+    conv?.inventoryWatch ||
+    conv?.inventoryWatchPending ||
+    (Array.isArray(conv?.inventoryWatches) && conv.inventoryWatches.length > 0)
+  ) {
+    return true;
+  }
+  const state = String(getDialogState(conv) ?? "").toLowerCase();
+  const modeReason = `${conv?.followUp?.mode ?? ""} ${conv?.followUp?.reason ?? ""} ${conv?.followUpCadence?.pauseReason ?? ""} ${conv?.followUpCadence?.stopReason ?? ""}`.toLowerCase();
+  if (state.includes("inventory_watch") || modeReason.includes("inventory_watch")) return true;
+  const recentOutbound = [...(conv?.messages ?? [])]
+    .reverse()
+    .filter((m: any) => m?.direction === "out" && m?.body)
+    .slice(0, 6)
+    .map((m: any) => String(m.body ?? ""))
+    .join("\n")
+    .toLowerCase();
+  return (
+    /\bgood news\b[\s\S]{0,100}\bjust got\b[\s\S]{0,120}\bin stock\b/.test(recentOutbound) ||
+    /\bwant details or a time to check it out\b/.test(recentOutbound) ||
+    /\binventory\/\d+/.test(recentOutbound)
+  );
 }
 
 function escapeHtml(input: string): string {
@@ -19173,7 +19202,7 @@ function parseCustomerDispositionFallback(text: string): CustomerDispositionDeci
   ) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
-  if (/\b(hold off for now|pass for now)\b/i.test(lower)) {
+  if (/\b(hold off(?: for now)?|pass(?: for now| man)?|i'?ll pass|i will pass)\b/i.test(lower)) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
   return null;
@@ -19217,8 +19246,19 @@ function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
     : "I hear you. If anything changes down the road, just give me a shout.";
 }
 
-function buildCustomerDispositionReply(text: string): string {
+function buildCustomerDispositionReply(text: string, conv?: any): string {
   const textLower = String(text ?? "").toLowerCase();
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  if (/\b(can\s+hold\s+off|hold off(?: for now)?)\b/i.test(textLower)) {
+    return firstName
+      ? `Ok ${firstName}, I’ll hold off. Thanks for the update.`
+      : "Ok, I’ll hold off. Thanks for the update.";
+  }
+  if (/\b(i'?ll pass|i will pass|pass man|pass for now|all set)\b/i.test(textLower)) {
+    return firstName
+      ? `Alright ${firstName}, thanks for the update. You have my number, just get a hold of me when you’re ready.`
+      : "Alright, thanks for the update. You have my number, just get a hold of me when you’re ready.";
+  }
   const hasBikeCompliment =
     /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
     /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
@@ -19362,7 +19402,7 @@ function isSteppingBackDispositionText(text: string): boolean {
   return (
     hasSellOnOwnSignal(t) ||
     hasKeepCurrentBikeSignal(t) ||
-    /\b(hold off for now|pass for now)\b/i.test(t)
+    /\b(hold off(?: for now)?|pass(?: for now| man)?|i'?ll pass|i will pass)\b/i.test(t)
   );
 }
 
@@ -41197,13 +41237,46 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const memorySummaryShouldUpdate = shouldUpdateMemorySummary(conv);
   const regenUnifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
   const regenUnifiedSlotCompareLogEnabled = process.env.LLM_UNIFIED_SLOT_COMPARE_LOG === "1";
+  const regenTextLower = String(event.body ?? "").toLowerCase();
+  const regenHasInventoryWatch = hasInventoryWatchStopContext(conv);
+  const regenSemanticWatchStopHint =
+    regenHasInventoryWatch &&
+    (isWatchSearchPauseIntent(event.body ?? "") ||
+      /\b(found one|stop looking|watch alerts?|inventory alerts?|availability alerts?)\b/i.test(
+        regenTextLower
+      ));
+  const regenSemanticSlotParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SEMANTIC_SLOT_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY &&
+    (regenSemanticWatchStopHint || isWatchAlertStopIntent(event.body ?? ""));
+  const regenSemanticSlotParse =
+    regenSemanticSlotParserEligible
+      ? await safeLlmParse("regen_semantic_slot_parser", () =>
+          parseSemanticSlotsWithLLM({
+            text: event.body ?? "",
+            history: buildHistory(conv, 8),
+            lead: conv.lead,
+            inventoryWatch: conv.inventoryWatch,
+            inventoryWatchPending: conv.inventoryWatchPending,
+            dialogState: getDialogState(conv)
+          })
+        )
+      : null;
+  const regenSemanticSlotConfidence =
+    typeof regenSemanticSlotParse?.confidence === "number" ? regenSemanticSlotParse.confidence : 0;
+  const regenSemanticSlotConfidenceMin = Number(process.env.LLM_SEMANTIC_SLOT_CONFIDENCE_MIN ?? 0.76);
+  const regenSemanticWatchAction =
+    regenSemanticSlotParse && regenSemanticSlotConfidence >= regenSemanticSlotConfidenceMin
+      ? regenSemanticSlotParse.watchAction
+      : "none";
   const regenTradePayoffParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_TRADE_PAYOFF_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY &&
     !regenShortAck;
-  const regenTextLower = String(event.body ?? "").toLowerCase();
   const regenFirstTimeRiderParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -42291,6 +42364,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
+  if (
+    event.provider === "twilio" &&
+    regenHasInventoryWatch &&
+    (isWatchAlertStopIntent(event.body ?? "") ||
+      isWatchSearchPauseIntent(event.body ?? "") ||
+      regenSemanticWatchAction === "stop_watch")
+  ) {
+    await clearInventoryWatchState(conv, "inventory_watch_optout");
+    const reply = buildInventoryWatchStopReply(conv, event.body ?? "");
+    recordRouteOutcome("regen", "inventory_watch_optout", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parser: regenSemanticWatchAction === "stop_watch" ? "semantic_slot" : "lexical"
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   const mentionResolution =
     event.provider === "sendgrid_adf"
       ? { user: null, ambiguousUsers: [], token: null as string | null }
@@ -42494,7 +42590,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenDispositionDecision
   ) {
     applyCustomerDispositionCloseout(conv, regenDispositionDecision);
-    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body), conv);
+    const regenReply = ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body, conv), conv);
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(regenReply);
     }
@@ -44325,10 +44421,18 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   if (llmNotInterested || isNotInterested(event.body)) {
-    stopFollowUpCadence(conv, "not_interested");
-    closeConversation(conv, "not_interested");
-    stopRelatedCadences(conv, "not_interested", { close: true });
-    const reply = "Totally understand - I won't bug you. If anything changes, just let me know.";
+    const watchPauseRequested =
+      hasInventoryWatchStopContext(conv) && isWatchSearchPauseIntent(event.body ?? "");
+    if (watchPauseRequested) {
+      await clearInventoryWatchState(conv, "inventory_watch_optout");
+    } else {
+      stopFollowUpCadence(conv, "not_interested");
+      closeConversation(conv, "not_interested");
+      stopRelatedCadences(conv, "not_interested", { close: true });
+    }
+    const reply = watchPauseRequested
+      ? buildInventoryWatchStopReply(conv, event.body ?? "")
+      : ensureUniqueDispositionReply(buildCustomerDispositionReply(event.body ?? "", conv), conv);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -44566,12 +44670,13 @@ if (authToken && signature) {
     });
 
   if (
-    (isWatchAlertStopIntent(event.body) || semanticWatchAction === "stop_watch") &&
-    (conv.inventoryWatchPending || conv.inventoryWatch || (conv.inventoryWatches?.length ?? 0) > 0)
+    (isWatchAlertStopIntent(event.body) ||
+      isWatchSearchPauseIntent(event.body) ||
+      semanticWatchAction === "stop_watch") &&
+    hasInventoryWatchStopContext(conv)
   ) {
     await clearInventoryWatchState(conv, "inventory_watch_optout");
-    const reply =
-      "Got it — we’ll stop inventory watch alerts. If you want alerts again later, just tell me.";
+    const reply = buildInventoryWatchStopReply(conv, semanticInboundText);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
@@ -44619,7 +44724,7 @@ if (authToken && signature) {
     dispositionDecision
   ) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
-    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText), conv);
+    const reply = ensureUniqueDispositionReply(buildCustomerDispositionReply(semanticInboundText, conv), conv);
     const mode = webhookMode;
     if (mode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");

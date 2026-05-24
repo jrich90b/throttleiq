@@ -108,5 +108,45 @@
       "intent": "none",
       "explicit_request": false
     }
+  },
+  {
+    "id": "weather_issue_existing_appointment_decline_1",
+    "text": "It is raining",
+    "history": [
+      {
+        "direction": "out",
+        "body": "You’re scheduled for today at 2:00 PM."
+      }
+    ],
+    "appointment": {
+      "status": "confirmed",
+      "whenIso": "2026-05-21T18:00:00.000Z"
+    },
+    "expected": {
+      "intent": "decline_time",
+      "explicit_request": true,
+      "reference": "last_appointment"
+    }
+  },
+  {
+    "id": "missed_yesterday_half_hour_new_time_1",
+    "text": "I couldn't make it yesterday. How does half an hour sound? I can get there before the weather gets bad.",
+    "history": [
+      {
+        "direction": "out",
+        "body": "We had you down yesterday afternoon."
+      }
+    ],
+    "appointment": {
+      "status": "missed",
+      "whenIso": "2026-05-20T18:00:00.000Z"
+    },
+    "expected": {
+      "intent": "provide_new_time",
+      "explicit_request": true,
+      "time_contains": "half",
+      "time_window": "range",
+      "reference": "last_appointment"
+    }
   }
 ]
