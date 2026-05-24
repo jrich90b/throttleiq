@@ -36,6 +36,26 @@
     }
   },
   {
+    "id": "adf_fuel_economy_fragment_1",
+    "text": "Fuel economy 0.02 mpg",
+    "expected": {
+      "intent": "specs",
+      "explicit_request": true,
+      "focus": "engine",
+      "format": "unknown"
+    }
+  },
+  {
+    "id": "mpg_question_1",
+    "text": "What kind of mpg does that bike get?",
+    "expected": {
+      "intent": "specs",
+      "explicit_request": true,
+      "focus": "engine",
+      "format": "unknown"
+    }
+  },
+  {
     "id": "compare_models_1",
     "text": "Can you compare the Road Glide and Street Glide?",
     "expected": {

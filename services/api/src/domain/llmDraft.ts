@@ -4237,6 +4237,12 @@ output: {"intent":"compare","explicit_request":true,"focus":"general","format":"
     `EXAMPLE F
 inbound: "full spec sheets please"
 output: {"intent":"specs","explicit_request":true,"focus":"general","format":"full","confidence":0.94}`,
+    `EXAMPLE F2
+inbound: "Fuel economy 0.02 mpg"
+output: {"intent":"specs","explicit_request":true,"focus":"engine","format":"unknown","confidence":0.93}`,
+    `EXAMPLE F3
+inbound: "What kind of mpg does that bike get?"
+output: {"intent":"specs","explicit_request":true,"focus":"engine","format":"unknown","confidence":0.95}`,
     `EXAMPLE G
 inbound: "Thanks for info. Any appointments later this month same time."
 output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unknown","confidence":0.98}`,
@@ -4257,7 +4263,7 @@ output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unk
     "- none: scheduling, availability/in-stock, pricing/payment, trade, callback, acknowledgement, or general conversation.",
     "",
     "Focus:",
-    "- engine: engine, power, torque, horsepower, displacement, transmission.",
+    "- engine: engine, power, torque, horsepower, displacement, transmission, mpg, fuel economy.",
     "- features: tech, electronics, stereo, audio, infotainment, screen, navigation, safety, brakes, suspension.",
     "- dimensions: weight, seat height, length, wheelbase, tank/fuel capacity.",
     "- accessories: trim, finish, bars, grips, seat, add-ons, packages.",
@@ -4268,6 +4274,7 @@ output: {"intent":"none","explicit_request":true,"focus":"unknown","format":"unk
     "- The word 'info' by itself is not enough if the actual ask is appointments, scheduling, availability, pricing, or trade.",
     "- Do not classify inventory availability questions as specs or compare.",
     "- Do not classify appointment dates/times as specs.",
+    "- Treat ADF-style fragments like 'Fuel economy 0.02 mpg' as a specs request, even without a question mark.",
     "- explicit_request=true only when the customer directly asks for information or a comparison.",
     "- confidence is 0..1.",
     "",

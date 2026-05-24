@@ -58,6 +58,7 @@ import {
   parseCompositeSalesInquiryWithLLM,
   parseJourneyIntentWithLLM,
   parseInventoryStatusWithLLM,
+  parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
@@ -65,6 +66,7 @@ import type {
   CompositeSalesInquiryParse,
   ConversationStateParse,
   InventoryStatusParse,
+  VehicleInfoRequestParse,
   VehicleFactQuestionParse
 } from "../domain/llmDraft.js";
 import type { InboundMessageEvent } from "../domain/types.js";
@@ -2656,12 +2658,37 @@ type AdfVehicleFactDecision = {
   source: "parser" | "fallback";
 };
 
+type AdfVehicleInfoDecision = {
+  intent: Exclude<VehicleInfoRequestParse["intent"], "none">;
+  focus: Exclude<VehicleInfoRequestParse["focus"], "unknown">;
+  format: Exclude<VehicleInfoRequestParse["format"], "unknown"> | null;
+  confidence: number;
+};
+
 function isAdfVehicleFactParserAccepted(parsed: VehicleFactQuestionParse | null): boolean {
   if (!parsed || parsed.questionType === "none" || parsed.questionType === "availability") return false;
   if (!parsed.explicitRequest) return false;
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   const min = Number(process.env.LLM_VEHICLE_FACT_CONFIDENCE_MIN ?? 0.74);
   return confidence >= min;
+}
+
+function isAdfVehicleInfoParserAccepted(parsed: VehicleInfoRequestParse | null): boolean {
+  if (!parsed || parsed.intent === "none") return false;
+  if (!parsed.explicitRequest) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_VEHICLE_INFO_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function resolveAdfVehicleInfoDecision(parsed: VehicleInfoRequestParse | null): AdfVehicleInfoDecision | null {
+  if (!isAdfVehicleInfoParserAccepted(parsed) || !parsed || parsed.intent === "none") return null;
+  return {
+    intent: parsed.intent,
+    focus: parsed.focus === "unknown" ? "general" : parsed.focus,
+    format: parsed.format === "unknown" ? null : parsed.format,
+    confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0
+  };
 }
 
 function resolveAdfVehicleFactDecision(
@@ -2705,6 +2732,62 @@ function resolveAdfVehicleFactDecision(
     return fallback("hold_timing", ["hold_timing"]);
   }
   return null;
+}
+
+function adfVehicleInfoFocusLabel(decision: AdfVehicleInfoDecision): string {
+  if (decision.intent === "compare") return "model comparison";
+  switch (decision.focus) {
+    case "engine":
+      return "engine and fuel economy details";
+    case "features":
+      return "features";
+    case "dimensions":
+      return "dimensions";
+    case "accessories":
+      return "accessory and trim details";
+    default:
+      return decision.format === "full" ? "full specs" : "specs";
+  }
+}
+
+function buildInitialAdfVehicleInfoReply(args: {
+  conv: any;
+  decision: AdfVehicleInfoDecision;
+  text: string;
+}): { reply: string; needsTodo: boolean; todoReason: string; todoSummary: string; dialogState: string } {
+  const vehicle = args.conv?.lead?.vehicle ?? {};
+  const year = String(vehicle.year ?? "").trim();
+  const model = normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null);
+  const bikeLabel = formatModelLabel(year || null, model ?? null) ?? (model ? normalizeDisplayCase(model) : "the bike");
+
+  if (args.decision.intent === "compare") {
+    return {
+      reply: "Thanks — I got your question. Which models would you like me to compare?",
+      needsTodo: false,
+      todoReason: "other",
+      todoSummary: "",
+      dialogState: "compare_request"
+    };
+  }
+
+  if (!model || bikeLabel === "the bike") {
+    return {
+      reply: "Thanks — I got your question. Which model are you asking about?",
+      needsTodo: false,
+      todoReason: "other",
+      todoSummary: "",
+      dialogState: "specs_single_request"
+    };
+  }
+
+  const focusLabel = adfVehicleInfoFocusLabel(args.decision);
+  return {
+    reply: `Thanks — I got your question on the ${bikeLabel}. I’ll pull the ${focusLabel} and follow up shortly.`,
+    needsTodo: true,
+    todoReason: "other",
+    todoSummary: `Confirm ${focusLabel} for ${bikeLabel}. Customer asked: ${args.text}`,
+    dialogState: "specs_single_request"
+  };
 }
 
 function cleanVehicleColorForReply(raw?: string | null): string | null {
@@ -3962,6 +4045,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmFaqTopic,
     llmWalkInOutcome,
     llmCompositeSalesInquiry,
+    llmVehicleInfo,
     llmVehicleFact,
     llmInventoryStatus
   ] = await Promise.all([
@@ -4049,6 +4133,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ),
     safeParser("composite_sales_inquiry", () =>
       parseCompositeSalesInquiryWithLLM({
+        text: effectiveInquiry,
+        history: adfHistory,
+        lead: conv.lead
+      })
+    ),
+    safeParser("vehicle_info_request", () =>
+      parseVehicleInfoRequestWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
         lead: conv.lead
@@ -5028,6 +5119,47 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         stage: "ENGAGED",
         note: "adf_vehicle_fact_answer",
         draft: vehicleFactReply.reply
+      });
+    }
+  }
+  const followUpAdfVehicleInfoDecision =
+    event.provider === "sendgrid_adf" && !isInitialAdf
+      ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
+      : null;
+  if (followUpAdfVehicleInfoDecision) {
+    const vehicleInfoReply = buildInitialAdfVehicleInfoReply({
+      conv,
+      decision: followUpAdfVehicleInfoDecision,
+      text: effectiveInquiry
+    });
+    if (vehicleInfoReply.reply) {
+      queueInitialDraftForPreferredContact(vehicleInfoReply.reply);
+      if (vehicleInfoReply.dialogState) {
+        conv.dialogState = { name: vehicleInfoReply.dialogState, updatedAt: new Date().toISOString() } as any;
+      }
+      if (vehicleInfoReply.needsTodo) {
+        addTodo(
+          conv,
+          vehicleInfoReply.todoReason as any,
+          vehicleInfoReply.todoSummary || `Confirm vehicle specs. Customer asked: ${effectiveInquiry}`,
+          event.providerMessageId
+        );
+        setFollowUpMode(conv, "manual_handoff", "adf_vehicle_info_followup");
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead,
+        leadSource,
+        bucket: inferredBucket,
+        cta: inferredCta,
+        channel,
+        intent: "GENERAL",
+        stage: "ENGAGED",
+        note: "adf_vehicle_info_request",
+        draft: vehicleInfoReply.reply
       });
     }
   }
@@ -7038,6 +7170,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const initialAdfVehicleFactDecision = isInitialAdf && !initialCompositeSalesInquiryDecision
     ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
     : null;
+  const initialAdfVehicleInfoDecision =
+    isInitialAdf &&
+    !initialCompositeSalesInquiryDecision &&
+    !initialAdfVehicleFactDecision
+      ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
+      : null;
   const skipInitialAdfVehicleFactForTrade =
     !!initialAdfVehicleFactDecision &&
     (initialAdfVehicleFactDecision.questionType === "price" ||
@@ -7070,10 +7208,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       stopFollowUpCadence(conv, "manual_handoff");
     }
   }
+  if (initialAdfVehicleInfoDecision) {
+    const vehicleInfoReply = buildInitialAdfVehicleInfoReply({
+      conv,
+      decision: initialAdfVehicleInfoDecision,
+      text: effectiveInquiry
+    });
+    draft = vehicleInfoReply.reply;
+    suppressAvailabilityAppend = true;
+    setDialogState(vehicleInfoReply.dialogState);
+    if (vehicleInfoReply.needsTodo) {
+      addTodo(
+        conv,
+        vehicleInfoReply.todoReason as any,
+        vehicleInfoReply.todoSummary,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "adf_vehicle_info_followup");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
+  }
   const initialAdfInventoryStatusAccepted =
     isInitialAdf &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfVehicleInfoDecision &&
     !isDepartmentLead &&
     isInitialAdfInventoryStatusParserAccepted(llmInventoryStatus);
   if (initialAdfInventoryStatusAccepted && llmInventoryStatus) {
@@ -7097,6 +7256,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted
       ? buildInitialTestRidePreferredDateReply(conv)
       : null;
@@ -7114,6 +7274,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !preferredTestRideDateReply &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted
   ) {
     const modelLabel = formatModelLabel(
@@ -7148,6 +7309,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isWalkInLead &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted &&
     !pricingInquiryIntent &&
     inferredBucket !== "trade_in_sell" &&
@@ -7188,6 +7350,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isInitialAdf &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
+    !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted &&
     pricingInquiryIntent &&
     typeof draft === "string" &&

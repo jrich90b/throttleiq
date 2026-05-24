@@ -5861,7 +5861,7 @@ type VehicleInfoRequestDecision = {
 function hasVehicleInfoRequestParserHint(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
-  return /\b(specs?|spec sheet|details?|more info|information|tell me about|highlights?|features?|compare|comparison|vs\.?|versus|difference|engine|motor|horsepower|torque|displacement|transmission|stereo|audio|speakers?|screen|display|infotainment|navigation|weight|seat height|dimensions?|wheelbase|fuel capacity|tank size|trim|finish|package)\b/i.test(
+  return /\b(specs?|spec sheet|details?|more info|information|tell me about|highlights?|features?|compare|comparison|vs\.?|versus|difference|engine|motor|horsepower|torque|displacement|transmission|stereo|audio|speakers?|screen|display|infotainment|navigation|weight|seat height|dimensions?|wheelbase|fuel capacity|fuel economy|mpg|tank size|trim|finish|package)\b/i.test(
     lower
   );
 }
@@ -41158,7 +41158,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && hasVehicleInfoRequestParserHint(event.body ?? "")) {
+  if (
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
+    hasVehicleInfoRequestParserHint(event.body ?? "")
+  ) {
     const vehicleInfoParse = await safeLlmParse("regen_vehicle_info_request_parser", () =>
       parseVehicleInfoRequestWithLLM({
         text: event.body ?? "",
@@ -41168,11 +41171,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     );
     const vehicleInfoDecision = resolveVehicleInfoRequestDecision(vehicleInfoParse);
     if (vehicleInfoDecision) {
-      const reply = await buildVehicleInfoRequestReply({
+      let reply = await buildVehicleInfoRequestReply({
         conv,
         text: event.body ?? "",
         decision: vehicleInfoDecision
       });
+      if (event.provider === "sendgrid_adf") {
+        const regenDealerProfile = await getDealerProfileHot();
+        const dealerName = regenDealerProfile?.dealerName ?? "American Harley-Davidson";
+        const agentName = resolveConversationAgentName(conv, regenDealerProfile?.agentName ?? "Alexandra");
+        const firstName = normalizeDisplayCase(conv.lead?.firstName);
+        const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+        reply = `${greeting}This is ${agentName} at ${dealerName}. ${reply}`.trim();
+      }
       recordRouteOutcome("regen", "vehicle_info_request", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -47687,7 +47698,7 @@ if (authToken && signature) {
       )
     : Promise.resolve(null);
   const vehicleInfoParserEligible =
-    event.provider === "twilio" &&
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_VEHICLE_INFO_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY &&
