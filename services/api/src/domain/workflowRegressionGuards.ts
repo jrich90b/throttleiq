@@ -1,5 +1,89 @@
 export type RequestedScheduleWindowMode = "after" | "before" | "any_time" | "window" | "none";
 
+function normalizeScheduleLabel(raw?: string | null): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function wantsReminder(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(text);
+}
+
+export function extractReminderFollowUpLabel(textRaw: string | null | undefined): string | null {
+  const text = String(textRaw ?? "");
+  const day = text.match(
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week)\b/i
+  )?.[1];
+  if (!day) return null;
+  if (/^mon$/i.test(day)) return "Monday";
+  if (/^tue|tues$/i.test(day)) return "Tuesday";
+  if (/^wed$/i.test(day)) return "Wednesday";
+  if (/^thu|thur|thurs$/i.test(day)) return "Thursday";
+  if (/^fri$/i.test(day)) return "Friday";
+  if (/^sat$/i.test(day)) return "Saturday";
+  if (/^sun$/i.test(day)) return "Sunday";
+  return normalizeScheduleLabel(day);
+}
+
+export function isFollowUpReminderOnlyText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  if (!wantsReminder(text)) return false;
+  if (/\?/.test(text)) return false;
+  if (
+    /\b(what time|what day|which time|which day|appointment|appt|book|schedule|reschedule|set up|lock it in|come in|stop in|stop by|test ride|demo ride)\b/i.test(
+      text
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function formatServiceScheduleTimeLabel(
+  timeTokenRaw: string | null | undefined,
+  sourceTextRaw: string | null | undefined
+): string {
+  const source = String(sourceTextRaw ?? "").toLowerCase();
+  const original = String(timeTokenRaw ?? "").trim();
+  const raw = original.toLowerCase().replace(/\s+/g, "");
+  const compact = raw.match(/^(\d{3,4})(am|pm)?$/i);
+  const colon = raw.match(/^(\d{1,2}):(\d{2})(am|pm)?$/i);
+  let hour = 0;
+  let minute = "00";
+  let meridiem = "";
+  if (compact) {
+    const digits = compact[1]!.padStart(4, "0");
+    hour = Number(digits.slice(0, 2));
+    minute = digits.slice(2, 4);
+    meridiem = compact[2] ?? "";
+  } else if (colon) {
+    hour = Number(colon[1]);
+    minute = colon[2] ?? "00";
+    meridiem = colon[3] ?? "";
+  } else {
+    const hourOnly = raw.match(/^(\d{1,2})(am|pm)?$/i);
+    if (!hourOnly) return original;
+    hour = Number(hourOnly[1]);
+    meridiem = hourOnly[2] ?? "";
+  }
+  if (!Number.isFinite(hour) || hour < 1 || hour > 12) return original;
+  if (!meridiem) {
+    if (/\b(afternoon|evening)\b/.test(source) || /\bafter\s+\d{1,2}(?::?\d{2})?\b/.test(source)) {
+      meridiem = "pm";
+    } else if (/\bmorning\b/.test(source)) {
+      meridiem = hour === 12 ? "pm" : "am";
+    } else {
+      meridiem = hour >= 7 && hour <= 11 ? "am" : "pm";
+    }
+  }
+  const suffix = meridiem.toLowerCase() === "am" ? "AM" : "PM";
+  return `${hour}:${minute} ${suffix}`;
+}
+
 export function isManualOutboundBookingConfirmationText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;

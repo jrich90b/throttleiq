@@ -6,6 +6,8 @@ import {
   buildAppointmentRescheduleBookingLinkReply,
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
+  extractReminderFollowUpLabel,
+  formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildInventoryOnlineCompletenessReply,
@@ -29,6 +31,7 @@ import {
   isDirectInventoryAvailabilityQuestionText,
   isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
+  isFollowUpReminderOnlyText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   getScheduleDayOptionsLabel,
@@ -193,6 +196,31 @@ const cases: Case[] = [
       "Hi Joe, sorry to text you after hours but had a quick question. Would you be able to facilitate a trade for a used bike I found with a private seller?"
     ),
     expected: false
+  },
+  {
+    id: "touch_base_statement_is_follow_up_reminder_only",
+    actual: isFollowUpReminderOnlyText("Hey brother, let’s touch base on Tuesday. Thank you."),
+    expected: true
+  },
+  {
+    id: "touch_base_statement_extracts_day_label",
+    actual: extractReminderFollowUpLabel("Hey brother, let’s touch base on Tuesday. Thank you."),
+    expected: "Tuesday"
+  },
+  {
+    id: "schedule_question_is_not_follow_up_reminder_only",
+    actual: isFollowUpReminderOnlyText("Can we schedule an appointment Tuesday?"),
+    expected: false
+  },
+  {
+    id: "service_time_330_defaults_to_pm_when_no_meridiem",
+    actual: formatServiceScheduleTimeLabel("330", "I can definitely do tomorrow at 330 or 4."),
+    expected: "3:30 PM"
+  },
+  {
+    id: "service_time_after_3_defaults_to_pm",
+    actual: formatServiceScheduleTimeLabel("3", "Would there be any time after 3 available?"),
+    expected: "3:00 PM"
   },
   {
     id: "voice_callback_suppressed_when_call_books_appointment",

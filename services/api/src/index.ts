@@ -375,6 +375,8 @@ import {
   buildAppointmentRescheduleBookingLinkReply,
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
+  extractReminderFollowUpLabel,
+  formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
@@ -393,6 +395,7 @@ import {
   isDemoDayEventQuestionText,
   isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
+  isFollowUpReminderOnlyText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -17857,6 +17860,7 @@ function applyPickupPolicy(conv: any, reply: string): string {
 function inboundAskedToSchedule(text: string): boolean {
   const t = String(text ?? "");
   if (!t.trim()) return false;
+  if (isFollowUpReminderOnlyText(t)) return false;
   if (detectSoftVisitIntent(t)) return false;
   if (isExplicitScheduleIntent(t)) return true;
   return (
@@ -17872,6 +17876,10 @@ function stripSchedulingLanguageIfNotAsked(reply: string, inboundText: string): 
   const schedulePhrase =
     /\b(schedule|appointment|appt|book|reserve|calendar|set (up )?a time|come in|stop in|stop by|visit|which works best|do any of these times work|what day|what time)\b/i;
   if (!schedulePhrase.test(reply)) return reply;
+  if (isFollowUpReminderOnlyText(inboundText)) {
+    const label = extractReminderFollowUpLabel(inboundText);
+    return label ? `Sounds good — I’ll touch base ${label}.` : "Sounds good — I’ll touch base with you.";
+  }
   const financeReplyContext =
     /\b(credit app|credit application|finance application|apply for credit|prequal|pre-qual|financing|finance)\b/i.test(
       reply
@@ -21816,7 +21824,7 @@ function formatServiceScheduleRequestPhrase(text: string | null | undefined): st
   const after = source.match(/\bafter\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)?.[1];
   const before = source.match(/\bbefore\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)?.[1];
   const timeToken = after || before || extractTimeToken(source);
-  const timeLabel = timeToken ? formatTime12h(timeToken) : "";
+  const timeLabel = timeToken ? formatServiceScheduleTimeLabel(timeToken, source) : "";
   const qualifier = after ? "after" : before ? "before" : "";
   return [dayLabel, dayPart ? normalizeDisplayCase(dayPart) : "", qualifier, timeLabel]
     .filter(Boolean)

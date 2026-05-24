@@ -73,6 +73,7 @@ type ReplayCaseResult = Candidate & {
     followUpMode?: string | null;
     followUpReason?: string | null;
     dialogState?: string | null;
+    conversationMode?: string | null;
     debugFlow?: any;
   };
   dataSources: string[];
@@ -592,7 +593,7 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   return false;
 }
 
-function classifyDraft(provider: Provider, inbound: string, draft: string | null): {
+function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
   verdict: Verdict;
   reasons: string[];
 } {
@@ -601,6 +602,12 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
   if (!draftText) {
+    if (String((conv as any)?.mode ?? "").toLowerCase() === "human") {
+      return {
+        verdict: "expected_no_response",
+        reasons: ["human mode suppresses customer-facing auto replies by design"]
+      };
+    }
     if (isExpectedNoCustomerReply(inbound)) {
       return {
         verdict: "expected_no_response",
@@ -717,7 +724,7 @@ async function replayOne(
       const outbound = latestOutboundAfter(convAfter, beforeCount);
       draft = outbound?.body?.trim() || null;
     }
-    const classification = classifyDraft(candidate.provider, candidate.body, draft);
+    const classification = classifyDraft(candidate.provider, candidate.body, draft, convAfter);
     return {
       ...candidate,
       status: "completed",
@@ -736,6 +743,7 @@ async function replayOne(
         followUpMode: convAfter?.followUp?.mode ?? null,
         followUpReason: convAfter?.followUp?.reason ?? null,
         dialogState: convAfter ? (convAfter as any).dialogState?.name ?? (convAfter as any).dialogState ?? null : null,
+        conversationMode: (convAfter as any)?.mode ?? null,
         debugFlow: convAfter?.lastDecision ?? null
       },
       dataSources: dataSourcesFor(candidate, convAfter)
