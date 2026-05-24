@@ -4,8 +4,10 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildAppointmentRescheduleBookingLinkReply,
+  buildConditionalPickupPlanAck,
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
+  buildFollowUpReminderOnlyReply,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
@@ -32,6 +34,7 @@ import {
   isExternalDealerApprovalTransferQuestionText,
   isFactoryOrderTimingQuestionText,
   isFollowUpReminderOnlyText,
+  isConditionalPickupPlanText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   getScheduleDayOptionsLabel,
@@ -208,9 +211,24 @@ const cases: Case[] = [
     expected: "Tuesday"
   },
   {
+    id: "touch_base_statement_builds_ack_not_time_request",
+    actual: buildFollowUpReminderOnlyReply("Hey brother, let’s touch base on Tuesday. Thank you."),
+    expected: "Sounds good — I’ll touch base Tuesday."
+  },
+  {
     id: "schedule_question_is_not_follow_up_reminder_only",
     actual: isFollowUpReminderOnlyText("Can we schedule an appointment Tuesday?"),
     expected: false
+  },
+  {
+    id: "conditional_pickup_plan_is_not_schedule_request",
+    actual: isConditionalPickupPlanText("Great. if not I'll pick it up tuesday."),
+    expected: true
+  },
+  {
+    id: "conditional_pickup_plan_ack_does_not_ask_time",
+    actual: buildConditionalPickupPlanAck("Great. if not I'll pick it up tuesday."),
+    expected: "Sounds good — just give me a heads up if you end up picking it up Tuesday."
   },
   {
     id: "service_time_330_defaults_to_pm_when_no_meridiem",

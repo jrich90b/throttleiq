@@ -373,8 +373,10 @@ import {
   buildAudioDemoStatusReply,
   buildAccessoryCustomizationReply,
   buildAppointmentRescheduleBookingLinkReply,
+  buildConditionalPickupPlanAck,
   buildExternalDealerApprovalTransferReply,
   buildFactoryOrderTimingHandoffReply,
+  buildFollowUpReminderOnlyReply,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
   buildHumanModeSchedulingDraft,
@@ -44751,6 +44753,28 @@ if (authToken && signature) {
         humanModeText
       );
     const humanModeLastOutboundText = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+    const humanModeReminderOnlyReply = isFollowUpReminderOnlyText(humanModeText)
+      ? buildFollowUpReminderOnlyReply(humanModeText)
+      : "";
+    const humanModeConditionalPickupReply = buildConditionalPickupPlanAck(humanModeText) ?? "";
+    if (humanModeReminderOnlyReply || humanModeConditionalPickupReply) {
+      const reply = humanModeReminderOnlyReply || humanModeConditionalPickupReply;
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      recordRouteOutcome(
+        "live",
+        humanModeReminderOnlyReply
+          ? "human_mode_follow_up_reminder_ack"
+          : "human_mode_conditional_pickup_plan_ack",
+        {
+          convId: conv.id,
+          leadKey: conv.leadKey
+        }
+      );
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     if (isOutboundInventoryWatchOfferConfirmation(humanModeText, humanModeLastOutboundText)) {
       const confirmedWatch = await buildInventoryWatchFromConfirmedOutboundOffer(
         conv,

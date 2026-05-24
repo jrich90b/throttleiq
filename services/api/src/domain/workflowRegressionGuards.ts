@@ -7,12 +7,7 @@ function normalizeScheduleLabel(raw?: string | null): string {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function wantsReminder(textRaw: string | null | undefined): boolean {
-  const text = String(textRaw ?? "").toLowerCase();
-  return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(text);
-}
-
-export function extractReminderFollowUpLabel(textRaw: string | null | undefined): string | null {
+export function extractDayLabelFromText(textRaw: string | null | undefined): string | null {
   const text = String(textRaw ?? "");
   const day = text.match(
     /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun|next week|this week)\b/i
@@ -28,6 +23,15 @@ export function extractReminderFollowUpLabel(textRaw: string | null | undefined)
   return normalizeScheduleLabel(day);
 }
 
+function wantsReminder(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  return /\b(remind|reminder|follow up|follow-up|check back|reach out|touch base)\b/i.test(text);
+}
+
+export function extractReminderFollowUpLabel(textRaw: string | null | undefined): string | null {
+  return extractDayLabelFromText(textRaw);
+}
+
 export function isFollowUpReminderOnlyText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
@@ -41,6 +45,38 @@ export function isFollowUpReminderOnlyText(textRaw: string | null | undefined): 
     return false;
   }
   return true;
+}
+
+export function buildFollowUpReminderOnlyReply(textRaw: string | null | undefined): string {
+  const label = extractReminderFollowUpLabel(textRaw);
+  return label ? `Sounds good — I’ll touch base ${label}.` : "Sounds good — I’ll touch base with you.";
+}
+
+export function isConditionalPickupPlanText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  if (/[?]/.test(text)) return false;
+  const conditional = /\b(if not|otherwise|if (?:it|that|this|they|we|you) (?:do(?:es)?n'?t|does not|isn'?t|is not)|if .* not)\b/.test(
+    text
+  );
+  if (!conditional) return false;
+  const futureSelf = /\b(?:i(?:'|’)?ll|i will|we(?:'|’)?ll|we will)\b/.test(text);
+  const pickupOrVisit = /\b(?:pick(?:ing)? (?:it|them|the bike)? ?up|pickup|come (?:in|by|down|through)|stop (?:in|by)|swing (?:in|by))\b/.test(
+    text
+  );
+  return futureSelf && pickupOrVisit && !!extractDayLabelFromText(text);
+}
+
+export function buildConditionalPickupPlanAck(textRaw: string | null | undefined): string | null {
+  if (!isConditionalPickupPlanText(textRaw)) return null;
+  const text = String(textRaw ?? "");
+  const label = extractDayLabelFromText(text);
+  const action = /\bpick(?:ing)? (?:it|them|the bike)? ?up|pickup\b/i.test(text)
+    ? "picking it up"
+    : "coming by";
+  return label
+    ? `Sounds good — just give me a heads up if you end up ${action} ${label}.`
+    : `Sounds good — just give me a heads up if that ends up being the plan.`;
 }
 
 export function formatServiceScheduleTimeLabel(
