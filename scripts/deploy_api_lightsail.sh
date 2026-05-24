@@ -217,7 +217,16 @@ mkdir -p "$backup_root"
 if [[ -d "$DEPLOY_DATA_DIR" ]]; then
   backup_path="$backup_root/data-$timestamp.tgz"
   echo "Backing up runtime data to $backup_path"
+  set +e
   tar -czf "$backup_path" -C "$(dirname "$DEPLOY_DATA_DIR")" "$(basename "$DEPLOY_DATA_DIR")"
+  tar_status=$?
+  set -e
+  if [[ "$tar_status" -eq 1 && -s "$backup_path" ]]; then
+    echo "Runtime data changed during backup; keeping completed live-data backup with warning."
+  elif [[ "$tar_status" -ne 0 ]]; then
+    echo "Runtime data backup failed with status $tar_status." >&2
+    exit "$tar_status"
+  fi
 else
   echo "Runtime data dir does not exist yet: $DEPLOY_DATA_DIR"
 fi
