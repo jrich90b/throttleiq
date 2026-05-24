@@ -47146,7 +47146,9 @@ if (authToken && signature) {
     !schedulingSignalsBase.hasDayTime &&
     !schedulingSignalsBase.hasDayOnlyAvailability &&
     !schedulingSignalsBase.hasDayOnlyRequest;
+  const businessHoursQuestionTurn = isBusinessHoursQuestionText(event.body ?? "");
   const bookingParserHint =
+    !businessHoursQuestionTurn &&
     !paymentOrPricingNoSchedule &&
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       draftHasSpecificTimes(lastOutboundText) ||
@@ -47172,6 +47174,7 @@ if (authToken && signature) {
     schedulingAllowed;
   const appointmentTimingParserHint =
     appointmentTimingParserEligible &&
+    !businessHoursQuestionTurn &&
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
       /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
