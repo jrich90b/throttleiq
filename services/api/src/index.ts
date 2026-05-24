@@ -43729,6 +43729,20 @@ function isAsyncTwilioSuggestOnly(): boolean {
   return raw !== "0" && raw !== "false" && raw !== "no";
 }
 
+function isAsyncTwilioAutopilotDeliveryEnabled(): boolean {
+  const raw = String(process.env.ASYNC_TWILIO_AUTOPILOT_DELIVERY_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function isAsyncTwilioAutopilotDeliveryDryRun(): boolean {
+  const raw = String(process.env.ASYNC_TWILIO_AUTOPILOT_DELIVERY_DRY_RUN ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function shouldDeliverAsyncTwilioResponseViaRest(): boolean {
+  return getSystemMode() === "autopilot" && !isAsyncTwilioSuggestOnly() && isAsyncTwilioAutopilotDeliveryEnabled();
+}
+
 function isAsyncTwilioWorkerRequest(req: any): boolean {
   return String(req.header?.("x-leadrider-twilio-worker") ?? "") === asyncTwilioWorkerSecret;
 }
@@ -43736,8 +43750,10 @@ function isAsyncTwilioWorkerRequest(req: any): boolean {
 function shouldQueueTwilioInboundAsync(req: any): boolean {
   if (!isAsyncTwilioInboundEnabled()) return false;
   if (isAsyncTwilioWorkerRequest(req)) return false;
-  if (isAsyncTwilioSuggestOnly() && getSystemMode() !== "suggest") return false;
-  return true;
+  const mode = getSystemMode();
+  if (mode === "suggest") return true;
+  if (isAsyncTwilioSuggestOnly()) return false;
+  return isAsyncTwilioAutopilotDeliveryEnabled();
 }
 
 function getAsyncTwilioInternalUrl(): string {
@@ -43745,6 +43761,84 @@ function getAsyncTwilioInternalUrl(): string {
   if (configured) return configured;
   const localPort = Number.parseInt(process.env.PORT ?? "3001", 10);
   return `http://127.0.0.1:${Number.isFinite(localPort) ? localPort : 3001}/webhooks/twilio`;
+}
+
+function decodeXmlEntities(text: string): string {
+  return String(text ?? "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function extractAsyncTwilioMessagesFromTwiML(twiml: string): Array<{ body: string; mediaUrls: string[] }> {
+  const xml = String(twiml ?? "");
+  const messages: Array<{ body: string; mediaUrls: string[] }> = [];
+  const messageRegex = /<Message\b[^>]*>([\s\S]*?)<\/Message>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = messageRegex.exec(xml))) {
+    const content = match[1] ?? "";
+    const mediaUrls = [...content.matchAll(/<Media\b[^>]*>([\s\S]*?)<\/Media>/gi)]
+      .map(media => decodeXmlEntities(String(media[1] ?? "").replace(/<[^>]+>/g, "").trim()))
+      .filter(Boolean);
+    const bodyMatch = content.match(/<Body\b[^>]*>([\s\S]*?)<\/Body>/i);
+    const bodySource = bodyMatch?.[1] ?? content.replace(/<Media\b[^>]*>[\s\S]*?<\/Media>/gi, "");
+    const body = decodeXmlEntities(bodySource.replace(/<[^>]+>/g, "").replace(/\\n/g, "\n")).trim();
+    if (body || mediaUrls.length) messages.push({ body, mediaUrls });
+  }
+  return messages;
+}
+
+async function deliverAsyncTwilioMessagesFromTwiML(args: {
+  jobId: string;
+  payload: Record<string, string>;
+  twiml: string;
+}): Promise<{ sent: boolean; dryRun: boolean; sids: string[]; messageCount: number }> {
+  const messages = extractAsyncTwilioMessagesFromTwiML(args.twiml);
+  if (!messages.length) return { sent: false, dryRun: false, sids: [], messageCount: 0 };
+
+  const from = normalizePhone(String(args.payload.To ?? ""));
+  const to = normalizePhone(String(args.payload.From ?? ""));
+  if (!from || !from.startsWith("+") || !to || !to.startsWith("+")) {
+    throw new Error("async autopilot delivery missing valid Twilio from/to phone");
+  }
+
+  if (isAsyncTwilioAutopilotDeliveryDryRun()) {
+    console.log("[twilio async] autopilot delivery dry-run", {
+      jobId: args.jobId,
+      from,
+      to,
+      messageCount: messages.length
+    });
+    return { sent: false, dryRun: true, sids: [], messageCount: messages.length };
+  }
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  if (!accountSid || !authToken) {
+    throw new Error("Twilio credentials missing for async autopilot delivery");
+  }
+  const client = twilio(accountSid, authToken);
+  const sids: string[] = [];
+  for (const message of messages) {
+    const out = await client.messages.create({
+      from,
+      to,
+      body: message.body,
+      ...(message.mediaUrls.length ? { mediaUrl: message.mediaUrls } : {})
+    });
+    if (out.sid) sids.push(out.sid);
+  }
+  console.log("[twilio async] autopilot delivery sent", {
+    jobId: args.jobId,
+    from,
+    to,
+    messageCount: messages.length,
+    sids
+  });
+  return { sent: true, dryRun: false, sids, messageCount: messages.length };
 }
 
 function scheduleTwilioInboundJobProcessing(jobId: string, delayMs = 0) {
@@ -43770,27 +43864,54 @@ async function processTwilioInboundJob(jobId: string) {
       nextAttemptAt: undefined
     });
 
-    const body = new URLSearchParams();
-    for (const [key, value] of Object.entries(job.payload)) body.set(key, value);
-    body.set("LeadriderAsyncJobId", job.id);
-
     const startedMs = Date.now();
-    const response = await fetch(getAsyncTwilioInternalUrl(), {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        "x-leadrider-twilio-worker": asyncTwilioWorkerSecret
-      },
-      body: body.toString()
-    });
-    const responseBody = await response.text();
-    if (!response.ok) {
-      throw new Error(`worker replay failed (${response.status}): ${responseBody.slice(0, 180)}`);
+    let responseStatus = job.responseStatus;
+    let responseBody = String(job.responseBody ?? "");
+    if (!responseBody || !responseStatus || responseStatus < 200 || responseStatus >= 300) {
+      const body = new URLSearchParams();
+      for (const [key, value] of Object.entries(job.payload)) body.set(key, value);
+      body.set("LeadriderAsyncJobId", job.id);
+
+      const response = await fetch(getAsyncTwilioInternalUrl(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          "x-leadrider-twilio-worker": asyncTwilioWorkerSecret
+        },
+        body: body.toString()
+      });
+      responseStatus = response.status;
+      responseBody = await response.text();
+      await updateTwilioInboundJob(job.id, {
+        responseStatus,
+        responseBody,
+        responseBodySnippet: responseBody.slice(0, 500)
+      });
+      if (!response.ok) {
+        throw new Error(`worker replay failed (${response.status}): ${responseBody.slice(0, 180)}`);
+      }
     }
+
+    let deliveredMessageSids: string[] | undefined;
+    let deliveryDryRun: boolean | undefined;
+    if (job.deliverResponseViaRest && !job.deliveredAt) {
+      const delivery = await deliverAsyncTwilioMessagesFromTwiML({
+        jobId: job.id,
+        payload: job.payload,
+        twiml: responseBody
+      });
+      deliveredMessageSids = delivery.sids;
+      deliveryDryRun = delivery.dryRun;
+    }
+
     await updateTwilioInboundJob(job.id, {
       status: "completed",
-      responseStatus: response.status,
+      responseStatus,
+      responseBody,
       responseBodySnippet: responseBody.slice(0, 500),
+      deliveredMessageSids,
+      deliveredAt: job.deliverResponseViaRest ? new Date().toISOString() : undefined,
+      deliveryDryRun,
       completedAt: new Date().toISOString(),
       lastError: undefined
     });
@@ -43910,9 +44031,13 @@ if (authToken && signature) {
   }
 
   if (shouldQueueTwilioInboundAsync(req)) {
+    const systemMode = getSystemMode();
+    const deliverResponseViaRest = shouldDeliverAsyncTwilioResponseViaRest();
     const { job, created } = await enqueueTwilioInboundJob({
       payload: (req.body ?? {}) as Record<string, unknown>,
-      receivedAt
+      receivedAt,
+      deliverResponseViaRest,
+      systemMode
     });
     if (created || (job.status !== "completed" && job.status !== "processing")) {
       scheduleTwilioInboundJobProcessing(job.id);
@@ -43922,6 +44047,8 @@ if (authToken && signature) {
       jobId: job.id,
       created,
       status: job.status,
+      systemMode,
+      deliverResponseViaRest,
       providerMessageId: job.providerMessageId ?? null
     });
     return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
@@ -53972,7 +54099,9 @@ const server = app.listen(port, () => {
 
   if (isAsyncTwilioInboundEnabled()) {
     console.log(
-      `[twilio async] webhook queue enabled${isAsyncTwilioSuggestOnly() ? " (suggest mode only)" : ""}`
+      `[twilio async] webhook queue enabled${isAsyncTwilioSuggestOnly() ? " (suggest mode only)" : ""}${
+        isAsyncTwilioAutopilotDeliveryEnabled() ? " (autopilot REST delivery available)" : ""
+      }${isAsyncTwilioAutopilotDeliveryDryRun() ? " (delivery dry-run)" : ""}`
     );
     setTimeout(() => {
       void resumePendingTwilioInboundJobs();

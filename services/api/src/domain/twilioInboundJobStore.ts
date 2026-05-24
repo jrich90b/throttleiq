@@ -14,7 +14,13 @@ export type TwilioInboundJob = {
   attempts: number;
   lastError?: string;
   responseStatus?: number;
+  responseBody?: string;
   responseBodySnippet?: string;
+  deliverResponseViaRest?: boolean;
+  deliveredMessageSids?: string[];
+  deliveredAt?: string;
+  deliveryDryRun?: boolean;
+  systemMode?: string;
   receivedAt: string;
   nextAttemptAt?: string;
   startedAt?: string;
@@ -62,6 +68,8 @@ export function buildTwilioInboundDedupeKey(payload: Record<string, unknown>): {
 export async function enqueueTwilioInboundJob(input: {
   payload: Record<string, unknown>;
   receivedAt?: string;
+  deliverResponseViaRest?: boolean;
+  systemMode?: string;
 }): Promise<{ job: TwilioInboundJob; created: boolean }> {
   await ensureLoaded();
   const normalizedPayload = normalizePayload(input.payload);
@@ -77,6 +85,8 @@ export async function enqueueTwilioInboundJob(input: {
     dedupeKey,
     payload: normalizedPayload,
     attempts: 0,
+    deliverResponseViaRest: input.deliverResponseViaRest === true,
+    systemMode: input.systemMode,
     receivedAt: input.receivedAt || now,
     createdAt: now,
     updatedAt: now
