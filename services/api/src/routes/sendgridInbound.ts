@@ -7172,7 +7172,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         `Thanks for your inquiry about the ${bikeLabel}. ` +
         "That unit is no longer available, but I can help with similar options if you want.";
     } else if (!hasIdentifiers) {
-      draft = `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
+      draft =
+        bikeLabel === "the bike"
+          ? "Thanks — I got your inquiry. Which bike are you asking about?"
+          : `Thanks — I saw you wanted to learn more about the ${bikeLabel}.${isRequestDetails ? " Any specific questions about the bike?" : ""} I’m here to help.`;
       suppressAvailabilityAppend = true;
     }
   }

@@ -44139,6 +44139,7 @@ if (authToken && signature) {
   const responseControlConfident = isResponseControlParserConfidentDecision(responseControlParse);
   const customerAckActionParserHint =
     event.provider === "twilio" &&
+    !isBusinessHoursQuestionText(event.body ?? "") &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY &&

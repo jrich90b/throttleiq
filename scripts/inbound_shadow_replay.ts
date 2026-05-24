@@ -598,6 +598,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (/\b(apr|interest|finance|financing|payment|monthly|credit|approved|approval|co-?sign|price|out the door|otd)\b/i.test(inboundLower)) {
     reasons.push("finance/pricing-sensitive inbound");
   }
+  if (/\bthe the\b/i.test(draftText)) {
+    reasons.push("draft contains duplicate article");
+  }
   if (/\b(rider\s*(to|2)\s*rider|r2r|private seller|another dealer|dealer trade)\b/i.test(inboundLower)) {
     reasons.push("policy-sensitive rider-to-rider/dealer-trade inbound");
   }
@@ -606,6 +609,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   }
   if (/\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)) {
     reasons.push("scheduling-sensitive inbound");
+  }
+  if (/\b(open|closed|hours?)\b/i.test(inboundLower) && /\bwould\s+\d{1,2}(:\d{2})?\s*(am|pm)?\s+work\b/i.test(inboundLower) && /\bhave that time noted\b/i.test(draftLower)) {
+    reasons.push("accepted time without answering hours/open question");
   }
   if (/\b(let me (figure|find|check)|i'?ll (let|give) you (know|a time)|time frame)\b/i.test(inboundLower) && /\bwhat time|works best|what day\b/i.test(draftLower)) {
     reasons.push("asks for time after customer said they will provide it");
