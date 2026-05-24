@@ -40,6 +40,7 @@
     "purchase_delivery_logistics:eval": "LLM_ENABLED=1 LLM_PURCHASE_DELIVERY_LOGISTICS_PARSER_ENABLED=1 npx tsx scripts/purchase_delivery_logistics_eval.ts",
     "regenerate_selection:eval": "npx tsx scripts/regenerate_selection_eval.ts",
     "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts",
+    "inbound_shadow:replay": "npx tsx scripts/inbound_shadow_replay.ts",
     "route_watchdog:run": "npx tsx scripts/route_audit_watchdog.ts",
     "language_corpus:mine": "npx tsx scripts/language_corpus_mine.ts",
     "voice_feedback:mine": "npx tsx scripts/voice_feedback_mine.ts",
