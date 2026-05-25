@@ -1191,19 +1191,26 @@ function isJumpStartExperienceText(text: string | null | undefined): boolean {
   );
 }
 
-function hasRiderCourseInfoInquiryText(text: string | null | undefined): boolean {
+function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
   const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!t) return false;
-  const courseTerm =
-    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
-      t
-    ) ||
-    /\b(?:your|the|this|that|our)\s+course\b/.test(t);
-  if (courseTerm) return true;
+  return /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+    t
+  );
+}
+
+function hasAmbiguousRiderCourseInfoText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t || hasExplicitRiderCourseInfoText(t)) return false;
   return (
+    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
     /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
     /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t)
   );
+}
+
+function hasRiderCourseInfoInquiryText(text: string | null | undefined): boolean {
+  return hasExplicitRiderCourseInfoText(text) || hasAmbiguousRiderCourseInfoText(text);
 }
 
 function hasFirstTimeRiderGuidanceParserHint(text: string | null | undefined): boolean {
@@ -1267,7 +1274,10 @@ function resolveFirstTimeRiderGuidanceDecision(
   return parseFirstTimeRiderGuidanceFallback(text);
 }
 
-function buildInitialAdfRiderCourseInfoReply(dealerProfile: any): string {
+function buildInitialAdfRiderCourseInfoReply(
+  dealerProfile: any,
+  inquiryText?: string | null
+): string {
   const policies = dealerProfile?.policies ?? {};
   const firstTimePolicy =
     policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
@@ -1283,11 +1293,16 @@ function buildInitialAdfRiderCourseInfoReply(dealerProfile: any): string {
   const courseUrl =
     String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const isAmbiguous = hasAmbiguousRiderCourseInfoText(inquiryText);
   const priceLine = coursePrice
-    ? `The current price is ${coursePrice}.`
+    ? `the current price is ${coursePrice}.`
     : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
   const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
-  return `Thanks for asking about our ${courseName}. ${priceLine}${urlLine}`;
+  if (isAmbiguous) {
+    return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
+  }
+  const directPriceLine = coursePrice ? `The current price is ${coursePrice}.` : priceLine;
+  return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
 }
 
 function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
@@ -6901,7 +6916,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   if (initialAdfRiderCourseDecision) {
     const profile = await getInitialDealerProfile();
-    let ack = buildInitialAdfRiderCourseInfoReply(profile);
+    let ack = buildInitialAdfRiderCourseInfoReply(profile, effectiveInquiry);
     ack = await applyInitialAdfPrefix(ack);
     setDialogState("first_time_rider");
     addTodo(
@@ -7256,7 +7271,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let suppressAvailabilityAppend = false;
   let handledInternationalShippingInquiry = false;
   if (initialAdfRiderCourseDecision) {
-    draft = buildInitialAdfRiderCourseInfoReply(dealerProfile);
+    draft = buildInitialAdfRiderCourseInfoReply(dealerProfile, effectiveInquiry);
     suppressAvailabilityAppend = true;
     setDialogState("first_time_rider");
     addTodo(

@@ -19623,18 +19623,33 @@ function buildCustomerDispositionReply(text: string, conv?: any): string {
   return buildFriendlyReachOutClose(hasBikeCompliment);
 }
 
+function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  return /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+    t
+  );
+}
+
+function hasAmbiguousRiderCourseInfoText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t || hasExplicitRiderCourseInfoText(t)) return false;
+  return (
+    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
+    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
+    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t)
+  );
+}
+
+function hasRiderCourseInfoInquiryText(text: string | null | undefined): boolean {
+  return hasExplicitRiderCourseInfoText(text) || hasAmbiguousRiderCourseInfoText(text);
+}
+
 function hasFirstTimeRiderGuidanceParserHint(text: string | null | undefined): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  const hasRiderCourseInfo =
-    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
-      t
-    ) ||
-    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
-    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
-    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t);
   return (
-    hasRiderCourseInfo ||
+    hasRiderCourseInfoInquiryText(t) ||
     /\b(first\s+(?:bike|motorcycle|harley|time\s+riding|time\s+rider)|new\s+rider|beginner\s+(?:bike|rider)|never\s+(?:ridden|rode|been\s+on)|haven['’]?t\s+(?:ridden|rode))\b/.test(
       t
     ) ||
@@ -19662,13 +19677,7 @@ function parseFirstTimeRiderGuidanceFallback(text: string): FirstTimeRiderGuidan
     /\b(i\s+have|got|already\s+have)\s+(?:my\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
       t
     );
-  const asksRiderCourse =
-    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
-      t
-    ) ||
-    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
-    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
-    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t);
+  const asksRiderCourse = hasRiderCourseInfoInquiryText(t);
   const asksBeginnerBike =
     /\b(first\s+(?:bike|motorcycle|harley)|beginner\s+(?:bike|rider)|new\s+rider|starter|manageable|easy)\b/.test(
       t
@@ -19703,6 +19712,7 @@ function resolveFirstTimeRiderGuidanceDecision(
 function buildFirstTimeRiderGuidanceReply(args: {
   parsed: FirstTimeRiderGuidanceParse;
   dealerProfile: any;
+  text?: string | null;
 }): string {
   const parsed = args.parsed;
   const policies = args.dealerProfile?.policies ?? {};
@@ -19721,15 +19731,21 @@ function buildFirstTimeRiderGuidanceReply(args: {
     String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
   const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
+  const courseDetails = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
   const coursePrice =
     String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
     String(firstTimePolicy.trainingCoursePrice ?? "").trim();
 
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
+    const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
     const priceLine = coursePrice
-      ? ` The current price is ${coursePrice}.`
-      : " I’ll have the team confirm current class pricing and availability and follow up.";
-    return `Good question. ${courseText} is the best place to start.${priceLine}`;
+      ? `the current price is ${coursePrice}.`
+      : "I’ll have the team confirm current class pricing and availability and follow up.";
+    if (isAmbiguous) {
+      return `Good question. If you mean our ${courseName}, ${priceLine}${courseDetails}`;
+    }
+    const directPriceLine = coursePrice ? ` The current price is ${coursePrice}.` : ` ${priceLine}`;
+    return `Good question. ${courseName} is the best place to start.${directPriceLine}${courseDetails}`;
   }
   if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
     const requirement = requiresEndorsement
@@ -41797,7 +41813,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     applyFirstTimeRiderGuidanceState(conv);
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: regenFirstTimeRiderDecision,
-      dealerProfile: profile
+      dealerProfile: profile,
+      text: event.body ?? ""
     });
     recordRouteOutcome("regen", "first_time_rider_guidance", {
       convId: conv.id,
@@ -45376,7 +45393,8 @@ if (authToken && signature) {
     applyFirstTimeRiderGuidanceState(conv);
     const reply = buildFirstTimeRiderGuidanceReply({
       parsed: firstTimeRiderDecision,
-      dealerProfile
+      dealerProfile,
+      text: semanticInboundText
     });
     recordRouteOutcome("live", "first_time_rider_guidance", {
       convId: conv.id,

@@ -74,6 +74,13 @@
     ]
   },
   "policies": {
+    "firstTimeRider": {
+      "riderCourseName": "Riding Academy course",
+      "riderCoursePrice": "",
+      "riderCourseUrl": "https://americanharley-davidson.com/news-article/42851/riding-academy",
+      "testRideRequiresEndorsement": true,
+      "requiresMotorcycleEndorsementForTestRide": true
+    },
     "internationalShipping": {
       "enabled": false,
       "newVehicleExportEnabled": false,
