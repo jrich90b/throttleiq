@@ -3166,6 +3166,11 @@ export default function Home() {
     offersUrl: "",
     lienHolderResponse: "",
     riderToRiderFinancingEnabled: false,
+    ridingAcademyEnabled: false,
+    riderCourseName: "",
+    riderCoursePrice: "",
+    riderCourseUrl: "",
+    testRideRequiresEndorsement: true,
     internationalNewVehicleExportEnabled: false,
     internationalUsedVehicleExportEnabled: false,
     internationalShippingDisabledResponse: "",
@@ -6664,6 +6669,27 @@ export default function Home() {
             profile?.policies?.riderToRiderFinancingEnabled === true ||
             profile?.policies?.riderToRiderFinanceEnabled === true ||
             profile?.policies?.offersRiderToRiderFinancing === true,
+          ridingAcademyEnabled:
+            profile?.policies?.firstTimeRider?.ridingAcademyEnabled === true ||
+            profile?.policies?.firstTimeRider?.riderCourseEnabled === true ||
+            profile?.policies?.firstTimeRider?.enabled === true ||
+            !!profile?.policies?.firstTimeRider?.riderCoursePrice ||
+            !!profile?.policies?.firstTimeRider?.riderCourseUrl,
+          riderCourseName:
+            profile?.policies?.firstTimeRider?.riderCourseName ??
+            profile?.policies?.firstTimeRider?.trainingCourseName ??
+            "Riding Academy course",
+          riderCoursePrice:
+            profile?.policies?.firstTimeRider?.riderCoursePrice ??
+            profile?.policies?.firstTimeRider?.trainingCoursePrice ??
+            "",
+          riderCourseUrl:
+            profile?.policies?.firstTimeRider?.riderCourseUrl ??
+            profile?.policies?.firstTimeRider?.trainingCourseUrl ??
+            "",
+          testRideRequiresEndorsement:
+            profile?.policies?.firstTimeRider?.testRideRequiresEndorsement !== false &&
+            profile?.policies?.firstTimeRider?.requiresMotorcycleEndorsementForTestRide !== false,
           internationalNewVehicleExportEnabled:
             profile?.policies?.internationalShipping?.newVehicleExportEnabled === true ||
             profile?.policies?.internationalShipping?.newVehiclesEnabled === true ||
@@ -11136,6 +11162,17 @@ export default function Home() {
           ...existingPolicies,
           lienHolderResponse: dealerProfileForm.lienHolderResponse.trim(),
           riderToRiderFinancingEnabled: !!dealerProfileForm.riderToRiderFinancingEnabled,
+          firstTimeRider: {
+            ...((existingPolicies as any)?.firstTimeRider ?? {}),
+            enabled: !!dealerProfileForm.ridingAcademyEnabled,
+            ridingAcademyEnabled: !!dealerProfileForm.ridingAcademyEnabled,
+            riderCourseEnabled: !!dealerProfileForm.ridingAcademyEnabled,
+            riderCourseName: dealerProfileForm.riderCourseName.trim(),
+            riderCoursePrice: dealerProfileForm.riderCoursePrice.trim(),
+            riderCourseUrl: dealerProfileForm.riderCourseUrl.trim(),
+            testRideRequiresEndorsement: !!dealerProfileForm.testRideRequiresEndorsement,
+            requiresMotorcycleEndorsementForTestRide: !!dealerProfileForm.testRideRequiresEndorsement
+          },
           internationalShipping: {
             ...((existingPolicies as any)?.internationalShipping ?? {}),
             enabled:
@@ -16644,6 +16681,70 @@ export default function Home() {
                   </label>
                   <div className="text-xs text-slate-600">
                     Controls replies for &quot;Marketplace - Rider to Rider Finance Inquiry&quot; and regenerate behavior.
+                  </div>
+                </div>
+                <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
+                  <div className="text-sm font-semibold">Riding Academy / First-Time Rider</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.ridingAcademyEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          ridingAcademyEnabled: e.target.checked
+                        })
+                      }
+                    />
+                    Dealer offers a Riding Academy or rider course
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1">
+                      <div className="text-xs text-slate-600">Course name</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.riderCourseName}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, riderCourseName: e.target.value })}
+                        placeholder="Riding Academy course"
+                        disabled={!dealerProfileForm.ridingAcademyEnabled}
+                      />
+                    </label>
+                    <label className="space-y-1">
+                      <div className="text-xs text-slate-600">Course price</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.riderCoursePrice}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, riderCoursePrice: e.target.value })}
+                        placeholder="$399"
+                        disabled={!dealerProfileForm.ridingAcademyEnabled}
+                      />
+                    </label>
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-slate-600">Course URL</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        value={dealerProfileForm.riderCourseUrl}
+                        onChange={e => setDealerProfileForm({ ...dealerProfileForm, riderCourseUrl: e.target.value })}
+                        placeholder="https://..."
+                        disabled={!dealerProfileForm.ridingAcademyEnabled}
+                      />
+                    </label>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.testRideRequiresEndorsement}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          testRideRequiresEndorsement: e.target.checked
+                        })
+                      }
+                    />
+                    Test rides require a motorcycle endorsement
+                  </label>
+                  <div className="text-xs text-slate-600">
+                    Controls replies for course/pricing questions and first-time-rider guidance. If enabled but price is blank, the assistant asks staff to confirm price.
                   </div>
                 </div>
                 <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
