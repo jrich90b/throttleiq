@@ -21798,8 +21798,21 @@ function hasServiceDepartmentContext(conv: any): boolean {
   if (listOpenTodos().some(todo => todo.convId === conv?.id && todo.status === "open" && todo.reason === "service")) {
     return true;
   }
+  const leadText = [
+    conv?.lead?.source,
+    conv?.lead?.inquiry,
+    conv?.lead?.comments,
+    conv?.lead?.rawText,
+    conv?.lead?.raw
+  ]
+    .map(part => String(part ?? ""))
+    .join(" ")
+    .toLowerCase();
+  if (/\b(service|inspection|inspect|oil change|maintenance|repair|service department)\b/.test(leadText)) {
+    return true;
+  }
   const recentText = (conv?.messages ?? [])
-    .slice(-6)
+    .slice(-12)
     .map((m: any) => String(m?.body ?? ""))
     .join(" ")
     .toLowerCase();
