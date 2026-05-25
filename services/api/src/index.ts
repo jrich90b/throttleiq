@@ -19762,6 +19762,42 @@ function buildFirstTimeRiderGuidanceReply(args: {
   return "That’s exciting. For a first bike, I’d focus on comfort, seat height, weight, and confidence. Do you already have your motorcycle endorsement, or are you still getting started?";
 }
 
+function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
+  parsed: FirstTimeRiderGuidanceParse;
+  dealerProfile: any;
+  text?: string | null;
+}): string {
+  const parsed = args.parsed;
+  const policies = args.dealerProfile?.policies ?? {};
+  const firstTimePolicy =
+    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
+      ? policies.firstTimeRider
+      : {};
+  const courseName =
+    String(firstTimePolicy.riderCourseName ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
+    "Riding Academy course";
+  const coursePrice =
+    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
+  const courseUrl =
+    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
+    const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
+    const priceLine = coursePrice
+      ? `the current price is ${coursePrice}.`
+      : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+    const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
+    if (isAmbiguous) {
+      return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
+    }
+    const directPriceLine = coursePrice ? `The current price is ${coursePrice}.` : priceLine;
+    return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
+  }
+  return buildFirstTimeRiderGuidanceReply(args);
+}
+
 function applyFirstTimeRiderGuidanceState(conv: any) {
   setDialogState(conv, "first_time_rider");
   setFollowUpMode(conv, "active", "first_time_rider_guidance");
@@ -41387,6 +41423,75 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnSchedulingIntent: true,
       turnAvailabilityIntent: false,
       turnFinanceIntent: false
+    });
+  }
+  const regenAdfFirstTimeRiderParserEligible =
+    event.provider === "sendgrid_adf" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FIRST_TIME_RIDER_GUIDANCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY &&
+    !regenShortAck &&
+    hasFirstTimeRiderGuidanceParserHint(event.body ?? "");
+  const regenAdfFirstTimeRiderParse = regenAdfFirstTimeRiderParserEligible
+    ? await safeLlmParse("regen_adf_first_time_rider_guidance_parser", () =>
+        parseFirstTimeRiderGuidanceWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 8),
+          lead: conv.lead
+        })
+      )
+    : null;
+  const regenAdfFirstTimeRiderDecision =
+    event.provider === "sendgrid_adf" && !regenShortAck
+      ? resolveFirstTimeRiderGuidanceDecision(event.body ?? "", regenAdfFirstTimeRiderParse)
+      : null;
+  if (regenAdfFirstTimeRiderDecision) {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const replyBody = buildInitialAdfFirstTimeRiderGuidanceReply({
+      parsed: regenAdfFirstTimeRiderDecision,
+      dealerProfile,
+      text: event.body ?? ""
+    });
+    const reply = `${greeting}This is ${agentName} at ${dealerName}. ${replyBody}`.trim();
+    applyFirstTimeRiderGuidanceState(conv);
+    if (
+      regenAdfFirstTimeRiderDecision.intent === "rider_course_info" ||
+      regenAdfFirstTimeRiderDecision.asksRiderCourse
+    ) {
+      const firstTimePolicy =
+        dealerProfile?.policies?.firstTimeRider && typeof dealerProfile.policies.firstTimeRider === "object"
+          ? dealerProfile.policies.firstTimeRider
+          : {};
+      const coursePrice =
+        String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+        String(firstTimePolicy.trainingCoursePrice ?? "").trim();
+      if (!coursePrice) {
+        addTodo(
+          conv,
+          "other",
+          `Confirm Riding Academy/course pricing and availability. Customer asked: ${event.body ?? ""}`,
+          event.providerMessageId
+        );
+        setFollowUpMode(conv, "manual_handoff", "rider_course_info");
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
+    }
+    recordRouteOutcome("regen", "adf_first_time_rider_guidance", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      intent: regenAdfFirstTimeRiderDecision.intent,
+      confidence: regenAdfFirstTimeRiderDecision.confidence ?? null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnFinanceIntent: false,
+      turnAvailabilityIntent: false
     });
   }
   if (event.provider === "sendgrid_adf" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
