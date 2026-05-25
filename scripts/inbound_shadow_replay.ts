@@ -626,20 +626,31 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
     }
     return { verdict: "no_response", reasons: ["no customer-facing draft/reply produced"] };
   }
-  if (draftText.length < 12) reasons.push("very short draft");
-  if (/\b(and|or|to|the|when|if|with|for)$/i.test(draftText)) reasons.push("draft appears truncated");
-  if (/\b(i don'?t want to guess|i'?ll have (the )?(team|manager|finance)|confirm .*follow up|verify .*follow up)\b/i.test(draftText)) {
-    reasons.push("draft hands off instead of answering directly");
-  }
-  if (/\b(apr|interest|finance|financing|payment|monthly|credit|approved|approval|co-?sign|price|out the door|otd)\b/i.test(inboundLower)) {
-    reasons.push("finance/pricing-sensitive inbound");
-  }
-  if (
+  const riderCourseInquiry =
     /\b(msf|riding academy|rider academy|riding course|rider course|motorcycle class|motorcycle course|your course|course and price)\b/i.test(
       inboundLower
-    ) &&
-    /\b(payment|monthly|down|term|street 750|bike|motorcycle|finance|financing)\b/i.test(draftLower)
+    );
+  const draftHandsOff =
+    /\b(i don'?t want to guess|i'?ll have (the )?(team|manager|finance)|confirm .*follow up|verify .*follow up)\b/i.test(
+      draftText
+    );
+  if (draftText.length < 12) reasons.push("very short draft");
+  if (/\b(and|or|to|the|when|if|with|for)$/i.test(draftText)) reasons.push("draft appears truncated");
+  if (draftHandsOff && !riderCourseInquiry) {
+    reasons.push("draft hands off instead of answering directly");
+  }
+  if (draftHandsOff && riderCourseInquiry) {
+    reasons.push("rider-course pricing/availability needs configured answer");
+  }
+  if (
+    !riderCourseInquiry &&
+    /\b(apr|interest|finance|financing|payment|monthly|credit|approved|approval|co-?sign|price|out the door|otd)\b/i.test(
+      inboundLower
+    )
   ) {
+    reasons.push("finance/pricing-sensitive inbound");
+  }
+  if (riderCourseInquiry && /\b(payment|monthly|down|term|street 750|bike|motorcycle|finance|financing)\b/i.test(draftLower)) {
     reasons.push("rider-course inquiry drifted to vehicle/payment response");
   }
   if (/\bthe the\b/i.test(draftText)) {
