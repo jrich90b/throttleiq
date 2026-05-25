@@ -21799,6 +21799,7 @@ function hasServiceDepartmentContext(conv: any): boolean {
     return true;
   }
   const leadText = [
+    JSON.stringify(conv?.lead ?? {}),
     conv?.lead?.source,
     conv?.lead?.inquiry,
     conv?.lead?.comments,
@@ -21812,7 +21813,6 @@ function hasServiceDepartmentContext(conv: any): boolean {
     return true;
   }
   const recentText = (conv?.messages ?? [])
-    .slice(-12)
     .map((m: any) => String(m?.body ?? ""))
     .join(" ")
     .toLowerCase();
@@ -52579,6 +52579,7 @@ if (authToken && signature) {
     !conv.appointment?.bookedEventId &&
     (!conv.scheduler?.lastSuggestedSlots || conv.scheduler.lastSuggestedSlots.length === 0) &&
     !schedulingBlocked &&
+    !isServiceDepartmentSchedulingRequest(conv, event.body) &&
     !schedulingSignals.hasDayOnlyRequest &&
     !schedulingSignals.hasDayOnlyAvailability
   ) {
