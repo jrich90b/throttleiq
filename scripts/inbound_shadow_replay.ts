@@ -15,6 +15,7 @@ type ReplayArgs = {
   outDir: string;
   twilioTo: string;
   keepTemp: boolean;
+  caseNumbers: number[];
 };
 
 type ConversationMessage = {
@@ -92,6 +93,7 @@ Options:
   --since-days <n>        Only consider inbound messages newer than this. Default: 14.
   --out-dir <path>        Report directory. Default: reports/inbound-shadow.
   --twilio-to <phone>     Fallback dealer Twilio number for replay. Default: +17164032516.
+  --case-numbers <list>   Optional 1-based case numbers after filtering, e.g. 5,25,38.
   --keep-temp             Keep temporary copied data folders for inspection.
 `);
   process.exit(1);
@@ -105,7 +107,8 @@ function parseArgs(argv: string[]): ReplayArgs {
     sinceDays: 14,
     outDir: "reports/inbound-shadow",
     twilioTo: "+17164032516",
-    keepTemp: false
+    keepTemp: false,
+    caseNumbers: []
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -125,6 +128,13 @@ function parseArgs(argv: string[]): ReplayArgs {
     else if (arg === "--since-days") out.sinceDays = Math.max(1, Number.parseInt(next(), 10) || 14);
     else if (arg === "--out-dir") out.outDir = next();
     else if (arg === "--twilio-to") out.twilioTo = next();
+    else if (arg === "--case-numbers") {
+      out.caseNumbers = next()
+        .split(",")
+        .map(part => Number.parseInt(part.trim(), 10))
+        .filter(num => Number.isFinite(num) && num > 0);
+      if (!out.caseNumbers.length) usage();
+    }
     else if (arg === "--keep-temp") out.keepTemp = true;
     else usage();
   }
@@ -808,7 +818,10 @@ function buildMarkdownReport(report: any): string {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const sourceSnapshot = await readJson<any>(path.join(args.dataDir, "conversations.json"));
-  const candidates = selectCandidates(sourceSnapshot, args);
+  const allCandidates = selectCandidates(sourceSnapshot, args);
+  const candidates = args.caseNumbers.length
+    ? args.caseNumbers.map(num => allCandidates[num - 1]).filter((candidate): candidate is Candidate => !!candidate)
+    : allCandidates;
   if (!candidates.length) {
     console.log("No inbound candidates matched the replay filters.");
     return;
