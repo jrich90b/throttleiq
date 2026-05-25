@@ -23,6 +23,7 @@ import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
+import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
   buildInternationalShippingUnavailableReply,
   isInternationalShippingInquiry,
@@ -569,6 +570,7 @@ function detectHiringManagerFallbackRequest(text: string): boolean {
 function detectPartsFallbackRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  const catalogMatch = matchPartsCatalogLexicon(t);
   return (
     /\b(parts? department|parts? counter|parts? desk|parts?\s+order|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|parts? for my|do you (have|carry|stock)\b.{0,36}\bparts?)\b/.test(
       t
@@ -576,7 +578,26 @@ function detectPartsFallbackRequest(text: string): boolean {
     (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(t) &&
       /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade|looking for|market for)\b/.test(
         t
+      )) ||
+    (catalogMatch.partsTerms.length > 0 &&
+      /\b(can you|could you|do you|would you|need|want|looking for|order|price|pricing|cost|quote|fit|fits|fitment|install|stock|in stock|available|carry|have)\b/.test(
+        t
       ))
+  );
+}
+
+function detectApparelFallbackRequest(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const catalogMatch = matchPartsCatalogLexicon(t);
+  return (
+    (/\b(apparel|motorclothes|motor clothes|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
+      t
+    ) ||
+      catalogMatch.apparelTerms.length > 0) &&
+    /\b(can you|could you|do you|would you|need|want|looking for|order|price|pricing|cost|quote|size|xl|2xl|3xl|4xl|stock|in stock|available|carry|have)\b/.test(
+      t
+    )
   );
 }
 
@@ -2742,6 +2763,16 @@ export async function orchestrateInbound(
     )
       ? buildTakeOffMilwaukeeEightEngineReply()
       : "Thanks — I’ll have our parts department reach out shortly.";
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft,
+      handoff: { required: true, reason: "other", ack: draft }
+    });
+  }
+  if (detectApparelFallbackRequest(event.body)) {
+    const draft = "Thanks — I’ll have our MotorClothes team check on that and reach out shortly.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",

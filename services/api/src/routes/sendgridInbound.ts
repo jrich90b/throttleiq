@@ -44,6 +44,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
+import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
 import { resolveChannel, resolveLeadRule, type LeadBucket, type LeadCTA } from "../domain/leadSourceRules.js";
 import {
   parseDealershipFaqTopicWithLLM,
@@ -4412,13 +4413,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const takeOffM8EnginePartsRequest = isTakeOffMilwaukeeEightEngineRequestText(
     [effectiveInquiry, inquiryRaw, lead.inquiry, lead.comment, event.body].filter(Boolean).join("\n")
   );
+  const catalogMatch = matchPartsCatalogLexicon(inquiryText);
+  const catalogPartsIntent =
+    catalogMatch.partsTerms.length > 0 &&
+    /\b(can you|could you|do you|would you|need|want|looking for|order|price|pricing|cost|quote|fit|fits|fitment|install|stock|in stock|available|carry|have)\b/i.test(
+      inquiryText
+    );
+  const catalogApparelIntent =
+    catalogMatch.apparelTerms.length > 0 &&
+    /\b(can you|could you|do you|would you|need|want|looking for|order|price|pricing|cost|quote|size|xl|2xl|3xl|4xl|stock|in stock|available|carry|have)\b/i.test(
+      inquiryText
+    );
   const partsIntentFromText =
     takeOffM8EnginePartsRequest ||
+    catalogPartsIntent ||
     /\b(part number|oem parts?|aftermarket parts?|need (?:a )?part|looking for (?:a )?part|parts?\s+(?:for|department|counter|desk)|do you have (?:it|this|that)?\s*in stock)\b/i.test(
       inquiryText
     ) ||
     /\bparts?\b/.test(leadSourceLower);
   const apparelIntentFromText =
+    catalogApparelIntent ||
     /\b(apparel|motorclothes|merch|jacket|helmet|gloves|boots|shirt|hoodie)\b/i.test(inquiryText) ||
     /\bapparel|motorclothes\b/i.test(leadSourceLower);
   const jumpStartExperienceLead =

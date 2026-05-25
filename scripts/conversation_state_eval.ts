@@ -90,6 +90,22 @@ const fixtures: Fixture[] = [
     expectedExplicit: true
   },
   {
+    id: "parts_catalog_sissy_bar_1",
+    text: "Can you order a sissy bar for my Low Rider ST?",
+    expectedState: "parts_request",
+    expectedDepartment: "parts",
+    expectedHandoff: "parts_request",
+    expectedExplicit: true
+  },
+  {
+    id: "parts_catalog_slip_ons_1",
+    text: "Do you carry slip ons for a 2024 Road Glide?",
+    expectedState: "parts_request",
+    expectedDepartment: "parts",
+    expectedHandoff: "parts_request",
+    expectedExplicit: true
+  },
+  {
     id: "service_install_1",
     text: "Can service quote an LED headlight install?",
     expectedState: "service_request",
@@ -116,6 +132,14 @@ const fixtures: Fixture[] = [
   {
     id: "apparel_helmet_1",
     text: "Do you have helmets in apparel?",
+    expectedState: "apparel_request",
+    expectedDepartment: "apparel",
+    expectedHandoff: "apparel_request",
+    expectedExplicit: true
+  },
+  {
+    id: "motorclothes_catalog_modular_helmet_1",
+    text: "Do you have a modular helmet in XL?",
     expectedState: "apparel_request",
     expectedDepartment: "apparel",
     expectedHandoff: "apparel_request",

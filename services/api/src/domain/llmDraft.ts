@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
+import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -6851,9 +6852,12 @@ export async function parseConversationStateWithLLM(args: {
 
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const catalogHint = buildPartsCatalogParserHint(text);
   const voiceExamples = [
     'input: "Customer: can service quote an LED headlight install?" output: {"state_intent":"service_request","corporate_topic":"none","department_intent":"service","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"service_request","confidence":0.97}',
     'input: "Customer: can parts order drag specialties for me?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: can you order a sissy bar for my Low Rider ST?" output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
+    'input: "Customer: do you have a modular helmet in XL?" output: {"state_intent":"apparel_request","corporate_topic":"none","department_intent":"apparel","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"apparel_request","confidence":0.97}',
     'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"state_intent":"parts_request","corporate_topic":"none","department_intent":"parts","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"parts_request","confidence":0.97}',
     'input: "Customer: Who is the hiring manager for American Harley Davidson?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.97}',
     'input: "Customer: I wanted to apply for a job at your dealership. Who should I talk to?" output: {"state_intent":"hiring_manager","corporate_topic":"none","department_intent":"none","explicit_request":true,"clear_inventory_watch_pending":true,"clear_pricing_need_model":true,"manual_handoff_reason":"hiring_manager_inquiry","confidence":0.96}',
@@ -6907,6 +6911,9 @@ export async function parseConversationStateWithLLM(args: {
     "",
     "Department intent rules:",
     "- service/parts/apparel only when explicitly requested or clearly implied.",
+    "- Catalog vocabulary can indicate Parts or MotorClothes/Apparel, but terms alone are not enough. Use the full message context.",
+    "- Route catalog accessory terms to parts when the customer asks about availability, price, ordering, fitment, install, or status.",
+    "- Route helmet/jacket/glove/boot/clothing/size terms to apparel when the customer asks about availability, size, price, ordering, or status.",
     "",
     "State hygiene rules:",
     "- clear_inventory_watch_pending=true when current message clearly shifts away from watch flow (especially into service/parts/apparel or finance docs).",
@@ -6925,6 +6932,7 @@ export async function parseConversationStateWithLLM(args: {
       leadYear: lead?.vehicle?.year ?? null,
       leadSource: lead?.source ?? null
     })}`,
+    catalogHint || "Catalog vocabulary hint: (none)",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     "Voice-style examples:",
     ...voiceExamples,
@@ -6966,6 +6974,13 @@ export async function parseConversationStateWithLLM(args: {
       /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade)\b/.test(
         textLower
       ));
+  const catalogMatch = matchPartsCatalogLexicon(textLower);
+  const catalogPartsCue = catalogMatch.partsTerms.length > 0;
+  const catalogApparelCue = catalogMatch.apparelTerms.length > 0;
+  const catalogDepartmentActionSignal =
+    /\b(can you|could you|do you|would you|need|want|looking for|order|get|price|pricing|cost|quote|fit|fits|fitment|install|stock|in stock|available|carry|have|part number|size)\b/.test(
+      textLower
+    );
   const apparelCue =
     /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|tee shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
       textLower
@@ -6985,8 +7000,10 @@ export async function parseConversationStateWithLLM(args: {
       textLower
     );
   const explicitServiceRequest = serviceCue && hasRequestSignal;
-  const explicitPartsRequest = partsCue && hasRequestSignal;
-  const explicitApparelRequest = apparelCue && hasRequestSignal;
+  const explicitPartsRequest =
+    (partsCue && hasRequestSignal) || (catalogPartsCue && catalogDepartmentActionSignal);
+  const explicitApparelRequest =
+    (apparelCue && hasRequestSignal) || (catalogApparelCue && catalogDepartmentActionSignal);
   const explicitHiringRequest = hiringCue && !financeCue && hasRequestSignal;
 
   const stateRaw = String(parsed.state_intent ?? "").toLowerCase();
@@ -7670,6 +7687,11 @@ export async function parseSemanticSlotsWithLLM(args: {
     /\b(cancel|can't come|cannot come|won't make|will not make|have to reschedule)\b/.test(textLower) &&
     /\b(service done|having service done|inspection)\b/.test(textLower) &&
     /\b(before i can sell|before selling|i'll get back|i will get back|let you know)\b/.test(textLower);
+  const semanticCatalogMatch = matchPartsCatalogLexicon(textLower);
+  const semanticCatalogDepartmentActionSignal =
+    /\b(can you|could you|do you|would you|need|want|looking for|order|get|price|pricing|cost|quote|fit|fits|fitment|install|stock|in stock|available|carry|have|part number|size)\b/.test(
+      textLower
+    );
   const hasPartsCue =
     /\b(parts? department|parts? counter|parts? desk|order (a )?part|need (a )?part|part number|oem parts?|aftermarket parts?|brake pads?|tires?|accessory fitment|fitment)\b/.test(
       textLower
@@ -7677,11 +7699,12 @@ export async function parseSemanticSlotsWithLLM(args: {
     (/\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/.test(textLower) &&
       /\b(engine|motor|take[-\s]?off|takeout|pull(?:ed|ing)?|yank(?:ed|ing)?|swap(?:ped|ping)?|upgrade)\b/.test(
         textLower
-      ));
+      )) ||
+    (semanticCatalogMatch.partsTerms.length > 0 && semanticCatalogDepartmentActionSignal);
   const hasApparelCue =
     /\b(apparel|merch|merchandise|clothing|jacket|hoodie|t-?shirt|helmet|gloves?|boots?|riding gear|gear)\b/.test(
       textLower
-    );
+    ) || (semanticCatalogMatch.apparelTerms.length > 0 && semanticCatalogDepartmentActionSignal);
   if (departmentIntent === "service" && !hasServiceCue) departmentIntent = "none";
   if (departmentIntent === "service" && serviceContextOnlyCue) departmentIntent = "none";
   if (departmentIntent === "parts" && !hasPartsCue) departmentIntent = "none";
