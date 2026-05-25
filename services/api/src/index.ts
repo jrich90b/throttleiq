@@ -5175,6 +5175,15 @@ async function applySmsOptOut(conv: any, event: { from?: string } | undefined) {
   stopRelatedCadences(conv, "opt_out", { close: true });
 }
 
+async function applyWrongNumberSuppression(conv: any, event: { from?: string } | undefined) {
+  await suppressRelatedPhones(conv, event, "wrong_number", "twilio");
+  discardPendingDrafts(conv, "wrong_number");
+  delete conv.emailDraft;
+  stopFollowUpCadence(conv, "wrong_number");
+  closeConversation(conv, "wrong_number");
+  stopRelatedCadences(conv, "wrong_number", { close: true });
+}
+
 function stopRelatedCadences(
   conv: any,
   reason: string,
@@ -12116,6 +12125,21 @@ function isOptOut(text: string): boolean {
     t === "unsubscribe" ||
     t === "cancel" ||
     /do not text|dont text/.test(t)
+  );
+}
+
+function isWrongNumberText(text: string | null | undefined): boolean {
+  const t = String(text ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ");
+  if (!t) return false;
+  return (
+    /^wrong\s+(?:number|person)\??[.!]*$/.test(t) ||
+    /\b(?:you(?:'ve| have)?|u)\s+(?:got|have|texted|messaged)\s+the\s+wrong\s+(?:number|person)\b/.test(t) ||
+    /\b(?:this is|i am|i'm)\s+not\s+(?:me|him|her|them|that person|the person)\b/.test(t) ||
+    /\b(?:not|isn'?t)\s+(?:my|their)\s+(?:number|phone)\b/.test(t)
   );
 }
 
@@ -40497,6 +40521,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         })
       )
     : null;
+  const regenWrongNumber =
+    (isResponseControlParserAccepted(regenEarlyResponseControlParse) &&
+      regenEarlyResponseControlParse?.intent === "wrong_number") ||
+    isWrongNumberText(event.body);
+  if (event.provider === "twilio" && channel === "sms" && regenWrongNumber) {
+    await applyWrongNumberSuppression(conv, event);
+    recordRouteOutcome("regen", "wrong_number_suppressed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserIntent: regenEarlyResponseControlParse?.intent ?? null,
+      confidence: regenEarlyResponseControlParse?.confidence ?? null
+    });
+    return respondRegenerateSkipped("wrong_number_suppressed");
+  }
   if (
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -44844,6 +44882,7 @@ if (authToken && signature) {
     !customerAckActionAccepted &&
     customerWillProvideScheduleTimeText(event.body) &&
     hasSchedulingQuestionContext(conv);
+  const llmWrongNumber = responseControlAccepted && responseControlParse?.intent === "wrong_number";
   const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
   const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
@@ -44854,6 +44893,19 @@ if (authToken && signature) {
     setDialogState(conv, "inventory_init");
   }
   let didConfirm = false;
+  if (event.provider === "twilio" && (llmWrongNumber || isWrongNumberText(event.body))) {
+    await applyWrongNumberSuppression(conv, event);
+    saveConversation(conv);
+    await flushConversationStore();
+    recordRouteOutcome("live", "wrong_number_suppressed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserIntent: responseControlParse?.intent ?? null,
+      confidence: responseControlParse?.confidence ?? null
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (conv.contactPreference === "call_only") {
     if (llmOptOut || isOptOut(event.body)) {
       await applySmsOptOut(conv, event);

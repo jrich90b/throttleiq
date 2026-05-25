@@ -16,6 +16,12 @@ const strongOptOut = {
   confidence: 0.93
 };
 
+const strongWrongNumber = {
+  intent: "wrong_number",
+  explicitRequest: true,
+  confidence: 0.98
+};
+
 const weakSchedule = {
   intent: "schedule_request",
   explicitRequest: true,
@@ -39,6 +45,11 @@ const cases: Case[] = [
     id: "accepts_strong_opt_out_parse",
     expected: true,
     run: () => isResponseControlParserAccepted(strongOptOut)
+  },
+  {
+    id: "accepts_strong_wrong_number_parse",
+    expected: true,
+    run: () => isResponseControlParserAccepted(strongWrongNumber)
   },
   {
     id: "rejects_low_confidence_schedule_parse",

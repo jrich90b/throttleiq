@@ -1624,7 +1624,14 @@ export type TradeTargetValueParse = {
 };
 
 export type ResponseControlParse = {
-  intent: "opt_out" | "not_interested" | "schedule_request" | "compliment_only" | "no_response" | "none";
+  intent:
+    | "opt_out"
+    | "wrong_number"
+    | "not_interested"
+    | "schedule_request"
+    | "compliment_only"
+    | "no_response"
+    | "none";
   explicitRequest: boolean;
   confidence?: number;
 };
@@ -2512,7 +2519,15 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     intent: {
       type: "string",
-      enum: ["opt_out", "not_interested", "schedule_request", "compliment_only", "no_response", "none"]
+      enum: [
+        "opt_out",
+        "wrong_number",
+        "not_interested",
+        "schedule_request",
+        "compliment_only",
+        "no_response",
+        "none"
+      ]
     },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
@@ -5084,6 +5099,7 @@ export async function parseResponseControlWithLLM(args: {
     "",
     "Classify message intent as one of:",
     "- opt_out: customer requests no texts/messages or asks to stop/cancel/end messages.",
+    "- wrong_number: recipient says this is the wrong number, not them, or asks who this is because the message reached the wrong person.",
     "- not_interested: customer clearly declines buying/follow-up for now.",
     "- schedule_request: customer explicitly asks to book/schedule/pick a day/time.",
     "- compliment_only: customer only compliments the bike/team without request/action.",
@@ -5093,6 +5109,7 @@ export async function parseResponseControlWithLLM(args: {
     "Rules:",
     "- Choose only one intent.",
     "- If customer says STOP/unsubscribe/no more texts => opt_out.",
+    "- If customer says wrong number / you have the wrong number / this is not me / who is this because they are not the intended person => wrong_number.",
     "- If customer says not interested / pass / no thanks / not moving forward => not_interested.",
     "- schedule_request only for explicit scheduling intent (appointment/time/day availability).",
     "- compliment_only only if no other request/intent is present.",
@@ -5112,6 +5129,8 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Perfect." output: {"intent":"no_response","explicit_request":false,"confidence":0.94}',
     'input: "Cool" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
     'input: "Ok great!" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
+    'input: "Wrong number?" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
+    'input: "You have the wrong number" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You can hold off. Thanks" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
     'input: "I’ll pass man. I just like to ride the new models and check them out. Not a big deal. Thx" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
     'input: "Here is my insurance card" output: {"intent":"none","explicit_request":false,"confidence":0.91}',
@@ -5145,6 +5164,7 @@ export async function parseResponseControlWithLLM(args: {
   const intentRaw = String(parsed.intent ?? "").toLowerCase();
   const intent: ResponseControlParse["intent"] =
     intentRaw === "opt_out" ||
+    intentRaw === "wrong_number" ||
     intentRaw === "not_interested" ||
     intentRaw === "schedule_request" ||
     intentRaw === "no_response" ||
