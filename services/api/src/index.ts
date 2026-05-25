@@ -43239,6 +43239,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return respondWithSmsRegeneratedDraft(reply);
   }
+  if (isServiceStatusUpdateQuestionText(event.body)) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+    if (!hasServiceTodo) {
+      addTodo(
+        conv,
+        "service",
+        `Check service status/update: ${event.body ?? "customer requested service status"}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
+    }
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_status_update");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
+    const reply = buildServiceStatusUpdateHandoffReply();
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
+  }
   const isServiceLead = regenInboundDepartmentIntent === "service";
   if (isServiceLead) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
@@ -45999,6 +46022,36 @@ if (authToken && signature) {
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
+    const systemMode = webhookMode;
+    if (systemMode === "suggest") {
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    appendOutbound(conv, event.to, event.from, reply, "twilio");
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+      reply
+    )}</Message>\n</Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (isServiceStatusUpdateQuestionText(event.body)) {
+    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+    if (!hasServiceTodo) {
+      addTodo(
+        conv,
+        "service",
+        `Check service status/update: ${event.body ?? "customer requested service status"}`,
+        event.providerMessageId,
+        serviceTodoOwner
+      );
+    }
+    setDialogState(conv, "service_handoff");
+    setFollowUpMode(conv, "manual_handoff", "service_status_update");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
+    const reply = buildServiceStatusUpdateHandoffReply();
     const systemMode = webhookMode;
     if (systemMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
