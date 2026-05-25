@@ -21,21 +21,6 @@ type AgentTask = {
   };
 };
 
-type AutomationRun = {
-  id: string;
-  name: string;
-  source: "codex" | "feedback_loop" | "manual" | "other";
-  status: "running" | "completed" | "failed" | "needs_approval" | "approved" | "declined";
-  summary: string;
-  startedAt: string;
-  approvalRequired: boolean;
-  approvalReason?: string;
-  commitHash?: string;
-  pullRequestUrl?: string;
-  deployUrl?: string;
-  changedFiles?: string[];
-};
-
 type SupportTicket = {
   id: string;
   type: string;
@@ -84,15 +69,10 @@ function formatTime(value: string) {
   }).format(date);
 }
 
-function statusLabel(value: string) {
-  return value.replace(/_/g, " ");
-}
-
 export default function SupportAgentCommandPage() {
   const [supportMailStatus, setSupportMailStatus] = useState<SupportMailStatus | null>(null);
   const [supportMailMessages, setSupportMailMessages] = useState<SupportMailMessage[]>([]);
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
-  const [automationRuns, setAutomationRuns] = useState<AutomationRun[]>([]);
   const [, setAgentTasks] = useState<AgentTask[]>([]);
   const [notice, setNotice] = useState("Support Agent workspace is ready.");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -103,26 +83,20 @@ export default function SupportAgentCommandPage() {
 
   const openTickets = useMemo(() => supportTickets.filter(ticket => ticket.status !== "closed"), [supportTickets]);
   const closedTickets = useMemo(() => supportTickets.filter(ticket => ticket.status === "closed"), [supportTickets]);
-  const closedLoopRuns = useMemo(
-    () => automationRuns.filter(run => run.source === "feedback_loop" || /feedback|closed loop/i.test(run.name)),
-    [automationRuns]
-  );
   useEffect(() => {
     let active = true;
     Promise.allSettled([
       fetch("/api/google/support-mail/status", { cache: "no-store" }).then(resp => resp.json()),
       fetch("/api/support-mail/messages?limit=12", { cache: "no-store" }).then(resp => resp.json()),
-      fetch("/api/ops/anomalies?limit=20", { cache: "no-store" }).then(resp => resp.json()),
-      fetch("/api/automation-runs?limit=20", { cache: "no-store" }).then(resp => resp.json())
+      fetch("/api/ops/anomalies?limit=20", { cache: "no-store" }).then(resp => resp.json())
     ]).then(results => {
       if (!active) return;
-      const [mailStatus, mailMessages, tickets, runs] = results.map(result =>
+      const [mailStatus, mailMessages, tickets] = results.map(result =>
         result.status === "fulfilled" ? result.value : null
       );
       if (mailStatus?.ok) setSupportMailStatus(mailStatus);
       if (mailMessages?.ok && Array.isArray(mailMessages.messages)) setSupportMailMessages(mailMessages.messages);
       if (tickets?.ok && Array.isArray(tickets.anomalies)) setSupportTickets(tickets.anomalies);
-      if (runs?.ok && Array.isArray(runs.runs)) setAutomationRuns(runs.runs);
     });
     return () => {
       active = false;
@@ -174,25 +148,6 @@ export default function SupportAgentCommandPage() {
     }
   }
 
-  async function decideAutomationRun(run: AutomationRun, status: "approved" | "declined") {
-    setBusyId(run.id);
-    try {
-      const resp = await fetch(`/api/automation-runs/${encodeURIComponent(run.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Automation run could not be updated.");
-      setAutomationRuns(current => current.map(row => (row.id === run.id ? data.run : row)));
-      setNotice(`Automation run ${status}: ${data.run.name}.`);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Automation run could not be updated.");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   return (
     <main className="lr-ceo-shell">
       <aside className="lr-ceo-sidebar">
@@ -207,6 +162,7 @@ export default function SupportAgentCommandPage() {
           <a href="/command">Command Home</a>
           <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support" className="is-active">Support Agent</a>
+          <a href="/command/approvals">Approvals</a>
           <a href="/command/personal-email">Personal Email</a>
           <a href="/command/clients">Active Clients</a>
           <a href="/command/clients/new">Dealer Setup</a>
@@ -255,9 +211,9 @@ export default function SupportAgentCommandPage() {
             <small>Report Issue queue</small>
           </article>
           <article>
-            <span>Closed-loop runs</span>
-            <strong>{closedLoopRuns.length}</strong>
-            <small>Feedback automation history</small>
+            <span>Recent emails</span>
+            <strong>{supportMailMessages.length}</strong>
+            <small>Loaded from support Gmail</small>
           </article>
           <article>
             <span>Closed tickets</span>
@@ -376,52 +332,6 @@ export default function SupportAgentCommandPage() {
           </article>
         </section>
 
-        <section className="lr-ceo-panel">
-          <div className="lr-ceo-panel-title">
-            <div>
-              <p className="lr-ceo-kicker">Closed feedback loop</p>
-              <h3>Automation runs</h3>
-            </div>
-            <span className="lr-ceo-status-ready">Synced</span>
-          </div>
-          <div className="lr-ceo-run-list">
-            {closedLoopRuns.length ? (
-              closedLoopRuns.map(run => (
-                <div key={run.id} className="lr-ceo-run-row">
-                  <div>
-                    <span className={`lr-ceo-run-status is-${run.status}`}>{statusLabel(run.status)}</span>
-                    <strong>{run.name}</strong>
-                    <p>{run.summary}</p>
-                    <small>
-                      {statusLabel(run.source)} • {formatTime(run.startedAt)}
-                      {run.commitHash ? ` • commit ${run.commitHash.slice(0, 7)}` : ""}
-                      {run.changedFiles?.length ? ` • ${run.changedFiles.length} files changed` : ""}
-                    </small>
-                    {run.approvalRequired && run.status === "needs_approval" ? (
-                      <em>{run.approvalReason || "This run needs approval before the next production action."}</em>
-                    ) : null}
-                  </div>
-                  <div className="lr-ceo-run-actions">
-                    {run.pullRequestUrl ? <a href={run.pullRequestUrl}>PR</a> : null}
-                    {run.deployUrl ? <a href={run.deployUrl}>Deploy</a> : null}
-                    {run.status === "needs_approval" ? (
-                      <>
-                        <button type="button" onClick={() => decideAutomationRun(run, "approved")} disabled={busyId === run.id}>
-                          Approve
-                        </button>
-                        <button type="button" className="lr-ceo-secondary-btn" onClick={() => decideAutomationRun(run, "declined")} disabled={busyId === run.id}>
-                          Decline
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="lr-ceo-note">No closed-loop feedback runs logged yet.</p>
-            )}
-          </div>
-        </section>
       </section>
     </main>
   );

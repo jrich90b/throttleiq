@@ -205,6 +205,7 @@ export default function CommandUsersPage() {
           <a href="/command">Command Home</a>
           <a href="/command/sales">Sales Funnel</a>
           <a href="/command/support">Support Agent</a>
+          <a href="/command/approvals">Approvals</a>
           <a href="/command/personal-email">Personal Email</a>
           <a href="/command/clients">Active Clients</a>
           <a href="/command/clients/new">Dealer Setup</a>
