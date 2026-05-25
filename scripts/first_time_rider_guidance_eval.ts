@@ -74,6 +74,16 @@ const cases: Case[] = [
     }
   },
   {
+    id: "course_motorcycle_license",
+    text: "Yes, I'm looking for a course motorcycle so I can get my license.",
+    expected: {
+      intent: "rider_course_info",
+      explicitRequest: true,
+      hasEndorsement: false,
+      asksRiderCourse: true
+    }
+  },
+  {
     id: "returning_rider_not_first_time",
     text: "I used to ride years ago and want to get back into it.",
     expected: {

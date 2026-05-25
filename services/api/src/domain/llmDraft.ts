@@ -4633,6 +4633,12 @@ output: {"intent":"rider_course_info","explicit_request":true,"endorsement_statu
     `EXAMPLE D3
 inbound: "How much is the Riding Academy course?"
 output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.98}`,
+    `EXAMPLE D4
+inbound: "Yes, I'm looking for a course motorcycle so I can get my license."
+output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"no","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.97}`,
+    `EXAMPLE D5
+inbound: "I need a motorcycle course to get my license."
+output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"no","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.98}`,
     `EXAMPLE E
 inbound: "I have my endorsement but I'm a new rider and want something manageable."
 output: {"intent":"beginner_bike_advice","explicit_request":true,"endorsement_status":"yes","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,
@@ -4649,7 +4655,7 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     "- first_time_rider: customer says this is their first bike, first motorcycle, first time riding, or they have never ridden.",
     "- no_motorcycle_endorsement: customer says they do not have a motorcycle license, motorcycle endorsement, permit, or are not licensed yet.",
     "- beginner_bike_advice: customer asks for a good beginner/first bike, manageable bike, easy bike, low seat/weight, or rider fit advice.",
-    "- rider_course_info: customer asks about learning to ride, riding school, MSF, Riding Academy, or a course.",
+    "- rider_course_info: customer asks about learning to ride, riding school, MSF, Riding Academy, a license class, or a course.",
     "- none: message is not about first-time rider guidance.",
     "",
     "Fields:",
@@ -4657,7 +4663,7 @@ output: {"intent":"none","explicit_request":false,"endorsement_status":"unknown"
     '- endorsement_status is "yes" only when they clearly say they have a motorcycle endorsement/license, "no" only when they clearly do not, otherwise "unknown".',
     "- asks_test_ride true when they ask to test ride/demo/ride the bike.",
     "- asks_beginner_bike true when they ask for beginner/first-bike/manageable fit advice.",
-    "- asks_rider_course true when they ask about training/course/school/academy.",
+    "- asks_rider_course true when they ask about training/course/school/academy, including awkward phrasing like \"course motorcycle\" or \"course so I can get my license\".",
     "- Do not classify returning riders as first-time riders unless they explicitly say they are new or never rode.",
     "- confidence is 0..1.",
     "",

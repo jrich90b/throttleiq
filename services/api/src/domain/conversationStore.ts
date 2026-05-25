@@ -329,6 +329,7 @@ export type DialogStateName =
   | "customer_sell_on_own"
   | "customer_keep_current_bike"
   | "first_time_rider"
+  | "rider_course_info"
   | "schedule_request"
   | "schedule_offer_sent"
   | "schedule_booked";

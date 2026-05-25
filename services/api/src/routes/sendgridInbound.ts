@@ -1194,8 +1194,17 @@ function isJumpStartExperienceText(text: string | null | undefined): boolean {
 function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
   const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
   if (!t) return false;
-  return /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
-    t
+  return (
+    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+      t
+    ) ||
+    /\b(course|class)\b[\s\S]{0,80}\b(?:get|getting|obtain|earn)\s+(?:my\s+|a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    ) ||
+    /\b(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b[\s\S]{0,80}\b(course|class)\b/.test(
+      t
+    ) ||
+    /\bcourse\s+motorcycle\b/.test(t)
   );
 }
 
@@ -6918,7 +6927,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getInitialDealerProfile();
     let ack = buildInitialAdfRiderCourseInfoReply(profile, effectiveInquiry);
     ack = await applyInitialAdfPrefix(ack);
-    setDialogState("first_time_rider");
+    setDialogState("rider_course_info");
     addTodo(
       conv,
       "other",
@@ -7273,7 +7282,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (initialAdfRiderCourseDecision) {
     draft = buildInitialAdfRiderCourseInfoReply(dealerProfile, effectiveInquiry);
     suppressAvailabilityAppend = true;
-    setDialogState("first_time_rider");
+    setDialogState("rider_course_info");
     addTodo(
       conv,
       "other",

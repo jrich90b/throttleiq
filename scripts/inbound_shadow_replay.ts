@@ -629,6 +629,12 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const riderCourseInquiry =
     /\b(msf|riding academy|rider academy|riding course|rider course|motorcycle class|motorcycle course|your course|course and price)\b/i.test(
       inboundLower
+    ) ||
+    /\b(course|class)\b[\s\S]{0,80}\b(?:get|getting|obtain|earn)\s+(?:my\s+|a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/i.test(
+      inboundLower
+    ) ||
+    /\b(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b[\s\S]{0,80}\b(course|class)\b/i.test(
+      inboundLower
     );
   const draftHandsOff =
     /\b(i don'?t want to guess|i'?ll have (the )?(team|manager|finance)|confirm .*follow up|verify .*follow up)\b/i.test(
