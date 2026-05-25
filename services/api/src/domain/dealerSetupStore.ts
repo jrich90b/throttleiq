@@ -397,33 +397,34 @@ function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
       valueHint: `${deployment.dataDir}/dealer_profile.json`
     }),
     required("AUTH_DISABLED", "Core", "Authentication enabled", "Must be false for production dealer workspaces.", { valueHint: "false" }),
-    required("OPENAI_API_KEY", "AI", "OpenAI key", "LLM drafting, parsing, campaign generation, and usage logging.", { secret: true }),
-    required("LLM_ENABLED", "AI", "LLM enabled", "Enables parser-first draft and routing behavior.", { valueHint: "1" }),
-    required("SENDGRID_API_KEY", "Email", "SendGrid key", "Outbound and inbound email handling.", { secret: true }),
-    required("SENDGRID_FROM_EMAIL", "Email", "Sender email", "Dealer-approved outbound sender address."),
-    optional("SENDGRID_REPLY_TO", "Email", "Reply-to email", "Dealer reply-to address when different from the sender."),
-    required("TWILIO_ACCOUNT_SID", "Messaging", "Twilio account", "Dealer messaging account SID.", { secret: true }),
-    required("TWILIO_AUTH_TOKEN", "Messaging", "Twilio auth token", "Dealer messaging auth token.", { secret: true }),
-    required("TWILIO_PHONE_NUMBER", "Messaging", "Twilio phone", "Primary dealer texting number."),
-    optional("TWILIO_FROM_NUMBER", "Messaging", "Twilio from number", "Fallback sender for older inbound/email bridge paths."),
-    required("GOOGLE_CLIENT_ID", "Google", "Google OAuth client", "Calendar and Gmail OAuth client ID.", { secret: true }),
-    required("GOOGLE_CLIENT_SECRET", "Google", "Google OAuth secret", "Calendar and Gmail OAuth client secret.", { secret: true }),
+    required("OPENAI_API_KEY", "LeadRider Platform", "OpenAI key", "LeadRider-owned shared key for LLM drafting, parser-first routing, campaign generation, and usage logging. Dealers do not provide this key.", { secret: true }),
+    optional("ANTHROPIC_API_KEY", "LeadRider Platform", "Claude key", "LeadRider-owned shared key for Command/dealer-setup agent tasks. Dealers do not provide this key.", { secret: true }),
+    required("LLM_ENABLED", "LeadRider Platform", "LLM enabled", "Enables parser-first draft and routing behavior.", { valueHint: "1" }),
+    required("SENDGRID_API_KEY", "Dealer Email", "SendGrid key", "Dealer sender/domain email account or isolated subaccount used for outbound and inbound email handling.", { secret: true }),
+    optional("SENDGRID_FROM_EMAIL", "Dealer Email", "Sender email env fallback", "Optional when dealer_profile.fromEmail is configured. Should be a dealer-approved outbound sender address."),
+    optional("SENDGRID_REPLY_TO", "Dealer Email", "Reply-to email env fallback", "Optional when dealer_profile.replyToEmail is configured. Dealer reply-to address when different from sender."),
+    required("TWILIO_ACCOUNT_SID", "Dealer Messaging", "Twilio account", "Dealer messaging account SID or isolated Twilio subaccount SID.", { secret: true }),
+    required("TWILIO_AUTH_TOKEN", "Dealer Messaging", "Twilio auth token", "Dealer messaging auth token or isolated Twilio subaccount token.", { secret: true }),
+    required("TWILIO_FROM_NUMBER", "Dealer Messaging", "Primary Twilio texting number", "Primary dealer texting number used for inbound and outbound SMS."),
+    optional("TWILIO_PHONE_NUMBER", "Dealer Messaging", "Twilio phone alias", "Optional alias for the primary dealer texting number when older setup notes use this name."),
+    required("GOOGLE_CLIENT_ID", "Dealer Google", "Google OAuth client", "OAuth client used for this dealer's Gmail/calendar connection.", { secret: true }),
+    required("GOOGLE_CLIENT_SECRET", "Dealer Google", "Google OAuth secret", "OAuth secret used for this dealer's Gmail/calendar connection.", { secret: true }),
     required("GOOGLE_REDIRECT_URI", "Google", "Google redirect URI", "OAuth redirect URL for the dealer API.", {
       valueHint: `${setup.apiUrl.replace(/\/$/, "")}/integrations/google/callback`
     }),
-    optional("GOOGLE_SUPPORT_MAIL_TOKEN_PATH", "Google", "Support mail token path", "Token file path for support mailbox access.", {
+    optional("GOOGLE_SUPPORT_MAIL_TOKEN_PATH", "Dealer Google", "Support mail token path", "Dealer-specific token file path for support mailbox access.", {
       valueHint: `${deployment.dataDir}/google_support_mail_tokens.json`
     }),
-    required("META_APP_ID", "Meta", "Meta app ID", "Meta app used for lead/campaign integration."),
-    required("META_APP_SECRET", "Meta", "Meta app secret", "Meta app secret for OAuth callbacks.", { secret: true }),
-    required("META_REDIRECT_URI", "Meta", "Meta redirect URI", "Callback URL registered in Meta.", {
+    required("META_APP_ID", "Dealer Meta", "Meta app ID", "Meta app used for this dealer's lead/campaign integration."),
+    required("META_APP_SECRET", "Dealer Meta", "Meta app secret", "Meta app secret for OAuth callbacks.", { secret: true }),
+    required("META_REDIRECT_URI", "Dealer Meta", "Meta redirect URI", "Callback URL registered in Meta.", {
       valueHint: `${setup.apiUrl.replace(/\/$/, "")}/integrations/meta/callback`
     }),
-    optional("SENTRY_DSN", "Ops", "Sentry DSN", "API error reporting."),
-    optional("SLACK_INCIDENT_WEBHOOK_URL", "Ops", "Slack incident webhook", "Incident notifications."),
-    optional("LINEAR_API_KEY", "Ops", "Linear key", "Ticket creation for production incidents.", { secret: true }),
-    optional("AUTOMATION_RUN_WRITE_TOKEN", "Ops", "Automation token", "Closed-loop automation ingest and runner callbacks.", { secret: true }),
-    optional("MDF_PORTAL_RUNNER_TOKEN", "Runner", "MDF runner token", "Required if the dealer uses a managed MDF/browser runner.", { secret: true })
+    optional("SENTRY_DSN", "LeadRider Ops", "Sentry DSN", "LeadRider-owned API error reporting."),
+    optional("SLACK_INCIDENT_WEBHOOK_URL", "LeadRider Ops", "Slack incident webhook", "LeadRider-owned incident notifications."),
+    optional("LINEAR_API_KEY", "LeadRider Ops", "Linear key", "LeadRider-owned ticket creation for production incidents.", { secret: true }),
+    optional("AUTOMATION_RUN_WRITE_TOKEN", "LeadRider Ops", "Automation token", "Closed-loop automation ingest and runner callbacks.", { secret: true }),
+    optional("MDF_PORTAL_RUNNER_TOKEN", "Dealer Runner", "MDF runner token", "Dealer-specific runner token. Required only if the dealer uses MDF/DMS/browser automation.", { secret: true })
   ];
 }
 
