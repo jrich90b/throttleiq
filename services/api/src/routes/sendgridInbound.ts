@@ -6899,6 +6899,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     conv.dialogState = { name, updatedAt } as any;
   };
+  if (initialAdfRiderCourseDecision) {
+    const profile = await getInitialDealerProfile();
+    let ack = buildInitialAdfRiderCourseInfoReply(profile);
+    ack = await applyInitialAdfPrefix(ack);
+    setDialogState("first_time_rider");
+    addTodo(
+      conv,
+      "other",
+      `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "rider_course_info");
+    stopFollowUpCadence(conv, "manual_handoff");
+    queueInitialDraftForPreferredContact(ack);
+    maybeAddInitialCallTodo();
+    setEmailDraft(conv, ack);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      riderCourse: true
+    });
+  }
   const draftText = String(result.draft ?? "");
   if (/(still available|in stock right now|not seeing .* in stock|checking availability)/i.test(draftText)) {
     setDialogState("inventory_answered");
