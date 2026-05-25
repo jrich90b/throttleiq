@@ -56,6 +56,24 @@ const cases: Case[] = [
     }
   },
   {
+    id: "rider_course_price_short_adf",
+    text: "Your course and price",
+    expected: {
+      intent: "rider_course_info",
+      explicitRequest: true,
+      asksRiderCourse: true
+    }
+  },
+  {
+    id: "riding_academy_price",
+    text: "How much is the Riding Academy course?",
+    expected: {
+      intent: "rider_course_info",
+      explicitRequest: true,
+      asksRiderCourse: true
+    }
+  },
+  {
     id: "returning_rider_not_first_time",
     text: "I used to ride years ago and want to get back into it.",
     expected: {

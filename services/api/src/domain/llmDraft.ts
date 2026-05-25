@@ -4612,6 +4612,12 @@ output: {"intent":"no_motorcycle_endorsement","explicit_request":true,"endorseme
     `EXAMPLE D
 inbound: "Do you know where I can take the rider course?"
 output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.96}`,
+    `EXAMPLE D2
+inbound: "Your course and price"
+output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.97}`,
+    `EXAMPLE D3
+inbound: "How much is the Riding Academy course?"
+output: {"intent":"rider_course_info","explicit_request":true,"endorsement_status":"unknown","asks_test_ride":false,"asks_beginner_bike":false,"asks_rider_course":true,"confidence":0.98}`,
     `EXAMPLE E
 inbound: "I have my endorsement but I'm a new rider and want something manageable."
 output: {"intent":"beginner_bike_advice","explicit_request":true,"endorsement_status":"yes","asks_test_ride":false,"asks_beginner_bike":true,"asks_rider_course":false,"confidence":0.97}`,

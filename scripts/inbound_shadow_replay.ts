@@ -634,6 +634,14 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (/\b(apr|interest|finance|financing|payment|monthly|credit|approved|approval|co-?sign|price|out the door|otd)\b/i.test(inboundLower)) {
     reasons.push("finance/pricing-sensitive inbound");
   }
+  if (
+    /\b(msf|riding academy|rider academy|riding course|rider course|motorcycle class|motorcycle course|your course|course and price)\b/i.test(
+      inboundLower
+    ) &&
+    /\b(payment|monthly|down|term|street 750|bike|motorcycle|finance|financing)\b/i.test(draftLower)
+  ) {
+    reasons.push("rider-course inquiry drifted to vehicle/payment response");
+  }
   if (/\bthe the\b/i.test(draftText)) {
     reasons.push("draft contains duplicate article");
   }

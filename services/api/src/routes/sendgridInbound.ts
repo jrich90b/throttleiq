@@ -60,11 +60,13 @@ import {
   parseInventoryStatusWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  parseFirstTimeRiderGuidanceWithLLM,
   parseWalkInOutcomeWithLLM
 } from "../domain/llmDraft.js";
 import type {
   CompositeSalesInquiryParse,
   ConversationStateParse,
+  FirstTimeRiderGuidanceParse,
   InventoryStatusParse,
   VehicleInfoRequestParse,
   VehicleFactQuestionParse
@@ -96,7 +98,10 @@ import {
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
-import { isResponseControlParserAccepted } from "../domain/transitionSafety.js";
+import {
+  isFirstTimeRiderGuidanceParserAccepted,
+  isResponseControlParserAccepted
+} from "../domain/transitionSafety.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
@@ -1184,6 +1189,105 @@ function isJumpStartExperienceText(text: string | null | undefined): boolean {
     /\b(riding academy|rider academy|learn to ride)\b/.test(t) &&
     /\b(prior|before|prep|practice|experience)\b/.test(t)
   );
+}
+
+function hasRiderCourseInfoInquiryText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  const courseTerm =
+    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+      t
+    ) ||
+    /\b(?:your|the|this|that|our)\s+course\b/.test(t);
+  if (courseTerm) return true;
+  return (
+    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
+    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t)
+  );
+}
+
+function hasFirstTimeRiderGuidanceParserHint(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    hasRiderCourseInfoInquiryText(t) ||
+    /\b(first\s+(?:bike|motorcycle|harley|time\s+riding|time\s+rider)|new\s+rider|beginner\s+(?:bike|rider)|never\s+(?:ridden|rode|been\s+on)|haven['’]?t\s+(?:ridden|rode))\b/.test(
+      t
+    ) ||
+    /\b(no|don['’]?t\s+have|do\s+not\s+have|without)\s+(?:a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    ) ||
+    /\b(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\s+(?:yet|first)\b/.test(t) ||
+    /\b(good|best|better|recommend|manageable|easy|starter)\b[\s\S]{0,80}\b(first|beginner|new rider|new to riding|learn)\b/.test(
+      t
+    )
+  );
+}
+
+function parseFirstTimeRiderGuidanceFallback(text: string): FirstTimeRiderGuidanceParse | null {
+  const t = String(text ?? "").toLowerCase();
+  if (!hasFirstTimeRiderGuidanceParserHint(t)) return null;
+  const noEndorsement =
+    /\b(no|don['’]?t\s+have|do\s+not\s+have|without)\s+(?:a\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    );
+  const hasEndorsement =
+    /\b(i\s+have|got|already\s+have)\s+(?:my\s+)?(?:motorcycle\s+)?(?:license|licence|endorsement|permit)\b/.test(
+      t
+    );
+  const asksRiderCourse = hasRiderCourseInfoInquiryText(t);
+  const asksBeginnerBike =
+    /\b(first\s+(?:bike|motorcycle|harley)|beginner\s+(?:bike|rider)|new\s+rider|starter|manageable|easy)\b/.test(
+      t
+    );
+  const asksTestRide = /\b(test ride|demo ride|ride it|take it for a ride|try it)\b/.test(t);
+  const intent: FirstTimeRiderGuidanceParse["intent"] = noEndorsement
+    ? "no_motorcycle_endorsement"
+    : asksRiderCourse
+      ? "rider_course_info"
+      : asksBeginnerBike
+        ? "beginner_bike_advice"
+        : "first_time_rider";
+  return {
+    intent,
+    explicitRequest: asksTestRide || asksRiderCourse || asksBeginnerBike || /\?/.test(text),
+    hasEndorsement: noEndorsement ? false : hasEndorsement ? true : null,
+    asksTestRide,
+    asksBeginnerBike,
+    asksRiderCourse,
+    confidence: 0.76
+  };
+}
+
+function resolveFirstTimeRiderGuidanceDecision(
+  text: string,
+  parsed: FirstTimeRiderGuidanceParse | null
+): FirstTimeRiderGuidanceParse | null {
+  if (isFirstTimeRiderGuidanceParserAccepted(parsed)) return parsed;
+  return parseFirstTimeRiderGuidanceFallback(text);
+}
+
+function buildInitialAdfRiderCourseInfoReply(dealerProfile: any): string {
+  const policies = dealerProfile?.policies ?? {};
+  const firstTimePolicy =
+    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
+      ? policies.firstTimeRider
+      : {};
+  const courseName =
+    String(firstTimePolicy.riderCourseName ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseName ?? "").trim() ||
+    "Riding Academy course";
+  const coursePrice =
+    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
+  const courseUrl =
+    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseUrl ?? "").trim();
+  const priceLine = coursePrice
+    ? `The current price is ${coursePrice}.`
+    : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+  const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
+  return `Thanks for asking about our ${courseName}. ${priceLine}${urlLine}`;
 }
 
 function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
@@ -4047,7 +4151,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmCompositeSalesInquiry,
     llmVehicleInfo,
     llmVehicleFact,
-    llmInventoryStatus
+    llmInventoryStatus,
+    llmFirstTimeRiderGuidance
   ] = await Promise.all([
     safeParser("dialog_act", () =>
       parseDialogActWithLLM({
@@ -4158,7 +4263,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         history: adfHistory,
         lead: conv.lead
       })
-    )
+    ),
+    hasFirstTimeRiderGuidanceParserHint(effectiveInquiry)
+      ? safeParser("first_time_rider_guidance", () =>
+          parseFirstTimeRiderGuidanceWithLLM({
+            text: effectiveInquiry,
+            history: adfHistory,
+            lead: conv.lead
+          })
+        )
+      : Promise.resolve(null)
   ]);
   const dialogActConfidenceMin = Number(process.env.LLM_DIALOG_ACT_CONFIDENCE_MIN ?? 0.68);
   const intentConfidenceMin = Number(process.env.LLM_INTENT_CONFIDENCE_MIN ?? 0.75);
@@ -4226,6 +4340,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     Number(llmDialogAct.confidence ?? 0) >= dialogActConfidenceMin;
   let pricingInquiryIntent =
     pricingInquiryIntentFromParser || parserPricingIntent || isPricingPaymentInquiry(inquiryText);
+  const initialAdfFirstTimeRiderDecision = isInitialAdf
+    ? resolveFirstTimeRiderGuidanceDecision(effectiveInquiry, llmFirstTimeRiderGuidance)
+    : null;
+  const initialAdfRiderCourseDecision =
+    initialAdfFirstTimeRiderDecision?.intent === "rider_course_info" ||
+    initialAdfFirstTimeRiderDecision?.asksRiderCourse
+      ? initialAdfFirstTimeRiderDecision
+      : null;
+  if (initialAdfRiderCourseDecision) {
+    pricingInquiryIntent = false;
+  }
   const inventoryEntityConfidence =
     typeof llmInventoryEntities?.confidence === "number" ? llmInventoryEntities.confidence : 0;
   const inventoryEntityConfidenceMin = Number(process.env.LLM_INVENTORY_ENTITY_CONFIDENCE_MIN ?? 0.68);
@@ -4294,7 +4419,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
-  if (semanticPartsIntent || partsIntentFromText) {
+  if (initialAdfRiderCourseDecision) {
+    inferredBucket = "general_inquiry";
+    inferredCta = "contact_us";
+  } else if (semanticPartsIntent || partsIntentFromText) {
     inferredBucket = "parts";
     inferredCta = "parts_request";
   } else if (semanticApparelIntent || apparelIntentFromText) {
@@ -7096,8 +7224,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let draft = result.shouldRespond ? result.draft : "Thanks — I’ll follow up shortly.";
   let suppressAvailabilityAppend = false;
   let handledInternationalShippingInquiry = false;
+  if (initialAdfRiderCourseDecision) {
+    draft = buildInitialAdfRiderCourseInfoReply(dealerProfile);
+    suppressAvailabilityAppend = true;
+    setDialogState("first_time_rider");
+    addTodo(
+      conv,
+      "other",
+      `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "rider_course_info");
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
   if (
     isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
     shouldDeclineInternationalShipping(dealerProfile, `${effectiveInquiry}\n${event.body}`, {
       vehicleCondition: conv.lead?.vehicle?.condition
     })
@@ -7108,7 +7250,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     closeConversation(conv, "international");
     stopFollowUpCadence(conv, "manual_handoff");
   }
-  if (isInitialAdf && inquiryDayPart) {
+  if (isInitialAdf && !initialAdfRiderCourseDecision && inquiryDayPart) {
     const dayPhrase = `${inquiryDayPart.dayLabel} ${inquiryDayPart.dayPart}`;
     if (initialAvailability === "in_stock") {
       draft = `Thanks — yes, it’s still available. If you want to come by ${dayPhrase}, what time works best?`;
@@ -7122,7 +7264,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft = `If you want to come by ${dayPhrase}, what time works best?`;
     }
   }
-  if (inferredBucket === "test_ride" && !testRideInSeason) {
+  if (!initialAdfRiderCourseDecision && inferredBucket === "test_ride" && !testRideInSeason) {
     const modelLabel = formatModelLabel(
       conv.lead?.vehicle?.year ?? null,
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
@@ -7134,7 +7276,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       "If you want to stop by to check it out, just let me know.";
   }
   const initialCompositeSalesInquiryDecision =
-    isInitialAdf && hasCompositeSalesInquiryParserHint(effectiveInquiry)
+    isInitialAdf && !initialAdfRiderCourseDecision && hasCompositeSalesInquiryParserHint(effectiveInquiry)
       ? resolveCompositeSalesInquiryDecision(effectiveInquiry, llmCompositeSalesInquiry)
       : null;
   if (initialCompositeSalesInquiryDecision) {
@@ -7168,10 +7310,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "manual_handoff");
   }
   const initialAdfVehicleFactDecision = isInitialAdf && !initialCompositeSalesInquiryDecision
+    && !initialAdfRiderCourseDecision
     ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
     : null;
   const initialAdfVehicleInfoDecision =
     isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision
       ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
@@ -7230,6 +7374,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   const initialAdfInventoryStatusAccepted =
     isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
@@ -7254,6 +7399,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const preferredTestRideDateReply =
     isInitialAdf &&
     (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
@@ -7272,6 +7418,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft
     }) &&
     !preferredTestRideDateReply &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
@@ -7307,6 +7454,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isSellLead &&
     !isCreditLead &&
     !isWalkInLead &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
@@ -7348,6 +7496,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (
     isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
@@ -7392,6 +7541,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   if (
     isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
     /meta/i.test(leadSourceLower) &&
     inferredBucket === "general_inquiry" &&
     typeof draft === "string"

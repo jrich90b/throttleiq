@@ -19626,7 +19626,15 @@ function buildCustomerDispositionReply(text: string, conv?: any): string {
 function hasFirstTimeRiderGuidanceParserHint(text: string | null | undefined): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
+  const hasRiderCourseInfo =
+    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+      t
+    ) ||
+    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
+    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
+    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t);
   return (
+    hasRiderCourseInfo ||
     /\b(first\s+(?:bike|motorcycle|harley|time\s+riding|time\s+rider)|new\s+rider|beginner\s+(?:bike|rider)|never\s+(?:ridden|rode|been\s+on)|haven['’]?t\s+(?:ridden|rode))\b/.test(
       t
     ) ||
@@ -19655,9 +19663,12 @@ function parseFirstTimeRiderGuidanceFallback(text: string): FirstTimeRiderGuidan
       t
     );
   const asksRiderCourse =
-    /\b(msf|riding academy|rider academy|learn to ride|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
+    /\b(msf|riding academy|rider academy|learn to ride|riding school|rider school|riding course|rider course|motorcycle class|motorcycle course)\b/.test(
       t
-    );
+    ) ||
+    /\b(?:your|the|this|that|our)\s+course\b/.test(t) ||
+    /\bcourse\b[\s\S]{0,50}\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b/.test(t) ||
+    /\b(price|pricing|cost|how much|tuition|fee|fees|rate)\b[\s\S]{0,50}\bcourse\b/.test(t);
   const asksBeginnerBike =
     /\b(first\s+(?:bike|motorcycle|harley)|beginner\s+(?:bike|rider)|new\s+rider|starter|manageable|easy)\b/.test(
       t
@@ -19710,9 +19721,15 @@ function buildFirstTimeRiderGuidanceReply(args: {
     String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
   const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
+  const coursePrice =
+    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.trainingCoursePrice ?? "").trim();
 
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
-    return `Good question. ${courseText} is the best place to start, and once you’re ready I can help match you with something manageable.`;
+    const priceLine = coursePrice
+      ? ` The current price is ${coursePrice}.`
+      : " I’ll have the team confirm current class pricing and availability and follow up.";
+    return `Good question. ${courseText} is the best place to start.${priceLine}`;
   }
   if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
     const requirement = requiresEndorsement
