@@ -39,6 +39,7 @@ import {
   isFollowUpReminderOnlyText,
   isConditionalPickupPlanText,
   isServiceStatusUpdateQuestionText,
+  isServiceSchedulingAvailabilityRequestText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   getScheduleDayOptionsLabel,
@@ -272,6 +273,11 @@ const cases: Case[] = [
     id: "service_time_after_3_defaults_to_pm",
     actual: formatServiceScheduleTimeLabel("3", "Would there be any time after 3 available?"),
     expected: "3:00 PM"
+  },
+  {
+    id: "service_after_3_availability_request_detected",
+    actual: isServiceSchedulingAvailabilityRequestText("Would there be any time after 3pm available?"),
+    expected: true
   },
   {
     id: "voice_callback_suppressed_when_call_books_appointment",

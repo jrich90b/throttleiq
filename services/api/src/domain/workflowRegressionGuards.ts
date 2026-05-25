@@ -174,6 +174,14 @@ export function formatServiceScheduleTimeLabel(
   return `${hour}:${minute} ${suffix}`;
 }
 
+export function isServiceSchedulingAvailabilityRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return /\b(appointment|appt|schedule|available|availability|openings?|anything|any time|time|after\s+\d{1,2}|before\s+\d{1,2}|morning|afternoon|evening)\b/.test(
+    text
+  );
+}
+
 export function isManualOutboundBookingConfirmationText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;

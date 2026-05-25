@@ -402,6 +402,7 @@ import {
   isFactoryOrderTimingQuestionText,
   isFollowUpReminderOnlyText,
   isServiceStatusUpdateQuestionText,
+  isServiceSchedulingAvailabilityRequestText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -21836,9 +21837,7 @@ function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | u
     signals.hasDayTime ||
     signals.hasDayOnlyAvailability ||
     signals.hasDayOnlyRequest ||
-    /\b(appointment|appt|schedule|available|availability|openings?|anything|any time|time|after\s+\d{1,2}|before\s+\d{1,2}|morning|afternoon|evening)\b/i.test(
-      source
-    )
+    isServiceSchedulingAvailabilityRequestText(source)
   );
 }
 
@@ -46264,6 +46263,7 @@ if (authToken && signature) {
     schedulingAllowed &&
     !conv.appointment?.bookedEventId &&
     conv.scheduler?.pendingSlot &&
+    !isServiceDepartmentSchedulingRequest(conv, event.body) &&
     !suppressAutoBookForMediaRequest
   ) {
     if (isDeferral(event.body)) {
