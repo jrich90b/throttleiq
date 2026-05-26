@@ -661,9 +661,9 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   ) {
     return true;
   }
+  if (/\b(no rush|not urgent|don't mean to bug you|dont mean to bug you|hope you'?re enjoying|figured that would help|you guys are outstanding|much appreciated)\b/i.test(text)) return true;
   const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
   if (hasQuestion) return false;
-  if (/\b(no rush|not urgent|don't mean to bug you|dont mean to bug you|hope you'?re enjoying|figured that would help|you guys are outstanding|much appreciated)\b/i.test(text)) return true;
   if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
   if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
   return false;
