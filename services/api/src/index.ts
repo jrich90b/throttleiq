@@ -45523,10 +45523,14 @@ if (authToken && signature) {
     });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
     appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
     )}</Message>\n</Response>`;
@@ -45636,10 +45640,14 @@ if (authToken && signature) {
     });
     if (webhookMode === "suggest") {
       appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
     appendOutbound(conv, event.to, event.from, reply, "twilio");
+    saveConversation(conv);
+    await flushConversationStore();
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
       reply
     )}</Message>\n</Response>`;
