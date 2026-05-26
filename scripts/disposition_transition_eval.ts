@@ -76,6 +76,18 @@ const cases: Case[] = [
       })
   },
   {
+    id: "past_visit_weekday_context_does_not_block_closeout",
+    expected: true,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: "Ill pass man. I was in sat for a part for my brother's bike but it was pouring. I just like to ride the new models and ck em out. Not a big deal. Thx",
+        parsedAccepted: isDispositionParserAccepted(parsedLow),
+        hasDecision: true,
+        responseControlNotInterested: true
+      })
+  },
+  {
     id: "structured_finance_info_blocks_closeout_even_if_parser_accepts_disposition",
     expected: false,
     run: () =>

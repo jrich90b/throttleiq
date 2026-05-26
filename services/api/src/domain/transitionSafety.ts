@@ -96,7 +96,10 @@ function hasCompetingActiveIntentText(text: string): boolean {
   const hasSchedulingAsk =
     /\b(can i come in|stop by|come by|what day|what time|set up a time|book (a )?(time|appointment)|schedule (a )?(time|appointment)|works for you)\b/.test(
       t
-    ) || /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/.test(t);
+    ) ||
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b[\s\S]{0,60}\b(?:at|around|about|before|after|morning|afternoon|evening|\d{1,2}(?::?\d{2})?\s*(?:am|pm)?)\b/.test(
+      t
+    );
   const hasActiveBuyingSignal =
     /\b(ready to buy|pull the trigger|i want (it|that bike)|i['’]?m interested|interested in|want to move forward)\b/.test(
       t
