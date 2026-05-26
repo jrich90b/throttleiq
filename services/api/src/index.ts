@@ -9956,6 +9956,31 @@ function buildTestRidePreferredDateReply(conv: any): string | null {
   return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
 }
 
+function formatPreferredTimeForReply(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return raw.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, (_m, hour, minute, meridiem) => {
+    const suffix = String(meridiem).toUpperCase();
+    return `${hour}${minute ? `:${minute}` : ""} ${suffix}`;
+  });
+}
+
+function buildJumpStartPreferredDateReply(conv: any): string {
+  const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
+  const preferredTime = formatPreferredTimeForReply(conv?.lead?.preferredTime);
+  const inquiry = String(conv?.lead?.inquiry ?? "").toLowerCase();
+  const party = /\b(my wife|wife|spouse|partner|we|both of us)\b/.test(inquiry)
+    ? "you and your wife"
+    : "you";
+  const dateLine =
+    preferredDateLabel && preferredTime
+      ? ` I have ${preferredDateLabel} at ${preferredTime} noted.`
+      : preferredDateLabel
+        ? ` I have ${preferredDateLabel} noted.`
+        : "";
+  return `Thanks — I saw ${party} want to do the Jumpstart experience before the course.${dateLine} I’ll have the team confirm and get that lined up.`;
+}
+
 function isTradeAcceleratorLead(conv: any): boolean {
   const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   return source.includes("trade accelerator");
@@ -44197,7 +44222,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const sourceIsTestRide = /test ride|book test ride|online test ride request/i.test(String(conv.lead?.source ?? ""));
     const classificationIsTestRide =
       conv.classification?.bucket === "test_ride" || conv.classification?.cta === "schedule_test_ride";
-    const preferredDateReply = sourceIsTestRide || classificationIsTestRide ? buildTestRidePreferredDateReply(conv) : null;
+    const jumpStartLead = isJumpStartExperienceText(conv?.lead?.inquiry ?? null);
+    const preferredDateReply =
+      jumpStartLead
+        ? buildJumpStartPreferredDateReply(conv)
+        : sourceIsTestRide || classificationIsTestRide
+          ? buildTestRidePreferredDateReply(conv)
+          : null;
     const shouldForceTestRideCopy = shouldForceInitialTestRideSourceScheduleCopy({
       isInitialAdf: true,
       inferredBucket: conv.classification?.bucket ?? null,

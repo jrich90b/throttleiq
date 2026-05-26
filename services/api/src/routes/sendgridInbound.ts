@@ -1657,6 +1657,31 @@ function buildInitialTestRidePreferredDateReply(conv: any): string | null {
   return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
 }
 
+function formatPreferredTimeForReply(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return raw.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i, (_m, hour, minute, meridiem) => {
+    const suffix = String(meridiem).toUpperCase();
+    return `${hour}${minute ? `:${minute}` : ""} ${suffix}`;
+  });
+}
+
+function buildInitialJumpStartPreferredDateReply(conv: any): string | null {
+  const preferredDateLabel = formatPreferredDateForReply(conv?.lead?.preferredDate);
+  const preferredTime = formatPreferredTimeForReply(conv?.lead?.preferredTime);
+  const inquiry = String(conv?.lead?.inquiry ?? "").toLowerCase();
+  const party = /\b(my wife|wife|spouse|partner|we|both of us)\b/.test(inquiry)
+    ? "you and your wife"
+    : "you";
+  const dateLine =
+    preferredDateLabel && preferredTime
+      ? ` I have ${preferredDateLabel} at ${preferredTime} noted.`
+      : preferredDateLabel
+        ? ` I have ${preferredDateLabel} noted.`
+        : "";
+  return `Thanks — I saw ${party} want to do the Jumpstart experience before the course.${dateLine} I’ll have the team confirm and get that lined up.`;
+}
+
 function buildInitialEmailDraft(
   conv: any,
   dealerProfile: any,
@@ -4393,6 +4418,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     initialAdfFirstTimeRiderDecision?.asksRiderCourse
       ? initialAdfFirstTimeRiderDecision
       : null;
+  const initialAdfJumpStartExperience =
+    isInitialAdf &&
+    isJumpStartExperienceText(effectiveInquiry);
   if (initialAdfRiderCourseDecision) {
     pricingInquiryIntent = false;
   }
@@ -4760,6 +4788,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     callbackRequestedInLead &&
     !!String(callbackSchedule?.dueAt ?? "").trim() &&
     !isTrafficLogWalkInLead &&
+    !initialAdfRiderCourseDecision &&
+    !initialAdfJumpStartExperience &&
     inferredBucket !== "in_store";
 
   let creditTodoCreated = false;
@@ -6957,6 +6987,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     conv.dialogState = { name, updatedAt } as any;
   };
+  if (initialAdfJumpStartExperience) {
+    let ack = buildInitialJumpStartPreferredDateReply(conv);
+    if (!ack) {
+      ack = "Thanks — I saw you’re looking to do the Jumpstart experience before the course. I’ll have the team confirm availability and get that lined up.";
+    }
+    ack = await applyInitialAdfPrefix(ack);
+    setDialogState("jumpstart_experience_requested");
+    setFollowUpMode(conv, "manual_handoff", "jumpstart_experience");
+    stopFollowUpCadence(conv, "manual_handoff");
+    addTodo(
+      conv,
+      "other",
+      `Confirm Jumpstart experience availability. Customer asked: ${effectiveInquiry}`,
+      event.providerMessageId
+    );
+    queueInitialDraftForPreferredContact(ack);
+    setEmailDraft(conv, ack);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      draft: ack,
+      jumpStartExperience: true
+    });
+  }
   if (initialAdfRiderCourseDecision) {
     const profile = await getInitialDealerProfile();
     let ack = buildInitialAdfRiderCourseInfoReply(profile, effectiveInquiry);
