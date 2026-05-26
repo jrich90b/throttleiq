@@ -28,6 +28,9 @@ data/
 services/api/data/scheduler_config.json
 services/api/data/google_tokens.json
 services/api/data/mdf_portal_runs/
+services/api/data/automation_runs.json
+services/api/data/campaigns.json
+services/api/data/contact_lists.json
 services/api/.env
 data/conversations.json
 
