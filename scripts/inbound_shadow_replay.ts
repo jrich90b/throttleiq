@@ -613,7 +613,19 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   if (hasQuestion) return false;
   if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
   if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
+  if (
+    /\b(let me (?:do some figuring out|figure|find|check)|i(?:'|’)ll (?:let|give) you (?:know|a time|a timeframe|a time frame)|give you a time\s*frame|let you know soon)\b/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
   return false;
+}
+
+function isDealerLeadAppOutcomeAdf(provider: Provider, inbound: string): boolean {
+  if (provider !== "sendgrid_adf") return false;
+  return /\b(?:dealer lead app|demo bikes ridden|marketing questions:)\b/i.test(inbound);
 }
 
 function isWrongNumberInbound(inbound: string): boolean {
@@ -631,6 +643,12 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
   if (!draftText) {
+    if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
+      return {
+        verdict: "expected_no_response",
+        reasons: ["Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"]
+      };
+    }
     if (
       isWrongNumberInbound(inbound) &&
       (String(conv?.status ?? "").toLowerCase() === "closed" ||
@@ -670,7 +688,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
       draftText
     );
   if (draftText.length < 12) reasons.push("very short draft");
-  if (/\b(and|or|to|the|when|if|with|for)$/i.test(draftText)) reasons.push("draft appears truncated");
+  if (/\b(and|or|to|the|when|if|with|for|can|could|would|should|will)$/i.test(draftText)) {
+    reasons.push("draft appears truncated");
+  }
   if (draftHandsOff && !riderCourseInquiry) {
     reasons.push("draft hands off instead of answering directly");
   }

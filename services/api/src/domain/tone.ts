@@ -177,6 +177,34 @@ function repairDanglingAcknowledgements(text: string): string {
   return out;
 }
 
+function repairIncompleteSentence(text: string): string {
+  let out = String(text ?? "").trim();
+  if (!out) return out;
+  const lower = out.toLowerCase();
+  const quoteSuffix = /["')\]]+$/.test(out) ? out.match(/["')\]]+$/)?.[0] ?? "" : "";
+  const core = quoteSuffix ? out.slice(0, -quoteSuffix.length).trimEnd() : out;
+  const coreLower = core.toLowerCase();
+
+  if (/\b(?:we can|i can)$/.test(coreLower)) {
+    const suffix = /\b(rain|rained out|weather)\b/.test(lower) ? " set up another time." : " follow up.";
+    return `${core}${suffix}${quoteSuffix}`.replace(/\s{2,}/g, " ").trim();
+  }
+
+  if (/\b(?:and\s+)?(?:ping|text|call|reach out|get a hold of me|let me know)\s+when$/.test(coreLower)) {
+    return `${core.replace(/\b(?:and\s+)?(?:ping|text|call|reach out|get a hold of me|let me know)\s+when$/i, "just text me when you're ready.")}${quoteSuffix}`
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  if (/\b(and|or|to|the|when|if|with|for)$/.test(coreLower)) {
+    return `${core.replace(/\s+\b(and|or|to|the|when|if|with|for)$/i, "").trim()}.${quoteSuffix}`
+      .replace(/\s+\./g, ".")
+      .trim();
+  }
+
+  return out;
+}
+
 function dedupeIdentityIntro(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
@@ -263,6 +291,7 @@ export function applyDeterministicToneOverrides(text: string): string {
   if (!out) return out;
   out = applyDeterministicToneRules(out);
   out = repairDanglingAcknowledgements(out);
+  out = repairIncompleteSentence(out);
   return out;
 }
 

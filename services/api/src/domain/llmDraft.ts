@@ -4518,7 +4518,10 @@ inbound: "Thanks Joe. I'm all set on the bike search for the time being. Appreci
 output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
     `EXAMPLE L
 inbound: "I'm not looking right now but I'll get a hold of you when I'm ready."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`,
+    `EXAMPLE M
+inbound: "We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me."
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`
   ];
 
   const prompt = [
