@@ -15746,6 +15746,10 @@ function isShortFutureTimeframeLabel(label: string | null | undefined): boolean 
   return false;
 }
 
+function formatFutureTimeframeLabelForReply(label: string | null | undefined): string {
+  return String(label ?? "").trim().toLowerCase();
+}
+
 function extractDayPart(text: string): string | null {
   const t = String(text ?? "").toLowerCase();
   const m = t.match(/\b(morning|afternoon|evening|tonight|tonite)\b/);
@@ -19785,7 +19789,18 @@ type CustomerDispositionDecision = {
 function hasCustomerDispositionParserHintText(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
-  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i'?ll pass|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
+  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i'?ll pass|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
+    lower
+  );
+}
+
+function hasFutureBuyingWindowHintText(text: string | null | undefined): boolean {
+  const raw = String(text ?? "");
+  const lower = raw.toLowerCase();
+  if (!lower.trim()) return false;
+  const future = parseFutureTimeframe(raw, new Date());
+  if (!future?.until) return false;
+  return /\b(can(?:not|'t)\s+do it now|not (?:now|right now|yet)|not ready|maybe|thinking(?: about)?|hold off|wait|next\s+(?:spring|summer|fall|autumn|winter|season|year|month)|this\s+(?:spring|summer|fall|autumn|winter|season|year|month))\b/i.test(
     lower
   );
 }
@@ -43507,7 +43522,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !isDispositionParserAccepted(regenCustomerDispositionParse) &&
     !hasCustomerDispositionParserHintText(event.body ?? "") &&
     !hasFirstTimeRiderGuidanceParserHint(event.body ?? "") &&
-    !hasAppointmentWeatherTimingHintText(event.body ?? "")
+    !hasAppointmentWeatherTimingHintText(event.body ?? "") &&
+    !hasFutureBuyingWindowHintText(event.body ?? "")
   ) {
     return respondRegenerateSkipped("response_control_no_response");
   }
@@ -43580,6 +43596,49 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(regenReply);
     }
     return respondWithSmsRegeneratedDraft(regenReply);
+  }
+
+  const regenFuture = parseFutureTimeframe(String(event.body ?? ""), new Date());
+  const regenFutureSignals = detectSchedulingSignals(event.body ?? "");
+  const regenWeatherLikeQuestion =
+    /\b(weather|forecast|temperature|temp|snow|cold|rain|nicest day|nice day|best day)\b/i.test(
+      regenTextLower
+    );
+  const regenShouldSkipFuture =
+    regenFutureSignals.hasDayTime ||
+    looksLikeTimeSelection(regenTextLower) ||
+    regenFutureSignals.explicit ||
+    regenWeatherLikeQuestion;
+  if (event.provider === "twilio" && regenFuture?.until && !regenShouldSkipFuture) {
+    conv.lead = conv.lead ?? {};
+    if (regenFuture.label) conv.lead.purchaseTimeframe = regenFuture.label;
+    const untilIso = regenFuture.until.toISOString();
+    const shortFuture = isShortFutureTimeframeLabel(regenFuture.label);
+    if (shortFuture) {
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        const cfg = await getSchedulerConfigHot();
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      }
+      pauseFollowUpCadence(conv, untilIso, "future_timeframe_short");
+    } else if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+      scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+    } else {
+      pauseFollowUpCadence(conv, untilIso, "future_timeframe");
+    }
+    if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+      setFollowUpMode(conv, "active", "future_timeframe");
+      setDialogState(conv, "followup_resumed");
+    }
+    const labelText = formatFutureTimeframeLabelForReply(regenFuture.label);
+    const regenReply = `Got it — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`;
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenReply);
+    }
+    return respondWithSmsRegeneratedDraft(regenReply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
   }
 
   if (regenReducedConversationState.usedLowMileageWatchIntent) {
@@ -45186,7 +45245,8 @@ if (authToken && signature) {
   const earlyNoResponseParserBlocker =
     hasCustomerDispositionParserHintText(event.body ?? "") ||
     hasFirstTimeRiderGuidanceParserHint(event.body ?? "") ||
-    hasAppointmentWeatherTimingHintText(event.body ?? "");
+    hasAppointmentWeatherTimingHintText(event.body ?? "") ||
+    hasFutureBuyingWindowHintText(event.body ?? "");
   const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
   const customerAckNoResponse =
     customerAckActionAccepted &&
@@ -50672,9 +50732,9 @@ if (authToken && signature) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const label = futureFromReply?.label;
-    const labelText = label ? label.charAt(0).toUpperCase() + label.slice(1) : "";
+    const labelText = formatFutureTimeframeLabelForReply(label);
     const replyRaw = label
-      ? `Sounds good — I’ll pause things until ${labelText}. Just reach out when the time is right.`
+      ? `Sounds good — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`
       : "Got it — I’m here when you’re ready. Just reach out when the time is right.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
@@ -50759,8 +50819,8 @@ if (authToken && signature) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
     const label = future.label;
-    const labelText = label.charAt(0).toUpperCase() + label.slice(1);
-    const replyRaw = `Got it — I’ll pause things until ${labelText}. Just reach out when the time is right.`;
+    const labelText = formatFutureTimeframeLabelForReply(label);
+    const replyRaw = `Got it — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`;
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
     const systemMode = webhookMode;
     if (systemMode === "suggest") {

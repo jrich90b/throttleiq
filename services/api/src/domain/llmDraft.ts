@@ -4492,6 +4492,9 @@ output: {"disposition":"sell_on_own","explicit_disposition":true,"timeframe_text
     `EXAMPLE C
 inbound: "Price is too high right now, maybe after tax return."
 output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"after tax return","confidence":0.93}`,
+    `EXAMPLE C2
+inbound: "I can't do it now but I'm thinking maybe next spring."
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"next spring","confidence":0.94}`,
     `EXAMPLE D
 inbound: "I need to talk to my wife first."
 output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.86}`,
@@ -5151,6 +5154,7 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Ok great!" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
     'input: "Thank you very much for answering my message. Yes, I’m looking for a course motorcycle so I can get my license." output: {"intent":"none","explicit_request":true,"confidence":0.92}',
     'input: "I guess we got rained out again" output: {"intent":"none","explicit_request":true,"confidence":0.9}',
+    'input: "I can’t do it now but I’m thinking maybe next spring. Thanks." output: {"intent":"none","explicit_request":true,"confidence":0.93}',
     'input: "Hi Scott, We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me. Rich" output: {"intent":"not_interested","explicit_request":true,"confidence":0.93}',
     'input: "Wrong number?" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You have the wrong number" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
