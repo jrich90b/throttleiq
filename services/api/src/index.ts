@@ -45357,6 +45357,57 @@ if (authToken && signature) {
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+    const humanModeBookingParserEligible =
+      event.provider === "twilio" &&
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY;
+    const humanModeText = String(event.body ?? "");
+    const humanModeTextLower = humanModeText.toLowerCase();
+    const humanModeFuture = parseFutureTimeframe(humanModeText, new Date());
+    const humanModeFutureSignals = detectSchedulingSignals(humanModeText);
+    const humanModeFutureWeatherLikeQuestion =
+      /\b(weather|forecast|temperature|temp|snow|cold|rain|nicest day|nice day|best day)\b/i.test(
+        humanModeTextLower
+      );
+    const humanModeShouldSkipFuture =
+      humanModeFutureSignals.hasDayTime ||
+      looksLikeTimeSelection(humanModeTextLower) ||
+      humanModeFutureSignals.explicit ||
+      humanModeFutureWeatherLikeQuestion;
+    if (event.provider === "twilio" && humanModeFuture?.until && !humanModeShouldSkipFuture) {
+      conv.lead = conv.lead ?? {};
+      if (humanModeFuture.label) conv.lead.purchaseTimeframe = humanModeFuture.label;
+      const untilIso = humanModeFuture.until.toISOString();
+      const shortFuture = isShortFutureTimeframeLabel(humanModeFuture.label);
+      if (shortFuture) {
+        if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+          const cfg = await getSchedulerConfigHot();
+          startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+        }
+        pauseFollowUpCadence(conv, untilIso, "future_timeframe_short");
+      } else if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        scheduleLongTermFollowUp(conv, untilIso, "future_timeframe");
+      } else {
+        pauseFollowUpCadence(conv, untilIso, "future_timeframe");
+      }
+      if (conv.followUp?.mode !== "holding_inventory" && conv.followUp?.mode !== "manual_handoff") {
+        setFollowUpMode(conv, "active", "future_timeframe");
+        setDialogState(conv, "followup_resumed");
+      }
+      discardPendingDrafts(conv, "human_mode_future_timeframe");
+      delete conv.emailDraft;
+      recordRouteOutcome("live", "human_mode_future_timeframe_pause", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        label: humanModeFuture.label ?? null,
+        until: untilIso
+      });
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     discardPendingDrafts(conv, "new_inbound_human_mode");
     didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
     if (didConfirm) {
@@ -45366,13 +45417,6 @@ if (authToken && signature) {
         leadKey: conv.leadKey
       });
     }
-    const humanModeBookingParserEligible =
-      event.provider === "twilio" &&
-      process.env.LLM_ENABLED === "1" &&
-      process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
-      !!process.env.OPENAI_API_KEY;
-    const humanModeText = String(event.body ?? "");
-    const humanModeTextLower = humanModeText.toLowerCase();
     const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText);
     const humanModeHasScheduleKeyword =
       /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
