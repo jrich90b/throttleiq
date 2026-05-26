@@ -64,6 +64,18 @@ const cases: Case[] = [
       })
   },
   {
+    id: "response_control_not_interested_allows_low_confidence_disposition_fallback",
+    expected: true,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: "Ill pass man. I just like to ride the new models and check them out.",
+        parsedAccepted: isDispositionParserAccepted(parsedLow),
+        hasDecision: true,
+        responseControlNotInterested: true
+      })
+  },
+  {
     id: "structured_finance_info_blocks_closeout_even_if_parser_accepts_disposition",
     expected: false,
     run: () =>
@@ -105,6 +117,18 @@ const cases: Case[] = [
         text: schedulingText,
         parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
+      })
+  },
+  {
+    id: "response_control_not_interested_still_blocks_competing_active_request",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: "I'll pass for now, but can I come in Monday at 3:45?",
+        parsedAccepted: false,
+        hasDecision: true,
+        responseControlNotInterested: true
       })
   }
 ];

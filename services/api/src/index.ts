@@ -43532,7 +43532,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     conv,
     text: event.body ?? "",
     parsedAccepted: regenParsedDispositionAccepted,
-    hasDecision: !!regenDispositionDecision
+    hasDecision: !!regenDispositionDecision,
+    responseControlNotInterested:
+      regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested"
   });
   const regenTerminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,
@@ -46155,7 +46157,8 @@ if (authToken && signature) {
     conv,
     text: semanticInboundText,
     parsedAccepted: parsedDispositionAccepted,
-    hasDecision: !!dispositionDecision
+    hasDecision: !!dispositionDecision,
+    responseControlNotInterested: llmNotInterested
   });
   const terminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,

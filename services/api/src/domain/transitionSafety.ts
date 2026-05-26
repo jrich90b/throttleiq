@@ -180,11 +180,15 @@ export function canApplyDispositionCloseout(args: {
   text: string;
   parsedAccepted: boolean;
   hasDecision: boolean;
+  responseControlNotInterested?: boolean;
 }): boolean {
-  const { conv, text, parsedAccepted, hasDecision } = args;
+  const { conv, text, parsedAccepted, hasDecision, responseControlNotInterested } = args;
   if (!hasDecision) return false;
   if (shouldSuppressDispositionCloseout(conv, text)) return false;
   if (parsedAccepted) return true;
+  // Parser-first closeout: allow fallback only when the dedicated response-control parser
+  // independently classified the turn as not interested.
+  if (responseControlNotInterested) return true;
   // Default to parser-first for closeout transitions; regex fallback can be re-enabled explicitly.
   return process.env.ALLOW_DISPOSITION_REGEX_FALLBACK === "1";
 }
