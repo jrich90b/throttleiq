@@ -4521,7 +4521,10 @@ inbound: "I'm not looking right now but I'll get a hold of you when I'm ready."
 output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.93}`,
     `EXAMPLE M
 inbound: "We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me."
-output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE N
+inbound: "Ill pass man. I was in sat for a part for my brother's bike but it was pouring. I just like to ride the new models and ck em out. Not a big deal. Thx"
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`
   ];
 
   const prompt = [
@@ -5146,6 +5149,9 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Perfect." output: {"intent":"no_response","explicit_request":false,"confidence":0.94}',
     'input: "Cool" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
     'input: "Ok great!" output: {"intent":"no_response","explicit_request":false,"confidence":0.95}',
+    'input: "Thank you very much for answering my message. Yes, I’m looking for a course motorcycle so I can get my license." output: {"intent":"none","explicit_request":true,"confidence":0.92}',
+    'input: "I guess we got rained out again" output: {"intent":"none","explicit_request":true,"confidence":0.9}',
+    'input: "Hi Scott, We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me. Rich" output: {"intent":"not_interested","explicit_request":true,"confidence":0.93}',
     'input: "Wrong number?" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You have the wrong number" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You can hold off. Thanks" output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',

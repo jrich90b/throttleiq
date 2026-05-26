@@ -19790,6 +19790,20 @@ function hasCustomerDispositionParserHintText(text: string | null | undefined): 
   );
 }
 
+function hasAppointmentWeatherTimingHintText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const weatherIssue = /\b(rain(?:ed|ing)?|rained out|weather|snow(?:ed|ing)?|windy|too cold)\b/.test(
+    lower
+  );
+  if (!weatherIssue) return false;
+  return (
+    /\b(again|appointment|appt|test ride|demo ride|ride|today|tomorrow|make it|made it|reschedule|another time)\b/.test(
+      lower
+    ) || /\brained out\b/.test(lower)
+  );
+}
+
 function parseCustomerDispositionFallback(text: string): CustomerDispositionDecision | null {
   const lower = String(text ?? "").toLowerCase();
   if (hasSellOnOwnSignal(lower)) {
@@ -19866,6 +19880,14 @@ function buildCustomerDispositionReply(text: string, conv?: any): string {
     /\b(beautiful|nice|great|awesome|amazing|love|like|clean|killer|badass|sweet)\b/i.test(textLower) &&
     /\b(bike|street glide|road glide|harley|motorcycle|ride)\b/i.test(textLower);
   return buildFriendlyReachOutClose(hasBikeCompliment);
+}
+
+function buildAppointmentWeatherTimingReply(text: string): string {
+  const lower = String(text ?? "").toLowerCase();
+  if (/\b(rain|rained out|weather)\b/.test(lower)) {
+    return "Yeah, looks like the weather got us again. We can set up another time when it clears.";
+  }
+  return "No problem — we can set up another time.";
 }
 
 function hasExplicitRiderCourseInfoText(text: string | null | undefined): boolean {
@@ -41340,7 +41362,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (
     event.provider === "twilio" &&
     isResponseControlNoResponseAccepted(regenEarlyResponseControlParse) &&
-    !hasCustomerDispositionParserHintText(event.body ?? "")
+    !hasCustomerDispositionParserHintText(event.body ?? "") &&
+    !hasFirstTimeRiderGuidanceParserHint(event.body ?? "") &&
+    !hasAppointmentWeatherTimingHintText(event.body ?? "")
   ) {
     recordRouteOutcome("regen", "response_control_no_response_early", {
       convId: conv.id,
@@ -42282,6 +42306,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenAppointmentTimingParserEligible &&
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      hasAppointmentWeatherTimingHintText(event.body ?? "") ||
       /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
         regenTextLower
       ));
@@ -42474,7 +42499,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.provider === "twilio" &&
     regenAppointmentTimingAccepted &&
     (regenAppointmentTimingIntent === "arrival_update" ||
-      regenAppointmentTimingIntent === "tentative_time_window")
+      regenAppointmentTimingIntent === "tentative_time_window" ||
+      regenAppointmentTimingIntent === "decline_time")
   ) {
     const checked =
       regenAppointmentTimingIntent === "arrival_update"
@@ -42485,7 +42511,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           })
         : null;
     const reply =
-      checked?.reply ??
+      regenAppointmentTimingIntent === "decline_time"
+        ? buildAppointmentWeatherTimingReply(event.body ?? "")
+        : checked?.reply ??
       (regenAppointmentTimingIntent === "arrival_update"
         ? buildAppointmentArrivalAck(regenAppointmentTimingParse)
         : buildTentativeAppointmentWindowAck(regenAppointmentTimingParse));
@@ -42507,6 +42535,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         `${event.body ?? ""} ${appointmentTimingRequestedPhrase(regenAppointmentTimingParse)}`,
         cfg.timezone
       );
+    }
+    if (regenAppointmentTimingIntent === "decline_time") {
+      setDialogState(conv, "schedule_request");
     }
     if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
     if (channel === "email") {
@@ -43474,7 +43505,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (
     isResponseControlNoResponseAccepted(regenResponseControlParse) &&
     !isDispositionParserAccepted(regenCustomerDispositionParse) &&
-    !hasCustomerDispositionParserHintText(event.body ?? "")
+    !hasCustomerDispositionParserHintText(event.body ?? "") &&
+    !hasFirstTimeRiderGuidanceParserHint(event.body ?? "") &&
+    !hasAppointmentWeatherTimingHintText(event.body ?? "")
   ) {
     return respondRegenerateSkipped("response_control_no_response");
   }
@@ -45148,11 +45181,16 @@ if (authToken && signature) {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && customerAckActionParse) {
     console.log("[llm-customer-ack-action-parse]", customerAckActionParse);
   }
+  const earlyNoResponseParserBlocker =
+    hasCustomerDispositionParserHintText(event.body ?? "") ||
+    hasFirstTimeRiderGuidanceParserHint(event.body ?? "") ||
+    hasAppointmentWeatherTimingHintText(event.body ?? "");
   const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
   const customerAckNoResponse =
     customerAckActionAccepted &&
     (customerAckActionParse?.action === "no_response_needed" ||
-      customerAckActionParse?.action === "customer_will_provide_time");
+      customerAckActionParse?.action === "customer_will_provide_time") &&
+    !earlyNoResponseParserBlocker;
   const customerWillProvideTimeFallback =
     event.provider === "twilio" &&
     !customerAckActionAccepted &&
@@ -45166,7 +45204,7 @@ if (authToken && signature) {
     responseControlAccepted && responseControlParse?.intent === "schedule_request";
   const llmNoResponse =
     isResponseControlNoResponseAccepted(responseControlParse) &&
-    !hasCustomerDispositionParserHintText(event.body ?? "");
+    !earlyNoResponseParserBlocker;
   if (getDialogState(conv) === "none" && conv.classification?.bucket === "inventory_interest") {
     setDialogState(conv, "inventory_init");
   }
@@ -48306,6 +48344,7 @@ if (authToken && signature) {
     !businessHoursQuestionTurn &&
     (!!conv.scheduler?.lastSuggestedSlots?.length ||
       String(conv.appointment?.status ?? "none").toLowerCase() !== "none" ||
+      hasAppointmentWeatherTimingHintText(event.body ?? "") ||
       /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|headed|be there|there by|around|between|morning|afternoon|evening|what time works|let me know what time|same time|later this month|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
         textLower
       ));
@@ -49367,7 +49406,9 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     appointmentTimingAccepted &&
     !pricingOrPaymentsIntent &&
-    (appointmentTimingIntent === "arrival_update" || appointmentTimingIntent === "tentative_time_window")
+    (appointmentTimingIntent === "arrival_update" ||
+      appointmentTimingIntent === "tentative_time_window" ||
+      appointmentTimingIntent === "decline_time")
   ) {
     const checked =
       appointmentTimingIntent === "arrival_update"
@@ -49378,7 +49419,9 @@ if (authToken && signature) {
           })
         : null;
     const reply =
-      checked?.reply ??
+      appointmentTimingIntent === "decline_time"
+        ? buildAppointmentWeatherTimingReply(event.body ?? "")
+        : checked?.reply ??
       (appointmentTimingIntent === "arrival_update"
         ? buildAppointmentArrivalAck(appointmentTimingParse)
         : buildTentativeAppointmentWindowAck(appointmentTimingParse));
@@ -49386,7 +49429,7 @@ if (authToken && signature) {
       setLastSuggestedSlots(conv, checked.alternatives);
       setDialogState(conv, inferAppointmentTypeFromConv(conv) === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
     }
-    if (!checked?.alternatives.length) {
+    if (!checked?.alternatives.length && appointmentTimingIntent !== "decline_time") {
       markOpenTodosResolvedByCommunication(conv, event.body, {
         channel: "sms",
         source: `appointment_timing_${appointmentTimingIntent}`
@@ -49406,6 +49449,9 @@ if (authToken && signature) {
         `${event.body ?? ""} ${appointmentTimingRequestedPhrase(appointmentTimingParse)}`,
         cfg.timezone
       );
+    }
+    if (appointmentTimingIntent === "decline_time") {
+      setDialogState(conv, "schedule_request");
     }
     if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
     const systemMode = webhookMode;

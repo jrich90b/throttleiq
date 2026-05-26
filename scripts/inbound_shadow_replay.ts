@@ -609,10 +609,6 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
   if (!text) return false;
   if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|ty|👍)[.!?\s]*$/i.test(text)) return true;
-  const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
-  if (hasQuestion) return false;
-  if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
-  if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
   if (
     /\b(let me (?:do some figuring out|figure|find|check)|i(?:'|’)ll (?:let|give) you (?:know|a time|a timeframe|a time frame)|give you a time\s*frame|let you know soon)\b/i.test(
       text
@@ -620,6 +616,10 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   ) {
     return true;
   }
+  const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
+  if (hasQuestion) return false;
+  if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
+  if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
   return false;
 }
 
