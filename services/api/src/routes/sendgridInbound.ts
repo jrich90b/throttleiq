@@ -1304,17 +1304,21 @@ function buildInitialAdfRiderCourseInfoReply(
     String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
   const isAmbiguous = hasAmbiguousRiderCourseInfoText(inquiryText);
-  const priceLine = coursePrice
+  const ambiguousPriceLine = coursePrice
     ? `the current price is ${coursePrice}.`
     : courseUrl
-      ? "current class details and pricing are listed here."
+      ? `course details and pricing are here: ${courseUrl}`
       : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
-  const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
+  const urlLine = courseUrl ? ` Course details are here: ${courseUrl}` : "";
   if (isAmbiguous) {
-    return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
+    return `Thanks for asking. If you mean our ${courseName}, ${ambiguousPriceLine}${coursePrice ? urlLine : ""}`;
   }
-  const directPriceLine = coursePrice ? `The current price is ${coursePrice}.` : priceLine;
-  return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
+  const directPriceLine = coursePrice
+    ? `The current price is ${coursePrice}.`
+    : courseUrl
+      ? `Course details and pricing are here: ${courseUrl}`
+      : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+  return `Thanks for asking about our ${courseName}. ${directPriceLine}${coursePrice ? urlLine : ""}`;
 }
 
 function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
