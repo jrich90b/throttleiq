@@ -19827,6 +19827,19 @@ function hasAppointmentCancelOrRescheduleHintText(text: string | null | undefine
   );
 }
 
+function isAppointmentCancellationWithoutNewTimeText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  const cancellation =
+    /\b(can't make|cant make|cannot make|won't make|wont make|not going to be able to make|not able to make|unable to make|need to cancel|have to cancel|family matter|something came up)\b/i.test(
+      lower
+    );
+  if (!cancellation) return false;
+  return !/\b(reschedule (?:to|for)|move (?:it|that|me) (?:to|for)|can (?:we|i) do|could (?:we|i) do|how about|instead|tomorrow|next\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(?::\d{2})?\s*(?:am|pm)|after\s+\d|before\s+\d)\b/i.test(
+    lower
+  );
+}
+
 function parseCustomerDispositionFallback(text: string): CustomerDispositionDecision | null {
   const lower = String(text ?? "").toLowerCase();
   if (hasSellOnOwnSignal(lower)) {
@@ -41043,8 +41056,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       !!regenBookingParse?.explicitRequest &&
       confidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
       (regenBookingParse.intent === "reschedule" || regenBookingParse.intent === "cancel");
-    const requestedDay = String(regenBookingParse?.requested?.day ?? "").trim();
-    const requestedTime = String(regenBookingParse?.requested?.timeText ?? "").trim();
+    const regenCancellationWithoutNewTime =
+      regenBookingParse?.intent === "cancel" ||
+      isAppointmentCancellationWithoutNewTimeText(event.body ?? "");
+    const requestedDay = regenCancellationWithoutNewTime
+      ? ""
+      : String(regenBookingParse?.requested?.day ?? "").trim();
+    const requestedTime = regenCancellationWithoutNewTime
+      ? ""
+      : String(regenBookingParse?.requested?.timeText ?? "").trim();
     if (accepted) {
       const profile = await getDealerProfileHot();
       const bookingUrl = !requestedDay && !requestedTime ? buildBookingUrlForLead(profile?.bookingUrl, conv) : null;
@@ -45335,17 +45355,22 @@ if (authToken && signature) {
   if (appointmentCancelOrRescheduleAccepted && conv.mode !== "human") {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
+    const cancellationWithoutNewTime =
+      appointmentCancelOrRescheduleParse.intent === "cancel" ||
+      isAppointmentCancellationWithoutNewTimeText(event.body ?? "");
     const normalizedText = String(
-      appointmentCancelOrRescheduleParse?.normalizedText ??
-        [
-          String(appointmentCancelOrRescheduleParse?.requested?.day ?? "").trim(),
-          String(appointmentCancelOrRescheduleParse?.requested?.timeText ?? "").trim()
-        ]
-          .filter(Boolean)
-          .join(" ")
+      cancellationWithoutNewTime
+        ? ""
+        : appointmentCancelOrRescheduleParse?.normalizedText ??
+            [
+              String(appointmentCancelOrRescheduleParse?.requested?.day ?? "").trim(),
+              String(appointmentCancelOrRescheduleParse?.requested?.timeText ?? "").trim()
+            ]
+              .filter(Boolean)
+              .join(" ")
     ).trim();
-    const schedule = buildAppointmentTodoSchedule(normalizedText || String(event.body ?? ""), timezone);
-    const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
+    const schedule = normalizedText ? buildAppointmentTodoSchedule(normalizedText, timezone) : undefined;
+    const requestedLabel = schedule?.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
     const intentLabel =
       appointmentCancelOrRescheduleParse.intent === "cancel"
         ? "Appointment cancellation/reschedule requested."
@@ -45366,8 +45391,12 @@ if (authToken && signature) {
     conv.appointment.reschedulePending = true;
     conv.appointment.updatedAt = new Date().toISOString();
     setDialogState(conv, "schedule_request");
-    const requestedDay = String(appointmentCancelOrRescheduleParse.requested?.day ?? "").trim();
-    const requestedTime = String(appointmentCancelOrRescheduleParse.requested?.timeText ?? "").trim();
+    const requestedDay = cancellationWithoutNewTime
+      ? ""
+      : String(appointmentCancelOrRescheduleParse.requested?.day ?? "").trim();
+    const requestedTime = cancellationWithoutNewTime
+      ? ""
+      : String(appointmentCancelOrRescheduleParse.requested?.timeText ?? "").trim();
     const profile = !requestedDay && !requestedTime ? await getDealerProfileHot().catch(() => null) : null;
     const bookingUrl =
       !requestedDay && !requestedTime ? buildBookingUrlForLead(profile?.bookingUrl, conv) : null;
@@ -45630,18 +45659,21 @@ if (authToken && signature) {
       if (humanBookingAccepted) {
         const cfg = await getSchedulerConfigHot();
         const timezone = cfg.timezone || "America/New_York";
+        const humanCancellationWithoutNewTime = isAppointmentCancellationWithoutNewTimeText(humanModeText);
         const normalizedText = String(
-          humanBookingParse?.normalizedText ??
-            [
-              String(humanBookingParse?.requested?.day ?? "").trim(),
-              String(humanBookingParse?.requested?.timeText ?? "").trim()
-            ]
-              .filter(Boolean)
-              .join(" ")
+          humanCancellationWithoutNewTime
+            ? ""
+            : humanBookingParse?.normalizedText ??
+                [
+                  String(humanBookingParse?.requested?.day ?? "").trim(),
+                  String(humanBookingParse?.requested?.timeText ?? "").trim()
+                ]
+                  .filter(Boolean)
+                  .join(" ")
         ).trim();
-        const rawTimePhrase = normalizedText || humanModeText;
-        const schedule = buildAppointmentTodoSchedule(rawTimePhrase, timezone);
-        const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
+        const rawTimePhrase = normalizedText || (humanCancellationWithoutNewTime ? "" : humanModeText);
+        const schedule = rawTimePhrase ? buildAppointmentTodoSchedule(rawTimePhrase, timezone) : undefined;
+        const requestedLabel = schedule?.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
         const intentLabel =
           humanBookingParse.intent === "cancel"
             ? "Appointment cancellation/reschedule requested."
@@ -45681,8 +45713,8 @@ if (authToken && signature) {
         });
         const draft = buildHumanModeSchedulingDraft({
           intent: humanBookingParse.intent === "cancel" ? "reschedule" : humanBookingParse.intent,
-          requestedDay: humanBookingParse.requested?.day ?? null,
-          requestedTime: humanBookingParse.requested?.timeText ?? null,
+          requestedDay: humanCancellationWithoutNewTime ? null : humanBookingParse.requested?.day ?? null,
+          requestedTime: humanCancellationWithoutNewTime ? null : humanBookingParse.requested?.timeText ?? null,
           requestedLabel,
           bookingUrl:
             (humanBookingParse.intent === "reschedule" || humanBookingParse.intent === "cancel") &&
