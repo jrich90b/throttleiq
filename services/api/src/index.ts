@@ -19794,26 +19794,31 @@ function buildFirstTimeRiderGuidanceReply(args: {
     String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
   const courseText = courseUrl ? `${courseName}: ${courseUrl}` : courseName;
-  const courseDetails = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
+  const courseDetails = courseUrl ? ` Course details are here: ${courseUrl}` : "";
   const coursePrice =
     String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
     String(firstTimePolicy.trainingCoursePrice ?? "").trim();
 
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
-    const priceLine = coursePrice
+    const ambiguousPriceLine = coursePrice
       ? `the current price is ${coursePrice}.`
       : courseUrl
-        ? "current class details and pricing are listed here."
+        ? `course details and pricing are here: ${courseUrl}`
         : "I’ll have the team confirm current class pricing and availability and follow up.";
     if (isAmbiguous) {
-      return `Good question. If you mean our ${courseName}, ${priceLine}${courseDetails}`;
+      return `Good question. If you mean our ${courseName}, ${ambiguousPriceLine}${coursePrice ? courseDetails : ""}`;
     }
     const intro = courseName.match(/^(a|an|the)\b/i)
       ? courseName
       : `the ${courseName}`;
-    const directPriceLine = coursePrice ? ` The current price is ${coursePrice}.` : ` ${priceLine}`;
-    return `Good question. ${intro} is the best place to start.${directPriceLine}${courseDetails}`;
+    const introSentence = intro.charAt(0).toUpperCase() + intro.slice(1);
+    const directPriceLine = coursePrice
+      ? ` The current price is ${coursePrice}.`
+      : courseUrl
+        ? ` Course details and pricing are here: ${courseUrl}`
+        : " I’ll have the team confirm current class pricing and availability and follow up.";
+    return `Good question. ${introSentence} is the best place to start.${directPriceLine}${coursePrice ? courseDetails : ""}`;
   }
   if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
     const requirement = requiresEndorsement
@@ -19853,17 +19858,21 @@ function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
     String(firstTimePolicy.trainingCourseUrl ?? "").trim();
   if (parsed.intent === "rider_course_info" || parsed.asksRiderCourse) {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
-    const priceLine = coursePrice
+    const ambiguousPriceLine = coursePrice
       ? `the current price is ${coursePrice}.`
       : courseUrl
-        ? "current class details and pricing are listed here."
+        ? `course details and pricing are here: ${courseUrl}`
         : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
-    const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
+    const urlLine = courseUrl ? ` Course details are here: ${courseUrl}` : "";
     if (isAmbiguous) {
-      return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
+      return `Thanks for asking. If you mean our ${courseName}, ${ambiguousPriceLine}${coursePrice ? urlLine : ""}`;
     }
-    const directPriceLine = coursePrice ? `The current price is ${coursePrice}.` : priceLine;
-    return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
+    const directPriceLine = coursePrice
+      ? `The current price is ${coursePrice}.`
+      : courseUrl
+        ? `Course details and pricing are here: ${courseUrl}`
+        : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+    return `Thanks for asking about our ${courseName}. ${directPriceLine}${coursePrice ? urlLine : ""}`;
   }
   return buildFirstTimeRiderGuidanceReply(args);
 }
