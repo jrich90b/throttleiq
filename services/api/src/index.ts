@@ -19819,6 +19819,14 @@ function hasAppointmentWeatherTimingHintText(text: string | null | undefined): b
   );
 }
 
+function hasAppointmentCancelOrRescheduleHintText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return /\b(reschedule|re-?schedule|can't make|cant make|cannot make|won't make|wont make|not going to be able to make|not able to make|unable to make|need to cancel|have to cancel|cancel(?:led|ing)?|family matter|something came up)\b/i.test(
+    lower
+  );
+}
+
 function parseCustomerDispositionFallback(text: string): CustomerDispositionDecision | null {
   const lower = String(text ?? "").toLowerCase();
   if (hasSellOnOwnSignal(lower)) {
@@ -41016,14 +41024,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && regenCustomerAckActionParse) {
     console.log("[llm-customer-ack-action-parse] regen", regenCustomerAckActionParse);
   }
-  const regenExplicitBookedAppointmentReschedule =
+  const regenExplicitAppointmentCancelOrReschedule =
     event.provider === "twilio" &&
     channel === "sms" &&
-    !!conv.appointment?.bookedEventId &&
-    /\b(reschedule|re-?schedule|need to reschedule|have to reschedule|can't make|cant make|cannot make|won't make|wont make)\b/i.test(
-      String(event.body ?? "")
-    );
-  if (regenExplicitBookedAppointmentReschedule) {
+    !isFinanceDocsQuestionText(event.body ?? "") &&
+    hasAppointmentCancelOrRescheduleHintText(event.body ?? "");
+  if (regenExplicitAppointmentCancelOrReschedule) {
     const regenBookingParse = await safeLlmParse("regen_booking_intent_parser_explicit_reschedule", () =>
       parseBookingIntentWithLLM({
         text: event.body ?? "",
@@ -41036,12 +41042,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const accepted =
       !!regenBookingParse?.explicitRequest &&
       confidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
-      regenBookingParse.intent === "reschedule";
+      (regenBookingParse.intent === "reschedule" || regenBookingParse.intent === "cancel");
     const requestedDay = String(regenBookingParse?.requested?.day ?? "").trim();
     const requestedTime = String(regenBookingParse?.requested?.timeText ?? "").trim();
-    if (accepted && !requestedDay && !requestedTime) {
+    if (accepted) {
       const profile = await getDealerProfileHot();
-      const bookingUrl = buildBookingUrlForLead(profile?.bookingUrl, conv);
+      const bookingUrl = !requestedDay && !requestedTime ? buildBookingUrlForLead(profile?.bookingUrl, conv) : null;
       conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
@@ -41049,13 +41055,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       recordRouteOutcome("regen", "booked_appointment_reschedule_link", {
         convId: conv.id,
         leadKey: conv.leadKey,
+        intent: regenBookingParse.intent,
         confidence,
         hasBookingUrl: !!bookingUrl
       });
       return respondWithSmsRegeneratedDraft(
-        buildAppointmentRescheduleBookingLinkReply({
-          bookingUrl,
-          firstName: conv.lead?.firstName ?? null
+        buildHumanModeSchedulingDraft({
+          intent: "reschedule",
+          requestedDay,
+          requestedTime,
+          bookingUrl
         }),
         undefined,
         {
@@ -45242,11 +45251,39 @@ if (authToken && signature) {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && customerAckActionParse) {
     console.log("[llm-customer-ack-action-parse]", customerAckActionParse);
   }
+  const appointmentCancelOrRescheduleHint =
+    event.provider === "twilio" &&
+    !isFinanceDocsQuestionText(event.body ?? "") &&
+    hasAppointmentCancelOrRescheduleHintText(event.body ?? "");
+  const appointmentCancelOrRescheduleParse =
+    appointmentCancelOrRescheduleHint &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_BOOKING_PARSER_ENABLED === "1" &&
+    !!process.env.OPENAI_API_KEY
+      ? await safeLlmParse("booking_intent_parser_cancel_or_reschedule", () =>
+          parseBookingIntentWithLLM({
+            text: event.body ?? "",
+            history: buildHistory(conv, 8),
+            lastSuggestedSlots: conv.scheduler?.lastSuggestedSlots,
+            appointment: conv.appointment
+          })
+        )
+      : null;
+  const appointmentCancelOrRescheduleConfidence =
+    typeof appointmentCancelOrRescheduleParse?.confidence === "number"
+      ? appointmentCancelOrRescheduleParse.confidence
+      : 0;
+  const appointmentCancelOrRescheduleAccepted =
+    !!appointmentCancelOrRescheduleParse?.explicitRequest &&
+    appointmentCancelOrRescheduleConfidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
+    (appointmentCancelOrRescheduleParse.intent === "reschedule" ||
+      appointmentCancelOrRescheduleParse.intent === "cancel");
   const earlyNoResponseParserBlocker =
     hasCustomerDispositionParserHintText(event.body ?? "") ||
     hasFirstTimeRiderGuidanceParserHint(event.body ?? "") ||
     hasAppointmentWeatherTimingHintText(event.body ?? "") ||
-    hasFutureBuyingWindowHintText(event.body ?? "");
+    hasFutureBuyingWindowHintText(event.body ?? "") ||
+    appointmentCancelOrRescheduleHint;
   const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
   const customerAckNoResponse =
     customerAckActionAccepted &&
@@ -45292,6 +45329,66 @@ if (authToken && signature) {
       closeConversation(conv, "not_interested");
       stopRelatedCadences(conv, "not_interested", { close: true });
     }
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (appointmentCancelOrRescheduleAccepted && conv.mode !== "human") {
+    const cfg = await getSchedulerConfigHot();
+    const timezone = cfg.timezone || "America/New_York";
+    const normalizedText = String(
+      appointmentCancelOrRescheduleParse?.normalizedText ??
+        [
+          String(appointmentCancelOrRescheduleParse?.requested?.day ?? "").trim(),
+          String(appointmentCancelOrRescheduleParse?.requested?.timeText ?? "").trim()
+        ]
+          .filter(Boolean)
+          .join(" ")
+    ).trim();
+    const schedule = buildAppointmentTodoSchedule(normalizedText || String(event.body ?? ""), timezone);
+    const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
+    const intentLabel =
+      appointmentCancelOrRescheduleParse.intent === "cancel"
+        ? "Appointment cancellation/reschedule requested."
+        : "Appointment reschedule requested.";
+    const summary = requestedLabel
+      ? `${intentLabel} Requested time: ${requestedLabel}.`
+      : normalizedText
+        ? `${intentLabel} Requested: ${normalizedText}.`
+        : intentLabel;
+    const owner = conv.leadOwner
+      ? {
+          id: String(conv.leadOwner.id ?? "").trim() || undefined,
+          name: String(conv.leadOwner.name ?? "").trim() || undefined
+        }
+      : undefined;
+    const todo = addTodo(conv, "call", summary, event.providerMessageId, owner, schedule);
+    conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+    conv.appointment.reschedulePending = true;
+    conv.appointment.updatedAt = new Date().toISOString();
+    setDialogState(conv, "schedule_request");
+    const requestedDay = String(appointmentCancelOrRescheduleParse.requested?.day ?? "").trim();
+    const requestedTime = String(appointmentCancelOrRescheduleParse.requested?.timeText ?? "").trim();
+    const profile = !requestedDay && !requestedTime ? await getDealerProfileHot().catch(() => null) : null;
+    const bookingUrl =
+      !requestedDay && !requestedTime ? buildBookingUrlForLead(profile?.bookingUrl, conv) : null;
+    const draft = buildHumanModeSchedulingDraft({
+      intent: "reschedule",
+      requestedDay,
+      requestedTime,
+      requestedLabel,
+      bookingUrl
+    });
+    if (draft) appendOutbound(conv, event.to, event.from, draft, "draft_ai");
+    saveConversation(conv);
+    await flushConversationStore();
+    recordRouteOutcome("live", "appointment_cancel_or_reschedule_draft_created", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      intent: appointmentCancelOrRescheduleParse.intent,
+      confidence: appointmentCancelOrRescheduleConfidence,
+      dueAt: todo?.dueAt ?? null,
+      hasBookingUrl: !!bookingUrl
+    });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -45419,7 +45516,7 @@ if (authToken && signature) {
     }
     const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText);
     const humanModeHasScheduleKeyword =
-      /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times)\b/i.test(
+      /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times|cancel|can't make|cant make|cannot make)\b/i.test(
         humanModeText
       );
     const humanModeHasDayToken =
@@ -45487,6 +45584,7 @@ if (authToken && signature) {
     const humanModeBookingParserHint =
       llmExplicitScheduleIntent ||
       humanModeHasScheduleKeyword ||
+      hasAppointmentCancelOrRescheduleHintText(humanModeText) ||
       (((conv.scheduler?.lastSuggestedSlots?.length ?? 0) > 0 ||
         String(conv.appointment?.status ?? "").toLowerCase() !== "none") &&
         (humanModeHasDayToken || humanModeHasTimeToken));
@@ -45507,6 +45605,7 @@ if (authToken && signature) {
         bookingConfidence >= bookingConfidenceMin &&
         (humanBookingParse.intent === "schedule" ||
           humanBookingParse.intent === "reschedule" ||
+          humanBookingParse.intent === "cancel" ||
           humanBookingParse.intent === "availability");
       if (humanBookingAccepted && isPostSalePickupCoordinationText(conv, humanModeText)) {
         markOpenPostSalePickupScheduleTodosDone(conv);
@@ -45544,7 +45643,9 @@ if (authToken && signature) {
         const schedule = buildAppointmentTodoSchedule(rawTimePhrase, timezone);
         const requestedLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), timezone) : null;
         const intentLabel =
-          humanBookingParse.intent === "reschedule"
+          humanBookingParse.intent === "cancel"
+            ? "Appointment cancellation/reschedule requested."
+            : humanBookingParse.intent === "reschedule"
             ? "Appointment reschedule requested."
             : humanBookingParse.intent === "availability"
               ? "Customer asked for appointment availability."
@@ -45579,12 +45680,12 @@ if (authToken && signature) {
           dueAt: todo?.dueAt ?? null
         });
         const draft = buildHumanModeSchedulingDraft({
-          intent: humanBookingParse.intent,
+          intent: humanBookingParse.intent === "cancel" ? "reschedule" : humanBookingParse.intent,
           requestedDay: humanBookingParse.requested?.day ?? null,
           requestedTime: humanBookingParse.requested?.timeText ?? null,
           requestedLabel,
           bookingUrl:
-            humanBookingParse.intent === "reschedule" &&
+            (humanBookingParse.intent === "reschedule" || humanBookingParse.intent === "cancel") &&
             !String(humanBookingParse.requested?.day ?? "").trim() &&
             !String(humanBookingParse.requested?.timeText ?? "").trim()
               ? buildBookingUrlForLead((await getDealerProfileHot())?.bookingUrl, conv)

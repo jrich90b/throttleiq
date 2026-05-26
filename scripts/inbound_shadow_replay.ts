@@ -16,6 +16,7 @@ type ReplayArgs = {
   outDir: string;
   twilioTo: string;
   keepTemp: boolean;
+  fullDataCopy: boolean;
   caseNumbers: number[];
 };
 
@@ -97,6 +98,7 @@ Options:
   --out-dir <path>        Report directory. Default: reports/inbound-shadow.
   --twilio-to <phone>     Fallback dealer Twilio number for replay. Default: +17164032516.
   --case-numbers <list>   Optional 1-based case numbers after filtering, e.g. 5,25,38.
+  --full-data-copy        Copy every DATA_DIR folder/file. Default skips uploads/backups for safe replay.
   --keep-temp             Keep temporary copied data folders for inspection.
 `);
   process.exit(1);
@@ -111,6 +113,7 @@ function parseArgs(argv: string[]): ReplayArgs {
     outDir: "reports/inbound-shadow",
     twilioTo: "+17164032516",
     keepTemp: false,
+    fullDataCopy: false,
     caseNumbers: []
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -138,6 +141,7 @@ function parseArgs(argv: string[]): ReplayArgs {
         .filter(num => Number.isFinite(num) && num > 0);
       if (!out.caseNumbers.length) usage();
     }
+    else if (arg === "--full-data-copy") out.fullDataCopy = true;
     else if (arg === "--keep-temp") out.keepTemp = true;
     else usage();
   }
@@ -155,6 +159,44 @@ async function readJson<T = any>(filePath: string): Promise<T> {
 async function writeJson(filePath: string, value: any): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function shouldCopyShadowTopLevelFile(fileName: string): boolean {
+  if (!fileName.endsWith(".json")) return false;
+  if (/(?:backup|backups|\.bak|bak-|backup-)/i.test(fileName)) return false;
+  return true;
+}
+
+async function copyShadowDataDir(sourceDir: string, destDir: string, fullCopy: boolean): Promise<void> {
+  if (fullCopy) {
+    await fs.cp(sourceDir, destDir, { recursive: true });
+    return;
+  }
+  await fs.mkdir(destDir, { recursive: true });
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isFile() && shouldCopyShadowTopLevelFile(entry.name)) {
+      await fs.copyFile(sourcePath, destPath);
+    }
+  }
+  for (const dirName of ["lead_sources", "openai_usage"]) {
+    const sourcePath = path.join(sourceDir, dirName);
+    if (await pathExists(sourcePath)) {
+      await fs.cp(sourcePath, path.join(destDir, dirName), { recursive: true });
+    }
+  }
+  await fs.mkdir(path.join(destDir, "uploads"), { recursive: true });
 }
 
 function normalizeProvider(raw?: string | null): Provider | null {
@@ -355,7 +397,7 @@ async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: 
 }> {
   const caseDir = await fs.mkdtemp(path.join(rootDir, `${candidate.provider}-`));
   const dataDir = path.join(caseDir, "data");
-  await fs.cp(args.dataDir, dataDir, { recursive: true });
+  await copyShadowDataDir(args.dataDir, dataDir, args.fullDataCopy);
 
   const conversationsPath = path.join(dataDir, "conversations.json");
   const snapshot = await readJson<any>(conversationsPath);
@@ -608,7 +650,10 @@ function latestOutboundAfter(conv: Conversation | null, beforeCount: number): Co
 function isExpectedNoCustomerReply(inbound: string): boolean {
   const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
   if (!text) return false;
-  if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|ty|👍)[.!?\s]*$/i.test(text)) return true;
+  if (/\b(reschedule|re-?schedule|can't make|cant make|cannot make|won't make|wont make|not going to be able to make|unable to make|need to cancel|have to cancel)\b/i.test(text)) {
+    return false;
+  }
+  if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|ty|yes sir|will do|thanks,?\s*will do|👍)[.!?\s]*$/i.test(text)) return true;
   if (
     /\b(let me (?:do some figuring out|figure|find|check)|i(?:'|’)ll (?:let|give) you (?:know|a time|a timeframe|a time frame)|give you a time\s*frame|let you know soon)\b/i.test(
       text
@@ -618,6 +663,7 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   }
   const hasQuestion = /\?|\b(can|could|would|do|does|did|is|are|will|what|when|where|why|how)\b/i.test(text);
   if (hasQuestion) return false;
+  if (/\b(no rush|not urgent|don't mean to bug you|dont mean to bug you|hope you'?re enjoying|figured that would help|you guys are outstanding|much appreciated)\b/i.test(text)) return true;
   if (/\b(thanks?|thank you|appreciate|have a great day|sounds good|perfect|ok|okay)\b/i.test(text)) return true;
   if (/\b(i'?ll be there|i will be there|be there by then|see you then|talk soon|touch base)\b/i.test(text)) return true;
   return false;
