@@ -259,23 +259,23 @@ function buildRiderToRiderFinanceLeadReply(args: {
       return (
         "Thanks - we received your Rider to Rider financing inquiry. " +
         "I'll have our business manager reach out shortly. " +
-        "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+        "If you're also looking at one of our in-stock bikes, I can help with that too."
       );
     }
     return firstName
-      ? `Thanks ${firstName} - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.`
-      : "Thanks - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.";
+      ? `Thanks ${firstName} - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you're also looking at one of our in-stock bikes, I can help with that too.`
+      : "Thanks - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you're also looking at one of our in-stock bikes, I can help with that too.";
   }
   if (args.isInitialAdf) {
     return (
       "Thanks for reaching out about Rider to Rider financing. " +
       "We don't participate in Rider to Rider financing, but we can review similar financing options we do offer. " +
-      "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+      "If you're open to one of our in-stock bikes, I can help with financing options here."
     );
   }
   return firstName
-    ? `Thanks ${firstName} - we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.`
-    : "Thanks - we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. If you also want a quick inventory check on the bike from your inquiry, I can confirm that too.";
+    ? `Thanks ${firstName} - we don't participate in Rider to Rider financing, but we can review similar financing options on bikes we sell here.`
+    : "Thanks - we don't participate in Rider to Rider financing, but we can review similar financing options on bikes we sell here.";
 }
 
 function pickFirstToken(raw: string | null | undefined): string {
@@ -1306,13 +1306,29 @@ function buildInitialAdfRiderCourseInfoReply(
   const isAmbiguous = hasAmbiguousRiderCourseInfoText(inquiryText);
   const priceLine = coursePrice
     ? `the current price is ${coursePrice}.`
-    : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+    : courseUrl
+      ? "current class details and pricing are listed here."
+      : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
   const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
   if (isAmbiguous) {
     return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
   }
   const directPriceLine = coursePrice ? `The current price is ${coursePrice}.` : priceLine;
   return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
+}
+
+function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
+  const policies = dealerProfile?.policies ?? {};
+  const firstTimePolicy =
+    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
+      ? policies.firstTimeRider
+      : {};
+  return !!(
+    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.trainingCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseUrl ?? "").trim()
+  );
 }
 
 function buildBookingUrlForLead(baseUrl: string | undefined | null, conv: any): string | null {
@@ -6942,14 +6958,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let ack = buildInitialAdfRiderCourseInfoReply(profile, effectiveInquiry);
     ack = await applyInitialAdfPrefix(ack);
     setDialogState("rider_course_info");
-    addTodo(
-      conv,
-      "other",
-      `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
-      event.providerMessageId
-    );
-    setFollowUpMode(conv, "manual_handoff", "rider_course_info");
-    stopFollowUpCadence(conv, "manual_handoff");
+    if (!hasRiderCourseCustomerFacingInfo(profile)) {
+      addTodo(
+        conv,
+        "other",
+        `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "rider_course_info");
+      stopFollowUpCadence(conv, "manual_handoff");
+    } else {
+      setFollowUpMode(conv, "active", "rider_course_info");
+    }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     setEmailDraft(conv, ack);
@@ -7297,14 +7317,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     draft = buildInitialAdfRiderCourseInfoReply(dealerProfile, effectiveInquiry);
     suppressAvailabilityAppend = true;
     setDialogState("rider_course_info");
-    addTodo(
-      conv,
-      "other",
-      `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
-      event.providerMessageId
-    );
-    setFollowUpMode(conv, "manual_handoff", "rider_course_info");
-    stopFollowUpCadence(conv, "manual_handoff");
+    if (!hasRiderCourseCustomerFacingInfo(dealerProfile)) {
+      addTodo(
+        conv,
+        "other",
+        `Confirm Riding Academy/course pricing and availability. Customer asked: ${effectiveInquiry}`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "rider_course_info");
+      stopFollowUpCadence(conv, "manual_handoff");
+    } else {
+      setFollowUpMode(conv, "active", "rider_course_info");
+    }
   }
   if (
     isInitialAdf &&

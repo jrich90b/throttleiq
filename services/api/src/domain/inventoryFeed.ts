@@ -71,6 +71,13 @@ function extractPrice(item: Record<string, any>): number | null {
   return null;
 }
 
+function priceForItem(item: Record<string, any> | null | undefined): number | null {
+  if (!item || typeof item !== "object") return null;
+  const direct = parsePrice(text((item as any).price));
+  if (direct != null) return direct;
+  return extractPrice(item);
+}
+
 function parseFeed(xml: string): InventoryFeedItem[] {
   const parser = new XMLParser({ ignoreAttributes: false });
   const doc = parser.parse(xml);
@@ -275,17 +282,17 @@ export async function findInventoryPrice(opts: {
     const vin = opts.vin?.trim().toLowerCase();
     if (stock) {
       const item = haystack.find(i => i.stockId?.toLowerCase() === stock);
-      if (item) return { price: item.price ?? null, item };
+      if (item) return { price: priceForItem(item as any), item };
     }
     if (vin) {
       const item = haystack.find(i => i.vin?.toLowerCase() === vin);
-      if (item) return { price: item.price ?? null, item };
+      if (item) return { price: priceForItem(item as any), item };
     }
     const year = opts.year?.trim();
     const model = opts.model?.trim() ?? null;
     if (year && model) {
       const item = haystack.find(i => i.year === year && modelMatches(i.model, model));
-      if (item) return { price: item.price ?? null, item };
+      if (item) return { price: priceForItem(item as any), item };
     }
     return null;
   };
@@ -306,9 +313,12 @@ export async function findPriceRange(opts: {
   const model = opts.model?.trim() ?? null;
   if (!year || !model) return null;
   const matches = items.filter(
-    i => i.year === year && modelMatches(i.model, model) && i.price && i.price > 0
+    i => i.year === year && modelMatches(i.model, model) && (priceForItem(i as any) ?? 0) > 0
   );
-  if (!matches.length) return null;
-  const prices = matches.map(m => m.price as number).sort((a, b) => a - b);
+  const prices = matches
+    .map(m => priceForItem(m as any))
+    .filter((price): price is number => typeof price === "number" && Number.isFinite(price) && price > 0)
+    .sort((a, b) => a - b);
+  if (!prices.length) return null;
   return { min: prices[0], max: prices[prices.length - 1], count: prices.length };
 }

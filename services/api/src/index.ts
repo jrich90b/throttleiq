@@ -2668,12 +2668,11 @@ function buildRiderToRiderFinanceRegenReply(args: {
     return (
       `${leadIn}we received your Rider to Rider financing inquiry. ` +
       "Our business manager will reach out shortly. " +
-      "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+      "If you're also looking at one of our in-stock bikes, I can help with that too."
     ).trim();
   }
   return (
-    `${leadIn}we don't participate in Rider to Rider financing, but we can review similar financing options we do offer. ` +
-    "If you also want a quick inventory check on the bike from your inquiry, I can confirm that too."
+    `${leadIn}we don't participate in Rider to Rider financing, but we can review similar financing options on bikes we sell here.`
   ).trim();
 }
 
@@ -2693,8 +2692,34 @@ function hasDealerTransactionPolicyParserHint(text: string | null | undefined): 
     /\bdealer\s+trade\b/.test(t) ||
     /\b(?:facilitate|facilitating|broker|handle|process)\b[\s\S]{0,90}\b(?:private|seller|party|marketplace|another dealer|other dealer|third[-\s]?party|used bike)\b/.test(
       t
+    ) ||
+    /\b(?:buy|purchase|acquire)\s+(?:this|that|the)\s+bike\b[\s\S]{0,140}\btrade\s+(?:mine|my\s+bike|my\s+motorcycle)\b/.test(
+      t
+    ) ||
+    /\btrade\s+(?:mine|my\s+bike|my\s+motorcycle)\s+(?:on|toward|towards)\s+(?:it|this|that|the\s+bike)\b/.test(
+      t
     );
   return riderToRider || thirdParty;
+}
+
+function hasDealerTransactionPolicyContinuationHint(
+  text: string | null | undefined,
+  conv: any
+): boolean {
+  if (hasDealerTransactionPolicyParserHint(text)) return true;
+  const current = String(text ?? "").toLowerCase();
+  if (
+    !/\b(trade\s+part|trade\s+mine|trade\s+my\s+(?:bike|motorcycle)|buy\s+(?:this|that|the)\s+bike|purchase\s+(?:this|that|the)\s+bike|facilitate|paperwork)\b/.test(
+      current
+    )
+  ) {
+    return false;
+  }
+  const recent = buildHistory(conv, 8)
+    .map(row => row.body)
+    .join("\n")
+    .toLowerCase();
+  return hasDealerTransactionPolicyParserHint(recent);
 }
 
 function parseDealerTransactionPolicyFallback(text: string): DealerTransactionPolicyDecision | null {
@@ -16417,9 +16442,11 @@ async function buildBusinessHoursQuestionReply(text: string): Promise<string> {
     if (dayHours?.open && dayHours?.close) {
       const open = formatTime12h(dayHours.open);
       const close = formatTime12h(dayHours.close);
-      return `Our hours on ${dayLabel} are ${open}–${close}.`;
+      const dayPhrase = dayLabel === "today" || dayLabel === "tomorrow" ? dayLabel : `on ${dayLabel}`;
+      return `Our hours ${dayPhrase} are ${open}–${close}.`;
     }
-    return `We’re closed on ${dayLabel}.`;
+    const closedPhrase = dayLabel === "today" || dayLabel === "tomorrow" ? dayLabel : `on ${dayLabel}`;
+    return `We’re closed ${closedPhrase}.`;
   }
   if (hoursLine) return `Our hours this week are ${hoursLine}.`;
   return "Our hours vary by day. What day are you thinking?";
@@ -19776,12 +19803,17 @@ function buildFirstTimeRiderGuidanceReply(args: {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
     const priceLine = coursePrice
       ? `the current price is ${coursePrice}.`
-      : "I’ll have the team confirm current class pricing and availability and follow up.";
+      : courseUrl
+        ? "current class details and pricing are listed here."
+        : "I’ll have the team confirm current class pricing and availability and follow up.";
     if (isAmbiguous) {
       return `Good question. If you mean our ${courseName}, ${priceLine}${courseDetails}`;
     }
+    const intro = courseName.match(/^(a|an|the)\b/i)
+      ? courseName
+      : `the ${courseName}`;
     const directPriceLine = coursePrice ? ` The current price is ${coursePrice}.` : ` ${priceLine}`;
-    return `Good question. ${courseName} is the best place to start.${directPriceLine}${courseDetails}`;
+    return `Good question. ${intro} is the best place to start.${directPriceLine}${courseDetails}`;
   }
   if (parsed.hasEndorsement === false || parsed.intent === "no_motorcycle_endorsement") {
     const requirement = requiresEndorsement
@@ -19823,7 +19855,9 @@ function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
     const isAmbiguous = hasAmbiguousRiderCourseInfoText(args.text);
     const priceLine = coursePrice
       ? `the current price is ${coursePrice}.`
-      : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
+      : courseUrl
+        ? "current class details and pricing are listed here."
+        : "I’ll have the team confirm current class pricing and availability and follow up shortly.";
     const urlLine = courseUrl ? ` You can also view course details here: ${courseUrl}` : "";
     if (isAmbiguous) {
       return `Thanks for asking. If you mean our ${courseName}, ${priceLine}${urlLine}`;
@@ -19832,6 +19866,20 @@ function buildInitialAdfFirstTimeRiderGuidanceReply(args: {
     return `Thanks for asking about our ${courseName}. ${directPriceLine}${urlLine}`;
   }
   return buildFirstTimeRiderGuidanceReply(args);
+}
+
+function hasRiderCourseCustomerFacingInfo(dealerProfile: any): boolean {
+  const policies = dealerProfile?.policies ?? {};
+  const firstTimePolicy =
+    policies?.firstTimeRider && typeof policies.firstTimeRider === "object"
+      ? policies.firstTimeRider
+      : {};
+  return !!(
+    String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.trainingCoursePrice ?? "").trim() ||
+    String(firstTimePolicy.riderCourseUrl ?? "").trim() ||
+    String(firstTimePolicy.trainingCourseUrl ?? "").trim()
+  );
 }
 
 function applyFirstTimeRiderGuidanceState(conv: any, parsed?: FirstTimeRiderGuidanceParse | null) {
@@ -41126,7 +41174,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
 
   if (
     (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
-    hasDealerTransactionPolicyParserHint(event.body ?? "")
+    hasDealerTransactionPolicyContinuationHint(event.body ?? "", conv)
   ) {
     const dealerTransactionPolicyParse = await safeLlmParse("regen_dealer_transaction_policy_parser", () =>
       parseDealerTransactionPolicyWithLLM({
@@ -41516,14 +41564,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       regenAdfFirstTimeRiderDecision.intent === "rider_course_info" ||
       regenAdfFirstTimeRiderDecision.asksRiderCourse
     ) {
-      const firstTimePolicy =
-        dealerProfile?.policies?.firstTimeRider && typeof dealerProfile.policies.firstTimeRider === "object"
-          ? dealerProfile.policies.firstTimeRider
-          : {};
-      const coursePrice =
-        String(firstTimePolicy.riderCoursePrice ?? "").trim() ||
-        String(firstTimePolicy.trainingCoursePrice ?? "").trim();
-      if (!coursePrice) {
+      if (!hasRiderCourseCustomerFacingInfo(dealerProfile)) {
         addTodo(
           conv,
           "other",
@@ -45587,7 +45628,11 @@ if (authToken && signature) {
     )}</Message>\n</Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
-  if (event.provider === "twilio" && !semanticShortAck && hasDealerTransactionPolicyParserHint(semanticInboundText)) {
+  if (
+    event.provider === "twilio" &&
+    !semanticShortAck &&
+    hasDealerTransactionPolicyContinuationHint(semanticInboundText, conv)
+  ) {
     const dealerTransactionPolicyParse = await safeLlmParse("dealer_transaction_policy_parser", () =>
       parseDealerTransactionPolicyWithLLM({
         text: semanticInboundText,

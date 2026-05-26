@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -31,6 +32,8 @@ type ConversationMessage = {
 
 type Conversation = {
   id: string;
+  status?: string;
+  closedReason?: string;
   leadKey?: string;
   messages?: ConversationMessage[];
   lead?: any;
@@ -391,8 +394,18 @@ async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: 
   };
 }
 
-function findFreePort(): number {
-  return 3900 + Math.floor(Math.random() * 800);
+async function findFreePort(): Promise<number> {
+  await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 150)));
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => (port ? resolve(port) : reject(new Error("no free port assigned"))));
+    });
+  });
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -400,7 +413,7 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function waitForHealth(port: number, child: ChildProcessWithoutNullStreams, logs: string[]): Promise<void> {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (child.exitCode != null) {
       throw new Error(`temporary API exited early (${child.exitCode}): ${logs.slice(-20).join("\n")}`);
@@ -528,7 +541,7 @@ async function submitTwilio(port: number, candidate: Candidate): Promise<{
 }
 
 async function waitForTwilioJob(jobsPath: string, providerMessageId: string): Promise<any | null> {
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     try {
       const rows = await readJson<any[]>(jobsPath);
@@ -603,6 +616,12 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   return false;
 }
 
+function isWrongNumberInbound(inbound: string): boolean {
+  return /\b(wrong\s+number|you\s+(?:have|got)\s+the\s+wrong\s+number|not\s+(?:me|mine|this\s+person)|who\s+is\s+this)\b/i.test(
+    inbound
+  );
+}
+
 function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
   verdict: Verdict;
   reasons: string[];
@@ -612,6 +631,16 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
   if (!draftText) {
+    if (
+      isWrongNumberInbound(inbound) &&
+      (String(conv?.status ?? "").toLowerCase() === "closed" ||
+        String(conv?.closedReason ?? "").toLowerCase() === "wrong_number")
+    ) {
+      return {
+        verdict: "expected_no_response",
+        reasons: ["wrong-number suppression closed the conversation"]
+      };
+    }
     if (String((conv as any)?.mode ?? "").toLowerCase() === "human") {
       return {
         verdict: "expected_no_response",
@@ -708,7 +737,7 @@ async function replayOne(
   let logs: string[] = [];
   try {
     caseData = await prepareCaseData(args, candidate, rootTempDir);
-    const port = findFreePort();
+    const port = await findFreePort();
     const started = await startApi({
       dataDir: caseData.dataDir,
       jobsPath: caseData.jobsPath,
@@ -897,7 +926,9 @@ async function main() {
   );
 }
 
-main().catch(err => {
-  console.error(err?.stack ?? err?.message ?? err);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch(err => {
+    console.error(err?.stack ?? err?.message ?? err);
+    process.exit(1);
+  });

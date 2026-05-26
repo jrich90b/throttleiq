@@ -4763,7 +4763,13 @@ inbound: "Can I trade my bike in on that Street Glide?"
 output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.95}`,
     `EXAMPLE F
 inbound: "Can I finance a used bike you have in stock?"
-output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.95}`
+output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":false,"asks_external_dealer_facilitation":false,"confidence":0.95}`,
+    `EXAMPLE G
+recent messages:
+in: "Would you be able to facilitate a trade for a used bike I found with a private seller? Would the rider to rider program work for something like this?"
+out: "We do not participate in Rider to Rider financing, and we generally cannot facilitate a trade or purchase for a bike owned by a private seller."
+inbound: "Fair enough. I'm more interested in the trade part than financing anyways. Would it be possible for you guys to buy this bike for an agreed amount and then I trade mine on it?"
+output: {"intent":"private_seller_facilitation","explicit_request":true,"asks_rider_to_rider_financing":false,"asks_private_seller_facilitation":true,"asks_external_dealer_facilitation":false,"confidence":0.97}`
   ];
 
   const prompt = [
@@ -4780,6 +4786,7 @@ output: {"intent":"none","explicit_request":true,"asks_rider_to_rider_financing"
     "Important:",
     "- Do not classify a normal trade-in question as private_seller_facilitation.",
     "- Do not classify a normal financing/payment question as rider_to_rider_financing unless Rider to Rider/R2R is explicitly mentioned.",
+    "- Use recent messages for continuity: if the prior context was a private seller or Rider-to-Rider question, a follow-up asking about 'the trade part', 'buy this bike', or 'trade mine on it' is private_seller_facilitation.",
     "- explicit_request=true when the customer asks what the dealership can do or whether a program/process applies.",
     "- confidence is 0..1.",
     "",
