@@ -3105,10 +3105,12 @@ function buildCompositeSalesInquiryReply(conv: any, decision: CompositeSalesInqu
 
 async function buildInitialAdfVehicleFactReply(args: {
   conv: any;
+  lead?: any;
   decision: AdfVehicleFactDecision;
   text: string;
 }): Promise<{ reply: string; needsTodo: boolean; todoReason: string; todoSummary: string }> {
-  const vehicle = args.conv?.lead?.vehicle ?? {};
+  const scopedConv = args.lead ? { ...args.conv, lead: args.lead } : args.conv;
+  const vehicle = scopedConv?.lead?.vehicle ?? {};
   const year = String(vehicle.year ?? "").trim();
   const model =
     normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null) ||
@@ -3117,7 +3119,7 @@ async function buildInitialAdfVehicleFactReply(args: {
   const color = cleanVehicleColorForReply(vehicle.color ?? null);
   const confirmExact = `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
   const inventoryBacked = await buildInventoryBackedVehicleFactAnswer({
-    conv: args.conv,
+    conv: scopedConv,
     decision: args.decision,
     text: args.text
   });
@@ -5401,6 +5403,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (followUpAdfVehicleFactDecision) {
     const vehicleFactReply = await buildInitialAdfVehicleFactReply({
       conv,
+      lead: activeAdfLeadProfile,
       decision: followUpAdfVehicleFactDecision,
       text: effectiveInquiry
     });
@@ -7572,6 +7575,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (initialAdfVehicleFactDecision && !skipInitialAdfVehicleFactForTrade) {
     const vehicleFactReply = await buildInitialAdfVehicleFactReply({
       conv,
+      lead: activeAdfLeadProfile,
       decision: initialAdfVehicleFactDecision,
       text: effectiveInquiry
     });
