@@ -35,6 +35,7 @@
     "trade_payoff:eval": "LLM_ENABLED=1 LLM_TRADE_PAYOFF_PARSER_ENABLED=1 npx tsx scripts/trade_payoff_eval.ts",
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",
     "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts",
+    "adf_parser:eval": "npx tsx scripts/adf_parser_eval.ts",
     "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts",
     "disposition_transition:eval": "npx tsx scripts/disposition_transition_eval.ts",
     "response_control:eval": "npx tsx scripts/response_control_eval.ts",
@@ -75,7 +76,7 @@
     "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "feedback:nightly": "bash scripts/feedback_loop_nightly.sh",
     "feedback:hourly": "bash scripts/feedback_loop_hourly.sh",
-    "ci:eval": "npm run reply_path:audit && npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run inventory_fact_answer:eval && npm run inbound_pipeline:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval"
+    "ci:eval": "npm run reply_path:audit && npm run adf_parser:eval && npm run adf_policy:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run inventory_fact_answer:eval && npm run inbound_pipeline:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",

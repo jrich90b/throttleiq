@@ -4130,6 +4130,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   lead.inquiry = effectiveInquiry;
   adfLeadProfile.inquiry = effectiveInquiry || undefined;
+  const activeAdfLeadProfile = adfLeadProfile;
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
     [
@@ -4229,35 +4230,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       parseDialogActWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("intent", () =>
       parseIntentWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("journey_intent", () =>
       parseJourneyIntentWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("inventory_entities", () =>
       parseInventoryEntitiesWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("semantic_slots", () =>
       parseSemanticSlotsWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead,
+        lead: activeAdfLeadProfile,
         inventoryWatch: conv.inventoryWatch,
         inventoryWatchPending: conv.inventoryWatchPending,
         dialogState: String(conv.dialogState?.name ?? "")
@@ -4267,7 +4268,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       parseConversationStateWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead,
+        lead: activeAdfLeadProfile,
         followUp: conv.followUp ?? null,
         dialogState: conv.dialogState?.name ?? null,
         inventoryWatchPending: conv.inventoryWatchPending ?? null
@@ -4277,14 +4278,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       parseResponseControlWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("routing_decision", () =>
       parseRoutingDecisionWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead,
+        lead: activeAdfLeadProfile,
         followUp: conv.followUp ?? null,
         dialogState: conv.dialogState?.name ?? null,
         classification: {
@@ -4297,35 +4298,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       parseDealershipFaqTopicWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("walkin_outcome", () =>
       parseWalkInOutcomeWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("composite_sales_inquiry", () =>
       parseCompositeSalesInquiryWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("vehicle_info_request", () =>
       parseVehicleInfoRequestWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("vehicle_fact_question", () =>
       parseVehicleFactQuestionWithLLM({
         text: effectiveInquiry,
         history: adfHistory,
-        lead: conv.lead
+        lead: activeAdfLeadProfile
       })
     ),
     safeParser("inventory_status", () =>
@@ -4340,7 +4341,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
           parseFirstTimeRiderGuidanceWithLLM({
             text: effectiveInquiry,
             history: adfHistory,
-            lead: conv.lead
+            lead: activeAdfLeadProfile
           })
         )
       : Promise.resolve(null)
@@ -5905,16 +5906,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const firstName = normalizeDisplayCase(activeAdfLeadProfile?.firstName);
     const modelLabel = normalizeVehicleModel(
-      conv.lead?.tradeVehicle?.model ??
-        conv.lead?.tradeVehicle?.description ??
-        conv.lead?.vehicle?.model ??
-        conv.lead?.vehicle?.description ??
+      activeAdfLeadProfile?.tradeVehicle?.model ??
+        activeAdfLeadProfile?.tradeVehicle?.description ??
+        activeAdfLeadProfile?.vehicle?.model ??
+        activeAdfLeadProfile?.vehicle?.description ??
         "",
-      conv.lead?.tradeVehicle?.make ?? conv.lead?.vehicle?.make ?? null
+      activeAdfLeadProfile?.tradeVehicle?.make ?? activeAdfLeadProfile?.vehicle?.make ?? null
     );
-    const sellYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const sellYear = activeAdfLeadProfile?.tradeVehicle?.year ?? activeAdfLeadProfile?.vehicle?.year ?? null;
     const bikeLabel = [sellYear, modelLabel].filter(Boolean).join(" ").trim() || "your bike";
     const ackCore = buildMarketplaceSellMyBikeReviewReply({
       bikeLabel,
@@ -6611,14 +6612,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
     const tradeModel = normalizeVehicleModel(
-      conv.lead?.tradeVehicle?.model ??
-        conv.lead?.tradeVehicle?.description ??
-        conv.lead?.vehicle?.model ??
-        conv.lead?.vehicle?.description ??
+      activeAdfLeadProfile?.tradeVehicle?.model ??
+        activeAdfLeadProfile?.tradeVehicle?.description ??
+        activeAdfLeadProfile?.vehicle?.model ??
+        activeAdfLeadProfile?.vehicle?.description ??
         "",
-      conv.lead?.tradeVehicle?.make ?? conv.lead?.vehicle?.make ?? null
+      activeAdfLeadProfile?.tradeVehicle?.make ?? activeAdfLeadProfile?.vehicle?.make ?? null
     );
-    const tradeYear = conv.lead?.tradeVehicle?.year ?? conv.lead?.vehicle?.year ?? null;
+    const tradeYear = activeAdfLeadProfile?.tradeVehicle?.year ?? activeAdfLeadProfile?.vehicle?.year ?? null;
     const bikeLabel = [tradeYear, tradeModel].filter(Boolean).join(" ").trim() || "your bike";
     let ack =
       `Thanks — I got your trade-in request for ${bikeLabel}. ` +
@@ -6998,8 +6999,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const modelMismatch = isInitialAdf
     ? detectInitialAdfModelMismatch({
-        leadModel: conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null,
-        leadMake: conv.lead?.vehicle?.make ?? null,
+        leadModel: activeAdfLeadProfile?.vehicle?.model ?? activeAdfLeadProfile?.vehicle?.description ?? null,
+        leadMake: activeAdfLeadProfile?.vehicle?.make ?? null,
         inquiry: lead.inquiry ?? inquiryRaw
       })
     : null;
@@ -7035,8 +7036,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     result = await orchestrateInbound(event, history, {
       appointment: conv.appointment,
       followUp: conv.followUp,
-      lead: conv.lead,
-      leadSource: conv.lead?.source ?? null,
+      lead: activeAdfLeadProfile,
+      leadSource: activeAdfLeadProfile?.source ?? null,
       bucket: conv.classification?.bucket ?? null,
       cta: conv.classification?.cta ?? null,
       availabilityIntentHint: availabilityIntentFromParser || hasStockIntent,
