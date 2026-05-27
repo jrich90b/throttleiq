@@ -719,6 +719,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const inboundLower = inbound.toLowerCase();
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
+  const immediateArrivalInbound = isImmediateArrivalInbound(inbound);
   if (!draftText) {
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
@@ -774,7 +775,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (/\b(and|or|to|the|when|if|with|for|can|could|would|should|will)$/i.test(draftText)) {
     reasons.push("draft appears truncated");
   }
-  if (draftHandsOff && !riderCourseInquiry) {
+  if (draftHandsOff && !riderCourseInquiry && !immediateArrivalInbound) {
     reasons.push("draft hands off instead of answering directly");
   }
   if (draftHandsOff && riderCourseInquiry) {
@@ -800,11 +801,11 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (/\b(service|inspection|parts?|warranty|recall|repair)\b/i.test(inboundLower)) {
     reasons.push("department routing-sensitive inbound");
   }
-  if (isImmediateArrivalInbound(inbound)) {
+  if (immediateArrivalInbound) {
     reasons.push("immediate-arrival scheduling-sensitive inbound");
   }
   if (
-    isImmediateArrivalInbound(inbound) &&
+    immediateArrivalInbound &&
     /\b(have that time noted|that time noted|text me if anything changes|see you|i'?ll see you|you'?re booked|booked for|locked in|lock that in|sounds good)\b/i.test(
       draftLower
     ) &&
