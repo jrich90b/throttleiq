@@ -158,6 +158,11 @@ const cases: Case[] = [
     expected: "No worries — what time works best on Saturday to reschedule?"
   },
   {
+    id: "human_mode_exact_time_checks_before_confirming",
+    actual: buildHumanModeSchedulingDraft({ intent: "schedule", requestedDay: "Friday", requestedTime: "3:30 PM" }),
+    expected: "Sounds good — I’ll check that time and follow up."
+  },
+  {
     id: "available_to_chat_now_routes_as_callback_fallback",
     actual: isImmediateChatCallbackAvailabilityText(
       "Hi Joe, I'm available to chat right now if that works for you."
@@ -1071,6 +1076,32 @@ const cases: Case[] = [
       classificationCta: "parts_request"
     }).allow,
     expected: true
+  },
+  {
+    id: "truncated_department_draft_is_repaired",
+    actual: applyDraftStateInvariants({
+      inboundText: "Thanks. I assume it's an auto generated message? For future reference use this number for parts.",
+      draftText: "Yep, this is Giovanni — appreciate the heads-up about the",
+      followUpMode: "active",
+      followUpReason: "post_sale",
+      dialogState: "small_talk",
+      classificationBucket: "sales",
+      classificationCta: "general"
+    }).draftText,
+    expected: "I’ll have the right person check that and follow up shortly."
+  },
+  {
+    id: "truncated_customer_closeout_draft_is_repaired",
+    actual: applyDraftStateInvariants({
+      inboundText: "Thanks Joe. I'm all set on the bike search for the time being. I'll reach out when I'm looking again.",
+      draftText: "Sounds great — enjoy the break, and ping me when",
+      followUpMode: "holding_inventory",
+      followUpReason: "inventory_watch",
+      dialogState: "watch_active",
+      classificationBucket: "inventory_interest",
+      classificationCta: "watch_inventory"
+    }).draftText,
+    expected: "Sounds good — thanks for the update."
   }
 ];
 

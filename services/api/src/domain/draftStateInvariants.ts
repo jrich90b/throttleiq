@@ -35,6 +35,35 @@ function isShortAckText(text: string): boolean {
   );
 }
 
+function looksLikeTruncatedDraft(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (t.length < 18) return false;
+  const normalized = t.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (/[.!?)]["']?\s*$/.test(normalized)) return false;
+  if (/\b(?:about\s+the|about|the|a|an|and|or|but|because|with|for|to|from|of|on|in|at|if|when|while|that|this|your|my|our|his|her|their|before|after|over|under|between|into|by|as)\s*$/i.test(normalized)) {
+    return true;
+  }
+  if (/[,:;—-]\s*$/.test(normalized)) return true;
+  return false;
+}
+
+function truncatedDraftFallback(input: DraftStateInvariantInput): string {
+  const inboundText = String(input.inboundText ?? "").toLowerCase();
+  if (
+    /\b(all set|not looking|no longer looking|not interested|reach out|reached out|when i'?m ready|when i am ready)\b/.test(
+      inboundText
+    ) &&
+    !/[?]/.test(inboundText)
+  ) {
+    return "Sounds good — thanks for the update.";
+  }
+  if (/\b(parts?|service|apparel|motorclothes)\b/.test(inboundText) || isDepartmentHandoff(input)) {
+    return "I’ll have the right person check that and follow up shortly.";
+  }
+  return "I’ll check on that and follow up shortly.";
+}
+
 function looksLikeInventoryPromptDraft(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -205,6 +234,13 @@ export function applyDraftStateInvariants(
   const followUpMode = String(input.followUpMode ?? "").toLowerCase();
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const inboundText = String(input.inboundText ?? "");
+  if (looksLikeTruncatedDraft(draftText)) {
+    return {
+      allow: true,
+      draftText: truncatedDraftFallback(input),
+      reason: "truncated_draft_repaired"
+    };
+  }
   // Parser-first: do not activate invariant routing guards from regex fallbacks.
   const regexFallbackEnabled = false;
   const inventoryPrompt = looksLikeInventoryPromptDraft(draftText);

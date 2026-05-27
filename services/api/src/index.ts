@@ -6062,6 +6062,13 @@ function formatVehicleFactMoney(value: unknown): string | null {
   }).format(numeric);
 }
 
+function formatVehicleSalePriceMoney(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.replace(/[^\d.]/g, "") : String(value ?? "");
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric) || numeric < 1000) return null;
+  return formatVehicleFactMoney(numeric);
+}
+
 type RecentVehicleDiscussionFacts = {
   year?: string | null;
   model?: string | null;
@@ -6161,7 +6168,7 @@ function extractRecentVehicleDiscussionFacts(conv: Conversation): RecentVehicleD
   const year = extractYearFromVehicleDiscussionText(text);
   const model = extractModelFromVehicleDiscussionText(text);
   const mileage = extractMileageFromVehicleDiscussionText(text);
-  const price = formatVehicleFactMoney(
+  const price = formatVehicleSalePriceMoney(
     text.match(/\b(?:price|priced|asking|number)\s+(?:is|was|would be|at)?\s*\$?\s*([1-9]\d{2,5}(?:,\d{3})?)\b/i)?.[1] ??
       text.match(/\$\s*([1-9]\d{2,5}(?:,\d{3})?)\b/)?.[1]
   );
@@ -6234,7 +6241,7 @@ function extractApproxVehiclePriceFromContext(conv: Conversation): string | null
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    const amount = formatVehicleFactMoney(match?.[1]);
+    const amount = formatVehicleSalePriceMoney(match?.[1]);
     if (amount) return amount;
   }
   return null;
@@ -6365,6 +6372,20 @@ async function buildVehicleFactQuestionReply(args: {
   text?: string | null;
 }): Promise<{ reply: string; needsTodo: boolean; todoSummary?: string }> {
   const conv = args.conv;
+  const requestedFactFields = extractRequestedVehicleFactFieldsFromText(args.text);
+  if (
+    args.decision.questionType !== "finance_program_eligibility" &&
+    shouldPreferRecentVehicleDiscussionFacts(args.text, requestedFactFields)
+  ) {
+    const recentFacts = extractRecentVehicleDiscussionFacts(conv);
+    if (recentFacts) {
+      const recentReply = buildRecentVehicleDiscussionReply({
+        facts: recentFacts,
+        requestedFields: requestedFactFields
+      });
+      if (recentReply) return recentReply;
+    }
+  }
   const inventoryBacked = await buildInventoryBackedVehicleFactAnswer({
     conv,
     decision: args.decision,
@@ -6381,7 +6402,6 @@ async function buildVehicleFactQuestionReply(args: {
       todoSummary: mergedInventoryBacked.todoSummary
     };
   }
-  const requestedFactFields = extractRequestedVehicleFactFieldsFromText(args.text);
   if (shouldPreferRecentVehicleDiscussionFacts(args.text, requestedFactFields)) {
     const recentFacts = extractRecentVehicleDiscussionFacts(conv);
     if (recentFacts) {
@@ -6671,12 +6691,8 @@ function manualOutboundAppointmentRequestedPhrase(parsed: ManualOutboundAppointm
   return normalized || [day, time].filter(Boolean).join(" ").trim();
 }
 
-function buildAppointmentArrivalAck(parsed: AppointmentTimingParse | null): string {
-  const time = String(parsed?.requested?.timeText ?? "").trim();
-  const phrase = appointmentTimingRequestedPhrase(parsed);
-  if (time) return `Sounds good — I’ll see you ${formatSeeYouTimePhrase(time)}. Text me if anything changes.`;
-  if (phrase) return `Sounds good — I’ll see you around then. Text me if anything changes.`;
-  return "Sounds good — I’ll see you then. Text me if anything changes.";
+function buildAppointmentArrivalAck(_parsed: AppointmentTimingParse | null): string {
+  return "Sounds good — I’ll check that time and follow up.";
 }
 
 function buildTentativeAppointmentWindowAck(parsed: AppointmentTimingParse | null): string {
@@ -6805,9 +6821,9 @@ function buildCustomerAckAvailableTimesReply(parsed: CustomerAckActionParse | nu
 function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null): string {
   const phrase = customerAckActionRequestedPhrase(parsed);
   if (phrase) {
-    return `Perfect — I’ll get ${normalizeDisplayCase(phrase)} locked in.`;
+    return `Perfect — I’ll check ${normalizeDisplayCase(phrase)} and follow up with confirmation.`;
   }
-  return "Perfect — I’ll get that locked in.";
+  return "Perfect — I’ll check that and follow up with confirmation.";
 }
 
 function buildImmediateArrivalRequestReply(_conv?: any): string {
@@ -6996,7 +7012,7 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
     };
   }
   return {
-    reply: `Sounds good — I’ll see you ${availability.requestedLabel}. Text me if anything changes.`,
+    reply: `That time looks available — I’ll confirm ${availability.requestedLabel} and follow up.`,
     alternatives: [],
     checkedCalendar: true
   };
