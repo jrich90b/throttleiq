@@ -45649,6 +45649,35 @@ if (authToken && signature) {
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+    if (
+      event.provider === "twilio" &&
+      (immediateArrivalRequestFallback ||
+        (customerAckActionAccepted && customerAckActionParse?.action === "immediate_arrival_request"))
+    ) {
+      discardPendingDrafts(conv, "immediate_arrival_request");
+      delete conv.emailDraft;
+      addTodo(
+        conv,
+        "call",
+        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        event.providerMessageId,
+        conv.leadOwner
+      );
+      setDialogState(conv, "schedule_request");
+      setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
+      stopFollowUpCadence(conv, "immediate_arrival_request");
+      stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
+      appendOutbound(conv, event.to, event.from, buildImmediateArrivalRequestReply(conv), "draft_ai");
+      recordRouteOutcome("live", "human_mode_immediate_arrival_request_draft_created", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null
+      });
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     discardPendingDrafts(conv, "new_inbound_human_mode");
     didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
     if (didConfirm) {
