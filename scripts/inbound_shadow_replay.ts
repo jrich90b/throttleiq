@@ -680,6 +680,26 @@ function isWrongNumberInbound(inbound: string): boolean {
   );
 }
 
+function hasInventoryWatchContext(conv?: Conversation | null): boolean {
+  return !!(
+    (conv as any)?.inventoryWatch ||
+    (Array.isArray((conv as any)?.inventoryWatches) && (conv as any).inventoryWatches.length > 0) ||
+    String((conv as any)?.followUp?.reason ?? "").toLowerCase().includes("inventory_watch") ||
+    String((conv as any)?.dialogState?.name ?? "").toLowerCase().includes("inventory_watch")
+  );
+}
+
+function isInventoryWatchAckNoReply(inbound: string, conv?: Conversation | null): boolean {
+  if (!hasInventoryWatchContext(conv)) return false;
+  const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
+  if (/^(yes please|yes pls|please do|sounds good|ok|okay|thanks|thank you)[.!?\s]*$/i.test(text)) return true;
+  const watchYear =
+    String((conv as any)?.inventoryWatch?.year ?? "").trim() ||
+    String((Array.isArray((conv as any)?.inventoryWatches) ? (conv as any).inventoryWatches[0]?.year : "") ?? "").trim();
+  if (/^\d{4}$/.test(text) && watchYear === text) return true;
+  return false;
+}
+
 function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
   verdict: Verdict;
   reasons: string[];
@@ -715,6 +735,12 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
       return {
         verdict: "expected_no_response",
         reasons: ["acknowledgement/signoff where no customer-facing reply is expected"]
+      };
+    }
+    if (isInventoryWatchAckNoReply(inbound, conv)) {
+      return {
+        verdict: "expected_no_response",
+        reasons: ["inventory-watch acknowledgement where no customer-facing reply is expected"]
       };
     }
     return { verdict: "no_response", reasons: ["no customer-facing draft/reply produced"] };
