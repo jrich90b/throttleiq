@@ -334,7 +334,7 @@ import {
   isResponseControlNoResponseAccepted
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
-import { applyDraftStateInvariants } from "./domain/draftStateInvariants.js";
+import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
 import {
   buildNoResponseFallbackReply,
   buildRouteDecisionSnapshot,
@@ -55685,7 +55685,8 @@ app.post("/webhooks/twilio/voice/status", async (req, res) => {
 });
 
 function escapeXml(s: string): string {
-  return s
+  const safe = repairLikelyTruncatedDraftText(s).draftText;
+  return safe
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

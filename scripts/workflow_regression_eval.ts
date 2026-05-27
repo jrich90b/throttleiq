@@ -77,7 +77,10 @@ import {
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { inferTodoTaskClass, parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
-import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
+import {
+  applyDraftStateInvariants,
+  repairLikelyTruncatedDraftText
+} from "../services/api/src/domain/draftStateInvariants.ts";
 import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
 import { isLogisticsProgressUpdateText } from "../services/api/src/domain/transitionSafety.ts";
 
@@ -1101,6 +1104,11 @@ const cases: Case[] = [
       classificationBucket: "inventory_interest",
       classificationCta: "watch_inventory"
     }).draftText,
+    expected: "Sounds good — thanks for the update."
+  },
+  {
+    id: "truncated_congrats_xml_reply_is_repaired_without_inbound_context",
+    actual: repairLikelyTruncatedDraftText("Awesome — glad to hear it worked out, congrats to").draftText,
     expected: "Sounds good — thanks for the update."
   }
 ];

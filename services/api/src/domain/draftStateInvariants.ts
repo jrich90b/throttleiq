@@ -48,20 +48,42 @@ function looksLikeTruncatedDraft(text: string): boolean {
   return false;
 }
 
-function truncatedDraftFallback(input: DraftStateInvariantInput): string {
+function truncatedDraftFallback(input: Partial<DraftStateInvariantInput>, draftText = ""): string {
   const inboundText = String(input.inboundText ?? "").toLowerCase();
+  const draftLower = String(draftText ?? "").toLowerCase();
   if (
-    /\b(all set|not looking|no longer looking|not interested|reach out|reached out|when i'?m ready|when i am ready)\b/.test(
-      inboundText
-    ) &&
-    !/[?]/.test(inboundText)
+    (!/[?]/.test(inboundText) &&
+      /\b(all set|not looking|no longer looking|not interested|reach out|reached out|when i'?m ready|when i am ready)\b/.test(
+        inboundText
+      )) ||
+    /\b(glad to hear it worked out|congrats|congratulations)\b/.test(draftLower)
   ) {
     return "Sounds good — thanks for the update.";
   }
-  if (/\b(parts?|service|apparel|motorclothes)\b/.test(inboundText) || isDepartmentHandoff(input)) {
+  const bucket = String(input.classificationBucket ?? "").toLowerCase();
+  const cta = String(input.classificationCta ?? "").toLowerCase();
+  const reason = String(input.followUpReason ?? "").toLowerCase();
+  if (
+    /\b(parts?|service|apparel|motorclothes)\b/.test(inboundText) ||
+    ["service", "parts", "apparel"].includes(bucket) ||
+    /(service|parts|apparel)_request/.test(cta) ||
+    /(service|parts|apparel|dealer_ride_no_purchase|credit_app|handoff:)/.test(reason)
+  ) {
     return "I’ll have the right person check that and follow up shortly.";
   }
   return "I’ll check on that and follow up shortly.";
+}
+
+export function repairLikelyTruncatedDraftText(
+  draftTextRaw: string,
+  input: Partial<DraftStateInvariantInput> = {}
+): { repaired: boolean; draftText: string } {
+  const draftText = String(draftTextRaw ?? "").trim();
+  if (!looksLikeTruncatedDraft(draftText)) return { repaired: false, draftText };
+  return {
+    repaired: true,
+    draftText: truncatedDraftFallback(input, draftText)
+  };
 }
 
 function looksLikeInventoryPromptDraft(text: string): boolean {
@@ -234,10 +256,11 @@ export function applyDraftStateInvariants(
   const followUpMode = String(input.followUpMode ?? "").toLowerCase();
   const dialogState = String(input.dialogState ?? "").toLowerCase();
   const inboundText = String(input.inboundText ?? "");
-  if (looksLikeTruncatedDraft(draftText)) {
+  const truncationRepair = repairLikelyTruncatedDraftText(draftText, input);
+  if (truncationRepair.repaired) {
     return {
       allow: true,
-      draftText: truncatedDraftFallback(input),
+      draftText: truncationRepair.draftText,
       reason: "truncated_draft_repaired"
     };
   }
