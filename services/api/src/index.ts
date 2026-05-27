@@ -6810,6 +6810,10 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll get that locked in.";
 }
 
+function buildImmediateArrivalRequestReply(_conv?: any): string {
+  return "Let me confirm we can take you now before you head over. I’ll follow up shortly.";
+}
+
 function buildRequestedSlotUnavailableReply(requestedLabel: string, alternatives: any[]): string {
   const label = requestedLabel ? normalizeDisplayCase(requestedLabel) : "that time";
   if (alternatives.length === 1) {
@@ -7036,6 +7040,17 @@ function customerWillProvideScheduleTimeText(text: string | null | undefined): b
     );
   if (!willProvideTime) return false;
   return !/[?]/.test(t);
+}
+
+function isImmediateArrivalRequestText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(?:i|we)\s+(?:can|could|am able to|are able to)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(t) ||
+    /\b(?:can|could)\s+(?:i|we)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(t) ||
+    /\b(?:is it ok|is it okay|is it alright)\s+(?:if\s+)?(?:i|we)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(t) ||
+    /\b(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\??$/.test(t)
+  );
 }
 
 function hasSchedulingQuestionContext(conv: any, lastOutboundText?: string | null): boolean {
@@ -41026,7 +41041,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         (inbound as any)?.at ?? event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const regenCustomerAckActionParse = regenCustomerAckActionParserHint
@@ -41265,6 +41280,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return respondRegenerateSkipped("customer_will_provide_time");
   }
+  const regenImmediateArrivalRequestFallback =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !isCustomerAckActionParserAccepted(regenCustomerAckActionParse) &&
+    isImmediateArrivalRequestText(event.body) &&
+    hasSchedulingQuestionContext(conv);
+  if (regenImmediateArrivalRequestFallback) {
+    addTodo(
+      conv,
+      "call",
+      "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+      (inbound as any)?.providerMessageId,
+      conv.leadOwner
+    );
+    setDialogState(conv, "schedule_request");
+    setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
+    stopFollowUpCadence(conv, "immediate_arrival_request");
+    stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
+    recordRouteOutcome("regen", "customer_ack_immediate_arrival_request_fallback", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv), undefined, {
+      turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
   if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
     const action = regenCustomerAckActionParse?.action;
     if (action === "no_response_needed") {
@@ -41283,6 +41326,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
       return respondRegenerateSkipped("customer_will_provide_time");
+    }
+    if (action === "immediate_arrival_request") {
+      addTodo(
+        conv,
+        "call",
+        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        (inbound as any)?.providerMessageId,
+        conv.leadOwner
+      );
+      setDialogState(conv, "schedule_request");
+      setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
+      stopFollowUpCadence(conv, "immediate_arrival_request");
+      stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
+      recordRouteOutcome("regen", "customer_ack_immediate_arrival_request", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null
+      });
+      return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv), undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
     }
     if (action === "accept_tentative_appointment") {
       setDialogState(conv, "schedule_request");
@@ -45276,7 +45342,7 @@ if (authToken && signature) {
         event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const customerAckActionParse = customerAckActionParserHint
@@ -45320,13 +45386,20 @@ if (authToken && signature) {
     appointmentCancelOrRescheduleConfidence >= Number(process.env.LLM_BOOKING_CONFIDENCE_MIN ?? 0.7) &&
     (appointmentCancelOrRescheduleParse.intent === "reschedule" ||
       appointmentCancelOrRescheduleParse.intent === "cancel");
+  const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
+  const immediateArrivalRequestFallback =
+    event.provider === "twilio" &&
+    !customerAckActionAccepted &&
+    isImmediateArrivalRequestText(event.body) &&
+    hasSchedulingQuestionContext(conv);
   const earlyNoResponseParserBlocker =
     hasCustomerDispositionParserHintText(event.body ?? "") ||
     hasFirstTimeRiderGuidanceParserHint(event.body ?? "") ||
     hasAppointmentWeatherTimingHintText(event.body ?? "") ||
     hasFutureBuyingWindowHintText(event.body ?? "") ||
-    appointmentCancelOrRescheduleHint;
-  const customerAckActionAccepted = isCustomerAckActionParserAccepted(customerAckActionParse);
+    appointmentCancelOrRescheduleHint ||
+    immediateArrivalRequestFallback ||
+    customerAckActionParse?.action === "immediate_arrival_request";
   const customerAckNoResponse =
     customerAckActionAccepted &&
     (customerAckActionParse?.action === "no_response_needed" ||
@@ -49514,6 +49587,31 @@ if (authToken && signature) {
     const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
+  if (event.provider === "twilio" && immediateArrivalRequestFallback && !pricingOrPaymentsIntent) {
+    discardPendingDrafts(conv, "immediate_arrival_request");
+    delete conv.emailDraft;
+    addTodo(
+      conv,
+      "call",
+      "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+      event.providerMessageId,
+      conv.leadOwner
+    );
+    setDialogState(conv, "schedule_request");
+    setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
+    stopFollowUpCadence(conv, "immediate_arrival_request");
+    stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
+    const reply = buildImmediateArrivalRequestReply(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    saveConversation(conv);
+    await flushConversationStore();
+    recordRouteOutcome("live", "customer_ack_immediate_arrival_request_fallback_draft_created", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
   if (
     event.provider === "twilio" &&
     customerAckActionAccepted &&
@@ -49521,9 +49619,36 @@ if (authToken && signature) {
     (customerAckActionParse?.action === "accept_tentative_appointment" ||
       customerAckActionParse?.action === "ask_for_available_times" ||
       customerAckActionParse?.action === "provide_arrival_window" ||
+      customerAckActionParse?.action === "immediate_arrival_request" ||
       customerAckActionParse?.action === "purchase_delivery_update")
   ) {
     const action = customerAckActionParse.action;
+    if (action === "immediate_arrival_request") {
+      discardPendingDrafts(conv, "immediate_arrival_request");
+      delete conv.emailDraft;
+      addTodo(
+        conv,
+        "call",
+        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        event.providerMessageId,
+        conv.leadOwner
+      );
+      setDialogState(conv, "schedule_request");
+      setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
+      stopFollowUpCadence(conv, "immediate_arrival_request");
+      stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
+      const reply = buildImmediateArrivalRequestReply(conv);
+      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+      saveConversation(conv);
+      await flushConversationStore();
+      recordRouteOutcome("live", "customer_ack_immediate_arrival_request_draft_created", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null
+      });
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
     if (
       action === "accept_tentative_appointment" ||
       action === "provide_arrival_window" ||

@@ -700,6 +700,17 @@ function isInventoryWatchAckNoReply(inbound: string, conv?: Conversation | null)
   return false;
 }
 
+function isImmediateArrivalInbound(inbound: string): boolean {
+  const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(?:i|we)\s+(?:can|could|am able to|are able to)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(text) ||
+    /\b(?:can|could)\s+(?:i|we)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(text) ||
+    /\b(?:is it ok|is it okay|is it alright)\s+(?:if\s+)?(?:i|we)\s+(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\b/.test(text) ||
+    /\b(?:come|stop|swing|head)(?:\s+(?:in|over|by|there))?\s+(?:now|right now|immediately)\??$/.test(text)
+  );
+}
+
 function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
   verdict: Verdict;
   reasons: string[];
@@ -788,6 +799,18 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   }
   if (/\b(service|inspection|parts?|warranty|recall|repair)\b/i.test(inboundLower)) {
     reasons.push("department routing-sensitive inbound");
+  }
+  if (isImmediateArrivalInbound(inbound)) {
+    reasons.push("immediate-arrival scheduling-sensitive inbound");
+  }
+  if (
+    isImmediateArrivalInbound(inbound) &&
+    /\b(have that time noted|that time noted|text me if anything changes|see you|i'?ll see you|you'?re booked|booked for|locked in|lock that in|sounds good)\b/i.test(
+      draftLower
+    ) &&
+    !/\b(confirm|check|verify)\b[\s\S]{0,80}\b(can take you|availability|available|staff|team)\b/i.test(draftLower)
+  ) {
+    reasons.push("accepted immediate arrival without confirming staff availability");
   }
   if (/\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)) {
     reasons.push("scheduling-sensitive inbound");

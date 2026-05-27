@@ -1500,6 +1500,7 @@ export type CustomerAckAction =
   | "ask_for_available_times"
   | "customer_will_provide_time"
   | "provide_arrival_window"
+  | "immediate_arrival_request"
   | "purchase_delivery_update"
   | "no_response_needed"
   | "neutral_ack"
@@ -2193,6 +2194,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "ask_for_available_times",
         "customer_will_provide_time",
         "provide_arrival_window",
+        "immediate_arrival_request",
         "purchase_delivery_update",
         "no_response_needed",
         "neutral_ack",
@@ -3637,6 +3639,8 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: 1-2 o’clock ish" history: "out: What time works for you today?" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"1-2 o’clock-ish","time_window":"range"},"reference":"last_outbound","normalized_text":"1-2 o’clock-ish","confidence":0.93}',
     'input: "Customer: be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"9:00 AM","time_window":"exact"},"reference":"last_outbound","normalized_text":"be there at 9:00 AM","confidence":0.96}',
     'input: "Customer: On my way doing my best to be there by 530" output: {"action":"provide_arrival_window","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.95}',
+    'input: "Customer: I can come now" history: "out: When would you like to come in and finalize?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"now","time_window":"unknown"},"reference":"none","normalized_text":"today now","confidence":0.96}',
+    'input: "Customer: can I come right now?" history: "out: What time works best to stop in?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"right now","time_window":"unknown"},"reference":"none","normalized_text":"today right now","confidence":0.96}',
     'input: "Customer: Talk soon!" history: "out: You’re welcome — happy to help, talk soon!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.97}',
     'input: "Customer: Cool" history: "out: Sounds good — thanks for the update." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
     'input: "Customer: Yes sir" history: "out: I’ll keep you posted." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
@@ -3659,6 +3663,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- ask_for_available_times: customer asks the dealer what time works or gives a day/window and wants available options.",
     "- customer_will_provide_time: customer says they need to figure out timing, find a ride, or will let the dealer know a timeframe later. Do not ask for the time again.",
     "- provide_arrival_window: customer says they are on the way, leaving, driving, or gives a casual ETA.",
+    "- immediate_arrival_request: customer says they can come now/right now/immediately or asks if they can head over now. Do not treat this as a booked or confirmed appointment.",
     "- purchase_delivery_update: customer gives arrival/pickup timing in an active purchase/delivery/docs context; do not treat as a trade appraisal or new appointment slot offer.",
     "- no_response_needed: short acknowledgement/signoff with no question, no requested action, and no appointment confirmation.",
     "- neutral_ack: acknowledgement that may deserve a brief response but does not book or change state.",
@@ -3669,6 +3674,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- should_book=true only when the customer confirms a concrete slot/time already offered or staff explicitly said they will schedule it.",
     "- If the last dealer message only says 'can work' or 'if that works', set accept_tentative_appointment and should_book=false.",
     "- If the customer asks what time works, do not ask them for a time again; set ask_for_available_times.",
+    "- If the customer says they can come now/right now, set immediate_arrival_request, should_book=false, and do not say a time is noted.",
     "- If the customer says they will give/send/provide/let you know the time later, set customer_will_provide_time and should_reply=false.",
     "- If the customer is buying/picking up/taking delivery and gives '1-2ish', classify purchase_delivery_update, not trade appraisal scheduling.",
     "- If the customer says they will be there at a concrete time after a pickup/paperwork/delivery coordination message, classify purchase_delivery_update and acknowledge the arrival time.",
@@ -3712,6 +3718,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     rawAction === "ask_for_available_times" ||
     rawAction === "customer_will_provide_time" ||
     rawAction === "provide_arrival_window" ||
+    rawAction === "immediate_arrival_request" ||
     rawAction === "purchase_delivery_update" ||
     rawAction === "no_response_needed" ||
     rawAction === "neutral_ack"

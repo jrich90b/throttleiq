@@ -111,6 +111,39 @@
     }
   },
   {
+    "id": "immediate_arrival_now_needs_staff_check_1",
+    "text": "I can come now",
+    "history": [
+      {
+        "direction": "out",
+        "body": "When would you like to come in and finalize?"
+      }
+    ],
+    "expected": {
+      "action": "immediate_arrival_request",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "today",
+      "time_contains": "now"
+    }
+  },
+  {
+    "id": "immediate_arrival_question_needs_staff_check_1",
+    "text": "Can I come right now?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "What time works best to stop in?"
+      }
+    ],
+    "expected": {
+      "action": "immediate_arrival_request",
+      "should_reply": true,
+      "should_book": false,
+      "time_contains": "right now"
+    }
+  },
+  {
     "id": "signoff_no_response_1",
     "text": "Talk soon!",
     "history": [
