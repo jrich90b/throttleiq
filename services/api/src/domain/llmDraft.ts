@@ -1631,6 +1631,7 @@ export type ResponseControlParse = {
     | "not_interested"
     | "schedule_request"
     | "compliment_only"
+    | "data_quality_complaint"
     | "no_response"
     | "none";
   explicitRequest: boolean;
@@ -2526,6 +2527,7 @@ const RESPONSE_CONTROL_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "not_interested",
         "schedule_request",
         "compliment_only",
+        "data_quality_complaint",
         "no_response",
         "none"
       ]
@@ -5131,6 +5133,7 @@ export async function parseResponseControlWithLLM(args: {
     "- not_interested: customer clearly declines buying/follow-up for now.",
     "- schedule_request: customer explicitly asks to book/schedule/pick a day/time.",
     "- compliment_only: customer only compliments the bike/team without request/action.",
+    "- data_quality_complaint: customer says the dealership/assistant got information wrong, sent incorrect details, or cannot get the information right.",
     "- no_response: customer only acknowledges/signs off and no useful customer-facing reply is needed.",
     "- none: anything else.",
     "",
@@ -5141,6 +5144,7 @@ export async function parseResponseControlWithLLM(args: {
     "- If customer says not interested / pass / no thanks / not moving forward => not_interested.",
     "- schedule_request only for explicit scheduling intent (appointment/time/day availability).",
     "- compliment_only only if no other request/intent is present.",
+    "- data_quality_complaint when the customer is upset because the bike, trade, appointment, price, or lead details were incorrect.",
     "- no_response for short acknowledgements/signoffs like Perfect, Sounds good, Talk soon, Ok, thumbs-up text, when there is no question or requested action.",
     "- Do not classify phrasing like 'like I said' as compliment_only; that is conversational context, not praise.",
     "- If the customer attaches media while giving paperwork/proof/status, use intent=none unless the text is only praise.",
@@ -5164,6 +5168,8 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Thank you very much for answering my message. Yes, I’m looking for a course motorcycle so I can get my license." output: {"intent":"none","explicit_request":true,"confidence":0.92}',
     'input: "I guess we got rained out again" output: {"intent":"none","explicit_request":true,"confidence":0.9}',
     'input: "I can’t do it now but I’m thinking maybe next spring. Thanks." output: {"intent":"none","explicit_request":true,"confidence":0.93}',
+    'input: "Never mind you can’t even get the information right" output: {"intent":"data_quality_complaint","explicit_request":true,"confidence":0.96}',
+    'input: "That is the wrong bike, not what I asked about" output: {"intent":"data_quality_complaint","explicit_request":true,"confidence":0.95}',
     'input: "Hi Scott, We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me. Rich" output: {"intent":"not_interested","explicit_request":true,"confidence":0.93}',
     'input: "Wrong number?" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
     'input: "You have the wrong number" output: {"intent":"wrong_number","explicit_request":true,"confidence":0.98}',
@@ -5204,6 +5210,7 @@ export async function parseResponseControlWithLLM(args: {
     intentRaw === "not_interested" ||
     intentRaw === "schedule_request" ||
     intentRaw === "no_response" ||
+    intentRaw === "data_quality_complaint" ||
     intentRaw === "compliment_only"
       ? intentRaw
       : "none";

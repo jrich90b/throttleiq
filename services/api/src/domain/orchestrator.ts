@@ -1573,6 +1573,25 @@ function normalizeInventoryGateText(value?: string | null): string {
     .trim();
 }
 
+function inventoryUrlStronglyMatchesRequestedModel(item: InventoryFeedItem, requestedModel: string): boolean {
+  const url = String(item.url ?? "").trim();
+  if (!url) return true;
+  const urlModelSlug = url.match(/\/inventory\/\d+\/([^?#]+)/i)?.[1] ?? "";
+  if (!urlModelSlug) return true;
+  const requested = normalizeInventoryGateText(requestedModel);
+  const urlModel = normalizeInventoryGateText(urlModelSlug);
+  if (!requested || !urlModel) return true;
+  return urlModel.includes(requested);
+}
+
+function inventoryItemStronglyMatchesRequestedModel(item: InventoryFeedItem, requestedModel: string): boolean {
+  const candidate = normalizeInventoryGateText(item.model);
+  const requested = normalizeInventoryGateText(requestedModel);
+  if (!candidate || !requested) return false;
+  if (candidate !== requested && !candidate.includes(requested)) return false;
+  return inventoryUrlStronglyMatchesRequestedModel(item, requestedModel);
+}
+
 function holdStoreMatchesRequestedBike(
   hold: { label?: string | null; stockId?: string | null; vin?: string | null } | undefined,
   requested: { year?: string | null; model?: string | null }
@@ -1643,7 +1662,9 @@ export async function evaluateTestRideInventoryGate(args: {
       const rawAlternateMatches = alternateYear
         ? await findInventoryMatches({ year: alternateYear, model: rawModel })
         : [];
-      const alternateMatches = filterAvailable(rawAlternateMatches);
+      const alternateMatches = filterAvailable(rawAlternateMatches).filter(m =>
+        inventoryItemStronglyMatchesRequestedModel(m, rawModel)
+      );
       const alternate = alternateMatches[0] ?? null;
       console.warn("[test-ride-inventory-gate] requested bike unavailable", {
         requested: {

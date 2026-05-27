@@ -22,6 +22,12 @@ const strongWrongNumber = {
   confidence: 0.98
 };
 
+const strongDataQualityComplaint = {
+  intent: "data_quality_complaint",
+  explicitRequest: true,
+  confidence: 0.96
+};
+
 const weakSchedule = {
   intent: "schedule_request",
   explicitRequest: true,
@@ -50,6 +56,11 @@ const cases: Case[] = [
     id: "accepts_strong_wrong_number_parse",
     expected: true,
     run: () => isResponseControlParserAccepted(strongWrongNumber)
+  },
+  {
+    id: "accepts_strong_data_quality_complaint_parse",
+    expected: true,
+    run: () => isResponseControlParserAccepted(strongDataQualityComplaint)
   },
   {
     id: "rejects_low_confidence_schedule_parse",

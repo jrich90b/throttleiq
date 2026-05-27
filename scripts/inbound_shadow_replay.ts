@@ -653,7 +653,7 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
   if (/\b(reschedule|re-?schedule|can't make|cant make|cannot make|won't make|wont make|not going to be able to make|unable to make|need to cancel|have to cancel)\b/i.test(text)) {
     return false;
   }
-  if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|ty|yes sir|will do|thanks,?\s*will do|👍)[.!?\s]*$/i.test(text)) return true;
+  if (/^(ok|okay|cool|great|perfect|sounds good|thank you|thanks|thanx|thx|ty|yes sir|will do|thanks,?\s*will do|👍)[.!?\s]*$/i.test(text)) return true;
   if (
     /\b(let me (?:do some figuring out|figure|find|check)|i(?:'|’)ll (?:let|give) you (?:know|a time|a timeframe|a time frame)|give you a time\s*frame|let you know soon)\b/i.test(
       text

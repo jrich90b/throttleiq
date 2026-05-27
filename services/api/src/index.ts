@@ -5209,6 +5209,12 @@ async function applyWrongNumberSuppression(conv: any, event: { from?: string } |
   stopRelatedCadences(conv, "wrong_number", { close: true });
 }
 
+function buildDataQualityComplaintReply(conv: any): string {
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  const prefix = firstName ? `Sorry about that, ${firstName}` : "Sorry about that";
+  return `${prefix} — you’re right to call that out. I’ll have the team review the details and follow up with the correct information.`;
+}
+
 function stopRelatedCadences(
   conv: any,
   reason: string,
@@ -43546,6 +43552,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     : null);
   const regenResponseControlAccepted = isResponseControlParserAccepted(regenResponseControlParse);
   const regenResponseControlConfident = isResponseControlParserConfidentDecision(regenResponseControlParse);
+  if (regenResponseControlAccepted && regenResponseControlParse?.intent === "data_quality_complaint") {
+    const regenReply = buildDataQualityComplaintReply(conv);
+    recordRouteOutcome("regen", "data_quality_complaint_draft_created", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: regenResponseControlParse?.confidence ?? null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenReply);
+    }
+    return respondWithSmsRegeneratedDraft(regenReply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
   if (
     isResponseControlNoResponseAccepted(regenResponseControlParse) &&
     !isDispositionParserAccepted(regenCustomerDispositionParse) &&
@@ -45319,6 +45341,8 @@ if (authToken && signature) {
   const llmOptOut = responseControlAccepted && responseControlParse?.intent === "opt_out";
   const llmNotInterested = responseControlAccepted && responseControlParse?.intent === "not_interested";
   const llmComplimentOnly = responseControlAccepted && responseControlParse?.intent === "compliment_only";
+  const llmDataQualityComplaint =
+    responseControlAccepted && responseControlParse?.intent === "data_quality_complaint";
   const llmExplicitScheduleIntent =
     responseControlAccepted && responseControlParse?.intent === "schedule_request";
   const llmNoResponse =
@@ -45336,6 +45360,24 @@ if (authToken && signature) {
       convId: conv.id,
       leadKey: conv.leadKey,
       parserIntent: responseControlParse?.intent ?? null,
+      confidence: responseControlParse?.confidence ?? null
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  if (event.provider === "twilio" && llmDataQualityComplaint && conv.mode !== "human") {
+    discardPendingDrafts(conv, "data_quality_complaint");
+    delete conv.emailDraft;
+    const reply = buildDataQualityComplaintReply(conv);
+    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
+    setFollowUpMode(conv, "manual_handoff", "data_quality_complaint");
+    setDialogState(conv, "callback_handoff");
+    addTodo(conv, "other", "Customer says the prior information was incorrect. Review lead details and follow up.", event.providerMessageId, conv.leadOwner);
+    saveConversation(conv);
+    await flushConversationStore();
+    recordRouteOutcome("live", "data_quality_complaint_draft_created", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
       confidence: responseControlParse?.confidence ?? null
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
