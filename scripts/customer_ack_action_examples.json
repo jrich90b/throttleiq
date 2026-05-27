@@ -198,7 +198,7 @@
       }
     ],
     "expected": {
-      "action": "neutral_ack",
+      "action": "no_response_needed",
       "should_reply": false,
       "should_book": false
     }
