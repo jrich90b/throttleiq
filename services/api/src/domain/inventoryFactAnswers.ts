@@ -76,6 +76,11 @@ function pickBestVehicleForLookup(conv: any): any {
     .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.vehicle ?? {};
 }
 
+function scopeConversationToLead(conv: any, lead: any): any {
+  if (!lead) return conv;
+  return { ...conv, lead, latestLead: lead };
+}
+
 function formatUnitLabel(conv: any, item?: InventoryFeedItem | null, sourceVehicle?: any): string {
   const leadVehicle = sourceVehicle ?? pickBestVehicleForLookup(conv);
   const year = normalizeText(item?.year ?? leadVehicle?.year);
@@ -215,9 +220,11 @@ function isLikelyLowAprEligible(item: InventoryFeedItem | null, conv: any): {
 
 export async function buildInventoryBackedVehicleFactAnswer(args: {
   conv: any;
+  lead?: any;
   decision: VehicleFactDecisionLike;
   text: string;
 }): Promise<InventoryFactAnswer> {
+  const conv = scopeConversationToLead(args.conv, args.lead);
   const rawQuestionType = String(args.decision?.questionType ?? "");
   const text = String(args.text ?? "");
   const combinesPriceAndFinanceEligibility =
@@ -234,8 +241,8 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     return { handled: false };
   }
 
-  const { item, price, sourceVehicle } = await resolveConversationInventoryItem(args.conv);
-  const unitLabel = formatUnitLabel(args.conv, item, sourceVehicle);
+  const { item, price, sourceVehicle } = await resolveConversationInventoryItem(conv);
+  const unitLabel = formatUnitLabel(conv, item, sourceVehicle);
   const priceText = formatMoney(price);
 
   if (questionType === "price" || questionType === "otd_total") {
@@ -278,7 +285,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     combinesPriceAndFinanceEligibility ||
     hasPriceQuestionSignal(text) ||
     (args.decision?.requestedFields ?? []).some(field => /price|total|otd|out_the_door/i.test(String(field)));
-  const eligibility = isLikelyLowAprEligible(item, args.conv);
+  const eligibility = isLikelyLowAprEligible(item, conv);
   const activeNotes = await getActiveInventoryNotesForUnit(item, sourceVehicle);
   const financePromo = activeNotes.find(note => noteContainsFinancePromo(note, apr));
   const aprText = apr ? `${apr}%` : "the low-interest";

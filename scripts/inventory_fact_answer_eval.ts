@@ -104,7 +104,41 @@ async function main() {
   assert.doesNotMatch(priceOnly.reply ?? "", /2\.99%|Financing Special/i);
   assert.match(priceOnly.reply ?? "", /published price/i);
 
-  console.log("All 3 inventory fact answer checks passed.");
+  const staleLatestLeadConv = {
+    latestLead: {
+      vehicle: {
+        year: "2016",
+        model: "Ultra Limited Peace Officer / Firefighter / Shrine Special Edition",
+        condition: "used"
+      }
+    },
+    lead: {
+      vehicle: {
+        year: "2021",
+        model: "Street Glide Special",
+        condition: "used"
+      }
+    },
+    messages: []
+  };
+  const activeAdfLead = {
+    vehicle: {
+      year: "2021",
+      model: "Street Glide Special",
+      condition: "used"
+    }
+  };
+  const activeLeadPrice = await buildInventoryBackedVehicleFactAnswer({
+    conv: staleLatestLeadConv,
+    lead: activeAdfLead,
+    decision: { questionType: "price", requestedFields: ["price"] },
+    text: "trade-in appraisal request"
+  });
+  assert.equal(activeLeadPrice.handled, true);
+  assert.match(activeLeadPrice.reply ?? "", /2021 Street Glide Special/i);
+  assert.doesNotMatch(activeLeadPrice.reply ?? "", /2016|Ultra Limited/i);
+
+  console.log("All 4 inventory fact answer checks passed.");
 }
 
 main().catch(err => {

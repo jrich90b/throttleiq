@@ -3119,7 +3119,8 @@ async function buildInitialAdfVehicleFactReply(args: {
   const color = cleanVehicleColorForReply(vehicle.color ?? null);
   const confirmExact = `I’ll have our team confirm the sale price on the ${bikeLabel} and follow up with exact numbers shortly.`;
   const inventoryBacked = await buildInventoryBackedVehicleFactAnswer({
-    conv: scopedConv,
+    conv: args.conv,
+    lead: args.lead,
     decision: args.decision,
     text: args.text
   });
