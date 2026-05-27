@@ -3109,7 +3109,7 @@ async function buildInitialAdfVehicleFactReply(args: {
   decision: AdfVehicleFactDecision;
   text: string;
 }): Promise<{ reply: string; needsTodo: boolean; todoReason: string; todoSummary: string }> {
-  const scopedConv = args.lead ? { ...args.conv, lead: args.lead } : args.conv;
+  const scopedConv = args.lead ? { ...args.conv, lead: args.lead, latestLead: args.lead } : args.conv;
   const vehicle = scopedConv?.lead?.vehicle ?? {};
   const year = String(vehicle.year ?? "").trim();
   const model =
