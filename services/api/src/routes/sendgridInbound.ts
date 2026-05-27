@@ -3109,7 +3109,7 @@ async function buildInitialAdfVehicleFactReply(args: {
   decision: AdfVehicleFactDecision;
   text: string;
 }): Promise<{ reply: string; needsTodo: boolean; todoReason: string; todoSummary: string }> {
-  const scopedConv = args.lead ? { ...args.conv, lead: args.lead, latestLead: args.lead } : args.conv;
+  const scopedConv = scopeConversationToAdfLead(args.conv, args.lead);
   const vehicle = scopedConv?.lead?.vehicle ?? {};
   const year = String(vehicle.year ?? "").trim();
   const model =
@@ -3216,6 +3216,11 @@ async function buildInitialAdfVehicleFactReply(args: {
         todoSummary: `Confirm finance program eligibility for ${bikeLabel}. Customer asked: ${args.text}`
       };
   }
+}
+
+function scopeConversationToAdfLead(conv: any, lead: any): any {
+  if (!lead) return conv;
+  return { ...conv, lead, latestLead: lead };
 }
 
 function isInitialAdfInventoryStatusParserAccepted(parsed: InventoryStatusParse | null): boolean {
