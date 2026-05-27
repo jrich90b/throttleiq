@@ -103,6 +103,7 @@ import {
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
+import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
@@ -4903,6 +4904,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const isRideChallengeSignup =
     isRideChallengeLead &&
     !hasRideChallengeSignupAcknowledgement(conv.messages);
+  const publishEarlyAdfSmsDraft = (text: string, mediaUrls?: string[]) => {
+    const invariant = applyDraftStateInvariants({
+      inboundText: event.body ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: conv.dialogState?.name ?? null,
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null
+    });
+    if (!invariant.allow) {
+      const reason = invariant.reason ?? "draft_invariant_blocked";
+      addTodo(
+        conv,
+        "other",
+        `Review ADF reply before sending; draft guard blocked automatic publication (${reason}).`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "draft_guard_blocked");
+      stopFollowUpCadence(conv, "manual_handoff");
+      return { ok: false, reason };
+    }
+    appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    return { ok: true, draft: invariant.draftText };
+  };
   if (isRideChallengeSignup) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
@@ -4910,7 +4936,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const ack = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
     const dueAt = await applyRideChallengeReminderCadence();
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai");
+    publishEarlyAdfSmsDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5277,19 +5303,95 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (prefersPhoneOnly) {
     setContactPreference(conv, "call_only");
   }
-  const queueInitialDraftForPreferredContact = (text: string, mediaUrls?: string[]) => {
+  const applyAdfReplyInvariant = (text: string) =>
+    applyDraftStateInvariants({
+      inboundText: event.body ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: conv.dialogState?.name ?? null,
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null
+    });
+  const blockAdfDraftForInvariant = (reason: string) => {
+    addTodo(
+      conv,
+      "other",
+      `Review ADF reply before sending; draft guard blocked automatic publication (${reason}).`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "draft_guard_blocked");
+    stopFollowUpCadence(conv, "manual_handoff");
+  };
+  const publishAdfEmailDraft = (text: string): { ok: boolean; draft?: string; reason?: string } => {
+    const invariant = applyAdfReplyInvariant(text);
+    if (!invariant.allow) {
+      const reason = invariant.reason ?? "draft_invariant_blocked";
+      blockAdfDraftForInvariant(reason);
+      return { ok: false, reason };
+    }
+    setEmailDraft(conv, invariant.draftText);
+    return { ok: true, draft: conv.emailDraft };
+  };
+  const publishAdfDraftForPreferredContact = (
+    text: string,
+    mediaUrls?: string[]
+  ): { ok: boolean; draft?: string; reason?: string } => {
     if (suppressInitialAutoDraftForTimedCallback) {
-      return;
+      return { ok: false, reason: "timed_callback_suppressed" };
     }
     if (prefersPhoneOnly && systemMode !== "suggest") {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
-      return;
+      return { ok: false, reason: "phone_preferred" };
+    }
+    const invariant = applyAdfReplyInvariant(text);
+    if (!invariant.allow) {
+      const reason = invariant.reason ?? "draft_invariant_blocked";
+      blockAdfDraftForInvariant(reason);
+      return { ok: false, reason };
     }
     if (prefersEmailOnly) {
-      setEmailDraft(conv, text);
-      return;
+      setEmailDraft(conv, invariant.draftText);
+      return { ok: true, draft: conv.emailDraft };
     }
-    appendOutbound(conv, "dealership", leadKey, text, "draft_ai", undefined, mediaUrls);
+    appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    return { ok: true, draft: invariant.draftText };
+  };
+  const queueInitialDraftForPreferredContact = publishAdfDraftForPreferredContact;
+  const sendAdfEmailReply = async (args: {
+    text: string;
+    to: string;
+    subject: string;
+    profile: any;
+    bodyAlreadyStyled?: boolean;
+  }): Promise<{ ok: boolean; draft?: string; reason?: string }> => {
+    const invariant = applyAdfReplyInvariant(args.text);
+    if (!invariant.allow) {
+      const reason = invariant.reason ?? "draft_invariant_blocked";
+      blockAdfDraftForInvariant(reason);
+      return { ok: false, reason };
+    }
+    const from = (args.profile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim();
+    const replyToRaw = (args.profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim();
+    if (!from) return { ok: false, reason: "missing_from_email" };
+    const replyTo = maybeTagReplyTo(replyToRaw || undefined, conv);
+    const signature = String(args.profile?.emailSignature ?? "").trim() || undefined;
+    const emailBody = args.bodyAlreadyStyled
+      ? invariant.draftText
+      : toEmailStyledBody(invariant.draftText, conv);
+    const signed =
+      signature
+        ? `${emailBody}\n\n${signature}${args.profile?.logoUrl ? `\n\n${args.profile.logoUrl}` : ""}`
+        : appendFallbackEmailSignoff(emailBody, args.profile);
+    await sendEmail({
+      to: args.to,
+      subject: args.subject,
+      text: signed,
+      from,
+      replyTo
+    });
+    appendOutbound(conv, from, args.to, signed, "sendgrid");
+    return { ok: true, draft: signed };
   };
   const followUpAdfVehicleFactDecision =
     event.provider === "sendgrid_adf" && !isInitialAdf
@@ -6536,7 +6638,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6639,35 +6741,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         setFollowUpMode(conv, "active", "private_party_seller");
       }
     }
-    setEmailDraft(conv, emailDraft);
+    publishAdfEmailDraft(emailDraft);
     const systemMode = getSystemMode();
     const emailTo = conv.lead?.email?.trim();
     const canSendEmail = systemMode !== "suggest" && !!emailTo && conv.lead?.emailOptIn === true;
     if (canSendEmail) {
-      const { from: emailFrom, replyTo: emailReplyTo, signature } = {
-        from: (profile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim(),
-        replyTo: (profile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim(),
-        signature: String(profile?.emailSignature ?? "").trim() || undefined
-      };
-      const replyTo = maybeTagReplyTo(emailReplyTo || undefined, conv);
-      if (emailFrom) {
-        try {
-          const subject = `Thanks for your inquiry at ${dealerName}`;
-          const signed =
-            signature
-              ? `${emailDraft}\n\n${signature}${profile?.logoUrl ? `\n\n${profile.logoUrl}` : ""}`
-              : appendFallbackEmailSignoff(emailDraft, profile);
-          await sendEmail({
-            to: emailTo!,
-            subject,
-            text: signed,
-            from: emailFrom,
-            replyTo
-          });
-          appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
-        } catch (e: any) {
-          console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
-        }
+      try {
+        await sendAdfEmailReply({
+          text: emailDraft,
+          to: emailTo!,
+          subject: `Thanks for your inquiry at ${dealerName}`,
+          profile,
+          bodyAlreadyStyled: true
+        });
+      } catch (e: any) {
+        console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
       }
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
@@ -6805,7 +6893,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6848,7 +6936,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6879,7 +6967,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = withInitialAvailabilityLine(ack);
     ack = await withInitialOffersLine(ack);
 
-    appendOutbound(conv, "dealership", leadKey, ack, "draft_ai", undefined, initialMediaUrls);
+    queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
     const offersLine = await resolveInitialOffersLine();
@@ -6892,10 +6980,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       ...(offersLine ? [offersLine] : []),
       "Which model are you interested in, and do you have a preferred trim or color?"
     ];
-    setEmailDraft(
-      conv,
-      emailLines.join("\n")
-    );
+    publishAdfEmailDraft(emailLines.join("\n"));
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6926,7 +7011,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = await applyInitialAdfPrefix(ack);
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -7003,7 +7088,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       event.providerMessageId
     );
     queueInitialDraftForPreferredContact(ack);
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -7038,7 +7123,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -7083,7 +7168,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -7108,7 +7193,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     closeConversation(conv, result.autoClose.reason);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
-    setEmailDraft(conv, ack);
+    publishAdfEmailDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -7149,14 +7234,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         buildInventoryAvailable = false;
       }
     }
-    setEmailDraft(
-      conv,
+    publishAdfEmailDraft(
       buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable, {
         testRideInventoryStatus: initialAvailability
       })
     );
   } else {
-    setEmailDraft(conv, result.draft);
+    publishAdfEmailDraft(result.draft);
   }
 
   if (result.requestedTime && !conv.appointment?.bookedEventId) {
@@ -7803,37 +7887,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   if (systemMode !== "suggest" && useEmail) {
     const dealerName = dealerProfile?.dealerName ?? "Dealership";
-    const { from: emailFrom, replyTo: emailReplyTo, signature } = {
-      from: (dealerProfile?.fromEmail ?? process.env.SENDGRID_FROM_EMAIL ?? "").trim(),
-      replyTo: (dealerProfile?.replyToEmail ?? process.env.SENDGRID_REPLY_TO ?? "").trim(),
-      signature: String(dealerProfile?.emailSignature ?? "").trim() || undefined
-    };
-    const replyTo = maybeTagReplyTo(emailReplyTo || undefined, conv);
-    if (emailFrom) {
-      try {
-        const subject = `Thanks for your inquiry at ${dealerName}`;
-        const emailBody = toEmailStyledBody(draft, conv);
-        const signed =
-          signature
-            ? `${emailBody}\n\n${signature}${dealerProfile?.logoUrl ? `\n\n${dealerProfile.logoUrl}` : ""}`
-            : appendFallbackEmailSignoff(emailBody, dealerProfile);
-        await sendEmail({
-          to: emailTo!,
-          subject,
-          text: signed,
-          from: emailFrom,
-          replyTo
-        });
-        appendOutbound(conv, emailFrom, emailTo!, signed, "sendgrid");
+    try {
+      const sent = await sendAdfEmailReply({
+        text: draft,
+        to: emailTo!,
+        subject: `Thanks for your inquiry at ${dealerName}`,
+        profile: dealerProfile
+      });
+      if (sent.ok) {
         maybeAddInitialCallTodo();
         saveConversation(conv);
         await flushConversationStore();
-      } catch (e: any) {
-        console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
+      } else {
         queueInitialDraftForPreferredContact(draft, initialMediaUrls);
         maybeAddInitialCallTodo();
       }
-    } else {
+    } catch (e: any) {
+      console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
       queueInitialDraftForPreferredContact(draft, initialMediaUrls);
       maybeAddInitialCallTodo();
     }

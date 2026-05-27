@@ -3095,6 +3095,68 @@ function formatEmailBodyForConversation(body: string, conv: any): string {
   return formatEmailLayout(body, { firstName, fallbackName: "there" });
 }
 
+type CustomerReplyDraftInvariantHints = {
+  turnFinanceIntent?: boolean;
+  turnAvailabilityIntent?: boolean;
+  turnSchedulingIntent?: boolean;
+  financeContextIntent?: boolean;
+  shortAckIntent?: boolean;
+};
+
+type CustomerReplyDraftInvariantEvaluator = (
+  text: string,
+  invariantHints?: CustomerReplyDraftInvariantHints
+) => { allow: boolean; draftText: string; reason?: string };
+
+function publishCustomerReplyDraft(args: {
+  conv: Conversation;
+  channel: "sms" | "email";
+  text: string;
+  evaluateInvariant: CustomerReplyDraftInvariantEvaluator;
+  from?: string | null;
+  to?: string | null;
+  mediaUrls?: string[];
+  invariantHints?: CustomerReplyDraftInvariantHints;
+  discardPendingDraftsBeforePublish?: boolean;
+  routeScope?: "live" | "regen" | "manual";
+  routeOutcome?: string;
+  routeDetail?: Record<string, unknown>;
+}): { ok: true; draft: string } | { ok: false; reason: string } {
+  const invariant = args.evaluateInvariant(args.text, args.invariantHints);
+  if (!invariant.allow) {
+    return { ok: false, reason: invariant.reason ?? "draft_invariant_blocked" };
+  }
+
+  const shouldDiscardPendingDrafts =
+    args.discardPendingDraftsBeforePublish ?? (args.channel === "sms");
+  if (shouldDiscardPendingDrafts) {
+    discardPendingDrafts(args.conv);
+  }
+
+  let draft: string;
+  if (args.channel === "email") {
+    draft = formatEmailBodyForConversation(invariant.draftText, args.conv);
+    args.conv.emailDraft = draft;
+  } else {
+    const from = String(args.from ?? "dealership").trim() || "dealership";
+    const to =
+      String(args.to ?? "").trim() ||
+      String(args.conv.leadKey ?? "").trim();
+    appendOutbound(args.conv, from, to, invariant.draftText, "draft_ai", undefined, args.mediaUrls);
+    draft = invariant.draftText;
+  }
+
+  saveConversation(args.conv);
+  if (args.routeScope && args.routeOutcome) {
+    recordRouteOutcome(args.routeScope, args.routeOutcome, {
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      ...(args.routeDetail ?? {})
+    });
+  }
+  return { ok: true, draft };
+}
+
 function base64UrlEncode(input: string): string {
   return Buffer.from(input)
     .toString("base64")
@@ -10916,12 +10978,43 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     agentName: profile?.agentName
   });
   const preferredMethod = String(conv?.lead?.preferredContactMethod ?? "").trim().toLowerCase();
+  const evaluateDealerRideOutcomeDraftInvariant = (
+    text: string,
+    invariantHints?: CustomerReplyDraftInvariantHints
+  ) =>
+    applyDraftStateInvariants({
+      inboundText: args.note ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: getDialogState(conv),
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null,
+      ...(invariantHints ?? {})
+    });
+  const publishBlockedTodo = (reason: string) => {
+    addTodo(
+      conv,
+      "other",
+      `Review dealer ride outcome customer follow-up before sending. Draft guard blocked it: ${reason}.`
+    );
+  };
   if (preferredMethod === "phone") {
     addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer with the dealer ride outcome follow-up.");
     return { queued: false, reason: "phone_preferred", draft };
   }
   if (preferredMethod === "email") {
-    conv.emailDraft = formatEmailBodyForConversation(draft, conv);
+    const published = publishCustomerReplyDraft({
+      conv,
+      channel: "email",
+      text: draft,
+      evaluateInvariant: evaluateDealerRideOutcomeDraftInvariant,
+      discardPendingDraftsBeforePublish: false
+    });
+    if (!published.ok) {
+      publishBlockedTodo(published.reason);
+      return { queued: false, reason: published.reason, draft };
+    }
   } else {
     const toNumber = normalizePhone(conv?.lead?.phone ?? conv?.leadKey ?? "");
     if (!toNumber.startsWith("+")) return { queued: false, reason: "missing_phone", draft };
@@ -10933,7 +11026,19 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     ) {
       return { queued: false, reason: "duplicate", draft };
     }
-    appendOutbound(conv, "salesperson", toNumber, draft, "draft_ai");
+    const published = publishCustomerReplyDraft({
+      conv,
+      channel: "sms",
+      text: draft,
+      evaluateInvariant: evaluateDealerRideOutcomeDraftInvariant,
+      from: "salesperson",
+      to: toNumber,
+      discardPendingDraftsBeforePublish: false
+    });
+    if (!published.ok) {
+      publishBlockedTodo(published.reason);
+      return { queued: false, reason: published.reason, draft };
+    }
   }
   conv.dealerRide.staffNotify.customerFollowUpDraftedAt = new Date().toISOString();
   recordRouteOutcome("live", "dealer_ride_outcome_customer_draft", {
@@ -40793,27 +40898,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ...(draft ? { draft } : {})
     });
   };
-  const appendSmsRegeneratedDraft = (
-    text: string,
-    mediaUrls?: string[],
-    invariantHints?: {
-      turnFinanceIntent?: boolean;
-      turnAvailabilityIntent?: boolean;
-      turnSchedulingIntent?: boolean;
-      financeContextIntent?: boolean;
-      shortAckIntent?: boolean;
-    }
-  ) => {
-    const invariant = evaluateRegenDraftInvariant(text, invariantHints);
-    if (!invariant.allow) {
-      return { ok: false as const, reason: invariant.reason ?? "draft_invariant_blocked" };
-    }
-    const from = String(event.to ?? "dealership").trim() || "dealership";
-    const leadKey = String(conv.leadKey ?? "").trim();
-    const to = leadKey || String(event.from ?? "").trim();
-    appendOutbound(conv, from, to, invariant.draftText, "draft_ai", undefined, mediaUrls);
-    return { ok: true as const, draft: invariant.draftText };
-  };
   const respondWithSmsRegeneratedDraft = (
     text: string,
     mediaUrls?: string[],
@@ -40825,30 +40909,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent?: boolean;
     }
   ) => {
-    discardPendingDrafts(conv);
-    const published = appendSmsRegeneratedDraft(text, mediaUrls, invariantHints);
+    const published = publishCustomerReplyDraft({
+      conv,
+      channel: "sms",
+      text,
+      evaluateInvariant: evaluateRegenDraftInvariant,
+      from: event.to,
+      to: String(conv.leadKey ?? "").trim() || event.from,
+      mediaUrls,
+      invariantHints,
+      routeScope: "regen",
+      routeOutcome: "draft_published"
+    });
     if (!published.ok) {
       return respondRegenerateSkipped(published.reason);
     }
-    saveConversation(conv);
-    recordRouteOutcome("regen", "draft_published", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
     return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
   const respondWithEmailRegeneratedDraft = (text: string) => {
-    const invariant = evaluateRegenDraftInvariant(text);
-    if (!invariant.allow) {
-      return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
-    }
-    conv.emailDraft = formatEmailBodyForConversation(invariant.draftText, conv);
-    saveConversation(conv);
-    recordRouteOutcome("regen", "email_draft_published", {
-      convId: conv.id,
-      leadKey: conv.leadKey
+    const published = publishCustomerReplyDraft({
+      conv,
+      channel: "email",
+      text,
+      evaluateInvariant: evaluateRegenDraftInvariant,
+      discardPendingDraftsBeforePublish: false,
+      routeScope: "regen",
+      routeOutcome: "email_draft_published"
     });
-    return res.json({ ok: true, conversation: conv, draft: conv.emailDraft });
+    if (!published.ok) {
+      return respondRegenerateSkipped(published.reason);
+    }
+    return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
   const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
   const regenMarketplaceSellMyBikeLead =
@@ -44704,16 +44795,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   await seedInventoryWatchPendingFromReply(conv, event, reply);
 
     if (channel === "email") {
-      const invariant = evaluateRegenDraftInvariant(reply);
-      if (!invariant.allow) {
-        return respondRegenerateSkipped(invariant.reason ?? "draft_invariant_blocked");
+      const published = publishCustomerReplyDraft({
+        conv,
+        channel: "email",
+        text: reply,
+        evaluateInvariant: evaluateRegenDraftInvariant,
+        discardPendingDraftsBeforePublish: false
+      });
+      if (!published.ok) {
+        return respondRegenerateSkipped(published.reason);
       }
-      conv.emailDraft = formatEmailBodyForConversation(invariant.draftText, conv);
-      saveConversation(conv);
       return res.json({
         ok: true,
         conversation: conv,
-        draft: conv.emailDraft,
+        draft: published.draft,
         debug: {
           inboundBody: event.body,
           inboundAt: event.receivedAt,
@@ -44723,12 +44818,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
 
-    discardPendingDrafts(conv);
-    const published = appendSmsRegeneratedDraft(reply);
+    const published = publishCustomerReplyDraft({
+      conv,
+      channel: "sms",
+      text: reply,
+      evaluateInvariant: evaluateRegenDraftInvariant,
+      from: event.to,
+      to: String(conv.leadKey ?? "").trim() || event.from
+    });
     if (!published.ok) {
       return respondRegenerateSkipped(published.reason);
     }
-    saveConversation(conv);
     return res.json({
       ok: true,
       conversation: conv,
@@ -44878,6 +44978,15 @@ const asyncTwilioInFlight = new Set<string>();
 
 function emptyTwilioWebhookResponse(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+}
+
+function twilioMessageWebhookResponse(body: string, mediaUrls?: string[]): string {
+  const mediaTags = Array.isArray(mediaUrls) && mediaUrls.length
+    ? mediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
+    : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
+    body
+  )}${mediaTags}\n  </Message>\n</Response>`;
 }
 
 function isAsyncTwilioInboundEnabled(): boolean {
@@ -45282,6 +45391,72 @@ if (authToken && signature) {
   const systemMode = getSystemMode();
   const webhookMode =
     systemMode === "suggest" ? "suggest" : event.provider === "twilio" ? "autopilot" : effectiveMode(conv);
+  const evaluateEarlyLiveDraftInvariant = (
+    text: string,
+    invariantHints?: CustomerReplyDraftInvariantHints
+  ) =>
+    applyDraftStateInvariants({
+      inboundText: event.body ?? "",
+      draftText: text,
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      dialogState: getDialogState(conv),
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null,
+      ...(invariantHints ?? {})
+    });
+  const publishLiveTwilioReply = async (
+    text: string,
+    invariantHints?: CustomerReplyDraftInvariantHints,
+    options?: { providerMessageId?: string | null; mediaUrls?: string[]; draftOnly?: boolean }
+  ) => {
+    const invariant = evaluateEarlyLiveDraftInvariant(text, invariantHints);
+    if (!invariant.allow) {
+      const reason = invariant.reason ?? "draft_invariant_blocked";
+      discardPendingDrafts(conv, reason);
+      saveConversation(conv);
+      await flushConversationStore();
+      recordRouteOutcome("live", reason, {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
+    }
+
+    const publishedText = invariant.draftText;
+    const outboundFrom = event.to;
+    const outboundTo = event.from;
+    const mediaUrls = Array.isArray(options?.mediaUrls) && options.mediaUrls.length
+      ? options.mediaUrls
+      : undefined;
+    if (webhookMode === "suggest" || options?.draftOnly) {
+      appendOutbound(
+        conv,
+        outboundFrom,
+        outboundTo,
+        publishedText,
+        "draft_ai",
+        String(options?.providerMessageId ?? "").trim() || undefined,
+        mediaUrls
+      );
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
+    }
+
+    appendOutbound(
+      conv,
+      outboundFrom,
+      outboundTo,
+      publishedText,
+      "twilio",
+      String(options?.providerMessageId ?? "").trim() || undefined,
+      mediaUrls
+    );
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(publishedText, mediaUrls));
+  };
   const livePreParserDecision = classifyInboundPreParserTurn({
     provider: event.provider,
     channel: event.channel === "email" ? "email" : "sms",
@@ -45314,20 +45489,10 @@ if (authToken && signature) {
       hasScheduleTimeSignal: livePreParserDecision.hasScheduleTimeSignal,
       hasScheduleDaySignal: livePreParserDecision.hasScheduleDaySignal
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnSchedulingIntent:
+        livePreParserDecision.hasScheduleTimeSignal || livePreParserDecision.hasScheduleDaySignal
+    });
   }
   const responseControlParserEligible =
     event.provider === "twilio" &&
@@ -45344,17 +45509,9 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       hasTimeProposal: !!extractTimeToken(event.body ?? "")
     });
-    const hoursWebhookMode = getSystemMode() === "suggest" ? "suggest" : "autopilot";
-    if (hoursWebhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnSchedulingIntent: !!extractTimeToken(event.body ?? "")
+    });
   }
   const responseControlParse = responseControlParserEligible
     ? await safeLlmParse("response_control_parser", () =>
@@ -45486,19 +45643,15 @@ if (authToken && signature) {
     discardPendingDrafts(conv, "data_quality_complaint");
     delete conv.emailDraft;
     const reply = buildDataQualityComplaintReply(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
     setFollowUpMode(conv, "manual_handoff", "data_quality_complaint");
     setDialogState(conv, "callback_handoff");
     addTodo(conv, "other", "Customer says the prior information was incorrect. Review lead details and follow up.", event.providerMessageId, conv.leadOwner);
-    saveConversation(conv);
-    await flushConversationStore();
     recordRouteOutcome("live", "data_quality_complaint_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey,
       confidence: responseControlParse?.confidence ?? null
     });
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, undefined, { draftOnly: true });
   }
   if (conv.contactPreference === "call_only") {
     if (llmOptOut || isOptOut(event.body)) {
@@ -45566,9 +45719,6 @@ if (authToken && signature) {
       requestedLabel,
       bookingUrl
     });
-    if (draft) appendOutbound(conv, event.to, event.from, draft, "draft_ai");
-    saveConversation(conv);
-    await flushConversationStore();
     recordRouteOutcome("live", "appointment_cancel_or_reschedule_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -45577,6 +45727,11 @@ if (authToken && signature) {
       dueAt: todo?.dueAt ?? null,
       hasBookingUrl: !!bookingUrl
     });
+    if (draft) {
+      return publishLiveTwilioReply(draft, { turnSchedulingIntent: true }, { draftOnly: true });
+    }
+    saveConversation(conv);
+    await flushConversationStore();
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }
@@ -45711,16 +45866,13 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-      appendOutbound(conv, event.to, event.from, buildImmediateArrivalRequestReply(conv), "draft_ai");
+      const reply = buildImmediateArrivalRequestReply(conv);
       recordRouteOutcome("live", "human_mode_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
         confidence: customerAckActionParse?.confidence ?? null
       });
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
     }
     discardPendingDrafts(conv, "new_inbound_human_mode");
     didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
@@ -45756,7 +45908,6 @@ if (authToken && signature) {
     const humanModeConditionalPickupReply = buildConditionalPickupPlanAck(humanModeText) ?? "";
     if (humanModeReminderOnlyReply || humanModeConditionalPickupReply) {
       const reply = humanModeReminderOnlyReply || humanModeConditionalPickupReply;
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
       recordRouteOutcome(
         "live",
         humanModeReminderOnlyReply
@@ -45767,10 +45918,7 @@ if (authToken && signature) {
           leadKey: conv.leadKey
         }
       );
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, undefined, { draftOnly: true });
     }
     if (isOutboundInventoryWatchOfferConfirmation(humanModeText, humanModeLastOutboundText)) {
       const confirmedWatch = await buildInventoryWatchFromConfirmedOutboundOffer(
@@ -45837,7 +45985,11 @@ if (authToken && signature) {
           ? buildPostSalePickupArrivalAck(humanModeText)
           : "";
         if (pickupDraft) {
-          appendOutbound(conv, event.to, event.from, pickupDraft, "draft_ai");
+          return publishLiveTwilioReply(
+            pickupDraft,
+            { turnSchedulingIntent: true },
+            { draftOnly: true }
+          );
         }
         saveConversation(conv);
         await flushConversationStore();
@@ -45912,12 +46064,26 @@ if (authToken && signature) {
               : null
         });
         if (draft) {
-          appendOutbound(conv, event.to, event.from, draft, "draft_ai");
-          recordRouteOutcome("live", "human_mode_schedule_draft_created", {
-            convId: conv.id,
-            leadKey: conv.leadKey,
-            intent: humanBookingParse.intent
+          const published = publishCustomerReplyDraft({
+            conv,
+            channel: "sms",
+            text: draft,
+            evaluateInvariant: evaluateEarlyLiveDraftInvariant,
+            from: event.to,
+            to: event.from,
+            invariantHints: { turnSchedulingIntent: true },
+            discardPendingDraftsBeforePublish: false,
+            routeScope: "live",
+            routeOutcome: "human_mode_schedule_draft_created",
+            routeDetail: { intent: humanBookingParse.intent }
           });
+          if (!published.ok) {
+            recordRouteOutcome("live", published.reason, {
+              convId: conv.id,
+              leadKey: conv.leadKey,
+              intent: humanBookingParse.intent
+            });
+          }
         }
       }
     }
@@ -46155,20 +46321,7 @@ if (authToken && signature) {
       parsed: liveEarlyPurchaseDeliveryLogisticsParse as PurchaseDeliveryLogisticsParse,
       scope: "live"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (
     event.provider === "twilio" &&
@@ -46193,20 +46346,7 @@ if (authToken && signature) {
       },
       scope: "live"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (event.provider === "twilio" && shouldAcknowledgeInboundMediaProof(conv, event)) {
     const reply = buildInboundMediaProofAcknowledgement();
@@ -46215,16 +46355,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       mediaCount: event.mediaUrls?.length ?? 0
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (event.provider === "twilio" && isLogisticsProgressUpdateText(event.body ?? "")) {
     if (isPurchaseDeliveryLogisticsParserConfidentNone(liveEarlyPurchaseDeliveryLogisticsParse)) {
@@ -46233,21 +46364,12 @@ if (authToken && signature) {
         leadKey: conv.leadKey
       });
     } else {
-    const reply = buildLogisticsProgressAcknowledgement(event.body ?? "");
-    recordRouteOutcome("live", "logistics_progress_acknowledgement", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+      const reply = buildLogisticsProgressAcknowledgement(event.body ?? "");
+      recordRouteOutcome("live", "logistics_progress_acknowledgement", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return publishLiveTwilioReply(reply);
     }
   }
   if (isSuppressed(event.from)) {
@@ -46262,17 +46384,7 @@ if (authToken && signature) {
   if (llmOptOut || isOptOut(event.body)) {
     await applySmsOptOut(conv, event);
     const reply = "Understood - I'll stop texting.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   const semanticInboundText = String(event.body ?? "");
   const semanticTextLower = semanticInboundText.toLowerCase();
@@ -46310,20 +46422,7 @@ if (authToken && signature) {
       intent: firstTimeRiderDecision.intent,
       confidence: firstTimeRiderDecision.confidence ?? null
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (
     event.provider === "twilio" &&
@@ -46360,21 +46459,11 @@ if (authToken && signature) {
         dealerProfile,
         scope: "live"
       });
-      const mode = webhookMode;
-      if (mode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent:
+          dealerTransactionPolicyDecision.asksRiderToRiderFinancing ||
+          dealerTransactionPolicyDecision.asksExternalDealerFacilitation
+      });
     }
   }
   const unifiedSlotRouterEnabled = process.env.LLM_UNIFIED_SLOT_ROUTER_ENABLED === "1";
@@ -46606,17 +46695,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parser: terminalRouteDecision.parser
     });
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (terminalRouteDecision?.kind === "customer_disposition_closeout" && dispositionDecision) {
     applyCustomerDispositionCloseout(conv, dispositionDecision);
@@ -46627,34 +46706,17 @@ if (authToken && signature) {
       reason: terminalRouteDecision.dispositionReason,
       responseControlNotInterested: terminalRouteDecision.responseControlNotInterested
     });
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
     setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasCompositeSalesInquiryParserHint(semanticInboundText)) {
@@ -46674,17 +46736,16 @@ if (authToken && signature) {
         decision: compositeDecision,
         scope: "live"
       });
-      const mode = webhookMode;
-      if (mode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent:
+          compositeDecision.asksOutTheDoorPrice ||
+          compositeDecision.asksAccessoryQuote ||
+          compositeDecision.hasFinancingConcern,
+        financeContextIntent:
+          compositeDecision.asksOutTheDoorPrice ||
+          compositeDecision.asksAccessoryQuote ||
+          compositeDecision.hasFinancingConcern
+      });
     }
   }
 
@@ -46706,17 +46767,7 @@ if (authToken && signature) {
         decision: accessoryDecision,
         scope: "live"
       });
-      const mode = webhookMode;
-      if (mode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
 
@@ -46727,17 +46778,7 @@ if (authToken && signature) {
       providerMessageId: event.providerMessageId,
       scope: "live"
     });
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (
@@ -46751,17 +46792,7 @@ if (authToken && signature) {
       providerMessageId: event.providerMessageId,
       scope: "live"
     });
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasVehicleFactQuestionParserHint(semanticInboundText)) {
@@ -46782,17 +46813,7 @@ if (authToken && signature) {
         decision: vehicleFactDecision,
         scope: "live"
       });
-      const mode = webhookMode;
-      if (mode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
 
@@ -46811,17 +46832,7 @@ if (authToken && signature) {
     const reply =
       "Got it — I’ll have a salesperson send a walkaround video by text shortly.";
     addTodo(conv, "other", `Video request: ${event.body}`, event.providerMessageId);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (serviceRecordsRequested) {
@@ -46843,17 +46854,7 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply = "Thanks for the details — I’ll have the team check service records (battery/tires) and follow up.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (isLienHolderInfoRequestText(event.body ?? "")) {
@@ -46863,25 +46864,18 @@ if (authToken && signature) {
       setManualHandoff: true
     });
     if (reply) {
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        recordRouteOutcome("live", "finance_followup_continuation_draft", {
+      recordRouteOutcome(
+        "live",
+        webhookMode === "suggest" ? "finance_followup_continuation_draft" : "finance_followup_continuation_send",
+        {
           convId: conv.id,
           leadKey: conv.leadKey
-        });
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      recordRouteOutcome("live", "finance_followup_continuation_send", {
-        convId: conv.id,
-        leadKey: conv.leadKey
+        }
+      );
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
       });
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
     }
   }
 
@@ -46905,17 +46899,7 @@ if (authToken && signature) {
     })
   ) {
     const reply = buildComplimentReply();
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const dialogState = getDialogState(conv);
@@ -46935,17 +46919,7 @@ if (authToken && signature) {
       text: event.body,
       providerMessageId: event.providerMessageId
     });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (inboundDepartmentIntent === "parts" || inboundDepartmentIntent === "apparel") {
     await assignDepartmentLeadOwnerIfUnassigned(conv, inboundDepartmentIntent);
@@ -46979,17 +46953,7 @@ if (authToken && signature) {
           ? buildTakeOffMilwaukeeEightEngineReply()
           : "Thanks — I’ll have our parts department reach out shortly."
         : "Thanks — I’ll have our apparel team reach out shortly.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (isServiceStatusUpdateQuestionText(event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
@@ -47009,17 +46973,7 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
     const reply = buildServiceStatusUpdateHandoffReply();
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   const isServiceLead = inboundDepartmentIntent === "service";
   if (isServiceLead) {
@@ -47042,17 +46996,7 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "manual_handoff");
       stopRelatedCadences(conv, "service_status_update", { setMode: "manual_handoff" });
       const reply = buildServiceStatusUpdateHandoffReply();
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     const complimentRegex =
       /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
@@ -47067,31 +47011,11 @@ if (authToken && signature) {
       })) ?? false;
     if (complimentRegex || complimentLLM) {
       const reply = "Totally — glad you like it.";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     if (/\b(thanks|thank you|thanks again|thx|ty|appreciate)\b/.test(t)) {
       const reply = "You're welcome!";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     if (getDialogState(conv) === "none") {
       setDialogState(conv, "service_request");
@@ -47114,17 +47038,7 @@ if (authToken && signature) {
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
     const reply =
       "We’ve received your service request and will have the service department reach out.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const isDeferral = (text: string) => {
@@ -47250,17 +47164,11 @@ if (authToken && signature) {
           const reply =
             `Perfect — you’re booked for ${when}${repSuffix}. ` +
             `${dealerName} is at ${addressLine}.`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio", eventObj.id ?? undefined);
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(
+            reply,
+            { turnSchedulingIntent: true },
+            { providerMessageId: eventObj.id ?? undefined }
+          );
         } catch (e: any) {
           console.log("[appt-resched-confirm] failed:", e?.message ?? e);
         }
@@ -47354,21 +47262,11 @@ if (authToken && signature) {
             null;
           const repSuffix = repName ? ` with ${repName}` : "";
           const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            saveConversation(conv);
-            await flushConversationStore();
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio", created.id ?? undefined);
-          saveConversation(conv);
-          await flushConversationStore();
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(
+            reply,
+            { turnSchedulingIntent: true },
+            { providerMessageId: created.id ?? undefined }
+          );
         } catch (e: any) {
           console.log("[auto-book] failed:", e?.message ?? e);
         }
@@ -47459,21 +47357,11 @@ if (authToken && signature) {
           null;
         const repSuffix = repName ? ` with ${repName}` : "";
         const reply = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          saveConversation(conv);
-          await flushConversationStore();
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio", created.id ?? undefined);
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(
+          reply,
+          { turnSchedulingIntent: true },
+          { providerMessageId: created.id ?? undefined }
+        );
       } catch (e: any) {
         console.log("[auto-book] failed:", e?.message ?? e);
       }
@@ -47552,17 +47440,9 @@ if (authToken && signature) {
         : rescheduleUrl
           ? `No problem — I’ve cancelled it. Reschedule here: ${rescheduleUrl}`
           : "No problem — I’ve cancelled it. What day and time works to reschedule?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnSchedulingIntent: isNo
+      });
     }
   }
   didConfirm = confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
@@ -47579,17 +47459,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "pending_used_followup");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, ack, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, ack, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      ack
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(ack);
   }
 
   const reschedulePending = conv.appointment?.reschedulePending === true;
@@ -47658,17 +47528,9 @@ if (authToken && signature) {
       });
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, ask, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, ask, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        ask
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(ask, {
+        turnSchedulingIntent: true
+      });
     }
 
     try {
@@ -47746,9 +47608,9 @@ if (authToken && signature) {
           };
           conv.appointment.updatedAt = new Date().toISOString();
           const ask = `I can move you to ${when}${repName}. Want me to lock that in?`;
-          appendOutbound(conv, event.to, event.from, ask, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(ask, {
+            turnSchedulingIntent: true
+          });
         }
 
         const sourceCalendarId =
@@ -47793,11 +47655,11 @@ if (authToken && signature) {
         const confirmText =
           `Perfect — you’re booked for ${when}${repName}. ` +
           `${dealerName} is at ${addressLine}.`;
-        appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          confirmText
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(
+          confirmText,
+          { turnSchedulingIntent: true },
+          { providerMessageId: eventObj.id ?? undefined }
+        );
       }
 
       const candidatesByDay = generateCandidateSlots(cfg, new Date(), durationMinutes, 14);
@@ -47852,35 +47714,6 @@ if (authToken && signature) {
         const reply =
           requestedWindowReply ??
           `${repBooked} The closest openings I have are ${picked[0].startLocal} or ${picked[1].startLocal} — do any of these times work?`;
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          saveConversation(conv);
-          console.log(
-            "[scheduler] saving convo before flush",
-            "leadKey",
-            conv.leadKey,
-            "len",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0
-          );
-          console.log("[scheduler] flushing store path:", getConversationStorePath());
-          if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
-            console.log(
-              "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
-            );
-          }
-          await flushConversationStore();
-          console.log(
-            "[scheduler] saved lastSuggestedSlots len:",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0,
-            "leadKey",
-            conv.leadKey
-          );
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        saveConversation(conv);
         console.log(
           "[scheduler] saving convo before flush",
           "leadKey",
@@ -47894,17 +47727,9 @@ if (authToken && signature) {
             "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
           );
         }
-        await flushConversationStore();
-        console.log(
-          "[scheduler] saved lastSuggestedSlots len:",
-          conv.scheduler?.lastSuggestedSlots?.length ?? 0,
-          "leadKey",
-          conv.leadKey
-        );
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply, {
+          turnSchedulingIntent: true
+        });
       }
       const dayName = requested.dayOfWeek.charAt(0).toUpperCase() + requested.dayOfWeek.slice(1);
       const hh = String(requested.hour24).padStart(2, "0");
@@ -47915,17 +47740,9 @@ if (authToken && signature) {
         "If that doesn't work, what other time could you do?";
       conv.appointment.reschedulePending = true;
       conv.appointment.updatedAt = new Date().toISOString();
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnSchedulingIntent: true
+      });
     } catch (e: any) {
       console.log("[reschedule] failed:", e?.message ?? e);
     }
@@ -47940,17 +47757,9 @@ if (authToken && signature) {
   if (scheduleConflictNoBooking) {
     const reply = "No problem — what day and time works better for you?";
     setDialogState(conv, "schedule_request");
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnSchedulingIntent: true
+    });
   }
 
   // Reschedule flow: if they pick one of our suggested slots, update the existing event
@@ -48005,18 +47814,11 @@ if (authToken && signature) {
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
 
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-
-      appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        confirmText
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(
+        confirmText,
+        { turnSchedulingIntent: true },
+        { providerMessageId: eventObj.id ?? undefined }
+      );
     } catch (e: any) {
       console.log("[reschedule-confirm] failed:", e?.message ?? e);
     }
@@ -48088,21 +47890,11 @@ if (authToken && signature) {
       const confirmText =
         `Perfect — you’re booked for ${when}${repName}. ` +
         `${dealerName} is at ${addressLine}.`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-
-      // Log as actually sent
-      appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-
-      // Return TwiML to send the SMS immediately (Option B)
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        confirmText
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(
+        confirmText,
+        { turnSchedulingIntent: true },
+        { providerMessageId: eventObj.id ?? undefined }
+      );
     } catch (e: any) {
       console.log("[auto-book] failed:", e?.message ?? e);
       // If booking fails, fall through to normal draft behavior
@@ -48184,17 +47976,7 @@ if (authToken && signature) {
       const reply = tradeModel || tradeYear
         ? `Perfect — thanks. ${tradeLabel} helps. About how many miles are on it, and is there any payoff left on it?`
         : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     if (tradeDeclined) {
       conv.lead = conv.lead ?? {};
@@ -48206,17 +47988,10 @@ if (authToken && signature) {
       const reply = /^no problem|^got it/i.test(financeReply)
         ? `${financeReply}`
         : `No problem — no trade is totally fine. ${financeReply}`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
     }
   }
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
@@ -48246,36 +48021,11 @@ if (authToken && signature) {
       if (!autoMediaUrls.length) {
         addMediaRequestTodoIfMissing(conv, event.body, event.providerMessageId);
       }
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(
-          conv,
-          event.to,
-          event.from,
-          mediaReply,
-          "draft_ai",
-          undefined,
-          autoMediaUrls.length ? autoMediaUrls : undefined
-        );
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(
-        conv,
-        event.to,
-        event.from,
+      return publishLiveTwilioReply(
         mediaReply,
-        "twilio",
         undefined,
-        autoMediaUrls.length ? autoMediaUrls : undefined
+        { mediaUrls: autoMediaUrls.length ? autoMediaUrls : undefined }
       );
-      const mediaTags = autoMediaUrls.length
-        ? autoMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
-        : "";
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        mediaReply
-      )}${mediaTags}\n  </Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
     }
   }
   const emojiOnly = isEmojiOnlyText(inboundText);
@@ -48463,17 +48213,7 @@ if (authToken && signature) {
       watchHandledEarly = true;
       if (!earlyWatchAsSideEffectOnly) {
         const reply = "Got it — which model should I watch for?";
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply);
       }
     } else {
       const budgetSeed = applyEntityBudgetSeed(
@@ -48542,17 +48282,7 @@ if (authToken && signature) {
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
           const reply = buildInventoryWatchConfirmation(pref.watch);
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       } else {
         conv.inventoryWatchPending = pending;
@@ -48566,17 +48296,7 @@ if (authToken && signature) {
             pendingCondition
           );
           const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
     }
@@ -48647,17 +48367,7 @@ if (authToken && signature) {
     if (!isTradeDialogState(getDialogState(conv))) {
       setDialogState(conv, "trade_cash");
     }
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (isTradeLead && conv.lead) {
     const parsedSellOption = parseSellOptionFromText(event.body ?? "");
@@ -49022,16 +48732,10 @@ if (authToken && signature) {
       decision: thirdPartyFinanceFacilitationDecision,
       scope: "live"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
   }
   if (event.provider === "twilio" && externalDealerApprovalTransferDecision) {
     const dealerProfile = await getDealerProfileHot();
@@ -49041,16 +48745,10 @@ if (authToken && signature) {
       decision: externalDealerApprovalTransferDecision,
       scope: "live"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
   }
   const financeTermQuestionDecision = resolveFinanceTermQuestionDecision(
     event.body ?? "",
@@ -49064,17 +48762,10 @@ if (authToken && signature) {
       decision: financeTermQuestionDecision,
       scope: "live"
     });
-    const mode = webhookMode;
-    if (mode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
   }
   const inventoryStatusResolution =
     event.provider === "twilio" && !pricingSignal && !explicitScheduleSignal
@@ -49099,35 +48790,11 @@ if (authToken && signature) {
       inventoryStatusResolution.kind === "reply" && Array.isArray(inventoryStatusResolution.mediaUrls)
         ? inventoryStatusResolution.mediaUrls
         : [];
-    if (webhookMode === "suggest") {
-      appendOutbound(
-        conv,
-        event.to,
-        event.from,
-        reply,
-        "draft_ai",
-        undefined,
-        extraMediaUrls.length ? extraMediaUrls : undefined
-      );
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(
-      conv,
-      event.to,
-      event.from,
+    return publishLiveTwilioReply(
       reply,
-      "twilio",
-      undefined,
-      extraMediaUrls.length ? extraMediaUrls : undefined
+      { turnAvailabilityIntent: true },
+      { mediaUrls: extraMediaUrls.length ? extraMediaUrls : undefined }
     );
-    const mediaTags = extraMediaUrls.length
-      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
-      : "";
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}${mediaTags}\n  </Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
   if (
     event.provider === "twilio" &&
@@ -49141,16 +48808,7 @@ if (authToken && signature) {
       providerMessageId: event.providerMessageId,
       scope: "live"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
   }
   if (
     getDialogState(conv) === "none" &&
@@ -49293,16 +48951,7 @@ if (authToken && signature) {
         })
       : null;
   if (testRideEligibilityReply) {
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, testRideEligibilityReply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, testRideEligibilityReply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      testRideEligibilityReply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(testRideEligibilityReply);
   }
   const factoryOrderTimingReply =
     event.provider === "twilio"
@@ -49315,14 +48964,7 @@ if (authToken && signature) {
         })
       : null;
   if (factoryOrderTimingReply) {
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, factoryOrderTimingReply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, factoryOrderTimingReply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(factoryOrderTimingReply)}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(factoryOrderTimingReply, { turnAvailabilityIntent: true });
   }
   let mentionedUser: any | null = null;
   let ambiguousMentionUsers: any[] = [];
@@ -49368,16 +49010,7 @@ if (authToken && signature) {
       (!mentionParserAccepted || mentionParserResult?.intent === "handoff_request")
     ) {
       const clarifyReply = buildMentionClarificationReply(ambiguousMentionUsers);
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, clarifyReply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, clarifyReply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        clarifyReply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(clarifyReply);
     }
     if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
       mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
@@ -49391,17 +49024,10 @@ if (authToken && signature) {
         setManualHandoff: true,
         triggered: true
       }) ?? buildLienHolderFallbackReply(dealerProfile);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
   }
   if (event.provider === "twilio" && mentionedUser) {
     const firstName = getCustomerFacingMentionName(mentionedUser, event.body ?? "");
@@ -49427,16 +49053,10 @@ if (authToken && signature) {
       stopRelatedCadences(conv, "payment_numbers_status", { setMode: "manual_handoff" });
       markPricingEscalated(conv);
       const reply = buildPaymentNumbersStatusReply(conv, mentionedUser, event.body ?? "");
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
     }
     const healthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
     const fallbackSensitive = healthUpdateWithoutScheduleAsk || /\b(cancer|chemo|chemotherapy|radiation|hospice|icu|hospital|surgery|surgical|terminal|stage\s*(four|4)|death|dying|funeral|passed away|stroke|heart attack)\b/i.test(
@@ -49546,31 +49166,13 @@ if (authToken && signature) {
       if (healthUpdateWithoutScheduleAsk) {
         await applyHealthRecoveryFollowUpDelay(conv);
       }
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
   if (event.provider === "twilio" && isHealthUpdateWithoutScheduleAsk(event.body ?? "")) {
     const reply = buildHealthUpdateReply(event.body ?? "");
     await applyHealthRecoveryFollowUpDelay(conv);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   const bookingConfidence =
     typeof bookingParse?.confidence === "number" ? bookingParse.confidence : 0;
@@ -49602,19 +49204,7 @@ if (authToken && signature) {
       parserConfidence: bookingConfidence || null
     });
     const reply = "Sorry about that — I’ve cancelled that appointment.";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
     await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
@@ -49647,19 +49237,7 @@ if (authToken && signature) {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && immediateArrivalRequestFallback && !pricingOrPaymentsIntent) {
     discardPendingDrafts(conv, "immediate_arrival_request");
@@ -49676,15 +49254,11 @@ if (authToken && signature) {
     stopFollowUpCadence(conv, "immediate_arrival_request");
     stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
     const reply = buildImmediateArrivalRequestReply(conv);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-    saveConversation(conv);
-    await flushConversationStore();
     recordRouteOutcome("live", "customer_ack_immediate_arrival_request_fallback_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
   }
   if (
     event.provider === "twilio" &&
@@ -49712,16 +49286,12 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
       const reply = buildImmediateArrivalRequestReply(conv);
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
       recordRouteOutcome("live", "customer_ack_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
         confidence: customerAckActionParse?.confidence ?? null
       });
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
     }
     if (
       action === "accept_tentative_appointment" ||
@@ -49751,19 +49321,7 @@ if (authToken && signature) {
           slotCount: windowSlots.length
         });
         const reply = `Sounds good. ${windowReply}`;
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          saveConversation(conv);
-          await flushConversationStore();
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
       }
     }
     if (action === "purchase_delivery_update") {
@@ -49803,19 +49361,7 @@ if (authToken && signature) {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
     }
     if (action === "provide_arrival_window") {
       const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
@@ -49836,19 +49382,7 @@ if (authToken && signature) {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, checked.reply, "draft_ai");
-        saveConversation(conv);
-        await flushConversationStore();
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, checked.reply, "twilio");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(checked.reply)}</Message></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(checked.reply, { turnSchedulingIntent: true });
     }
     const reply =
       action === "accept_tentative_appointment"
@@ -49869,19 +49403,7 @@ if (authToken && signature) {
       confidence: customerAckActionParse?.confidence ?? null
     });
     setDialogState(conv, "schedule_request");
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (
     event.provider === "twilio" &&
@@ -49935,19 +49457,7 @@ if (authToken && signature) {
       setDialogState(conv, "schedule_request");
     }
     if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      saveConversation(conv);
-      await flushConversationStore();
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    saveConversation(conv);
-    await flushConversationStore();
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(reply)}</Message></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   let bookingParseText = bookingIntentAccepted ? bookingParse?.normalizedText ?? "" : "";
   if (
@@ -50151,16 +49661,7 @@ if (authToken && signature) {
       hasNewUrl: !!inventoryBrowse.newUrl,
       hasUsedUrl: !!inventoryBrowse.usedUrl
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, inventoryBrowse.reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, inventoryBrowse.reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      inventoryBrowse.reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(inventoryBrowse.reply);
   }
   const frustrationAffectSignal =
     !!acceptedAffect?.needsEmpathy ||
@@ -50196,16 +49697,7 @@ if (authToken && signature) {
       affectPrimary: acceptedAffect?.primaryAffect ?? null,
       replySource: empathyReplyParse?.reply ? "llm_structured" : "fallback"
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, empathyReply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, empathyReply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      empathyReply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(empathyReply);
   }
   const smallTalkPreemptCandidate =
     event.provider === "twilio" &&
@@ -50239,16 +49731,7 @@ if (authToken && signature) {
     logRouteOutcome("style_preference_discovery_prompt", {
       family: stylePreferenceReply.family
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, stylePreferenceReply.reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, stylePreferenceReply.reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      stylePreferenceReply.reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(stylePreferenceReply.reply);
   }
   if (smallTalkPreemptCandidate) {
     const smallTalkPreemptSignal = await detectSmallTalkSignalWithFallback({
@@ -50277,16 +49760,7 @@ if (authToken && signature) {
           classifySource: smallTalkPreemptSignal.source,
           replySource: chit.source
         });
-        if (webhookMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          chit.reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(chit.reply);
       }
       logRouteOutcome("smalltalk_preempt_llm_unavailable", {
         turnPrimaryIntent: routeExecutionIntent,
@@ -50328,16 +49802,7 @@ if (authToken && signature) {
       confidence: conversationStateParse?.confidence ?? null,
       draftOnly: forceDraft
     });
-    if (webhookMode === "suggest" || forceDraft) {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, undefined, { draftOnly: forceDraft });
   }
   const logisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
   if (event.provider === "twilio" && routeExecCallback) {
@@ -50478,16 +49943,7 @@ if (authToken && signature) {
         smallTalkClassifySource: noResponseSmallTalkSignal.source,
         replySource
       });
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     if (effectiveNoResponseAction === "ack_progress_update") {
       const progressReply = "Thanks for the update. I’m here if you need anything.";
@@ -50496,16 +49952,7 @@ if (authToken && signature) {
         parserReason: routingParserDecision.reason,
         mode: routePolicyMode
       });
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, progressReply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, progressReply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        progressReply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(progressReply);
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
@@ -50520,16 +49967,7 @@ if (authToken && signature) {
           logRouteOutcome("style_preference_discovery_prompt", {
             family: noResponseStyleReply.family
           });
-          if (webhookMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, noResponseStyleReply.reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, noResponseStyleReply.reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            noResponseStyleReply.reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(noResponseStyleReply.reply);
         }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
@@ -50559,16 +49997,7 @@ if (authToken && signature) {
           smallTalkClassifySource: noResponseSmallTalkSignal.source,
           replySource: chit.source
         });
-        if (webhookMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          chit.reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(chit.reply);
       }
       const webFallbackReply = await buildNoResponseWebFallbackReply({
         text: noResponseInboundText,
@@ -50587,16 +50016,11 @@ if (authToken && signature) {
           answerable: webFallbackReply.answerable,
           needsFollowUp: webFallbackReply.needsFollowUp
         });
-        if (webhookMode === "suggest" || webFallbackReply.draftOnly) {
-          appendOutbound(conv, event.to, event.from, webFallbackReply.reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, webFallbackReply.reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          webFallbackReply.reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(
+          webFallbackReply.reply,
+          undefined,
+          { draftOnly: webFallbackReply.draftOnly }
+        );
       }
       logRouteOutcome("routing_parser_no_response", {
         turnPrimaryIntent: routeExecutionIntent,
@@ -50628,18 +50052,8 @@ if (authToken && signature) {
       routingParserDecision.clarifyPrompt ??
       "Quick check — are you asking about payments, availability, or setting a time to come in?";
     setDialogState(conv, "clarify_schedule");
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, clarifyReply, "draft_ai");
-      logRouteOutcome("routing_parser_clarify_draft");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, clarifyReply, "twilio");
-    logRouteOutcome("routing_parser_clarify_send");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      clarifyReply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    logRouteOutcome(webhookMode === "suggest" ? "routing_parser_clarify_draft" : "routing_parser_clarify_send");
+    return publishLiveTwilioReply(clarifyReply);
   }
   if (routeExecScheduling && getDialogState(conv) === "pricing_need_model") {
     setDialogState(conv, "schedule_request");
@@ -50699,16 +50113,7 @@ if (authToken && signature) {
         replySource: chit.source
       });
     }
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, chit.reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, chit.reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      chit.reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(chit.reply);
   }
   const suppressWatchIntentThisTurn = !routeExecGeneral;
   if (schedulingSignals.explicit || schedulingSignals.hasDayTime) {
@@ -50878,17 +50283,10 @@ if (authToken && signature) {
       }
     }
     if (reply) {
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
     }
   }
   if (event.provider === "twilio" && schedulingAllowed && schedulingSignals.hasDayOnlyRequest) {
@@ -50903,17 +50301,10 @@ if (authToken && signature) {
         const dayPhrase = `${dayInfo.day} ${dayPart}`;
         const reply = `Got it — ${unitLabel} is available right now. ${buildDayOnlySchedulingTimeReply(dayPhrase, event.body)}`;
         setDialogState(conv, "schedule_request");
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply, {
+          turnAvailabilityIntent: true,
+          turnSchedulingIntent: true
+        });
       }
     }
   }
@@ -50942,17 +50333,10 @@ if (authToken && signature) {
       if (intentParse?.intent === "test_ride") {
         setDialogState(conv, "test_ride_init");
       }
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, {
+        turnAvailabilityIntent: intentParse?.intent === "availability",
+        turnSchedulingIntent: intentParse?.intent === "test_ride"
+      });
     }
   }
   if (
@@ -50967,17 +50351,7 @@ if (authToken && signature) {
   ) {
     const reply = "Just to confirm — are you looking to set a time to stop in?";
     setDialogState(conv, "clarify_schedule");
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && schedulingExplicit && conv.followUp?.mode === "holding_inventory") {
     setFollowUpMode(conv, "active", "customer_requested_appointment");
@@ -51012,16 +50386,10 @@ if (authToken && signature) {
       schedulingAllowed,
       outboundHoldNotice: !!outboundHoldNotice
     });
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnSchedulingIntent:
+        !!decision?.hasScheduleTimeSignal || !!decision?.hasScheduleDaySignal
+    });
   }
   if (metaPromoSource && unknownModel) {
     const foundModels = await inferModelsFromText(String(event.body ?? ""));
@@ -51052,16 +50420,7 @@ if (authToken && signature) {
         `This is ${agentName} at ${dealerName}. ` +
         `Are you leaning more toward ${foundModels.join(" or ")}?`;
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
   const clarificationReply = isClarificationReply(String(event.body ?? ""));
@@ -51073,17 +50432,7 @@ if (authToken && signature) {
     const reply =
       "Sorry for the confusion — I meant I don’t see that exact bike/color in stock right now. " +
       "Want me to check similar options or other years/colors?";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
   }
 
   const lastAskedShortList =
@@ -51101,16 +50450,7 @@ if (authToken && signature) {
     const reply = shortListClarifier.reply;
     setDialogState(conv, "inventory_init");
     clearPendingShortListPrompt(conv, "shortlist_reply_handled");
-    if (webhookMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const lastAskedReminder =
@@ -51155,17 +50495,7 @@ if (authToken && signature) {
       ? `Sounds good — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`
       : "Got it — I’m here when you’re ready. Just reach out when the time is right.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const notReadyToBuy =
@@ -51183,17 +50513,7 @@ if (authToken && signature) {
       const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       const replyRaw = buildFriendlyReachOutClose(false);
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
 
@@ -51240,17 +50560,7 @@ if (authToken && signature) {
     const labelText = formatFutureTimeframeLabelForReply(label);
     const replyRaw = `Got it — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`;
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (event.provider === "twilio" && wantsReminder(event.body)) {
@@ -51262,17 +50572,7 @@ if (authToken && signature) {
     const replyRaw =
       "Sounds good — I’m here when you’re ready. Just reach out when the time is right.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
@@ -51354,17 +50654,7 @@ if (authToken && signature) {
       const reply = bestDayQuestion
         ? "Happy to check — any specific day next week you’re thinking?"
         : "Sure — which day are you wondering about?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
 
     const dateIso = formatDatePartsIso(targetParts);
@@ -51409,17 +50699,7 @@ if (authToken && signature) {
       const extraB = tradeContext ? tradeAltB : rideContext ? rideAltB : "";
       reply = pickVariantByKey(conv.leadKey ?? event.from, [lineA + extraA, lineB + extraB]);
     }
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (event.provider === "twilio" && locationQuestion) {
     const dealerProfile = await getDealerProfileHot();
@@ -51434,17 +50714,7 @@ if (authToken && signature) {
       `Hi — this is ${agentName} at ${dealerName}. We’re located at ${line1}, ${city}, ${state} ${zip}. ` +
       "Do you want pricing details or a quick model comparison?";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const testRideRequirementsQuestion =
@@ -51464,17 +50734,7 @@ if (authToken && signature) {
       : weather?.bad
         ? `If the weather’s rough, we can plan the test ride for a better day. ${requirements} If you want me to set one up, just let me know.`
         : `Yes — we can set that up during your visit. ${requirements} If you want me to add a test ride to your visit, just let me know.`;
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
 
   if (
@@ -51496,17 +50756,7 @@ if (authToken && signature) {
     if (stage === "need_town") {
       if (shouldAskForTown(townRaw)) {
         const reply = "Got it — where are you located?";
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply);
       }
 
       const dealerProfile = await getDealerProfileHot();
@@ -51537,34 +50787,14 @@ if (authToken && signature) {
         : eligible === true
           ? `Thanks — ${townLabel} is within our pickup range. What street address (number and street) should we use?`
           : "Thanks — I’ll have to check with the driver to see if we can get a pick-up scheduled. What street address (number and street) should we use?";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
 
     if (stage === "need_street") {
       const streetRaw = String(event.body ?? "").trim();
       if (!/\d+/.test(streetRaw)) {
         const reply = "Thanks — can you share the street number and street name for pickup?";
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply);
       }
       conv.pickup = {
         ...(conv.pickup ?? {}),
@@ -51592,17 +50822,7 @@ if (authToken && signature) {
       stopFollowUpCadence(conv, "pickup_request");
       stopRelatedCadences(conv, "pickup_request", { setMode: "manual_handoff" });
       const reply = "Thanks — I’ll have our service department reach out to schedule the pickup.";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
   }
 
@@ -51661,17 +50881,7 @@ if (authToken && signature) {
           if (!watchAsSideEffectOnly) {
             const reply = "Got it — which model should I watch for?";
             setDialogState(conv, "inventory_watch_prompted");
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-            appendOutbound(conv, event.to, event.from, reply, "twilio");
-            const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-              reply
-            )}</Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
+            return publishLiveTwilioReply(reply);
           }
         } else {
           pending.model = resolvedModel;
@@ -51727,17 +50937,7 @@ if (authToken && signature) {
       if (pref.action === "clarify") {
         if (!watchAsSideEffectOnly) {
           const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
       if (pref.action === "set" && pref.watch) {
@@ -51757,17 +50957,7 @@ if (authToken && signature) {
         stopFollowUpCadence(conv, "inventory_watch");
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
     }
@@ -51842,38 +51032,12 @@ if (authToken && signature) {
       availabilityResolution.kind === "reply" && Array.isArray(availabilityResolution.mediaUrls)
         ? availabilityResolution.mediaUrls
         : [];
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(
-        conv,
-        event.to,
-        event.from,
-        reply,
-        "draft_ai",
-        undefined,
-        extraMediaUrls.length ? extraMediaUrls : undefined
-      );
-      logRouteOutcome("availability_explicit_draft");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(
-      conv,
-      event.to,
-      event.from,
+    logRouteOutcome(webhookMode === "suggest" ? "availability_explicit_draft" : "availability_explicit_send");
+    return publishLiveTwilioReply(
       reply,
-      "twilio",
-      undefined,
-      extraMediaUrls.length ? extraMediaUrls : undefined
+      { turnAvailabilityIntent: true },
+      { mediaUrls: extraMediaUrls.length ? extraMediaUrls : undefined }
     );
-    logRouteOutcome("availability_explicit_send");
-    const mediaTags = extraMediaUrls.length
-      ? extraMediaUrls.map(u => `\n    <Media>${escapeXml(u)}</Media>`).join("")
-      : "";
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}${mediaTags}\n  </Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
   }
   const tradeYearCorrection =
     isTradeLead && !availabilityExplicit && !routeExecAvailability
@@ -51932,17 +51096,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "purchase_delivery");
     stopFollowUpCadence(conv, "purchase_delivery");
     stopRelatedCadences(conv, "purchase_delivery", { setMode: "manual_handoff" });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
     }
   }
   if (event.provider === "twilio" && tradeFollowupMessage) {
@@ -51983,17 +51137,9 @@ if (authToken && signature) {
       correctionLine,
       lastOutboundText: String(getLastNonVoiceOutbound(conv)?.body ?? "")
     });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, {
+      turnSchedulingIntent: tradeScheduleIntent
+    });
   }
   const compareRequest =
     vehicleInfoDecision?.intent === "compare" ||
@@ -52069,17 +51215,7 @@ if (authToken && signature) {
         })
       : null;
   if (event.provider === "twilio" && testRideInventoryReply) {
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, testRideInventoryReply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, testRideInventoryReply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      testRideInventoryReply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(testRideInventoryReply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && testRideBikeSelection) {
     const selectedModel = mentionedModelsEarly[0] ?? conv.lead?.vehicle?.model ?? conv.inventoryContext?.model ?? null;
@@ -52099,31 +51235,11 @@ if (authToken && signature) {
       ? formatModelLabel(selectedYear ? String(selectedYear) : null, selectedModel)
       : "that bike";
     const reply = `Got it — I can line up the test ride on the ${label}. What day and time works best?`;
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
     const reply = "Got it — which model and year are you looking for?";
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
   if (event.provider === "twilio" && infoOnlyRequest && !availabilityExplicit) {
     if (isCompare) {
@@ -52221,17 +51337,7 @@ if (authToken && signature) {
           if (wantsEverythingCompare) {
             reply += " Want full spec sheets or safety/features next?";
           }
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
         if (isCompareFormatChoice) {
           conv.compareContext = {
@@ -52245,17 +51351,7 @@ if (authToken && signature) {
             formatChoice === "highlights"
               ? "Got it — I can do a quick highlights comparison. Which two models should I compare?"
               : "Got it — I can send the full spec sheets. Which two models should I compare?";
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
       setDialogState(conv, isCompareFormatChoice ? "compare_answered" : "compare_request");
@@ -52294,17 +51390,7 @@ if (authToken && signature) {
         mentionedModels[1]
       );
       const reply = `Got it — I can compare the ${primaryLabel} and the ${secondaryLabel}. Do you want the full spec sheets or a quick highlights comparison?`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
     let baseModelForLabel = baseModelRaw;
     let baseYearForLabel = baseYearRaw;
@@ -52386,17 +51472,7 @@ if (authToken && signature) {
               ? `Got it — I’ll pull a quick highlights list for ${baseLabelWithThe} and text it over shortly.`
               : `Got it — I’ll pull the full spec sheet for ${baseLabelWithThe} and text it over shortly.`;
         }
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply);
       }
     }
     const compareModelRaw = compareRequest ? findMentionedModel(textLower) : null;
@@ -52432,17 +51508,7 @@ if (authToken && signature) {
         reply = `Got it — want the full spec sheet or a quick highlights list for ${baseLabelWithThe}? If you want specific areas (engine, features, accessories), tell me what to focus on.`;
       }
     }
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   const inventoryQuestion =
@@ -52529,17 +51595,7 @@ if (authToken && signature) {
           const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
           const colorText = watchColor ? ` in ${watchColor}` : "";
           const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
     }
@@ -52577,17 +51633,7 @@ if (authToken && signature) {
           askedAt: nowIso
         };
         setDialogState(conv, "inventory_watch_prompted");
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply);
       }
     }
 
@@ -52662,17 +51708,7 @@ if (authToken && signature) {
         stopFollowUpCadence(conv, "inventory_watch");
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
 
@@ -52688,17 +51724,7 @@ if (authToken && signature) {
         );
         const reply = buildWatchPreferencePrompt(pendingCondition, finishEligible);
         if (!watchAsSideEffectOnly) {
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply);
         }
       }
     }
@@ -52745,17 +51771,7 @@ if (authToken && signature) {
     const firstName = conv.lead?.firstName?.trim();
     const greeting = firstName ? `Hi ${firstName} — ` : "";
     const reply = `${greeting}This is ${agentName} at ${dealerName}.${context} Want a quick walkaround video or to stop in?`;
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, reply, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      reply
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(reply);
   }
 
   if (
@@ -52791,17 +51807,7 @@ if (authToken && signature) {
       const watchColor = sanitizeColorPhrase(watch.color) ?? watch.color;
       const colorText = watchColor ? ` in ${watchColor}` : "";
       const reply = `I’ve already got a watch set for ${yearText}${modelText}${colorText}. If you want me to update it, just tell me the ${updateHint}.`;
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        reply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply);
     }
 	    try {
 	      const yearMatch = textLower.match(/\b(20\d{2}|19\d{2})\b/);
@@ -52838,17 +51844,7 @@ if (authToken && signature) {
 	          hasHumor: !!acceptedAffect?.hasHumor,
 	          incomingHint: incomingInventorySignal
 	        });
-	        const systemMode = webhookMode;
-	        if (systemMode === "suggest") {
-	          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-	          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-	          return res.status(200).type("text/xml").send(twiml);
-	        }
-	        appendOutbound(conv, event.to, event.from, reply, "twilio");
-	        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-	          reply
-	        )}</Message>\n</Response>`;
-	        return res.status(200).type("text/xml").send(twiml);
+	        return publishLiveTwilioReply(reply);
 	      }
 	      const paymentBudgetContext = resolvePaymentBudgetForConversation(conv, event.body);
       const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
@@ -53030,17 +52026,7 @@ if (authToken && signature) {
             color ? ` in ${formatColorLabel(color)}` : ""
           }`.trim();
           const reply = `Quick clarify so I quote this right: are you asking on the ${bikeLabel} specifically, or across all in-stock options around that payment?`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnFinanceIntent: true });
         }
         const resolvedSpecificUnitBudgetQuestion =
           specificUnitBudgetQuestion ||
@@ -53077,49 +52063,19 @@ if (authToken && signature) {
           const reply = leadSold
             ? `Looks like that unit has sold. Want me to keep an eye out for another ${label}?`
             : `That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
         }
 
         if (matches.length > 0 && availableMatches.length === 0) {
           const reply = hasSoldMatch
             ? "Looks like that unit has sold. Want me to keep an eye out for another one?"
             : "That unit is on hold right now. I can reach out if it becomes available — want me to keep an eye on it?";
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
         }
 
         if (leadHold && availableMatches.length > 0) {
           const reply = `That specific unit is on hold right now, but we do have other ${conditionLabel}${model} options available. Want details?`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
         }
 
         if (hasMonthlyBudgetTarget && availableMatches.length > 0 && responseMatches.length === 0) {
@@ -53173,17 +52129,10 @@ if (authToken && signature) {
                       : "";
                   reply = `On ${pickedLabel}, to get near ${budgetLabel} on a ${paymentTermMonths}-month estimate, you’d be around $${roundedDown.toLocaleString("en-US")} down (before taxes/fees and final lender approval).${noDownLine} ${combosText}`;
                 }
-              const systemMode = webhookMode;
-              if (systemMode === "suggest") {
-                appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-                const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-                return res.status(200).type("text/xml").send(twiml);
-              }
-              appendOutbound(conv, event.to, event.from, reply, "twilio");
-              const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-                reply
-              )}</Message>\n</Response>`;
-              return res.status(200).type("text/xml").send(twiml);
+              return publishLiveTwilioReply(reply, {
+                turnFinanceIntent: true,
+                turnAvailabilityIntent: true
+              });
             }
           }
 
@@ -53240,17 +52189,10 @@ if (authToken && signature) {
                   : `Closest in-stock options around ${budgetLabel} on a ${paymentTermMonths}-month estimate: ${list}. Want me to pull more in that range?`;
               })()
             : `I’m not seeing ${scopeLabel} in stock that would typically land under ${budgetLabel} on a ${paymentTermMonths}-month estimate. If you share term or down payment, I can tighten the match.`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, {
+            turnFinanceIntent: true,
+            turnAvailabilityIntent: true
+          });
         }
 
         if (responseMatches.length > 0) {
@@ -53264,17 +52206,7 @@ if (authToken && signature) {
         if (otherInventoryRequest && responseMatchesExcludingLead.length === 0) {
           const paintTrimPrompt = "Are you looking for any paint or trim specifically (chrome vs blacked-out)?";
           const reply = `Right now that’s the only ${conditionLabel}${year ? `${year} ` : ""}${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} we have in stock. ${paintTrimPrompt}`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
         }
         const exactMatch = !otherInventoryRequest && (leadStockId || leadVin)
           ? responseMatches.find(m =>
@@ -53341,34 +52273,11 @@ if (authToken && signature) {
               ? `Yes — here’s a photo of the ${year ? `${year} ` : ""}${model ?? pickedModel}${colorNote} we have in stock.`
               : `Yes — here’s a photo of the ${colorNote ? colorNote.replace(/^ in /, "") + " " : ""}${label} we have in stock.`;
           setDialogState(conv, "inventory_answered");
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(
-              conv,
-              event.to,
-              event.from,
-              reply,
-              "draft_ai",
-              undefined,
-              picked.images?.[0] ? [picked.images[0]] : undefined
-            );
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(
-            conv,
-            event.to,
-            event.from,
+          return publishLiveTwilioReply(
             reply,
-            "twilio",
-            undefined,
-            picked.images?.[0] ? [picked.images[0]] : undefined
+            { turnAvailabilityIntent: true },
+            { mediaUrls: picked.images?.[0] ? [picked.images[0]] : undefined }
           );
-          const mediaTag = picked.images?.[0] ? `\n    <Media>${escapeXml(picked.images[0])}</Media>` : "";
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
-            reply
-          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
         }
         if (!year && (color || finishFromText) && picked) {
           const pickedYear = picked.year ? `${picked.year} ` : "";
@@ -53381,34 +52290,14 @@ if (authToken && signature) {
               ? `Yes — we do have another ${conditionLabel}${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. ${paintTrimPrompt}`
               : `Yes — we do have a ${conditionLabel}${pickedYear}${pickedModel}${pickedColor ? ` in ${pickedColor}` : ""} in stock. Want details or to stop by?`;
           setDialogState(conv, "inventory_answered");
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(
-              conv,
-              event.to,
-              event.from,
-              reply,
-              "draft_ai",
-              undefined,
-              picked.images?.[0] ? [picked.images[0]] : undefined
-            );
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(
-            conv,
-            event.to,
-            event.from,
+          return publishLiveTwilioReply(
             reply,
-            "twilio",
-            undefined,
-            picked.images?.[0] ? [picked.images[0]] : undefined
+            {
+              turnAvailabilityIntent: true,
+              turnFinanceIntent: hasMonthlyBudgetTarget
+            },
+            { mediaUrls: picked.images?.[0] ? [picked.images[0]] : undefined }
           );
-          const mediaTag = picked.images?.[0] ? `\n    <Media>${escapeXml(picked.images[0])}</Media>` : "";
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
-            reply
-          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
         }
         conv.lead = conv.lead ?? {};
         conv.lead.vehicle = conv.lead.vehicle ?? {};
@@ -53450,26 +52339,14 @@ if (authToken && signature) {
                 ? `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. Would you like details or to stop by?`
                 : `Yes — we do have a ${conditionLabel}${model}${colorLabel}${finishLabel} in stock. What year are you after?`
               : `Yes — we do have a ${conditionLabel}${model} in stock. ${followUpPreferencePrompt}`;
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(
-              conv,
-              event.to,
-              event.from,
-              reply,
-              "draft_ai",
-              undefined,
-              imageUrl ? [imageUrl] : undefined
-            );
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio", undefined, imageUrl ? [imageUrl] : undefined);
-          const mediaTag = imageUrl ? `\n    <Media>${escapeXml(imageUrl)}</Media>` : "";
-          const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>\\n    <Body>${escapeXml(
-            reply
-          )}</Body>${mediaTag}\\n  </Message>\\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(
+            reply,
+            {
+              turnAvailabilityIntent: true,
+              turnFinanceIntent: hasMonthlyBudgetTarget
+            },
+            { mediaUrls: imageUrl ? [imageUrl] : undefined }
+          );
         }
         if (matches.length === 0 && color && !hasIdentifiers) {
           const watchCondition = inferWatchCondition(
@@ -53497,17 +52374,7 @@ if (authToken && signature) {
             ? `I’m not seeing a ${conditionLabel}${year} ${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`
             : `I’m not seeing a ${conditionLabel}${model}${requestedColorLabel ? ` in ${requestedColorLabel}` : ""} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for the ${watchExactLabel}?`;
           setDialogState(conv, "inventory_watch_prompted");
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
         }
         if (matches.length === 0 && !hasIdentifiers) {
           const inventoryFallbackMatchStartedAt = Date.now();
@@ -53539,34 +52406,11 @@ if (authToken && signature) {
                 ? `Got it — I’m not seeing a ${year} ${model} in stock right now, but we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the ${watchExactLabel}.`
                 : `Got it — we do have a ${colorLabel ? `${colorLabel} ` : ""}${label} available. Here’s a photo — is this the one you had in mind? If not, I can keep an eye out for the ${watchExactLabel}.`;
             setDialogState(conv, "inventory_answered");
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              appendOutbound(
-                conv,
-                event.to,
-                event.from,
-                reply,
-                "draft_ai",
-                undefined,
-                pick.imageUrl ? [pick.imageUrl] : undefined
-              );
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-            appendOutbound(
-              conv,
-              event.to,
-              event.from,
+            return publishLiveTwilioReply(
               reply,
-              "twilio",
-              undefined,
-              pick.imageUrl ? [pick.imageUrl] : undefined
+              { turnAvailabilityIntent: true },
+              { mediaUrls: pick.imageUrl ? [pick.imageUrl] : undefined }
             );
-            const mediaTag = pick.imageUrl ? `\n    <Media>${escapeXml(pick.imageUrl)}</Media>` : "";
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>\n    <Body>${escapeXml(
-              reply
-            )}</Body>${mediaTag}\n  </Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
           }
         }
         addTodo(
@@ -53600,45 +52444,15 @@ if (authToken && signature) {
           (isGenericModel
             ? "I’ll have someone verify and follow up shortly."
             : `${buildOutOfStockHumanOptionsLine()}${colorFinishPrompt ? ` ${colorFinishPrompt}` : ""} Want me to keep an eye out and text you when one lands?`);
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
-          reply
-        )}</Message>\\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
       }
       addTodo(conv, "other", "Verify inventory availability", event.providerMessageId);
       const reply = "I’ll have someone verify inventory availability and follow up shortly.";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
-        reply
-      )}</Message>\\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
     } catch (e: any) {
       addTodo(conv, "other", "Verify inventory availability", event.providerMessageId);
       const reply = "I’ll have someone verify inventory availability and follow up shortly.";
-      const systemMode = webhookMode;
-      if (systemMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, reply, "twilio");
-      const twiml = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<Response>\\n  <Message>${escapeXml(
-        reply
-      )}</Message>\\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(reply, { turnAvailabilityIntent: true });
     } finally {
       logRouteTiming("inventory", inventoryStageStartedAt);
     }
@@ -53819,23 +52633,14 @@ if (authToken && signature) {
               null;
             const repSuffix = repName ? ` with ${repName}` : "";
             const confirmText = `Perfect — you’re all set for ${conv.appointment.whenText}${repSuffix}. See you then.`;
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, { mode: "suggest" });
-              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai");
-              saveConversation(conv);
-              await flushConversationStore();
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-            logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, { mode: "twilio" });
-            appendOutbound(conv, event.to, event.from, confirmText, "twilio", created.id ?? undefined);
-            saveConversation(conv);
-            await flushConversationStore();
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-              confirmText
-            )}</Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
+            logRouteTiming("scheduler.deterministic_booked", schedulerStageStartedAt, {
+              mode: webhookMode === "suggest" ? "suggest" : "twilio"
+            });
+            return publishLiveTwilioReply(
+              confirmText,
+              { turnSchedulingIntent: true },
+              { providerMessageId: created.id ?? undefined }
+            );
           }
 
           setLastSuggestedSlots(conv, bestSlots);
@@ -53863,31 +52668,14 @@ if (authToken && signature) {
               setDialogState(conv, "schedule_offer_sent");
             }
           }
-          const systemMode = webhookMode;
-          if (systemMode === "suggest") {
-            logRouteTiming("scheduler.deterministic_offer", schedulerStageStartedAt, { mode: "suggest" });
-            appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-            saveConversation(conv);
-            await flushConversationStore();
-            console.log(
-              "[scheduler] after flush lastSuggestedSlots len:",
-              conv.scheduler?.lastSuggestedSlots?.length ?? 0
-            );
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-            return res.status(200).type("text/xml").send(twiml);
-          }
-          logRouteTiming("scheduler.deterministic_offer", schedulerStageStartedAt, { mode: "twilio" });
-          appendOutbound(conv, event.to, event.from, reply, "twilio");
-          saveConversation(conv);
-          await flushConversationStore();
+          logRouteTiming("scheduler.deterministic_offer", schedulerStageStartedAt, {
+            mode: webhookMode === "suggest" ? "suggest" : "twilio"
+          });
           console.log(
             "[scheduler] after flush lastSuggestedSlots len:",
             conv.scheduler?.lastSuggestedSlots?.length ?? 0
           );
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-            reply
-          )}</Message>\n</Response>`;
-          return res.status(200).type("text/xml").send(twiml);
+          return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
         }
         }
       } catch (e: any) {
@@ -54409,17 +53197,11 @@ if (authToken && signature) {
     if (reason === "pricing" || reason === "payments") {
       markPricingEscalated(conv);
     }
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, ack, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, ack, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      ack
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(ack, {
+      turnFinanceIntent: reason === "pricing" || reason === "payments",
+      turnSchedulingIntent: routeExecScheduling,
+      turnAvailabilityIntent: routeExecAvailability
+    });
   }
   if (result.autoClose?.reason) {
     const dealerProfile = await getDealerProfileHot();
@@ -54428,17 +53210,7 @@ if (authToken && signature) {
     const ack = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
     closeConversation(conv, result.autoClose.reason);
     stopRelatedCadences(conv, result.autoClose.reason, { close: true });
-    const systemMode = webhookMode;
-    if (systemMode === "suggest") {
-      appendOutbound(conv, event.to, event.from, ack, "draft_ai");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-      return res.status(200).type("text/xml").send(twiml);
-    }
-    appendOutbound(conv, event.to, event.from, ack, "twilio");
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-      ack
-    )}</Message>\n</Response>`;
-    return res.status(200).type("text/xml").send(twiml);
+    return publishLiveTwilioReply(ack);
   }
   if (result.pricingAttempted) {
     incrementPricingAttempt(conv);
@@ -54537,19 +53309,11 @@ if (authToken && signature) {
             const confirmText =
               `Perfect — you’re booked for ${when}${repName}. ` +
               `${dealerName} is at ${addressLine}.`;
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai", eventObj.id ?? undefined);
-              saveConversation(conv);
-              await flushConversationStore();
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-            appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-              confirmText
-            )}</Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
+            return publishLiveTwilioReply(
+              confirmText,
+              { turnSchedulingIntent: true },
+              { providerMessageId: eventObj.id ?? undefined }
+            );
           }
         } catch (e: any) {
           console.log("[scheduler] suggestedSlots exact match failed:", e?.message ?? e);
@@ -54705,9 +53469,7 @@ if (authToken && signature) {
               };
               conv.scheduler.updatedAt = new Date().toISOString();
               const ask = `I can do ${when}${repName}. Want me to lock that in?`;
-              appendOutbound(conv, event.to, event.from, ask, "draft_ai");
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
+              return publishLiveTwilioReply(ask, { turnSchedulingIntent: true });
             }
 
             const colorId = getAppointmentTypeColorId(cfg, appointmentType);
@@ -54743,20 +53505,11 @@ if (authToken && signature) {
               `Perfect — you’re booked for ${when}${repName}. ` +
               `${dealerName} is at ${addressLine}.`;
 
-            if (systemMode === "suggest") {
-              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai", eventObj.id ?? undefined);
-              saveConversation(conv);
-              await flushConversationStore();
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-
-            appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-              confirmText
-            )}</Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
+            return publishLiveTwilioReply(
+              confirmText,
+              { turnSchedulingIntent: true },
+              { providerMessageId: eventObj.id ?? undefined }
+            );
           }
         }
       }
@@ -54915,19 +53668,11 @@ if (authToken && signature) {
             const confirmText =
               `Perfect — you’re booked for ${when}${repName}. ` +
               `${dealerName} is at ${addressLine}.`;
-            const systemMode = webhookMode;
-            if (systemMode === "suggest") {
-              appendOutbound(conv, event.to, event.from, confirmText, "draft_ai", eventObj.id ?? undefined);
-              saveConversation(conv);
-              await flushConversationStore();
-              const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-              return res.status(200).type("text/xml").send(twiml);
-            }
-            appendOutbound(conv, event.to, event.from, confirmText, "twilio", eventObj.id ?? undefined);
-            const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-              confirmText
-            )}</Message>\n</Response>`;
-            return res.status(200).type("text/xml").send(twiml);
+            return publishLiveTwilioReply(
+              confirmText,
+              { turnSchedulingIntent: true },
+              { providerMessageId: eventObj.id ?? undefined }
+            );
           }
         }
         const requestedWindowSlots = pickSlotsInsideRequestedWindow(
@@ -54986,69 +53731,20 @@ if (authToken && signature) {
             setDialogState(conv, "schedule_offer_sent");
           }
         }
-        const systemMode = webhookMode;
-        if (systemMode === "suggest") {
-          // Persist suggested slots before early return so the next inbound can match.
-          appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-          saveConversation(conv);
-          console.log(
-            "[scheduler] saving convo before flush",
-            "leadKey",
-            conv.leadKey,
-            "len",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0
-          );
-          console.log("[scheduler] flushing store path:", getConversationStorePath());
-          if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
-            console.log(
-              "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
-            );
-          }
-          await flushConversationStore();
-          console.log(
-            "[scheduler] saved lastSuggestedSlots len:",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0,
-            "leadKey",
-            conv.leadKey
-          );
-          console.log(
-            "[scheduler] after persist lastSuggestedSlots",
-            conv.scheduler?.lastSuggestedSlots?.length ?? 0
-          );
-          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-          return res.status(200).type("text/xml").send(twiml);
-        }
         // Persist suggested slots before early return so the next inbound can match.
-        appendOutbound(conv, event.to, event.from, reply, "twilio");
-        saveConversation(conv);
         console.log(
-          "[scheduler] saving convo before flush",
+          "[scheduler] publishing slots",
           "leadKey",
           conv.leadKey,
           "len",
           conv.scheduler?.lastSuggestedSlots?.length ?? 0
         );
-        console.log("[scheduler] flushing store path:", getConversationStorePath());
         if (getConversationStorePath() !== "/home/ubuntu/throttleiq-runtime/data/conversations.json") {
           console.log(
             "[scheduler] WARN expected CONVERSATIONS_DB_PATH /home/ubuntu/throttleiq-runtime/data/conversations.json"
           );
         }
-        await flushConversationStore();
-        console.log(
-          "[scheduler] saved lastSuggestedSlots len:",
-          conv.scheduler?.lastSuggestedSlots?.length ?? 0,
-          "leadKey",
-          conv.leadKey
-        );
-        console.log(
-          "[scheduler] after persist lastSuggestedSlots",
-          conv.scheduler?.lastSuggestedSlots?.length ?? 0
-        );
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-          reply
-        )}</Message>\n</Response>`;
-        return res.status(200).type("text/xml").send(twiml);
+        return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
       }
     } catch (e: any) {
       console.log("[exact-book] failed:", e?.message ?? e);
@@ -55066,16 +53762,12 @@ if (authToken && signature) {
         hasActionableSchedulingContext,
         hasActionableCallbackContext
       });
-      if (webhookMode === "suggest") {
-        appendOutbound(conv, event.to, event.from, fallbackReply, "draft_ai");
-        const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-        return res.status(200).type("text/xml").send(twiml);
-      }
-      appendOutbound(conv, event.to, event.from, fallbackReply, "twilio");
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-        fallbackReply
-      )}</Message>\n</Response>`;
-      return res.status(200).type("text/xml").send(twiml);
+      return publishLiveTwilioReply(fallbackReply, {
+        turnFinanceIntent: hasActionableFinanceContext,
+        turnSchedulingIntent: hasActionableSchedulingContext,
+        turnAvailabilityIntent: hasActionableAvailabilityContext,
+        financeContextIntent: hasActionableFinanceContext
+      });
     }
     logRouteOutcome("orchestrator_no_response", {
       intent: result.intent ?? "unknown",
@@ -55248,46 +53940,6 @@ if (authToken && signature) {
   const effectiveWebhookMode = webhookMode;
   const hadOutbound = conv.messages.some(m => m.direction === "out");
 
-  // ✅ Global behavior:
-  // - suggest: store a draft, do NOT auto-send
-  // - autopilot: send immediately and log as twilio (no separate draft)
-  if (effectiveWebhookMode === "suggest") {
-    if (result.suggestedSlots && result.suggestedSlots.length > 0) {
-      console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
-      setLastSuggestedSlots(conv, result.suggestedSlots);
-      console.log(
-        "[twilio] after persist lastSuggestedSlots",
-        conv.scheduler?.lastSuggestedSlots?.length ?? 0
-      );
-      const offerSlots = parseOfferSlotsFromReply(reply);
-      const asksToLock =
-        /\b(lock (that|it) in|book (that|it)|schedule (that|it)|confirm (that|it)|want me to (book|lock|schedule)|should i (book|schedule)|ok to (book|schedule)|sound good to (book|schedule))\b/i.test(
-          reply
-        );
-      if (asksToLock && offerSlots.length < 2 && conv.scheduler) {
-        const pending = chooseSlotFromReply(result.suggestedSlots, reply) ?? result.suggestedSlots[0];
-        if (pending) {
-          conv.scheduler.pendingSlot = pending;
-          conv.scheduler.updatedAt = new Date().toISOString();
-        }
-      }
-    }
-    console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
-    appendOutbound(conv, event.to, event.from, reply, "draft_ai");
-    logRouteOutcome("orchestrator_draft", {
-      intent: result.intent ?? "unknown"
-    });
-    if (result.memorySummary) {
-      setMemorySummary(conv, result.memorySummary, conv.messages.length);
-    }
-    if (!hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
-    }
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
-    return res.status(200).type("text/xml").send(twiml);
-  }
-
-  // autopilot
   if (result.suggestedSlots && result.suggestedSlots.length > 0) {
     console.log("[scheduler] persist suggestedSlots", result.suggestedSlots.length);
     setLastSuggestedSlots(conv, result.suggestedSlots);
@@ -55308,15 +53960,9 @@ if (authToken && signature) {
       }
     }
   }
-  appendOutbound(conv, event.to, event.from, reply, "twilio");
-  logRouteOutcome("orchestrator_send", {
-    intent: result.intent ?? "unknown"
-  });
-  if (result.memorySummary) {
-    setMemorySummary(conv, result.memorySummary, conv.messages.length);
-  }
   console.log("[twilio] result.suggestedSlots len:", result.suggestedSlots?.length ?? 0);
   if (
+    effectiveWebhookMode !== "suggest" &&
     (conv.scheduler?.lastSuggestedSlots?.length ?? 0) === 0 &&
     (!result.suggestedSlots || result.suggestedSlots.length === 0)
   ) {
@@ -55330,25 +53976,16 @@ if (authToken && signature) {
       );
     }
   }
-  saveConversation(conv);
-  await flushConversationStore();
-  if (result.suggestedSlots && result.suggestedSlots.length > 0) {
-    saveConversation(conv);
-    await flushConversationStore();
-    console.log(
-      "[scheduler] saved offer-path slots",
-      result.suggestedSlots.length,
-      conv.leadKey
-    );
+  logRouteOutcome(effectiveWebhookMode === "suggest" ? "orchestrator_draft" : "orchestrator_send", {
+    intent: result.intent ?? "unknown"
+  });
+  if (result.memorySummary) {
+    setMemorySummary(conv, result.memorySummary, conv.messages.length);
   }
   if (!hadOutbound) {
     await maybeStartCadence(conv, new Date().toISOString());
   }
-
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n  <Message>${escapeXml(
-    reply
-  )}</Message>\n</Response>`;
-  return res.status(200).type("text/xml").send(twiml);
+  return publishLiveTwilioReply(reply, liveDraftInvariantHints);
 });
 
 app.post("/webhooks/twilio/voice", async (req, res) => {
