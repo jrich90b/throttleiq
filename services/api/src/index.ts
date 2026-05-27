@@ -19828,6 +19828,30 @@ function hasCustomerDispositionParserHintText(text: string | null | undefined): 
   if (!lower.trim()) return false;
   return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i'?ll pass|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
     lower
+  ) || hasBoughtElsewhereDispositionSignalText(lower);
+}
+
+function hasBoughtElsewhereDispositionSignalText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!lower) return false;
+  const boughtVehicle =
+    /\b(?:i|we|he|she|they)?\s*(?:ended up\s+)?bought\s+(?:a|an|one|the|another)?[\s\S]{0,90}\b(?:\d{4}|bike|motorcycle|harley|street glide|road glide|softail|sportster|low rider|heritage)\b/.test(
+      lower
+    ) || /\bbought\s+a\s+\d{4}\b/.test(lower);
+  if (!boughtVehicle) return false;
+  if (/\b(?:from|through)\s+(?:you|u|your|american|american h-?d|american harley|the dealership|your store)\b/.test(lower)) {
+    return false;
+  }
+  return (
+    /\b(?:elsewhere|somewhere else|another dealer|different dealer|private seller)\b/.test(lower) ||
+    /\b(?:from|through)\s+(?!you\b|u\b|your\b|american\b|american h-?d\b|american harley\b|the dealership\b|your store\b)[a-z0-9][a-z0-9'.& -]{2,40}\b/.test(
+      lower
+    ) ||
+    /\bin\s+(?!north tonawanda\b|buffalo\b|your store\b|the dealership\b)[a-z][a-z'. -]{2,35}\b/.test(lower)
   );
 }
 
@@ -19893,6 +19917,9 @@ function parseCustomerDispositionFallback(text: string): CustomerDispositionDeci
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
   if (/\b(hold off(?: for now)?|pass(?: for now| man)?|i'?ll pass|i will pass)\b/i.test(lower)) {
+    return { reason: "customer_stepping_back", state: "customer_stepping_back" };
+  }
+  if (hasBoughtElsewhereDispositionSignalText(lower)) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
   return null;
@@ -43831,6 +43858,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         (regenLlmComplimentOnly ||
           ((!regenResponseControlParserEligible || !regenResponseControlConfident) &&
             isComplimentOnlyText(event.body))) &&
+        !hasCustomerDispositionParserHintText(event.body) &&
         !isShortAckText(event.body) &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       financeSignal: regenParserPricingIntent,
@@ -46870,6 +46898,7 @@ if (authToken && signature) {
         (llmComplimentOnly ||
           ((!responseControlParserEligible || !responseControlConfident) &&
             isComplimentOnlyText(event.body))) &&
+        !hasCustomerDispositionParserHintText(event.body) &&
         !isShortAckText(event.body) &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       schedulingSignal: complimentHasSchedulingSignal

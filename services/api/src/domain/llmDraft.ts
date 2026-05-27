@@ -4541,7 +4541,13 @@ inbound: "We are out of town, but I think I will wait on deciding whether to get
 output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
     `EXAMPLE N
 inbound: "Ill pass man. I was in sat for a part for my brother's bike but it was pouring. I just like to ride the new models and ck em out. Not a big deal. Thx"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE O
+inbound: "Yes, Scott he bought a 2016 with about 10,000 about a week ago in Ohio. I forgot to tell you thank you I appreciate it."
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
+    `EXAMPLE P
+inbound: "I ended up buying a 2016 in Ohio. Thank you, I appreciate it."
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`
   ];
 
   const prompt = [
@@ -5175,6 +5181,8 @@ export async function parseResponseControlWithLLM(args: {
     'input: "Thank you very much for answering my message. Yes, I’m looking for a course motorcycle so I can get my license." output: {"intent":"none","explicit_request":true,"confidence":0.92}',
     'input: "I guess we got rained out again" output: {"intent":"none","explicit_request":true,"confidence":0.9}',
     'input: "I can’t do it now but I’m thinking maybe next spring. Thanks." output: {"intent":"none","explicit_request":true,"confidence":0.93}',
+    'input: "Yes, Scott he bought a 2016 with about 10,000 about a week ago in Ohio. I forgot to tell you thank you I appreciate it." output: {"intent":"not_interested","explicit_request":true,"confidence":0.94}',
+    'input: "I ended up buying a 2016 in Ohio. Thank you, I appreciate it." output: {"intent":"not_interested","explicit_request":true,"confidence":0.95}',
     'input: "Never mind you can’t even get the information right" output: {"intent":"data_quality_complaint","explicit_request":true,"confidence":0.96}',
     'input: "That is the wrong bike, not what I asked about" output: {"intent":"data_quality_complaint","explicit_request":true,"confidence":0.95}',
     'input: "Hi Scott, We are out of town, but I think I will wait on deciding whether to get a Harley. Thanks for checking in with me. Rich" output: {"intent":"not_interested","explicit_request":true,"confidence":0.93}',

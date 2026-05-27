@@ -875,6 +875,13 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "bought_elsewhere_thank_you_not_compliment",
+    actual: isNonComplimentLikePhraseText(
+      "Yes, Scott he bought a 2016 with about 10,000 about a week ago in Ohio. I forgot to tell you thank you I appreciate it."
+    ),
+    expected: true
+  },
+  {
     id: "media_proof_status_detects_legit_update",
     actual: isMediaProofStatusUpdateText("Like I said. I'm 💯 legit"),
     expected: true

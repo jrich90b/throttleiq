@@ -784,7 +784,12 @@ export function isNonComplimentLikePhraseText(textRaw: string | null | undefined
     .toLowerCase()
     .replace(/\s+/g, " ");
   if (!text) return false;
-  return /\blike i (?:said|mentioned|told you)\b/.test(text);
+  return (
+    /\blike i (?:said|mentioned|told you)\b/.test(text) ||
+    /\b(?:ended up\s+)?bought\s+(?:a|an|one|the|another)?[\s\S]{0,90}\b(?:\d{4}|bike|motorcycle|harley|street glide|road glide|softail|sportster|low rider|heritage)\b/.test(
+      text
+    )
+  );
 }
 
 export function isMediaProofStatusUpdateText(textRaw: string | null | undefined): boolean {
