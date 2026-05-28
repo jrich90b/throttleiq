@@ -386,9 +386,14 @@ export function InboxSection(props: any) {
                                     Outcome needed
                                   </span>
                                 ) : null}
-                                {openTasks.length ? (
+                              </div>
+                              {getInboxVehicleLine(c) ? (
+                                <div className="text-xs text-gray-500 mt-1 truncate">{getInboxVehicleLine(c)}</div>
+                              ) : null}
+                              {openTasks.length ? (
+                                <div className="mt-1 flex min-w-0">
                                   <span
-                                    className="inline-flex max-w-[240px] items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800"
+                                    className="inline-flex max-w-full items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-800"
                                     title={[
                                       openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`,
                                       openTaskOwner ? `Owner: ${openTaskOwner}` : ""
@@ -397,16 +402,10 @@ export function InboxSection(props: any) {
                                       .join(" • ")}
                                   >
                                     <span className="truncate">
-                                      {openTasks.length === 1 ? `Open task: ${openTaskTitle}` : `${openTasks.length} open tasks`}
+                                      {openTasks.length === 1 ? `Task: ${openTaskTitle}` : `${openTasks.length} open tasks`}
                                     </span>
-                                    {openTasks.length === 1 && openTaskOwner ? (
-                                      <span className="hidden shrink-0 sm:inline">• {openTaskOwner}</span>
-                                    ) : null}
                                   </span>
-                                ) : null}
-                              </div>
-                              {getInboxVehicleLine(c) ? (
-                                <div className="text-xs text-gray-500 mt-1 truncate">{getInboxVehicleLine(c)}</div>
+                                </div>
                               ) : null}
                             </div>
 
