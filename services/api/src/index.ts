@@ -41,6 +41,9 @@ import {
   isSupportMailSummarySafeToAutoTrash
 } from "./domain/supportMailPolicy.js";
 import {
+  detectManualOutboundCadenceContext
+} from "./domain/manualCadenceContext.js";
+import {
   addAgentTask,
   listAgentTasks,
   updateAgentTaskStatus,
@@ -10260,11 +10263,17 @@ function isSellLead(conv: any): boolean {
   const source = (conv?.lead?.source ?? conv?.leadSource ?? "").toLowerCase();
   const bucket = conv?.classification?.bucket ?? "";
   const cta = conv?.classification?.cta ?? "";
+  const followUpReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  const cadenceContext = String(conv?.followUpCadence?.contextTag ?? "").trim().toLowerCase();
   if (isTradeAcceleratorTradeInLead(conv)) return false;
   return (
     bucket === "trade_in_sell" ||
     cta === "sell_my_bike" ||
     cta === "value_my_trade" ||
+    followUpReason === "private_party_seller" ||
+    followUpReason === "seller_photo_details_request" ||
+    cadenceContext === "private_party_seller" ||
+    cadenceContext === "seller_photo_details_request" ||
     /sell my bike|sell your bike|sell your vehicle|value my trade|value your trade/.test(source)
   );
 }
@@ -24647,12 +24656,14 @@ async function processDueFollowUps() {
     }
 
     const canTestRideFlag = await canTestRideNow(conv);
+    const cadenceContextTag = String(cadence.contextTag ?? "").trim().toLowerCase();
     const isTradeNoInterest =
       conv?.classification?.bucket === "trade_in_sell" &&
       isUnknownInterestVehicle(conv) &&
       isTradeAcceleratorLead(conv);
     const isTradeInAppraisalLead = isTradeAcceleratorTradeInLead(conv);
     const isSellMyBikeLead = isSellLead(conv);
+    const isSellerPhotoDetailsRequest = cadenceContextTag === "seller_photo_details_request";
     const isTestRideCadenceLead =
       conv?.classification?.bucket === "test_ride" ||
       conv?.classification?.cta === "schedule_test_ride" ||
@@ -24797,6 +24808,16 @@ async function processDueFollowUps() {
     ) {
       message = String(cadence.deferredMessage).trim();
       cadenceNoRepeatFallbacks = [message];
+    } else if (isSellerPhotoDetailsRequest) {
+      const bikeLabel = sellBikeLabel ?? "your bike";
+      const templates = [
+        `Hey ${firstName}, just checking if you had a chance to send over the pictures and details on ${bikeLabel}.`,
+        `Quick follow-up ${firstName} — send the photos, VIN, mileage, and any details on ${bikeLabel} when you can and I’ll take a look.`,
+        `No rush — if you still want us to look at ${bikeLabel}, just send over the pictures and details whenever you have them.`,
+        `Last check-in for now on ${bikeLabel}. If you still want a buy or trade evaluation, send the photos and details and I can help from there.`
+      ];
+      message = templates[Math.min(cadence.stepIndex, templates.length - 1)];
+      cadenceNoRepeatFallbacks = templates;
     } else if (isTradeNoInterest) {
       const day2 = cadence.stepIndex === 0 ? await buildDay2Options(cfg) : null;
       if (day2) {
@@ -25815,18 +25836,66 @@ function parseTimeframeMonthsFromLabel(raw?: string | null): { start?: number; e
   return null;
 }
 
-async function maybeStartCadence(conv: any, sentAtIso: string) {
+async function maybeStartCadence(
+  conv: any,
+  sentAtIso: string,
+  opts?: { manualOutboundText?: string | null; channel?: "sms" | "email" | null }
+) {
   if (conv.appointment?.bookedEventId) return;
   if (conv.status === "closed") return;
   if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
   if (conv.followUp?.mode === "manual_handoff" || conv.followUp?.mode === "paused_indefinite") return;
+  const cfg = await getSchedulerConfigHot();
+  const now = sentAtIso || new Date().toISOString();
+  const manualCadenceContext = opts?.manualOutboundText
+    ? detectManualOutboundCadenceContext(opts.manualOutboundText, conv)
+    : null;
+  if (manualCadenceContext?.contextTag === "seller_photo_details_request") {
+    setFollowUpMode(conv, "active", manualCadenceContext.followUpReason);
+    conv.followUpCadence = {
+      status: "active",
+      anchorAt: now,
+      nextDueAt: computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], cfg.timezone),
+      stepIndex: 0,
+      kind: "engaged",
+      contextTag: manualCadenceContext.contextTag,
+      contextTagUpdatedAt: now,
+      scheduleInviteCount: 0,
+      scheduleMuted: false
+    };
+    conv.manualContext = {
+      status: "inferred",
+      contextTag: manualCadenceContext.contextTag,
+      followUpReason: manualCadenceContext.followUpReason,
+      source: "manual_outbound",
+      channel: opts?.channel ?? null,
+      confidence: manualCadenceContext.confidence,
+      reason: manualCadenceContext.reason,
+      updatedAt: now
+    };
+    return;
+  }
+  if (manualCadenceContext?.contextTag === "manual_context_needed") {
+    setFollowUpMode(conv, "manual_handoff", manualCadenceContext.followUpReason);
+    stopFollowUpCadence(conv, manualCadenceContext.followUpReason);
+    conv.manualContext = {
+      status: "needed",
+      contextTag: manualCadenceContext.contextTag,
+      followUpReason: manualCadenceContext.followUpReason,
+      source: "manual_outbound",
+      channel: opts?.channel ?? null,
+      confidence: manualCadenceContext.confidence,
+      reason: manualCadenceContext.reason,
+      updatedAt: now
+    };
+    return;
+  }
   const purchaseTimeframeRaw = String(conv.lead?.purchaseTimeframe ?? "").toLowerCase();
   const notReadyTimeframe =
     /\b(not interested|not ready|not (yet|right now)|not in the market|not looking)\b/i.test(
       purchaseTimeframeRaw
     );
   if (notReadyTimeframe) return;
-  const cfg = await getSchedulerConfigHot();
   const storedMonthsStart = Number(conv.lead?.purchaseTimeframeMonthsStart);
   const parsedTimeframe = parseTimeframeMonthsFromLabel(conv.lead?.purchaseTimeframe);
   const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
@@ -25848,7 +25917,7 @@ async function maybeStartCadence(conv: any, sentAtIso: string) {
     return;
   }
   if (hasExistingCadence) return;
-  startFollowUpCadence(conv, sentAtIso, cfg.timezone);
+  startFollowUpCadence(conv, now, cfg.timezone);
 }
 
 const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION ?? "v23.0").trim() || "v23.0";
@@ -39763,7 +39832,10 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     finalizeManualSendDraftState();
     if (!emojiOnlyManualSms && !args.hadOutbound) {
-      await maybeStartCadence(conv, new Date().toISOString());
+      await maybeStartCadence(conv, new Date().toISOString(), {
+        manualOutboundText: smsBody,
+        channel: "sms"
+      });
     }
     if (!emojiOnlyManualSms) {
       applyManualCadenceAdvance(args.hadOutbound);
@@ -40639,7 +40711,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       saveConversation(conv);
       await flushConversationStore();
       if (!hadOutbound) {
-        await maybeStartCadence(conv, new Date().toISOString());
+        await maybeStartCadence(conv, new Date().toISOString(), {
+          manualOutboundText: emailBody,
+          channel: "email"
+        });
       }
       applyManualCadenceAdvance(hadOutbound);
       pauseCadenceAfterManualOutbound();

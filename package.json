@@ -29,6 +29,7 @@
     "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 node -r dotenv/config ./node_modules/.bin/tsx scripts/appointment_timing_eval.ts",
     "customer_ack_action:eval": "LLM_ENABLED=1 LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED=1 npx tsx scripts/customer_ack_action_eval.ts",
     "manual_outbound_appointment:eval": "LLM_ENABLED=1 LLM_MANUAL_OUTBOUND_APPOINTMENT_PARSER_ENABLED=1 npx tsx scripts/manual_outbound_appointment_eval.ts",
+    "manual_cadence_context:eval": "npx tsx scripts/manual_cadence_context_eval.ts",
     "cadence_regenerate_context:eval": "LLM_ENABLED=1 LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED=1 npx tsx scripts/cadence_regenerate_context_eval.ts",
     "conversation_state:eval": "LLM_ENABLED=1 LLM_CONVERSATION_STATE_PARSER_ENABLED=1 npx tsx scripts/conversation_state_eval.ts",
     "parts_catalog_lexicon:eval": "npx tsx scripts/parts_catalog_lexicon_eval.ts",
