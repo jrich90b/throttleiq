@@ -539,7 +539,7 @@ async function searchVertexSearchLite(args: {
     if (!resp.ok) return null;
     const data: any = await resp.json().catch(() => null);
     const items = Array.isArray(data?.results) ? data.results : [];
-    const hits: WebSearchHit[] = [];
+    const candidateHits: WebSearchHit[] = [];
     for (const item of items) {
       const url = parseVertexUrl(item);
       const parsed = parseHttpUrl(url);
@@ -547,29 +547,33 @@ async function searchVertexSearchLite(args: {
       if (!domainAllowed(parsed.hostname, allowlist)) continue;
       const title = parseVertexTitle(item);
       const vertexSnippet = parseVertexSnippet(item);
+      candidateHits.push({
+        title: title || normalizeHost(parsed.hostname),
+        snippet: vertexSnippet,
+        url: parsed.toString(),
+        domain: normalizeHost(parsed.hostname)
+      });
+      if (candidateHits.length >= requestResults) break;
+    }
+    if (!candidateHits.length) return null;
+    const rankedHits = rankWebSearchHitsForQuestion(query, candidateHits, args.profile).slice(0, maxResults);
+    const hits: WebSearchHit[] = [];
+    for (const hit of rankedHits) {
       const snippet =
-        vertexSnippet ||
+        hit.snippet ||
         (await fetchAllowlistedPageSnippet({
-          url: parsed.toString(),
+          url: hit.url,
           query,
           allowlist,
           timeoutMs: Math.min(timeoutMs, Number(process.env.WEB_FALLBACK_PAGE_FETCH_TIMEOUT_MS ?? 2500))
         }));
-      hits.push({
-        title: title || normalizeHost(parsed.hostname),
-        snippet,
-        url: parsed.toString(),
-        domain: normalizeHost(parsed.hostname)
-      });
-      if (hits.length >= requestResults) break;
+      hits.push({ ...hit, snippet });
     }
-    if (!hits.length) return null;
-    const rankedHits = rankWebSearchHitsForQuestion(query, hits, args.profile).slice(0, maxResults);
     return {
       provider: "vertex_search",
       engine: engineId,
       query,
-      hits: rankedHits
+      hits
     };
   } catch {
     return null;
