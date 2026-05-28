@@ -72,15 +72,58 @@ function isQuestion(text: string): boolean {
 function firstSentence(text: string): string {
   const t = normalizeText(text);
   if (!t) return "";
-  const parts = t.split(/(?<=[.!?])\s+/);
-  return normalizeText(parts[0] ?? t);
+  const parts = t.split(/(?<=[.!?])\s+/).map(p => normalizeText(p)).filter(Boolean);
+  if (!parts.length) return "";
+
+  const looksLikeIntro = (s: string): boolean => {
+    const lower = s.toLowerCase();
+    // Skip common greeting/identity openers so we evaluate whether the reply addressed the question promptly.
+    // Examples: "Hi Joe, this is Brooke at ...", "Hi — this is ...", "Hello!"
+    if (/^(hi|hello|hey)\b/.test(lower) && lower.length <= 160) return true;
+    if (/^\bthis is\b/.test(lower) && lower.length <= 160) return true;
+    if (/^(hi|hello|hey)\b.*\bthis is\b/.test(lower) && lower.length <= 200) return true;
+    return false;
+  };
+
+  if (parts.length >= 2 && looksLikeIntro(parts[0] ?? "")) {
+    return parts[1] ?? parts[0] ?? "";
+  }
+  return parts[0] ?? t;
 }
 
 function hasPricingSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(apr|rate|rates|monthly|payment|payments|per month|term|months?|down payment|cash down|money down|put down|financing|finance|credit|specials?|deals?|incentives?)\b/.test(
+  return /\b(price|pricing|quote|cost|msrp|otd|out[-\s]?the[-\s]?door|apr|rate|rates|monthly|payment|payments|per month|term|months?|down payment|cash down|money down|put down|financing|finance|credit|specials?|deals?|incentives?)\b/.test(
     t
   );
+}
+
+function hasConcretePriceAnswerSignal(text: string): boolean {
+  const t = normalizeText(text);
+  const lower = t.toLowerCase();
+  if (!t) return false;
+  if (/\$\s?\d/.test(t)) return true;
+  if (
+    /\b(price|msrp|otd|out[-\s]?the[-\s]?door|listed|asking)\b/.test(lower) &&
+    /\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b/.test(lower)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function hasFinanceAnswerSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(apr|rate|rates|monthly|payment|payments|per month|term|months?|down payment|cash down|money down|put down|financing|finance|credit)\b/.test(
+    t
+  );
+}
+
+function looksLikePricingDeferral(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  if (hasConcretePriceAnswerSignal(t) || hasFinanceAnswerSignal(t)) return false;
+  return /\b(pull|check|confirm|verify|get)\b/.test(t) && /\b(price|pricing|quote|numbers?)\b/.test(t);
 }
 
 function hasAvailabilitySignal(text: string): boolean {
@@ -93,7 +136,9 @@ function hasAvailabilitySignal(text: string): boolean {
 function hasSchedulingSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return (
-    /\b(schedule|book|appointment|set a time|what day|what time|come in|stop by|works best)\b/.test(t) ||
+    /\b(schedule|book|appointment|set a time|what day|what time|come in|stop by|works best|test ride|testride|demo ride|demo[-\s]?ride)\b/.test(
+      t
+    ) ||
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow)\b/.test(t) ||
     /\b\d{1,2}(?::\d{2})?\s*(am|pm)\b/.test(t)
   );
@@ -194,7 +239,9 @@ function firstSentenceMatchesIntent(intent: ToneIntent, outboundText: string): b
   if (!first) return false;
   switch (intent) {
     case "pricing_finance":
-      return hasPricingSignal(first) || /\$\s?\d/.test(first);
+      // For pricing questions, treat "I'll check/pull pricing" as a deferral, not an answer.
+      if (looksLikePricingDeferral(first)) return false;
+      return hasConcretePriceAnswerSignal(first) || hasFinanceAnswerSignal(first);
     case "availability":
       return (
         hasAvailabilitySignal(first) ||
