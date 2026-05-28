@@ -53,6 +53,26 @@ expectTop({
 });
 
 expectTop({
+  name: "prefer event page over private-party finance for event query",
+  question: "What Harley-Davidson private events information is available?",
+  hits: [
+    hit("https://www.harley-davidson.com/us/en/tools/private-party-financing.html", "Private Party Financing"),
+    hit("https://www.harley-davidson.com/us/en/experiences/museum", "Harley-Davidson Museum")
+  ],
+  expectedUrl: /www\.harley-davidson\.com\/us\/en\/experiences\/museum/
+});
+
+expectTop({
+  name: "demote email campaign pages",
+  question: "What does Harley-Davidson say about things to do?",
+  hits: [
+    hit("https://cloud.email2.harley-davidson.com/Nov22-Emma-Poole-UKI", "Harley-Davidson email campaign"),
+    hit("https://www.harley-davidson.com/us/en/experiences/museum", "Harley-Davidson Museum")
+  ],
+  expectedUrl: /www\.harley-davidson\.com\/us\/en\/experiences\/museum/
+});
+
+expectTop({
   name: "keep insurance page for insurance question",
   question: "Does Harley-Davidson offer motorcycle insurance coverage?",
   hits: [

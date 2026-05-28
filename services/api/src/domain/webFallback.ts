@@ -180,6 +180,15 @@ function scoreWebSearchHitSource(args: {
   }
   if (pathName.includes("/us/en/tools/find-a-dealer/")) score -= 25;
 
+  const eventQuery = queryMatchesAny(query, /\b(?:event|events|calendar|schedule|bike night|demo ride|private event)\b/i);
+  const financeQuery = queryMatchesAny(query, /\b(?:finance|financing|payment|loan|credit|offer|special)\b/i);
+  if (eventQuery && !financeQuery) {
+    if (/^\/us\/en\/(?:experiences|content\/event-calendar)\b/.test(pathName)) score += 45;
+    if (/^\/us\/en\/tools\/(?:private-party-financing|motorcycle-financing|estimate-payment|offers)\b/.test(pathName)) {
+      score -= 65;
+    }
+  }
+
   if (normalizedHost === "insurance.harley-davidson.com") {
     score += queryMatchesAny(query, /\b(?:insurance|coverage|claim|policy|quote)\b/i) ? 115 : -45;
   }
@@ -187,6 +196,7 @@ function scoreWebSearchHitSource(args: {
     score += queryMatchesAny(query, /\b(?:investor|stock|earnings|shareholder|financial results)\b/i) ? 5 : -70;
   }
   if (/^(?:news|media)\.harley-davidson\.com$/.test(normalizedHost)) score -= 25;
+  if (/^(?:cloud|email|email\d*)\./.test(normalizedHost) || normalizedHost.includes(".email")) score -= 80;
   if (/\/news(?:-details)?\/|\/investor\b|\/resources\/things-to-do-following-motorcycle-accident\b/.test(pathName)) {
     score -= 20;
   }
