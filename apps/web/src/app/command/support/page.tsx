@@ -148,6 +148,23 @@ export default function SupportAgentCommandPage() {
     }
   }
 
+  async function trashSupportMailMessage(message: SupportMailMessage) {
+    setBusyId(message.id);
+    try {
+      const resp = await fetch(`/api/support-mail/messages/${encodeURIComponent(message.id)}/trash`, {
+        method: "POST"
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Support email could not be moved to trash.");
+      setSupportMailMessages(current => current.filter(row => row.id !== message.id));
+      setNotice(`Moved support email to trash: ${message.subject}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Support email could not be moved to trash.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <main className="lr-ceo-shell">
       <aside className="lr-ceo-sidebar">
@@ -289,6 +306,14 @@ export default function SupportAgentCommandPage() {
                         disabled={agentBusy}
                       >
                         Draft reply
+                      </button>
+                      <button
+                        type="button"
+                        className="lr-ceo-secondary-btn"
+                        onClick={() => trashSupportMailMessage(message)}
+                        disabled={busyId === message.id}
+                      >
+                        Approve trash
                       </button>
                     </div>
                   </div>

@@ -27024,6 +27024,17 @@ app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessT
   return res.json({ ok: true, draft });
 });
 
+app.post("/support-mail/messages/:id/trash", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const messageId = String(req.params.id ?? "").trim();
+  if (!messageId) return res.status(400).json({ ok: false, error: "Gmail message id is required." });
+  const result = await trashSupportGmailMessage(messageId);
+  return res.json({ ok: true, message: result });
+});
+
 const allowedDealerSetupStages: DealerSetupStage[] = ["intake", "dns", "vercel", "api_config", "connectors", "agreement", "live"];
 const allowedDealerSetupStatuses: DealerSetupStatus[] = ["draft", "in_progress", "blocked", "ready", "live"];
 const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = ["pending", "in_progress", "blocked", "done"];
