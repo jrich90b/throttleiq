@@ -129,6 +129,96 @@ export function resolveVertexSearchEngine(profile?: DealerProfileLike | null): s
   return String(process.env.VERTEX_SEARCH_ENGINE_ID ?? "").trim();
 }
 
+function getProfileReferenceHosts(profile?: DealerProfileLike | null): string[] {
+  const dealerHost = getDealerWebsiteHost(profile);
+  const referenceHosts = Array.isArray(profile?.webSearch?.referenceUrls)
+    ? profile!.webSearch!.referenceUrls!
+        .map(v => normalizeReferenceHost(v))
+        .filter(Boolean)
+    : [];
+  return [...new Set([dealerHost, ...referenceHosts].filter(Boolean))];
+}
+
+function queryMatchesAny(query: string, pattern: RegExp): boolean {
+  return pattern.test(String(query ?? ""));
+}
+
+function scoreWebSearchHitSource(args: {
+  query: string;
+  hit: WebSearchHit;
+  profile?: DealerProfileLike | null;
+  originalIndex: number;
+}): number {
+  const parsed = parseHttpUrl(args.hit.url);
+  const host = parsed?.hostname.toLowerCase() ?? "";
+  const normalizedHost = normalizeHost(host);
+  const pathName = parsed?.pathname.toLowerCase() ?? "";
+  const query = String(args.query ?? "");
+  const title = String(args.hit.title ?? "").toLowerCase();
+  const snippet = String(args.hit.snippet ?? "").toLowerCase();
+  const urlText = String(args.hit.url ?? "").toLowerCase();
+  let score = 0;
+
+  const dealerHost = getDealerWebsiteHost(args.profile);
+  const preferredHosts = getProfileReferenceHosts(args.profile).filter(domain => domain !== dealerHost);
+  if (dealerHost && (normalizedHost === dealerHost || normalizedHost.endsWith(`.${dealerHost}`))) {
+    score += 130;
+  } else if (preferredHosts.some(domain => normalizedHost === domain || normalizedHost.endsWith(`.${domain}`))) {
+    score += 55;
+  }
+
+  if (host === "www.harley-davidson.com" && pathName.startsWith("/us/en/")) score += 95;
+  else if (host === "www.harley-davidson.com") score += 75;
+  else if (normalizedHost === "harley-davidson.com") score += 65;
+  else if (normalizedHost.endsWith(".harley-davidson.com")) score += 20;
+
+  if (/^\/us\/en\/(?:content|tools|customer-service|shop|motorcycles|experiences|about-us)\b/.test(pathName)) {
+    score += 22;
+  }
+  if (/^\/us\/en\/(?:content|tools|customer-service|shop|motorcycles)\b/.test(pathName)) {
+    score += 10;
+  }
+  if (pathName.includes("/us/en/tools/find-a-dealer/")) score -= 25;
+
+  if (normalizedHost === "insurance.harley-davidson.com") {
+    score += queryMatchesAny(query, /\b(?:insurance|coverage|claim|policy|quote)\b/i) ? 115 : -45;
+  }
+  if (normalizedHost === "investor.harley-davidson.com") {
+    score += queryMatchesAny(query, /\b(?:investor|stock|earnings|shareholder|financial results)\b/i) ? 5 : -70;
+  }
+  if (/^(?:news|media)\.harley-davidson\.com$/.test(normalizedHost)) score -= 25;
+  if (/\/news(?:-details)?\/|\/investor\b|\/resources\/things-to-do-following-motorcycle-accident\b/.test(pathName)) {
+    score -= 20;
+  }
+  if (!snippet.trim()) score -= 18;
+
+  for (const term of queryTerms(query)) {
+    if (!term || term.length < 3) continue;
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const termPattern = new RegExp(`\\b${escaped}\\b`, "i");
+    if (termPattern.test(title)) score += 4;
+    if (termPattern.test(urlText)) score += 3;
+    if (termPattern.test(snippet)) score += 1;
+  }
+
+  return score - args.originalIndex * 0.01;
+}
+
+export function rankWebSearchHitsForQuestion(
+  query: string,
+  hits: WebSearchHit[],
+  profile?: DealerProfileLike | null
+): WebSearchHit[] {
+  return hits
+    .map((hit, originalIndex) => ({
+      hit,
+      score: scoreWebSearchHitSource({ query, hit, profile, originalIndex }),
+      originalIndex
+    }))
+    .sort((a, b) => b.score - a.score || a.originalIndex - b.originalIndex)
+    .map(item => item.hit);
+}
+
 function parseVertexSnippet(result: any): string {
   const snippetCandidates = [
     result?.snippet,
@@ -422,6 +512,7 @@ async function searchVertexSearchLite(args: {
     1,
     Math.min(10, Number(args.maxResults ?? process.env.WEB_FALLBACK_MAX_RESULTS ?? 3))
   );
+  const requestResults = Math.max(maxResults, Math.min(10, maxResults * 3));
   const allowlist = getAllowlistedDomains(args.profile);
   const endpoint = new URL(
     `https://discoveryengine.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(
@@ -441,7 +532,7 @@ async function searchVertexSearchLite(args: {
       signal: controller.signal,
       body: JSON.stringify({
         query,
-        pageSize: maxResults,
+        pageSize: requestResults,
         userPseudoId: `wf-${Date.now().toString(36)}`
       })
     });
@@ -470,14 +561,15 @@ async function searchVertexSearchLite(args: {
         url: parsed.toString(),
         domain: normalizeHost(parsed.hostname)
       });
-      if (hits.length >= maxResults) break;
+      if (hits.length >= requestResults) break;
     }
     if (!hits.length) return null;
+    const rankedHits = rankWebSearchHitsForQuestion(query, hits, args.profile).slice(0, maxResults);
     return {
       provider: "vertex_search",
       engine: engineId,
       query,
-      hits
+      hits: rankedHits
     };
   } catch {
     return null;

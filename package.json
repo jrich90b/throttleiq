@@ -62,6 +62,7 @@
     "tone_quality:fixture_eval": "npx tsx scripts/tone_quality_fixture_eval.ts",
     "web_text_widget:eval": "npx tsx scripts/web_text_widget_eval.ts",
     "web_fallback:eval": "npx tsx scripts/web_fallback_eval.ts",
+    "web_fallback_rank:eval": "npx tsx scripts/web_fallback_rank_eval.ts",
     "harley_vertex:coverage": "npx tsx scripts/harley_vertex_coverage_audit.ts",
     "post_sale_cadence:backfill": "npx tsx scripts/backfill_post_sale_cadence.ts",
     "walkin_outcome:eval": "LLM_ENABLED=1 LLM_WALKIN_OUTCOME_PARSER_ENABLED=1 npx tsx scripts/walkin_outcome_eval.ts",
