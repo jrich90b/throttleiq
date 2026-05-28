@@ -7906,22 +7906,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         profile: dealerProfile
       });
       if (sent.ok) {
-        maybeAddInitialCallTodo();
         saveConversation(conv);
         await flushConversationStore();
       } else {
         queueInitialDraftForPreferredContact(draft, initialMediaUrls);
-        maybeAddInitialCallTodo();
       }
     } catch (e: any) {
       console.log("[sendgrid inbound] email send failed:", e?.message ?? e);
       queueInitialDraftForPreferredContact(draft, initialMediaUrls);
-      maybeAddInitialCallTodo();
     }
   } else {
     // Store the draft as an outbound message (suggest-only for now)
     queueInitialDraftForPreferredContact(draft, initialMediaUrls);
-    maybeAddInitialCallTodo();
   }
   if (conv.classification?.bucket === "event_promo") {
     closeConversation(conv, "event_promo_no_cadence");
@@ -7994,6 +7990,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "not_ready_no_timeframe");
     setFollowUpMode(conv, "paused_indefinite", "not_ready_no_timeframe");
   }
+  maybeAddInitialCallTodo();
 
   return res.status(200).json({
     ok: true,

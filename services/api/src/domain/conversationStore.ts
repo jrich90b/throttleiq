@@ -3949,6 +3949,13 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
   const bucket = String((conv as any)?.classification?.bucket ?? "").trim().toLowerCase();
   const cta = String((conv as any)?.classification?.cta ?? "").trim().toLowerCase();
   const followUpReason = String((conv as any)?.followUp?.reason ?? "").trim().toLowerCase();
+  const summaryText = String(summary ?? "").trim();
+  const hasActiveCustomerCadence =
+    conv?.followUpCadence?.status === "active" &&
+    String(conv?.followUpCadence?.kind ?? "standard").toLowerCase() !== "post_sale";
+  if (/^call customer \(initial reply sent\)\.?$/i.test(summaryText) && hasActiveCustomerCadence) {
+    return null;
+  }
   const isFinancePrequalOrCreditApp =
     bucket === "finance_prequal" ||
     cta === "hdfs_coa" ||
