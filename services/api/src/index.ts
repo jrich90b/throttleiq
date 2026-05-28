@@ -36,6 +36,11 @@ import {
 } from "./domain/opsAnomalyStore.js";
 import { sendSupportTicketEmail } from "./domain/supportTicketEmail.js";
 import {
+  buildSupportMailReviewInstructions,
+  classifySupportMailAutoTrash,
+  isSupportMailSummarySafeToAutoTrash
+} from "./domain/supportMailPolicy.js";
+import {
   addAgentTask,
   listAgentTasks,
   updateAgentTaskStatus,
@@ -26770,6 +26775,7 @@ app.post("/personal-mail/messages/:id/trash", requirePermission("canAccessTodos"
 });
 
 type GmailListMessage = Awaited<ReturnType<typeof listPersonalInboxMessages>>[number];
+type SupportGmailListMessage = Awaited<ReturnType<typeof listSupportInboxMessages>>[number];
 
 function minutesSinceMailDate(dateValue?: string) {
   const ts = Date.parse(String(dateValue ?? ""));
@@ -26952,17 +26958,66 @@ app.post("/personal-mail/poll", async (req, res) => {
   return res.json({ ok: true, messages: messages.length, tasks: tasks.length, trashed: trashed + reviewedTrash });
 });
 
-function isObviousNonSupportEmail(message: { from?: string; subject?: string; snippet?: string }) {
-  const from = String(message.from ?? "").toLowerCase();
-  const subject = String(message.subject ?? "").toLowerCase();
-  const snippet = String(message.snippet ?? "").toLowerCase();
-  const text = `${from}\n${subject}\n${snippet}`;
-  if (/\b(no-?reply|notify-noreply|workspace-noreply|noreply)\b/.test(from)) return true;
-  if (from.includes("@google.com") && /\b(google workspace|google cloud organization|billing information|new google account|referring google workspace|verification code|your code is)\b/.test(text)) {
-    return true;
+async function logSupportMailAutoTrash(message: SupportGmailListMessage, reason: string) {
+  const existing = (await listAgentTasks(1000)).find(task =>
+    task.instructions.includes(`[support-mail-auto-trash:${message.id}]`)
+  );
+  if (existing) return existing;
+  const task = await addAgentTask({
+    provider: "claude",
+    kind: "email",
+    title: `Auto-trashed support email: ${message.subject}`,
+    instructions: [
+      `[support-mail-auto-trash:${message.id}]`,
+      "Support inbox policy moved this message to Gmail trash automatically.",
+      `Reason: ${reason}`,
+      `Gmail message ID: ${message.id}`,
+      message.threadId ? `Thread ID: ${message.threadId}` : "",
+      `From: ${message.from}`,
+      `Subject: ${message.subject}`,
+      message.date ? `Date: ${message.date}` : "",
+      message.snippet ? `Snippet: ${message.snippet}` : ""
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    clientName: "LeadRider",
+    priority: "normal",
+    risk: "low",
+    approval: { required: false },
+    requestedBy: {
+      name: "Support Gmail Poller",
+      role: "system"
+    }
+  });
+  await updateAgentTaskStatus(task.id, "completed", {
+    summary: `Auto-trashed support email (${reason}): ${message.subject}`,
+    links: [`support-mail:trashed:${message.id}`]
+  });
+  return task;
+}
+
+async function autoTrashObviousSupportMailMessages(messages: SupportGmailListMessage[]) {
+  const remaining: SupportGmailListMessage[] = [];
+  const failures: Array<{ message: SupportGmailListMessage; error: string }> = [];
+  let trashed = 0;
+  for (const message of messages) {
+    const reason = supportMailAutoTrashEnabled() ? classifySupportMailAutoTrash(message) : "";
+    if (!reason) {
+      remaining.push(message);
+      continue;
+    }
+    try {
+      await trashSupportGmailMessage(message.id);
+      await logSupportMailAutoTrash(message, reason);
+      trashed += 1;
+    } catch (err: any) {
+      const error = String(err?.message ?? err);
+      console.warn("[support mail] auto-trash failed:", error);
+      failures.push({ message, error });
+      remaining.push(message);
+    }
   }
-  if (from.includes("docusign") && /\b(code|verification|one-time|otp)\b/.test(text)) return true;
-  return false;
+  return { messages: remaining, trashed, failures };
 }
 
 app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
@@ -26971,25 +27026,13 @@ app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (re
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "10");
-  const messages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
+  const listedMessages = await listSupportInboxMessages(Number.isFinite(limit) ? limit : 10);
+  const { messages, trashed } = await autoTrashObviousSupportMailMessages(listedMessages);
   for (const message of messages) {
-    if (isObviousNonSupportEmail(message)) continue;
     queueSupportAgentTask({
       dedupeKey: `gmail_${message.id}`,
       title: `Draft support reply: ${message.subject}`,
-      instructions: [
-        "Review this support Gmail message and draft a reply for approval.",
-        "Classify the message as support_ticket, non_support, or unclear. Only use non_support for obvious automated notices, promotions, newsletters, account/billing/security admin emails, or unrelated vendor updates that do not need a LeadRider support response.",
-        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
-        `Gmail message ID: ${message.id}`,
-        message.threadId ? `Thread ID: ${message.threadId}` : "",
-        `From: ${message.from}`,
-        `Subject: ${message.subject}`,
-        message.date ? `Date: ${message.date}` : "",
-        message.snippet ? `Snippet: ${message.snippet}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      instructions: buildSupportMailReviewInstructions(message),
       priority: "normal",
       requestedBy: {
         name: "Support Gmail Poller",
@@ -26997,7 +27040,7 @@ app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (re
       }
     });
   }
-  return res.json({ ok: true, messages });
+  return res.json({ ok: true, messages, trashed });
 });
 
 function canPollSupportAgent(req: any) {
@@ -27009,8 +27052,8 @@ function canPollSupportAgent(req: any) {
 app.post("/support-mail/poll", async (req, res) => {
   if (!canPollSupportAgent(req)) return res.status(401).json({ ok: false, error: "invalid support poll token" });
   const limit = Number(req.body?.limit ?? req.query.limit ?? "10");
-  const { messages, tasks } = await ensureSupportAgentTasksForMail(Number.isFinite(limit) ? limit : 10);
-  return res.json({ ok: true, messages: messages.length, tasks });
+  const { messages, tasks, trashed } = await ensureSupportAgentTasksForMail(Number.isFinite(limit) ? limit : 10);
+  return res.json({ ok: true, messages: messages.length, tasks: tasks.length, trashed });
 });
 
 app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessTodos"), async (req, res) => {
@@ -32763,7 +32806,13 @@ const runningClaudeTasks = new Set<string>();
 const runningProspectResearchTasks = new Set<string>();
 
 function supportMailAutoTrashEnabled() {
-  const raw = String(process.env.SUPPORT_MAIL_AUTO_TRASH_NON_SUPPORT_ENABLED ?? "1").trim().toLowerCase();
+  const raw = String(
+    process.env.SUPPORT_MAIL_AUTO_TRASH_ENABLED ??
+      process.env.SUPPORT_MAIL_AUTO_TRASH_NON_SUPPORT_ENABLED ??
+      "1"
+  )
+    .trim()
+    .toLowerCase();
   return raw !== "0" && raw !== "false" && raw !== "off";
 }
 
@@ -32800,6 +32849,7 @@ async function maybeTrashNonSupportSupportMail(task: AgentTask, summary: string)
   if (!supportMailAutoTrashEnabled()) return null;
   if (!task.instructions.includes("[support-auto:gmail_")) return null;
   if (getClaudeSupportClassification(summary) !== "non_support") return null;
+  if (!isSupportMailSummarySafeToAutoTrash(summary, task.instructions)) return null;
   const messageId = extractSupportGmailMessageId(task);
   if (!messageId) return null;
   await trashSupportGmailMessage(messageId);
@@ -32833,7 +32883,9 @@ function queueClaudeTaskExecution(task: AgentTask) {
       const result = await runClaudeAgentTask(task);
       if (result.ok) {
         const supportAutoNonSupport =
-          task.instructions.includes("[support-auto:gmail_") && getClaudeSupportClassification(result.summary) === "non_support";
+          task.instructions.includes("[support-auto:gmail_") &&
+          getClaudeSupportClassification(result.summary) === "non_support" &&
+          isSupportMailSummarySafeToAutoTrash(result.summary, task.instructions);
         const personalAutoTrash =
           task.instructions.includes("[personal-mail-auto:") &&
           (getClaudePersonalMailClassification(result.summary) === "trash_candidate" || isPersonalMailSummarySafeToTrash(result.summary));
@@ -32934,26 +32986,14 @@ function queueSupportAgentTask(input: Parameters<typeof ensureSupportAgentTask>[
 }
 
 async function ensureSupportAgentTasksForMail(limit = 10) {
-  const messages = await listSupportInboxMessages(limit);
+  const listedMessages = await listSupportInboxMessages(limit);
+  const { messages, trashed } = await autoTrashObviousSupportMailMessages(listedMessages);
   const tasks = [];
   for (const message of messages) {
-    if (isObviousNonSupportEmail(message)) continue;
     const task = await ensureSupportAgentTask({
       dedupeKey: `gmail_${message.id}`,
       title: `Draft support reply: ${message.subject}`,
-      instructions: [
-        "Review this support Gmail message and draft a reply for approval.",
-        "Classify the message as support_ticket, non_support, or unclear. Only use non_support for obvious automated notices, promotions, newsletters, account/billing/security admin emails, or unrelated vendor updates that do not need a LeadRider support response.",
-        "Do not send the reply. Create a concise recommended response and note whether a Codex/code task is needed.",
-        `Gmail message ID: ${message.id}`,
-        message.threadId ? `Thread ID: ${message.threadId}` : "",
-        `From: ${message.from}`,
-        `Subject: ${message.subject}`,
-        message.date ? `Date: ${message.date}` : "",
-        message.snippet ? `Snippet: ${message.snippet}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      instructions: buildSupportMailReviewInstructions(message),
       priority: "normal",
       requestedBy: {
         name: "Support Gmail Poller",
@@ -32962,7 +33002,7 @@ async function ensureSupportAgentTasksForMail(limit = 10) {
     });
     tasks.push(task);
   }
-  return { messages, tasks };
+  return { messages, tasks, trashed };
 }
 
 function agentKindDefaultTitle(kind: AgentTaskKind): string {
@@ -54440,8 +54480,8 @@ const server = app.listen(port, () => {
     console.log(`[support mail] auto poll enabled (${supportMailPollMinutes} min interval)`);
     const runSupportMailPoll = async () => {
       try {
-        const { messages, tasks } = await ensureSupportAgentTasksForMail(10);
-        console.log(`[support mail] poll checked ${messages.length} messages, ${tasks.length} support tasks present`);
+        const { messages, tasks, trashed } = await ensureSupportAgentTasksForMail(10);
+        console.log(`[support mail] poll checked ${messages.length} messages, ${tasks.length} support tasks present, ${trashed} auto-trashed`);
       } catch (err: any) {
         console.warn("[support mail] poll failed:", err?.message ?? err);
       }
