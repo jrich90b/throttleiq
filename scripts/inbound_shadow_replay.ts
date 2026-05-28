@@ -6,6 +6,7 @@ import * as path from "node:path";
 
 type Provider = "twilio" | "sendgrid_adf";
 type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
+type ReplayMode = "human" | "suggest" | "autopilot";
 
 type ReplayArgs = {
   dataDir: string;
@@ -17,6 +18,8 @@ type ReplayArgs = {
   twilioTo: string;
   keepTemp: boolean;
   fullDataCopy: boolean;
+  modeMatrix: boolean;
+  modes: ReplayMode[];
   caseNumbers: number[];
 };
 
@@ -39,6 +42,8 @@ type Conversation = {
   messages?: ConversationMessage[];
   lead?: any;
   latestLead?: any;
+  mode?: ReplayMode;
+  conversationMode?: ReplayMode;
   classification?: any;
   followUp?: any;
   appointment?: any;
@@ -62,6 +67,10 @@ type Candidate = {
 };
 
 type ReplayCaseResult = Candidate & {
+  replayMode: ReplayMode;
+  systemMode: "suggest" | "autopilot";
+  sourceConversationMode?: string | null;
+  sourceConversationModeField?: string | null;
   status: "completed" | "failed";
   responseStatus?: number;
   responseBodySnippet?: string;
@@ -98,6 +107,8 @@ Options:
   --out-dir <path>        Report directory. Default: reports/inbound-shadow.
   --twilio-to <phone>     Fallback dealer Twilio number for replay. Default: +17164032516.
   --case-numbers <list>   Optional 1-based case numbers after filtering, e.g. 5,25,38.
+  --mode-matrix           Replay every case in human, suggest, and autopilot modes.
+  --modes <list>          Optional replay modes, e.g. human,suggest,autopilot. Implies --mode-matrix.
   --full-data-copy        Copy every DATA_DIR folder/file. Default skips uploads/backups for safe replay.
   --keep-temp             Keep temporary copied data folders for inspection.
 `);
@@ -114,6 +125,8 @@ function parseArgs(argv: string[]): ReplayArgs {
     twilioTo: "+17164032516",
     keepTemp: false,
     fullDataCopy: false,
+    modeMatrix: false,
+    modes: ["human", "suggest", "autopilot"],
     caseNumbers: []
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -140,6 +153,16 @@ function parseArgs(argv: string[]): ReplayArgs {
         .map(part => Number.parseInt(part.trim(), 10))
         .filter(num => Number.isFinite(num) && num > 0);
       if (!out.caseNumbers.length) usage();
+    }
+    else if (arg === "--mode-matrix") out.modeMatrix = true;
+    else if (arg === "--modes") {
+      out.modeMatrix = true;
+      const modes = next()
+        .split(",")
+        .map(part => part.trim().toLowerCase())
+        .filter((mode): mode is ReplayMode => mode === "human" || mode === "suggest" || mode === "autopilot");
+      if (!modes.length) usage();
+      out.modes = [...new Set(modes)];
     }
     else if (arg === "--full-data-copy") out.fullDataCopy = true;
     else if (arg === "--keep-temp") out.keepTemp = true;
@@ -388,14 +411,29 @@ function caseMode(provider: Provider): "suggest" | "autopilot" {
   return provider === "twilio" ? "autopilot" : "suggest";
 }
 
+function systemModeForReplayMode(provider: Provider, mode: ReplayMode): "suggest" | "autopilot" {
+  if (mode === "human") return "suggest";
+  if (mode === "suggest") return "suggest";
+  if (mode === "autopilot") return "autopilot";
+  return caseMode(provider);
+}
+
 async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: string): Promise<{
   caseDir: string;
   dataDir: string;
   jobsPath: string;
   convBefore: Conversation;
   adfXml?: string;
+}>;
+async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: string, replayMode?: ReplayMode): Promise<{
+  caseDir: string;
+  dataDir: string;
+  jobsPath: string;
+  convBefore: Conversation;
+  adfXml?: string;
 }> {
-  const caseDir = await fs.mkdtemp(path.join(rootDir, `${candidate.provider}-`));
+  const mode = replayMode ?? caseMode(candidate.provider);
+  const caseDir = await fs.mkdtemp(path.join(rootDir, `${candidate.provider}-${mode}-`));
   const dataDir = path.join(caseDir, "data");
   await copyShadowDataDir(args.dataDir, dataDir, args.fullDataCopy);
 
@@ -407,6 +445,8 @@ async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: 
   const originalConv = JSON.parse(JSON.stringify(conv)) as Conversation;
   conv.messages = (conv.messages ?? []).slice(0, candidate.messageIndex);
   conv.updatedAt = candidate.messageAt ?? conv.updatedAt;
+  conv.mode = mode;
+  conv.conversationMode = mode;
 
   const selectedAtMs = Date.parse(candidate.messageAt ?? "");
   if (Array.isArray(snapshot.todos) && Number.isFinite(selectedAtMs)) {
@@ -420,7 +460,7 @@ async function prepareCaseData(args: ReplayArgs, candidate: Candidate, rootDir: 
   await writeJson(path.join(dataDir, "settings.json"), {
     version: 1,
     savedAt: new Date().toISOString(),
-    mode: caseMode(candidate.provider)
+    mode: systemModeForReplayMode(candidate.provider, mode)
   });
 
   let adfXml: string | undefined;
@@ -846,13 +886,16 @@ async function replayOne(
   args: ReplayArgs,
   envFileVars: Record<string, string>,
   rootTempDir: string,
-  candidate: Candidate
+  candidate: Candidate,
+  replayMode?: ReplayMode
 ): Promise<ReplayCaseResult> {
   let caseData: Awaited<ReturnType<typeof prepareCaseData>> | null = null;
   let child: ChildProcessWithoutNullStreams | null = null;
   let logs: string[] = [];
+  const mode = replayMode ?? caseMode(candidate.provider);
+  const systemMode = systemModeForReplayMode(candidate.provider, mode);
   try {
-    caseData = await prepareCaseData(args, candidate, rootTempDir);
+    caseData = await prepareCaseData(args, candidate, rootTempDir, mode);
     const port = await findFreePort();
     const started = await startApi({
       dataDir: caseData.dataDir,
@@ -907,6 +950,10 @@ async function replayOne(
     const classification = classifyDraft(candidate.provider, candidate.body, draft, convAfter);
     return {
       ...candidate,
+      replayMode: mode,
+      systemMode,
+      sourceConversationMode: caseData.convBefore.mode ?? null,
+      sourceConversationModeField: caseData.convBefore.conversationMode ?? null,
       status: "completed",
       responseStatus,
       responseBodySnippet,
@@ -931,6 +978,10 @@ async function replayOne(
   } catch (err: any) {
     return {
       ...candidate,
+      replayMode: mode,
+      systemMode,
+      sourceConversationMode: caseData?.convBefore?.mode ?? null,
+      sourceConversationModeField: caseData?.convBefore?.conversationMode ?? null,
       status: "failed",
       draft: null,
       verdict: "error",
@@ -971,14 +1022,33 @@ function buildMarkdownReport(report: any): string {
   lines.push(`- Expected no response: ${report.summary.expectedNoResponse}`);
   lines.push(`- No response: ${report.summary.noResponse}`);
   lines.push(`- Errors: ${report.summary.error}`);
+  if (report.modeMatrix) {
+    lines.push("");
+    lines.push(`### Mode Outcomes`);
+    lines.push("");
+    lines.push(`| Mode | Safe | Review | Expected no response | No response | Error |`);
+    lines.push(`|---|---:|---:|---:|---:|---:|`);
+    for (const mode of ["human", "suggest", "autopilot"]) {
+      const row = report.summary.byMode?.[mode] ?? {};
+      lines.push(
+        `| ${mode} | ${row.candidateSafe ?? 0} | ${row.review ?? 0} | ${row.expectedNoResponse ?? 0} | ${row.noResponse ?? 0} | ${row.error ?? 0} |`
+      );
+    }
+  }
   lines.push("");
   lines.push(`## Cases`);
   lines.push("");
-  lines.push(`| Verdict | Provider | Customer | Inbound | Draft / Would-send | Reasons |`);
-  lines.push(`|---|---|---|---|---|---|`);
+  lines.push(`| Verdict | Mode | Provider | Customer | Inbound | Draft / Would-send | Route/debug state | Reasons |`);
+  lines.push(`|---|---|---|---|---|---|---|---|`);
   for (const row of report.cases as ReplayCaseResult[]) {
+    const routeState = [
+      row.router?.intent ? `intent=${row.router.intent}` : "",
+      row.router?.dialogState ? `dialog=${row.router.dialogState}` : "",
+      row.router?.conversationMode ? `convMode=${row.router.conversationMode}` : "",
+      row.systemMode ? `system=${row.systemMode}` : ""
+    ].filter(Boolean).join("; ");
     lines.push(
-      `| ${row.verdict} | ${row.provider} | ${mdEscape(row.customerName ?? row.leadKey ?? row.conversationId)} | ${mdEscape(row.body)} | ${mdEscape(row.draft ?? row.error)} | ${mdEscape(row.reviewReasons.join("; "))} |`
+      `| ${row.verdict} | ${row.replayMode} | ${row.provider} | ${mdEscape(row.customerName ?? row.leadKey ?? row.conversationId)} | ${mdEscape(row.body)} | ${mdEscape(row.draft ?? row.error)} | ${mdEscape(routeState)} | ${mdEscape(row.reviewReasons.join("; "))} |`
     );
   }
   lines.push("");
@@ -1002,10 +1072,13 @@ async function main() {
   try {
     for (let i = 0; i < candidates.length; i += 1) {
       const candidate = candidates[i]!;
-      console.log(
-        `[${i + 1}/${candidates.length}] shadow replay ${candidate.provider} ${candidate.customerName ?? candidate.leadKey ?? candidate.conversationId}`
-      );
-      cases.push(await replayOne(args, envFileVars, rootTempDir, candidate));
+      const modes = args.modeMatrix ? args.modes : [caseMode(candidate.provider)];
+      for (const mode of modes) {
+        console.log(
+          `[${i + 1}/${candidates.length}] shadow replay ${mode} ${candidate.provider} ${candidate.customerName ?? candidate.leadKey ?? candidate.conversationId}`
+        );
+        cases.push(await replayOne(args, envFileVars, rootTempDir, candidate, mode));
+      }
     }
   } finally {
     if (!args.keepTemp) await fs.rm(rootTempDir, { recursive: true, force: true });
@@ -1019,7 +1092,23 @@ async function main() {
     review: cases.filter(row => row.verdict === "review").length,
     expectedNoResponse: cases.filter(row => row.verdict === "expected_no_response").length,
     noResponse: cases.filter(row => row.verdict === "no_response").length,
-    error: cases.filter(row => row.verdict === "error").length
+    error: cases.filter(row => row.verdict === "error").length,
+    byMode: Object.fromEntries(
+      (["human", "suggest", "autopilot"] as ReplayMode[]).map(mode => {
+        const rows = cases.filter(row => row.replayMode === mode);
+        return [
+          mode,
+          {
+            total: rows.length,
+            candidateSafe: rows.filter(row => row.verdict === "candidate_safe").length,
+            review: rows.filter(row => row.verdict === "review").length,
+            expectedNoResponse: rows.filter(row => row.verdict === "expected_no_response").length,
+            noResponse: rows.filter(row => row.verdict === "no_response").length,
+            error: rows.filter(row => row.verdict === "error").length
+          }
+        ];
+      })
+    )
   };
   const report = {
     generatedAt,
@@ -1027,6 +1116,8 @@ async function main() {
     provider: args.provider,
     limit: args.limit,
     sinceDays: args.sinceDays,
+    modeMatrix: args.modeMatrix,
+    modes: args.modeMatrix ? args.modes : undefined,
     summary,
     cases
   };
