@@ -67,6 +67,9 @@ export function InboxSection(props: any) {
     authUser,
     deleteConvFromList,
     inboxTodoOwnerByConv,
+    openTasksByConv,
+    todoTaskTitle,
+    todoTaskOwnerLabel,
     renderBookingLinkLine,
     loading
   } = props;
@@ -286,6 +289,14 @@ export function InboxSection(props: any) {
                     const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
                     const campaignReply = isCampaignReplyConversation(c);
                     const needsResponse = needsCustomerResponse(c);
+                    const openTasks = openTasksByConv?.get(c.id) ?? [];
+                    const primaryOpenTask = openTasks[0] ?? null;
+                    const openTaskTitle = primaryOpenTask
+                      ? (todoTaskTitle?.(primaryOpenTask) ?? "Open task")
+                      : "";
+                    const openTaskOwner = primaryOpenTask
+                      ? (todoTaskOwnerLabel?.(primaryOpenTask) ?? "")
+                      : "";
                     return (
                       <div key={c.id} className="flex items-stretch">
                         <button
@@ -373,6 +384,24 @@ export function InboxSection(props: any) {
                                   >
                                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                                     Outcome needed
+                                  </span>
+                                ) : null}
+                                {openTasks.length ? (
+                                  <span
+                                    className="inline-flex max-w-[240px] items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-800"
+                                    title={[
+                                      openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`,
+                                      openTaskOwner ? `Owner: ${openTaskOwner}` : ""
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" • ")}
+                                  >
+                                    <span className="truncate">
+                                      {openTasks.length === 1 ? `Open task: ${openTaskTitle}` : `${openTasks.length} open tasks`}
+                                    </span>
+                                    {openTasks.length === 1 && openTaskOwner ? (
+                                      <span className="hidden shrink-0 sm:inline">• {openTaskOwner}</span>
+                                    ) : null}
                                   </span>
                                 ) : null}
                               </div>

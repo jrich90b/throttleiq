@@ -1152,6 +1152,66 @@ type TodoItem = {
   createdAt: string;
 };
 
+function compactText(raw: string, maxLength: number): string {
+  const text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trim()}...`;
+}
+
+function todoTaskPriority(todo: TodoItem): number {
+  const reason = String(todo.reason ?? "").toLowerCase();
+  const taskClass = String(todo.taskClass ?? "").toLowerCase();
+  const summary = String(todo.summary ?? "").toLowerCase();
+  if (taskClass === "appointment") return 0;
+  if (reason === "call") return 1;
+  if (/hiring manager inquiry|service manager position|resume|interview|employment|job|hiring/.test(summary)) {
+    return 2;
+  }
+  if (reason === "approval" || reason === "payments" || reason === "pricing" || reason === "manager") {
+    return 3;
+  }
+  if (reason === "service" || reason === "parts" || reason === "apparel") return 4;
+  if (taskClass === "followup") return 5;
+  if (taskClass === "reminder") return 6;
+  if (reason === "note") return 9;
+  return 7;
+}
+
+function todoTaskTitle(todo: TodoItem | null | undefined): string {
+  if (!todo) return "Open task";
+  const reason = String(todo.reason ?? "").toLowerCase();
+  const taskClass = String(todo.taskClass ?? "").toLowerCase();
+  const summary = String(todo.summary ?? "").toLowerCase();
+  if (/hiring manager inquiry|service manager position|resume|interview|employment|job|hiring/.test(summary)) {
+    return "Hiring manager inquiry";
+  }
+  if (taskClass === "appointment") return "Appointment task";
+  if (taskClass === "reminder") return "Reminder";
+  if (taskClass === "followup") return "Follow-up task";
+  if (reason === "call") return "Call task";
+  if (reason === "approval") return "Credit approval task";
+  if (reason === "payments") return "Payment task";
+  if (reason === "pricing") return "Pricing task";
+  if (reason === "service") return "Service task";
+  if (reason === "parts") return "Parts task";
+  if (reason === "apparel") return "Apparel task";
+  if (reason === "note") return "Internal note";
+  return "Open task";
+}
+
+function todoTaskDetail(todo: TodoItem | null | undefined, maxLength = 140): string {
+  if (!todo) return "";
+  const raw = String(todo.summary ?? "").trim();
+  if (!raw) return "";
+  const cleaned = raw.replace(/^hiring manager inquiry:\s*/i, "").trim();
+  return compactText(cleaned || raw, maxLength);
+}
+
+function todoTaskOwnerLabel(todo: TodoItem | null | undefined): string {
+  if (!todo) return "";
+  return String(todo.ownerDisplayName ?? todo.departmentOwnerName ?? todo.ownerName ?? "").trim();
+}
+
 type QuestionItem = {
   id: string;
   convId: string;
@@ -7973,6 +8033,42 @@ export default function Home() {
     return byId;
   }, [conversations]);
 
+  const openTasksByConv = useMemo(() => {
+    const byConv = new Map<string, TodoItem[]>();
+    const addTask = (keyRaw: string | null | undefined, task: TodoItem) => {
+      const key = String(keyRaw ?? "").trim();
+      if (!key) return;
+      const list = byConv.get(key) ?? [];
+      if (!list.some(existing => existing.id === task.id)) {
+        list.push(task);
+        byConv.set(key, list);
+      }
+    };
+    for (const task of todos) {
+      addTask(task.convId, task);
+      addTask(task.leadKey, task);
+    }
+    for (const list of byConv.values()) {
+      list.sort((a, b) => todoTaskPriority(a) - todoTaskPriority(b));
+    }
+    return byConv;
+  }, [todos]);
+
+  const selectedOpenTasks = useMemo(() => {
+    if (!selectedConv) return [] as TodoItem[];
+    const byId = new Map<string, TodoItem>();
+    const collect = (keyRaw: string | null | undefined) => {
+      const key = String(keyRaw ?? "").trim();
+      if (!key) return;
+      for (const task of openTasksByConv.get(key) ?? []) {
+        byId.set(task.id, task);
+      }
+    };
+    collect(selectedConv.id);
+    collect(selectedConv.leadKey);
+    return Array.from(byId.values()).sort((a, b) => todoTaskPriority(a) - todoTaskPriority(b));
+  }, [openTasksByConv, selectedConv?.id, selectedConv?.leadKey]);
+
   const {
     filteredTodos,
     groupedTodos,
@@ -12884,6 +12980,9 @@ export default function Home() {
             authUser={authUser}
             deleteConvFromList={deleteConvFromList}
             inboxTodoOwnerByConv={inboxTodoOwnerByConv}
+            openTasksByConv={openTasksByConv}
+            todoTaskTitle={todoTaskTitle}
+            todoTaskOwnerLabel={todoTaskOwnerLabel}
             renderBookingLinkLine={renderBookingLinkLine}
             loading={loading}
           />
@@ -19160,6 +19259,45 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {selectedOpenTasks.length ? (() => {
+              const primaryTask = selectedOpenTasks[0];
+              const ownerLabel = todoTaskOwnerLabel(primaryTask);
+              const detail = todoTaskDetail(primaryTask);
+              const taskTitle = todoTaskTitle(primaryTask);
+              const taskQuery =
+                selectedConv.lead?.name ||
+                [selectedConv.lead?.firstName, selectedConv.lead?.lastName]
+                  .filter(Boolean)
+                  .join(" ") ||
+                selectedConv.leadKey ||
+                selectedConv.id;
+              return (
+                <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <div className="font-medium text-sky-950">
+                      {selectedOpenTasks.length === 1 ? "Open task" : `${selectedOpenTasks.length} open tasks`}
+                    </div>
+                    <div className="mt-0.5 text-xs font-semibold text-sky-900">
+                      {taskTitle}
+                      {ownerLabel ? ` • ${ownerLabel}` : ""}
+                    </div>
+                    {detail ? (
+                      <div className="mt-1 line-clamp-2 text-xs text-sky-800">{detail}</div>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded border border-sky-300 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-100"
+                    onClick={() => {
+                      setTodoQuery(taskQuery);
+                      goToSection("todos");
+                    }}
+                  >
+                    View
+                  </button>
+                </div>
+              );
+            })() : null}
             {cadenceResolveNotice ? (
               <div className="mt-2 border rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
                 {cadenceResolveNotice}
