@@ -177,6 +177,19 @@ export type FollowUpCadence = {
   scheduleMuted?: boolean;
 };
 
+export type ManualContextState = {
+  status: "needed" | "inferred" | "resolved" | "dismissed";
+  contextTag?: string | null;
+  followUpReason?: string | null;
+  source?: string | null;
+  channel?: "sms" | "email" | null;
+  confidence?: number | null;
+  reason?: string | null;
+  selectedByUserId?: string | null;
+  selectedByUserName?: string | null;
+  updatedAt?: string;
+};
+
 export type PricingObjectionState = {
   attempts: number;
   lastAt?: string;
@@ -593,6 +606,7 @@ export type Conversation = {
   };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
+  manualContext?: ManualContextState;
   objections?: ObjectionState;
   crm?: { lastLoggedAt?: string; lastLoggedAtByLeadRef?: Record<string, string> };
   inventoryWatch?: InventoryWatch;
@@ -2627,6 +2641,7 @@ export function listConversations() {
           : null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
+        manualContext: c.manualContext ?? null,
         hold: c.hold ?? null,
         inventoryWatch: c.inventoryWatch ?? null,
         inventoryWatches: c.inventoryWatches ?? null,

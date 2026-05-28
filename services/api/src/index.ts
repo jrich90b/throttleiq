@@ -25920,6 +25920,130 @@ async function maybeStartCadence(
   startFollowUpCadence(conv, now, cfg.timezone);
 }
 
+type ManualContextChoice =
+  | "seller_intake"
+  | "buyer_interest"
+  | "service"
+  | "finance_docs"
+  | "appointment"
+  | "no_cadence";
+
+const MANUAL_CONTEXT_CHOICES = new Set<ManualContextChoice>([
+  "seller_intake",
+  "buyer_interest",
+  "service",
+  "finance_docs",
+  "appointment",
+  "no_cadence"
+]);
+
+function normalizeManualContextChoice(raw: unknown): ManualContextChoice | null {
+  const choice = String(raw ?? "").trim().toLowerCase();
+  return MANUAL_CONTEXT_CHOICES.has(choice as ManualContextChoice)
+    ? (choice as ManualContextChoice)
+    : null;
+}
+
+async function applyManualContextChoice(args: {
+  conv: any;
+  choice: ManualContextChoice;
+  user?: any;
+}): Promise<string> {
+  const { conv, choice, user } = args;
+  const now = new Date().toISOString();
+  const cfg = await getSchedulerConfigHot();
+  const timezone = cfg.timezone || "America/New_York";
+  const actorName =
+    String(user?.name ?? "").trim() ||
+    String(user?.email ?? "").trim() ||
+    undefined;
+  const actorId = String(user?.id ?? "").trim() || undefined;
+  const setManualContext = (contextTag: string, followUpReason: string, status: "resolved" | "dismissed" = "resolved") => {
+    conv.manualContext = {
+      ...(conv.manualContext ?? {}),
+      status,
+      contextTag,
+      followUpReason,
+      source: "manual_context_prompt",
+      selectedByUserId: actorId ?? null,
+      selectedByUserName: actorName ?? null,
+      updatedAt: now
+    };
+  };
+  const activateCadence = (contextTag: string, followUpReason: string, kind: "standard" | "engaged") => {
+    setFollowUpMode(conv, "active", followUpReason);
+    const existing = conv.followUpCadence && conv.followUpCadence.status !== "completed"
+      ? conv.followUpCadence
+      : null;
+    const anchorAt = String(existing?.anchorAt ?? "").trim() || now;
+    const stepIndex = Number.isFinite(Number(existing?.stepIndex))
+      ? Math.max(0, Number(existing.stepIndex))
+      : 0;
+    conv.followUpCadence = {
+      ...(existing ?? {}),
+      status: "active",
+      anchorAt,
+      nextDueAt:
+        String(existing?.nextDueAt ?? "").trim() ||
+        computeFollowUpDueAt(anchorAt, FOLLOW_UP_DAY_OFFSETS[0], timezone),
+      stepIndex,
+      kind,
+      contextTag,
+      contextTagUpdatedAt: now,
+      pausedUntil: undefined,
+      pauseReason: undefined,
+      stopReason: undefined,
+      scheduleInviteCount: existing?.scheduleInviteCount ?? 0,
+      scheduleMuted: existing?.scheduleMuted ?? false
+    };
+    setDialogState(conv, "followup_resumed");
+  };
+
+  if (choice === "seller_intake") {
+    activateCadence("seller_photo_details_request", "seller_photo_details_request", "engaged");
+    setManualContext("seller_photo_details_request", "seller_photo_details_request");
+    return "Seller-intake follow-up cadence enabled.";
+  }
+  if (choice === "buyer_interest") {
+    activateCadence("buyer_interest", "manual_buyer_interest", "standard");
+    setManualContext("buyer_interest", "manual_buyer_interest");
+    return "Buyer follow-up cadence enabled.";
+  }
+  if (choice === "service") {
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket: "service",
+      cta: "service_request"
+    };
+    setFollowUpMode(conv, "manual_handoff", "service_request");
+    stopFollowUpCadence(conv, "service_request");
+    stopRelatedCadences(conv, "service_request", { setMode: "manual_handoff" });
+    setManualContext("service", "service_request");
+    return "Service context saved; sales cadence paused.";
+  }
+  if (choice === "finance_docs") {
+    setFollowUpMode(conv, "manual_handoff", "finance_docs_manual_context");
+    stopFollowUpCadence(conv, "finance_docs_manual_context");
+    stopRelatedCadences(conv, "finance_docs_manual_context", { setMode: "manual_handoff" });
+    setManualContext("finance_docs", "finance_docs_manual_context");
+    return "Finance/docs context saved; sales cadence paused.";
+  }
+  if (choice === "appointment") {
+    setFollowUpMode(conv, "manual_handoff", "manual_appointment");
+    stopFollowUpCadence(conv, "manual_appointment");
+    stopRelatedCadences(conv, "manual_appointment", { setMode: "manual_handoff" });
+    setDialogState(conv, "followup_paused");
+    setManualContext("appointment", "manual_appointment");
+    return "Appointment context saved; follow-up cadence paused.";
+  }
+
+  stopFollowUpCadence(conv, "manual_context_no_cadence");
+  setFollowUpMode(conv, "paused_indefinite", "manual_context_no_cadence");
+  stopRelatedCadences(conv, "manual_context_no_cadence", { setMode: "manual_handoff" });
+  setManualContext("no_cadence", "manual_context_no_cadence", "dismissed");
+  return "No-cadence context saved.";
+}
+
 const META_GRAPH_VERSION = String(process.env.META_GRAPH_VERSION ?? "v23.0").trim() || "v23.0";
 const META_OAUTH_SCOPES = [
   "pages_show_list",
@@ -32076,6 +32200,29 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
   } catch (err: any) {
     console.log("[followup-action] failed:", err?.message ?? err);
     return res.status(500).json({ ok: false, error: err?.message ?? "Failed to update follow-ups" });
+  }
+});
+
+app.post("/conversations/:id/manual-context", async (req, res) => {
+  try {
+    const conv = getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+    const user = (req as any).user ?? null;
+    if (!canUserAccessConversation(user, conv)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+    const choice = normalizeManualContextChoice(req.body?.choice ?? req.body?.context);
+    if (!choice) {
+      return res.status(400).json({ ok: false, error: "Invalid manual context choice." });
+    }
+    const notice = await applyManualContextChoice({ conv, choice, user });
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.json({ ok: true, conversation: conv, notice });
+  } catch (err: any) {
+    console.log("[manual-context] failed:", err?.message ?? err);
+    return res.status(500).json({ ok: false, error: err?.message ?? "Failed to save manual context" });
   }
 });
 

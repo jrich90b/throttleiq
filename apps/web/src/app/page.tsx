@@ -663,6 +663,16 @@ function isShortAckNoActionText(text: string): boolean {
 
 type SystemMode = "suggest" | "autopilot";
 
+type ManualContextState = {
+  status?: "needed" | "inferred" | "resolved" | "dismissed";
+  contextTag?: string | null;
+  followUpReason?: string | null;
+  source?: string | null;
+  channel?: "sms" | "email" | null;
+  reason?: string | null;
+  updatedAt?: string;
+};
+
 type ConversationListItem = {
   id: string;
   leadKey: string;
@@ -744,6 +754,7 @@ type ConversationListItem = {
     kind?: string | null;
   } | null;
   followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
+  manualContext?: ManualContextState | null;
   inventoryWatches?: Array<{
     model: string;
     year?: number | string;
@@ -904,6 +915,7 @@ type ConversationDetail = {
     kind?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
+  manualContext?: ManualContextState | null;
   agentContext?: {
     text?: string;
     mode?: "persistent" | "next_reply";
@@ -2685,6 +2697,8 @@ export default function Home() {
   const [cadenceResolveSaving, setCadenceResolveSaving] = useState(false);
   const [cadenceResolveError, setCadenceResolveError] = useState<string | null>(null);
   const [cadenceResolveNotice, setCadenceResolveNotice] = useState<string | null>(null);
+  const [manualContextSaving, setManualContextSaving] = useState<string | null>(null);
+  const [manualContextError, setManualContextError] = useState<string | null>(null);
   const [watchQuery, setWatchQuery] = useState("");
   const [watchSalespersonFilter, setWatchSalespersonFilter] = useState("all");
   const [inboxQuery, setInboxQuery] = useState("");
@@ -5045,6 +5059,7 @@ export default function Home() {
 
   useEffect(() => {
     setAgentContextOpen(false);
+    setManualContextError(null);
   }, [selectedConv?.id]);
 
   useEffect(() => {
@@ -6470,6 +6485,58 @@ export default function Home() {
       setCadenceResolveError(err?.message ?? "Failed to update follow-up cadence");
     } finally {
       setCadenceResolveSaving(false);
+    }
+  }
+
+  async function submitManualContextChoice(choice: string) {
+    if (!selectedConv) return;
+    setManualContextSaving(choice);
+    setManualContextError(null);
+    try {
+      const resp = await fetch(
+        `/api/conversations/${encodeURIComponent(selectedConv.id)}/manual-context`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ choice })
+        }
+      );
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || data?.ok === false) {
+        throw new Error(data?.error ?? "Failed to save follow-up context");
+      }
+      const conv = data?.conversation as ConversationDetail | null;
+      if (conv?.id) {
+        setSelectedConv(conv);
+        setConversations(prev =>
+          prev.map(item =>
+            item.id === conv.id
+              ? {
+                  ...item,
+                  classification: conv.classification ?? item.classification,
+                  followUp: conv.followUp ?? item.followUp,
+                  followUpCadence: conv.followUpCadence ?? null,
+                  manualContext: conv.manualContext ?? null,
+                  updatedAt: conv.updatedAt ?? item.updatedAt
+                }
+              : item
+          )
+        );
+      }
+      if (data?.notice) {
+        if (cadenceResolveNoticeTimer.current) {
+          clearTimeout(cadenceResolveNoticeTimer.current);
+        }
+        setCadenceResolveNotice(data.notice);
+        cadenceResolveNoticeTimer.current = setTimeout(() => {
+          setCadenceResolveNotice(null);
+          cadenceResolveNoticeTimer.current = null;
+        }, 4500);
+      }
+    } catch (err: any) {
+      setManualContextError(err?.message ?? "Failed to save follow-up context");
+    } finally {
+      setManualContextSaving(null);
     }
   }
 
@@ -19259,6 +19326,37 @@ export default function Home() {
               </div>
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
+            {selectedConv.manualContext?.status === "needed" && selectedConv.status !== "closed" ? (
+              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
+                <div className="font-medium text-amber-950">What is this follow-up about?</div>
+                <div className="mt-1 text-xs text-amber-800">
+                  Choose a context so the follow-up cadence stays accurate.
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {[
+                    { key: "seller_intake", label: "Seller intake" },
+                    { key: "buyer_interest", label: "Buyer interest" },
+                    { key: "service", label: "Service" },
+                    { key: "finance_docs", label: "Finance/docs" },
+                    { key: "appointment", label: "Appointment" },
+                    { key: "no_cadence", label: "No cadence" }
+                  ].map(option => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className="rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-60"
+                      disabled={!!manualContextSaving}
+                      onClick={() => void submitManualContextChoice(option.key)}
+                    >
+                      {manualContextSaving === option.key ? "Saving..." : option.label}
+                    </button>
+                  ))}
+                </div>
+                {manualContextError ? (
+                  <div className="mt-2 text-xs text-red-700">{manualContextError}</div>
+                ) : null}
+              </div>
+            ) : null}
             {selectedOpenTasks.length ? (() => {
               const primaryTask = selectedOpenTasks[0];
               const ownerLabel = todoTaskOwnerLabel(primaryTask);
