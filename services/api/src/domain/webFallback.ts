@@ -15,7 +15,7 @@ export type WebSearchHit = {
 };
 
 export type WebSearchResult = {
-  provider: "vertex_search";
+  provider: "vertex_search" | "known_source";
   engine?: string;
   query: string;
   hits: WebSearchHit[];
@@ -217,6 +217,8 @@ function htmlToSearchText(html: string): string {
 function queryTerms(query: string): string[] {
   const aliases: Record<string, string[]> = {
     hog: ["hog", "h.o.g", "h.o.g.", "harley owners group"],
+    baggers: ["bagger", "baggers", "king of the baggers", "kotb"],
+    calendar: ["calendar", "schedule", "dates", "events"],
     membership: ["membership", "member"],
     price: ["price", "cost", "fee", "$", "year", "annual"]
   };
@@ -234,9 +236,45 @@ function queryTerms(query: string): string[] {
   return [...terms];
 }
 
+function extractKnownHarleySection(text: string, query: string): string {
+  const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  const isBaggersSchedule =
+    /\b(?:king\s+of\s+the\s+baggers|baggers|kotb)\b/i.test(query) &&
+    /\b(?:schedule|calendar|dates?|when|events?)\b/i.test(query);
+  if (isBaggersSchedule) {
+    const scheduleSection =
+      clean.match(
+        /(2026 Harley-Davidson Racing Schedules\s+King of the Baggers\s+[\s\S]{0,900}?)(?=\s+FIM Harley-Davidson Bagger World Cup\b|\s+SUPER HOOLIGAN\b|\s+SuperTwins\b)/
+      )?.[1] ??
+      clean.match(
+        /(King of the Baggers\s+[\s\S]{0,700}?(?:March|April|May|June|July|August|September)[\s\S]{0,900}?)(?=\s+FIM Harley-Davidson Bagger World Cup\b|\s+SUPER HOOLIGAN\b|\s+SuperTwins\b)/
+      )?.[1];
+    if (scheduleSection) return scheduleSection.trim();
+  }
+
+  const isHogMembership =
+    /\b(?:h\.?o\.?g\.?|hog|harley owners group|membership)\b/i.test(query) &&
+    /\b(?:how much|cost|price|fee|membership|renew)\b/i.test(query);
+  if (isHogMembership) {
+    const membershipSection =
+      clean.match(
+        /(Join Harley Owners Group\s+\|\s+\$?\d+\/year[\s\S]{0,900}?)(?=\s+FREQUENTLY ASKED QUESTIONS\b|\s+What is Harley Owners Group\b)/
+      )?.[1] ??
+      clean.match(
+        /(HARLEY OWNERS GROUP\s+[\s\S]{0,500}?\$\d+\/YR[\s\S]{0,900}?)(?=\s+PASSENGER\b|\s+FREE MEMBERSHIP\b)/
+      )?.[1];
+    if (membershipSection) return membershipSection.trim();
+  }
+
+  return "";
+}
+
 function extractRelevantSnippetFromText(text: string, query: string, maxLength = 700): string {
   const clean = String(text ?? "").replace(/\s+/g, " ").trim();
   if (!clean) return "";
+  const knownSection = extractKnownHarleySection(clean, query);
+  if (knownSection) return knownSection.slice(0, Math.max(maxLength, 1200)).trim();
   const terms = queryTerms(query);
   const lower = clean.toLowerCase();
   let bestIndex = -1;
@@ -248,6 +286,8 @@ function extractRelevantSnippetFromText(text: string, query: string, maxLength =
       if (term && window.includes(term)) score += term === "$" ? 3 : 1;
     }
     if (/\$\s*\d+|\d+\s*\/\s*(?:year|yr)|\d+\s*(?:per|a)\s+year/i.test(window)) score += 3;
+    if (/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b/i.test(window)) score += 2;
+    if (/\b(?:daytona|road america|laguna|mid-ohio|circuit|speedway|raceway)\b/i.test(window)) score += 2;
     if (score > bestScore) {
       bestScore = score;
       bestIndex = i;
@@ -287,6 +327,76 @@ async function fetchAllowlistedPageSnippet(args: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function knownHarleySourceUrls(query: string): string[] {
+  if (String(process.env.WEB_FALLBACK_KNOWN_SOURCES_ENABLED ?? "1") === "0") return [];
+  const q = String(query ?? "");
+  const urls: string[] = [];
+  if (
+    /\b(?:king\s+of\s+the\s+baggers|baggers|kotb)\b/i.test(q) &&
+    /\b(?:schedule|calendar|dates?|when|events?)\b/i.test(q)
+  ) {
+    urls.push("https://www.harley-davidson.com/us/en/content/event-calendar/king-of-baggers.html");
+  }
+  if (
+    /\b(?:h\.?o\.?g\.?|hog|harley owners group|membership)\b/i.test(q) &&
+    /\b(?:how much|cost|price|fee|membership|renew)\b/i.test(q)
+  ) {
+    urls.push(
+      "https://www.harley-davidson.com/us/en/content/hog/membership-benefits.html",
+      "https://www.harley-davidson.com/us/en/content/membership.html"
+    );
+  }
+  return [...new Set(urls)];
+}
+
+async function searchKnownHarleySources(args: {
+  query: string;
+  profile?: DealerProfileLike | null;
+  maxResults?: number;
+  timeoutMs?: number;
+}): Promise<WebSearchResult | null> {
+  const query = String(args.query ?? "").trim();
+  if (!query) return null;
+  const urls = knownHarleySourceUrls(query);
+  if (!urls.length) return null;
+  const allowlist = getAllowlistedDomains(args.profile);
+  const timeoutMs = Math.max(1000, Number(args.timeoutMs ?? process.env.WEB_FALLBACK_TIMEOUT_MS ?? 3500));
+  const maxResults = Math.max(
+    1,
+    Math.min(10, Number(args.maxResults ?? process.env.WEB_FALLBACK_MAX_RESULTS ?? 3))
+  );
+  const hits: WebSearchHit[] = [];
+  for (const url of urls) {
+    const parsed = parseHttpUrl(url);
+    if (!parsed?.hostname || !domainAllowed(parsed.hostname, allowlist)) continue;
+    const snippet = await fetchAllowlistedPageSnippet({
+      url: parsed.toString(),
+      query,
+      allowlist,
+      timeoutMs: Math.min(timeoutMs, Number(process.env.WEB_FALLBACK_PAGE_FETCH_TIMEOUT_MS ?? 2500))
+    });
+    if (!snippet) continue;
+    hits.push({
+      title: parsed.pathname
+        .split("/")
+        .filter(Boolean)
+        .pop()
+        ?.replace(/[-_]+/g, " ")
+        .replace(/\.html$/i, "") || normalizeHost(parsed.hostname),
+      snippet,
+      url: parsed.toString(),
+      domain: normalizeHost(parsed.hostname)
+    });
+    if (hits.length >= maxResults) break;
+  }
+  if (!hits.length) return null;
+  return {
+    provider: "known_source",
+    query,
+    hits
+  };
 }
 
 async function searchVertexSearchLite(args: {
@@ -383,6 +493,8 @@ export async function searchGoogleCse(args: {
   timeoutMs?: number;
 }): Promise<WebSearchResult | null> {
   if (!isWebFallbackEnabled()) return null;
-  // Backward-compatible function name; implementation is Vertex-only.
+  const knownSource = await searchKnownHarleySources(args);
+  if (knownSource?.hits?.length) return knownSource;
+  // Backward-compatible function name; implementation falls through to Vertex Search.
   return searchVertexSearchLite(args);
 }
