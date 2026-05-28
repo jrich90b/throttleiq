@@ -183,6 +183,112 @@ function parseVertexUrl(result: any): string {
   return "";
 }
 
+function decodeHtmlEntities(value: string): string {
+  return String(value ?? "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_m, code) => {
+      const n = Number.parseInt(code, 16);
+      return Number.isFinite(n) ? String.fromCodePoint(n) : "";
+    });
+}
+
+function htmlToSearchText(html: string): string {
+  return decodeHtmlEntities(
+    String(html ?? "")
+      .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function queryTerms(query: string): string[] {
+  const aliases: Record<string, string[]> = {
+    hog: ["hog", "h.o.g", "h.o.g.", "harley owners group"],
+    membership: ["membership", "member"],
+    price: ["price", "cost", "fee", "$", "year", "annual"]
+  };
+  const raw = String(query ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9$]+/g, " ")
+    .split(/\s+/)
+    .filter(term => term.length >= 3 || term === "$");
+  const terms = new Set<string>();
+  for (const term of raw) {
+    terms.add(term);
+    for (const alias of aliases[term] ?? []) terms.add(alias);
+  }
+  if (/\bhow much|cost|price|fee\b/i.test(query)) terms.add("$");
+  return [...terms];
+}
+
+function extractRelevantSnippetFromText(text: string, query: string, maxLength = 700): string {
+  const clean = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  const terms = queryTerms(query);
+  const lower = clean.toLowerCase();
+  let bestIndex = -1;
+  let bestScore = -1;
+  for (let i = 0; i < lower.length; i += 250) {
+    const window = lower.slice(i, i + 900);
+    let score = 0;
+    for (const term of terms) {
+      if (term && window.includes(term)) score += term === "$" ? 3 : 1;
+    }
+    if (/\$\s*\d+|\d+\s*\/\s*(?:year|yr)|\d+\s*(?:per|a)\s+year/i.test(window)) score += 3;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+  if (bestIndex < 0 || bestScore <= 0) return clean.slice(0, maxLength).trim();
+  const start = Math.max(0, bestIndex - 160);
+  const snippet = clean.slice(start, start + maxLength).trim();
+  return snippet.replace(/^\S{1,20}\s/, "").trim();
+}
+
+async function fetchAllowlistedPageSnippet(args: {
+  url: string;
+  query: string;
+  allowlist: string[];
+  timeoutMs: number;
+}): Promise<string> {
+  if (String(process.env.WEB_FALLBACK_FETCH_EMPTY_SNIPPETS ?? "1") === "0") return "";
+  const parsed = parseHttpUrl(args.url);
+  if (!parsed?.hostname || !domainAllowed(parsed.hostname, args.allowlist)) return "";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, args.timeoutMs));
+  try {
+    const resp = await fetch(parsed.toString(), {
+      method: "GET",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+      redirect: "follow",
+      signal: controller.signal
+    });
+    if (!resp.ok) return "";
+    const contentType = String(resp.headers.get("content-type") ?? "").toLowerCase();
+    if (contentType && !contentType.includes("text/html") && !contentType.includes("application/xhtml")) return "";
+    const html = await resp.text();
+    return extractRelevantSnippetFromText(htmlToSearchText(html), args.query);
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function searchVertexSearchLite(args: {
   query: string;
   profile?: DealerProfileLike | null;
@@ -239,7 +345,15 @@ async function searchVertexSearchLite(args: {
       if (!parsed?.hostname) continue;
       if (!domainAllowed(parsed.hostname, allowlist)) continue;
       const title = parseVertexTitle(item);
-      const snippet = parseVertexSnippet(item);
+      const vertexSnippet = parseVertexSnippet(item);
+      const snippet =
+        vertexSnippet ||
+        (await fetchAllowlistedPageSnippet({
+          url: parsed.toString(),
+          query,
+          allowlist,
+          timeoutMs: Math.min(timeoutMs, Number(process.env.WEB_FALLBACK_PAGE_FETCH_TIMEOUT_MS ?? 2500))
+        }));
       hits.push({
         title: title || normalizeHost(parsed.hostname),
         snippet,
