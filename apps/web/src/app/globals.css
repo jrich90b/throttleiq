@@ -2579,6 +2579,57 @@ input[type="reset"],
     linear-gradient(180deg, #090d14 0%, #070b12 100%) !important;
 }
 
+@media (min-width: 640px) and (max-width: 767.98px) {
+  .lr-tablet-header-row {
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+
+  .lr-tablet-header-tabs {
+    width: auto !important;
+  }
+
+  .lr-tablet-header-tab {
+    flex: none !important;
+  }
+
+  .lr-tablet-hide {
+    display: none !important;
+  }
+
+  .lr-tablet-workspace-body {
+    flex-direction: row !important;
+  }
+
+  .lr-tablet-side-nav {
+    position: relative !important;
+    inset: auto !important;
+    z-index: 20 !important;
+    display: flex !important;
+    flex: 0 0 4rem !important;
+    height: 100% !important;
+    transform: translateX(0) !important;
+  }
+
+  .lr-tablet-list-panel {
+    display: block !important;
+    flex: 0 0 20rem !important;
+    width: 20rem !important;
+    min-width: 20rem !important;
+  }
+
+  .lr-tablet-main-panel {
+    display: block !important;
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  .lr-app-theme .lr-tablet-main-panel {
+    padding: 1rem !important;
+  }
+}
+
 .lr-app-theme .lr-app-sidebar-panel h1,
 .lr-app-theme .lr-app-main-panel h2 {
   font-family:

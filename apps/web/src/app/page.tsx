@@ -12220,12 +12220,12 @@ export default function Home() {
       ) : null}
       {mobileNavOpen ? (
         <div
-          className="fixed inset-0 bg-black/40 z-40 md:hidden"
+          className="fixed inset-0 bg-black/40 z-40 md:hidden lr-tablet-hide"
           onClick={() => setMobileNavOpen(false)}
         />
       ) : null}
       <header className="shrink-0 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.5)]">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between lr-tablet-header-row">
           <div className="min-w-0">
             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
               LeadRider
@@ -12234,11 +12234,11 @@ export default function Home() {
               {isMdfSection ? "MDF Assistant" : "Dealer Workspace"}
             </div>
           </div>
-          <div className="flex w-full gap-2 md:w-auto">
+          <div className="flex w-full gap-2 md:w-auto lr-tablet-header-tabs">
             <button
               type="button"
               className={[
-                "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none",
+                "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none lr-tablet-header-tab",
                 isMessagingWorkspace
                   ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-sm"
                   : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--surface)]"
@@ -12253,7 +12253,7 @@ export default function Home() {
               <button
                 type="button"
                 className={[
-                  "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none",
+                  "flex-1 rounded-lg border px-4 py-2 text-sm font-semibold transition md:flex-none lr-tablet-header-tab",
                   isMdfSection
                     ? "border-[var(--accent)] bg-[var(--accent)] text-white shadow-sm"
                     : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--surface)]"
@@ -12267,7 +12267,7 @@ export default function Home() {
         </div>
       </header>
       {isMessagingWorkspace ? (
-      <div className="md:hidden w-full flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
+      <div className="md:hidden lr-tablet-hide w-full flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
         <div className="w-[60px] shrink-0">
           <button
             className="px-2 py-1 border rounded text-sm"
@@ -12290,9 +12290,9 @@ export default function Home() {
         </div>
       </div>
       ) : null}
-      <div className="flex-1 flex md:flex-row flex-col min-h-0">
+      <div className="flex-1 flex md:flex-row flex-col min-h-0 lr-tablet-workspace-body">
       {isMessagingWorkspace ? (
-      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-full border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex`}>
+      <aside className={`fixed inset-y-0 left-0 md:relative md:inset-auto z-50 w-16 md:h-full border-r border-[var(--palette-graphite)] bg-[var(--palette-graphite)] text-white flex flex-col items-center py-3 cursor-pointer overflow-x-visible overflow-y-hidden transform transition-transform duration-200 ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"} md:flex lr-tablet-side-nav`}>
         <div className="text-lg font-semibold shrink-0">TI</div>
         <div className="mt-3 flex-1 min-h-0 w-full overflow-y-auto flex flex-col items-center gap-4 px-2 pb-3">
         <button
@@ -12511,7 +12511,7 @@ export default function Home() {
           section === "contacts" ? "md:w-[620px]" : "md:w-96"
         } border-r border-[var(--border)] bg-[var(--surface)] p-4 overflow-y-auto shadow-[0_10px_30px_rgba(0,0,0,0.08)] lr-app-sidebar-panel ${
           isCampaignSection ? "lr-campaign-sidebar" : ""
-        } ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
+        } ${section !== "calendar" && !isMdfSection ? "lr-tablet-list-panel" : ""} ${section === "calendar" || isMdfSection ? "hidden" : ""} ${isConversationSection && mobilePanel === "detail" ? "hidden md:block" : ""}`}
         data-campaign-sidebar={isCampaignSection ? "true" : "false"}
       >
         <div className="flex items-start justify-between gap-4">
@@ -13883,7 +13883,7 @@ export default function Home() {
             : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] lr-app-main-panel"
         } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
-        } ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
+        } lr-tablet-main-panel ${isConversationSection && mobilePanel === "list" ? "hidden md:block" : ""}`}
         data-campaign-main={isCampaignSection ? "true" : "false"}
       >
         {isCampaignSection ? (
