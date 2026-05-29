@@ -69,17 +69,20 @@ function americanHarleyNotes(setup: DealerSetup) {
 function buildStepRows(setup: DealerSetup) {
   const detailByStep: Record<string, string> = {
     intake: "Confirm dealer name, website, owner, legal name, DBA, address, contact, plan, and billing terms.",
-    agreement: "Generate or attach the agreement packet. Do not send without review.",
-    vercel: "Add or verify the dealer web hostname in Vercel.",
-    dns: "Have the dealer or DNS owner add records. Continue other steps while DNS waits or propagates.",
-    api: "Prepare and run the clean API deployment profile.",
-    remote_env: "Add production secrets only on the server runtime env file.",
-    google: "Connect Gmail, support mail, calendar, and OAuth callbacks.",
-    twilio: "Configure number, webhooks, consent, STOP/HELP, A2P/10DLC, and routing. Approval can take days.",
+    domains: "Prepare web/API subdomains and DNS records. Continue other steps while DNS waits or propagates.",
     sendgrid: "Configure sender/domain authentication, DNS records, inbound parse, and reply-to. DNS can wait in parallel.",
-    meta: "Verify app ID/secret, callback, app status, permissions, and business/app review status.",
+    twilio: "Configure number, webhooks, consent, STOP/HELP, A2P/10DLC, and routing. Approval can take days.",
+    google: "Connect Gmail, support mail, calendar, users, and OAuth callbacks.",
+    inventory: "Capture and validate the dealer inventory feed or export URL.",
+    crm: "Confirm ADF source mappings, CRM provider behavior, owner routing, and Twilio route mapping.",
+    profile: "Confirm dealer profile, tone, rules, feature flags, privacy policy, TCPA wording, and SMS consent language.",
+    remote_env: "Add production secrets only on the server runtime env file.",
+    api: "Prepare the clean API tenant/runtime deployment profile and rollback path.",
+    vercel: "Prepare or verify the dealer web hostname and frontend settings in Vercel.",
+    manual: "Generate and review the dealer deployment manual.",
     smoke: "Run web, API, provider, inventory, conversation, and webhook smoke checks.",
-    handoff: "Move to Active Clients only after go-live blockers are clear."
+    launch_gate: "Review launch checklist, remote env, compliance, smoke results, rollback, and monitoring.",
+    handoff: "Move to Active Clients only after go-live blockers are clear and launch is approved."
   };
   return setup.steps.map(step => [
     step.label,
@@ -102,7 +105,6 @@ function buildManualMarkdown(setup: DealerSetup) {
 
   const providerCallbacks = [
     ["Google OAuth", `${setup.apiUrl.replace(/\/$/, "")}/integrations/google/callback`],
-    ["Meta OAuth", `${setup.apiUrl.replace(/\/$/, "")}/integrations/meta/callback`],
     ["Twilio inbound SMS", `${setup.apiUrl.replace(/\/$/, "")}/webhooks/twilio`],
     ["SendGrid inbound ADF/email", `${setup.apiUrl.replace(/\/$/, "")}/crm/leads/adf/sendgrid`],
     ["Public widget API base", setup.apiUrl]
@@ -164,7 +166,7 @@ function buildManualMarkdown(setup: DealerSetup) {
     "",
     "## Setup Flow",
     "",
-    "Work the setup steps in order, but do not let slow third-party approvals stop unrelated work. DNS, SMS/A2P approval, Google OAuth, SendGrid verification, Meta review, and dealer website edits can wait in parallel. They block go-live, not the rest of onboarding.",
+    "Work the setup steps in order, but do not let slow third-party approvals stop unrelated work. DNS, SMS/A2P approval, Google OAuth, SendGrid verification, optional Meta review, and dealer website edits can wait in parallel. They block go-live, not the rest of onboarding.",
     "",
     table(["Step", "Current status", "What to do"], buildStepRows(setup)),
     "",

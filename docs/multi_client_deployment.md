@@ -20,7 +20,7 @@ Use the same product repo, but keep dealer runtime separated.
 | API | PM2 process per dealer or server per dealer |
 | Runtime data | one `DATA_DIR` per dealer, for example `/home/ubuntu/leadrider-runtime/<dealer>/data` |
 | Secrets | one remote `.env` per dealer API process |
-| Webhooks | Twilio/SendGrid/Google/Meta point to that dealer's API hostname |
+| Webhooks | Twilio, SendGrid, and Google callbacks point to that dealer's API hostname |
 | Browser/MDF runners | one registered runner computer per dealer where needed |
 
 Example:
@@ -123,6 +123,25 @@ Set:
 
 Do not store API keys, Twilio tokens, SendGrid keys, or Google secrets in the deploy profile. Those belong in the remote API `.env`.
 
+You can also generate a complete local runtime handoff package from Dealer Setup:
+
+```bash
+npm run dealer:config:export -- --slug <dealer-slug>
+npm run dealer:config:verify -- --slug <dealer-slug>
+```
+
+The default package path is `reports/dealer-setup/<dealer-slug>/runtime-config-package`. It includes the normalized dealer config, `dealer_profile.json`, Lightsail deploy profile, remote API env template, Vercel env template, deployment manual, smoke script, manifest, checksums, and explicit human approval stops. It is an offline package only; it does not deploy, change DNS, submit vendor forms, create credentials, or send customer-facing messages.
+
+Command Dealer Setup also exposes the same package from **Technical details** as **Runtime package**. Use that browser action for preview/download during onboarding; use the CLI commands when you need the files written under `reports/`.
+
+Before requesting any deployment approval, run the launch dry-run:
+
+```bash
+npm run dealer:launch:dry-run -- --slug <dealer-slug>
+```
+
+The dry-run aggregates the runtime package verification, deploy profile, DNS records, remote API env checklist, tenant-isolated runtime paths, launch checklist, smoke-test state, and vendor/compliance setup steps. It is read-only: no SSH, deploy, Vercel, DNS, Twilio, SendGrid, Google, CRM, or customer-message action is performed.
+
 After the profile is created, deploy with:
 
 ```bash
@@ -131,17 +150,71 @@ npm run deploy:api -- --profile infra/deploy/<dealer-slug>.api.env
 
 ## Dealer Launch Checklist
 
-The Command Dealer Setup page now shows a generated launch checklist for each setup record. Use it as the go-live gate before sending the dealer into Active Clients:
+The Command Dealer Setup page now follows one repeatable workflow from closed-won prospect to launch:
 
 - dealer intake
-- agreement and e-sign status
-- Vercel web domain
-- DNS records
-- API deploy profile
+- domains and subdomains
+- SendGrid sender/domain
+- Twilio SMS and compliance
+- Google Calendar and users
+- inventory/export URL
+- CRM/ADF/Twilio routing
+- dealer profile, tone, rules, and feature flags
 - remote API env
-- Google, Twilio, SendGrid, and Meta setup
-- launch smoke test
-- optional runner computer
-- dealer handoff
+- API tenant/runtime setup
+- Vercel frontend setup
+- deployment manual
+- smoke tests
+- launch gate
+- production launch and post-launch monitoring
 
 The API deploy profile only defines where the app should run. The remote API `.env` still has to exist on the server and contain the dealer's real secrets. Use the **Remote API env** section in Dealer Setup to copy a safe template, fill secret values directly on the server, then mark **Remote API env confirmed**.
+
+Blocked third-party items such as DNS propagation, Twilio A2P/10DLC approval, SMS consent/legal review, SendGrid domain verification, vendor logins, OAuth, credentials, or MFA should be marked blocked or waiting on dealer without stopping unrelated setup steps.
+
+Run a public per-dealer smoke test without deploying:
+
+```bash
+npm run dealer:smoke -- --dealer americanharley
+npm run dealer:smoke -- --dealer <dealer-slug>
+```
+
+You can override generated URLs when testing a custom host:
+
+```bash
+npm run dealer:smoke -- --app https://<dealer>.leadrider.ai --api https://api.<dealer>.leadrider.ai
+```
+
+## American Harley Sandbox Setup
+
+American Harley is the live first client and should be used as the read-only canary. To test the repeatable Dealer Setup workflow without touching production vendor settings, seed a sandbox setup record:
+
+```bash
+npm run dealer:seed:american-harley-sandbox
+```
+
+The default slug is `americanharley-sandbox`, which generates sandbox web/API/runtime paths such as:
+
+- `https://americanharley-sandbox.leadrider.ai`
+- `https://api.americanharley-sandbox.leadrider.ai`
+- `/home/ubuntu/leadrider-runtime/americanharley-sandbox/data`
+
+This seed record is for setup workflow, config, manual, launch-gate, and task testing only. Do not deploy it, change live DNS, submit Twilio/SendGrid/Google/vendor changes, or reuse live credentials without explicit approval.
+
+Preview the seed payload without writing:
+
+```bash
+npm run dealer:seed:american-harley-sandbox -- --dry-run
+```
+
+Generate and verify the sandbox runtime package:
+
+```bash
+npm run dealer:workflow:american-harley-sandbox
+npm run dealer:config:export -- --slug americanharley-sandbox
+npm run dealer:config:verify -- --slug americanharley-sandbox
+npm run dealer:launch:dry-run -- --slug americanharley-sandbox
+npm run dealer:runtime-isolation:eval -- --sandbox americanharley-sandbox
+```
+
+The sandbox package should remain review-only until there is explicit approval to create DNS/provider/runtime changes.

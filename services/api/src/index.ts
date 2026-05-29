@@ -87,6 +87,8 @@ import {
   type DealerSetup
 } from "./domain/dealerSetupStore.js";
 import { buildDealerDeploymentManual } from "./domain/dealerDeploymentManual.js";
+import { buildDealerRuntimePackage, verifyDealerRuntimePackage } from "./domain/dealerRuntimePackage.js";
+import { buildDealerLaunchDryRun } from "./domain/dealerLaunchDryRun.js";
 import {
   addSalesProspect,
   deleteSalesProspect,
@@ -16739,21 +16741,28 @@ function extractDayRequest(text: string): string | null {
   const t = text.toLowerCase();
   const map: Record<string, string> = {
     monday: "monday",
+    mondays: "monday",
     mon: "monday",
     tuesday: "tuesday",
+    tuesdays: "tuesday",
     tue: "tuesday",
     tues: "tuesday",
     wednesday: "wednesday",
+    wednesdays: "wednesday",
     wed: "wednesday",
     thursday: "thursday",
+    thursdays: "thursday",
     thu: "thursday",
     thur: "thursday",
     thurs: "thursday",
     friday: "friday",
+    fridays: "friday",
     fri: "friday",
     saturday: "saturday",
+    saturdays: "saturday",
     sat: "saturday",
     sunday: "sunday",
+    sundays: "sunday",
     sun: "sunday"
   };
   for (const key of Object.keys(map)) {
@@ -20078,6 +20087,96 @@ function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositi
   setDialogState(conv, decision.state as DialogStateName);
   closeConversation(conv, decision.reason);
   stopRelatedCadences(conv, decision.reason, { close: true });
+}
+
+type CustomerFollowUpDeferralDecision = {
+  label: string;
+  until: Date;
+  reason: "customer_thinking_it_over";
+};
+
+function parseCustomerFollowUpDeferralFallback(
+  text: string,
+  base: Date
+): CustomerFollowUpDeferralDecision | null {
+  const normalized = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  const hasDeferralIntent =
+    /\b(think (?:about|on|it over)|thinking (?:about|on|it over)|need (?:some )?time|take (?:some )?time|give me (?:a )?(?:few|couple|several|\d+) days?|let me think|get back to (?:you|u)|i'?ll let (?:you|u) know|i will let (?:you|u) know)\b/.test(
+      normalized
+    );
+  if (!hasDeferralIntent) return null;
+  const parsedFuture = parseFutureTimeframe(normalized, base);
+  if (parsedFuture?.until && isShortFutureTimeframeLabel(parsedFuture.label)) {
+    return { label: parsedFuture.label, until: parsedFuture.until, reason: "customer_thinking_it_over" };
+  }
+  const relativeDays = [
+    { pattern: /\b(?:in\s+)?(?:several|a handful of)\s+days\b/, days: 5, label: "in 5 days" },
+    { pattern: /\b(?:in\s+)?(?:a\s+)?few\s+days\b/, days: 3, label: "in 3 days" },
+    { pattern: /\b(?:in\s+)?(?:a\s+)?couple\s+days\b/, days: 2, label: "in 2 days" }
+  ];
+  const matched = relativeDays.find(row => row.pattern.test(normalized));
+  if (!matched) return null;
+  return {
+    label: matched.label,
+    until: new Date(base.getTime() + matched.days * 24 * 60 * 60 * 1000),
+    reason: "customer_thinking_it_over"
+  };
+}
+
+function resolveCustomerFollowUpDeferralDecision(
+  text: string,
+  parsed: CustomerDispositionParse | null,
+  base = new Date()
+): CustomerFollowUpDeferralDecision | null {
+  const parsedAccepted = isDispositionParserAccepted(parsed);
+  if (parsedAccepted && parsed?.disposition === "defer_with_window") {
+    const timeframeText = String(parsed.timeframeText ?? "").trim();
+    const parsedFuture = parseFutureTimeframe(timeframeText || text, base);
+    if (parsedFuture?.until && isShortFutureTimeframeLabel(parsedFuture.label)) {
+      return { label: parsedFuture.label, until: parsedFuture.until, reason: "customer_thinking_it_over" };
+    }
+    const fallback = parseCustomerFollowUpDeferralFallback(
+      `${timeframeText ? `${timeframeText} ` : ""}${text}`,
+      base
+    );
+    if (fallback) return fallback;
+  }
+  return parseCustomerFollowUpDeferralFallback(text, base);
+}
+
+async function applyCustomerFollowUpDeferral(conv: any, decision: CustomerFollowUpDeferralDecision) {
+  if (!conv || conv.status === "closed" || conv.followUpCadence?.kind === "post_sale") return;
+  const cfg = await getSchedulerConfigHot();
+  const timezone = cfg.timezone || "America/New_York";
+  const now = new Date().toISOString();
+  if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+    conv.followUpCadence = undefined;
+    startFollowUpCadence(conv, now, timezone);
+  }
+  if (conv.followUpCadence) {
+    conv.followUpCadence.kind = "engaged";
+    conv.followUpCadence.contextTag = decision.reason;
+    conv.followUpCadence.contextTagUpdatedAt = now;
+  }
+  pauseFollowUpCadence(conv, decision.until.toISOString(), decision.reason);
+  setFollowUpMode(conv, "active", decision.reason);
+  setDialogState(conv, "followup_paused");
+  conv.lead = conv.lead ?? {};
+  conv.lead.purchaseTimeframe = decision.label;
+  conv.updatedAt = now;
+  saveConversation(conv);
+}
+
+function buildCustomerFollowUpDeferralReply(conv?: any): string {
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  return firstName
+    ? `Sure ${firstName} — take your time, no rush at all.`
+    : "Sure — take your time, no rush at all.";
 }
 
 function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
@@ -27277,7 +27376,14 @@ app.post("/support-mail/messages/:id/trash", requirePermission("canAccessTodos")
 
 const allowedDealerSetupStages: DealerSetupStage[] = ["intake", "dns", "vercel", "api_config", "connectors", "agreement", "live"];
 const allowedDealerSetupStatuses: DealerSetupStatus[] = ["draft", "in_progress", "blocked", "ready", "live"];
-const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = ["pending", "in_progress", "blocked", "done"];
+const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = [
+  "pending",
+  "in_progress",
+  "blocked",
+  "waiting_on_dealer",
+  "ready_to_verify",
+  "done"
+];
 
 app.get("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
@@ -27330,6 +27436,7 @@ app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req,
   const setup = await updateDealerSetup(req.params.id, {
     stage: allowedDealerSetupStages.includes(stageRaw as DealerSetupStage) ? (stageRaw as DealerSetupStage) : undefined,
     status: allowedDealerSetupStatuses.includes(statusRaw as DealerSetupStatus) ? (statusRaw as DealerSetupStatus) : undefined,
+    dealerName: typeof req.body?.dealerName === "string" ? req.body.dealerName : undefined,
     owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
     primaryContact: typeof req.body?.primaryContact === "string" ? req.body.primaryContact : undefined,
     legalName: typeof req.body?.legalName === "string" ? req.body.legalName : undefined,
@@ -27557,7 +27664,7 @@ app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos")
   const updated = await updateDealerSetup(setup.id, {
     stage: "dns",
     status: "in_progress",
-    stepId: "dns",
+    stepId: "domains",
     stepStatus: "in_progress",
     stepNote: records.map(row => `${row.type} ${row.name} -> ${row.value}`).join("; ")
   });
@@ -27580,6 +27687,34 @@ app.post("/dealer-setups/:id/api/deploy-profile", requirePermission("canAccessTo
     stepNote: `API deploy profile ready: ${deployment.deployProfileLocalPath}; PM2 ${deployment.pm2Process}; data ${deployment.dataDir}`
   });
   return res.json({ ok: true, setup: updated ?? setup, deployment });
+});
+
+app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const runtimePackage = buildDealerRuntimePackage(setup);
+  const verification = verifyDealerRuntimePackage(setup, runtimePackage);
+  return res.json({
+    ok: verification.ok,
+    package: runtimePackage,
+    verification,
+    filename: `${setup.slug || "dealer"}-runtime-config-package.json`
+  });
+});
+
+app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const dryRun = buildDealerLaunchDryRun(setup);
+  return res.json({ ok: true, dryRun });
 });
 
 async function checkUrl(url: string) {
@@ -27646,34 +27781,39 @@ app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos")
 
 function dealerSetupStageForStep(stepId: string): DealerSetupStage {
   if (stepId === "vercel") return "vercel";
-  if (stepId === "dns") return "dns";
+  if (stepId === "domains") return "dns";
   if (stepId === "api" || stepId === "remote_env") return "api_config";
-  if (["google", "twilio", "sendgrid", "meta"].includes(stepId)) return "connectors";
-  if (stepId === "agreement") return "agreement";
-  if (stepId === "smoke" || stepId === "handoff") return "live";
+  if (["google", "twilio", "sendgrid", "inventory", "crm", "profile", "manual"].includes(stepId)) return "connectors";
+  if (stepId === "smoke" || stepId === "launch_gate" || stepId === "handoff") return "live";
   return "intake";
 }
 
 function dealerSetupCompletionNote(stepId: string) {
   switch (stepId) {
-    case "agreement":
-      return "Agreement and pricing confirmed.";
-    case "dns":
-      return "DNS records entered and confirmed.";
+    case "domains":
+      return "Domains and DNS records confirmed.";
     case "api":
-      return "API deployment completed.";
+      return "API tenant/runtime setup confirmed.";
     case "remote_env":
       return "Remote API environment confirmed.";
     case "google":
       return "Google mail and calendar connected.";
     case "twilio":
-      return "Twilio messaging configured.";
+      return "Twilio messaging and SMS compliance configured.";
     case "sendgrid":
       return "SendGrid sender/domain configured.";
-    case "meta":
-      return "Meta connection verified.";
+    case "inventory":
+      return "Inventory/export URL confirmed.";
+    case "crm":
+      return "CRM, ADF, and Twilio routing confirmed.";
+    case "profile":
+      return "Dealer profile, tone, rules, features, and compliance language confirmed.";
+    case "manual":
+      return "Dealer deployment manual generated and reviewed.";
+    case "launch_gate":
+      return "Launch gate reviewed.";
     case "handoff":
-      return "Dealer handoff completed.";
+      return "Production launch and monitoring completed.";
     default:
       return "Step completed.";
   }
@@ -27687,8 +27827,6 @@ function providerBrowserStartUrl(stepId: string) {
       return "https://app.sendgrid.com/";
     case "google":
       return "https://admin.google.com/";
-    case "meta":
-      return "https://developers.facebook.com/apps/";
     default:
       return "";
   }
@@ -27703,9 +27841,7 @@ function providerBrowserSetupInstructions(setup: DealerSetup, stepId: string, pr
         ? "SendGrid"
         : stepId === "google"
           ? "Google Workspace"
-          : stepId === "meta"
-            ? "Meta"
-            : "provider";
+          : "provider";
   return [
     "Use browser-use/browser-harness with the registered LeadRider provider runner browser.",
     `Provider: ${providerName}`,
@@ -27760,27 +27896,22 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
     `Monthly fee: ${setup.monthlyFee || "not provided"}`,
     `Setup fee: ${setup.setupFee || "not provided"}`
   ].join("\n");
-  if (stepId === "agreement") {
+  if (stepId === "domains") {
+    const deployment = buildDealerApiDeployment(setup);
     return {
-      provider: "claude",
-      kind: "agreement",
-      title: `Draft ${setup.dealerName} agreement`,
-      message: "Agreement draft started.",
-      nextStep: "Review the draft before sending it for signature.",
-      approvalReason: "Agreement work can affect legal/commercial terms, so review is required before sending.",
+      provider: "codex",
+      kind: "dealer_setup",
+      title: `Prepare ${setup.dealerName} domain checklist`,
+      message: "Domain checklist task created.",
+      nextStep: "Enter DNS changes with the domain owner, then mark ready to verify or complete.",
+      approvalReason: "DNS changes affect production routing, so the operator must approve and apply them.",
       instructions: [
-        "Draft a dealer agreement packet using only the structured facts below for business terms.",
-        "Do not invent pricing, usage, contract dates, legal names, signer details, or overage terms that are not provided.",
-        "Flag missing fields clearly for human review. Do not send the agreement.",
+        "Prepare the domain and subdomain setup checklist.",
+        "Do not make DNS changes or submit registrar/provider changes without explicit human approval.",
         "",
-        `Dealer legal name: ${setup.legalName || "not provided"}`,
-        `DBA name: ${setup.dbaName || setup.dealerName || "not provided"}`,
-        `Dealer address: ${setup.dealerAddress || "not provided"}`,
-        `Included usage: ${setup.includedUsage || setup.leadVolume || "not provided"}`,
-        `Overage terms: ${setup.overageTerms || "not provided"}`,
-        `Contract term: ${setup.contractTerm || "not provided"}`,
-        `Billing start: ${setup.billingStart || "not provided"}`,
-        `Notes: ${setup.notes || "none"}`,
+        `Web hostname: ${deployment.webHostname}`,
+        `API hostname: ${deployment.apiHostname}`,
+        `DNS records: ${deployment.dnsRecords.map(record => `${record.type} ${record.name} -> ${record.value}`).join("; ")}`,
         "",
         coreFacts
       ].join("\n")
@@ -27828,6 +27959,12 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
     };
   }
   const providerCopy: Record<string, { title: string; message: string; nextStep: string; instructions: string }> = {
+    vercel: {
+      title: `Prepare ${setup.dealerName} Vercel frontend setup`,
+      message: "Vercel setup task created.",
+      nextStep: "Confirm the web domain and required frontend environment values, then mark this step complete.",
+      instructions: "Prepare Vercel frontend setup for this dealer, including domain, environment checklist, and rollback notes. Do not deploy or change production domains without approval."
+    },
     google: {
       title: `Connect ${setup.dealerName} Google mail and calendars`,
       message: "Google setup task created.",
@@ -27846,11 +27983,35 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
       nextStep: "Finish sender/domain authentication, then mark this step complete.",
       instructions: "Prepare SendGrid sender/domain authentication, inbound parse, reply-to, and smoke-test steps. Do not expose API keys or DNS secrets."
     },
-    meta: {
-      title: `Verify ${setup.dealerName} Meta connection`,
-      message: "Meta setup task created.",
-      nextStep: "Confirm app status, callback, and permissions, then mark this step complete.",
-      instructions: "Prepare Meta app/callback/permissions verification for this dealer. Identify human login or app-review blockers. Do not change production settings without approval."
+    inventory: {
+      title: `Prepare ${setup.dealerName} inventory checklist`,
+      message: "Inventory checklist task created.",
+      nextStep: "Get the feed/export URL from the dealer or vendor, then mark ready to verify.",
+      instructions: "Prepare the inventory/export URL checklist, expected format, validation command, and fallback contact path. Do not log into vendor portals, scrape credentials, or change vendor exports without approval."
+    },
+    crm: {
+      title: `Prepare ${setup.dealerName} CRM and routing checklist`,
+      message: "CRM/routing checklist task created.",
+      nextStep: "Confirm ADF, lead source mapping, Twilio routing, and vendor login blockers.",
+      instructions: "Prepare CRM/ADF/Twilio routing setup. Include inbound ADF endpoint, Twilio webhook, source mappings, owner routing, and smoke-test steps. Do not submit vendor changes, use MFA, or send live test messages without approval."
+    },
+    profile: {
+      title: `Generate ${setup.dealerName} dealer config`,
+      message: "Dealer config task created.",
+      nextStep: "Review profile, tone, rules, features, and compliance wording before launch.",
+      instructions: "Generate the normalized dealer config draft from the setup record. Include name/legal/DBA, slug/subdomain, API routing, CRM/source mappings, Twilio, SendGrid, Google Calendar, inventory URL, profile/tone/rules, feature flags, privacy policy, SMS consent, TCPA wording, STOP/HELP language, blockers, launch checklist, and smoke-test status. Keep American Harley-specific assumptions isolated to the American Harley setup only."
+    },
+    manual: {
+      title: `Update ${setup.dealerName} deployment manual`,
+      message: "Deployment manual task created.",
+      nextStep: "Review the generated manual from Dealer Setup, then mark complete.",
+      instructions: "Generate or update the dealer deployment manual from the setup record, including rollback path, health checks, remote env checklist, smoke tests, and human approval stops. Do not deploy."
+    },
+    launch_gate: {
+      title: `Review ${setup.dealerName} launch gate`,
+      message: "Launch gate review task created.",
+      nextStep: "Resolve blockers, run smoke tests, and only launch after human approval.",
+      instructions: "Review launch readiness, remote env, compliance, vendor blockers, smoke-test status, rollback path, and post-launch monitoring. Do not deploy or launch without explicit human approval."
     }
   };
   const copy = providerCopy[stepId] ?? {
@@ -27861,19 +28022,19 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
   };
   return {
     provider: "codex",
-    kind: ["google", "twilio", "sendgrid", "meta"].includes(stepId) ? "provider_browser" : "dealer_setup",
+    kind: ["google", "twilio", "sendgrid"].includes(stepId) ? "provider_browser" : "dealer_setup",
     title: copy.title,
-    message: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+    message: ["google", "twilio", "sendgrid"].includes(stepId)
       ? `${providerCopy[stepId]?.title.replace(/^Configure |^Connect |^Verify /, "") || "Provider"} browser task created.`
       : copy.message,
-    nextStep: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+    nextStep: ["google", "twilio", "sendgrid"].includes(stepId)
       ? "The provider runner will open the site and pause for login, MFA, approvals, or sensitive submissions. Continue the other setup steps while this waits."
       : copy.nextStep,
-    approvalRequired: !["google", "twilio", "sendgrid", "meta"].includes(stepId),
-    approvalReason: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+    approvalRequired: !["google", "twilio", "sendgrid"].includes(stepId),
+    approvalReason: ["google", "twilio", "sendgrid"].includes(stepId)
       ? undefined
       : "This setup step can affect external provider accounts or production routing, so review is required.",
-    instructions: ["google", "twilio", "sendgrid", "meta"].includes(stepId)
+    instructions: ["google", "twilio", "sendgrid"].includes(stepId)
       ? providerBrowserSetupInstructions(setup, stepId, copy.instructions, coreFacts)
       : [copy.instructions, "", coreFacts].join("\n")
   };
@@ -27956,31 +28117,29 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
       stepStatus: "done",
       stepNote: "Dealer intake confirmed."
     });
-    return res.json({ ok: true, setup: updated ?? setup, stepId, message: "Dealer intake confirmed.", nextStep: "Continue to agreement and pricing." });
+    return res.json({ ok: true, setup: updated ?? setup, stepId, message: "Dealer intake confirmed.", nextStep: "Continue to domains and subdomains." });
   }
 
   if (stepId === "vercel") {
-    const appDomain = new URL(setup.appUrl).hostname;
-    const domains = await Promise.all([addVercelProjectDomain(appDomain)]);
-    const domainSummary = domains.map(domain => `${domain.domain}${domain.verified ? " verified" : " pending DNS"}`).join(", ");
+    const { task, spec, reused } = await ensureDealerSetupAgentTask(setup, stepId);
     const updated = await updateDealerSetup(setup.id, {
       stage: "vercel",
       status: "in_progress",
       stepId,
-      stepStatus: domains.every(domain => domain.exists) ? "done" : "in_progress",
-      stepNote: `Vercel domain checked: ${domainSummary}`
+      stepStatus: "in_progress",
+      stepNote: reused ? "Vercel setup task is already open." : spec.nextStep
     });
     return res.json({
       ok: true,
       setup: updated ?? setup,
       stepId,
-      domains,
-      message: domains.every(domain => domain.exists) ? "Vercel domain is added." : "Vercel domain still needs attention.",
-      nextStep: domains.every(domain => domain.verified) ? "Continue to DNS records." : "Point DNS if needed, then continue."
+      task: { id: task.id, title: task.title, status: task.status, provider: task.provider },
+      message: reused ? "Vercel setup task is already open." : spec.message,
+      nextStep: spec.nextStep
     });
   }
 
-  if (stepId === "dns") {
+  if (stepId === "domains") {
     const records = buildDealerDnsChecklist(setup);
     const updated = await updateDealerSetup(setup.id, {
       stage: "dns",
@@ -28020,7 +28179,7 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
     });
   }
 
-  if (["agreement", "remote_env", "google", "twilio", "sendgrid", "meta"].includes(stepId)) {
+  if (["remote_env", "google", "twilio", "sendgrid", "inventory", "crm", "profile", "manual", "launch_gate"].includes(stepId)) {
     const { task, spec, reused } = await ensureDealerSetupAgentTask(setup, stepId);
     const updated = await updateDealerSetup(setup.id, {
       stage: dealerSetupStageForStep(stepId),
@@ -28121,7 +28280,7 @@ function extractLabeledNoteValue(notes: string | null | undefined, label: string
 }
 
 function providerStatusSummary(setup: DealerSetup) {
-  const providerIds = ["google", "twilio", "sendgrid", "meta"];
+  const providerIds = ["google", "twilio", "sendgrid", "inventory", "crm", "profile"];
   return providerIds
     .map(id => {
       const step = setup.steps.find(row => row.id === id);
@@ -34526,21 +34685,21 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
   let setupForResponse =
     (await updateDealerSetup(setup.id, {
       status: "in_progress",
-      stage: agreementHandled ? "vercel" : "agreement",
+      stage: "intake",
       stepId: "intake",
       stepStatus: "done",
-      stepNote: "Completed from Sales Funnel handoff."
+      stepNote: agreementHandled ? "Closed-won intake completed from Sales Funnel handoff." : "Completed from Sales Funnel handoff."
     })) ?? setup;
   if (agreementHandled) {
     setupForResponse =
       (await updateDealerSetup(setup.id, {
         status: "in_progress",
-        stage: "vercel",
-        stepId: "agreement",
-        stepStatus: "done",
+        stage: "dns",
+        stepId: "domains",
+        stepStatus: "in_progress",
         stepNote: prospect.docusignPacketId
           ? `Handled in Sales Funnel. DocuSign packet: ${prospect.docusignPacketId}.`
-          : "Handled in Sales Funnel before dealer setup."
+          : "Sales Funnel closed-won handoff is ready for domain setup."
       })) ?? setupForResponse;
   }
 
@@ -44126,6 +44285,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(regenReply);
   }
 
+  const regenFollowUpDeferralDecision = resolveCustomerFollowUpDeferralDecision(
+    event.body ?? "",
+    regenCustomerDispositionParse
+  );
+  if (event.provider === "twilio" && regenFollowUpDeferralDecision) {
+    await applyCustomerFollowUpDeferral(conv, regenFollowUpDeferralDecision);
+    const regenReply = buildCustomerFollowUpDeferralReply(conv);
+    recordRouteOutcome("regen", "customer_thinking_it_over_cadence_delayed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      label: regenFollowUpDeferralDecision.label,
+      until: regenFollowUpDeferralDecision.until.toISOString()
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenReply);
+    }
+    return respondWithSmsRegeneratedDraft(regenReply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
+  }
+
   const regenFuture = parseFutureTimeframe(String(event.body ?? ""), new Date());
   const regenFutureSignals = detectSchedulingSignals(event.body ?? "");
   const regenWeatherLikeQuestion =
@@ -46984,6 +47166,26 @@ if (authToken && signature) {
       responseControlNotInterested: terminalRouteDecision.responseControlNotInterested
     });
     return publishLiveTwilioReply(reply);
+  }
+
+  const followUpDeferralDecision = resolveCustomerFollowUpDeferralDecision(
+    semanticInboundText,
+    customerDispositionParse
+  );
+  if (event.provider === "twilio" && followUpDeferralDecision) {
+    await applyCustomerFollowUpDeferral(conv, followUpDeferralDecision);
+    const reply = buildCustomerFollowUpDeferralReply(conv);
+    recordRouteOutcome("live", "customer_thinking_it_over_cadence_delayed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      label: followUpDeferralDecision.label,
+      until: followUpDeferralDecision.until.toISOString()
+    });
+    return publishLiveTwilioReply(reply, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false
+    });
   }
 
   if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {

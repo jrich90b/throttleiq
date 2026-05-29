@@ -4,7 +4,7 @@ import { dataPath } from "./dataDir.js";
 
 export type DealerSetupStage = "intake" | "dns" | "vercel" | "api_config" | "connectors" | "agreement" | "live";
 export type DealerSetupStatus = "draft" | "in_progress" | "blocked" | "ready" | "live";
-export type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "done";
+export type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "waiting_on_dealer" | "ready_to_verify" | "done";
 
 export type DealerSetupStep = {
   id: string;
@@ -67,6 +67,77 @@ export type DealerApiDeployment = {
   profileText: string;
 };
 
+export type DealerConfigStandard = {
+  identity: {
+    dealerName: string;
+    legalName?: string;
+    dbaName?: string;
+    slug: string;
+    subdomain: string;
+    website?: string;
+    address?: string;
+  };
+  routing: {
+    appUrl: string;
+    apiUrl: string;
+    apiHostname: string;
+    tenantMode: "isolated_runtime";
+    dataDir: string;
+    envFile: string;
+    pm2Process: string;
+  };
+  crm: {
+    provider?: string;
+    sourceMappings: string[];
+    adfEndpoint: string;
+    twilioWebhook: string;
+  };
+  twilio: {
+    fromNumberEnvKey: string;
+    accountSidEnvKey: string;
+    authTokenEnvKey: string;
+    a2pStatus: DealerSetupChecklistStatus;
+    webhookUrl: string;
+  };
+  sendgrid: {
+    apiKeyEnvKey: string;
+    senderEnvKey: string;
+    replyToEnvKey: string;
+    inboundEndpoint: string;
+    dnsStatus: DealerSetupChecklistStatus;
+  };
+  googleCalendar: {
+    clientIdEnvKey: string;
+    clientSecretEnvKey: string;
+    redirectUri: string;
+    tokenPath: string;
+    status: DealerSetupChecklistStatus;
+  };
+  inventory: {
+    exportUrl?: string;
+    envKey: string;
+    status: DealerSetupChecklistStatus;
+  };
+  profile: {
+    tone?: string;
+    rules: string[];
+    notes?: string;
+  };
+  features: Record<string, boolean>;
+  compliance: {
+    privacyPolicy: DealerSetupChecklistStatus;
+    smsConsent: DealerSetupChecklistStatus;
+    tcpaWording: DealerSetupChecklistStatus;
+    stopHelpLanguage: DealerSetupChecklistStatus;
+  };
+  setup: {
+    status: DealerSetupStatus;
+    blockers: string[];
+    launchChecklistStatus: DealerDeployReadinessStatus;
+    smokeTestStatus: DealerSetupChecklistStatus;
+  };
+};
+
 export type DealerSetup = {
   id: string;
   dealerName: string;
@@ -98,6 +169,7 @@ export type DealerSetup = {
   remoteEnvChecklist?: DealerRemoteEnvItem[];
   remoteEnvTemplate?: string;
   deployReadiness?: DealerDeployReadiness;
+  dealerConfig?: DealerConfigStandard;
   createdAt: string;
   updatedAt: string;
 };
@@ -121,17 +193,20 @@ function slugify(value: string) {
 function defaultSteps(): DealerSetupStep[] {
   return [
     { id: "intake", label: "Dealer intake", status: "pending" },
-    { id: "agreement", label: "Agreement and pricing", status: "pending" },
-    { id: "vercel", label: "Vercel domains", status: "pending" },
-    { id: "dns", label: "DNS records", status: "pending" },
-    { id: "api", label: "API dealer config", status: "pending" },
-    { id: "remote_env", label: "Remote API env", status: "pending" },
-    { id: "google", label: "Google mail and calendars", status: "pending" },
-    { id: "twilio", label: "Twilio messaging", status: "pending" },
+    { id: "domains", label: "Domains and subdomains", status: "pending" },
     { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
-    { id: "meta", label: "Meta connection", status: "pending" },
-    { id: "smoke", label: "Smoke test", status: "pending" },
-    { id: "handoff", label: "Active client handoff", status: "pending" }
+    { id: "twilio", label: "Twilio SMS and compliance", status: "pending" },
+    { id: "google", label: "Google Calendar and users", status: "pending" },
+    { id: "inventory", label: "Inventory/export URL", status: "pending" },
+    { id: "crm", label: "CRM/ADF/Twilio routing", status: "pending" },
+    { id: "profile", label: "Dealer profile, tone, and features", status: "pending" },
+    { id: "remote_env", label: "Remote env checklist", status: "pending" },
+    { id: "api", label: "API tenant/runtime setup", status: "pending" },
+    { id: "vercel", label: "Vercel frontend setup", status: "pending" },
+    { id: "manual", label: "Deployment manual", status: "pending" },
+    { id: "smoke", label: "Smoke tests", status: "pending" },
+    { id: "launch_gate", label: "Launch gate", status: "pending" },
+    { id: "handoff", label: "Production launch and monitoring", status: "pending" }
   ];
 }
 
@@ -147,11 +222,32 @@ function buildUrls(slug: string) {
 function mergeDefaultSteps(existing: DealerSetupStep[] | undefined): DealerSetupStep[] {
   const current = Array.isArray(existing) ? existing : [];
   const defaults = defaultSteps();
+  const aliases: Record<string, string> = {
+    dns: "domains",
+    agreement: "intake",
+    meta: "profile"
+  };
   const byId = new Map(current.map(step => [step.id, step]));
-  return defaults.map(step => {
-    const existingStep = byId.get(step.id);
-    return existingStep ? { ...existingStep, label: step.label } : step;
-  });
+  for (const [oldId, newId] of Object.entries(aliases)) {
+    const oldStep = byId.get(oldId);
+    if (oldStep && !byId.has(newId)) byId.set(newId, { ...oldStep, id: newId });
+  }
+  const knownIds = new Set([...defaults.map(step => step.id), ...Object.keys(aliases)]);
+  return defaults
+    .map(step => {
+      const existingStep = byId.get(step.id);
+      return existingStep ? { ...existingStep, label: step.label } : step;
+    })
+    .concat(current.filter(step => !knownIds.has(step.id)));
+}
+
+function canonicalStepId(stepId: string) {
+  const aliases: Record<string, string> = {
+    dns: "domains",
+    agreement: "intake",
+    meta: "profile"
+  };
+  return aliases[stepId] ?? stepId;
 }
 
 function safeHostname(url: string, fallback: string) {
@@ -220,7 +316,7 @@ function stepStatus(setup: Pick<DealerSetup, "steps">, stepId: string): DealerSe
 
 function checklistStatusFromStep(status: DealerSetupStepStatus): DealerSetupChecklistStatus {
   if (status === "done") return "ready";
-  if (status === "in_progress") return "working";
+  if (status === "in_progress" || status === "ready_to_verify" || status === "waiting_on_dealer") return "working";
   if (status === "blocked") return "blocked";
   return "pending";
 }
@@ -230,9 +326,9 @@ function stepLabel(setup: Pick<DealerSetup, "steps">, stepId: string): string {
 }
 
 function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
-  const requiredDone = ["vercel", "dns", "remote_env"];
-  const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
-  const goLiveRequiredDone = ["intake", "agreement", ...requiredDone, ...requiredStarted, "smoke"];
+  const requiredDone = ["domains", "remote_env"];
+  const requiredStarted = ["api", "vercel", "google", "twilio", "sendgrid", "inventory", "crm", "profile", "manual"];
+  const goLiveRequiredDone = ["intake", ...requiredDone, ...requiredStarted, "smoke", "launch_gate"];
   const missing: string[] = [];
   const blockers: string[] = [];
   const goLiveMissing: string[] = [];
@@ -245,7 +341,9 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
 
   for (const stepId of requiredStarted) {
     const status = stepStatus(setup, stepId);
-    if (status !== "done" && status !== "in_progress") missing.push(stepLabel(setup, stepId));
+    if (status !== "done" && status !== "in_progress" && status !== "ready_to_verify" && status !== "waiting_on_dealer") {
+      missing.push(stepLabel(setup, stepId));
+    }
   }
 
   for (const stepId of goLiveRequiredDone) {
@@ -320,16 +418,19 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
   });
   return [
     item("intake", "Dealer intake", "intake", setup.website ? `Website captured: ${setup.website}` : "Dealer website/contact fields still need review."),
-    item("agreement", "Agreement", "agreement", "Pricing, term, legal name, signer, and e-sign packet are approved."),
-    item("vercel", "Vercel web domain", "vercel", `${deployment.webHostname} is added to the Vercel project and verified.`),
-    item("dns", "DNS records", "dns", `Point ${deployment.webHostname} to Vercel and ${deployment.apiHostname} to the API server.`),
-    item("api_profile", "API deploy profile", "api", `${deployment.deployProfileLocalPath} uses isolated checkout/env/data/PM2 paths.`),
+    item("domains", "Domains and subdomains", "domains", `Point ${deployment.webHostname} to Vercel and ${deployment.apiHostname} to the API server.`),
+    item("vercel", "Vercel web setup", "vercel", `${deployment.webHostname} is added to the Vercel project and verified.`),
+    item("api_profile", "API tenant/runtime setup", "api", `${deployment.deployProfileLocalPath} uses isolated checkout/env/data/PM2 paths.`),
     item("remote_env", "Remote API env", "remote_env", `Required variables are present in ${deployment.envFile}; secret values stay on the server.`),
     item("google", "Google mail/calendar", "google", "OAuth credentials and support/calendar token paths are configured for this dealer."),
     item("twilio", "Twilio messaging", "twilio", "Phone number, webhook URLs, compliance, and routing are configured."),
     item("sendgrid", "SendGrid email", "sendgrid", "Sender/domain, inbound parse, and reply-to fields are configured."),
-    item("meta", "Meta connection", "meta", "App ID/secret, callback URL, permissions, and active app status are verified."),
+    item("inventory", "Inventory/export URL", "inventory", "Dealer inventory feed or export URL is captured and validated."),
+    item("crm", "CRM/ADF/Twilio routing", "crm", "ADF source mappings, lead source rules, and SMS routing are configured."),
+    item("profile", "Profile, tone, and features", "profile", "Dealer tone, rules, features, compliance language, and profile fields are confirmed."),
+    item("manual", "Deployment manual", "manual", "Dealer deployment manual is generated and reviewed."),
     item("smoke", "Launch smoke test", "smoke", "Web app, API health, inventory, conversation, and provider routes have been checked."),
+    item("launch_gate", "Launch gate", "launch_gate", "Readiness, compliance, remote env, smoke tests, and rollback path are reviewed."),
     {
       id: "runner",
       label: "Runner computer",
@@ -338,6 +439,96 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
     },
     item("handoff", "Dealer handoff", "handoff", "Client record is live with URLs, owner, billing, and support details.")
   ];
+}
+
+function buildDealerConfigStandard(setup: DealerSetup): DealerConfigStandard {
+  const deployment = buildDealerApiDeployment(setup);
+  const status = (stepId: string) => checklistStatusFromStep(stepStatus(setup, stepId));
+  const notes = setup.notes || "";
+  const inventoryUrl = notes.match(/^Inventory(?:\/export)? URL:\s*(.+)$/im)?.[1]?.trim();
+  const sourceMappings = setup.crmProvider
+    ? setup.crmProvider.split(/[,;/]+/).map(value => value.trim()).filter(Boolean)
+    : [];
+  const blockers = mergeDefaultSteps(setup.steps)
+    .filter(step => step.status === "blocked")
+    .map(step => step.label);
+  return {
+    identity: {
+      dealerName: setup.dealerName,
+      legalName: setup.legalName,
+      dbaName: setup.dbaName,
+      slug: setup.slug,
+      subdomain: deployment.webHostname,
+      website: setup.website,
+      address: setup.dealerAddress
+    },
+    routing: {
+      appUrl: setup.appUrl,
+      apiUrl: setup.apiUrl,
+      apiHostname: deployment.apiHostname,
+      tenantMode: "isolated_runtime",
+      dataDir: deployment.dataDir,
+      envFile: deployment.envFile,
+      pm2Process: deployment.pm2Process
+    },
+    crm: {
+      provider: setup.crmProvider,
+      sourceMappings,
+      adfEndpoint: `${setup.apiUrl.replace(/\/$/, "")}/crm/leads/adf/sendgrid`,
+      twilioWebhook: `${setup.apiUrl.replace(/\/$/, "")}/webhooks/twilio`
+    },
+    twilio: {
+      fromNumberEnvKey: "TWILIO_FROM_NUMBER",
+      accountSidEnvKey: "TWILIO_ACCOUNT_SID",
+      authTokenEnvKey: "TWILIO_AUTH_TOKEN",
+      a2pStatus: status("twilio"),
+      webhookUrl: `${setup.apiUrl.replace(/\/$/, "")}/webhooks/twilio`
+    },
+    sendgrid: {
+      apiKeyEnvKey: "SENDGRID_API_KEY",
+      senderEnvKey: "SENDGRID_FROM_EMAIL",
+      replyToEnvKey: "SENDGRID_REPLY_TO",
+      inboundEndpoint: `${setup.apiUrl.replace(/\/$/, "")}/crm/leads/adf/sendgrid`,
+      dnsStatus: status("sendgrid")
+    },
+    googleCalendar: {
+      clientIdEnvKey: "GOOGLE_CLIENT_ID",
+      clientSecretEnvKey: "GOOGLE_CLIENT_SECRET",
+      redirectUri: `${setup.apiUrl.replace(/\/$/, "")}/integrations/google/callback`,
+      tokenPath: `${deployment.dataDir}/google_tokens.json`,
+      status: status("google")
+    },
+    inventory: {
+      exportUrl: inventoryUrl,
+      envKey: "INVENTORY_FEED_URL",
+      status: status("inventory")
+    },
+    profile: {
+      tone: notes.match(/^Tone:\s*(.+)$/im)?.[1]?.trim(),
+      rules: notes.match(/^Rules:\s*(.+)$/im)?.[1]?.split(/;+/).map(value => value.trim()).filter(Boolean) ?? [],
+      notes: setup.notes
+    },
+    features: {
+      sms: true,
+      email: true,
+      calendar: true,
+      inventory: true,
+      campaigns: setup.plan !== "Starter",
+      browserRunner: false
+    },
+    compliance: {
+      privacyPolicy: status("profile"),
+      smsConsent: status("twilio"),
+      tcpaWording: status("twilio"),
+      stopHelpLanguage: status("twilio")
+    },
+    setup: {
+      status: setup.status,
+      blockers,
+      launchChecklistStatus: buildDeployReadiness(setup).status,
+      smokeTestStatus: status("smoke")
+    }
+  };
 }
 
 function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
@@ -415,9 +606,9 @@ function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
     optional("GOOGLE_SUPPORT_MAIL_TOKEN_PATH", "Dealer Google", "Support mail token path", "Dealer-specific token file path for support mailbox access.", {
       valueHint: `${deployment.dataDir}/google_support_mail_tokens.json`
     }),
-    required("META_APP_ID", "Dealer Meta", "Meta app ID", "Meta app used for this dealer's lead/campaign integration."),
-    required("META_APP_SECRET", "Dealer Meta", "Meta app secret", "Meta app secret for OAuth callbacks.", { secret: true }),
-    required("META_REDIRECT_URI", "Dealer Meta", "Meta redirect URI", "Callback URL registered in Meta.", {
+    optional("META_APP_ID", "Dealer Meta", "Meta app ID", "Optional Meta app used only when the dealer enables Meta lead or campaign integrations."),
+    optional("META_APP_SECRET", "Dealer Meta", "Meta app secret", "Optional Meta app secret for OAuth callbacks.", { secret: true }),
+    optional("META_REDIRECT_URI", "Dealer Meta", "Meta redirect URI", "Optional callback URL registered in Meta.", {
       valueHint: `${setup.apiUrl.replace(/\/$/, "")}/integrations/meta/callback`
     }),
     optional("SENTRY_DSN", "LeadRider Ops", "Sentry DSN", "LeadRider-owned API error reporting."),
@@ -448,7 +639,8 @@ function withGeneratedFields(setup: DealerSetup): DealerSetup {
     launchChecklist: buildLaunchChecklist(normalized),
     remoteEnvChecklist: buildRemoteEnvChecklist(normalized),
     remoteEnvTemplate: buildRemoteEnvTemplate(normalized),
-    deployReadiness: buildDeployReadiness(normalized)
+    deployReadiness: buildDeployReadiness(normalized),
+    dealerConfig: buildDealerConfigStandard(normalized)
   };
 }
 
@@ -531,6 +723,7 @@ export async function updateDealerSetup(
   patch: Partial<
     Pick<
       DealerSetup,
+      | "dealerName"
       | "stage"
       | "status"
       | "owner"
@@ -559,6 +752,10 @@ export async function updateDealerSetup(
   await ensureLoaded();
   const setup = rows.find(row => row.id === id);
   if (!setup) return null;
+  if (typeof patch.dealerName === "string") {
+    const dealerName = patch.dealerName.replace(/\s+/g, " ").trim().slice(0, 160);
+    if (dealerName) setup.dealerName = dealerName;
+  }
   if (patch.stage) setup.stage = patch.stage;
   if (patch.status) setup.status = patch.status;
   for (const key of [
@@ -582,12 +779,13 @@ export async function updateDealerSetup(
     if (typeof patch[key] === "string") (setup as any)[key] = patch[key]?.trim() || undefined;
   }
   if (patch.stepId && patch.stepStatus) {
-    const step = setup.steps.find(row => row.id === patch.stepId);
+    const stepId = canonicalStepId(patch.stepId);
+    const step = setup.steps.find(row => row.id === stepId);
     if (step) {
       step.status = patch.stepStatus;
       if (typeof patch.stepNote === "string") step.note = patch.stepNote.trim().slice(0, 600) || undefined;
     } else {
-      const defaultStep = defaultSteps().find(row => row.id === patch.stepId);
+      const defaultStep = defaultSteps().find(row => row.id === stepId);
       if (defaultStep) {
         setup.steps.push({
           ...defaultStep,

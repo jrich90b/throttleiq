@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "done";
+type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "waiting_on_dealer" | "ready_to_verify" | "done";
 type DealerSetupChecklistStatus = "pending" | "working" | "blocked" | "ready" | "optional";
 
 type DealerLaunchChecklistItem = {
@@ -35,6 +35,8 @@ type DealerDeployReadiness = {
   goLiveMissing?: string[];
   warnings: string[];
 };
+
+type DealerConfigStandard = Record<string, unknown>;
 
 type DealerSetupStep = {
   id: string;
@@ -73,6 +75,7 @@ type DealerSetup = {
   remoteEnvChecklist?: DealerRemoteEnvItem[];
   remoteEnvTemplate?: string;
   deployReadiness?: DealerDeployReadiness;
+  dealerConfig?: DealerConfigStandard;
   steps: DealerSetupStep[];
   updatedAt: string;
 };
@@ -119,6 +122,55 @@ type SmokeCheck = {
   ms: number;
   error?: string;
 };
+
+type DealerRuntimePackageVerification = {
+  ok: boolean;
+  failures: string[];
+  warnings: string[];
+};
+
+type DealerRuntimePackageFile = {
+  path: string;
+  description: string;
+  content: string;
+  sha256: string;
+  mode?: number;
+};
+
+type DealerRuntimePackage = {
+  packageDir: string;
+  slug: string;
+  generatedAt: string;
+  manifest: Record<string, unknown>;
+  files: DealerRuntimePackageFile[];
+};
+
+type DealerLaunchDryRunItem = {
+  id: string;
+  label: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+  stepId?: string;
+};
+
+type DealerLaunchDryRun = {
+  status: "blocked" | "review_ready" | "deploy_dry_run_ready" | "launch_ready";
+  label: string;
+  summary: string;
+  ok: boolean;
+  canRunDeployDryRun: boolean;
+  canRequestProductionApproval: boolean;
+  canLaunch: boolean;
+  blockers: string[];
+  warnings: string[];
+  commands: {
+    deployDryRun?: string;
+    smoke: string;
+    packageVerify: string;
+  };
+  items: DealerLaunchDryRunItem[];
+};
+
 type ActiveClient = {
   id: string;
   dealerName: string;
@@ -209,6 +261,30 @@ const emptyForm: DealerSetupForm = {
   notes: ""
 };
 
+function setupToForm(setup: DealerSetup): DealerSetupForm {
+  return {
+    dealerName: setup.dealerName || "",
+    slug: setup.slug || "",
+    owner: setup.owner || "",
+    primaryContact: setup.primaryContact || "",
+    legalName: setup.legalName || "",
+    dbaName: setup.dbaName || "",
+    dealerAddress: setup.dealerAddress || "",
+    website: setup.website || "",
+    crmProvider: setup.crmProvider || "",
+    leadVolume: setup.leadVolume || "",
+    plan: setup.plan || "Growth",
+    setupFee: setup.setupFee || "",
+    monthlyFee: setup.monthlyFee || "",
+    includedUsage: setup.includedUsage || "",
+    overageTerms: setup.overageTerms || "",
+    contractTerm: setup.contractTerm || "",
+    billingStart: setup.billingStart || "",
+    generateAgreement: false,
+    notes: setup.notes || ""
+  };
+}
+
 function formatTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -218,8 +294,13 @@ function formatTime(value: string) {
 function statusClass(value: string) {
   if (value === "done" || value === "ready" || value === "live") return "is-ready";
   if (value === "blocked") return "is-blocked";
-  if (value === "in_progress") return "is-working";
+  if (value === "in_progress" || value === "waiting_on_dealer" || value === "ready_to_verify") return "is-working";
   return "";
+}
+
+function statusLabel(value: string) {
+  if (value === "pending") return "not started";
+  return value.replace(/_/g, " ");
 }
 
 function readinessClass(status?: DealerDeployReadiness["status"]) {
@@ -230,26 +311,35 @@ function readinessClass(status?: DealerDeployReadiness["status"]) {
 
 const fallbackDealerSteps: DealerSetupStep[] = [
   { id: "intake", label: "Dealer intake", status: "pending" },
-  { id: "agreement", label: "Agreement and pricing", status: "pending" },
-  { id: "vercel", label: "Vercel domains", status: "pending" },
-  { id: "dns", label: "DNS records", status: "pending" },
-  { id: "api", label: "API dealer config", status: "pending" },
-  { id: "remote_env", label: "Remote API env", status: "pending" },
-  { id: "google", label: "Google mail and calendars", status: "pending" },
-  { id: "twilio", label: "Twilio messaging", status: "pending" },
+  { id: "domains", label: "Domains and subdomains", status: "pending" },
   { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
-  { id: "meta", label: "Meta connection", status: "pending" },
-  { id: "smoke", label: "Smoke test", status: "pending" },
-  { id: "handoff", label: "Active client handoff", status: "pending" }
+  { id: "twilio", label: "Twilio SMS and compliance", status: "pending" },
+  { id: "google", label: "Google Calendar and users", status: "pending" },
+  { id: "inventory", label: "Inventory/export URL", status: "pending" },
+  { id: "crm", label: "CRM/ADF/Twilio routing", status: "pending" },
+  { id: "profile", label: "Dealer profile, tone, and features", status: "pending" },
+  { id: "remote_env", label: "Remote env checklist", status: "pending" },
+  { id: "api", label: "API tenant/runtime setup", status: "pending" },
+  { id: "vercel", label: "Vercel frontend setup", status: "pending" },
+  { id: "manual", label: "Deployment manual", status: "pending" },
+  { id: "smoke", label: "Smoke tests", status: "pending" },
+  { id: "launch_gate", label: "Launch gate", status: "pending" },
+  { id: "handoff", label: "Production launch and monitoring", status: "pending" }
 ];
 
 function mergedSetupSteps(steps: DealerSetupStep[] = []) {
+  const aliases: Record<string, string> = { dns: "domains", agreement: "intake", meta: "profile" };
   const byId = new Map(steps.map(step => [step.id, step]));
+  for (const [oldId, newId] of Object.entries(aliases)) {
+    const oldStep = byId.get(oldId);
+    if (oldStep && !byId.has(newId)) byId.set(newId, { ...oldStep, id: newId });
+  }
   const merged = fallbackDealerSteps.map(step => {
     const existing = byId.get(step.id);
     return existing ? { ...existing, label: step.label } : step;
   });
   const known = new Set(merged.map(step => step.id));
+  for (const oldId of Object.keys(aliases)) known.add(oldId);
   return merged.concat(steps.filter(step => !known.has(step.id)));
 }
 
@@ -262,9 +352,9 @@ function setupStepLabel(setup: DealerSetup, stepId: string) {
 }
 
 function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
-  const requiredDone = ["vercel", "dns", "remote_env"];
-  const requiredStarted = ["api", "google", "twilio", "sendgrid", "meta"];
-  const goLiveRequiredDone = ["intake", "agreement", ...requiredDone, ...requiredStarted, "smoke"];
+  const requiredDone = ["domains", "remote_env"];
+  const requiredStarted = ["api", "vercel", "google", "twilio", "sendgrid", "inventory", "crm", "profile", "manual"];
+  const goLiveRequiredDone = ["intake", ...requiredDone, ...requiredStarted, "smoke", "launch_gate"];
   const missing: string[] = [];
   const blockers: string[] = [];
   const goLiveMissing: string[] = [];
@@ -275,7 +365,9 @@ function buildFallbackDeployReadiness(setup: DealerSetup): DealerDeployReadiness
   }
   for (const stepId of requiredStarted) {
     const status = setupStepStatus(setup, stepId);
-    if (status !== "done" && status !== "in_progress") missing.push(setupStepLabel(setup, stepId));
+    if (status !== "done" && status !== "in_progress" && status !== "ready_to_verify" && status !== "waiting_on_dealer") {
+      missing.push(setupStepLabel(setup, stepId));
+    }
   }
   for (const stepId of goLiveRequiredDone) {
     const status = setupStepStatus(setup, stepId);
@@ -324,14 +416,12 @@ function guidedStepDescription(stepId: string) {
   switch (stepId) {
     case "intake":
       return "Confirm the dealer record has the right website, contact, legal name, plan, and billing terms.";
-    case "agreement":
-      return "Prepare the agreement only if it was not already handled in Sales Funnel.";
+    case "domains":
+      return "Prepare the web and API subdomains. DNS changes can wait while the rest of setup continues.";
     case "vercel":
-      return "Add the dealer web domain to the LeadRider web project.";
-    case "dns":
-      return "Generate the DNS records, then enter them where the dealer domain is hosted.";
+      return "Prepare the dealer frontend setup and domain checklist for Vercel.";
     case "api":
-      return "Prepare the dealer API deployment task and profile.";
+      return "Prepare the isolated API runtime paths, profile, health check, and rollback notes.";
     case "remote_env":
       return "Confirm the required server settings and secret values are in place.";
     case "google":
@@ -340,12 +430,20 @@ function guidedStepDescription(stepId: string) {
       return "Configure dealer texting, compliance, and message routing.";
     case "sendgrid":
       return "Configure the dealer email sender, domain, and inbound routing.";
-    case "meta":
-      return "Verify the Meta app, callback, permissions, and app status.";
+    case "inventory":
+      return "Capture and validate the dealer inventory feed or export URL.";
+    case "crm":
+      return "Confirm ADF source mappings and how CRM, email, and SMS route into LeadRider.";
+    case "profile":
+      return "Set the dealer's tone, policy rules, feature flags, and compliance language.";
+    case "manual":
+      return "Generate and review the dealer deployment manual from this setup record.";
     case "smoke":
       return "Check the dealer app and API before launch.";
+    case "launch_gate":
+      return "Review blockers, remote env, vendor approvals, smoke tests, rollback, and monitoring before launch.";
     case "handoff":
-      return "Move the live-ready dealer into Active Clients.";
+      return "Move the live-ready dealer into Active Clients after production launch approval.";
     default:
       return "Work the next setup item.";
   }
@@ -353,13 +451,14 @@ function guidedStepDescription(stepId: string) {
 
 function canMarkStepComplete(step: DealerSetupStep) {
   return (
-    step.status === "in_progress" &&
-    ["agreement", "dns", "api", "remote_env", "google", "twilio", "sendgrid", "meta"].includes(step.id)
+    (step.status === "in_progress" || step.status === "ready_to_verify" || step.status === "waiting_on_dealer") &&
+    ["domains", "api", "remote_env", "google", "twilio", "sendgrid", "inventory", "crm", "profile", "vercel", "manual", "launch_gate"].includes(step.id)
   );
 }
 
 export default function NewDealerClientPage() {
   const [form, setForm] = useState(emptyForm);
+  const [editForm, setEditForm] = useState<DealerSetupForm>(emptyForm);
   const [setups, setSetups] = useState<DealerSetup[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
   const [notice, setNotice] = useState("Create a dealer setup when you are ready to start onboarding.");
@@ -373,6 +472,11 @@ export default function NewDealerClientPage() {
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
   const [activeClientBusy, setActiveClientBusy] = useState(false);
   const [stepResult, setStepResult] = useState<StepRunSummary | null>(null);
+  const [runtimePackage, setRuntimePackage] = useState<DealerRuntimePackage | null>(null);
+  const [runtimePackageVerification, setRuntimePackageVerification] = useState<DealerRuntimePackageVerification | null>(null);
+  const [runtimePackageBusy, setRuntimePackageBusy] = useState(false);
+  const [launchDryRun, setLaunchDryRun] = useState<DealerLaunchDryRun | null>(null);
+  const [launchDryRunBusy, setLaunchDryRunBusy] = useState(false);
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const selectedReadiness = useMemo(() => (selected ? selected.deployReadiness ?? buildFallbackDeployReadiness(selected) : null), [selected]);
@@ -387,6 +491,8 @@ export default function NewDealerClientPage() {
       selectedSteps.find(step => step.status === "pending" && step.id !== "handoff") ??
       selectedSteps.find(step => step.status === "blocked") ??
       selectedSteps.find(step => step.status === "in_progress") ??
+      selectedSteps.find(step => step.status === "waiting_on_dealer") ??
+      selectedSteps.find(step => step.status === "ready_to_verify") ??
       selectedSteps.find(step => step.status === "pending") ??
       null
     );
@@ -408,11 +514,15 @@ export default function NewDealerClientPage() {
     }
     return [...groups.entries()];
   }, [selected?.remoteEnvChecklist]);
-  const hasTechnicalDetails = Boolean(currentApiDeployment || groupedRemoteEnv.length || vercelDomains.length || dnsRecords.length || smokeChecks.length);
+  const hasTechnicalDetails = Boolean(currentApiDeployment || groupedRemoteEnv.length || vercelDomains.length || dnsRecords.length || smokeChecks.length || runtimePackage || launchDryRun);
 
   useEffect(() => {
     setApiDeployment(selected?.apiDeployment ?? null);
-  }, [selected?.id, selected?.apiDeployment]);
+    setRuntimePackage(null);
+    setRuntimePackageVerification(null);
+    setLaunchDryRun(null);
+    if (selected) setEditForm(setupToForm(selected));
+  }, [selected]);
 
   useEffect(() => {
     let active = true;
@@ -438,6 +548,10 @@ export default function NewDealerClientPage() {
     setForm(current => ({ ...current, [field]: value }));
   }
 
+  function updateEditField(field: keyof DealerSetupForm, value: string) {
+    setEditForm(current => ({ ...current, [field]: value }));
+  }
+
   function updatePlan(value: string) {
     const defaults = planDefaults[value as PlanName];
     setForm(current => ({
@@ -452,6 +566,43 @@ export default function NewDealerClientPage() {
           }
         : {})
     }));
+  }
+
+  function updateEditPlan(value: string) {
+    const defaults = planDefaults[value as PlanName];
+    setEditForm(current => ({
+      ...current,
+      plan: value,
+      ...(defaults && !current.monthlyFee && !current.setupFee
+        ? {
+            setupFee: defaults.setupFee,
+            monthlyFee: defaults.monthlyFee,
+            includedUsage: defaults.includedUsage,
+            overageTerms: defaults.overageTerms
+          }
+        : {})
+    }));
+  }
+
+  async function saveSelectedSetup() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editForm)
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer setup could not be saved.");
+      setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      setEditForm(setupToForm(data.setup));
+      setNotice(`${data.setup.dealerName} setup details saved.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Dealer setup could not be saved.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createSetup() {
@@ -547,12 +698,10 @@ export default function NewDealerClientPage() {
     switch (step.id) {
       case "intake":
         return "Mark intake complete";
-      case "agreement":
-        return "Start agreement";
       case "vercel":
-        return "Add web domain";
-      case "dns":
-        return "Prepare DNS";
+        return "Prepare Vercel";
+      case "domains":
+        return "Prepare domains";
       case "api":
         return "Prepare API";
       case "remote_env":
@@ -561,14 +710,22 @@ export default function NewDealerClientPage() {
         return "Start Google setup";
       case "sendgrid":
         return "Start SendGrid setup";
-      case "meta":
-        return "Start Meta setup";
       case "twilio":
         return "Start texting setup";
+      case "inventory":
+        return "Prepare inventory";
+      case "crm":
+        return "Prepare routing";
+      case "profile":
+        return "Generate config";
+      case "manual":
+        return "Generate manual";
       case "smoke":
         return "Run smoke test";
+      case "launch_gate":
+        return "Review gate";
       case "handoff":
-        return "Send to Active Clients";
+        return "Launch and monitor";
       default:
         return "Start step";
     }
@@ -744,6 +901,86 @@ export default function NewDealerClientPage() {
     }
   }
 
+  async function copyDealerConfig() {
+    if (!selected?.dealerConfig) return;
+    try {
+      await navigator.clipboard.writeText(`${JSON.stringify(selected.dealerConfig, null, 2)}\n`);
+      setNotice("Dealer config JSON copied.");
+    } catch {
+      setNotice("Could not copy the dealer config from this browser.");
+    }
+  }
+
+  async function generateRuntimePackage() {
+    if (!selected) return;
+    setRuntimePackageBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/runtime-package`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.package) throw new Error(data?.error || "Runtime config package could not be generated.");
+      setRuntimePackage(data.package);
+      setRuntimePackageVerification(data.verification ?? null);
+      const failures = Array.isArray(data.verification?.failures) ? data.verification.failures.length : 0;
+      const warnings = Array.isArray(data.verification?.warnings) ? data.verification.warnings.length : 0;
+      setNotice(failures ? "Runtime package generated, but verification found blockers." : warnings ? "Runtime package generated for review. It is not a launch approval yet." : "Runtime package generated and verified.");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Runtime config package could not be generated.");
+    } finally {
+      setRuntimePackageBusy(false);
+    }
+  }
+
+  async function copyRuntimeManifest() {
+    if (!runtimePackage?.manifest) return;
+    try {
+      await navigator.clipboard.writeText(`${JSON.stringify(runtimePackage.manifest, null, 2)}\n`);
+      setNotice("Runtime package manifest copied.");
+    } catch {
+      setNotice("Could not copy the runtime package manifest from this browser.");
+    }
+  }
+
+  function downloadRuntimePackage() {
+    if (!runtimePackage) return;
+    const filename = `${runtimePackage.slug || selected?.slug || "dealer"}-runtime-config-package.json`;
+    const blob = new Blob([`${JSON.stringify(runtimePackage, null, 2)}\n`], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setNotice("Runtime config package downloaded as JSON.");
+  }
+
+  async function runLaunchDryRun() {
+    if (!selected) return;
+    setLaunchDryRunBusy(true);
+    try {
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/launch-dry-run`, { method: "POST" });
+      const data = await resp.json();
+      if (!resp.ok || !data?.dryRun) throw new Error(data?.error || "Launch dry-run could not be completed.");
+      setLaunchDryRun(data.dryRun);
+      setNotice(data.dryRun.canLaunch ? "Launch dry-run is clear. Production launch still needs explicit approval." : data.dryRun.summary);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Launch dry-run could not be completed.");
+    } finally {
+      setLaunchDryRunBusy(false);
+    }
+  }
+
+  async function copyLaunchDryRun() {
+    if (!launchDryRun) return;
+    try {
+      await navigator.clipboard.writeText(`${JSON.stringify(launchDryRun, null, 2)}\n`);
+      setNotice("Launch dry-run report copied.");
+    } catch {
+      setNotice("Could not copy the launch dry-run report from this browser.");
+    }
+  }
+
   async function runSmokeTest() {
     if (!selected) return;
     setActionBusy(true);
@@ -865,9 +1102,15 @@ export default function NewDealerClientPage() {
               <p>{guidedStepDescription(currentStep.id)}</p>
             </div>
             <div className="lr-ceo-guided-actions">
-              <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{currentStep.status.replace(/_/g, " ")}</span>
+              <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{statusLabel(currentStep.status)}</span>
               <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || activeClientBusy}>
                 {guidedStepButtonLabel(currentStep)}
+              </button>
+              <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "waiting_on_dealer")} disabled={busy}>
+                Waiting on dealer
+              </button>
+              <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "ready_to_verify")} disabled={busy}>
+                Ready to verify
               </button>
               <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "blocked")} disabled={busy}>
                 Mark blocked
@@ -1012,15 +1255,106 @@ export default function NewDealerClientPage() {
                   <div>
                     <p className="lr-ceo-kicker">Deployment manual</p>
                     <h3>{selected.dealerName} runbook</h3>
-                    <p>Open the current start-to-finish deployment manual generated from this setup record.</p>
+                    <p>Preview, print, or download the current deployment manual generated from this setup record.</p>
                   </div>
                   <div>
                     <a className="lr-ceo-secondary-btn" href={`${manualBaseHref}?format=html`} target="_blank" rel="noreferrer">
-                      Open manual
+                      Preview / print
                     </a>
                     <a className="lr-ceo-secondary-btn" href={`${manualBaseHref}?format=markdown&download=1`}>
                       Download
                     </a>
+                  </div>
+                </section>
+                <section className="lr-ceo-edit-card">
+                  <div className="lr-ceo-panel-title">
+                    <div>
+                      <p className="lr-ceo-kicker">Dealer record</p>
+                      <h3>Setup details</h3>
+                    </div>
+                    <button type="button" onClick={saveSelectedSetup} disabled={busy}>
+                      Save details
+                    </button>
+                  </div>
+                  <div className="lr-ceo-form-stack">
+                    <label>
+                      Dealer name
+                      <input value={editForm.dealerName} onChange={event => updateEditField("dealerName", event.target.value)} />
+                    </label>
+                    <label>
+                      Subdomain slug
+                      <input value={editForm.slug} disabled />
+                      <span className="lr-ceo-field-note">Create a new setup if the slug needs to change.</span>
+                    </label>
+                    <label>
+                      Owner
+                      <input value={editForm.owner} onChange={event => updateEditField("owner", event.target.value)} />
+                    </label>
+                    <label>
+                      Primary contact
+                      <input value={editForm.primaryContact} onChange={event => updateEditField("primaryContact", event.target.value)} placeholder="Name, email, phone" />
+                    </label>
+                    <label>
+                      Legal name
+                      <input value={editForm.legalName} onChange={event => updateEditField("legalName", event.target.value)} />
+                    </label>
+                    <label>
+                      DBA name
+                      <input value={editForm.dbaName} onChange={event => updateEditField("dbaName", event.target.value)} />
+                    </label>
+                    <label>
+                      Dealer address
+                      <textarea value={editForm.dealerAddress} onChange={event => updateEditField("dealerAddress", event.target.value)} />
+                    </label>
+                    <label>
+                      Dealer website
+                      <input value={editForm.website} onChange={event => updateEditField("website", event.target.value)} placeholder="https://..." />
+                    </label>
+                    <label>
+                      CRM / source mappings
+                      <input value={editForm.crmProvider} onChange={event => updateEditField("crmProvider", event.target.value)} placeholder="Traffic Log Pro, ADF, website form..." />
+                    </label>
+                    <label>
+                      Lead volume
+                      <input value={editForm.leadVolume} onChange={event => updateEditField("leadVolume", event.target.value)} />
+                    </label>
+                    <label>
+                      Plan
+                      <select value={editForm.plan} onChange={event => updateEditPlan(event.target.value)}>
+                        <option>Starter</option>
+                        <option>Growth</option>
+                        <option>Pro</option>
+                        <option>Enterprise</option>
+                      </select>
+                    </label>
+                    <label>
+                      Setup fee
+                      <input value={editForm.setupFee} onChange={event => updateEditField("setupFee", event.target.value)} />
+                    </label>
+                    <label>
+                      Monthly fee
+                      <input value={editForm.monthlyFee} onChange={event => updateEditField("monthlyFee", event.target.value)} />
+                    </label>
+                    <label>
+                      Included usage
+                      <input value={editForm.includedUsage} onChange={event => updateEditField("includedUsage", event.target.value)} />
+                    </label>
+                    <label>
+                      Overage terms
+                      <input value={editForm.overageTerms} onChange={event => updateEditField("overageTerms", event.target.value)} />
+                    </label>
+                    <label>
+                      Contract term
+                      <input value={editForm.contractTerm} onChange={event => updateEditField("contractTerm", event.target.value)} />
+                    </label>
+                    <label>
+                      Billing start
+                      <input value={editForm.billingStart} onChange={event => updateEditField("billingStart", event.target.value)} />
+                    </label>
+                    <label>
+                      Profile, tone, rules, inventory URL, blockers
+                      <textarea value={editForm.notes} onChange={event => updateEditField("notes", event.target.value)} placeholder={"Inventory/export URL: https://...\nTone: warm, direct, sales-helpful\nRules: no price guessing; manager verifies availability"} />
+                    </label>
                   </div>
                 </section>
                 <div className="lr-ceo-progress">
@@ -1047,10 +1381,41 @@ export default function NewDealerClientPage() {
                     ) : null}
                   </section>
                 ) : null}
+                {selectedReadiness?.canDeployApi ? (
+                  <section className="lr-ceo-deployment-gate">
+                    <div>
+                      <p className="lr-ceo-kicker">Deployment gate</p>
+                      <h3>{selectedReadiness.canPushToActiveClient ? "Ready for launch approval" : "Ready to test deployment"}</h3>
+                      <p>{selectedReadiness.canPushToActiveClient ? "Smoke tests and launch checklist are clear. Production launch still requires human approval." : "Core runtime setup is ready enough for deploy testing. Run smoke tests before launch."}</p>
+                    </div>
+                    <button type="button" onClick={runSmokeTest} disabled={actionBusy}>
+                      Run smoke test
+                    </button>
+                  </section>
+                ) : null}
+                {selected.launchChecklist?.length ? (
+                  <section className="lr-ceo-launch-card">
+                    <div className="lr-ceo-panel-title">
+                      <div>
+                        <p className="lr-ceo-kicker">Launch checklist</p>
+                        <h3>Go-live requirements</h3>
+                      </div>
+                    </div>
+                    <div className="lr-ceo-launch-grid">
+                      {selected.launchChecklist.map(item => (
+                        <div key={item.id} className={`lr-ceo-launch-item is-${item.status}`}>
+                          <span>{statusLabel(item.status)}</span>
+                          <strong>{item.label}</strong>
+                          <small>{item.detail}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
                 <div className="lr-ceo-setup-steps">
                   {selectedSteps.map(step => (
                     <div key={step.id} className={`lr-ceo-setup-step ${currentStep?.id === step.id ? "is-current" : ""}`}>
-                      <span className={statusClass(step.status)}>{step.status.replace(/_/g, " ")}</span>
+                      <span className={statusClass(step.status)}>{statusLabel(step.status)}</span>
                       <div>
                         <strong>{step.label}</strong>
                       </div>
@@ -1061,6 +1426,50 @@ export default function NewDealerClientPage() {
                 {hasTechnicalDetails ? (
                   <details className="lr-ceo-technical-details">
                     <summary>Technical details</summary>
+                    <div className="lr-ceo-action-row">
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
+                        Setup review
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("stack")} disabled={taskBusy}>
+                        Stack task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("api")} disabled={taskBusy}>
+                        API task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("vercel")} disabled={taskBusy}>
+                        Vercel task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("providers")} disabled={taskBusy}>
+                        Provider task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("texting")} disabled={taskBusy}>
+                        Texting task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
+                        Agreement task
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
+                        Check Vercel
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={addVercelDomains} disabled={vercelBusy}>
+                        Add Vercel domain
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
+                        DNS records
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateApiDeployProfile} disabled={actionBusy}>
+                        API profile
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateRuntimePackage} disabled={runtimePackageBusy}>
+                        Runtime package
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={runLaunchDryRun} disabled={launchDryRunBusy}>
+                        Launch dry-run
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={pushToActiveClient} disabled={activeClientBusy || !selectedReadiness?.canPushToActiveClient}>
+                        Active Clients
+                      </button>
+                    </div>
                     {vercelDomains.length ? (
                       <div className="lr-ceo-vercel-status">
                         {vercelDomains.map(domain => (
@@ -1091,6 +1500,86 @@ export default function NewDealerClientPage() {
                         ))}
                       </div>
                     ) : null}
+                    {runtimePackage ? (
+                      <section className="lr-ceo-runtime-package">
+                        <div className="lr-ceo-panel-title">
+                          <div>
+                            <p className="lr-ceo-kicker">Runtime package</p>
+                            <h3>{runtimePackage.slug}</h3>
+                            <small>{runtimePackage.files.length} files generated. Review-only until launch is approved.</small>
+                          </div>
+                          <div className="lr-ceo-action-row">
+                            <button type="button" className="lr-ceo-secondary-btn" onClick={copyRuntimeManifest}>
+                              Copy manifest
+                            </button>
+                            <button type="button" className="lr-ceo-secondary-btn" onClick={downloadRuntimePackage}>
+                              Download JSON
+                            </button>
+                          </div>
+                        </div>
+                        {runtimePackageVerification ? (
+                          <div className="lr-ceo-vercel-status">
+                            <span className={runtimePackageVerification.ok ? "is-ready" : "is-blocked"}>
+                              Verification: {runtimePackageVerification.ok ? "passed" : "blocked"}
+                            </span>
+                            {runtimePackageVerification.warnings.map(item => (
+                              <span key={item} className="is-working">{item}</span>
+                            ))}
+                            {runtimePackageVerification.failures.map(item => (
+                              <span key={item} className="is-blocked">{item}</span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="lr-ceo-package-files">
+                          {runtimePackage.files.map(file => (
+                            <div key={file.path}>
+                              <strong>{file.path}</strong>
+                              <small>{file.description}</small>
+                              <code>{file.sha256.slice(0, 12)}</code>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
+                    {launchDryRun ? (
+                      <section className={`lr-ceo-launch-dry-run is-${launchDryRun.status}`}>
+                        <div className="lr-ceo-panel-title">
+                          <div>
+                            <p className="lr-ceo-kicker">Launch dry-run</p>
+                            <h3>{launchDryRun.label}</h3>
+                            <small>{launchDryRun.summary}</small>
+                          </div>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={copyLaunchDryRun}>
+                            Copy report
+                          </button>
+                        </div>
+                        <div className="lr-ceo-vercel-status">
+                          <span className={launchDryRun.canRunDeployDryRun ? "is-ready" : "is-blocked"}>
+                            Deploy dry-run: {launchDryRun.canRunDeployDryRun ? "available" : "blocked"}
+                          </span>
+                          <span className={launchDryRun.canRequestProductionApproval ? "is-ready" : "is-blocked"}>
+                            Production approval: {launchDryRun.canRequestProductionApproval ? "ready to request" : "not ready"}
+                          </span>
+                          <span className={launchDryRun.canLaunch ? "is-ready" : "is-working"}>
+                            Launch: {launchDryRun.canLaunch ? "ready after approval" : "waiting"}
+                          </span>
+                        </div>
+                        <div className="lr-ceo-package-files">
+                          {launchDryRun.items.map(item => (
+                            <div key={item.id} className={`is-${item.status}`}>
+                              <strong>{item.label}</strong>
+                              <small>{item.detail}</small>
+                              <code>{item.status}</code>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="lr-ceo-dry-run-commands">
+                          {launchDryRun.commands.deployDryRun ? <code>{launchDryRun.commands.deployDryRun}</code> : null}
+                          <code>{launchDryRun.commands.packageVerify}</code>
+                          <code>{launchDryRun.commands.smoke}</code>
+                        </div>
+                      </section>
+                    ) : null}
                     {currentApiDeployment ? (
                       <div className="lr-ceo-dns-records">
                         <div>
@@ -1118,6 +1607,17 @@ export default function NewDealerClientPage() {
                           <pre>{currentApiDeployment.profileText}</pre>
                           <button type="button" className="lr-ceo-secondary-btn" onClick={copyApiDeployProfile}>
                             Copy profile
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {selected.dealerConfig ? (
+                      <div className="lr-ceo-dns-records">
+                        <div className="lr-ceo-deploy-profile">
+                          <span>Config</span>
+                          <pre>{JSON.stringify(selected.dealerConfig, null, 2)}</pre>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={copyDealerConfig}>
+                            Copy config
                           </button>
                         </div>
                       </div>

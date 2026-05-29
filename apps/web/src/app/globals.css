@@ -1433,6 +1433,12 @@ a {
   color: #b9f6c0;
 }
 
+.lr-ceo-status-pill.is-ready::before,
+.lr-ceo-setup-step > span.is-ready::before {
+  content: "✓";
+  margin-right: 0.28rem;
+}
+
 .lr-ceo-status-pill.is-working {
   border-color: rgba(251, 127, 4, 0.34);
   background: rgba(251, 127, 4, 0.16);
@@ -1475,6 +1481,8 @@ a {
 }
 
 .lr-ceo-launch-card,
+.lr-ceo-deployment-gate,
+.lr-ceo-edit-card,
 .lr-ceo-readiness-card,
 .lr-ceo-env-card,
 .lr-ceo-manual-card {
@@ -1515,9 +1523,46 @@ a {
   text-decoration: none;
 }
 
+.lr-ceo-edit-card {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.lr-ceo-edit-card .lr-ceo-form-stack {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lr-ceo-edit-card .lr-ceo-form-stack label:last-child {
+  grid-column: 1 / -1;
+}
+
+.lr-ceo-edit-card input:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .lr-ceo-readiness-card {
   display: grid;
   gap: 0.9rem;
+}
+
+.lr-ceo-deployment-gate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  border-color: rgba(116, 214, 128, 0.28);
+  background: rgba(116, 214, 128, 0.07);
+}
+
+.lr-ceo-deployment-gate h3,
+.lr-ceo-deployment-gate p {
+  margin: 0;
+}
+
+.lr-ceo-deployment-gate p {
+  color: #bfd0e7;
+  line-height: 1.45;
 }
 
 .lr-ceo-readiness-card.is-ready {
@@ -1901,10 +1946,110 @@ a {
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.lr-ceo-technical-details > .lr-ceo-action-row,
 .lr-ceo-technical-details > .lr-ceo-vercel-status,
 .lr-ceo-technical-details > .lr-ceo-dns-records,
+.lr-ceo-technical-details > .lr-ceo-runtime-package,
+.lr-ceo-technical-details > .lr-ceo-launch-dry-run,
 .lr-ceo-technical-details > .lr-ceo-env-card {
   margin: 0.85rem 0.9rem 0;
+}
+
+.lr-ceo-runtime-package,
+.lr-ceo-launch-dry-run {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 0.95rem;
+  background: rgba(15, 23, 42, 0.44);
+}
+
+.lr-ceo-launch-dry-run.is-blocked {
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.lr-ceo-launch-dry-run.is-deploy_dry_run_ready,
+.lr-ceo-launch-dry-run.is-launch_ready {
+  border-color: rgba(34, 197, 94, 0.32);
+}
+
+.lr-ceo-runtime-package .lr-ceo-panel-title,
+.lr-ceo-launch-dry-run .lr-ceo-panel-title {
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.lr-ceo-runtime-package .lr-ceo-action-row,
+.lr-ceo-launch-dry-run .lr-ceo-action-row {
+  justify-content: flex-end;
+}
+
+.lr-ceo-package-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.lr-ceo-package-files div {
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  padding: 0.7rem;
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.lr-ceo-package-files div.is-pass {
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.lr-ceo-package-files div.is-warn {
+  border-color: rgba(251, 191, 36, 0.28);
+}
+
+.lr-ceo-package-files div.is-fail {
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.lr-ceo-package-files strong,
+.lr-ceo-package-files small,
+.lr-ceo-package-files code {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lr-ceo-package-files strong {
+  color: #f8fafc;
+  font-size: 0.82rem;
+}
+
+.lr-ceo-package-files small {
+  margin-top: 0.25rem;
+  color: #94a3b8;
+  font-size: 0.76rem;
+}
+
+.lr-ceo-package-files code {
+  margin-top: 0.45rem;
+  color: #ffca92;
+  font-size: 0.72rem;
+}
+
+.lr-ceo-dry-run-commands {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+}
+
+.lr-ceo-dry-run-commands code {
+  display: block;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.55);
+  color: #d9e4f5;
+  overflow-wrap: anywhere;
 }
 
 .lr-ceo-deploy-profile pre {
