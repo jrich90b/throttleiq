@@ -176,6 +176,17 @@ type ActiveClient = {
   dealerName: string;
 };
 
+type DealerActivationResult = {
+  message?: string;
+  client?: ActiveClient;
+  checks?: SmokeCheck[];
+  dryRun?: DealerLaunchDryRun;
+  activation?: {
+    automated?: string[];
+    manualApprovalStillRequired?: string[];
+  };
+};
+
 type StepRunSummary = {
   message: string;
   nextStep?: string;
@@ -187,6 +198,8 @@ type StepRunSummary = {
   };
   blocked?: boolean;
 };
+
+type AgentTaskKind = "codex" | "agreement" | "vercel" | "stack" | "api" | "providers" | "texting";
 
 const planDefaults = {
   Starter: {
@@ -300,6 +313,7 @@ function statusClass(value: string) {
 
 function statusLabel(value: string) {
   if (value === "pending") return "not started";
+  if (value === "done") return "complete";
   return value.replace(/_/g, " ");
 }
 
@@ -311,14 +325,14 @@ function readinessClass(status?: DealerDeployReadiness["status"]) {
 
 const fallbackDealerSteps: DealerSetupStep[] = [
   { id: "intake", label: "Dealer intake", status: "pending" },
-  { id: "domains", label: "Domains and subdomains", status: "pending" },
+  { id: "domains", label: "Website and API domains", status: "pending" },
   { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
   { id: "twilio", label: "Twilio SMS and compliance", status: "pending" },
   { id: "google", label: "Google Calendar and users", status: "pending" },
   { id: "inventory", label: "Inventory/export URL", status: "pending" },
   { id: "crm", label: "CRM/ADF/Twilio routing", status: "pending" },
   { id: "profile", label: "Dealer profile, tone, and features", status: "pending" },
-  { id: "remote_env", label: "Remote env checklist", status: "pending" },
+  { id: "remote_env", label: "Server settings checklist", status: "pending" },
   { id: "api", label: "API tenant/runtime setup", status: "pending" },
   { id: "vercel", label: "Vercel frontend setup", status: "pending" },
   { id: "manual", label: "Deployment manual", status: "pending" },
@@ -417,13 +431,13 @@ function guidedStepDescription(stepId: string) {
     case "intake":
       return "Confirm the dealer record has the right website, contact, legal name, plan, and billing terms.";
     case "domains":
-      return "Prepare the web and API subdomains. DNS changes can wait while the rest of setup continues.";
+      return "Prepare the web and API domain checklist. DNS changes can wait while the rest of setup continues.";
     case "vercel":
-      return "Prepare the dealer frontend setup and domain checklist for Vercel.";
+      return "Prepare the dealer website setup and domain checklist.";
     case "api":
       return "Prepare the isolated API runtime paths, profile, health check, and rollback notes.";
     case "remote_env":
-      return "Confirm the required server settings and secret values are in place.";
+      return "Confirm the required server settings and secret values are ready.";
     case "google":
       return "Connect dealer Gmail, support mail, and calendars.";
     case "twilio":
@@ -437,7 +451,7 @@ function guidedStepDescription(stepId: string) {
     case "profile":
       return "Set the dealer's tone, policy rules, feature flags, and compliance language.";
     case "manual":
-      return "Generate and review the dealer deployment manual from this setup record.";
+      return "Review the dealer deployment manual generated from this setup record.";
     case "smoke":
       return "Check the dealer app and API before launch.";
     case "launch_gate":
@@ -470,13 +484,16 @@ export default function NewDealerClientPage() {
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
   const [apiDeployment, setApiDeployment] = useState<DealerApiDeployment | null>(null);
   const [smokeChecks, setSmokeChecks] = useState<SmokeCheck[]>([]);
-  const [activeClientBusy, setActiveClientBusy] = useState(false);
   const [stepResult, setStepResult] = useState<StepRunSummary | null>(null);
   const [runtimePackage, setRuntimePackage] = useState<DealerRuntimePackage | null>(null);
   const [runtimePackageVerification, setRuntimePackageVerification] = useState<DealerRuntimePackageVerification | null>(null);
   const [runtimePackageBusy, setRuntimePackageBusy] = useState(false);
   const [launchDryRun, setLaunchDryRun] = useState<DealerLaunchDryRun | null>(null);
   const [launchDryRunBusy, setLaunchDryRunBusy] = useState(false);
+  const [setupTaskKind, setSetupTaskKind] = useState<AgentTaskKind>("codex");
+  const [activateConfirmOpen, setActivateConfirmOpen] = useState(false);
+  const [activateBusy, setActivateBusy] = useState(false);
+  const [activationResult, setActivationResult] = useState<DealerActivationResult | null>(null);
 
   const selected = useMemo(() => setups.find(setup => setup.id === selectedId) ?? setups[0] ?? null, [selectedId, setups]);
   const selectedReadiness = useMemo(() => (selected ? selected.deployReadiness ?? buildFallbackDeployReadiness(selected) : null), [selected]);
@@ -515,12 +532,15 @@ export default function NewDealerClientPage() {
     return [...groups.entries()];
   }, [selected?.remoteEnvChecklist]);
   const hasTechnicalDetails = Boolean(currentApiDeployment || groupedRemoteEnv.length || vercelDomains.length || dnsRecords.length || smokeChecks.length || runtimePackage || launchDryRun);
+  const cleanLaunchCheck = Boolean(launchDryRun?.canLaunch);
 
   useEffect(() => {
     setApiDeployment(selected?.apiDeployment ?? null);
     setRuntimePackage(null);
     setRuntimePackageVerification(null);
     setLaunchDryRun(null);
+    setActivateConfirmOpen(false);
+    setActivationResult(null);
     if (selected) setEditForm(setupToForm(selected));
   }, [selected]);
 
@@ -699,11 +719,11 @@ export default function NewDealerClientPage() {
       case "intake":
         return "Mark intake complete";
       case "vercel":
-        return "Prepare Vercel";
+        return "Prepare website";
       case "domains":
         return "Prepare domains";
       case "api":
-        return "Prepare API";
+        return "Prepare API server";
       case "remote_env":
         return "Prepare server settings";
       case "google":
@@ -719,11 +739,11 @@ export default function NewDealerClientPage() {
       case "profile":
         return "Generate config";
       case "manual":
-        return "Generate manual";
+        return "Review manual";
       case "smoke":
         return "Run smoke test";
       case "launch_gate":
-        return "Review gate";
+        return "Review launch gate";
       case "handoff":
         return "Launch and monitor";
       default:
@@ -768,7 +788,7 @@ export default function NewDealerClientPage() {
     }
   }
 
-  async function createSetupTask(kind: "codex" | "agreement" | "vercel" | "stack" | "api" | "providers" | "texting") {
+  async function createSetupTask(kind: AgentTaskKind) {
     if (!selected) return;
     setTaskBusy(true);
     const instructions =
@@ -803,14 +823,14 @@ export default function NewDealerClientPage() {
               "Do not overwrite existing clients or shared American Harley paths."
             ].join("\n")
         : kind === "providers"
-          ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Meta app/callback, Sentry, Linear, Slack, and OpenAI usage logging. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
+          ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Sentry, Linear, Slack, OpenAI usage logging, and Meta only if that feature is enabled. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
         : kind === "texting"
           ? `Create the texting setup plan for ${selected.dealerName}. Cover Twilio number selection or porting, A2P/10DLC brand/campaign registration, opt-in and STOP/HELP compliance language, inbound/outbound routing, salesperson ownership, support escalation, campaign safeguards, and smoke tests. Separate what Codex can prepare from anything requiring human login, billing, consent, carrier verification, or credentials.`
         : kind === "stack"
-          ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, Meta app/callback, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
+          ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, optional Meta app/callback if enabled, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
         : kind === "vercel"
           ? `Prepare Vercel deployment steps for ${selected.dealerName}. Target app URL: ${selected.appUrl}. Target API URL: ${selected.apiUrl}. List required Vercel project/domain/env changes and DNS records. Do not make external changes without approval.`
-          : `Run dealer setup review for ${selected.dealerName}. Check onboarding blockers across Vercel, DNS, API dealer config, Google, Twilio, SendGrid, Meta, agreement, and smoke testing. Return the next action list.`;
+          : `Run dealer setup review for ${selected.dealerName}. Check onboarding blockers across Vercel, DNS, API dealer config, Google, Twilio, SendGrid, optional Meta only if enabled, agreement, and smoke testing. Return the next action list.`;
     try {
       const resp = await fetch("/api/agent-tasks", {
         method: "POST",
@@ -895,9 +915,9 @@ export default function NewDealerClientPage() {
     if (!selected?.remoteEnvTemplate) return;
     try {
       await navigator.clipboard.writeText(selected.remoteEnvTemplate);
-      setNotice("Remote API env template copied. Fill secret values only on the server.");
+      setNotice("Server settings template copied. Fill secret values only on the server.");
     } catch {
-      setNotice("Could not copy the remote API env template from this browser.");
+      setNotice("Could not copy the server settings template from this browser.");
     }
   }
 
@@ -917,14 +937,14 @@ export default function NewDealerClientPage() {
     try {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/runtime-package`, { method: "POST" });
       const data = await resp.json();
-      if (!resp.ok || !data?.package) throw new Error(data?.error || "Runtime config package could not be generated.");
+      if (!resp.ok || !data?.package) throw new Error(data?.error || "Launch packet could not be generated.");
       setRuntimePackage(data.package);
       setRuntimePackageVerification(data.verification ?? null);
       const failures = Array.isArray(data.verification?.failures) ? data.verification.failures.length : 0;
       const warnings = Array.isArray(data.verification?.warnings) ? data.verification.warnings.length : 0;
-      setNotice(failures ? "Runtime package generated, but verification found blockers." : warnings ? "Runtime package generated for review. It is not a launch approval yet." : "Runtime package generated and verified.");
+      setNotice(failures ? "Launch packet generated, but verification found blockers." : warnings ? "Launch packet generated for review. It is not a launch approval yet." : "Launch packet generated and verified.");
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Runtime config package could not be generated.");
+      setNotice(err instanceof Error ? err.message : "Launch packet could not be generated.");
     } finally {
       setRuntimePackageBusy(false);
     }
@@ -934,9 +954,9 @@ export default function NewDealerClientPage() {
     if (!runtimePackage?.manifest) return;
     try {
       await navigator.clipboard.writeText(`${JSON.stringify(runtimePackage.manifest, null, 2)}\n`);
-      setNotice("Runtime package manifest copied.");
+      setNotice("Launch packet manifest copied.");
     } catch {
-      setNotice("Could not copy the runtime package manifest from this browser.");
+      setNotice("Could not copy the launch packet manifest from this browser.");
     }
   }
 
@@ -952,7 +972,7 @@ export default function NewDealerClientPage() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    setNotice("Runtime config package downloaded as JSON.");
+    setNotice("Launch packet downloaded as JSON.");
   }
 
   async function runLaunchDryRun() {
@@ -961,11 +981,11 @@ export default function NewDealerClientPage() {
     try {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/launch-dry-run`, { method: "POST" });
       const data = await resp.json();
-      if (!resp.ok || !data?.dryRun) throw new Error(data?.error || "Launch dry-run could not be completed.");
+      if (!resp.ok || !data?.dryRun) throw new Error(data?.error || "Launch check could not be completed.");
       setLaunchDryRun(data.dryRun);
-      setNotice(data.dryRun.canLaunch ? "Launch dry-run is clear. Production launch still needs explicit approval." : data.dryRun.summary);
+      setNotice(data.dryRun.canLaunch ? "Launch check is clear. Production launch still needs explicit approval." : data.dryRun.summary);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Launch dry-run could not be completed.");
+      setNotice(err instanceof Error ? err.message : "Launch check could not be completed.");
     } finally {
       setLaunchDryRunBusy(false);
     }
@@ -975,14 +995,14 @@ export default function NewDealerClientPage() {
     if (!launchDryRun) return;
     try {
       await navigator.clipboard.writeText(`${JSON.stringify(launchDryRun, null, 2)}\n`);
-      setNotice("Launch dry-run report copied.");
+      setNotice("Launch check report copied.");
     } catch {
-      setNotice("Could not copy the launch dry-run report from this browser.");
+      setNotice("Could not copy the launch check report from this browser.");
     }
   }
 
-  async function runSmokeTest() {
-    if (!selected) return;
+  async function runSmokeTest(): Promise<boolean> {
+    if (!selected) return false;
     setActionBusy(true);
     try {
       const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/smoke-test`, { method: "POST" });
@@ -991,32 +1011,37 @@ export default function NewDealerClientPage() {
       setSmokeChecks(Array.isArray(data.checks) ? data.checks : []);
       if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
       setNotice(data.passed ? "Launch smoke test passed." : "Launch smoke test found a blocker.");
+      return Boolean(data.passed);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Smoke test could not be run.");
+      return false;
     } finally {
       setActionBusy(false);
     }
   }
 
-  async function pushToActiveClient(): Promise<boolean> {
-    if (!selected) return false;
-    if (!selectedReadiness?.canPushToActiveClient) {
-      setNotice(selectedReadiness?.summary || "Setup is not live-ready yet.");
-      return false;
+  async function activateDealer() {
+    if (!selected) return;
+    if (!cleanLaunchCheck) {
+      setNotice("Run a clean launch check before activating this dealer.");
+      return;
     }
-    setActiveClientBusy(true);
+    setActivateBusy(true);
+    setActivationResult(null);
     try {
-      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/active-client`, { method: "POST" });
+      const resp = await fetch(`/api/dealer-setups/${encodeURIComponent(selected.id)}/activate`, { method: "POST" });
       const data = await resp.json();
-      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Active client could not be created.");
-      const client = data.client as ActiveClient;
-      setNotice(`${client.dealerName} is ready in Active Clients with setup, agreement, contact, and billing fields prefilled.`);
-      return true;
+      if (Array.isArray(data?.checks)) setSmokeChecks(data.checks);
+      if (data?.dryRun) setLaunchDryRun(data.dryRun);
+      if (data?.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Dealer could not be activated.");
+      setActivationResult(data);
+      setActivateConfirmOpen(false);
+      setNotice(data.message || `${data.client?.dealerName || selected.dealerName} activated.`);
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Active client could not be created.");
-      return false;
+      setNotice(err instanceof Error ? err.message : "Dealer could not be activated.");
     } finally {
-      setActiveClientBusy(false);
+      setActivateBusy(false);
     }
   }
 
@@ -1072,9 +1097,9 @@ export default function NewDealerClientPage() {
           <a href="/command/clients">Active Clients</a>
           <a href="/command/clients/new" className="is-active">Dealer Setup</a>
           <a href="/command/users">Users</a>
-          <a href="/command">Agreements</a>
-          <a href="/command">Billing</a>
-          <a href="/command">Connectors</a>
+          <span className="lr-ceo-nav-disabled">Agreements <small>Coming soon</small></span>
+          <span className="lr-ceo-nav-disabled">Billing <small>Coming soon</small></span>
+          <span className="lr-ceo-nav-disabled">Connectors <small>Coming soon</small></span>
         </nav>
         <section className="lr-ceo-side-panel">
           <p className="lr-ceo-kicker">Dealer setup</p>
@@ -1103,7 +1128,7 @@ export default function NewDealerClientPage() {
             </div>
             <div className="lr-ceo-guided-actions">
               <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{statusLabel(currentStep.status)}</span>
-              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || activeClientBusy}>
+              <button type="button" onClick={runGuidedStep} disabled={busy || taskBusy || actionBusy || vercelBusy || activateBusy}>
                 {guidedStepButtonLabel(currentStep)}
               </button>
               <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(currentStep.id, "waiting_on_dealer")} disabled={busy}>
@@ -1225,11 +1250,11 @@ export default function NewDealerClientPage() {
                   checked={form.generateAgreement}
                   onChange={event => setForm(current => ({ ...current, generateAgreement: event.target.checked }))}
                 />
-                Generate agreement draft on create
+                Create agreement draft task on create
               </label>
               <label>
-                Notes
-                <textarea value={form.notes} onChange={event => updateField("notes", event.target.value)} placeholder="Special routing, owners, calendar notes, pricing assumptions..." />
+                Setup notes
+                <textarea value={form.notes} onChange={event => updateField("notes", event.target.value)} placeholder={"Inventory/export URL:\nTone and rules:\nRouting or owner notes:\nKnown blockers:"} />
               </label>
               <button type="button" onClick={createSetup} disabled={busy || !form.dealerName.trim()}>
                 Create dealer setup
@@ -1255,7 +1280,7 @@ export default function NewDealerClientPage() {
                   <div>
                     <p className="lr-ceo-kicker">Deployment manual</p>
                     <h3>{selected.dealerName} runbook</h3>
-                    <p>Preview, print, or download the current deployment manual generated from this setup record.</p>
+                    <p>This manual is generated from the setup record. Preview or download it here, then mark the manual step complete after review.</p>
                   </div>
                   <div>
                     <a className="lr-ceo-secondary-btn" href={`${manualBaseHref}?format=html`} target="_blank" rel="noreferrer">
@@ -1352,7 +1377,7 @@ export default function NewDealerClientPage() {
                       <input value={editForm.billingStart} onChange={event => updateEditField("billingStart", event.target.value)} />
                     </label>
                     <label>
-                      Profile, tone, rules, inventory URL, blockers
+                      Dealer profile notes
                       <textarea value={editForm.notes} onChange={event => updateEditField("notes", event.target.value)} placeholder={"Inventory/export URL: https://...\nTone: warm, direct, sales-helpful\nRules: no price guessing; manager verifies availability"} />
                     </label>
                   </div>
@@ -1386,11 +1411,80 @@ export default function NewDealerClientPage() {
                     <div>
                       <p className="lr-ceo-kicker">Deployment gate</p>
                       <h3>{selectedReadiness.canPushToActiveClient ? "Ready for launch approval" : "Ready to test deployment"}</h3>
-                      <p>{selectedReadiness.canPushToActiveClient ? "Smoke tests and launch checklist are clear. Production launch still requires human approval." : "Core runtime setup is ready enough for deploy testing. Run smoke tests before launch."}</p>
+                      <p>{selectedReadiness.canPushToActiveClient ? "Smoke tests and launch checklist are clear. Production launch still requires human approval." : "Core runtime setup is ready enough for deploy testing. Run the launch check and smoke test before launch."}</p>
                     </div>
-                    <button type="button" onClick={runSmokeTest} disabled={actionBusy}>
-                      Run smoke test
-                    </button>
+                    <div className="lr-ceo-action-row">
+                      <button type="button" onClick={runLaunchDryRun} disabled={launchDryRunBusy}>
+                        Run launch check
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={runSmokeTest} disabled={actionBusy}>
+                        Run smoke test
+                      </button>
+                      {selectedReadiness.canPushToActiveClient ? (
+                        <button
+                          type="button"
+                          className="lr-ceo-secondary-btn"
+                          onClick={() => setActivateConfirmOpen(true)}
+                          disabled={activateBusy || !cleanLaunchCheck}
+                          title={cleanLaunchCheck ? "Open activation confirmation" : "Run a clean launch check first"}
+                        >
+                          Activate Dealer
+                        </button>
+                      ) : null}
+                    </div>
+                    {selectedReadiness.canPushToActiveClient && !cleanLaunchCheck ? (
+                      <small>Run launch check first. Activation unlocks only when the launch check is clean.</small>
+                    ) : null}
+                  </section>
+                ) : null}
+                {selected && activateConfirmOpen ? (
+                  <section className="lr-ceo-activation-card">
+                    <div>
+                      <p className="lr-ceo-kicker">Activation confirmation</p>
+                      <h3>Activate {selected.dealerName}</h3>
+                      <p>This records the dealer as launched in Command after the launch check has passed. It does not run DNS, vendor, legal, credential, or Lightsail deploy changes.</p>
+                    </div>
+                    <div className="lr-ceo-activation-grid">
+                      <div>
+                        <strong>Will automate</strong>
+                        <span>Re-run public app and API smoke tests</span>
+                        <span>Create or update the Active Client record</span>
+                        <span>Mark production launch and monitoring handoff complete</span>
+                      </div>
+                      <div>
+                        <strong>Still manual approval</strong>
+                        <span>DNS changes and vendor submissions</span>
+                        <span>Credentials, billing, OAuth, and MFA</span>
+                        <span>Legal, TCPA, and privacy approvals</span>
+                      </div>
+                    </div>
+                    <div className="lr-ceo-action-row">
+                      <button type="button" onClick={activateDealer} disabled={activateBusy || !cleanLaunchCheck}>
+                        Confirm activation
+                      </button>
+                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => setActivateConfirmOpen(false)} disabled={activateBusy}>
+                        Cancel
+                      </button>
+                    </div>
+                  </section>
+                ) : null}
+                {activationResult ? (
+                  <section className="lr-ceo-activation-card is-complete">
+                    <div>
+                      <p className="lr-ceo-kicker">Activation complete</p>
+                      <h3>{activationResult.client?.dealerName || selected.dealerName}</h3>
+                      <p>{activationResult.message || "Dealer is ready in Active Clients for post-launch monitoring."}</p>
+                    </div>
+                    <div className="lr-ceo-activation-grid">
+                      <div>
+                        <strong>Automated</strong>
+                        {(activationResult.activation?.automated ?? ["Active Client handoff completed"]).map(item => <span key={item}>{item}</span>)}
+                      </div>
+                      <div>
+                        <strong>Manual controls preserved</strong>
+                        {(activationResult.activation?.manualApprovalStillRequired ?? ["Vendor, legal, DNS, credential, and deploy changes still require approval."]).map(item => <span key={item}>{item}</span>)}
+                      </div>
+                    </div>
                   </section>
                 ) : null}
                 {selected.launchChecklist?.length ? (
@@ -1419,56 +1513,86 @@ export default function NewDealerClientPage() {
                       <div>
                         <strong>{step.label}</strong>
                       </div>
-                      {currentStep?.id === step.id ? <em>Current</em> : <em />}
+                      <div className="lr-ceo-step-actions">
+                        {currentStep?.id === step.id ? <em>Current</em> : null}
+                        {step.status === "done" ? (
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={() => updateStep(step.id, "in_progress")} disabled={busy}>
+                            Reopen
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                   ))}
                 </div>
                 {hasTechnicalDetails ? (
                   <details className="lr-ceo-technical-details">
-                    <summary>Technical details</summary>
-                    <div className="lr-ceo-action-row">
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("codex")} disabled={taskBusy}>
-                        Setup review
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("stack")} disabled={taskBusy}>
-                        Stack task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("api")} disabled={taskBusy}>
-                        API task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("vercel")} disabled={taskBusy}>
-                        Vercel task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("providers")} disabled={taskBusy}>
-                        Provider task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("texting")} disabled={taskBusy}>
-                        Texting task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask("agreement")} disabled={taskBusy}>
-                        Agreement task
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
-                        Check Vercel
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={addVercelDomains} disabled={vercelBusy}>
-                        Add Vercel domain
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
-                        DNS records
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateApiDeployProfile} disabled={actionBusy}>
-                        API profile
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={generateRuntimePackage} disabled={runtimePackageBusy}>
-                        Runtime package
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={runLaunchDryRun} disabled={launchDryRunBusy}>
-                        Launch dry-run
-                      </button>
-                      <button type="button" className="lr-ceo-secondary-btn" onClick={pushToActiveClient} disabled={activeClientBusy || !selectedReadiness?.canPushToActiveClient}>
-                        Active Clients
-                      </button>
+                    <summary>Advanced/debug actions</summary>
+                    <div className="lr-ceo-advanced-actions">
+                      <section className="lr-ceo-advanced-group">
+                        <div>
+                          <h4>Create setup task</h4>
+                          <small>Use this when work should be handed to Codex or the document runner.</small>
+                        </div>
+                        <div className="lr-ceo-task-picker">
+                          <select value={setupTaskKind} onChange={event => setSetupTaskKind(event.target.value as AgentTaskKind)}>
+                            <option value="codex">Setup review</option>
+                            <option value="stack">Full setup plan</option>
+                            <option value="api">API/server task</option>
+                            <option value="vercel">Website/domain task</option>
+                            <option value="providers">Provider checklist task</option>
+                            <option value="texting">Texting compliance task</option>
+                            <option value="agreement">Agreement draft task</option>
+                          </select>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={() => createSetupTask(setupTaskKind)} disabled={taskBusy}>
+                            Create task
+                          </button>
+                        </div>
+                      </section>
+                      <section className="lr-ceo-advanced-group">
+                        <div>
+                          <h4>Website and domains</h4>
+                          <small>Prepare Vercel and DNS details. DNS changes still need human approval.</small>
+                        </div>
+                        <div className="lr-ceo-action-row">
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
+                            Check domains
+                          </button>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={addVercelDomains} disabled={vercelBusy}>
+                            Add Vercel domains
+                          </button>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
+                            DNS checklist
+                          </button>
+                        </div>
+                      </section>
+                      <section className="lr-ceo-advanced-group">
+                        <div>
+                          <h4>API and server</h4>
+                          <small>Generate runtime paths and server profile without touching production.</small>
+                        </div>
+                        <div className="lr-ceo-action-row">
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={generateApiDeployProfile} disabled={actionBusy}>
+                            API deploy profile
+                          </button>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={generateRuntimePackage} disabled={runtimePackageBusy}>
+                            Launch packet
+                          </button>
+                        </div>
+                      </section>
+                      <section className="lr-ceo-advanced-group">
+                        <div>
+                          <h4>Launch verification</h4>
+                          <small>Run review-only checks before asking for launch approval.</small>
+                        </div>
+                        <div className="lr-ceo-action-row">
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={runLaunchDryRun} disabled={launchDryRunBusy}>
+                            Run launch check
+                          </button>
+                          <button type="button" className="lr-ceo-secondary-btn" onClick={runSmokeTest} disabled={actionBusy}>
+                            Run smoke test
+                          </button>
+                        </div>
+                      </section>
                     </div>
                     {vercelDomains.length ? (
                       <div className="lr-ceo-vercel-status">
@@ -1504,7 +1628,7 @@ export default function NewDealerClientPage() {
                       <section className="lr-ceo-runtime-package">
                         <div className="lr-ceo-panel-title">
                           <div>
-                            <p className="lr-ceo-kicker">Runtime package</p>
+                            <p className="lr-ceo-kicker">Launch packet</p>
                             <h3>{runtimePackage.slug}</h3>
                             <small>{runtimePackage.files.length} files generated. Review-only until launch is approved.</small>
                           </div>
@@ -1545,7 +1669,7 @@ export default function NewDealerClientPage() {
                       <section className={`lr-ceo-launch-dry-run is-${launchDryRun.status}`}>
                         <div className="lr-ceo-panel-title">
                           <div>
-                            <p className="lr-ceo-kicker">Launch dry-run</p>
+                            <p className="lr-ceo-kicker">Launch check</p>
                             <h3>{launchDryRun.label}</h3>
                             <small>{launchDryRun.summary}</small>
                           </div>
@@ -1555,7 +1679,7 @@ export default function NewDealerClientPage() {
                         </div>
                         <div className="lr-ceo-vercel-status">
                           <span className={launchDryRun.canRunDeployDryRun ? "is-ready" : "is-blocked"}>
-                            Deploy dry-run: {launchDryRun.canRunDeployDryRun ? "available" : "blocked"}
+                            API test deploy: {launchDryRun.canRunDeployDryRun ? "available" : "blocked"}
                           </span>
                           <span className={launchDryRun.canRequestProductionApproval ? "is-ready" : "is-blocked"}>
                             Production approval: {launchDryRun.canRequestProductionApproval ? "ready to request" : "not ready"}

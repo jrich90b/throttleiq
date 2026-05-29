@@ -27738,6 +27738,13 @@ async function checkUrl(url: string) {
   }
 }
 
+async function runDealerSmokeChecks(setup: DealerSetup) {
+  return Promise.all([
+    checkUrl(setup.appUrl),
+    checkUrl(`${setup.apiUrl.replace(/\/$/, "")}/health`)
+  ]);
+}
+
 app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
   if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
@@ -27745,10 +27752,7 @@ app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), a
   }
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
-  const checks = await Promise.all([
-    checkUrl(setup.appUrl),
-    checkUrl(`${setup.apiUrl.replace(/\/$/, "")}/health`)
-  ]);
+  const checks = await runDealerSmokeChecks(setup);
   const passed = checks.every(check => check.ok);
   const updated = await updateDealerSetup(setup.id, {
     stage: "live",
@@ -27758,6 +27762,99 @@ app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), a
     stepNote: checks.map(check => `${check.url}: ${check.status || check.error}`).join("; ")
   });
   return res.json({ ok: true, setup: updated ?? setup, passed, checks });
+});
+
+app.post("/dealer-setups/:id/activate", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  const setup = await getDealerSetup(req.params.id);
+  if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+
+  const initialDryRun = buildDealerLaunchDryRun(setup);
+  if (!initialDryRun.canLaunch) {
+    return res.status(409).json({
+      ok: false,
+      error: "Run a clean launch check before activating this dealer.",
+      dryRun: initialDryRun
+    });
+  }
+
+  const checks = await runDealerSmokeChecks(setup);
+  const passed = checks.every(check => check.ok);
+  if (!passed) {
+    const blocked = await updateDealerSetup(setup.id, {
+      stage: "live",
+      status: "blocked",
+      stepId: "smoke",
+      stepStatus: "blocked",
+      stepNote: checks.map(check => `${check.url}: ${check.status || check.error}`).join("; ")
+    });
+    return res.status(409).json({
+      ok: false,
+      error: "Activation stopped because the smoke test found a blocker.",
+      setup: blocked ?? setup,
+      dryRun: initialDryRun,
+      checks,
+      passed: false
+    });
+  }
+
+  const smokeUpdated = await updateDealerSetup(setup.id, {
+    stage: "live",
+    status: "ready",
+    stepId: "smoke",
+    stepStatus: "done",
+    stepNote: "Smoke test passed during activation."
+  });
+  const readySetup = (await getDealerSetup(setup.id)) ?? smokeUpdated ?? setup;
+  const readyDryRun = buildDealerLaunchDryRun(readySetup);
+  if (!readyDryRun.canLaunch || !readySetup.deployReadiness?.canPushToActiveClient) {
+    return res.status(409).json({
+      ok: false,
+      error: readyDryRun.summary || "Activation stopped because launch readiness changed after smoke testing.",
+      setup: readySetup,
+      dryRun: readyDryRun,
+      checks,
+      passed: true
+    });
+  }
+
+  const client = await upsertActiveClientFromDealerSetup(readySetup);
+  if (!client) return res.status(500).json({ ok: false, error: "Active client could not be saved." });
+
+  const activated = await updateDealerSetup(readySetup.id, {
+    stage: "live",
+    status: "live",
+    stepId: "handoff",
+    stepStatus: "done",
+    stepNote: "Dealer activated from the Command activation gate. Post-launch monitoring is ready."
+  });
+  const finalSetup = activated ?? readySetup;
+  return res.json({
+    ok: true,
+    message: `${finalSetup.dealerName} activated. Active Client is ready for post-launch monitoring.`,
+    setup: finalSetup,
+    client,
+    checks,
+    passed: true,
+    dryRun: buildDealerLaunchDryRun(finalSetup),
+    activation: {
+      automated: [
+        "Re-ran public app/API smoke tests",
+        "Created or updated the Active Client record",
+        "Marked production launch and monitoring handoff complete"
+      ],
+      manualApprovalStillRequired: [
+        "DNS changes",
+        "Vendor submissions and approvals",
+        "Credential, billing, OAuth, and MFA steps",
+        "Legal/TCPA/privacy approvals",
+        "Lightsail deploy execution unless separately approved"
+      ]
+    }
+  });
 });
 
 app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos"), async (req, res) => {
@@ -28199,10 +28296,7 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
   }
 
   if (stepId === "smoke") {
-    const checks = await Promise.all([
-      checkUrl(setup.appUrl),
-      checkUrl(`${setup.apiUrl.replace(/\/$/, "")}/health`)
-    ]);
+    const checks = await runDealerSmokeChecks(setup);
     const passed = checks.every(check => check.ok);
     const updated = await updateDealerSetup(setup.id, {
       stage: "live",
