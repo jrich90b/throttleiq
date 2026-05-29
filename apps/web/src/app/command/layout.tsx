@@ -12,8 +12,12 @@ export default function CommandLayout({ children }: { children: React.ReactNode 
   const [busy, setBusy] = useState(false);
 
   async function checkAuth() {
-    const resp = await fetch("/api/auth/me", { cache: "no-store" });
+    const resp = await fetch("/api/auth/me", { cache: "no-store", headers: { "x-leadrider-command": "1" } });
     const data = await resp.json().catch(() => null);
+    if (resp.ok && data?.ok && data?.authDisabled) {
+      setAuthState("authed");
+      return;
+    }
     const userEmail = String(data?.user?.email ?? "").trim().toLowerCase();
     if (resp.ok && data?.ok && userEmail.endsWith("@leadrider.ai")) {
       setAuthState("authed");
@@ -35,11 +39,17 @@ export default function CommandLayout({ children }: { children: React.ReactNode 
     try {
       const resp = await fetch("/api/auth/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-leadrider-command": "1" },
         body: JSON.stringify({ email, password })
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Sign in failed.");
+      if (data?.authDisabled) {
+        setEmail("");
+        setPassword("");
+        setAuthState("authed");
+        return;
+      }
       const userEmail = String(data?.user?.email ?? "").trim().toLowerCase();
       if (!userEmail.endsWith("@leadrider.ai")) throw new Error("Use a LeadRider email for Command.");
       setEmail("");

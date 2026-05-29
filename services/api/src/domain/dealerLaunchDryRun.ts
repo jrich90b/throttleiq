@@ -95,7 +95,10 @@ function deployProfileItem(setup: DealerSetup): DealerLaunchDryRunItem {
   if (!deployment.dataDir) missing.push("data dir");
   if (!deployment.envFile) missing.push("env file");
   if (!deployment.pm2Process) missing.push("PM2 process");
+  if (!deployment.localPort) missing.push("local API port");
   if (!deployment.healthUrl?.endsWith("/health")) missing.push("health URL");
+  if (!deployment.proxyPathPrefix) missing.push("proxy path prefix");
+  if (!deployment.proxyTarget) missing.push("proxy target");
   if (missing.length) {
     return statusItem("deploy_profile", "API deploy profile", "fail", `Missing ${missing.join(", ")}.`, "api");
   }
@@ -103,7 +106,7 @@ function deployProfileItem(setup: DealerSetup): DealerLaunchDryRunItem {
     "deploy_profile",
     "API deploy profile",
     "pass",
-    `${deployment.deployProfileLocalPath} targets ${deployment.repoPath}, ${deployment.dataDir}, ${deployment.envFile}, and ${deployment.pm2Process}.`,
+    `${deployment.deployProfileLocalPath} targets ${deployment.repoPath}, ${deployment.dataDir}, ${deployment.envFile}, ${deployment.pm2Process}, and local port ${deployment.localPort}.`,
     "api"
   );
 }
@@ -118,22 +121,57 @@ function tenantIsolationItem(setup: DealerSetup): DealerLaunchDryRunItem {
   if (!deployment.dataDir.includes(slug)) failures.push("data dir does not include slug");
   if (!deployment.envFile.includes(slug)) failures.push("env file does not include slug");
   if (slug !== "americanharley" && !deployment.pm2Process.includes(slug)) failures.push("PM2 process does not include slug");
+  if (slug !== "americanharley" && deployment.localPort === 3001) failures.push("non-American Harley dealer cannot use the American Harley default port");
+  if (!deployment.proxyTarget.endsWith(`:${deployment.localPort}`)) failures.push("proxy target does not match dealer local port");
+  if (setup.routingMode === "path" && deployment.proxyPathPrefix !== `/t/${slug}`) failures.push("path routing proxy prefix does not match dealer slug");
   if (!clean(deployment.healthUrl).startsWith(`${expectedApi}/health`)) failures.push("health URL does not match API URL");
   if (failures.length) {
     return statusItem("tenant_isolation", "Tenant isolation", "fail", failures.join("; "), "api");
   }
-  return statusItem("tenant_isolation", "Tenant isolation", "pass", "Runtime repo, data, env, PM2, and health paths are dealer-specific.", "api");
+  return statusItem("tenant_isolation", "Tenant isolation", "pass", "Runtime repo, data, env, PM2, port, proxy, and health paths are dealer-specific.", "api");
+}
+
+function proxyReviewItem(setup: DealerSetup): DealerLaunchDryRunItem {
+  const deployment = setup.apiDeployment;
+  if (!deployment) return statusItem("proxy_review", "Lightsail proxy route", "fail", "API deployment profile is missing.", "api");
+  if (!deployment.nginxPreview?.trim()) return statusItem("proxy_review", "Lightsail proxy route", "fail", "Nginx route preview is missing.", "api");
+  if (setup.routingMode === "integration_mapping") {
+    return statusItem(
+      "proxy_review",
+      "Lightsail proxy route",
+      "warn",
+      "Integration-mapping mode needs a shared tenant router before production launch; nginx cannot route provider payloads by itself.",
+      "api"
+    );
+  }
+  return statusItem(
+    "proxy_review",
+    "Lightsail proxy route",
+    "pass",
+    `Review-only route preview maps ${deployment.proxyPathPrefix} to ${deployment.proxyTarget}.`,
+    "api"
+  );
 }
 
 function dnsItem(setup: DealerSetup): DealerLaunchDryRunItem {
   const records = setup.apiDeployment?.dnsRecords ?? [];
-  if (records.length < 2) return statusItem("dns_records", "DNS records", "fail", "Web/API DNS records are missing.", "domains");
+  const sharedRouting = setup.routingMode !== "subdomain";
+  const label = sharedRouting ? "Tenant routing records" : "DNS records";
+  if (records.length < 2) return statusItem("dns_records", label, "fail", "Web/API routing records are missing.", "domains");
   const webHost = setup.apiDeployment?.webHostname || "";
   const apiHost = setup.apiDeployment?.apiHostname || "";
   const hasWeb = records.some(record => record.name === webHost && record.type === "CNAME");
   const hasApi = records.some(record => record.name === apiHost && record.type === "A");
-  if (!hasWeb || !hasApi) return statusItem("dns_records", "DNS records", "fail", "Generated DNS records do not cover both web and API hostnames.", "domains");
-  return statusItem("dns_records", "DNS records", "pass", `${records.length} web/API DNS records are generated.`, "domains");
+  if (!hasWeb || !hasApi) return statusItem("dns_records", label, "fail", "Generated routing records do not cover both web and API hostnames.", "domains");
+  return statusItem(
+    "dns_records",
+    label,
+    "pass",
+    sharedRouting
+      ? `${records.length} shared web/API host checks are generated. No per-dealer DNS is required.`
+      : `${records.length} web/API DNS records are generated.`,
+    "domains"
+  );
 }
 
 function remoteEnvItem(setup: DealerSetup): DealerLaunchDryRunItem {
@@ -174,14 +212,15 @@ export function buildDealerLaunchDryRun(setup: DealerSetup): DealerLaunchDryRun 
     ...packageItems(setup),
     deployProfileItem(setup),
     tenantIsolationItem(setup),
+    proxyReviewItem(setup),
     dnsItem(setup),
     itemFromStep(
       setup,
       "domains",
-      "Domain approval",
-      "Domain/DNS step is complete.",
-      "Domain/DNS work is still waiting or ready to verify.",
-      "Domain/DNS step must be completed before deployment approval."
+      "Tenant routing approval",
+      "Tenant routing step is complete.",
+      "Tenant routing work is still waiting or ready to verify.",
+      "Tenant routing step must be completed before deployment approval."
     ),
     itemFromStep(
       setup,
@@ -269,7 +308,7 @@ export function buildDealerLaunchDryRun(setup: DealerSetup): DealerLaunchDryRun 
 
   const blockers = items.filter(item => item.status === "fail").map(item => `${item.label}: ${item.detail}`);
   const warnings = items.filter(item => item.status === "warn").map(item => `${item.label}: ${item.detail}`);
-  const canRunDeployDryRun = !blockers.some(blocker => /Runtime package|API deploy profile|Tenant isolation|DNS records|Remote API env/i.test(blocker));
+  const canRunDeployDryRun = !blockers.some(blocker => /Runtime package|API deploy profile|Tenant isolation|Lightsail proxy route|DNS records|Tenant routing records|Remote API env/i.test(blocker));
   const canRequestProductionApproval = blockers.length === 0 && setup.deployReadiness?.canDeployApi === true;
   const canLaunch = blockers.length === 0 && warnings.length === 0 && setup.deployReadiness?.canPushToActiveClient === true;
   const status: DealerLaunchDryRunStatus = canLaunch

@@ -37,8 +37,15 @@ async function check(target: SmokeTarget) {
 
 async function main() {
   const slug = argValue("--dealer") || argValue("--slug") || process.env.DEALER_SLUG || "americanharley";
-  const appBase = cleanBase(argValue("--app") || process.env.APP_BASE_URL || `https://${slug}.leadrider.ai`);
-  const apiBase = cleanBase(argValue("--api") || process.env.API_BASE_URL || `https://api.${slug}.leadrider.ai`);
+  const routingMode = argValue("--routing-mode") || process.env.TENANT_ROUTING_MODE || "subdomain";
+  const defaultApp = routingMode === "subdomain" ? `https://${slug}.leadrider.ai` : `https://app.leadrider.ai/d/${slug}`;
+  const defaultApi = routingMode === "path"
+    ? `https://api.leadrider.ai/t/${slug}`
+    : routingMode === "integration_mapping"
+      ? "https://api.leadrider.ai"
+      : `https://api.${slug}.leadrider.ai`;
+  const appBase = cleanBase(argValue("--app") || process.env.APP_BASE_URL || defaultApp);
+  const apiBase = cleanBase(argValue("--api") || process.env.API_BASE_URL || defaultApi);
   const targets: SmokeTarget[] = [
     { label: "web", url: appBase },
     { label: "api_health", url: `${apiBase}/health` }

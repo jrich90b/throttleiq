@@ -2,12 +2,20 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { apiFetch } from "../../../../lib/apiFetch";
 
+function isLocalDevHost(host: string) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isCommandAuthRequest(req: Request, host: string) {
+  return host === "leadrider.ai" || host === "www.leadrider.ai" || (isLocalDevHost(host) && req.headers.get("x-leadrider-command") === "1");
+}
+
 export async function POST(req: Request) {
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
   const host = req.headers.get("host")?.split(":")[0]?.toLowerCase() ?? "";
-  const isLeadRiderHost = host === "leadrider.ai" || host === "www.leadrider.ai";
+  const isLeadRiderHost = isCommandAuthRequest(req, host);
   const body = await req.text();
   const requestedEmail = (() => {
     try {

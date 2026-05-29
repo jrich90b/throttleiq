@@ -97,6 +97,7 @@ export type AppointmentMemory = {
         | "bought_elsewhere"
         | "lost"
         | "follow_up"
+        | "no_change"
         | "other";
       primaryStatus?: "showed" | "did_not_show" | "cancelled";
       secondaryStatus?:
@@ -107,6 +108,7 @@ export type AppointmentMemory = {
         | "finance_not_approved"
         | "finance_needs_info"
         | "not_ready"
+        | "no_change"
         | "other";
       note?: string;
       updatedAt: string;
@@ -2024,6 +2026,49 @@ export function discardAllDrafts(conv: Conversation, reason?: string) {
   }
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+function normalizePostSaleCloseoutText(text: string): string {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function isPostSaleCloseoutCadenceText(text: string): boolean {
+  const normalized = normalizePostSaleCloseoutText(text);
+  if (!normalized) return false;
+  const hasThanksAgain = /\bthanks again\b/.test(normalized);
+  const hasSoldVisitSignal =
+    /\b(congrats|congratulations|coming in|came in|coming to see us|stopping in|picked up|delivered)\b/.test(
+      normalized
+    );
+  const hasSoftExit = /\b(if you need anything|if anything comes up|just let me know|let me know)\b/.test(
+    normalized
+  );
+  return hasThanksAgain && hasSoldVisitSignal && hasSoftExit;
+}
+
+export function retireSupersededPostSaleCloseoutDrafts(
+  conv: Conversation,
+  sentText: string,
+  opts?: { persist?: boolean }
+): number {
+  if (!isPostSaleCloseoutCadenceText(sentText)) return 0;
+  let retired = 0;
+  for (const m of conv.messages ?? []) {
+    if (m.direction !== "out") continue;
+    if (m.provider !== "draft_ai" || m.draftStatus === "stale") continue;
+    if (!isPostSaleCloseoutCadenceText(m.body)) continue;
+    m.draftStatus = "stale";
+    retired += 1;
+  }
+  if (retired > 0) {
+    conv.updatedAt = nowIso();
+    if (opts?.persist !== false) scheduleSave();
+  }
+  return retired;
 }
 
 export function getLatestPendingDraft(conv: Conversation): Message | null {

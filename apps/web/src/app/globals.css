@@ -469,6 +469,100 @@ a {
   gap: 0.62rem;
 }
 
+.lr-ceo-step-guide-card {
+  display: grid;
+  gap: 0.78rem;
+  margin-bottom: 1rem;
+  padding: 0.94rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 8px;
+  background: rgba(12, 24, 39, 0.78);
+}
+
+.lr-ceo-step-guide-card .lr-ceo-panel-title {
+  margin-bottom: 0;
+}
+
+.lr-ceo-step-guide-card h3,
+.lr-ceo-step-guide-card p {
+  margin: 0;
+}
+
+.lr-ceo-step-guide-card p {
+  color: #bfd0e7;
+  line-height: 1.45;
+}
+
+.lr-ceo-step-guide-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.62rem;
+}
+
+.lr-ceo-step-action {
+  display: grid;
+  gap: 0.32rem;
+  min-height: 96px;
+  padding: 0.72rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.34);
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+button.lr-ceo-step-action {
+  cursor: pointer;
+  font: inherit;
+}
+
+button.lr-ceo-step-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.lr-ceo-step-action:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.lr-ceo-step-action strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-step-action span {
+  color: #c7d3e4;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.lr-ceo-step-guide-milestones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.lr-ceo-step-guide-milestones span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0.2rem 0.52rem;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.11);
+  color: #bfdbfe;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.lr-ceo-step-guide-approval {
+  padding-top: 0.12rem;
+  color: #ffca92;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .lr-ceo-step-result {
   display: grid;
   gap: 0.28rem;
@@ -636,6 +730,32 @@ a {
   display: grid;
   gap: 0.65rem;
   margin-top: 0.9rem;
+}
+
+.lr-ceo-billing-card {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lr-ceo-billing-card > div:not(.lr-ceo-action-row) {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.lr-ceo-billing-card span,
+.lr-ceo-billing-card small {
+  color: #aebbd2;
+  font-size: 0.82rem;
+}
+
+.lr-ceo-billing-card strong {
+  color: #f7fbff;
+  overflow-wrap: anywhere;
 }
 
 .lr-ceo-payment-row {
@@ -1501,6 +1621,7 @@ a {
 .lr-ceo-edit-card,
 .lr-ceo-readiness-card,
 .lr-ceo-env-card,
+.lr-ceo-vendor-card,
 .lr-ceo-manual-card {
   margin-top: 1rem;
   padding: 0.9rem;
@@ -1537,6 +1658,72 @@ a {
 
 .lr-ceo-manual-card a {
   text-decoration: none;
+}
+
+.lr-ceo-vendor-card {
+  display: grid;
+  gap: 0.85rem;
+  border-color: rgba(96, 165, 250, 0.2);
+  background: rgba(96, 165, 250, 0.06);
+}
+
+.lr-ceo-vendor-card .lr-ceo-panel-title {
+  align-items: flex-start;
+}
+
+.lr-ceo-vendor-card h3,
+.lr-ceo-vendor-card p {
+  margin: 0;
+}
+
+.lr-ceo-vendor-card p {
+  max-width: 860px;
+  color: #bfd0e7;
+  line-height: 1.45;
+}
+
+.lr-ceo-vendor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.65rem;
+}
+
+.lr-ceo-vendor-link {
+  display: grid;
+  gap: 0.34rem;
+  min-height: 122px;
+  padding: 0.78rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.34);
+  text-decoration: none;
+}
+
+.lr-ceo-vendor-link:hover {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.lr-ceo-vendor-link strong {
+  color: #f7fbff;
+}
+
+.lr-ceo-vendor-link span {
+  color: #c7d3e4;
+  font-size: 0.83rem;
+  line-height: 1.35;
+}
+
+.lr-ceo-vendor-link small {
+  align-self: end;
+  width: fit-content;
+  padding: 0.18rem 0.44rem;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.15);
+  color: #bfdbfe;
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .lr-ceo-edit-card {
@@ -2746,10 +2933,12 @@ a {
   .lr-ceo-metrics,
   .lr-ceo-email-workspace,
   .lr-ceo-guided-setup,
+  .lr-ceo-step-guide-actions,
   .lr-ceo-connector-grid,
   .lr-ceo-manual-card,
   .lr-ceo-facts,
   .lr-ceo-launch-grid,
+  .lr-ceo-vendor-grid,
   .lr-ceo-deployment-gate,
   .lr-ceo-activation-grid,
   .lr-ceo-readiness-columns,

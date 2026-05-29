@@ -1,4 +1,4 @@
-import { buildDealerApiDeployment, type DealerSetup } from "./dealerSetupStore.js";
+import { buildDealerApiDeployment, dealerRoutingModeLabel, type DealerSetup } from "./dealerSetupStore.js";
 
 type ManualFormat = "markdown" | "html";
 
@@ -66,10 +66,28 @@ function americanHarleyNotes(setup: DealerSetup) {
   ].join("\n");
 }
 
+function newDealerApprovalReminder(setup: DealerSetup) {
+  if (setup.slug === "americanharley") return "";
+  return [
+    "## New Dealer Approval Reminder",
+    "",
+    "Before launching dealer #2 or any later dealer, create or verify the real external setup for that dealer. Sandbox approvals do not count.",
+    "",
+    bulletList([
+      "Vendor credentials and account ownership",
+      "DNS or shared-route approval",
+      "Twilio phone number, webhook, A2P/10DLC, SMS consent, and STOP/HELP language",
+      "SendGrid sender/domain authentication, inbound parse, and reply-to",
+      "Google OAuth credentials, redirect URI, Gmail/calendar users, and token paths",
+      "Dealer legal approval for privacy policy, TCPA wording, SMS consent, and launch"
+    ])
+  ].join("\n");
+}
+
 function buildStepRows(setup: DealerSetup) {
   const detailByStep: Record<string, string> = {
     intake: "Confirm dealer name, website, owner, legal name, DBA, address, contact, plan, and billing terms.",
-    domains: "Prepare web/API subdomains and DNS records. Continue other steps while DNS waits or propagates.",
+    domains: "Confirm tenant routing. Dedicated subdomains need DNS; shared path or integration mapping modes only need shared host and route verification.",
     sendgrid: "Configure sender/domain authentication, DNS records, inbound parse, and reply-to. DNS can wait in parallel.",
     twilio: "Configure number, webhooks, consent, STOP/HELP, A2P/10DLC, and routing. Approval can take days.",
     google: "Connect Gmail, support mail, calendar, users, and OAuth callbacks.",
@@ -93,6 +111,7 @@ function buildStepRows(setup: DealerSetup) {
 
 function buildManualMarkdown(setup: DealerSetup) {
   const deployment = buildDealerApiDeployment(setup);
+  const routingLabel = dealerRoutingModeLabel(deployment.routingMode);
   const readiness = setup.deployReadiness;
   const launchRows = (setup.launchChecklist ?? []).map(item => [item.label, item.status, item.detail]);
   const envRows = (setup.remoteEnvChecklist ?? []).map(item => [
@@ -133,6 +152,7 @@ function buildManualMarkdown(setup: DealerSetup) {
     table(["Field", "Value"], [
       ["Dealer", setup.dealerName],
       ["Slug", setup.slug],
+      ["Tenant routing", routingLabel],
       ["Website", clean(setup.website)],
       ["LeadRider app", setup.appUrl],
       ["LeadRider API", setup.apiUrl],
@@ -148,19 +168,26 @@ function buildManualMarkdown(setup: DealerSetup) {
     ]),
     "",
     americanHarleyNotes(setup),
+    newDealerApprovalReminder(setup),
     "",
     "## Deployment Shape",
     "",
     "LeadRider currently uses a split deployment: the dealer web UI is hosted on Vercel and the always-on API remains on Lightsail/PM2 for webhooks, runtime data, background work, and browser-runner tasks.",
     "",
+    deployment.routingSummary,
+    "",
     table(["Layer", "Value"], [
+      ["Tenant routing", routingLabel],
       ["Web hostname", deployment.webHostname],
       ["API hostname", deployment.apiHostname],
       ["API checkout", deployment.repoPath],
       ["Runtime env", deployment.envFile],
       ["Runtime data", deployment.dataDir],
       ["PM2 process", deployment.pm2Process],
+      ["Local API port", String(deployment.localPort)],
       ["Health check", deployment.healthUrl],
+      ["Proxy path prefix", deployment.proxyPathPrefix],
+      ["Proxy target", deployment.proxyTarget],
       ["Deploy profile", deployment.deployProfileLocalPath]
     ]),
     "",
@@ -184,9 +211,21 @@ function buildManualMarkdown(setup: DealerSetup) {
         ])
       : "Readiness is not available yet. Refresh the dealer setup record.",
     "",
-    "## DNS Records",
+    "## Tenant Routing And DNS",
+    "",
+    deployment.routingMode === "subdomain"
+      ? "This setup uses dedicated dealer hostnames. DNS changes require explicit human approval."
+      : "This setup uses shared LeadRider hostnames. The records below are platform-level checks, not new per-dealer DNS changes.",
     "",
     table(["Type", "Name", "Value", "Purpose"], deployment.dnsRecords.map(record => [record.type, record.name, record.value, record.purpose])),
+    "",
+    "## Lightsail Proxy Review",
+    "",
+    "Each dealer API process should listen on its own local port and use its own runtime data path. The nginx snippet below is a review artifact only; applying proxy changes still requires explicit human approval and a rollback note.",
+    "",
+    bulletList(deployment.proxyNotes),
+    "",
+    codeBlock(deployment.nginxPreview, "nginx"),
     "",
     "## Provider URLs And Callbacks",
     "",

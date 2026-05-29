@@ -686,6 +686,15 @@ function appointmentOutcomeWinsDealerRideOutcome(conv: any): boolean {
   );
 }
 
+function hasDealerRideOutcomeRecordedOrRequested(conv: any): boolean {
+  const staffNotify = conv?.dealerRide?.staffNotify ?? {};
+  return Boolean(
+    String(staffNotify?.outcome?.status ?? "").trim() ||
+      String(staffNotify?.followUpSentAt ?? "").trim() ||
+      String(staffNotify?.outcomePromptRespondedAt ?? "").trim()
+  );
+}
+
 function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token: string; outcomeLink?: string | null }) {
   if (appointmentOutcomeWinsDealerRideOutcome(conv)) return;
   addTodo(
@@ -694,7 +703,7 @@ function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token
     [
       `Dealer ride outcome needed for ${args.customerName}.`,
       "DLA confirms they rode a demo bike.",
-      "Record what happened so the correct follow-up cadence can start.",
+      "Record what happened so the correct next step can start. If nothing changed, use No change / already on hold.",
       args.outcomeLink ? `Update form: ${args.outcomeLink}` : null
     ]
       .filter(Boolean)
@@ -5098,7 +5107,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       String(owner?.name ?? "").trim() ||
       String(conv.leadOwner?.name ?? "").trim() ||
       "salesperson";
-    if (!appointmentOutcomeWins && !appt?.staffNotify?.followUpSentAt) {
+    if (!appointmentOutcomeWins && !hasDealerRideOutcomeRecordedOrRequested(conv)) {
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
         conv.leadKey ||
@@ -5183,7 +5192,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       sent: false,
       reason: appointmentOutcomeWins ? "appointment_outcome_wins" : "not_sent"
     };
-    const dealerRideOutcomeAlreadyRequested = !!conv.dealerRide?.staffNotify?.followUpSentAt;
+    const dealerRideOutcomeAlreadyRequested = hasDealerRideOutcomeRecordedOrRequested(conv);
     if (dealerRideOutcomeAlreadyRequested) {
       staffSms.reason = "outcome_prompt_already_sent";
     }

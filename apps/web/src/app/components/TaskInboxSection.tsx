@@ -191,6 +191,7 @@ export function TaskInboxSection(props: any) {
                       legacy: appointmentOutcomeStatus || null
                     });
                     const dealerRideOutcomeNeeded = isDealerRideOutcomeTodo(t) && !String(t.dealerRideOutcomeStatus ?? "").trim();
+                    const dealerRideDefaultOutcome = rowConv?.hold ? "no_change" : "needs_follow_up";
                     const appointmentReminderSent =
                       sectionType === "appointment" &&
                       !appointmentOutcomeLabel &&
@@ -232,7 +233,7 @@ export function TaskInboxSection(props: any) {
                                 onClick={() => {
                                   setAppointmentCloseTarget(t);
                                   setAppointmentClosePrimaryOutcome("showed");
-                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                  setAppointmentCloseSecondaryOutcome(dealerRideDefaultOutcome);
                                   setAppointmentCloseNote("");
                                   setAppointmentCloseOpen(true);
                                 }}

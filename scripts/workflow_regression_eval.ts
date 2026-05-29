@@ -76,7 +76,12 @@ import {
   shouldSuppressVoiceCallbackTodoForAppointment,
   shouldTreatAdfAsWalkInContext
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
-import { inferTodoTaskClass, parseRequestedDayTime } from "../services/api/src/domain/conversationStore.ts";
+import {
+  inferTodoTaskClass,
+  isPostSaleCloseoutCadenceText,
+  parseRequestedDayTime,
+  retireSupersededPostSaleCloseoutDrafts
+} from "../services/api/src/domain/conversationStore.ts";
 import {
   applyDraftStateInvariants,
   repairLikelyTruncatedDraftText
@@ -148,6 +153,19 @@ const cases: Case[] = [
     expected: "appointment"
   },
   {
+    id: "dealer_ride_outcome_todo_stays_todo_even_with_due_at",
+    actual: inferTodoTaskClass(
+      "other",
+      [
+        "Dealer ride outcome needed for Megan Sweeney.",
+        "DLA confirms they rode a demo bike.",
+        "Record what happened so the correct next step can start. If nothing changed, use No change / already on hold."
+      ].join("\n"),
+      { dueAt: "2026-05-27T21:02:58.000Z" }
+    ),
+    expected: "todo"
+  },
+  {
     id: "customer_reschedule_link_reply_uses_first_name",
     actual: buildAppointmentRescheduleBookingLinkReply({
       firstName: "Alex",
@@ -192,6 +210,13 @@ const cases: Case[] = [
   {
     id: "open_plus_time_proposal_detected_as_hours_question",
     actual: isBusinessHoursQuestionText("Is the dealership open on Monday? If so, would 1 work?"),
+    expected: true
+  },
+  {
+    id: "opened_saturday_detected_as_hours_question",
+    actual: isBusinessHoursQuestionText(
+      "I start work at 9:30 and am normally out at 6 m-f are you guys not opened Saturdays?"
+    ),
     expected: true
   },
   {
@@ -1086,6 +1111,83 @@ const cases: Case[] = [
       classificationCta: "parts_request"
     }).allow,
     expected: true
+  },
+  {
+    id: "post_sale_closeout_text_detects_sold_followup",
+    actual: isPostSaleCloseoutCadenceText(
+      "Hi Scott - this is Stone at American Harley-Davidson. Thanks again for coming to see us for your Freewheeler. If you need anything, just let me know."
+    ),
+    expected: true
+  },
+  {
+    id: "post_sale_closeout_text_does_not_match_custom_coverage_step",
+    actual: isPostSaleCloseoutCadenceText(
+      "Hi Scott - Stone at American Harley-Davidson. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know."
+    ),
+    expected: false
+  },
+  {
+    id: "post_sale_sent_closeout_retires_matching_unsent_draft",
+    actual: (() => {
+      const conv: any = {
+        id: "conv_post_sale_dedupe",
+        leadKey: "+17168740538",
+        updatedAt: "2026-05-29T10:30:00.000Z",
+        messages: [
+          {
+            id: "draft_1",
+            direction: "out",
+            from: "salesperson",
+            to: "+17168740538",
+            body:
+              "Hi Scott - This is Stone at American Harley-Davidson. Thanks again for coming in today. Congrats on the Freewheeler. If you need anything, just let me know.",
+            at: "2026-05-28T13:19:06.000Z",
+            provider: "draft_ai"
+          },
+          {
+            id: "sent_1",
+            direction: "out",
+            from: "+17160000000",
+            to: "+17168740538",
+            body:
+              "Hi Scott - this is Stone at American Harley-Davidson. Thanks again for coming to see us for your Freewheeler. If you need anything, just let me know.",
+            at: "2026-05-29T14:31:00.000Z",
+            provider: "twilio"
+          }
+        ]
+      };
+      const retired = retireSupersededPostSaleCloseoutDrafts(conv, conv.messages[1].body, { persist: false });
+      return `${retired}:${conv.messages[0].draftStatus ?? "pending"}`;
+    })(),
+    expected: "1:stale"
+  },
+  {
+    id: "post_sale_sent_closeout_keeps_unrelated_unsent_draft",
+    actual: (() => {
+      const conv: any = {
+        id: "conv_post_sale_dedupe_unrelated",
+        leadKey: "+17168740538",
+        updatedAt: "2026-05-29T10:30:00.000Z",
+        messages: [
+          {
+            id: "draft_1",
+            direction: "out",
+            from: "salesperson",
+            to: "+17168740538",
+            body: "Hi Scott - I can help schedule your service appointment. What day works best?",
+            at: "2026-05-28T13:19:06.000Z",
+            provider: "draft_ai"
+          }
+        ]
+      };
+      const retired = retireSupersededPostSaleCloseoutDrafts(
+        conv,
+        "Hi Scott - this is Stone at American Harley-Davidson. Thanks again for coming to see us for your Freewheeler. If you need anything, just let me know.",
+        { persist: false }
+      );
+      return `${retired}:${conv.messages[0].draftStatus ?? "pending"}`;
+    })(),
+    expected: "0:pending"
   },
   {
     id: "truncated_department_draft_is_repaired",

@@ -311,7 +311,7 @@ export function isBusinessHoursQuestionText(textRaw: string | null | undefined):
   if (!text) return false;
   const incidentalAfterHours =
     /\b(after|outside of|past)\s+(?:business\s+|store\s+)?hours?\b/.test(text) &&
-    !/\b(?:what|when|how late|how long|until|til|till|open|close|closed|closing|business hours|store hours)\b/.test(
+    !/\b(?:what|when|how late|how long|until|til|till|open|opened|close|closed|closing|business hours|store hours)\b/.test(
       text.replace(/\b(after|outside of|past)\s+(?:business\s+|store\s+)?hours?\b/g, "")
     );
   if (incidentalAfterHours) return false;
@@ -321,7 +321,7 @@ export function isBusinessHoursQuestionText(textRaw: string | null | undefined):
     /\b(what|when|how late|how long|until|til|till|thru|through)\b/.test(text);
   const hasHoursWord = /\bhours?\b/.test(hoursWordText);
   const hasOpenClose =
-    /\bopen\b/.test(text) || /\bclos(?:e|ed|es|ing)\b/.test(text);
+    /\bopen(?:ed)?\b/.test(text) || /\bclos(?:e|ed|es|ing)\b/.test(text);
   const hasCloseTimePhrase =
     /\b(?:open|there)\s+(?:until|til|till|thru|through)\s+(?:when|what time|how late)\b/.test(text) ||
     /\b(?:until|til|till)\s+(?:when|what time|how late)\b/.test(text) ||

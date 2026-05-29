@@ -5,6 +5,7 @@ import { dataPath } from "./dataDir.js";
 export type DealerSetupStage = "intake" | "dns" | "vercel" | "api_config" | "connectors" | "agreement" | "live";
 export type DealerSetupStatus = "draft" | "in_progress" | "blocked" | "ready" | "live";
 export type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "waiting_on_dealer" | "ready_to_verify" | "done";
+export type DealerRoutingMode = "subdomain" | "path" | "integration_mapping";
 
 export type DealerSetupStep = {
   id: string;
@@ -48,12 +49,21 @@ export type DealerDeployReadiness = {
 };
 
 export type DealerApiDeployment = {
+  routingMode: DealerRoutingMode;
+  routingSummary: string;
   repoUrl: string;
   repoPath: string;
   envFile: string;
   dataDir: string;
   pm2Process: string;
+  localPort: number;
+  internalBaseUrl: string;
   healthUrl: string;
+  proxyPathPrefix: string;
+  proxyTarget: string;
+  proxyNotes: string[];
+  nginxPreviewPath: string;
+  nginxPreview: string;
   deployProfileLocalPath: string;
   deployCommand: string;
   webHostname: string;
@@ -73,7 +83,10 @@ export type DealerConfigStandard = {
     legalName?: string;
     dbaName?: string;
     slug: string;
-    subdomain: string;
+    routingMode: DealerRoutingMode;
+    subdomain?: string;
+    appHostname: string;
+    apiHostname: string;
     website?: string;
     address?: string;
   };
@@ -82,9 +95,18 @@ export type DealerConfigStandard = {
     apiUrl: string;
     apiHostname: string;
     tenantMode: "isolated_runtime";
+    routeMode: DealerRoutingMode;
+    tenantKey: string;
+    resolver: "hostname" | "path" | "integration_mapping";
+    routeNotes: string[];
     dataDir: string;
     envFile: string;
     pm2Process: string;
+    localPort: number;
+    internalBaseUrl: string;
+    proxyPathPrefix: string;
+    proxyTarget: string;
+    proxyNotes: string[];
   };
   crm: {
     provider?: string;
@@ -142,6 +164,7 @@ export type DealerSetup = {
   id: string;
   dealerName: string;
   slug: string;
+  routingMode: DealerRoutingMode;
   commandUrl: string;
   appUrl: string;
   apiUrl: string;
@@ -190,17 +213,30 @@ function slugify(value: string) {
     .slice(0, 60);
 }
 
+const routingModes: DealerRoutingMode[] = ["subdomain", "path", "integration_mapping"];
+
+export function normalizeDealerRoutingMode(value: unknown): DealerRoutingMode {
+  const raw = String(value ?? "").trim().toLowerCase();
+  return routingModes.includes(raw as DealerRoutingMode) ? (raw as DealerRoutingMode) : "subdomain";
+}
+
+export function dealerRoutingModeLabel(value: DealerRoutingMode) {
+  if (value === "path") return "Shared app/API paths";
+  if (value === "integration_mapping") return "Shared provider mapping (future router)";
+  return "Separate dealer subdomains";
+}
+
 function defaultSteps(): DealerSetupStep[] {
   return [
     { id: "intake", label: "Dealer intake", status: "pending" },
-    { id: "domains", label: "Domains and subdomains", status: "pending" },
+    { id: "domains", label: "Tenant routing and domains", status: "pending" },
     { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
     { id: "twilio", label: "Twilio SMS and compliance", status: "pending" },
     { id: "google", label: "Google Calendar and users", status: "pending" },
     { id: "inventory", label: "Inventory/export URL", status: "pending" },
     { id: "crm", label: "CRM/ADF/Twilio routing", status: "pending" },
     { id: "profile", label: "Dealer profile, tone, and features", status: "pending" },
-    { id: "remote_env", label: "Remote env checklist", status: "pending" },
+    { id: "remote_env", label: "Server settings checklist", status: "pending" },
     { id: "api", label: "API tenant/runtime setup", status: "pending" },
     { id: "vercel", label: "Vercel frontend setup", status: "pending" },
     { id: "manual", label: "Deployment manual", status: "pending" },
@@ -210,13 +246,62 @@ function defaultSteps(): DealerSetupStep[] {
   ];
 }
 
-function buildUrls(slug: string) {
+function buildUrls(slug: string, routingMode: DealerRoutingMode = "subdomain") {
   const clean = slug || "newdealer";
+  if (routingMode === "path") {
+    return {
+      commandUrl: `https://www.leadrider.ai/command`,
+      appUrl: `https://app.leadrider.ai/d/${clean}`,
+      apiUrl: `https://api.leadrider.ai/t/${clean}`
+    };
+  }
+  if (routingMode === "integration_mapping") {
+    return {
+      commandUrl: `https://www.leadrider.ai/command`,
+      appUrl: `https://app.leadrider.ai/d/${clean}`,
+      apiUrl: `https://api.leadrider.ai`
+    };
+  }
   return {
     commandUrl: `https://www.leadrider.ai/command`,
     appUrl: `https://${clean}.leadrider.ai`,
     apiUrl: `https://api.${clean}.leadrider.ai`
   };
+}
+
+function routingResolver(mode: DealerRoutingMode): DealerConfigStandard["routing"]["resolver"] {
+  if (mode === "path") return "path";
+  if (mode === "integration_mapping") return "integration_mapping";
+  return "hostname";
+}
+
+function routingSummary(mode: DealerRoutingMode, clean: string) {
+  if (mode === "path") return `Shared LeadRider app/API hosts route tenant traffic through /d/${clean} and /t/${clean}.`;
+  if (mode === "integration_mapping") {
+    return "Shared LeadRider API endpoints resolve the dealer from integration mappings such as Twilio number, SendGrid recipient, CRM source, or OAuth state.";
+  }
+  return "Dealer uses dedicated web and API subdomains.";
+}
+
+function routingNotes(mode: DealerRoutingMode, clean: string) {
+  if (mode === "path") {
+    return [
+      `Frontend route: /d/${clean}`,
+      `API route prefix: /t/${clean}`,
+      "No per-dealer DNS is required after the shared app/API hosts are verified."
+    ];
+  }
+  if (mode === "integration_mapping") {
+    return [
+      "No per-dealer API hostname is required.",
+      "Inbound provider traffic must carry a mapped Twilio number, SendGrid recipient/domain, CRM source/token, or OAuth state.",
+      "Use the dealer slug as the stable tenant key in logs, setup tasks, and usage reporting."
+    ];
+  }
+  return [
+    "Dedicated web/API hostnames identify the tenant.",
+    "Keep American Harley on this mode until an explicit production migration is approved."
+  ];
 }
 
 function mergeDefaultSteps(existing: DealerSetupStep[] | undefined): DealerSetupStep[] {
@@ -258,17 +343,119 @@ function safeHostname(url: string, fallback: string) {
   }
 }
 
-export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "appUrl" | "apiUrl">): DealerApiDeployment {
+function stableDealerPort(slug: string) {
+  const clean = slugify(slug || "newdealer") || "newdealer";
+  if (clean === "americanharley") return 3001;
+  let hash = 0;
+  for (const char of clean) hash = (hash * 31 + char.charCodeAt(0)) % 900;
+  return 31000 + hash;
+}
+
+function proxyPathPrefix(mode: DealerRoutingMode, clean: string) {
+  if (mode === "path") return `/t/${clean}`;
+  return "/";
+}
+
+function proxyNotes(mode: DealerRoutingMode, clean: string) {
+  if (mode === "path") {
+    return [
+      `Run this dealer API on its own local port and proxy ${`/t/${clean}`} to that process.`,
+      "The API strips the tenant prefix before route handling and records the dealer slug on the request.",
+      "Shared DNS should already point api.leadrider.ai at Lightsail; only nginx route review is needed for a new path-mode dealer."
+    ];
+  }
+  if (mode === "integration_mapping") {
+    return [
+      "Integration-mapping mode needs an explicit tenant router before production launch.",
+      "Nginx cannot safely choose a dealer from Twilio, SendGrid, CRM, or OAuth payload contents by itself.",
+      "Use path routing for the next production dealer unless a shared in-process router has been approved and tested."
+    ];
+  }
+  return [
+    "Dedicated API hostname proxies all traffic to this dealer's local API process.",
+    "American Harley keeps port 3001 and its existing PM2 process name for production continuity."
+  ];
+}
+
+function buildNginxPreview(input: {
+  clean: string;
+  routingMode: DealerRoutingMode;
+  apiHostname: string;
+  localPort: number;
+  proxyPathPrefix: string;
+}) {
+  const target = `http://127.0.0.1:${input.localPort}`;
+  if (input.routingMode === "path") {
+    return [
+      "# Human-review preview only. Do not apply without explicit approval.",
+      `# Shared API host: ${input.apiHostname}`,
+      `# Dealer slug: ${input.clean}`,
+      "",
+      `location = ${input.proxyPathPrefix} {`,
+      `  return 308 ${input.proxyPathPrefix}/;`,
+      "}",
+      "",
+      `location ^~ ${input.proxyPathPrefix}/ {`,
+      "  proxy_set_header Host $host;",
+      "  proxy_set_header X-Forwarded-Proto $scheme;",
+      "  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+      `  proxy_set_header X-LeadRider-Dealer-Slug ${input.clean};`,
+      `  proxy_pass ${target};`,
+      "}",
+      ""
+    ].join("\n");
+  }
+  if (input.routingMode === "integration_mapping") {
+    return [
+      "# Human-review preview only. Do not apply without explicit approval.",
+      "# Integration-mapping mode is not a standalone nginx-only production route.",
+      "# Keep this dealer in review until a shared tenant router can resolve the dealer",
+      "# from Twilio number, SendGrid recipient/domain, CRM source/token, or OAuth state.",
+      ""
+    ].join("\n");
+  }
+  return [
+    "# Human-review preview only. Do not apply without explicit approval.",
+    "server {",
+    "  listen 443 ssl http2;",
+    `  server_name ${input.apiHostname};`,
+    "",
+    "  location / {",
+    "    proxy_set_header Host $host;",
+    "    proxy_set_header X-Forwarded-Proto $scheme;",
+    "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+    `    proxy_set_header X-LeadRider-Dealer-Slug ${input.clean};`,
+    `    proxy_pass ${target};`,
+    "  }",
+    "}",
+    ""
+  ].join("\n");
+}
+
+export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "routingMode" | "appUrl" | "apiUrl">): DealerApiDeployment {
   const clean = slugify(setup.slug || "newdealer") || "newdealer";
+  const routingMode = normalizeDealerRoutingMode(setup.routingMode);
   const repoUrl = String(process.env.LEADRIDER_DEPLOY_REPO_URL ?? "https://github.com/jrich90b/throttleiq.git").trim();
   const apiAddress = String(process.env.LEADRIDER_API_STATIC_IP ?? "44.194.249.46").trim();
   const repoPath = `/home/ubuntu/leadrider-api/${clean}`;
   const runtimeRoot = `/home/ubuntu/leadrider-runtime/${clean}`;
   const pm2Process = clean === "americanharley" ? "throttleiq-api" : `leadrider-api-${clean}`.slice(0, 80);
+  const localPort = stableDealerPort(clean);
+  const internalBaseUrl = `http://127.0.0.1:${localPort}`;
   const healthUrl = `${setup.apiUrl.replace(/\/$/, "")}/health`;
+  const proxyPrefix = proxyPathPrefix(routingMode, clean);
+  const proxyTarget = internalBaseUrl;
+  const nginxPreviewPath = `deploy/${clean}.nginx.conf.preview`;
   const deployProfileLocalPath = `infra/deploy/${clean}.api.env`;
   const webHostname = safeHostname(setup.appUrl, `${clean}.leadrider.ai`);
   const apiHostname = safeHostname(setup.apiUrl, `api.${clean}.leadrider.ai`);
+  const nginxPreview = buildNginxPreview({
+    clean,
+    routingMode,
+    apiHostname,
+    localPort,
+    proxyPathPrefix: proxyPrefix
+  });
   const profileLines = [
     `DEPLOY_HOST=ubuntu@api.leadrider.ai`,
     `DEPLOY_REPO_URL=${repoUrl}`,
@@ -277,35 +464,65 @@ export function buildDealerApiDeployment(setup: Pick<DealerSetup, "slug" | "appU
     `DEPLOY_DATA_DIR=${runtimeRoot}/data`,
     `DEPLOY_ENV_FILE=${runtimeRoot}/api.env`,
     `DEPLOY_PM2_PROCESS=${pm2Process}`,
+    `DEPLOY_API_PORT=${localPort}`,
     `DEPLOY_HEALTH_URL=${healthUrl}`,
+    `DEPLOY_TENANT_ROUTING_MODE=${routingMode}`,
+    `DEPLOY_PROXY_SERVER_NAME=${apiHostname}`,
+    `DEPLOY_PROXY_PATH_PREFIX=${proxyPrefix}`,
+    `DEPLOY_PROXY_TARGET=${proxyTarget}`,
     `DEPLOY_REPLACE_PM2=1`,
     `DEPLOY_ALLOW_DIRTY_REMOTE=0`
   ];
+  const dnsRecords = routingMode === "subdomain"
+    ? [
+        {
+          type: "CNAME" as const,
+          name: webHostname,
+          value: "cname.vercel-dns.com",
+          purpose: "Dealer web app on Vercel"
+        },
+        {
+          type: "A" as const,
+          name: apiHostname,
+          value: apiAddress,
+          purpose: "Dealer API on Lightsail"
+        }
+      ]
+    : [
+        {
+          type: "CNAME" as const,
+          name: webHostname,
+          value: "cname.vercel-dns.com",
+          purpose: "Shared LeadRider dealer app host; usually one-time platform DNS"
+        },
+        {
+          type: "A" as const,
+          name: apiHostname,
+          value: apiAddress,
+          purpose: "Shared LeadRider API host; route tenant by path or integration mapping"
+        }
+      ];
   return {
+    routingMode,
+    routingSummary: routingSummary(routingMode, clean),
     repoUrl,
     repoPath,
     envFile: `${runtimeRoot}/api.env`,
     dataDir: `${runtimeRoot}/data`,
     pm2Process,
+    localPort,
+    internalBaseUrl,
     healthUrl,
+    proxyPathPrefix: proxyPrefix,
+    proxyTarget,
+    proxyNotes: proxyNotes(routingMode, clean),
+    nginxPreviewPath,
+    nginxPreview,
     deployProfileLocalPath,
     deployCommand: `npm run deploy:api -- --profile ${deployProfileLocalPath}`,
     webHostname,
     apiHostname,
-    dnsRecords: [
-      {
-        type: "CNAME",
-        name: webHostname,
-        value: "cname.vercel-dns.com",
-        purpose: "Dealer web app on Vercel"
-      },
-      {
-        type: "A",
-        name: apiHostname,
-        value: apiAddress,
-        purpose: "Dealer API on Lightsail"
-      }
-    ],
+    dnsRecords,
     profileText: `${profileLines.join("\n")}\n`
   };
 }
@@ -353,6 +570,9 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
   }
 
   if (stepStatus(setup, "smoke") === "pending") warnings.push("Launch smoke test has not run yet.");
+  if (normalizeDealerRoutingMode(setup.routingMode) === "integration_mapping") {
+    warnings.push("Integration-mapping mode requires a shared tenant router before production launch; use path routing for the next dealer unless that router is approved.");
+  }
   if (goLiveMissing.length) {
     warnings.push(
       `Setup can continue in parallel. Go-live waits on ${goLiveMissing.length} item${goLiveMissing.length === 1 ? "" : "s"}.`
@@ -409,6 +629,14 @@ function buildDeployReadiness(setup: DealerSetup): DealerDeployReadiness {
 
 function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
   const deployment = buildDealerApiDeployment(setup);
+  const routeModeLabel = dealerRoutingModeLabel(deployment.routingMode);
+  const isAmericanHarley = setup.slug === "americanharley";
+  const domainDetail = deployment.routingMode === "subdomain"
+    ? `Point ${deployment.webHostname} to Vercel and ${deployment.apiHostname} to the API server.`
+    : `Confirm the shared hosts ${deployment.webHostname} and ${deployment.apiHostname}; this dealer routes by ${routeModeLabel.toLowerCase()}.`;
+  const vercelDetail = deployment.routingMode === "subdomain"
+    ? `${deployment.webHostname} is added to the Vercel project and verified.`
+    : `${deployment.webHostname} is verified once, then the dealer app path uses ${setup.appUrl}.`;
   const item = (id: string, label: string, stepId: string, detail: string): DealerLaunchChecklistItem => ({
     id,
     label,
@@ -416,12 +644,12 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
     status: checklistStatusFromStep(stepStatus(setup, stepId)),
     detail
   });
-  return [
+  const items: DealerLaunchChecklistItem[] = [
     item("intake", "Dealer intake", "intake", setup.website ? `Website captured: ${setup.website}` : "Dealer website/contact fields still need review."),
-    item("domains", "Domains and subdomains", "domains", `Point ${deployment.webHostname} to Vercel and ${deployment.apiHostname} to the API server.`),
-    item("vercel", "Vercel web setup", "vercel", `${deployment.webHostname} is added to the Vercel project and verified.`),
-    item("api_profile", "API tenant/runtime setup", "api", `${deployment.deployProfileLocalPath} uses isolated checkout/env/data/PM2 paths.`),
-    item("remote_env", "Remote API env", "remote_env", `Required variables are present in ${deployment.envFile}; secret values stay on the server.`),
+    item("domains", "Tenant routing", "domains", domainDetail),
+    item("vercel", "Vercel web setup", "vercel", vercelDetail),
+    item("api_profile", "API tenant/runtime setup", "api", `${deployment.deployProfileLocalPath} uses isolated checkout/env/data/PM2 paths and local port ${deployment.localPort}.`),
+    item("remote_env", "Remote API env", "remote_env", `Required variables are present in ${deployment.envFile}; PORT=${deployment.localPort}; secret values stay on the server.`),
     item("google", "Google mail/calendar", "google", "OAuth credentials and support/calendar token paths are configured for this dealer."),
     item("twilio", "Twilio messaging", "twilio", "Phone number, webhook URLs, compliance, and routing are configured."),
     item("sendgrid", "SendGrid email", "sendgrid", "Sender/domain, inbound parse, and reply-to fields are configured."),
@@ -431,6 +659,19 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
     item("manual", "Deployment manual", "manual", "Dealer deployment manual is generated and reviewed."),
     item("smoke", "Launch smoke test", "smoke", "Web app, API health, inventory, conversation, and provider routes have been checked."),
     item("launch_gate", "Launch gate", "launch_gate", "Readiness, compliance, remote env, smoke tests, and rollback path are reviewed."),
+    isAmericanHarley
+      ? {
+          id: "external_approvals_reminder",
+          label: "External approvals",
+          status: "optional",
+          detail: "American Harley is already live. Keep this reminder for new dealers only."
+        }
+      : item(
+          "external_approvals_reminder",
+          "New dealer external approvals",
+          "launch_gate",
+          "Before launching this dealer, create or verify the real vendor credentials, DNS/route approvals, SMS/A2P compliance, SendGrid sender/domain, Google OAuth, legal privacy/TCPA language, and STOP/HELP wording. Sandbox approvals do not count."
+        ),
     {
       id: "runner",
       label: "Runner computer",
@@ -439,6 +680,7 @@ function buildLaunchChecklist(setup: DealerSetup): DealerLaunchChecklistItem[] {
     },
     item("handoff", "Dealer handoff", "handoff", "Client record is live with URLs, owner, billing, and support details.")
   ];
+  return items;
 }
 
 function buildDealerConfigStandard(setup: DealerSetup): DealerConfigStandard {
@@ -458,7 +700,10 @@ function buildDealerConfigStandard(setup: DealerSetup): DealerConfigStandard {
       legalName: setup.legalName,
       dbaName: setup.dbaName,
       slug: setup.slug,
-      subdomain: deployment.webHostname,
+      routingMode: deployment.routingMode,
+      subdomain: deployment.routingMode === "subdomain" ? deployment.webHostname : undefined,
+      appHostname: deployment.webHostname,
+      apiHostname: deployment.apiHostname,
       website: setup.website,
       address: setup.dealerAddress
     },
@@ -467,9 +712,18 @@ function buildDealerConfigStandard(setup: DealerSetup): DealerConfigStandard {
       apiUrl: setup.apiUrl,
       apiHostname: deployment.apiHostname,
       tenantMode: "isolated_runtime",
+      routeMode: deployment.routingMode,
+      tenantKey: setup.slug,
+      resolver: routingResolver(deployment.routingMode),
+      routeNotes: routingNotes(deployment.routingMode, setup.slug),
       dataDir: deployment.dataDir,
       envFile: deployment.envFile,
-      pm2Process: deployment.pm2Process
+      pm2Process: deployment.pm2Process,
+      localPort: deployment.localPort,
+      internalBaseUrl: deployment.internalBaseUrl,
+      proxyPathPrefix: deployment.proxyPathPrefix,
+      proxyTarget: deployment.proxyTarget,
+      proxyNotes: deployment.proxyNotes
     },
     crm: {
       provider: setup.crmProvider,
@@ -571,6 +825,9 @@ function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
   });
   return [
     required("NODE_ENV", "Core", "Production mode", "Run the API in production mode.", { valueHint: "production" }),
+    required("PORT", "Core", "Dealer API port", "Local PM2 port for this dealer API process. Must be unique on the Lightsail host.", {
+      valueHint: String(deployment.localPort)
+    }),
     required("DATA_DIR", "Core", "Dealer runtime data", "Dealer-specific JSON stores, uploads, OAuth tokens, and generated state.", {
       valueHint: deployment.dataDir
     }),
@@ -584,6 +841,9 @@ function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
       valueHint: setup.apiUrl
     }),
     required("DEALER_SLUG", "Core", "Dealer slug", "Stable dealer identifier used in logs and usage records.", { valueHint: setup.slug }),
+    required("TENANT_ROUTING_MODE", "Core", "Tenant routing mode", "How public app/API traffic identifies this dealer.", {
+      valueHint: deployment.routingMode
+    }),
     required("DEALER_PROFILE_PATH", "Core", "Dealer profile path", "Dealer-specific profile config file inside the runtime data directory.", {
       valueHint: `${deployment.dataDir}/dealer_profile.json`
     }),
@@ -591,6 +851,16 @@ function buildRemoteEnvChecklist(setup: DealerSetup): DealerRemoteEnvItem[] {
     required("OPENAI_API_KEY", "LeadRider Platform", "OpenAI key", "LeadRider-owned shared key for LLM drafting, parser-first routing, campaign generation, and usage logging. Dealers do not provide this key.", { secret: true }),
     optional("ANTHROPIC_API_KEY", "LeadRider Platform", "Claude key", "LeadRider-owned shared key for Command/dealer-setup agent tasks. Dealers do not provide this key.", { secret: true }),
     required("LLM_ENABLED", "LeadRider Platform", "LLM enabled", "Enables parser-first draft and routing behavior.", { valueHint: "1" }),
+    optional("STRIPE_SECRET_KEY", "LeadRider Billing", "Stripe secret key", "LeadRider-owned Stripe key for test/live checkout links and invoice sync. Keep live mode disabled until billing launch approval.", { secret: true }),
+    optional("STRIPE_WEBHOOK_SECRET", "LeadRider Billing", "Stripe webhook secret", "Webhook signing secret for /stripe/webhook invoice and subscription status sync.", { secret: true }),
+    optional("STRIPE_ALLOW_LIVE_MODE", "LeadRider Billing", "Stripe live-mode approval", "Set to 1 only after explicit approval to use a live Stripe key.", { valueHint: "0" }),
+    optional("COMMAND_BASE_URL", "LeadRider Billing", "Command base URL", "Base URL for Stripe checkout success/cancel redirects.", { valueHint: "https://www.leadrider.ai" }),
+    optional("STRIPE_STARTER_MONTHLY_PRICE_ID", "LeadRider Billing", "Starter monthly price", "Optional Stripe monthly price ID for the Starter plan. Inline price data is used in test mode if unset."),
+    optional("STRIPE_GROWTH_MONTHLY_PRICE_ID", "LeadRider Billing", "Growth monthly price", "Optional Stripe monthly price ID for the Growth plan. Inline price data is used in test mode if unset."),
+    optional("STRIPE_PRO_MONTHLY_PRICE_ID", "LeadRider Billing", "Pro monthly price", "Optional Stripe monthly price ID for the Pro plan. Inline price data is used in test mode if unset."),
+    optional("STRIPE_STARTER_SETUP_PRICE_ID", "LeadRider Billing", "Starter setup price", "Optional Stripe one-time setup price ID for the Starter plan. Inline price data is used in test mode if unset."),
+    optional("STRIPE_GROWTH_SETUP_PRICE_ID", "LeadRider Billing", "Growth setup price", "Optional Stripe one-time setup price ID for the Growth plan. Inline price data is used in test mode if unset."),
+    optional("STRIPE_PRO_SETUP_PRICE_ID", "LeadRider Billing", "Pro setup price", "Optional Stripe one-time setup price ID for the Pro plan. Inline price data is used in test mode if unset."),
     required("SENDGRID_API_KEY", "Dealer Email", "SendGrid key", "Dealer sender/domain email account or isolated subaccount used for outbound and inbound email handling.", { secret: true }),
     optional("SENDGRID_FROM_EMAIL", "Dealer Email", "Sender email env fallback", "Optional when dealer_profile.fromEmail is configured. Should be a dealer-approved outbound sender address."),
     optional("SENDGRID_REPLY_TO", "Dealer Email", "Reply-to email env fallback", "Optional when dealer_profile.replyToEmail is configured. Dealer reply-to address when different from sender."),
@@ -629,8 +899,14 @@ function buildRemoteEnvTemplate(setup: DealerSetup): string {
 }
 
 function withGeneratedFields(setup: DealerSetup): DealerSetup {
+  const routingMode = normalizeDealerRoutingMode(setup.routingMode);
+  const urls = buildUrls(setup.slug, routingMode);
   const normalized = {
     ...setup,
+    routingMode,
+    commandUrl: setup.commandUrl || urls.commandUrl,
+    appUrl: setup.appUrl || urls.appUrl,
+    apiUrl: setup.apiUrl || urls.apiUrl,
     steps: mergeDefaultSteps(setup.steps)
   };
   return {
@@ -662,6 +938,7 @@ export async function getDealerSetup(id: string): Promise<DealerSetup | null> {
 export async function addDealerSetup(input: {
   dealerName: string;
   slug?: string;
+  routingMode?: DealerRoutingMode;
   owner?: string;
   primaryContact?: string;
   legalName?: string;
@@ -683,11 +960,13 @@ export async function addDealerSetup(input: {
   const now = new Date().toISOString();
   const dealerName = input.dealerName.replace(/\s+/g, " ").trim().slice(0, 160);
   const slug = slugify(input.slug || dealerName);
-  const urls = buildUrls(slug);
+  const routingMode = input.routingMode ? normalizeDealerRoutingMode(input.routingMode) : "path";
+  const urls = buildUrls(slug, routingMode);
   const setup: DealerSetup = {
     id: `dealer_setup_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     dealerName,
     slug,
+    routingMode,
     ...urls,
     stage: "intake",
     status: "draft",
@@ -724,6 +1003,7 @@ export async function updateDealerSetup(
     Pick<
       DealerSetup,
       | "dealerName"
+      | "routingMode"
       | "stage"
       | "status"
       | "owner"
@@ -758,6 +1038,13 @@ export async function updateDealerSetup(
   }
   if (patch.stage) setup.stage = patch.stage;
   if (patch.status) setup.status = patch.status;
+  if (patch.routingMode) {
+    setup.routingMode = normalizeDealerRoutingMode(patch.routingMode);
+    const urls = buildUrls(setup.slug, setup.routingMode);
+    setup.commandUrl = urls.commandUrl;
+    setup.appUrl = urls.appUrl;
+    setup.apiUrl = urls.apiUrl;
+  }
   for (const key of [
     "owner",
     "primaryContact",

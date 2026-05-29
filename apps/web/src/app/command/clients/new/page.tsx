@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 type DealerSetupStepStatus = "pending" | "in_progress" | "blocked" | "waiting_on_dealer" | "ready_to_verify" | "done";
 type DealerSetupChecklistStatus = "pending" | "working" | "blocked" | "ready" | "optional";
+type DealerRoutingMode = "subdomain" | "path" | "integration_mapping";
 
 type DealerLaunchChecklistItem = {
   id: string;
@@ -49,6 +50,7 @@ type DealerSetup = {
   id: string;
   dealerName: string;
   slug: string;
+  routingMode?: DealerRoutingMode;
   commandUrl: string;
   appUrl: string;
   apiUrl: string;
@@ -96,12 +98,21 @@ type DnsRecord = {
 };
 
 type DealerApiDeployment = {
+  routingMode?: DealerRoutingMode;
+  routingSummary?: string;
   repoUrl: string;
   repoPath: string;
   envFile: string;
   dataDir: string;
   pm2Process: string;
+  localPort?: number;
+  internalBaseUrl?: string;
   healthUrl: string;
+  proxyPathPrefix?: string;
+  proxyTarget?: string;
+  proxyNotes?: string[];
+  nginxPreviewPath?: string;
+  nginxPreview?: string;
   deployProfileLocalPath: string;
   deployCommand: string;
   webHostname: string;
@@ -201,6 +212,30 @@ type StepRunSummary = {
 
 type AgentTaskKind = "codex" | "agreement" | "vercel" | "stack" | "api" | "providers" | "texting";
 
+type VendorWebsiteLink = {
+  id: string;
+  label: string;
+  href: string;
+  detail: string;
+  stepId: string;
+};
+
+type StepSetupCopyValue = {
+  id: string;
+  label: string;
+  value: string;
+  detail: string;
+};
+
+type StepVendorGuide = {
+  title: string;
+  summary: string;
+  links: VendorWebsiteLink[];
+  copyValues: StepSetupCopyValue[];
+  milestones: string[];
+  approvalNote: string;
+};
+
 const planDefaults = {
   Starter: {
     setupFee: "$1,999",
@@ -233,6 +268,7 @@ type PlanName = keyof typeof planDefaults;
 type DealerSetupForm = {
   dealerName: string;
   slug: string;
+  routingMode: DealerRoutingMode;
   owner: string;
   primaryContact: string;
   legalName: string;
@@ -255,6 +291,7 @@ type DealerSetupForm = {
 const emptyForm: DealerSetupForm = {
   dealerName: "",
   slug: "",
+  routingMode: "path",
   owner: "Joe Hartrich",
   primaryContact: "",
   legalName: "",
@@ -278,6 +315,7 @@ function setupToForm(setup: DealerSetup): DealerSetupForm {
   return {
     dealerName: setup.dealerName || "",
     slug: setup.slug || "",
+    routingMode: setup.routingMode || "subdomain",
     owner: setup.owner || "",
     primaryContact: setup.primaryContact || "",
     legalName: setup.legalName || "",
@@ -323,9 +361,25 @@ function readinessClass(status?: DealerDeployReadiness["status"]) {
   return "is-working";
 }
 
+function routingModeLabel(value?: DealerRoutingMode) {
+  if (value === "path") return "Shared app/API paths";
+  if (value === "integration_mapping") return "Shared provider mapping (future router)";
+  return "Separate dealer subdomains";
+}
+
+function routingModeDescription(value?: DealerRoutingMode) {
+  if (value === "path") return "Use one LeadRider app/API domain and route this dealer by slug paths.";
+  if (value === "integration_mapping") return "Future option: resolve the dealer from provider mappings after a shared tenant router is approved.";
+  return "Use dedicated dealer web and API subdomains. American Harley stays on this mode.";
+}
+
+function isSharedRouting(setup: Pick<DealerSetup, "routingMode"> | null | undefined) {
+  return (setup?.routingMode || "subdomain") !== "subdomain";
+}
+
 const fallbackDealerSteps: DealerSetupStep[] = [
   { id: "intake", label: "Dealer intake", status: "pending" },
-  { id: "domains", label: "Website and API domains", status: "pending" },
+  { id: "domains", label: "Tenant routing and domains", status: "pending" },
   { id: "sendgrid", label: "SendGrid sender/domain", status: "pending" },
   { id: "twilio", label: "Twilio SMS and compliance", status: "pending" },
   { id: "google", label: "Google Calendar and users", status: "pending" },
@@ -431,9 +485,9 @@ function guidedStepDescription(stepId: string) {
     case "intake":
       return "Confirm the dealer record has the right website, contact, legal name, plan, and billing terms.";
     case "domains":
-      return "Prepare the web and API domain checklist. DNS changes can wait while the rest of setup continues.";
+      return "Confirm how this dealer will route into LeadRider. Shared routing can move ahead without dealer-specific DNS.";
     case "vercel":
-      return "Prepare the dealer website setup and domain checklist.";
+      return "Prepare the dealer website setup and route/domain checklist.";
     case "api":
       return "Prepare the isolated API runtime paths, profile, health check, and rollback notes.";
     case "remote_env":
@@ -468,6 +522,308 @@ function canMarkStepComplete(step: DealerSetupStep) {
     (step.status === "in_progress" || step.status === "ready_to_verify" || step.status === "waiting_on_dealer") &&
     ["domains", "api", "remote_env", "google", "twilio", "sendgrid", "inventory", "crm", "profile", "vercel", "manual", "launch_gate"].includes(step.id)
   );
+}
+
+function safeExternalUrl(value: string | undefined) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return "";
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(withProtocol).toString();
+  } catch {
+    return "";
+  }
+}
+
+function hostnameFromUrl(value: string | undefined) {
+  const href = safeExternalUrl(value);
+  if (!href) return "";
+  try {
+    return new URL(href).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function buildVendorWebsiteLinks(setup: DealerSetup | null): VendorWebsiteLink[] {
+  if (!setup) return [];
+  const dealerWebsite = safeExternalUrl(setup.website);
+  const webHost = hostnameFromUrl(setup.appUrl);
+  const apiHost = hostnameFromUrl(setup.apiUrl);
+  const shared = isSharedRouting(setup);
+  return [
+    dealerWebsite
+      ? {
+          id: "dealer-website",
+          label: "Dealer website",
+          href: dealerWebsite,
+          detail: "Reference public dealer site and contact details.",
+          stepId: "intake"
+        }
+      : null,
+    {
+      id: "vercel",
+      label: "Vercel project",
+      href: "https://vercel.com/lead-rider/leadrider-web",
+      detail: "Frontend deployments, domains, and environment variables.",
+      stepId: "vercel"
+    },
+    webHost
+      ? {
+          id: "web-dns-check",
+          label: shared ? "Shared web host check" : "Web DNS check",
+          href: `https://www.whatsmydns.net/#CNAME/${encodeURIComponent(webHost)}`,
+          detail: shared ? "Confirm the shared app host is live." : "Check public web-domain propagation.",
+          stepId: "domains"
+        }
+      : null,
+    apiHost
+      ? {
+          id: "api-dns-check",
+          label: shared ? "Shared API host check" : "API DNS check",
+          href: `https://www.whatsmydns.net/#A/${encodeURIComponent(apiHost)}`,
+          detail: shared ? "Confirm the shared API host is live." : "Check public API-domain propagation.",
+          stepId: "domains"
+        }
+      : null,
+    {
+      id: "twilio-console",
+      label: "Twilio Console",
+      href: "https://console.twilio.com/",
+      detail: "Phone numbers, messaging, A2P/10DLC, and webhooks.",
+      stepId: "twilio"
+    },
+    {
+      id: "sendgrid-sender-auth",
+      label: "SendGrid sender auth",
+      href: "https://app.sendgrid.com/settings/sender_auth",
+      detail: "Sender identity and domain authentication.",
+      stepId: "sendgrid"
+    },
+    {
+      id: "sendgrid-inbound",
+      label: "SendGrid inbound parse",
+      href: "https://app.sendgrid.com/settings/parse",
+      detail: "Inbound ADF/email parse routing.",
+      stepId: "sendgrid"
+    },
+    {
+      id: "google-cloud",
+      label: "Google credentials",
+      href: "https://console.cloud.google.com/apis/credentials",
+      detail: "OAuth credentials and redirect URI setup.",
+      stepId: "google"
+    },
+    {
+      id: "google-calendar",
+      label: "Google Calendar",
+      href: "https://calendar.google.com/",
+      detail: "Calendar/user verification.",
+      stepId: "google"
+    },
+    {
+      id: "openai-usage",
+      label: "OpenAI usage",
+      href: "https://platform.openai.com/usage",
+      detail: "Usage review for tenant launch monitoring.",
+      stepId: "remote_env"
+    }
+  ].filter((link): link is VendorWebsiteLink => Boolean(link));
+}
+
+function apiPath(setup: DealerSetup, path: string) {
+  return `${setup.apiUrl.replace(/\/$/, "")}${path}`;
+}
+
+function buildStepVendorGuide(setup: DealerSetup, step: DealerSetupStep | null, links: VendorWebsiteLink[], deployment: DealerApiDeployment | null): StepVendorGuide | null {
+  if (!step) return null;
+  const linkFor = (...stepIds: string[]) => links.filter(link => stepIds.includes(link.stepId));
+  const appHost = hostnameFromUrl(setup.appUrl);
+  const apiHost = hostnameFromUrl(setup.apiUrl);
+  const shared = isSharedRouting(setup);
+  const routeLabel = routingModeLabel(setup.routingMode);
+  const twilioWebhook = apiPath(setup, "/webhooks/twilio");
+  const sendgridInbound = apiPath(setup, "/crm/leads/adf/sendgrid");
+  const googleCallback = apiPath(setup, "/integrations/google/callback");
+  const commonApproval = "Human approval remains required for vendor submissions, DNS changes, credentials, MFA, billing, legal approval, and production launch.";
+  const guide = (
+    title: string,
+    summary: string,
+    stepLinks: VendorWebsiteLink[],
+    copyValues: StepSetupCopyValue[],
+    milestones: string[],
+    approvalNote = commonApproval
+  ): StepVendorGuide => ({ title, summary, links: stepLinks, copyValues: copyValues.filter(item => item.value), milestones, approvalNote });
+
+  switch (step.id) {
+    case "intake":
+      return guide(
+        "Dealer intake actions",
+        "Confirm the public dealer details and keep the setup record clean before technical work starts.",
+        linkFor("intake"),
+        [
+          { id: "dealer-app-url", label: "Copy LeadRider app URL", value: setup.appUrl, detail: "Save this as the future dealer login URL." },
+          { id: "dealer-api-url", label: "Copy API URL", value: setup.apiUrl, detail: "Use this for vendor callback and health-check planning." },
+          { id: "dealer-routing", label: "Copy routing mode", value: routeLabel, detail: "Record how this dealer will route into LeadRider." }
+        ],
+        ["Dealer website checked", "Legal/DBA/contact details captured", "Plan and billing terms reviewed"]
+      );
+    case "domains":
+      return guide(
+        shared ? "Tenant routing actions" : "Domain actions",
+        shared
+          ? "Confirm shared LeadRider hosts and route mapping. No per-dealer DNS is needed for this routing mode."
+          : "Open DNS checks and copy the target hostnames while the dealer or DNS owner makes changes.",
+        linkFor("domains"),
+        [
+          { id: "route-mode", label: "Copy routing mode", value: routeLabel, detail: "Use this in setup notes and launch review." },
+          { id: "web-host", label: shared ? "Copy shared web host" : "Copy web hostname", value: appHost, detail: shared ? "Confirm this shared host is already configured." : "Use this when requesting or checking the web DNS record." },
+          { id: "api-host", label: shared ? "Copy shared API host" : "Copy API hostname", value: apiHost, detail: shared ? "Confirm this shared host is already configured." : "Use this when requesting or checking the API DNS record." },
+          { id: "tenant-slug", label: "Copy dealer slug", value: setup.slug, detail: "Stable tenant key for shared routing and vendor mapping." }
+        ],
+        shared
+          ? ["Shared hosts verified", "Dealer slug route confirmed", "Provider mapping identified", "Ready to verify app/API routing"]
+          : ["DNS record request sent", "Web domain resolves", "API domain resolves", "Ready to verify in Vercel/API"]
+      );
+    case "vercel":
+      return guide(
+        "Vercel actions",
+        shared
+          ? "Open the Vercel project and confirm the shared app host and dealer slug route."
+          : "Open the Vercel project and prepare the frontend domain setup without changing DNS automatically.",
+        linkFor("vercel", "domains"),
+        [
+          { id: "vercel-app", label: "Copy app URL", value: setup.appUrl, detail: "Use this for the Vercel domain check." },
+          { id: "vercel-api", label: "Copy API URL", value: setup.apiUrl, detail: "Use this when comparing public environment settings." }
+        ],
+        shared
+          ? ["Project opened", "Shared app host reviewed", "Dealer route checked", "Environment values compared"]
+          : ["Project opened", "Domain entries reviewed", "Environment values compared", "DNS verification pending or complete"]
+      );
+    case "twilio":
+      return guide(
+        "Twilio actions",
+        "Open Twilio after the account owner logs in, then prepare number, compliance, and webhook fields.",
+        linkFor("twilio"),
+        [
+          { id: "twilio-webhook", label: "Copy Twilio webhook URL", value: twilioWebhook, detail: "Paste into the inbound messaging webhook after human login/MFA." },
+          { id: "twilio-stop", label: "Copy STOP/HELP language", value: "Reply STOP to opt out. Reply HELP for help.", detail: "Use as the baseline compliance wording for review." }
+        ],
+        ["Phone number selected or porting started", "Webhook field prepared", "A2P/10DLC submitted or waiting", "STOP/HELP/TCPA wording reviewed"]
+      );
+    case "sendgrid":
+      return guide(
+        "SendGrid actions",
+        "Open sender authentication and inbound parse setup after the account owner logs in.",
+        linkFor("sendgrid"),
+        [
+          { id: "sendgrid-inbound-url", label: "Copy inbound parse URL", value: sendgridInbound, detail: "Paste into SendGrid inbound parse after human login/MFA." },
+          { id: "sendgrid-reply-domain", label: "Copy API base URL", value: setup.apiUrl, detail: "Use when validating reply and inbound routing." }
+        ],
+        ["Sender/domain auth opened", "DNS records requested", "Inbound parse URL prepared", "Ready to verify email routing"]
+      );
+    case "google":
+      return guide(
+        "Google actions",
+        "Open Google Cloud or Calendar after the account owner logs in, then prepare OAuth and user checks.",
+        linkFor("google"),
+        [
+          { id: "google-callback", label: "Copy OAuth callback URL", value: googleCallback, detail: "Add as an authorized redirect URI after human login/MFA." },
+          { id: "google-calendar-note", label: "Copy calendar check note", value: `${setup.dealerName}: verify sales/support calendar access`, detail: "Use as the setup note for calendar access review." }
+        ],
+        ["OAuth app selected", "Redirect URI prepared", "Support mail/calendar consent complete", "Users/calendar access verified"]
+      );
+    case "inventory":
+      return guide(
+        "Inventory actions",
+        "Capture the dealer export URL and verify it can be read before launch.",
+        linkFor("intake"),
+        [
+          { id: "inventory-notes", label: "Copy setup notes", value: setup.notes || "", detail: "Use this if the export URL is recorded in dealer notes." }
+        ],
+        ["Export URL captured", "Authentication needs identified", "Sample feed reviewed", "Refresh cadence confirmed"]
+      );
+    case "crm":
+      return guide(
+        "CRM and routing actions",
+        "Prepare the ADF and SMS routing endpoints for the dealer CRM or lead vendor.",
+        linkFor("sendgrid", "twilio"),
+        [
+          { id: "crm-adf-endpoint", label: "Copy ADF endpoint", value: sendgridInbound, detail: "Use for ADF/email lead routing setup." },
+          { id: "crm-twilio-webhook", label: "Copy SMS webhook URL", value: twilioWebhook, detail: "Use for Twilio inbound message routing." },
+          { id: "crm-provider", label: "Copy CRM/source notes", value: setup.crmProvider || "", detail: "Use as the vendor/source mapping reference." }
+        ],
+        ["Lead source mapping reviewed", "ADF endpoint prepared", "SMS routing prepared", "Test lead path identified"]
+      );
+    case "profile":
+      return guide(
+        "Dealer profile actions",
+        "Prepare tone, policy, feature flags, and compliance language before config export.",
+        [],
+        [
+          { id: "profile-notes", label: "Copy profile notes", value: setup.notes || "", detail: "Use this as the source for tone/rules/features." },
+          { id: "profile-config", label: "Copy dealer config JSON", value: setup.dealerConfig ? JSON.stringify(setup.dealerConfig, null, 2) : "", detail: "Use after config generation for review." }
+        ],
+        ["Tone/rules captured", "Compliance wording reviewed", "Features selected", "Dealer config generated"]
+      );
+    case "remote_env":
+      return guide(
+        "Server settings actions",
+        "Prepare the server-only environment values and usage checks without exposing secrets in Command.",
+        linkFor("remote_env"),
+        [
+          { id: "remote-env-template", label: "Copy env template", value: setup.remoteEnvTemplate || "", detail: "Fill secret values only on the server." },
+          { id: "remote-env-api", label: "Copy API URL", value: setup.apiUrl, detail: "Use when checking callback and public base URL settings." }
+        ],
+        ["Required variables listed", "Secret ownership confirmed", "Server paths reviewed", "Usage monitoring link opened"]
+      );
+    case "api":
+      return guide(
+        "API runtime actions",
+        `Prepare isolated Lightsail runtime paths for this dealer using ${routeLabel.toLowerCase()}.`,
+        [],
+        [
+          { id: "api-profile", label: "Copy API deploy profile", value: deployment?.profileText || "", detail: "Use for review before any server change." },
+          { id: "api-routing", label: "Copy routing summary", value: deployment?.routingSummary || routeLabel, detail: "Use for proxy/router review." },
+          { id: "api-nginx-preview", label: "Copy nginx preview", value: deployment?.nginxPreview || "", detail: "Human-review route preview only; do not apply automatically." },
+          { id: "api-health", label: "Copy health URL", value: deployment?.healthUrl || apiPath(setup, "/health"), detail: "Use for smoke test and rollback verification." }
+        ],
+        ["Runtime profile generated", "Dealer data path isolated", "PM2 process and port named", "Proxy route reviewed", "Rollback path reviewed"]
+      );
+    case "manual":
+      return guide(
+        "Manual actions",
+        "Review the generated launch manual and keep it aligned with the setup record.",
+        [],
+        [
+          { id: "manual-url", label: "Copy manual preview URL", value: `/api/dealer-setups/${encodeURIComponent(setup.id)}/manual?format=html`, detail: "Open or share this internal preview for review." }
+        ],
+        ["Manual previewed", "Deployment steps checked", "Human approval gates confirmed", "Download saved if needed"]
+      );
+    case "smoke":
+      return guide(
+        "Smoke test actions",
+        "Run public checks against the dealer web and API endpoints before launch approval.",
+        linkFor("domains"),
+        [
+          { id: "smoke-app", label: "Copy app URL", value: setup.appUrl, detail: "Use for public frontend smoke testing." },
+          { id: "smoke-health", label: "Copy API health URL", value: apiPath(setup, "/health"), detail: "Use for public API smoke testing." }
+        ],
+        ["Frontend reachable", "API health reachable", "Dealer config verifies", "No launch blockers found"]
+      );
+    case "launch_gate":
+      return guide(
+        "Launch gate actions",
+        "Review all vendor approvals, smoke tests, rollback notes, and monitoring before requesting production approval.",
+        links,
+        [
+          { id: "launch-report", label: "Copy launch check report", value: "", detail: "Run launch check first, then copy the report from advanced/debug." }
+        ],
+        ["Vendor approvals confirmed", "Smoke tests passed", "Rollback path confirmed", "Production approval requested"]
+      );
+    default:
+      return null;
+  }
 }
 
 export default function NewDealerClientPage() {
@@ -531,6 +887,11 @@ export default function NewDealerClientPage() {
     }
     return [...groups.entries()];
   }, [selected?.remoteEnvChecklist]);
+  const selectedVendorLinks = useMemo(() => buildVendorWebsiteLinks(selected), [selected]);
+  const currentStepGuide = useMemo(
+    () => (selected ? buildStepVendorGuide(selected, currentStep, selectedVendorLinks, currentApiDeployment) : null),
+    [currentApiDeployment, currentStep, selected, selectedVendorLinks]
+  );
   const hasTechnicalDetails = Boolean(currentApiDeployment || groupedRemoteEnv.length || vercelDomains.length || dnsRecords.length || smokeChecks.length || runtimePackage || launchDryRun);
   const cleanLaunchCheck = Boolean(launchDryRun?.canLaunch);
 
@@ -660,6 +1021,7 @@ export default function NewDealerClientPage() {
       `Dealer address: ${setup.dealerAddress || "not provided"}`,
       `Primary contact: ${setup.primaryContact || "not provided"}`,
       `Website: ${setup.website || "not provided"}`,
+      `Tenant routing: ${routingModeLabel(setup.routingMode)}`,
       `Plan: ${setup.plan || "not provided"}`,
       `Setup fee: ${setup.setupFee || "not provided"}`,
       `Monthly fee: ${setup.monthlyFee || "not provided"}`,
@@ -721,7 +1083,7 @@ export default function NewDealerClientPage() {
       case "vercel":
         return "Prepare website";
       case "domains":
-        return "Prepare domains";
+        return "Prepare routing";
       case "api":
         return "Prepare API server";
       case "remote_env":
@@ -815,21 +1177,22 @@ export default function NewDealerClientPage() {
           ].join("\n")
         : kind === "api"
           ? [
-              `Create the API dealer setup work for ${selected.dealerName}.`,
-              `Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}.`,
-              `Use the clean multi-client API pattern: repo path ${selected.apiDeployment?.repoPath || apiDeployment?.repoPath || `/home/ubuntu/leadrider-api/${selected.slug}`}, env file ${selected.apiDeployment?.envFile || apiDeployment?.envFile || `/home/ubuntu/leadrider-runtime/${selected.slug}/api.env`}, data dir ${selected.apiDeployment?.dataDir || apiDeployment?.dataDir || `/home/ubuntu/leadrider-runtime/${selected.slug}/data`}, PM2 process ${selected.apiDeployment?.pm2Process || apiDeployment?.pm2Process || `leadrider-api-${selected.slug}`}.`,
+	              `Create the API dealer setup work for ${selected.dealerName}.`,
+	              `Tenant routing: ${routingModeLabel(selected.routingMode)}.`,
+	              `Use app URL ${selected.appUrl} and API URL ${selected.apiUrl}.`,
+              `Use the clean multi-client API pattern: repo path ${selected.apiDeployment?.repoPath || apiDeployment?.repoPath || `/home/ubuntu/leadrider-api/${selected.slug}`}, env file ${selected.apiDeployment?.envFile || apiDeployment?.envFile || `/home/ubuntu/leadrider-runtime/${selected.slug}/api.env`}, data dir ${selected.apiDeployment?.dataDir || apiDeployment?.dataDir || `/home/ubuntu/leadrider-runtime/${selected.slug}/data`}, PM2 process ${selected.apiDeployment?.pm2Process || apiDeployment?.pm2Process || `leadrider-api-${selected.slug}`}, local port ${selected.apiDeployment?.localPort || apiDeployment?.localPort || "from the generated deploy profile"}, proxy path ${selected.apiDeployment?.proxyPathPrefix || apiDeployment?.proxyPathPrefix || "from the generated deploy profile"}, and proxy target ${selected.apiDeployment?.proxyTarget || apiDeployment?.proxyTarget || "from the generated deploy profile"}.`,
               `Deploy profile: ${selected.apiDeployment?.deployProfileLocalPath || apiDeployment?.deployProfileLocalPath || `infra/deploy/${selected.slug}.api.env`}.`,
-              "Prepare dealer profile/config, routing defaults, owner/calendar placeholders, domain/callback settings, env requirements, and deploy/smoke-test steps.",
+	              "Prepare dealer profile/config, routing defaults, owner/calendar placeholders, tenant route/callback settings, env requirements, and deploy/smoke-test steps.",
               "Do not overwrite existing clients or shared American Harley paths."
             ].join("\n")
         : kind === "providers"
           ? `Create provider setup tasks for ${selected.dealerName}. Cover Google Workspace/Gmail/calendar, Twilio messaging/phone, SendGrid sender/domain, Sentry, Linear, Slack, OpenAI usage logging, and Meta only if that feature is enabled. Separate steps that Codex can do from steps needing human login, billing, OAuth consent, phone verification, or credentials.`
         : kind === "texting"
           ? `Create the texting setup plan for ${selected.dealerName}. Cover Twilio number selection or porting, A2P/10DLC brand/campaign registration, opt-in and STOP/HELP compliance language, inbound/outbound routing, salesperson ownership, support escalation, campaign safeguards, and smoke tests. Separate what Codex can prepare from anything requiring human login, billing, consent, carrier verification, or credentials.`
-        : kind === "stack"
-          ? `Create the full tech-stack setup plan for ${selected.dealerName}. Include Vercel app domains, DNS records, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, optional Meta app/callback if enabled, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
-        : kind === "vercel"
-          ? `Prepare Vercel deployment steps for ${selected.dealerName}. Target app URL: ${selected.appUrl}. Target API URL: ${selected.apiUrl}. List required Vercel project/domain/env changes and DNS records. Do not make external changes without approval.`
+	        : kind === "stack"
+	          ? `Create the full tech-stack setup plan for ${selected.dealerName}. Tenant routing is ${routingModeLabel(selected.routingMode)}. Include Vercel app routing/domains, DNS records only if needed, API dealer profile/config, Google Workspace/Gmail/calendar, Twilio phone/messaging, SendGrid sender/domain, OpenAI usage logging, optional Meta app/callback if enabled, Sentry, Linear, Slack alerts, smoke tests, and handoff steps. Identify which steps can be automated now and which require human login, billing, verification, OAuth consent, or credentials.`
+	        : kind === "vercel"
+	          ? `Prepare Vercel deployment steps for ${selected.dealerName}. Tenant routing is ${routingModeLabel(selected.routingMode)}. Target app URL: ${selected.appUrl}. Target API URL: ${selected.apiUrl}. List required Vercel project/domain/env changes and DNS records only if needed. Do not make external changes without approval.`
           : `Run dealer setup review for ${selected.dealerName}. Check onboarding blockers across Vercel, DNS, API dealer config, Google, Twilio, SendGrid, optional Meta only if enabled, agreement, and smoke testing. Return the next action list.`;
     try {
       const resp = await fetch("/api/agent-tasks", {
@@ -876,7 +1239,7 @@ export default function NewDealerClientPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "DNS checklist could not be generated.");
       setDnsRecords(Array.isArray(data.records) ? data.records : []);
       if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
-      setNotice("DNS checklist generated for the dealer app and API domains.");
+      setNotice(isSharedRouting(selected) ? "Tenant routing checklist generated for the shared app/API hosts." : "DNS checklist generated for the dealer app and API domains.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "DNS checklist could not be generated.");
     } finally {
@@ -928,6 +1291,16 @@ export default function NewDealerClientPage() {
       setNotice("Dealer config JSON copied.");
     } catch {
       setNotice("Could not copy the dealer config from this browser.");
+    }
+  }
+
+  async function copySetupValue(label: string, value: string) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value.endsWith("\n") ? value : `${value}\n`);
+      setNotice(`${label} copied.`);
+    } catch {
+      setNotice(`Could not copy ${label.toLowerCase()} from this browser.`);
     }
   }
 
@@ -1070,7 +1443,7 @@ export default function NewDealerClientPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Vercel domains could not be added.");
       setVercelDomains(Array.isArray(data.domains) ? data.domains : []);
       if (data.setup) setSetups(current => current.map(row => (row.id === data.setup.id ? data.setup : row)));
-      setNotice("Vercel domains added or confirmed. DNS may still need to be pointed and verified.");
+      setNotice(isSharedRouting(selected) ? "Shared Vercel host confirmed for dealer routing review." : "Vercel domains added or confirmed. DNS may still need to be pointed and verified.");
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Vercel domains could not be added.");
     } finally {
@@ -1152,6 +1525,129 @@ export default function NewDealerClientPage() {
           </section>
         ) : null}
 
+        {selected && currentStep && currentStepGuide ? (
+          <section className="lr-ceo-step-guide-card">
+            <div className="lr-ceo-panel-title">
+              <div>
+                <p className="lr-ceo-kicker">Current step actions</p>
+                <h3>{currentStepGuide.title}</h3>
+                <p>{currentStepGuide.summary}</p>
+              </div>
+              <span className={`lr-ceo-status-pill ${statusClass(currentStep.status)}`}>{statusLabel(currentStep.status)}</span>
+            </div>
+            <div className="lr-ceo-step-guide-actions">
+              {currentStepGuide.links.map(link => (
+                <a key={link.id} className="lr-ceo-step-action" href={link.href} target="_blank" rel="noreferrer">
+                  <strong>{link.label}</strong>
+                  <span>{link.detail}</span>
+                </a>
+              ))}
+              {currentStepGuide.copyValues.map(item => (
+                <button key={item.id} type="button" className="lr-ceo-step-action" onClick={() => copySetupValue(item.label, item.value)}>
+                  <strong>{item.label}</strong>
+                  <span>{item.detail}</span>
+                </button>
+              ))}
+	              {currentStep.id === "domains" ? (
+	                <>
+	                  <button type="button" className="lr-ceo-step-action" onClick={generateDnsChecklist} disabled={actionBusy}>
+	                    <strong>{isSharedRouting(selected) ? "Generate routing checklist" : "Generate DNS checklist"}</strong>
+	                    <span>{isSharedRouting(selected) ? "Create the shared host and tenant mapping checklist." : "Create the records to send to the DNS owner."}</span>
+	                  </button>
+	                  <button type="button" className="lr-ceo-step-action" onClick={checkVercelDomains} disabled={vercelBusy}>
+	                    <strong>{isSharedRouting(selected) ? "Check shared host" : "Check Vercel domains"}</strong>
+	                    <span>{isSharedRouting(selected) ? "Verify whether the shared app host is visible." : "Verify whether the app domains are added and visible."}</span>
+	                  </button>
+	                </>
+	              ) : null}
+              {currentStep.id === "vercel" ? (
+                <>
+	                  <button type="button" className="lr-ceo-step-action" onClick={checkVercelDomains} disabled={vercelBusy}>
+	                    <strong>{isSharedRouting(selected) ? "Check shared app host" : "Check domains"}</strong>
+	                    <span>{isSharedRouting(selected) ? "Read current Vercel status for the shared app host." : "Read current Vercel domain status."}</span>
+	                  </button>
+	                  <button type="button" className="lr-ceo-step-action" onClick={addVercelDomains} disabled={vercelBusy}>
+	                    <strong>{isSharedRouting(selected) ? "Confirm shared host" : "Add Vercel domains"}</strong>
+	                    <span>{isSharedRouting(selected) ? "Explicitly confirm the shared host in Vercel." : "Explicitly add or confirm domains in Vercel."}</span>
+	                  </button>
+                </>
+              ) : null}
+              {currentStep.id === "api" ? (
+                <>
+                  <button type="button" className="lr-ceo-step-action" onClick={generateApiDeployProfile} disabled={actionBusy}>
+                    <strong>API deploy profile</strong>
+                    <span>Generate isolated Lightsail paths for review.</span>
+                  </button>
+                  <button type="button" className="lr-ceo-step-action" onClick={generateRuntimePackage} disabled={runtimePackageBusy}>
+                    <strong>Launch packet</strong>
+                    <span>Build the dealer runtime files for verification.</span>
+                  </button>
+                </>
+              ) : null}
+              {currentStep.id === "remote_env" ? (
+                <>
+                  <button type="button" className="lr-ceo-step-action" onClick={copyRemoteEnvTemplate} disabled={!selected.remoteEnvTemplate}>
+                    <strong>Copy env template</strong>
+                    <span>Copy server settings without secret values.</span>
+                  </button>
+                  <button type="button" className="lr-ceo-step-action" onClick={() => createSetupTask("stack")} disabled={taskBusy}>
+                    <strong>Create stack task</strong>
+                    <span>Hand off remaining server and vendor settings.</span>
+                  </button>
+                </>
+              ) : null}
+              {currentStep.id === "twilio" ? (
+                <button type="button" className="lr-ceo-step-action" onClick={() => createSetupTask("texting")} disabled={taskBusy}>
+                  <strong>Create texting task</strong>
+                  <span>Prepare Twilio and compliance work for Codex review.</span>
+                </button>
+              ) : null}
+              {["sendgrid", "google", "inventory", "crm"].includes(currentStep.id) ? (
+                <button type="button" className="lr-ceo-step-action" onClick={() => createSetupTask("providers")} disabled={taskBusy}>
+                  <strong>Create provider task</strong>
+                  <span>Hand off vendor checklist prep without final submissions.</span>
+                </button>
+              ) : null}
+              {currentStep.id === "manual" ? (
+                <>
+                  <a className="lr-ceo-step-action" href={`${manualBaseHref}?format=html`} target="_blank" rel="noreferrer">
+                    <strong>Preview manual</strong>
+                    <span>Open the printable deployment manual.</span>
+                  </a>
+                  <a className="lr-ceo-step-action" href={`${manualBaseHref}?format=markdown&download=1`}>
+                    <strong>Download manual</strong>
+                    <span>Save a markdown copy for launch review.</span>
+                  </a>
+                </>
+              ) : null}
+              {currentStep.id === "smoke" ? (
+                <button type="button" className="lr-ceo-step-action" onClick={runSmokeTest} disabled={actionBusy}>
+                  <strong>Run smoke test</strong>
+                  <span>Check public app and API endpoints.</span>
+                </button>
+              ) : null}
+              {currentStep.id === "launch_gate" ? (
+                <>
+                  <button type="button" className="lr-ceo-step-action" onClick={runLaunchDryRun} disabled={launchDryRunBusy}>
+                    <strong>Run launch check</strong>
+                    <span>Review blockers before production approval.</span>
+                  </button>
+                  {launchDryRun ? (
+                    <button type="button" className="lr-ceo-step-action" onClick={copyLaunchDryRun}>
+                      <strong>Copy launch report</strong>
+                      <span>Copy the latest launch check details.</span>
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+            <div className="lr-ceo-step-guide-milestones">
+              {currentStepGuide.milestones.map(item => <span key={item}>{item}</span>)}
+            </div>
+            <p className="lr-ceo-step-guide-approval">{currentStepGuide.approvalNote}</p>
+          </section>
+        ) : null}
+
         {stepResult ? (
           <section className={`lr-ceo-step-result ${stepResult.blocked ? "is-blocked" : "is-ready"}`}>
             <strong>{stepResult.message}</strong>
@@ -1173,11 +1669,21 @@ export default function NewDealerClientPage() {
               <label>
                 Dealer name
                 <input value={form.dealerName} onChange={event => updateField("dealerName", event.target.value)} placeholder="American Harley-Davidson" />
-              </label>
-              <label>
-                Subdomain slug
-                <input value={form.slug} onChange={event => updateField("slug", event.target.value)} placeholder="americanharley" />
-              </label>
+	              </label>
+	              <label>
+	                Dealer slug
+	                <input value={form.slug} onChange={event => updateField("slug", event.target.value)} placeholder="americanharley" />
+	                <span className="lr-ceo-field-note">Stable tenant ID used for routing, reporting, config, and smoke tests.</span>
+	              </label>
+	              <label>
+	                Tenant routing
+	                <select value={form.routingMode} onChange={event => updateField("routingMode", event.target.value as DealerRoutingMode)}>
+	                  <option value="path">Shared app/API paths</option>
+	                  <option value="integration_mapping">Shared provider mapping (future router)</option>
+	                  <option value="subdomain">Separate dealer subdomains</option>
+	                </select>
+	                <span className="lr-ceo-field-note">{routingModeDescription(form.routingMode)}</span>
+	              </label>
               <label>
                 Owner
                 <input value={form.owner} onChange={event => updateField("owner", event.target.value)} />
@@ -1305,12 +1811,21 @@ export default function NewDealerClientPage() {
                     <label>
                       Dealer name
                       <input value={editForm.dealerName} onChange={event => updateEditField("dealerName", event.target.value)} />
-                    </label>
-                    <label>
-                      Subdomain slug
-                      <input value={editForm.slug} disabled />
-                      <span className="lr-ceo-field-note">Create a new setup if the slug needs to change.</span>
-                    </label>
+	                    </label>
+	                    <label>
+	                      Dealer slug
+	                      <input value={editForm.slug} disabled />
+	                      <span className="lr-ceo-field-note">Create a new setup if the slug needs to change.</span>
+	                    </label>
+	                    <label>
+	                      Tenant routing
+	                      <select value={editForm.routingMode} onChange={event => updateEditField("routingMode", event.target.value as DealerRoutingMode)}>
+	                        <option value="path">Shared app/API paths</option>
+	                        <option value="integration_mapping">Shared provider mapping (future router)</option>
+	                        <option value="subdomain">Separate dealer subdomains</option>
+	                      </select>
+	                      <span className="lr-ceo-field-note">{routingModeDescription(editForm.routingMode)}</span>
+	                    </label>
                     <label>
                       Owner
                       <input value={editForm.owner} onChange={event => updateEditField("owner", event.target.value)} />
@@ -1385,8 +1900,9 @@ export default function NewDealerClientPage() {
                 <div className="lr-ceo-progress">
                   <span style={{ width: `${completion}%` }} />
                 </div>
-                <dl className="lr-ceo-facts">
-                  <div><dt>App URL</dt><dd>{selected.appUrl}</dd></div>
+	                <dl className="lr-ceo-facts">
+	                  <div><dt>Routing</dt><dd>{routingModeLabel(selected.routingMode)}</dd></div>
+	                  <div><dt>App URL</dt><dd>{selected.appUrl}</dd></div>
                   <div><dt>API URL</dt><dd>{selected.apiUrl}</dd></div>
                   <div><dt>Command</dt><dd>{selected.commandUrl}</dd></div>
                   <div><dt>Updated</dt><dd>{formatTime(selected.updatedAt)}</dd></div>
@@ -1487,6 +2003,26 @@ export default function NewDealerClientPage() {
                     </div>
                   </section>
                 ) : null}
+                {selectedVendorLinks.length ? (
+                  <section className="lr-ceo-vendor-card">
+                    <div className="lr-ceo-panel-title">
+                      <div>
+                        <p className="lr-ceo-kicker">Vendor websites</p>
+                        <h3>Open setup dashboards</h3>
+                        <p>Use these links for human-led setup. They open external sites only; final submissions, DNS changes, credentials, MFA, billing, and legal approvals still require explicit approval.</p>
+                      </div>
+                    </div>
+                    <div className="lr-ceo-vendor-grid">
+                      {selectedVendorLinks.map(link => (
+                        <a key={link.id} className="lr-ceo-vendor-link" href={link.href} target="_blank" rel="noreferrer">
+                          <strong>{link.label}</strong>
+                          <span>{link.detail}</span>
+                          <small>{setupStepLabel(selected, link.stepId)}</small>
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
                 {selected.launchChecklist?.length ? (
                   <section className="lr-ceo-launch-card">
                     <div className="lr-ceo-panel-title">
@@ -1548,21 +2084,21 @@ export default function NewDealerClientPage() {
                           </button>
                         </div>
                       </section>
-                      <section className="lr-ceo-advanced-group">
-                        <div>
-                          <h4>Website and domains</h4>
-                          <small>Prepare Vercel and DNS details. DNS changes still need human approval.</small>
-                        </div>
-                        <div className="lr-ceo-action-row">
-                          <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
-                            Check domains
-                          </button>
-                          <button type="button" className="lr-ceo-secondary-btn" onClick={addVercelDomains} disabled={vercelBusy}>
-                            Add Vercel domains
-                          </button>
-                          <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
-                            DNS checklist
-                          </button>
+	                      <section className="lr-ceo-advanced-group">
+	                        <div>
+	                          <h4>Website and routing</h4>
+	                          <small>Prepare Vercel, tenant routing, and DNS details when needed. External changes still need human approval.</small>
+	                        </div>
+	                        <div className="lr-ceo-action-row">
+	                          <button type="button" className="lr-ceo-secondary-btn" onClick={checkVercelDomains} disabled={vercelBusy}>
+	                            {isSharedRouting(selected) ? "Check shared host" : "Check domains"}
+	                          </button>
+	                          <button type="button" className="lr-ceo-secondary-btn" onClick={addVercelDomains} disabled={vercelBusy}>
+	                            {isSharedRouting(selected) ? "Confirm Vercel host" : "Add Vercel domains"}
+	                          </button>
+	                          <button type="button" className="lr-ceo-secondary-btn" onClick={generateDnsChecklist} disabled={actionBusy}>
+	                            {isSharedRouting(selected) ? "Routing checklist" : "DNS checklist"}
+	                          </button>
                         </div>
                       </section>
                       <section className="lr-ceo-advanced-group">
@@ -1726,6 +2262,16 @@ export default function NewDealerClientPage() {
                           <strong>{currentApiDeployment.pm2Process}</strong>
                           <small>{currentApiDeployment.healthUrl}</small>
                         </div>
+                        <div>
+                          <span>Port</span>
+                          <strong>{currentApiDeployment.localPort || "Not generated"}</strong>
+                          <small>{currentApiDeployment.internalBaseUrl || "Local API process"}</small>
+                        </div>
+                        <div>
+                          <span>Proxy</span>
+                          <strong>{currentApiDeployment.proxyPathPrefix || "/"}</strong>
+                          <small>{currentApiDeployment.proxyTarget || "Review generated route."}</small>
+                        </div>
                         <div className="lr-ceo-deploy-profile">
                           <span>Profile</span>
                           <pre>{currentApiDeployment.profileText}</pre>
@@ -1733,6 +2279,13 @@ export default function NewDealerClientPage() {
                             Copy profile
                           </button>
                         </div>
+                        {currentApiDeployment.nginxPreview ? (
+                          <div className="lr-ceo-deploy-profile">
+                            <span>Nginx preview</span>
+                            <pre>{currentApiDeployment.nginxPreview}</pre>
+                            <small>Human-review only. Do not apply without approval.</small>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     {selected.dealerConfig ? (

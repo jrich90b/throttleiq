@@ -4509,6 +4509,12 @@ output: {"disposition":"defer_with_window","explicit_disposition":true,"timefram
     `EXAMPLE C2
 inbound: "I can't do it now but I'm thinking maybe next spring."
 output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"next spring","confidence":0.94}`,
+    `EXAMPLE C3
+inbound: "Alright let me think about it i will get back to you in several days"
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"in several days","confidence":0.94}`,
+    `EXAMPLE C4
+inbound: "Give me a few days to think it over and I will let you know"
+output: {"disposition":"defer_with_window","explicit_disposition":true,"timeframe_text":"a few days","confidence":0.93}`,
     `EXAMPLE D
 inbound: "I need to talk to my wife first."
 output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.86}`,

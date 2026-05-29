@@ -52,7 +52,7 @@ function coreFacts(setup: DealerSetup) {
     `API URL: ${setup.apiUrl}`,
     `Website: ${setup.website || "not provided"}`,
     `Primary contact: ${setup.primaryContact || "not provided"}`,
-    `Sandbox: yes. Do not deploy or change live American Harley vendor settings.`
+    `Sandbox: yes. Do not deploy or change production vendor settings.`
   ].join("\n");
 }
 
@@ -62,7 +62,7 @@ function buildSteps(setup: DealerSetup): WorkflowStep[] {
     {
       id: "intake",
       status: "done",
-      note: "Sandbox intake confirmed from American Harley baseline."
+      note: "Sandbox intake confirmed from the setup record."
     },
     {
       id: "domains",
@@ -137,7 +137,7 @@ function buildSteps(setup: DealerSetup): WorkflowStep[] {
     {
       id: "inventory",
       status: "ready_to_verify",
-      note: "Inventory/export URL captured from current American Harley baseline; ready for parser/import validation.",
+      note: "Inventory/export URL captured from the setup record; ready for parser/import validation.",
       task: {
         title: `Validate ${setup.dealerName} sandbox inventory export`,
         kind: "dealer_setup",
@@ -154,7 +154,7 @@ function buildSteps(setup: DealerSetup): WorkflowStep[] {
     {
       id: "crm",
       status: "ready_to_verify",
-      note: "CRM/ADF/Twilio routing checklist created from baseline provider assumptions.",
+      note: "CRM/ADF/Twilio routing checklist created from setup provider assumptions.",
       task: {
         title: `Validate ${setup.dealerName} sandbox CRM routing`,
         kind: "dealer_setup",
@@ -256,7 +256,7 @@ function buildSteps(setup: DealerSetup): WorkflowStep[] {
     {
       id: "smoke",
       status: "blocked",
-      note: "Sandbox public domains are intentionally not live; use live americanharley as read-only canary until sandbox deployment is approved.",
+      note: "Sandbox public domains are intentionally not assumed live; run smoke tests only after sandbox deployment is approved.",
       task: {
         title: `Run ${setup.dealerName} sandbox smoke plan`,
         kind: "dealer_setup",
@@ -313,7 +313,7 @@ async function ensureTask(setup: DealerSetup, step: WorkflowStep) {
         : "Sandbox setup task can affect production-like routing or external provider setup, so human approval is required before action."
     },
     requestedBy: {
-      name: "American Harley Sandbox Workflow",
+      name: "Dealer Sandbox Workflow",
       role: "system"
     }
   });
@@ -345,7 +345,7 @@ async function main() {
   const { getDealerSetup, listDealerSetups, updateDealerSetup } = await import("../services/api/src/domain/dealerSetupStore.js");
   const setup = (await listDealerSetups(500)).find(row => row.slug === slug);
   if (!setup) {
-    throw new Error(`Dealer setup with slug "${slug}" was not found. Run npm run dealer:seed:american-harley-sandbox first.`);
+    throw new Error(`Dealer setup with slug "${slug}" was not found. Run npm run dealer:sandbox:seed -- --slug ${slug} first.`);
   }
 
   const taskResults: Array<{ stepId: string; taskId: string; status: string }> = [];

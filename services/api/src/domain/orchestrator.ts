@@ -2660,8 +2660,7 @@ export async function orchestrateInbound(
         hasSchedulingIntent(event.body) ||
         /(stop in|come in|come by|stop by|swing by|try to stop|try to come|head in|head over|make it in|make it|what about)/i.test(
           event.body
-        ) ||
-        !!requestedDay;
+        );
       const salesLead =
         !!ctx?.lead?.vehicle?.model ||
         !!ctx?.lead?.vehicle?.description ||

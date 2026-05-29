@@ -28,6 +28,7 @@ export type DealerRuntimePackageManifest = {
     deployReadiness: DealerSetup["deployReadiness"];
   };
   runtime: {
+    routingMode: DealerSetup["routingMode"];
     appUrl: string;
     apiUrl: string;
     apiHostname?: string;
@@ -37,7 +38,12 @@ export type DealerRuntimePackageManifest = {
     envFile?: string;
     dealerProfilePath?: string;
     pm2Process?: string;
+    localPort?: number;
+    internalBaseUrl?: string;
     healthUrl?: string;
+    proxyPathPrefix?: string;
+    proxyTarget?: string;
+    nginxPreviewPath?: string;
     deployProfileLocalPath?: string;
   };
   commands: {
@@ -173,6 +179,7 @@ function buildVercelEnvTemplate(setup: DealerSetup) {
     `NEXT_PUBLIC_API_BASE_URL=${cleanBase(setup.apiUrl)}`,
     `NEXT_PUBLIC_APP_BASE_URL=${cleanBase(setup.appUrl)}`,
     `NEXT_PUBLIC_DEALER_SLUG=${setup.slug}`,
+    `NEXT_PUBLIC_TENANT_ROUTING_MODE=${setup.routingMode}`,
     ""
   ].join("\n");
 }
@@ -235,6 +242,7 @@ function buildReadme(setup: DealerSetup, packageDir: string) {
     "- `config/dealer-config.json`: normalized dealer config standard",
     "- `config/dealer_profile.json`: dealer runtime profile for `DEALER_PROFILE_PATH`",
     `- \`${profilePath}\`: Lightsail API deploy profile with no secrets`,
+    `- \`${deployment?.nginxPreviewPath || `deploy/${setup.slug}.nginx.conf.preview`}\`: human-review nginx route preview; do not apply automatically`,
     "- `env/remote-api.env.template`: remote API env template; fill secrets directly on the server",
     "- `env/vercel.env.template`: Vercel env values for the dealer web project",
     "- `manual/deployment-manual.md`: dealer deployment manual",
@@ -248,6 +256,7 @@ function buildReadme(setup: DealerSetup, packageDir: string) {
     "```bash",
     `npm run dealer:config:verify -- --slug ${setup.slug} --package ${packageDir}`,
     `npm run dealer:runtime-isolation:eval -- --sandbox ${setup.slug}`,
+    `npm run dealer:smoke -- --dealer ${setup.slug} --routing-mode ${setup.routingMode}`,
     "```",
     "",
     "## Deployment Preparation",
@@ -265,6 +274,10 @@ function buildReadme(setup: DealerSetup, packageDir: string) {
     "",
     `Remote API env target: \`${deployment?.envFile || "not generated"}\``,
     `Remote dealer profile target: \`${deployment?.dataDir ? `${deployment.dataDir}/dealer_profile.json` : "not generated"}\``,
+    `Remote API local port: \`${deployment?.localPort ?? "not generated"}\``,
+    `Proxy path prefix: \`${deployment?.proxyPathPrefix || "not generated"}\``,
+    `Proxy target: \`${deployment?.proxyTarget || "not generated"}\``,
+    `Tenant routing mode: \`${setup.routingMode}\``,
     "",
     "Fill real secret values only on the server or in the vendor system that owns them. Do not commit API keys, Twilio tokens, SendGrid keys, Google credentials, OAuth tokens, or vendor credentials.",
     ""
@@ -290,6 +303,7 @@ function buildManifest(setup: DealerSetup, packageDir: string, generatedAt: stri
       deployReadiness: setup.deployReadiness
     },
     runtime: {
+      routingMode: setup.routingMode,
       appUrl: setup.appUrl,
       apiUrl: setup.apiUrl,
       apiHostname: deployment?.apiHostname,
@@ -299,13 +313,18 @@ function buildManifest(setup: DealerSetup, packageDir: string, generatedAt: stri
       envFile: deployment?.envFile,
       dealerProfilePath: deployment?.dataDir ? `${deployment.dataDir}/dealer_profile.json` : undefined,
       pm2Process: deployment?.pm2Process,
+      localPort: deployment?.localPort,
+      internalBaseUrl: deployment?.internalBaseUrl,
       healthUrl: deployment?.healthUrl,
+      proxyPathPrefix: deployment?.proxyPathPrefix,
+      proxyTarget: deployment?.proxyTarget,
+      nginxPreviewPath: deployment?.nginxPreviewPath,
       deployProfileLocalPath: deployment?.deployProfileLocalPath
     },
     commands: {
       verifyPackage: `npm run dealer:config:verify -- --slug ${setup.slug} --package ${packageDir}`,
       deployDryRun: deployment ? `npm run deploy:api -- --profile ${deployment.deployProfileLocalPath} --dry-run` : undefined,
-      smoke: `npm run dealer:smoke -- --dealer ${setup.slug}`
+      smoke: `npm run dealer:smoke -- --dealer ${setup.slug} --routing-mode ${setup.routingMode}`
     },
     approvalStops: [
       "DNS changes",
@@ -348,6 +367,11 @@ function buildPackageFileInputs(setup: DealerSetup, packageDir: string, generate
       path: profilePath,
       content: setup.apiDeployment?.profileText ?? "",
       description: "Lightsail API deploy profile. Contains runtime paths, not secrets."
+    },
+    {
+      path: setup.apiDeployment?.nginxPreviewPath || `deploy/${setup.slug}.nginx.conf.preview`,
+      content: setup.apiDeployment?.nginxPreview ?? "",
+      description: "Human-review nginx route preview for the dealer API runtime. Not applied automatically."
     },
     {
       path: "env/remote-api.env.template",
@@ -453,6 +477,7 @@ export function verifyDealerRuntimePackage(setup: DealerSetup, pkg: DealerRuntim
     "config/dealer-config.json",
     "config/dealer_profile.json",
     `deploy/${setup.slug}.api.env`,
+    setup.apiDeployment?.nginxPreviewPath || `deploy/${setup.slug}.nginx.conf.preview`,
     "env/remote-api.env.template",
     "env/vercel.env.template",
     "manual/deployment-manual.md",
@@ -468,6 +493,7 @@ export function verifyDealerRuntimePackage(setup: DealerSetup, pkg: DealerRuntim
   const dealerConfig = parseJsonFile(files, "config/dealer-config.json", failures);
   const dealerProfile = parseJsonFile(files, "config/dealer_profile.json", failures);
   const deployProfile = readEnv(files.get(`deploy/${setup.slug}.api.env`)?.content ?? "");
+  const nginxPreview = files.get(deployment?.nginxPreviewPath || `deploy/${setup.slug}.nginx.conf.preview`)?.content ?? "";
   const remoteEnv = readEnv(files.get("env/remote-api.env.template")?.content ?? "");
   const vercelEnv = readEnv(files.get("env/vercel.env.template")?.content ?? "");
   const smokeScript = files.get("scripts/smoke-test.sh")?.content ?? "";
@@ -477,6 +503,10 @@ export function verifyDealerRuntimePackage(setup: DealerSetup, pkg: DealerRuntim
   if (manifest?.runtime?.dataDir !== deployment?.dataDir) failures.push("manifest dataDir does not match generated deployment.");
   if (manifest?.runtime?.envFile !== deployment?.envFile) failures.push("manifest envFile does not match generated deployment.");
   if (manifest?.runtime?.pm2Process !== deployment?.pm2Process) failures.push("manifest pm2Process does not match generated deployment.");
+  if (manifest?.runtime?.localPort !== deployment?.localPort) failures.push("manifest localPort does not match generated deployment.");
+  if (manifest?.runtime?.proxyPathPrefix !== deployment?.proxyPathPrefix) failures.push("manifest proxyPathPrefix does not match generated deployment.");
+  if (manifest?.runtime?.proxyTarget !== deployment?.proxyTarget) failures.push("manifest proxyTarget does not match generated deployment.");
+  if (manifest?.runtime?.nginxPreviewPath !== deployment?.nginxPreviewPath) failures.push("manifest nginxPreviewPath does not match generated deployment.");
   for (const file of Array.isArray(manifest?.files) ? manifest.files : []) {
     const rel = String(file?.path ?? "");
     const expected = String(file?.sha256 ?? "");
@@ -499,16 +529,28 @@ export function verifyDealerRuntimePackage(setup: DealerSetup, pkg: DealerRuntim
     requireEnv(deployProfile, "DEPLOY_DATA_DIR", deployment.dataDir, failures, "deploy profile");
     requireEnv(deployProfile, "DEPLOY_ENV_FILE", deployment.envFile, failures, "deploy profile");
     requireEnv(deployProfile, "DEPLOY_PM2_PROCESS", deployment.pm2Process, failures, "deploy profile");
+    requireEnv(deployProfile, "DEPLOY_API_PORT", String(deployment.localPort), failures, "deploy profile");
     requireEnv(deployProfile, "DEPLOY_HEALTH_URL", deployment.healthUrl, failures, "deploy profile");
+    requireEnv(deployProfile, "DEPLOY_PROXY_PATH_PREFIX", deployment.proxyPathPrefix, failures, "deploy profile");
+    requireEnv(deployProfile, "DEPLOY_PROXY_TARGET", deployment.proxyTarget, failures, "deploy profile");
+    requireEnv(remoteEnv, "PORT", String(deployment.localPort), failures, "remote env template");
     requireEnv(remoteEnv, "DATA_DIR", deployment.dataDir, failures, "remote env template");
     requireEnv(remoteEnv, "DEALER_PROFILE_PATH", `${deployment.dataDir}/dealer_profile.json`, failures, "remote env template");
+    if (deployment.routingMode !== "integration_mapping") {
+      if (!nginxPreview.includes(String(deployment.localPort))) failures.push("nginx preview does not include dealer local port.");
+      if (!nginxPreview.includes(deployment.proxyPathPrefix)) failures.push("nginx preview does not include proxy path prefix.");
+    } else if (!nginxPreview.includes("not a standalone nginx-only production route")) {
+      warnings.push("Integration-mapping nginx preview should state that a shared tenant router is required.");
+    }
   }
   requireEnv(remoteEnv, "DEALER_SLUG", setup.slug, failures, "remote env template");
+  requireEnv(remoteEnv, "TENANT_ROUTING_MODE", setup.routingMode, failures, "remote env template");
   requireEnv(remoteEnv, "PUBLIC_BASE_URL", setup.apiUrl, failures, "remote env template");
   requireEnv(remoteEnv, "APP_BASE_URL", setup.appUrl, failures, "remote env template");
   requireEnv(remoteEnv, "API_BASE_URL", setup.apiUrl, failures, "remote env template");
   requireEnv(vercelEnv, "API_BASE_URL", setup.apiUrl, failures, "Vercel env template");
   requireEnv(vercelEnv, "NEXT_PUBLIC_API_BASE_URL", setup.apiUrl, failures, "Vercel env template");
+  requireEnv(vercelEnv, "NEXT_PUBLIC_TENANT_ROUTING_MODE", setup.routingMode, failures, "Vercel env template");
   if (!smokeScript.includes(setup.appUrl)) failures.push("smoke-test.sh does not include dealer app URL.");
   if (!smokeScript.includes(setup.apiUrl)) failures.push("smoke-test.sh does not include dealer API URL.");
   for (const phrase of ["DNS", "Vercel", "Twilio", "SendGrid", "Google", "Legal"]) {

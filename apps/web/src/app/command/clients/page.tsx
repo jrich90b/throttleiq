@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 type ClientStatus = "active" | "implementation" | "paused" | "canceled";
-type PaymentMethod = "ach" | "card" | "check" | "wire" | "other";
+type PaymentMethod = "ach" | "card" | "check" | "wire" | "stripe" | "other";
 
 type ClientPayment = {
   id: string;
@@ -52,6 +52,16 @@ type ActiveClient = {
   achMandateStatus?: string;
   bankLast4?: string;
   paymentTerms?: string;
+  stripeMode?: "test" | "live";
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  stripeSubscriptionStatus?: string;
+  stripeLatestCheckoutSessionId?: string;
+  stripeLatestCheckoutSessionUrl?: string;
+  stripeLatestInvoiceId?: string;
+  stripeLastPaymentStatus?: string;
+  stripeCurrentPeriodEnd?: string;
+  stripeBillingStatusUpdatedAt?: string;
   notes?: string;
   payments: ClientPayment[];
   createdAt: string;
@@ -178,6 +188,12 @@ function statusClass(status: ClientStatus) {
   return "is-blocked";
 }
 
+function stripeCustomerUrl(client: ActiveClient) {
+  if (!client.stripeCustomerId) return "";
+  const mode = client.stripeMode === "live" ? "" : "/test";
+  return `https://dashboard.stripe.com${mode}/customers/${encodeURIComponent(client.stripeCustomerId)}`;
+}
+
 export default function ActiveClientsPage() {
   const [clients, setClients] = useState<ActiveClient[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -210,17 +226,7 @@ export default function ActiveClientsPage() {
     [selected]
   );
 
-  useEffect(() => {
-    void loadClients();
-  }, []);
-
-  useEffect(() => {
-    if (!selected) return;
-    setSelectedId(selected.id);
-    setForm(toForm(selected));
-  }, [selected?.id]);
-
-  async function loadClients() {
+  const loadClients = useCallback(async () => {
     setBusy(true);
     try {
       const resp = await fetch("/api/active-clients?limit=250", { cache: "no-store" });
@@ -228,13 +234,23 @@ export default function ActiveClientsPage() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Active clients could not be loaded.");
       const rows = Array.isArray(data.clients) ? data.clients : [];
       setClients(rows);
-      if (rows.length && !selectedId) setSelectedId(rows[0].id);
+      if (rows.length) setSelectedId(current => current || rows[0].id);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Active clients could not be loaded.");
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadClients();
+  }, [loadClients]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setSelectedId(selected.id);
+    setForm(toForm(selected));
+  }, [selected]);
 
   function updateForm(field: keyof ClientForm, value: string) {
     setForm(current => ({ ...current, [field]: value }));
@@ -310,6 +326,53 @@ export default function ActiveClientsPage() {
       setNotice(`Payment saved for ${data.client.dealerName}.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Payment could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createStripeCheckout(kind: "onboarding" | "setup_fee" | "subscription") {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/active-clients/${encodeURIComponent(selected.id)}/stripe/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Stripe checkout could not be created.");
+      if (data.client) {
+        setClients(current => current.map(client => (client.id === data.client.id ? data.client : client)));
+        setForm(toForm(data.client));
+      }
+      const url = data.checkout?.url || data.client?.stripeLatestCheckoutSessionUrl;
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      setNotice(`Stripe ${kind === "onboarding" ? "setup + monthly" : kind.replace("_", " ")} checkout created for ${data.client?.dealerName || selected.dealerName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Stripe checkout could not be created.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncStripeBilling() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      const resp = await fetch(`/api/active-clients/${encodeURIComponent(selected.id)}/stripe/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Stripe billing could not be synced.");
+      if (data.client) {
+        setClients(current => current.map(client => (client.id === data.client.id ? data.client : client)));
+        setForm(toForm(data.client));
+      }
+      setNotice(`Stripe billing synced for ${data.client?.dealerName || selected.dealerName}.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Stripe billing could not be synced.");
     } finally {
       setBusy(false);
     }
@@ -483,6 +546,40 @@ export default function ActiveClientsPage() {
                   <h3>{currency(selectedPaid)} total paid</h3>
                 </div>
               </div>
+              <div className="lr-ceo-billing-card">
+                <div>
+                  <span>Stripe</span>
+                  <strong>{selected.stripeSubscriptionStatus || selected.stripeLastPaymentStatus || (selected.stripeCustomerId ? "Customer ready" : "Not connected")}</strong>
+                  <small>
+                    {selected.stripeMode ? `${selected.stripeMode.toUpperCase()} mode` : "Test mode checkout is created from Command."}
+                    {selected.stripeBillingStatusUpdatedAt ? ` · synced ${selected.stripeBillingStatusUpdatedAt.slice(0, 10)}` : ""}
+                  </small>
+                </div>
+                <div>
+                  <span>Customer</span>
+                  <strong>{selected.stripeCustomerId || "Not created"}</strong>
+                  <small>{selected.stripeSubscriptionId || selected.stripeLatestCheckoutSessionId || "No subscription or checkout yet."}</small>
+                </div>
+                <div className="lr-ceo-action-row">
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createStripeCheckout("onboarding")} disabled={busy}>
+                    Create setup + monthly checkout
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createStripeCheckout("setup_fee")} disabled={busy}>
+                    Setup fee only
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={() => createStripeCheckout("subscription")} disabled={busy}>
+                    Monthly only
+                  </button>
+                  <button type="button" className="lr-ceo-secondary-btn" onClick={syncStripeBilling} disabled={busy}>
+                    Sync Stripe
+                  </button>
+                  {stripeCustomerUrl(selected) ? (
+                    <a className="lr-ceo-button-link" href={stripeCustomerUrl(selected)} target="_blank" rel="noreferrer">
+                      Open Stripe customer
+                    </a>
+                  ) : null}
+                </div>
+              </div>
               <div className="lr-ceo-form-stack">
                 <label>Date<input value={paymentForm.paidAt} onChange={e => setPaymentForm(current => ({ ...current, paidAt: e.target.value }))} /></label>
                 <label>Amount<input value={paymentForm.amount} onChange={e => setPaymentForm(current => ({ ...current, amount: e.target.value }))} placeholder="$999" /></label>
@@ -492,6 +589,7 @@ export default function ActiveClientsPage() {
                     <option value="card">Card</option>
                     <option value="check">Check</option>
                     <option value="wire">Wire</option>
+                    <option value="stripe">Stripe</option>
                     <option value="other">Other</option>
                   </select>
                 </label>

@@ -36,6 +36,11 @@ function hasFlag(name: string) {
 
 function configureDefaultStorePath() {
   if (process.env.DEALER_SETUPS_PATH?.trim()) return process.env.DEALER_SETUPS_PATH;
+  const explicit = argValue("--dealer-setups-path") || argValue("--store-path");
+  if (explicit) {
+    process.env.DEALER_SETUPS_PATH = path.resolve(explicit);
+    return process.env.DEALER_SETUPS_PATH;
+  }
   const cwd = process.cwd();
   const isApiWorkspace = cwd.endsWith(path.join("services", "api"));
   const storePath = isApiWorkspace
@@ -46,19 +51,23 @@ function configureDefaultStorePath() {
 }
 
 function buildSeedInput(): SeedInput {
-  const slug = argValue("--slug") || "americanharley-sandbox";
+  const slug = argValue("--slug") || "fictional-powersports-sandbox";
+  const routingMode = (argValue("--routing-mode") || "path") as DealerRoutingMode;
+  const dealerName = argValue("--dealer-name") || "Fictional Powersports Sandbox";
+  const legalName = argValue("--legal-name") || "Fictional Powersports LLC";
+  const dbaName = argValue("--dba-name") || "Fictional Powersports";
   return {
-    dealerName: argValue("--dealer-name") || "American Harley-Davidson Sandbox",
+    dealerName,
     slug,
-    routingMode: "subdomain",
+    routingMode,
     owner: argValue("--owner") || "Joe Hartrich",
-    primaryContact: argValue("--primary-contact") || "Use live American Harley contacts only after explicit approval.",
-    legalName: argValue("--legal-name") || "American Harley-Davidson, Inc.",
-    dbaName: argValue("--dba-name") || "American Harley-Davidson",
-    dealerAddress: argValue("--address") || "1149 Erie Ave, North Tonawanda, NY 14120",
-    website: argValue("--website") || "https://americanharley-davidson.com",
-    crmProvider: argValue("--crm") || "Traffic Log Pro, ADF email, Twilio SMS",
-    leadVolume: argValue("--lead-volume") || "American Harley live baseline; validate before copying to a new dealer.",
+    primaryContact: argValue("--primary-contact") || "Sandbox contact only; no real customer or vendor credentials.",
+    legalName,
+    dbaName,
+    dealerAddress: argValue("--address") || "100 Test Ride Ave, Demo City, NY 14000",
+    website: argValue("--website") || "https://example.com",
+    crmProvider: argValue("--crm") || "ADF email, website form, Twilio SMS",
+    leadVolume: argValue("--lead-volume") || "Sandbox workflow testing only.",
     plan: argValue("--plan") || "Growth",
     setupFee: argValue("--setup-fee") || "$0 sandbox",
     monthlyFee: argValue("--monthly-fee") || "$0 sandbox",
@@ -66,13 +75,13 @@ function buildSeedInput(): SeedInput {
     overageTerms: argValue("--overage-terms") || "Not applicable for sandbox.",
     contractTerm: argValue("--contract-term") || "Sandbox only",
     billingStart: argValue("--billing-start") || "Not applicable",
-    notes: [
-      "Seeded from the current American Harley baseline for multi-client setup testing.",
+    notes: argValue("--notes") || [
+      "Seeded as a fictitious dealer for multi-client setup testing.",
       "Do not deploy this sandbox without explicit approval.",
-      "Do not change live American Harley DNS, Twilio, SendGrid, Google, CRM, or API env from this record.",
-      "Inventory/export URL: https://americanharley-davidson.com/inventory/xml?location=127",
-      "Tone: warm, direct, helpful dealership assistant; avoid over-promising availability, financing, or pricing.",
-      "Rules: keep American Harley-specific copy isolated; manager verifies availability; no final vendor submissions; no credential or MFA automation; customer-facing replies stay on parser/router/orchestrator/publisher path.",
+      "Do not change production DNS, Twilio, SendGrid, Google, CRM, billing, legal, or API env from this record.",
+      "Inventory/export URL: https://example.com/inventory/export.xml",
+      "Tone: helpful, concise, dealership assistant; avoid over-promising availability, financing, or pricing.",
+      "Rules: manager verifies availability; no final vendor submissions; no credential or MFA automation; customer-facing replies stay on parser/router/orchestrator/publisher path.",
       "Compliance: verify privacy policy, SMS consent, TCPA wording, and STOP/HELP language before any production launch."
     ].join("\n")
   };
@@ -109,7 +118,7 @@ async function main() {
     envFile: setup.apiDeployment?.envFile,
     storePath,
     manualUrl: `/api/dealer-setups/${encodeURIComponent(setup.id)}/manual?format=html`,
-    nextStep: "Open Command > Dealer Setup, select the sandbox record, and run the guided workflow. Do not deploy."
+    nextStep: `Run npm run dealer:sandbox:workflow -- --slug ${setup.slug}. Do not deploy.`
   }, null, 2));
 }
 

@@ -1036,6 +1036,7 @@ type ConversationDetail = {
           | "finance_not_approved"
           | "finance_needs_info"
           | "not_ready"
+          | "no_change"
           | "other";
         note?: string;
         updatedAt?: string;
@@ -1315,6 +1316,16 @@ const APPOINTMENT_PRIMARY_LABELS: Record<"showed" | "did_not_show" | "cancelled"
   cancelled: "Cancelled"
 };
 
+const DEALER_RIDE_SECONDARY_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "no_change", label: "No change / already on hold" },
+  { value: "needs_follow_up", label: "Needs follow up" },
+  { value: "sold", label: "Sold" },
+  { value: "hold", label: "Hold" },
+  { value: "not_ready", label: "Not ready" },
+  { value: "lost", label: "Lost / bought elsewhere" },
+  { value: "other", label: "Other" }
+];
+
 const APPOINTMENT_SECONDARY_LABELS: Record<string, string> = {
   sold: "Sold",
   hold: "Hold",
@@ -1323,6 +1334,7 @@ const APPOINTMENT_SECONDARY_LABELS: Record<string, string> = {
   finance_not_approved: "Finance not approved",
   finance_needs_info: "Finance needs more info",
   not_ready: "Not ready",
+  no_change: "No change / already on hold",
   other: "Other"
 };
 
@@ -1342,6 +1354,7 @@ function normalizeAppointmentSecondaryValue(raw?: string | null): string | null 
   if (value === "bought_elsewhere") return "lost";
   if (value === "financing_declined") return "finance_not_approved";
   if (value === "financing_needs_info") return "finance_needs_info";
+  if (value === "already_on_hold") return "no_change";
   return value;
 }
 
@@ -1356,6 +1369,7 @@ function mapLegacyAppointmentOutcomeToPair(legacyRaw?: string | null): {
   if (legacy === "financing_declined") return { primary: "showed", secondary: "finance_not_approved" };
   if (legacy === "financing_needs_info") return { primary: "showed", secondary: "finance_needs_info" };
   if (legacy === "lost" || legacy === "bought_elsewhere") return { primary: "showed", secondary: "lost" };
+  if (legacy === "no_change" || legacy === "already_on_hold") return { primary: "showed", secondary: "no_change" };
   if (legacy === "other") return { primary: "showed", secondary: "other" };
   if (legacy === "cancelled" || legacy === "canceled") return { primary: "cancelled", secondary: "needs_follow_up" };
   if (legacy === "no_show") return { primary: "did_not_show", secondary: "needs_follow_up" };
@@ -1417,6 +1431,7 @@ function todoActionLabel(todo: TodoItem): string {
   if (/(trade|appraisal|trade[- ]in)/.test(text)) return "Discuss trade appraisal and next steps.";
   if (/(inventory|verify|check stock|not seeing|live feed)/.test(text)) return "Verify inventory and follow up.";
   if (/(video|walkaround|photos)/.test(text)) return "Send a walkaround video or photos.";
+  if (/\bdealer ride outcome needed\b/.test(text)) return "Record demo ride outcome.";
   if (/(appointment|schedule|book)/.test(text)) return "Schedule an appointment.";
   if (/(pricing|price|quote|payment)/.test(text)) return "Provide pricing or payment details.";
   if (/(^|\\b)note(\\b|$)/.test(reason) || /update for/.test(text)) return "Internal note (no customer follow-up).";
@@ -13538,9 +13553,11 @@ export default function Home() {
                     value={appointmentCloseSecondaryOutcome}
                     onChange={e => setAppointmentCloseSecondaryOutcome(e.target.value)}
                   >
-                    {(APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[
-                      isDealerRideOutcomeTodo(appointmentCloseTarget) ? "showed" : appointmentClosePrimaryOutcome
-                    ] ?? []).map(opt => (
+                    {(
+                      isDealerRideOutcomeTodo(appointmentCloseTarget)
+                        ? DEALER_RIDE_SECONDARY_OPTIONS
+                        : APPOINTMENT_SECONDARY_OPTIONS_BY_PRIMARY[appointmentClosePrimaryOutcome] ?? []
+                    ).map(opt => (
                       <option key={opt.value} value={opt.value}>
                         {opt.label}
                       </option>
@@ -13555,7 +13572,7 @@ export default function Home() {
                     onChange={e => setAppointmentCloseNote(e.target.value)}
                     placeholder={
                       isDealerRideOutcomeTodo(appointmentCloseTarget)
-                        ? "Add any context from the demo ride."
+                        ? "Optional: add any context from the demo ride."
                         : "Add any context from the visit."
                     }
                   />

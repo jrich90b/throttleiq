@@ -81,6 +81,7 @@ import {
   buildDealerApiDeployment,
   listDealerSetups,
   updateDealerSetup,
+  type DealerRoutingMode,
   type DealerSetupStage,
   type DealerSetupStatus,
   type DealerSetupStepStatus,
@@ -107,6 +108,13 @@ import {
   type ActiveClientPaymentMethod,
   type ActiveClientStatus
 } from "./domain/activeClientStore.js";
+import {
+  createStripeCheckoutForActiveClient,
+  getStripeBillingStatus,
+  handleStripeWebhook,
+  syncStripeBillingForActiveClient,
+  type StripeCheckoutKind
+} from "./domain/stripeBilling.js";
 import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
 import {
   addEsignPacket,
@@ -507,6 +515,7 @@ import {
   reloadConversationStore,
   saveConversation,
   getConversationStorePath,
+  retireSupersededPostSaleCloseoutDrafts,
   setAgentContext,
   addAgentContextNote,
   clearAgentContext,
@@ -813,6 +822,22 @@ app.post(
       xForwardedProto: req.header("x-forwarded-proto")
     });
     return res.status(200).send("ok");
+  }
+);
+
+app.post(
+  "/stripe/webhook",
+  express.raw({ type: "application/json", limit: "2mb" }),
+  async (req, res) => {
+    try {
+      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? "");
+      const result = await handleStripeWebhook(rawBody, req.header("stripe-signature") ?? undefined);
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Stripe webhook failed.";
+      console.warn("[stripe webhook]", message);
+      return res.status(400).json({ ok: false, error: message });
+    }
   }
 );
 
@@ -1359,6 +1384,17 @@ app.get("/debug/route-watchdog", (req, res) => {
 
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: false, limit: "100mb" }));
+app.use((req, _res, next) => {
+  const originalUrl = req.url || "";
+  const match = originalUrl.match(/^\/t\/([a-z0-9][a-z0-9-]{0,80})(?=\/|\?|$)/i);
+  if (!match) return next();
+  const tenantSlug = match[1].toLowerCase();
+  const stripped = originalUrl.slice(match[0].length);
+  (req as any).dealerTenantSlug = tenantSlug;
+  if (!req.headers["x-leadrider-dealer-slug"]) req.headers["x-leadrider-dealer-slug"] = tenantSlug;
+  req.url = stripped ? (stripped.startsWith("?") ? `/${stripped}` : stripped) : "/";
+  next();
+});
 
 const AUTH_DISABLED = (process.env.AUTH_DISABLED ?? "false").toLowerCase() === "true";
 
@@ -10598,6 +10634,15 @@ function isDealerRideOutcomeTokenForConversation(conv: any, token: string): bool
   return String(conv?.dealerRide?.staffNotify?.outcomeToken ?? "").trim().toLowerCase() === normalized;
 }
 
+function hasDealerRideOutcomeRecordedOrRequested(conv: any): boolean {
+  const staffNotify = conv?.dealerRide?.staffNotify ?? {};
+  return Boolean(
+    String(staffNotify?.outcome?.status ?? "").trim() ||
+      String(staffNotify?.followUpSentAt ?? "").trim() ||
+      String(staffNotify?.outcomePromptRespondedAt ?? "").trim()
+  );
+}
+
 type StaffOutcomeTokenMatch = {
   conv: any;
   kind: "appointment" | "dealer_ride" | "finance";
@@ -10955,6 +11000,9 @@ function buildDealerRideOutcomeCustomerDraft(args: {
   if (args.secondaryStatus === "hold" || args.outcome === "hold") {
     return `${intro} I have the ${modelLabel} noted while we work through the next steps. I’ll keep you posted.`;
   }
+  if (args.secondaryStatus === "no_change" || args.outcome === "no_change") {
+    return "";
+  }
   if (args.secondaryStatus === "finance_not_approved" || args.outcome === "financing_declined") {
     return `${intro} I’ll follow up with you about the finance options and next steps.`;
   }
@@ -10985,6 +11033,9 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
   conv.dealerRide.staffNotify = conv.dealerRide.staffNotify ?? {};
   if (conv.dealerRide.staffNotify.customerFollowUpDraftedAt) {
     return { queued: false, reason: "already_drafted" };
+  }
+  if (args.secondaryStatus === "no_change" || args.outcome === "no_change") {
+    return { queued: false, reason: "no_change" };
   }
   const profile = await getDealerProfileHot();
   const draft = buildDealerRideOutcomeCustomerDraft({
@@ -12977,7 +13028,7 @@ function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token
     [
       `Dealer ride outcome needed for ${args.customerName}.`,
       "DLA confirms they rode a demo bike.",
-      "Record what happened so the correct follow-up cadence can start.",
+      "Record what happened so the correct next step can start. If nothing changed, use No change / already on hold.",
       args.outcomeLink ? `Update form: ${args.outcomeLink}` : null
     ]
       .filter(Boolean)
@@ -13519,6 +13570,7 @@ type AppointmentSecondaryOutcome =
   | "finance_not_approved"
   | "finance_needs_info"
   | "not_ready"
+  | "no_change"
   | "other";
 type LegacyAppointmentOutcomeStatus =
   | "showed_up"
@@ -13531,6 +13583,7 @@ type LegacyAppointmentOutcomeStatus =
   | "bought_elsewhere"
   | "lost"
   | "follow_up"
+  | "no_change"
   | "other";
 
 const APPOINTMENT_SECONDARY_OPTIONS: Record<AppointmentPrimaryOutcome, Set<AppointmentSecondaryOutcome>> = {
@@ -13542,6 +13595,7 @@ const APPOINTMENT_SECONDARY_OPTIONS: Record<AppointmentPrimaryOutcome, Set<Appoi
     "finance_not_approved",
     "finance_needs_info",
     "not_ready",
+    "no_change",
     "other"
   ]),
   did_not_show: new Set(["needs_follow_up", "lost", "not_ready", "other"]),
@@ -13567,6 +13621,9 @@ function normalizeAppointmentSecondaryOutcome(raw: string): AppointmentSecondary
   if (value === "finance_not_approved" || value === "financing_declined") return "finance_not_approved";
   if (value === "finance_needs_info" || value === "financing_needs_info") return "finance_needs_info";
   if (value === "not_ready") return "not_ready";
+  if (value === "no_change" || value === "already_on_hold" || value === "already hold" || value === "already on hold") {
+    return "no_change";
+  }
   if (value === "other") return "other";
   return null;
 }
@@ -13593,6 +13650,9 @@ function mapLegacyAppointmentOutcome(
   if (status === "other") {
     return { primaryStatus: "showed", secondaryStatus: "other", legacyStatus: "other" };
   }
+  if (status === "no_change" || status === "already_on_hold") {
+    return { primaryStatus: "showed", secondaryStatus: "no_change", legacyStatus: "no_change" };
+  }
   if (status === "cancelled" || status === "canceled") {
     return { primaryStatus: "cancelled", secondaryStatus: "needs_follow_up", legacyStatus: "cancelled" };
   }
@@ -13616,6 +13676,7 @@ function mapPrimarySecondaryToLegacy(
   if (secondaryStatus === "finance_not_approved") return "financing_declined";
   if (secondaryStatus === "finance_needs_info") return "financing_needs_info";
   if (secondaryStatus === "lost") return "bought_elsewhere";
+  if (secondaryStatus === "no_change") return "no_change";
   if (secondaryStatus === "other") return "other";
   return "follow_up";
 }
@@ -24212,6 +24273,12 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
   const dueLabel = formatTodoCallDueAtLabel(todo?.dueAt, timeZone);
   const withDue = (label: string) =>
     dueLabel ? `${label.replace(/[. ]*$/, "")} (requested: ${dueLabel}).` : label;
+  if (
+    String(todo?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
+    /\bdealer ride outcome needed\b/i.test(summary)
+  ) {
+    return "Record demo ride outcome.";
+  }
   if (explicitTaskClass === "appointment") {
     return withDue("Appointment booked. Confirm attendance and record outcome.");
   }
@@ -25490,7 +25557,7 @@ async function processDueFollowUps() {
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
       if (
         isRecentDuplicateOutbound(conv, to, message, {
-          providers: ["human", "twilio", "draft_ai"],
+          providers: isPostSale ? ["human", "twilio"] : ["human", "twilio", "draft_ai"],
           windowMs: 2 * 60 * 1000,
           mediaUrls
         })
@@ -25499,6 +25566,12 @@ async function processDueFollowUps() {
         continue;
       }
       appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
+      if (isPostSale) {
+        const retired = retireSupersededPostSaleCloseoutDrafts(conv, message);
+        if (retired > 0) {
+          console.log("[followup] retired superseded post-sale drafts", { convId: conv.id, retired });
+        }
+      }
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
@@ -25523,6 +25596,12 @@ async function processDueFollowUps() {
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       });
       appendOutbound(conv, from, to, message, "twilio", msg.sid, mediaUrls);
+      if (isPostSale) {
+        const retired = retireSupersededPostSaleCloseoutDrafts(conv, message);
+        if (retired > 0) {
+          console.log("[followup] retired superseded post-sale drafts", { convId: conv.id, retired });
+        }
+      }
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
     } catch (e: any) {
@@ -27050,7 +27129,7 @@ app.get("/integrations/google/callback", async (req, res) => {
 
 app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "10");
@@ -27061,7 +27140,7 @@ app.get("/personal-mail/messages", requirePermission("canAccessTodos"), async (r
 
 app.post("/personal-mail/messages/:id/trash", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const messageId = String(req.params.id ?? "").trim();
@@ -27318,7 +27397,7 @@ async function autoTrashObviousSupportMailMessages(messages: SupportGmailListMes
 
 app.get("/support-mail/messages", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "10");
@@ -27354,7 +27433,7 @@ app.post("/support-mail/poll", async (req, res) => {
 
 app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const bodyText = String(req.body?.body ?? "").trim().slice(0, 8000);
@@ -27365,7 +27444,7 @@ app.post("/support-mail/messages/:id/draft-reply", requirePermission("canAccessT
 
 app.post("/support-mail/messages/:id/trash", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const messageId = String(req.params.id ?? "").trim();
@@ -27376,6 +27455,7 @@ app.post("/support-mail/messages/:id/trash", requirePermission("canAccessTodos")
 
 const allowedDealerSetupStages: DealerSetupStage[] = ["intake", "dns", "vercel", "api_config", "connectors", "agreement", "live"];
 const allowedDealerSetupStatuses: DealerSetupStatus[] = ["draft", "in_progress", "blocked", "ready", "live"];
+const allowedDealerRoutingModes: DealerRoutingMode[] = ["subdomain", "path", "integration_mapping"];
 const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = [
   "pending",
   "in_progress",
@@ -27387,7 +27467,7 @@ const allowedDealerSetupStepStatuses: DealerSetupStepStatus[] = [
 
 app.get("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "100");
@@ -27397,14 +27477,16 @@ app.get("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) 
 
 app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
   if (!dealerName) return res.status(400).json({ ok: false, error: "Dealer name is required." });
+  const routingModeRaw = String(req.body?.routingMode ?? "").trim();
   const setup = await addDealerSetup({
     dealerName,
     slug: String(req.body?.slug ?? ""),
+    routingMode: allowedDealerRoutingModes.includes(routingModeRaw as DealerRoutingMode) ? (routingModeRaw as DealerRoutingMode) : "path",
     owner: String(req.body?.owner ?? ""),
     primaryContact: String(req.body?.primaryContact ?? ""),
     legalName: String(req.body?.legalName ?? ""),
@@ -27427,15 +27509,17 @@ app.post("/dealer-setups", requirePermission("canAccessTodos"), async (req, res)
 
 app.patch("/dealer-setups/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const stageRaw = String(req.body?.stage ?? "").trim();
   const statusRaw = String(req.body?.status ?? "").trim();
+  const routingModeRaw = String(req.body?.routingMode ?? "").trim();
   const stepStatusRaw = String(req.body?.stepStatus ?? "").trim();
   const setup = await updateDealerSetup(req.params.id, {
     stage: allowedDealerSetupStages.includes(stageRaw as DealerSetupStage) ? (stageRaw as DealerSetupStage) : undefined,
     status: allowedDealerSetupStatuses.includes(statusRaw as DealerSetupStatus) ? (statusRaw as DealerSetupStatus) : undefined,
+    routingMode: allowedDealerRoutingModes.includes(routingModeRaw as DealerRoutingMode) ? (routingModeRaw as DealerRoutingMode) : undefined,
     dealerName: typeof req.body?.dealerName === "string" ? req.body.dealerName : undefined,
     owner: typeof req.body?.owner === "string" ? req.body.owner : undefined,
     primaryContact: typeof req.body?.primaryContact === "string" ? req.body.primaryContact : undefined,
@@ -27483,11 +27567,11 @@ app.get("/dealer-setups/:id/manual", requirePermission("canAccessTodos"), async 
 });
 
 const allowedActiveClientStatuses: ActiveClientStatus[] = ["active", "implementation", "paused", "canceled"];
-const allowedActiveClientPaymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "other"];
+const allowedActiveClientPaymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "stripe", "other"];
 
 app.get("/active-clients", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "250");
@@ -27497,7 +27581,7 @@ app.get("/active-clients", requirePermission("canAccessTodos"), async (req, res)
 
 app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
@@ -27539,6 +27623,16 @@ app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res
     achMandateStatus: req.body?.achMandateStatus,
     bankLast4: req.body?.bankLast4,
     paymentTerms: req.body?.paymentTerms,
+    stripeMode: req.body?.stripeMode,
+    stripeCustomerId: req.body?.stripeCustomerId,
+    stripeSubscriptionId: req.body?.stripeSubscriptionId,
+    stripeSubscriptionStatus: req.body?.stripeSubscriptionStatus,
+    stripeLatestCheckoutSessionId: req.body?.stripeLatestCheckoutSessionId,
+    stripeLatestCheckoutSessionUrl: req.body?.stripeLatestCheckoutSessionUrl,
+    stripeLatestInvoiceId: req.body?.stripeLatestInvoiceId,
+    stripeLastPaymentStatus: req.body?.stripeLastPaymentStatus,
+    stripeCurrentPeriodEnd: req.body?.stripeCurrentPeriodEnd,
+    stripeBillingStatusUpdatedAt: req.body?.stripeBillingStatusUpdatedAt,
     notes: req.body?.notes
   });
   return res.json({ ok: true, client });
@@ -27546,7 +27640,7 @@ app.post("/active-clients", requirePermission("canAccessTodos"), async (req, res
 
 app.patch("/active-clients/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const existing = await getActiveClient(req.params.id);
@@ -27588,14 +27682,32 @@ app.patch("/active-clients/:id", requirePermission("canAccessTodos"), async (req
     achMandateStatus: typeof req.body?.achMandateStatus === "string" ? req.body.achMandateStatus : undefined,
     bankLast4: typeof req.body?.bankLast4 === "string" ? req.body.bankLast4 : undefined,
     paymentTerms: typeof req.body?.paymentTerms === "string" ? req.body.paymentTerms : undefined,
+    stripeMode: typeof req.body?.stripeMode === "string" ? req.body.stripeMode : undefined,
+    stripeCustomerId: typeof req.body?.stripeCustomerId === "string" ? req.body.stripeCustomerId : undefined,
+    stripeSubscriptionId: typeof req.body?.stripeSubscriptionId === "string" ? req.body.stripeSubscriptionId : undefined,
+    stripeSubscriptionStatus: typeof req.body?.stripeSubscriptionStatus === "string" ? req.body.stripeSubscriptionStatus : undefined,
+    stripeLatestCheckoutSessionId: typeof req.body?.stripeLatestCheckoutSessionId === "string" ? req.body.stripeLatestCheckoutSessionId : undefined,
+    stripeLatestCheckoutSessionUrl: typeof req.body?.stripeLatestCheckoutSessionUrl === "string" ? req.body.stripeLatestCheckoutSessionUrl : undefined,
+    stripeLatestInvoiceId: typeof req.body?.stripeLatestInvoiceId === "string" ? req.body.stripeLatestInvoiceId : undefined,
+    stripeLastPaymentStatus: typeof req.body?.stripeLastPaymentStatus === "string" ? req.body.stripeLastPaymentStatus : undefined,
+    stripeCurrentPeriodEnd: typeof req.body?.stripeCurrentPeriodEnd === "string" ? req.body.stripeCurrentPeriodEnd : undefined,
+    stripeBillingStatusUpdatedAt: typeof req.body?.stripeBillingStatusUpdatedAt === "string" ? req.body.stripeBillingStatusUpdatedAt : undefined,
     notes: typeof req.body?.notes === "string" ? req.body.notes : undefined
   });
   return res.json({ ok: true, client });
 });
 
+app.get("/active-clients/stripe/status", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  return res.json({ ok: true, stripe: getStripeBillingStatus() });
+});
+
 app.post("/active-clients/:id/payments", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const amount = String(req.body?.amount ?? "").replace(/\s+/g, " ").trim();
@@ -27614,9 +27726,39 @@ app.post("/active-clients/:id/payments", requirePermission("canAccessTodos"), as
   return res.json({ ok: true, client });
 });
 
+app.post("/active-clients/:id/stripe/checkout", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  try {
+    const requestedKind = String(req.body?.kind ?? "onboarding").trim().toLowerCase();
+    const kind: StripeCheckoutKind = requestedKind === "setup_fee" || requestedKind === "subscription" ? requestedKind : "onboarding";
+    const result = await createStripeCheckoutForActiveClient(req.params.id, kind);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Stripe checkout could not be created.";
+    return res.status(400).json({ ok: false, error: message, stripe: getStripeBillingStatus() });
+  }
+});
+
+app.post("/active-clients/:id/stripe/sync", requirePermission("canAccessTodos"), async (req, res) => {
+  const user = (req as any).user ?? null;
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+    return res.status(403).json({ ok: false, error: "manager required" });
+  }
+  try {
+    const result = await syncStripeBillingForActiveClient(req.params.id);
+    return res.json({ ok: true, ...result, stripe: getStripeBillingStatus() });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Stripe billing sync failed.";
+    return res.status(400).json({ ok: false, error: message, stripe: getStripeBillingStatus() });
+  }
+});
+
 app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27629,7 +27771,7 @@ app.get("/dealer-setups/:id/vercel", requirePermission("canAccessTodos"), async 
 
 app.post("/dealer-setups/:id/vercel/domains", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27655,25 +27797,29 @@ function buildDealerDnsChecklist(setup: DealerSetup) {
 
 app.post("/dealer-setups/:id/dns/checklist", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
   if (!setup) return res.status(404).json({ ok: false, error: "Dealer setup not found." });
+  const deployment = buildDealerApiDeployment(setup);
   const records = buildDealerDnsChecklist(setup);
+  const sharedRouting = deployment.routingMode !== "subdomain";
   const updated = await updateDealerSetup(setup.id, {
     stage: "dns",
     status: "in_progress",
     stepId: "domains",
     stepStatus: "in_progress",
-    stepNote: records.map(row => `${row.type} ${row.name} -> ${row.value}`).join("; ")
+    stepNote: sharedRouting
+      ? `Shared routing confirmed for ${deployment.webHostname} and ${deployment.apiHostname}; no dealer-specific DNS required.`
+      : records.map(row => `${row.type} ${row.name} -> ${row.value}`).join("; ")
   });
   return res.json({ ok: true, setup: updated ?? setup, records });
 });
 
 app.post("/dealer-setups/:id/api/deploy-profile", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27691,7 +27837,7 @@ app.post("/dealer-setups/:id/api/deploy-profile", requirePermission("canAccessTo
 
 app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27708,7 +27854,7 @@ app.post("/dealer-setups/:id/runtime-package", requirePermission("canAccessTodos
 
 app.post("/dealer-setups/:id/launch-dry-run", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27747,7 +27893,7 @@ async function runDealerSmokeChecks(setup: DealerSetup) {
 
 app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27766,7 +27912,7 @@ app.post("/dealer-setups/:id/smoke-test", requirePermission("canAccessTodos"), a
 
 app.post("/dealer-setups/:id/activate", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27859,7 +28005,7 @@ app.post("/dealer-setups/:id/activate", requirePermission("canAccessTodos"), asy
 
 app.post("/dealer-setups/:id/active-client", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -27888,7 +28034,7 @@ function dealerSetupStageForStep(stepId: string): DealerSetupStage {
 function dealerSetupCompletionNote(stepId: string) {
   switch (stepId) {
     case "domains":
-      return "Domains and DNS records confirmed.";
+      return "Tenant routing and domain requirements confirmed.";
     case "api":
       return "API tenant/runtime setup confirmed.";
     case "remote_env":
@@ -27995,17 +28141,24 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
   ].join("\n");
   if (stepId === "domains") {
     const deployment = buildDealerApiDeployment(setup);
+    const sharedRouting = deployment.routingMode !== "subdomain";
     return {
       provider: "codex",
       kind: "dealer_setup",
-      title: `Prepare ${setup.dealerName} domain checklist`,
-      message: "Domain checklist task created.",
-      nextStep: "Enter DNS changes with the domain owner, then mark ready to verify or complete.",
-      approvalReason: "DNS changes affect production routing, so the operator must approve and apply them.",
+      title: `Prepare ${setup.dealerName} tenant routing checklist`,
+      message: sharedRouting ? "Tenant routing checklist task created." : "Domain checklist task created.",
+      nextStep: sharedRouting
+        ? "Confirm shared app/API routing and mark ready to verify or complete."
+        : "Enter DNS changes with the domain owner, then mark ready to verify or complete.",
+      approvalReason: sharedRouting
+        ? "Shared routing affects tenant access and callbacks, so the operator must approve routing changes."
+        : "DNS changes affect production routing, so the operator must approve and apply them.",
       instructions: [
-        "Prepare the domain and subdomain setup checklist.",
-        "Do not make DNS changes or submit registrar/provider changes without explicit human approval.",
+        sharedRouting ? "Prepare the shared tenant routing checklist." : "Prepare the domain and subdomain setup checklist.",
+        "Do not make DNS changes, shared-route changes, or submit registrar/provider changes without explicit human approval.",
         "",
+        `Routing mode: ${deployment.routingMode}`,
+        `Routing summary: ${deployment.routingSummary}`,
         `Web hostname: ${deployment.webHostname}`,
         `API hostname: ${deployment.apiHostname}`,
         `DNS records: ${deployment.dnsRecords.map(record => `${record.type} ${record.name} -> ${record.value}`).join("; ")}`,
@@ -28028,6 +28181,8 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
         "Do not overwrite existing clients or shared American Harley paths.",
         "Do not deploy until the operator approves.",
         "",
+        `Routing mode: ${deployment.routingMode}`,
+        `Routing summary: ${deployment.routingSummary}`,
         `Repo path: ${deployment.repoPath}`,
         `Env file: ${deployment.envFile}`,
         `Data dir: ${deployment.dataDir}`,
@@ -28096,7 +28251,7 @@ function dealerSetupTaskSpec(setup: DealerSetup, stepId: string): {
       title: `Generate ${setup.dealerName} dealer config`,
       message: "Dealer config task created.",
       nextStep: "Review profile, tone, rules, features, and compliance wording before launch.",
-      instructions: "Generate the normalized dealer config draft from the setup record. Include name/legal/DBA, slug/subdomain, API routing, CRM/source mappings, Twilio, SendGrid, Google Calendar, inventory URL, profile/tone/rules, feature flags, privacy policy, SMS consent, TCPA wording, STOP/HELP language, blockers, launch checklist, and smoke-test status. Keep American Harley-specific assumptions isolated to the American Harley setup only."
+      instructions: "Generate the normalized dealer config draft from the setup record. Include name/legal/DBA, slug, tenant routing mode, API routing, CRM/source mappings, Twilio, SendGrid, Google Calendar, inventory URL, profile/tone/rules, feature flags, privacy policy, SMS consent, TCPA wording, STOP/HELP language, blockers, launch checklist, and smoke-test status. Keep American Harley-specific assumptions isolated to the American Harley setup only."
     },
     manual: {
       title: `Update ${setup.dealerName} deployment manual`,
@@ -28182,7 +28337,7 @@ function nextDealerSetupStepId(setup: DealerSetup) {
 
 app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "Manager access is required." });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -28214,7 +28369,7 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
       stepStatus: "done",
       stepNote: "Dealer intake confirmed."
     });
-    return res.json({ ok: true, setup: updated ?? setup, stepId, message: "Dealer intake confirmed.", nextStep: "Continue to domains and subdomains." });
+    return res.json({ ok: true, setup: updated ?? setup, stepId, message: "Dealer intake confirmed.", nextStep: "Continue to tenant routing and domains." });
   }
 
   if (stepId === "vercel") {
@@ -28237,21 +28392,25 @@ app.post("/dealer-setups/:id/run-step", requirePermission("canAccessTodos"), asy
   }
 
   if (stepId === "domains") {
+    const deployment = buildDealerApiDeployment(setup);
+    const sharedRouting = deployment.routingMode !== "subdomain";
     const records = buildDealerDnsChecklist(setup);
     const updated = await updateDealerSetup(setup.id, {
       stage: "dns",
       status: "in_progress",
       stepId,
       stepStatus: "in_progress",
-      stepNote: "DNS records generated and ready to enter."
+      stepNote: sharedRouting ? "Shared tenant routing checklist generated." : "DNS records generated and ready to enter."
     });
     return res.json({
       ok: true,
       setup: updated ?? setup,
       stepId,
       records,
-      message: "DNS records are ready.",
-      nextStep: "Add these records where the dealer domain is hosted. Continue other setup steps while DNS is waiting or propagating."
+      message: sharedRouting ? "Tenant routing checklist is ready." : "DNS records are ready.",
+      nextStep: sharedRouting
+        ? "Confirm the shared app/API hosts and tenant route mapping. Continue other setup steps while routing is verified."
+        : "Add these records where the dealer domain is hosted. Continue other setup steps while DNS is waiting or propagating."
     });
   }
 
@@ -28434,6 +28593,7 @@ async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
     notes: [
       existing?.notes || "",
       setup.notes || "",
+      setup.routingMode ? `Routing mode: ${setup.routingMode}` : "",
       setup.appUrl ? `App URL: ${setup.appUrl}` : "",
       setup.apiUrl ? `API URL: ${setup.apiUrl}` : "",
       deployment.healthUrl ? `API health URL: ${deployment.healthUrl}` : "",
@@ -28455,7 +28615,7 @@ async function upsertActiveClientFromDealerSetup(setup: DealerSetup) {
 
 app.get("/esign/packets", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const dealerSetupId = String(req.query.dealerSetupId ?? "").trim() || undefined;
@@ -28561,7 +28721,7 @@ app.get("/integrations/zoom/callback", async (req, res) => {
 
 app.post("/dealer-setups/:id/esign/packet", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const setup = await getDealerSetup(req.params.id);
@@ -28647,7 +28807,7 @@ app.post("/dealer-setups/:id/esign/packet", requirePermission("canAccessTodos"),
 
 app.patch("/esign/packets/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
@@ -28692,7 +28852,7 @@ app.patch("/esign/packets/:id", requirePermission("canAccessTodos"), async (req,
 
 app.post("/esign/packets/:id/docusign/send", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const packet = await getEsignPacket(req.params.id);
@@ -29839,8 +29999,11 @@ app.get("/public/appointment/outcome", async (req, res) => {
         const noteEl = document.getElementById("note-field");
         const primaryOutcomeEl = document.getElementById("primary-outcome");
         const secondaryOutcomeEl = document.getElementById("secondary-outcome");
+        const dealerRideOnly = ${isAppointmentOutcome ? "false" : "true"};
+        const dealerRideHasHold = ${holdUnit ? "true" : "false"};
         const secondaryOptionsByPrimary = {
           showed: [
+            ...(dealerRideOnly && dealerRideHasHold ? [{ value: "no_change", label: "No change / already on hold" }] : []),
             { value: "needs_follow_up", label: "Needs follow up" },
             { value: "sold", label: "Sold" },
             { value: "hold", label: "Hold" },
@@ -29848,6 +30011,7 @@ app.get("/public/appointment/outcome", async (req, res) => {
             { value: "finance_needs_info", label: "Finance needs more info" },
             { value: "not_ready", label: "Not ready" },
             { value: "lost", label: "Lost / bought elsewhere" },
+            ...(dealerRideOnly && !dealerRideHasHold ? [{ value: "no_change", label: "No change / already on hold" }] : []),
             { value: "other", label: "Other" }
           ],
           did_not_show: [
@@ -30374,19 +30538,21 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
   if (!normalizedOutcome.ok || !normalizedOutcome.legacyStatus) {
     return res.status(400).send("Invalid outcome");
   }
-  if (!note) {
+  const outcome = normalizedOutcome.legacyStatus;
+  const effectiveNote =
+    note || (outcome === "no_change" ? "No change / already on hold." : "");
+  if (!effectiveNote) {
     return res.status(400).send("Please add what actually happened before saving the outcome.");
   }
-  const outcome = normalizedOutcome.legacyStatus;
 
   const nowIso = new Date().toISOString();
   const unit = readOutcomeUnit(req.body);
   if (outcome === "hold") {
-    const err = await applyOutcomeHold(conv, unit, note || undefined, nowIso);
+    const err = await applyOutcomeHold(conv, unit, effectiveNote || undefined, nowIso);
     if (err) return res.status(400).send(err);
   } else if (outcome === "sold") {
     const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
-    const err = await applyOutcomeSold(conv, unit, note || undefined, nowIso, soldById, "");
+    const err = await applyOutcomeSold(conv, unit, effectiveNote || undefined, nowIso, soldById, "");
     if (err) return res.status(400).send(err);
   } else if (outcome === "financing_declined") {
     const cfg = await getSchedulerConfigHot();
@@ -30402,11 +30568,11 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
       stepIndex: 0,
       kind: "long_term"
     };
-    await notifyBusinessManagerFinancingDeclined(conv, note);
+    await notifyBusinessManagerFinancingDeclined(conv, effectiveNote);
   } else if (outcome === "financing_needs_info") {
     setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
     stopFollowUpCadence(conv, "manual_handoff");
-    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", note || undefined);
+    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", effectiveNote || undefined);
   }
 
   const isDealerRideOutcome = isDealerRideOutcomeTokenForConversation(conv, token);
@@ -30423,12 +30589,13 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
     status: outcome as any,
     primaryStatus: normalizedOutcome.primaryStatus,
     secondaryStatus: normalizedOutcome.secondaryStatus,
-    note: note || undefined,
+    note: effectiveNote || undefined,
     updatedAt: nowIso
   };
-  if (note) {
+  outcomeTarget.outcomePromptRespondedAt = nowIso;
+  if (effectiveNote && outcome !== "no_change") {
     try {
-      await applyActionStateFromContextNote(conv, note, "Appointment outcome");
+      await applyActionStateFromContextNote(conv, effectiveNote, "Appointment outcome");
     } catch (err: any) {
       console.log("[outcome-note-actions] failed:", err?.message ?? err);
     }
@@ -30440,10 +30607,10 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
     source: "public_outcome_form"
   });
   const appointmentFollowUpPlan =
-    normalizedOutcome.secondaryStatus === "needs_follow_up" && note
+    normalizedOutcome.secondaryStatus === "needs_follow_up" && effectiveNote
       ? await safeLlmParse("public_appointment_outcome_follow_up_plan_parser", () =>
           parseAppointmentOutcomeFollowUpPlanWithLLM({
-            note,
+            note: effectiveNote,
             primaryStatus: normalizedOutcome.primaryStatus,
             secondaryStatus: normalizedOutcome.secondaryStatus,
             history: buildHistory(conv, 8),
@@ -30453,7 +30620,7 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
       : null;
   await activateAppointmentOutcomeFollowUp({
     conv,
-    note,
+    note: effectiveNote,
     primaryStatus: normalizedOutcome.primaryStatus,
     secondaryStatus: normalizedOutcome.secondaryStatus,
     plan: appointmentFollowUpPlan,
@@ -30466,7 +30633,7 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
       outcome,
       primaryStatus: normalizedOutcome.primaryStatus,
       secondaryStatus: normalizedOutcome.secondaryStatus,
-      note,
+      note: effectiveNote,
       source: "public_outcome_form"
     });
   }
@@ -32937,6 +33104,9 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
       }
       const appointmentOutcomeStatus = normalizedOutcome.legacyStatus;
       const nowIsoValue = new Date().toISOString();
+      const effectiveAppointmentOutcomeNote =
+        appointmentOutcomeNote ||
+        (appointmentOutcomeStatus === "no_change" ? "No change / already on hold." : "");
       if (appointmentOutcomeStatus === "financing_declined") {
         const cfg = await getSchedulerConfigHot();
         conv.followUp = {
@@ -32951,14 +33121,14 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           stepIndex: 0,
           kind: "long_term"
         };
-        await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
+        await notifyBusinessManagerFinancingDeclined(conv, effectiveAppointmentOutcomeNote || undefined);
       } else if (appointmentOutcomeStatus === "financing_needs_info") {
         setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
         stopFollowUpCadence(conv, "manual_handoff");
         await notifyBusinessManagerFinanceOutcome(
           conv,
           "needs_more_info",
-          appointmentOutcomeNote || undefined
+          effectiveAppointmentOutcomeNote || undefined
         );
       } else if (appointmentOutcomeStatus === "sold") {
         const cfg = await getSchedulerConfigHot();
@@ -32974,7 +33144,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
           stockId: String(leadVehicle?.stockId ?? "").trim() || undefined,
           vin: String(leadVehicle?.vin ?? "").trim() || undefined,
           label,
-          note: appointmentOutcomeNote || undefined
+          note: effectiveAppointmentOutcomeNote || undefined
         };
         conv.status = "closed";
         conv.closedAt = nowIsoValue;
@@ -33000,9 +33170,10 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         status: appointmentOutcomeStatus as any,
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
-        note: appointmentOutcomeNote || undefined,
+        note: effectiveAppointmentOutcomeNote || undefined,
         updatedAt: nowIsoValue
       };
+      notifyTarget.outcomePromptRespondedAt = nowIsoValue;
       await maybeQueueAppointmentOutcomeRescheduleDraft({
         conv,
         primaryStatus: normalizedOutcome.primaryStatus,
@@ -33010,10 +33181,10 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         source: "todo_done_modal"
       });
       const appointmentFollowUpPlan =
-        normalizedOutcome.secondaryStatus === "needs_follow_up" && appointmentOutcomeNote
+        normalizedOutcome.secondaryStatus === "needs_follow_up" && effectiveAppointmentOutcomeNote
           ? await safeLlmParse("todo_appointment_outcome_follow_up_plan_parser", () =>
               parseAppointmentOutcomeFollowUpPlanWithLLM({
-                note: appointmentOutcomeNote,
+                note: effectiveAppointmentOutcomeNote,
                 primaryStatus: normalizedOutcome.primaryStatus,
                 secondaryStatus: normalizedOutcome.secondaryStatus,
                 history: buildHistory(conv, 8),
@@ -33021,11 +33192,11 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
               })
             )
           : null;
-      if (appointmentOutcomeNote) {
+      if (effectiveAppointmentOutcomeNote && appointmentOutcomeStatus !== "no_change") {
         try {
           await applyActionStateFromContextNote(
             conv,
-            appointmentOutcomeNote,
+            effectiveAppointmentOutcomeNote,
             isDealerRideOutcomeTask ? "Dealer ride outcome" : "Appointment outcome"
           );
         } catch (err: any) {
@@ -33034,7 +33205,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
       }
       await activateAppointmentOutcomeFollowUp({
         conv,
-        note: appointmentOutcomeNote,
+        note: effectiveAppointmentOutcomeNote,
         primaryStatus: normalizedOutcome.primaryStatus,
         secondaryStatus: normalizedOutcome.secondaryStatus,
         plan: appointmentFollowUpPlan,
@@ -33106,7 +33277,7 @@ function opsAnomalyDefaultTitle(type: OpsAnomalyType): string {
 
 app.get("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "200");
@@ -33243,7 +33414,7 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
 
 app.patch("/ops/anomalies/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
@@ -34531,7 +34702,7 @@ function queueProspectResearchTaskExecution(task: AgentTask) {
 
 app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "200");
@@ -34564,7 +34735,7 @@ app.get("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =>
 
 app.post("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const providerRaw = String(req.body?.provider ?? "codex").trim().toLowerCase();
@@ -34605,7 +34776,7 @@ app.post("/agent-tasks", requirePermission("canAccessTodos"), async (req, res) =
 
 app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
@@ -34620,7 +34791,7 @@ app.patch("/agent-tasks/:id", requirePermission("canAccessTodos"), async (req, r
 
 app.post("/agent-tasks/:id/personal-gmail-draft", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const tasks = await listAgentTasks(1000);
@@ -34646,7 +34817,7 @@ app.post("/agent-tasks/:id/personal-gmail-draft", requirePermission("canAccessTo
 
 app.post("/agent-tasks/:id/personal-gmail-send", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const tasks = await listAgentTasks(1000);
@@ -34688,7 +34859,7 @@ const allowedSalesProspectStages: SalesProspectStage[] = [
 
 app.get("/sales-prospects", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "250");
@@ -34698,7 +34869,7 @@ app.get("/sales-prospects", requirePermission("canAccessTodos"), async (req, res
 
 app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const dealerName = String(req.body?.dealerName ?? "").replace(/\s+/g, " ").trim();
@@ -34732,7 +34903,7 @@ app.post("/sales-prospects", requirePermission("canAccessTodos"), async (req, re
 
 app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const prospect = await getSalesProspect(req.params.id);
@@ -34760,9 +34931,10 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
 
   const setup =
     existing ??
-    (await addDealerSetup({
-      dealerName: prospect.dealerName,
-      owner: prospect.owner,
+	    (await addDealerSetup({
+	      dealerName: prospect.dealerName,
+	      routingMode: "path",
+	      owner: prospect.owner,
       primaryContact: contact,
       website: prospect.website,
       leadVolume: prospect.leadVolume,
@@ -34793,7 +34965,7 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
         stepStatus: "in_progress",
         stepNote: prospect.docusignPacketId
           ? `Handled in Sales Funnel. DocuSign packet: ${prospect.docusignPacketId}.`
-          : "Sales Funnel closed-won handoff is ready for domain setup."
+	          : "Sales Funnel closed-won handoff is ready for tenant routing setup."
       })) ?? setupForResponse;
   }
 
@@ -34808,7 +34980,7 @@ app.post("/sales-prospects/:id/dealer-setup", requirePermission("canAccessTodos"
 
 app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const existing = await getSalesProspect(req.params.id);
@@ -34840,7 +35012,7 @@ app.patch("/sales-prospects/:id", requirePermission("canAccessTodos"), async (re
 
 app.delete("/sales-prospects/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const existing = await getSalesProspect(req.params.id);
@@ -34851,7 +35023,7 @@ app.delete("/sales-prospects/:id", requirePermission("canAccessTodos"), async (r
 
 app.post("/sales-prospects/:id/zoom/meeting", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const existing = await getSalesProspect(req.params.id);
@@ -34900,7 +35072,7 @@ function canWriteAutomationRun(req: any) {
 
 app.get("/automation-runs", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const limit = Number(req.query.limit ?? "50");
@@ -34969,7 +35141,7 @@ app.post("/automation-runs/ingest", async (req, res) => {
 
 app.patch("/automation-runs/:id", requirePermission("canAccessTodos"), async (req, res) => {
   const user = (req as any).user ?? null;
-  if (user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
+  if (!AUTH_DISABLED && user?.role !== "manager" && !user?.permissions?.canViewAllTasks) {
     return res.status(403).json({ ok: false, error: "manager required" });
   }
   const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
@@ -42872,7 +43044,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       String(conv.leadOwner?.name ?? "").trim() ||
       "salesperson";
     const ownerPhone = pickUserPhone(owner);
-    const dealerRideOutcomeAlreadyRequested = !!conv.dealerRide?.staffNotify?.followUpSentAt;
+    const dealerRideOutcomeAlreadyRequested = hasDealerRideOutcomeRecordedOrRequested(conv);
     if (ownerPhone && !appointmentOutcomeWins && !dealerRideOutcomeAlreadyRequested) {
       const customerName =
         [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||

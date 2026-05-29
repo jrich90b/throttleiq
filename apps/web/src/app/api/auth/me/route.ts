@@ -2,7 +2,15 @@ import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 import { apiFetch } from "../../../../lib/apiFetch";
 
-export async function GET() {
+function isLocalDevHost(host: string) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isCommandAuthRequest(req: Request, host: string) {
+  return host === "leadrider.ai" || host === "www.leadrider.ai" || (isLocalDevHost(host) && req.headers.get("x-leadrider-command") === "1");
+}
+
+export async function GET(req: Request) {
   const base = process.env.API_BASE_URL;
   if (!base) return NextResponse.json({ ok: false, error: "API_BASE_URL not set" }, { status: 500 });
 
@@ -15,9 +23,12 @@ export async function GET() {
   const text = await r.text();
   try {
     const data = JSON.parse(text);
+    if (data?.authDisabled) {
+      return NextResponse.json(data, { status: r.status });
+    }
     const headerStore = await headers();
     const currentHost = headerStore.get("host")?.split(":")[0]?.toLowerCase() ?? "";
-    const isLeadRiderHost = currentHost === "leadrider.ai" || currentHost === "www.leadrider.ai";
+    const isLeadRiderHost = isCommandAuthRequest(req, currentHost);
     const email = String(data?.user?.email ?? "").trim().toLowerCase();
     if (r.ok && data?.ok && email) {
       if (isLeadRiderHost && !email.endsWith("@leadrider.ai")) {

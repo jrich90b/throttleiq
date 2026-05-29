@@ -4,6 +4,7 @@ import type { listDealerSetups } from "../services/api/src/domain/dealerSetupSto
 
 type RuntimeShape = {
   slug: string;
+  routingMode: string;
   appUrl: string;
   apiUrl: string;
   apiHostname: string;
@@ -11,7 +12,10 @@ type RuntimeShape = {
   dataDir: string;
   envFile: string;
   pm2Process: string;
+  localPort: string;
   healthUrl: string;
+  proxyPathPrefix: string;
+  proxyTarget: string;
   dealerProfilePath: string;
 };
 
@@ -58,6 +62,7 @@ function profileRuntime(slug: string, profile: Map<string, string>): RuntimeShap
   const apiUrl = (profile.get("DEPLOY_HEALTH_URL") || "").replace(/\/health\/?$/, "");
   return {
     slug,
+    routingMode: "subdomain",
     appUrl: `https://${slug}.leadrider.ai`,
     apiUrl,
     apiHostname: hostname(apiUrl),
@@ -65,7 +70,10 @@ function profileRuntime(slug: string, profile: Map<string, string>): RuntimeShap
     dataDir,
     envFile: profile.get("DEPLOY_ENV_FILE") || "",
     pm2Process: profile.get("DEPLOY_PM2_PROCESS") || "",
+    localPort: profile.get("DEPLOY_API_PORT") || "3001",
     healthUrl: profile.get("DEPLOY_HEALTH_URL") || "",
+    proxyPathPrefix: profile.get("DEPLOY_PROXY_PATH_PREFIX") || "/",
+    proxyTarget: profile.get("DEPLOY_PROXY_TARGET") || "http://127.0.0.1:3001",
     dealerProfilePath: `${dataDir.replace(/\/$/, "")}/dealer_profile.json`
   };
 }
@@ -77,6 +85,7 @@ function setupRuntime(
   const deployment = buildDealerApiDeployment(setup);
   return {
     slug: setup.slug,
+    routingMode: setup.routingMode || "subdomain",
     appUrl: setup.appUrl,
     apiUrl: setup.apiUrl,
     apiHostname: deployment.apiHostname,
@@ -84,7 +93,10 @@ function setupRuntime(
     dataDir: deployment.dataDir,
     envFile: deployment.envFile,
     pm2Process: deployment.pm2Process,
+    localPort: String(deployment.localPort),
     healthUrl: deployment.healthUrl,
+    proxyPathPrefix: deployment.proxyPathPrefix,
+    proxyTarget: deployment.proxyTarget,
     dealerProfilePath: `${deployment.dataDir.replace(/\/$/, "")}/dealer_profile.json`
   };
 }
@@ -108,7 +120,7 @@ function checkDistinct(field: keyof RuntimeShape, left: RuntimeShape, right: Run
 
 function assertRuntimeIsolation(prod: RuntimeShape, sandbox: RuntimeShape) {
   const failures: string[] = [];
-  for (const field of ["slug", "appUrl", "apiUrl", "apiHostname", "repoPath", "dataDir", "envFile", "pm2Process", "healthUrl", "dealerProfilePath"] as const) {
+  for (const field of ["slug", "appUrl", "apiUrl", "apiHostname", "repoPath", "dataDir", "envFile", "pm2Process", "localPort", "healthUrl", "dealerProfilePath"] as const) {
     checkDistinct(field, prod, sandbox, failures);
   }
   for (const field of ["dataDir", "envFile", "dealerProfilePath"] as const) {
@@ -119,7 +131,21 @@ function assertRuntimeIsolation(prod: RuntimeShape, sandbox: RuntimeShape) {
   if (!sandbox.dataDir.includes(sandbox.slug)) failures.push(`sandbox dataDir does not include sandbox slug: ${sandbox.dataDir}`);
   if (!sandbox.envFile.includes(sandbox.slug)) failures.push(`sandbox envFile does not include sandbox slug: ${sandbox.envFile}`);
   if (!sandbox.pm2Process.includes(sandbox.slug)) failures.push(`sandbox PM2 process does not include sandbox slug: ${sandbox.pm2Process}`);
-  if (!sandbox.apiHostname.includes(sandbox.slug)) failures.push(`sandbox API hostname does not include sandbox slug: ${sandbox.apiHostname}`);
+  if (!sandbox.proxyTarget.endsWith(`:${sandbox.localPort}`)) {
+    failures.push(`sandbox proxy target does not match local port: ${sandbox.proxyTarget} <> ${sandbox.localPort}`);
+  }
+  if (sandbox.routingMode === "subdomain" && !sandbox.apiHostname.includes(sandbox.slug)) {
+    failures.push(`sandbox API hostname does not include sandbox slug: ${sandbox.apiHostname}`);
+  }
+  if (sandbox.routingMode === "path" && !sandbox.apiUrl.includes(`/t/${sandbox.slug}`)) {
+    failures.push(`path-mode sandbox API URL does not include tenant path: ${sandbox.apiUrl}`);
+  }
+  if (sandbox.routingMode === "path" && sandbox.proxyPathPrefix !== `/t/${sandbox.slug}`) {
+    failures.push(`path-mode sandbox proxy prefix does not include tenant path: ${sandbox.proxyPathPrefix}`);
+  }
+  if (sandbox.routingMode === "integration_mapping" && !sandbox.appUrl.includes(`/d/${sandbox.slug}`)) {
+    failures.push(`integration-mapping sandbox app URL does not include dealer path: ${sandbox.appUrl}`);
+  }
   return failures;
 }
 

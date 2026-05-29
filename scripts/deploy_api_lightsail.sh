@@ -17,6 +17,7 @@ Common options:
   --data-dir PATH             Runtime DATA_DIR to back up before deploy.
   --env-file PATH             Remote API .env file to load into PM2.
   --pm2 NAME                  PM2 process name. Default: throttleiq-api
+  --api-port PORT             Local API port for this dealer PM2 process.
   --health-url URL            Public API health URL to check after restart.
   --allow-dirty-remote        Allow deploying over a dirty remote worktree.
   --replace-pm2               Replace the PM2 process so it runs from this repo path.
@@ -26,7 +27,7 @@ Common options:
 Environment variable equivalents:
   DEPLOY_HOST, DEPLOY_REPO, DEPLOY_BRANCH, DEPLOY_DATA_DIR,
   DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
-  DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
+  DEPLOY_API_PORT, DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
   DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_DRY_RUN
 USAGE
 }
@@ -66,6 +67,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pm2)
       DEPLOY_PM2_PROCESS="${2:-}"
+      shift 2
+      ;;
+    --api-port)
+      DEPLOY_API_PORT="${2:-}"
       shift 2
       ;;
     --health-url)
@@ -116,6 +121,7 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 DEPLOY_DATA_DIR="${DEPLOY_DATA_DIR:-/home/ubuntu/throttleiq-runtime/data}"
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$DEPLOY_REPO/services/api/.env}"
 DEPLOY_PM2_PROCESS="${DEPLOY_PM2_PROCESS:-throttleiq-api}"
+DEPLOY_API_PORT="${DEPLOY_API_PORT:-}"
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-https://api.leadrider.ai/health}"
 DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
 DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
@@ -147,6 +153,9 @@ echo "  repo:       $DEPLOY_REPO"
 echo "  data dir:   $DEPLOY_DATA_DIR"
 echo "  env file:   $DEPLOY_ENV_FILE"
 echo "  pm2:        $DEPLOY_PM2_PROCESS"
+if [[ -n "$DEPLOY_API_PORT" ]]; then
+  echo "  api port:   $DEPLOY_API_PORT"
+fi
 echo "  health:     $DEPLOY_HEALTH_URL"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
 echo
@@ -163,6 +172,7 @@ remote_env=(
   "DEPLOY_DATA_DIR=$(shell_quote "$DEPLOY_DATA_DIR")"
   "DEPLOY_ENV_FILE=$(shell_quote "$DEPLOY_ENV_FILE")"
   "DEPLOY_PM2_PROCESS=$(shell_quote "$DEPLOY_PM2_PROCESS")"
+  "DEPLOY_API_PORT=$(shell_quote "$DEPLOY_API_PORT")"
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
@@ -266,6 +276,12 @@ PY
 mkdir -p "$DEPLOY_DATA_DIR"
 export DATA_DIR="$DEPLOY_DATA_DIR"
 export NODE_ENV="${NODE_ENV:-production}"
+if [[ -n "$DEPLOY_API_PORT" && -z "${PORT:-}" ]]; then
+  export PORT="$DEPLOY_API_PORT"
+fi
+if [[ -n "${PORT:-}" ]]; then
+  echo "API process port: $PORT"
+fi
 
 if [[ "$DEPLOY_REPLACE_PM2" == "1" ]] && pm2 describe "$DEPLOY_PM2_PROCESS" >/dev/null 2>&1; then
   echo "Replacing PM2 process so it runs from $DEPLOY_REPO..."

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
 
 export type ActiveClientStatus = "active" | "implementation" | "paused" | "canceled";
-export type ActiveClientPaymentMethod = "ach" | "card" | "check" | "wire" | "other";
+export type ActiveClientPaymentMethod = "ach" | "card" | "check" | "wire" | "stripe" | "other";
 
 export type ActiveClientPayment = {
   id: string;
@@ -52,6 +52,16 @@ export type ActiveClient = {
   achMandateStatus?: string;
   bankLast4?: string;
   paymentTerms?: string;
+  stripeMode?: "test" | "live";
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  stripeSubscriptionStatus?: string;
+  stripeLatestCheckoutSessionId?: string;
+  stripeLatestCheckoutSessionUrl?: string;
+  stripeLatestInvoiceId?: string;
+  stripeLastPaymentStatus?: string;
+  stripeCurrentPeriodEnd?: string;
+  stripeBillingStatusUpdatedAt?: string;
   notes?: string;
   payments: ActiveClientPayment[];
   createdAt: string;
@@ -116,6 +126,16 @@ export async function addActiveClient(input: Partial<ActiveClient> & { dealerNam
     achMandateStatus: clean(input.achMandateStatus, 120),
     bankLast4: clean(input.bankLast4, 12),
     paymentTerms: clean(input.paymentTerms, 240),
+    stripeMode: normalizeStripeMode(input.stripeMode),
+    stripeCustomerId: clean(input.stripeCustomerId, 120),
+    stripeSubscriptionId: clean(input.stripeSubscriptionId, 120),
+    stripeSubscriptionStatus: clean(input.stripeSubscriptionStatus, 120),
+    stripeLatestCheckoutSessionId: clean(input.stripeLatestCheckoutSessionId, 160),
+    stripeLatestCheckoutSessionUrl: clean(input.stripeLatestCheckoutSessionUrl, 1000),
+    stripeLatestInvoiceId: clean(input.stripeLatestInvoiceId, 160),
+    stripeLastPaymentStatus: clean(input.stripeLastPaymentStatus, 120),
+    stripeCurrentPeriodEnd: clean(input.stripeCurrentPeriodEnd, 80),
+    stripeBillingStatusUpdatedAt: clean(input.stripeBillingStatusUpdatedAt, 80),
     notes: clean(input.notes, 3000),
     payments: [],
     createdAt: now,
@@ -168,6 +188,15 @@ export async function updateActiveClient(id: string, patch: Partial<ActiveClient
     "achMandateStatus",
     "bankLast4",
     "paymentTerms",
+    "stripeCustomerId",
+    "stripeSubscriptionId",
+    "stripeSubscriptionStatus",
+    "stripeLatestCheckoutSessionId",
+    "stripeLatestCheckoutSessionUrl",
+    "stripeLatestInvoiceId",
+    "stripeLastPaymentStatus",
+    "stripeCurrentPeriodEnd",
+    "stripeBillingStatusUpdatedAt",
     "notes"
   ] as const) {
     if (typeof patch[key] === "string") {
@@ -175,9 +204,24 @@ export async function updateActiveClient(id: string, patch: Partial<ActiveClient
       (client as any)[key] = clean(patch[key], max);
     }
   }
+  if (patch.stripeMode) client.stripeMode = normalizeStripeMode(patch.stripeMode);
   client.updatedAt = new Date().toISOString();
   scheduleSave();
   return client;
+}
+
+export async function findActiveClientByStripeCustomerId(customerId: string): Promise<ActiveClient | null> {
+  await ensureLoaded();
+  const cleanId = clean(customerId, 120);
+  if (!cleanId) return null;
+  return rows.find(row => row.stripeCustomerId === cleanId) ?? null;
+}
+
+export async function findActiveClientByStripeSubscriptionId(subscriptionId: string): Promise<ActiveClient | null> {
+  await ensureLoaded();
+  const cleanId = clean(subscriptionId, 120);
+  if (!cleanId) return null;
+  return rows.find(row => row.stripeSubscriptionId === cleanId) ?? null;
 }
 
 export async function addActiveClientPayment(
@@ -205,8 +249,21 @@ export async function addActiveClientPayment(
   return client;
 }
 
+export async function addActiveClientPaymentIfMissing(
+  clientId: string,
+  input: Partial<ActiveClientPayment> & { amount: string; paidAt: string; reference: string }
+): Promise<ActiveClient | null> {
+  await ensureLoaded();
+  const client = rows.find(row => row.id === clientId);
+  if (!client) return null;
+  const reference = clean(input.reference, 160);
+  if (reference && (client.payments ?? []).some(payment => payment.reference === reference)) return client;
+  return addActiveClientPayment(clientId, input);
+}
+
 const statuses: ActiveClientStatus[] = ["active", "implementation", "paused", "canceled"];
-const paymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "other"];
+const paymentMethods: ActiveClientPaymentMethod[] = ["ach", "card", "check", "wire", "stripe", "other"];
+const stripeModes: Array<NonNullable<ActiveClient["stripeMode"]>> = ["test", "live"];
 
 function normalizeStatus(value: unknown): ActiveClientStatus | undefined {
   const status = String(value ?? "").trim().toLowerCase();
@@ -216,6 +273,13 @@ function normalizeStatus(value: unknown): ActiveClientStatus | undefined {
 function normalizePaymentMethod(value: unknown): ActiveClientPaymentMethod | undefined {
   const method = String(value ?? "").trim().toLowerCase();
   return paymentMethods.includes(method as ActiveClientPaymentMethod) ? (method as ActiveClientPaymentMethod) : undefined;
+}
+
+function normalizeStripeMode(value: unknown): ActiveClient["stripeMode"] | undefined {
+  const mode = String(value ?? "").trim().toLowerCase();
+  return stripeModes.includes(mode as NonNullable<ActiveClient["stripeMode"]>)
+    ? (mode as NonNullable<ActiveClient["stripeMode"]>)
+    : undefined;
 }
 
 function clean(value: unknown, max: number): string | undefined {
