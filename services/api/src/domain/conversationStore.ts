@@ -224,6 +224,12 @@ export type TodoTask = {
   sourceMessageId?: string;
   status: "open" | "done";
   doneAt?: string;
+  outcome?: string;
+  outcomeLabel?: string;
+  outcomeNote?: string;
+  outcomeResolution?: string;
+  outcomeByUserId?: string;
+  outcomeByUserName?: string;
   dueAt?: string;
   reminderAt?: string;
   reminderLeadMinutes?: number;

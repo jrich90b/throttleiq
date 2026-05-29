@@ -1159,6 +1159,10 @@ type TodoItem = {
   dealerRideOutcomeStatus?: string | null;
   dealerRideOutcomePrimaryStatus?: string | null;
   dealerRideOutcomeSecondaryStatus?: string | null;
+  outcome?: string | null;
+  outcomeLabel?: string | null;
+  outcomeNote?: string | null;
+  outcomeResolution?: string | null;
   sourceMessageId?: string | null;
   dueAt?: string | null;
   reminderAt?: string | null;
@@ -1337,6 +1341,78 @@ const APPOINTMENT_SECONDARY_LABELS: Record<string, string> = {
   no_change: "No change / already on hold",
   other: "Other"
 };
+
+type ApprovalTodoOutcome =
+  | "contacted_follow_up"
+  | "left_voicemail"
+  | "approved_next_step"
+  | "needs_info"
+  | "not_approved"
+  | "not_interested_now"
+  | "bought_elsewhere"
+  | "closed_no_action";
+
+type TodoOutcomePayload = {
+  outcome: string;
+  label?: string;
+  note?: string;
+};
+
+const APPROVAL_TODO_OUTCOME_OPTIONS: Array<{
+  value: ApprovalTodoOutcome;
+  label: string;
+  resolution: string;
+  helper: string;
+}> = [
+  {
+    value: "contacted_follow_up",
+    label: "Spoke - follow up needed",
+    resolution: "pause_7",
+    helper: "Closes this To Do and reminds the team to follow up soon."
+  },
+  {
+    value: "left_voicemail",
+    label: "Left voicemail",
+    resolution: "pause_7",
+    helper: "Closes this To Do and checks back soon."
+  },
+  {
+    value: "approved_next_step",
+    label: "Approved / ready for next step",
+    resolution: "appointment_set",
+    helper: "Closes this To Do and keeps the customer in manual follow-up."
+  },
+  {
+    value: "needs_info",
+    label: "Needs more information",
+    resolution: "pause_indef",
+    helper: "Closes this To Do and pauses automated follow-up until the missing items are handled."
+  },
+  {
+    value: "not_approved",
+    label: "Not approved",
+    resolution: "pause_30",
+    helper: "Closes this To Do and pauses follow-up for 30 days."
+  },
+  {
+    value: "not_interested_now",
+    label: "Not interested right now",
+    resolution: "archive",
+    helper: "Closes this To Do, archives the conversation, and stops follow-ups."
+  },
+  {
+    value: "bought_elsewhere",
+    label: "Bought elsewhere / lost",
+    resolution: "archive",
+    helper: "Closes this To Do, archives the conversation, and stops follow-ups."
+  },
+  {
+    value: "closed_no_action",
+    label: "Handled - no next action",
+    resolution: "dismiss",
+    helper: "Closes only this To Do."
+  }
+];
 
 function normalizeAppointmentPrimaryValue(raw?: string | null): "showed" | "did_not_show" | "cancelled" | null {
   const value = String(raw ?? "").trim().toLowerCase();
@@ -3391,6 +3467,11 @@ export default function Home() {
   const [appointmentOutcomeNote, setAppointmentOutcomeNote] = useState("");
   const [appointmentOutcomeSaving, setAppointmentOutcomeSaving] = useState(false);
   const [appointmentOutcomeError, setAppointmentOutcomeError] = useState<string | null>(null);
+  const [approvalOutcomeOpen, setApprovalOutcomeOpen] = useState(false);
+  const [approvalOutcomeTarget, setApprovalOutcomeTarget] = useState<TodoItem | null>(null);
+  const [approvalOutcome, setApprovalOutcome] = useState<ApprovalTodoOutcome>("contacted_follow_up");
+  const [approvalOutcomeNote, setApprovalOutcomeNote] = useState("");
+  const [approvalOutcomeSaving, setApprovalOutcomeSaving] = useState(false);
   const [appointmentVoiceSupported, setAppointmentVoiceSupported] = useState(false);
   const [appointmentVoiceTarget, setAppointmentVoiceTarget] = useState<"header" | "close" | null>(null);
   const [appointmentVoiceStatus, setAppointmentVoiceStatus] = useState("");
@@ -9343,7 +9424,8 @@ export default function Home() {
     appointmentOutcome?: string,
     appointmentOutcomeNote?: string,
     appointmentPrimaryOutcome?: string,
-    appointmentSecondaryOutcome?: string
+    appointmentSecondaryOutcome?: string,
+    todoOutcomePayload?: TodoOutcomePayload
   ) {
     await fetch("/api/todos", {
       method: "POST",
@@ -9355,7 +9437,10 @@ export default function Home() {
         appointmentOutcome: appointmentOutcome || undefined,
         appointmentOutcomeNote: appointmentOutcomeNote || undefined,
         appointmentPrimaryOutcome: appointmentPrimaryOutcome || undefined,
-        appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined
+        appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined,
+        todoOutcome: todoOutcomePayload?.outcome || undefined,
+        todoOutcomeLabel: todoOutcomePayload?.label || undefined,
+        todoOutcomeNote: todoOutcomePayload?.note || undefined
       })
     });
     await load();
@@ -10232,6 +10317,13 @@ export default function Home() {
     const conv = await fetchConversationDetail(todo.convId);
     if (conv) setSelectedConv(conv);
     await openCallPickerOrStart(conv ?? selectedConv);
+  }
+
+  function openApprovalTodoOutcome(todo: TodoItem) {
+    setApprovalOutcomeTarget(todo);
+    setApprovalOutcome("contacted_follow_up");
+    setApprovalOutcomeNote("");
+    setApprovalOutcomeOpen(true);
   }
 
   function openManualAppointment() {
@@ -13104,6 +13196,7 @@ export default function Home() {
             authUser={authUser}
             openReassignLeadInline={openReassignLeadInline}
             openCallFromTodo={openCallFromTodo}
+            openApprovalTodoOutcome={openApprovalTodoOutcome}
             setAppointmentCloseTarget={setAppointmentCloseTarget}
             setAppointmentClosePrimaryOutcome={setAppointmentClosePrimaryOutcome}
             setAppointmentCloseSecondaryOutcome={setAppointmentCloseSecondaryOutcome}
@@ -13751,6 +13844,93 @@ export default function Home() {
                   }}
                 >
                   {appointmentOutcomeSaving ? "Saving..." : "Save Outcome"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {approvalOutcomeOpen && approvalOutcomeTarget ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="bg-white lr-app-modal rounded-lg shadow-lg w-full max-w-md p-4">
+              <div className="text-sm font-medium">Resolve Finance To Do</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Record what happened before closing this task.
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <label className="text-xs text-gray-600">
+                  Outcome
+                  <select
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={approvalOutcome}
+                    onChange={e => setApprovalOutcome(e.target.value as ApprovalTodoOutcome)}
+                  >
+                    {APPROVAL_TODO_OUTCOME_OPTIONS.map(opt => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {(APPROVAL_TODO_OUTCOME_OPTIONS.find(opt => opt.value === approvalOutcome) ??
+                    APPROVAL_TODO_OUTCOME_OPTIONS[0])?.helper}
+                </div>
+                <label className="text-xs text-gray-600">
+                  Note (optional)
+                  <textarea
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm min-h-[72px]"
+                    value={approvalOutcomeNote}
+                    onChange={e => setApprovalOutcomeNote(e.target.value)}
+                    placeholder="Add the call result or finance context."
+                  />
+                </label>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-3 py-2 border rounded text-sm"
+                  disabled={approvalOutcomeSaving}
+                  onClick={() => {
+                    setApprovalOutcomeOpen(false);
+                    setApprovalOutcomeTarget(null);
+                    setApprovalOutcomeNote("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                  disabled={approvalOutcomeSaving}
+                  onClick={async () => {
+                    if (!approvalOutcomeTarget) return;
+                    const selected =
+                      APPROVAL_TODO_OUTCOME_OPTIONS.find(opt => opt.value === approvalOutcome) ??
+                      APPROVAL_TODO_OUTCOME_OPTIONS[0];
+                    if (!selected) return;
+                    setApprovalOutcomeSaving(true);
+                    try {
+                      await markTodoDone(
+                        approvalOutcomeTarget,
+                        selected.resolution,
+                        undefined,
+                        undefined,
+                        undefined,
+                        undefined,
+                        {
+                          outcome: selected.value,
+                          label: selected.label,
+                          note: approvalOutcomeNote.trim()
+                        }
+                      );
+                      setApprovalOutcomeOpen(false);
+                      setApprovalOutcomeTarget(null);
+                      setApprovalOutcomeNote("");
+                    } finally {
+                      setApprovalOutcomeSaving(false);
+                    }
+                  }}
+                >
+                  {approvalOutcomeSaving ? "Saving..." : "Save & Close"}
                 </button>
               </div>
             </div>

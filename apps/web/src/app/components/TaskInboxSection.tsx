@@ -23,6 +23,18 @@ function isDealerRideOutcomeTodo(todo: any): boolean {
   );
 }
 
+function isApprovalTodo(todo: any): boolean {
+  const reason = String(todo?.reason ?? "").trim().toLowerCase();
+  const text = [todo?.reason, todo?.summary, todo?.action].map(value => String(value ?? "")).join(" ").toLowerCase();
+  return (
+    reason === "approval" ||
+    reason === "payments" ||
+    reason === "pricing" ||
+    reason === "manager" ||
+    /\b(credit|prequal|pre-qual|approval|finance|financing|payment|business manager)\b/.test(text)
+  );
+}
+
 export function TaskInboxSection(props: any) {
   const {
     todoQuery,
@@ -56,6 +68,7 @@ export function TaskInboxSection(props: any) {
     authUser,
     openReassignLeadInline,
     openCallFromTodo,
+    openApprovalTodoOutcome,
     setAppointmentCloseTarget,
     setAppointmentClosePrimaryOutcome,
     setAppointmentCloseSecondaryOutcome,
@@ -171,6 +184,7 @@ export function TaskInboxSection(props: any) {
                             ? "border-[color:rgba(234,179,8,0.62)] bg-[color:rgba(234,179,8,0.20)] text-[#fff4c6]"
                             : "border-[color:rgba(59,130,246,0.52)] bg-[color:rgba(59,130,246,0.18)] text-[#dce9ff]";
                     const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
+                    const isApprovalTodoTask = isApprovalTodo(t);
                     const showCallButton = !isInternalNoteTodo;
                     const actionLabel = todoActionLabel(t);
                     const requestedCallTime =
@@ -378,23 +392,33 @@ export function TaskInboxSection(props: any) {
                             </button>
                           ) : null}
                           {appointmentReminderSent || dealerRideOutcomeNeeded ? null : (
-                            <button
-                              className="px-3 py-2 border rounded text-sm text-gray-600"
-                              onClick={() => {
-                                if (sectionType === "appointment" && !appointmentOutcomeLabel) {
-                                  setAppointmentCloseTarget(t);
-                                  setAppointmentClosePrimaryOutcome("showed");
-                                  setAppointmentCloseSecondaryOutcome("needs_follow_up");
-                                  setAppointmentCloseNote("");
-                                  setAppointmentCloseOpen(true);
-                                  return;
-                                }
-                                void markTodoDone(t, "dismiss");
-                              }}
-                              title="Close this To Do"
-                            >
-                              {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
-                            </button>
+                            isApprovalTodoTask ? (
+                              <button
+                                className="px-3 py-2 border rounded text-sm text-gray-700 bg-amber-50"
+                                onClick={() => openApprovalTodoOutcome(t)}
+                                title="Record the outcome and close this To Do"
+                              >
+                                Outcome
+                              </button>
+                            ) : (
+                              <button
+                                className="px-3 py-2 border rounded text-sm text-gray-600"
+                                onClick={() => {
+                                  if (sectionType === "appointment" && !appointmentOutcomeLabel) {
+                                    setAppointmentCloseTarget(t);
+                                    setAppointmentClosePrimaryOutcome("showed");
+                                    setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                    setAppointmentCloseNote("");
+                                    setAppointmentCloseOpen(true);
+                                    return;
+                                  }
+                                  void markTodoDone(t, "dismiss");
+                                }}
+                                title="Close this To Do"
+                              >
+                                {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                              </button>
+                            )
                           )}
                           <button
                             className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"

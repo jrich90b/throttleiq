@@ -34,6 +34,9 @@ export async function POST(req: Request) {
   const appointmentOutcomeNote = String(body?.appointmentOutcomeNote ?? "").trim();
   const appointmentPrimaryOutcome = String(body?.appointmentPrimaryOutcome ?? "").trim();
   const appointmentSecondaryOutcome = String(body?.appointmentSecondaryOutcome ?? "").trim();
+  const todoOutcome = String(body?.todoOutcome ?? "").trim();
+  const todoOutcomeLabel = String(body?.todoOutcomeLabel ?? "").trim();
+  const todoOutcomeNote = String(body?.todoOutcomeNote ?? "").trim();
   if (!convId || !todoId) {
     return NextResponse.json({ ok: false, error: "Missing convId/todoId" }, { status: 400 });
   }
@@ -46,7 +49,10 @@ export async function POST(req: Request) {
       appointmentOutcome: appointmentOutcome || undefined,
       appointmentOutcomeNote: appointmentOutcomeNote || undefined,
       appointmentPrimaryOutcome: appointmentPrimaryOutcome || undefined,
-      appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined
+      appointmentSecondaryOutcome: appointmentSecondaryOutcome || undefined,
+      todoOutcome: todoOutcome || undefined,
+      todoOutcomeLabel: todoOutcomeLabel || undefined,
+      todoOutcomeNote: todoOutcomeNote || undefined
     })
   });
   const text = await r.text();

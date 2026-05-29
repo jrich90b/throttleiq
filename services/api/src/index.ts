@@ -33086,6 +33086,33 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   const conv = getConversation(convId);
   if (conv) {
     let appointmentOutcomeMarkedSold = false;
+    const todoOutcome = String(req.body?.todoOutcome ?? "").trim();
+    const todoOutcomeLabel = String(req.body?.todoOutcomeLabel ?? "").trim();
+    const todoOutcomeNote = String(req.body?.todoOutcomeNote ?? "").trim();
+    const actorName =
+      [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim() ||
+      String(user?.name ?? user?.email ?? "").trim();
+    if (task && todoOutcome) {
+      task.outcome = todoOutcome;
+      task.outcomeLabel = todoOutcomeLabel || todoOutcome.replace(/_/g, " ");
+      task.outcomeNote = todoOutcomeNote || undefined;
+      task.outcomeByUserId = String(user?.id ?? "").trim() || undefined;
+      task.outcomeByUserName = actorName || undefined;
+      task.outcomeResolution = String(req.body?.resolution ?? "").trim() || undefined;
+      const summary = String(existingTask?.summary ?? task.summary ?? "").replace(/\s+/g, " ").trim();
+      const noteParts = [
+        `To Do outcome: ${task.outcomeLabel}.`,
+        summary ? `Task: ${summary}` : "",
+        todoOutcomeNote ? `Note: ${todoOutcomeNote}` : "",
+        actorName ? `Recorded by ${actorName}.` : ""
+      ].filter(Boolean);
+      addAgentContextNote(conv, {
+        text: noteParts.join(" "),
+        mode: "persistent",
+        createdByUserId: String(user?.id ?? "").trim() || undefined,
+        createdByUserName: actorName || undefined
+      });
+    }
     const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
     const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
     const appointmentSecondaryOutcome = String(req.body?.appointmentSecondaryOutcome ?? "").trim();
