@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-29T08:04:47.992Z",
+  "auto": {
+    "sourceDir": "/Users/joehartrich/throttleiq/reports/automations/feedback-loop-learning/20260529/feedback_loop_review_services_api_data_2500h/language_corpus",
+    "minCount": 2,
+    "rewriteRules": [],
+    "blockedExactDrafts": []
+  },
+  "manual": {
+    "rewriteRules": [],
+    "blockedExactDrafts": []
+  }
+}

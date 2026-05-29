@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-29T08:04:48.272Z",
+  "sourceDir": "/Users/joehartrich/throttleiq/reports/automations/feedback-loop-learning/20260529/feedback_loop_review_services_api_data_2500h/language_corpus",
+  "minCount": 1,
+  "maxPerIntent": 6,
+  "byIntent": {
+    "scheduling": [
+      {
+        "inboundText": "Can I come in this week?",
+        "reply": "I can get you scheduled to come in. I have Wed, 3:30 PM or Thu, 9:30 AM — which works best?",
+        "count": 1,
+        "observedAt": "2026-02-25T16:12:48.026Z"
+      }
+    ]
+  }
+}
