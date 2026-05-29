@@ -96,6 +96,14 @@ const cases: Case[] = [
     }
   },
   {
+    id: "marketplace_value_my_trade_routes_trade_value",
+    expected: true,
+    run: () => {
+      const rule = resolveLeadRule("Marketplace - Value My Trade");
+      return rule.bucket === "trade_in_sell" && rule.cta === "value_my_trade";
+    }
+  },
+  {
     id: "international_shipping_question_detected",
     expected: true,
     run: () =>

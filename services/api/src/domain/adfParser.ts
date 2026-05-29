@@ -39,6 +39,7 @@ export type ParsedAdfLead = {
     vin?: string;
     mileage?: number;
     color?: string;
+    condition?: "new" | "used";
     description?: string;
   };
 };
@@ -93,7 +94,17 @@ function stripHtml(s: string): string {
 function normalizeCondition(raw?: string): "new" | "used" | undefined {
   if (!raw) return undefined;
   const t = raw.toLowerCase();
-  if (t.includes("used") || t.includes("pre-owned") || t.includes("preowned")) return "used";
+  if (
+    t.includes("used") ||
+    t.includes("pre-owned") ||
+    t.includes("preowned") ||
+    t.includes("minimal wear") ||
+    t.includes("normal wear") ||
+    t.includes("clean trade") ||
+    t.includes("rough trade")
+  ) {
+    return "used";
+  }
   if (t.includes("new")) return "new";
   return undefined;
 }
@@ -268,7 +279,7 @@ function parseFromComment(comment?: string) {
   const modelMatch = clean.match(/\bmodel\s*:\s*([^\n\r,]+)/i);
   const requestedVehicleMatch = clean.match(/(?:^|\n)\s*vehicle\s*:\s*([^\n\r]+)/i);
   const trimMatch = clean.match(/\btrim\s*:\s*([^\n\r,]+)/i);
-  const statusMatch = clean.match(/status\s*[:=]\s*\"?(new|used|pre[-\s]?owned)\"?/i);
+  const statusMatch = clean.match(/(?:status|condition)\s*[:=]\s*\"?([^\n\r\"]+)/i);
   const phoneMatch = clean.match(/phone:\s*([0-9\-\s\(\)\.]+)/i);
   const emailMatch = clean.match(/email:\s*([^\s\n\r]+)/i);
   const streetMatch = clean.match(/address line 1:\s*([^\n\r]+)/i);
@@ -282,7 +293,15 @@ function parseFromComment(comment?: string) {
   const tradeOptionsMatch = clean.match(/trade options:\s*([^\n\r]+)/i);
   const optionsRaw = optionsMatch?.[1]?.trim().toLowerCase();
   const tradeOptionsRaw = tradeOptionsMatch?.[1]?.trim().toLowerCase();
-  const sellYear = firstStructuredValue(clean, ["manufacturer year", "model year"]);
+  const sellVehicleFieldContext =
+    /\bevent name\s*:\s*(?:value my trade|sell my bike|sell your bike|trade[-\s]?in)\b/i.test(clean) ||
+    /\b(value my trade|sell my bike|sell your bike|sell your vehicle|trade options)\b/i.test(clean) ||
+    (/\boptions\s*:\s*(?:open|cash|trade)\b/i.test(clean) &&
+      /\b(?:model|make|year|mileage|price)\s*:/i.test(clean));
+  const sellYear = firstStructuredValue(
+    clean,
+    sellVehicleFieldContext ? ["manufacturer year", "model year", "year"] : ["manufacturer year", "model year"]
+  );
   const sellMake = normalizeMake(firstStructuredValue(clean, ["manufacturer", "make"]));
   const sellModel = normalizeSellVehicleModel(firstStructuredValue(clean, ["model type", "model"]));
   const sellColor = firstStructuredValue(clean, ["color"]);
@@ -312,6 +331,7 @@ function parseFromComment(comment?: string) {
   }
   const mileage =
     mileageMatch?.[1] != null ? Number(mileageMatch[1].replace(/,/g, "")) : undefined;
+  const parsedCondition = normalizeCondition(statusMatch?.[1]);
   const sellVehicle =
     sellYear || sellMake || sellModel || sellColor || mileage
       ? {
@@ -320,6 +340,7 @@ function parseFromComment(comment?: string) {
           model: sellModel,
           mileage,
           color: sellColor,
+          condition: parsedCondition,
           description: [sellMake, sellModel].filter(Boolean).join(" ") || sellModel
         }
       : undefined;
@@ -333,7 +354,7 @@ function parseFromComment(comment?: string) {
     model: modelMatch?.[1]?.trim() ?? requestedVehicleMatch?.[1]?.trim(),
     trim: trimMatch?.[1]?.trim() ?? itemDetails.trim,
     color: colorMatch?.[1]?.trim() ?? itemDetails.color ?? itemColor,
-    condition: normalizeCondition(statusMatch?.[1]),
+    condition: parsedCondition,
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
     street: streetMatch?.[1]?.trim(),
@@ -525,6 +546,9 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     const tradeMake = normalizeMake(text(tradeVehicleRaw?.make));
     let tradeModel = text(tradeVehicleRaw?.model);
     const tradeVin = text(tradeVehicleRaw?.vin);
+    const tradeCondition = normalizeCondition(
+      attr(tradeVehicleRaw, "status") ?? attr(tradeVehicleRaw, "condition")
+    );
     const tradeOdometerRaw = text(tradeVehicleRaw?.odometer);
     const tradeMileage =
       tradeOdometerRaw != null ? Number(String(tradeOdometerRaw).replace(/,/g, "")) : undefined;
@@ -539,6 +563,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
       model: tradeModel,
       vin: tradeVin,
       mileage: tradeMileage,
+      condition: tradeCondition,
       description: tradeDesc
     };
   }

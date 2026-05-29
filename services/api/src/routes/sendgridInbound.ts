@@ -1033,9 +1033,17 @@ function extractInquiryModelHint(inquiry?: string | null): string | undefined {
 function extractInquiryYearHint(inquiry?: string | null): string | undefined {
   const raw = String(inquiry ?? "").trim();
   if (!raw) return undefined;
-  const full = raw.match(/\b(20\d{2})\b/);
+  const withoutMetadataDates = raw
+    .replace(/\blead\s+captured\s+date\s*:\s*(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}[^\n\r]*/gi, " ")
+    .replace(/\brequest\s*date\s*:\s*(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}[^\n\r]*/gi, " ")
+    .replace(/\brequestdate\s*:\s*(?:19|20)\d{2}[-/]\d{1,2}[-/]\d{1,2}[^\n\r]*/gi, " ");
+  const structured = withoutMetadataDates.match(
+    /\b(?:inventory\s+year|manufacturer\s+year|model\s+year|year)\s*:\s*((?:19|20)\d{2})\b/i
+  );
+  if (structured?.[1]) return structured[1];
+  const full = withoutMetadataDates.match(/\b(20\d{2})\b/);
   if (full?.[1]) return full[1];
-  const short = raw.match(
+  const short = withoutMetadataDates.match(
     /\b'?(\d{2})\s+(?:(?:new|used|orange|black|white|blue|red|gray|grey|silver|vivid|dark|bright|inferno|citrus|billiard|matte|metallic)\s+){0,4}(?:harley|cvo|street|road|glide|softail|sportster|nightster|pan|fat|breakout|heritage|ultra|trike|tri|freewheeler)\b/i
   );
   if (!short?.[1]) return undefined;
@@ -3856,7 +3864,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadSourceLower = (leadSource ?? "").toLowerCase();
   const isRoom58SellLeadSource =
     /room58/i.test(leadSourceLower) && /(sell|sell your vehicle|sell your bike)/i.test(leadSourceLower);
-  if (isRoom58SellLeadSource && lead.tradeVehicle) {
+  const isMarketplaceValueMyTradeLeadSource =
+    /marketplace/i.test(leadSourceLower) &&
+    /\b(value\s+my\s+trade|value\s+your\s+trade|trade[-\s]?in|trade\s+value|appraisal)\b/i.test(
+      leadSourceLower
+    );
+  const shouldUseTradeVehicleAsPrimaryLead =
+    (isRoom58SellLeadSource || isMarketplaceValueMyTradeLeadSource) && !!lead.tradeVehicle;
+  if (shouldUseTradeVehicleAsPrimaryLead && lead.tradeVehicle) {
     const tradeModel = normalizeVehicleModel(
       lead.tradeVehicle.model ?? lead.tradeVehicle.description ?? "",
       lead.tradeVehicle.make ?? null
@@ -3870,7 +3885,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       lead.vehicleDescription;
     lead.vehicleColor = lead.tradeVehicle.color ?? lead.vehicleColor;
     lead.mileage = lead.tradeVehicle.mileage ?? lead.mileage;
-    lead.vehicleCondition = "used";
+    lead.vehicleCondition = lead.tradeVehicle.condition ?? "used";
   }
   const sourceFromIdLower = String(meta.sourceFromId ?? "").trim().toLowerCase();
   const isTrafficLogProLeadSourceHint = /traffic\s*log\s*pro/i.test(leadSourceLower);
@@ -6614,7 +6629,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const isPrivatePartyMarketplaceSellLead = isMarketplaceContactDealerSource && marketplaceSellSignal;
   const isMarketplaceSell =
     /marketplace/i.test(leadSourceLower) &&
-    (/sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);
+    (marketplaceSellSignal || /sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
   if (isInitialAdf && isTradeAcceleratorLead && isSellLead) {
     const profile = await getDealerProfile();
