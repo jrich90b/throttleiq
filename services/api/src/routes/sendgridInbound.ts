@@ -107,6 +107,7 @@ import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
+import { buildInitialInventoryEmailSegment } from "../domain/initialAdfEmailDraft.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -1697,6 +1698,7 @@ function buildInitialEmailDraft(
   inventoryNote?: string | null,
   buildInventoryAvailable?: boolean | null,
   options?: {
+    inventoryStatus?: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
     testRideInventoryStatus?: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
   }
 ): string {
@@ -1751,41 +1753,21 @@ function buildInitialEmailDraft(
         ? `Thanks for your interest in the ${model}.`
         : "Thanks for your interest.";
   const intro = `This is ${agentName} at ${dealerName}.`;
-  const help = "I’m happy to help with pricing, options, and availability.";
-  const noteLine = inventoryNote ? `Right now there’s ${inventoryNote} available.` : "";
-  const buildLine = isCustomBuild
-    ? buildInventoryAvailable
-      ? "We do have one in stock if you’d like to check it out. I can also walk you through build options and next steps."
-      : "I can walk you through build options and next steps."
-    : "";
-  const visit = isCustomBuild
-    ? buildInventoryAvailable
-      ? "If you want to stop in to check it out and go over build options, you can book an appointment below."
-      : "If you want to stop in to go over build options, you can book an appointment below."
-    : isTestRide
-      ? testRideInStock
-        ? model
-          ? "If you want to stop in for a test ride and go over options, you can book an appointment below."
-          : "If you want to stop in for a test ride, you can book an appointment below."
-        : model
-          ? "I don’t want to schedule a test ride on a bike we don’t currently have in stock."
-          : "I can line up a test ride once you pick an in-stock bike."
-    : model
-      ? "If you want to stop in to check out the bike and go over options, you can book an appointment below."
-      : "If you want to stop in to go over options, you can book an appointment below.";
-  const bookingLine =
-    isTestRide && !testRideInStock
-      ? inventoryBrowseUrl
-        ? `Please pick an in-stock bike from here and reply with the one you want to ride: ${inventoryBrowseUrl}`
-        : "Reply with the exact in-stock bike you want to ride and I’ll line up the test ride."
-      : bookingUrl
-        ? `You can book an appointment here: ${bookingUrl}`
-        : "Just reply with a day and time that works for you.";
-  const extra = "If a walkaround or extra photos would help, just let me know.";
+  const emailSegment = buildInitialInventoryEmailSegment({
+    model,
+    bookingUrl,
+    inventoryBrowseUrl,
+    inventoryNote,
+    inventoryStatus: options?.inventoryStatus ?? "unknown",
+    isCustomBuild,
+    buildInventoryAvailable,
+    isTestRide,
+    testRideInStock
+  });
 
-  const draft = `Hi ${name},\n\n${thanks} ${intro} ${help} ${noteLine} ${buildLine} ${visit}\n\n${
+  const draft = `Hi ${name},\n\n${thanks} ${intro} ${emailSegment.helpLine} ${emailSegment.inventoryLine} ${emailSegment.buildLine} ${emailSegment.visitLine}\n\n${
     offersLine ? `${offersLine}\n\n` : ""
-  }${bookingLine}\n\n${extra}`
+  }${emailSegment.actionLine}\n\n${emailSegment.extraLine}`
     .replace(/\s+\n/g, "\n")
     .trim();
   return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
@@ -7261,6 +7243,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
     publishAdfEmailDraft(
       buildInitialEmailDraft(conv, profile, inventoryNote, buildInventoryAvailable, {
+        inventoryStatus: initialAvailability,
         testRideInventoryStatus: initialAvailability
       })
     );

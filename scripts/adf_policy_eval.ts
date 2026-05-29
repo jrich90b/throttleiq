@@ -8,6 +8,7 @@ import {
   isInternationalShippingInquiry,
   shouldDeclineInternationalShipping
 } from "../services/api/src/domain/internationalShippingPolicy.ts";
+import { buildInitialInventoryEmailSegment } from "../services/api/src/domain/initialAdfEmailDraft.ts";
 import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 type Case = {
@@ -200,6 +201,25 @@ const cases: Case[] = [
         leadSourceLower: "hd.com online test ride request",
         draft: "Thanks for reaching out. How can I help?"
       })
+  },
+  {
+    id: "unverified_inventory_email_does_not_invite_check_out_exact_bike",
+    expected: true,
+    run: () => {
+      const segment = buildInitialInventoryEmailSegment({
+        model: "2016 Iron 883",
+        inventoryStatus: "not_found",
+        inventoryBrowseUrl: "https://dealer.example/inventory",
+        bookingUrl: "https://dealer.example/book"
+      });
+      const text = Object.values(segment).join(" ").toLowerCase();
+      return (
+        text.includes("not seeing a 2016 iron 883 in stock") &&
+        !text.includes("check out the bike") &&
+        !text.includes("walkaround or extra photos") &&
+        !text.includes("book an appointment")
+      );
+    }
   }
 ];
 
