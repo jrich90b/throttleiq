@@ -8,7 +8,10 @@ import {
   isInternationalShippingInquiry,
   shouldDeclineInternationalShipping
 } from "../services/api/src/domain/internationalShippingPolicy.ts";
-import { buildInitialInventoryEmailSegment } from "../services/api/src/domain/initialAdfEmailDraft.ts";
+import {
+  buildInitialInventoryEmailSegment,
+  buildInitialUnavailableInventorySmsReply
+} from "../services/api/src/domain/initialAdfEmailDraft.ts";
 import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 type Case = {
@@ -218,6 +221,23 @@ const cases: Case[] = [
         !text.includes("check out the bike") &&
         !text.includes("walkaround or extra photos") &&
         !text.includes("book an appointment")
+      );
+    }
+  },
+  {
+    id: "unavailable_inventory_sms_offers_watch_instead_of_specs",
+    expected: true,
+    run: () => {
+      const text = buildInitialUnavailableInventorySmsReply({
+        model: "Iron 883",
+        status: "not_found"
+      }).toLowerCase();
+      return (
+        text.includes("not seeing an iron 883 in stock") &&
+        text.includes("similar options") &&
+        text.includes("keep an eye out") &&
+        !text.includes("pull the specs") &&
+        !text.includes("follow up shortly")
       );
     }
   }

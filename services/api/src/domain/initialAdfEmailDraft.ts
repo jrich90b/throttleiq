@@ -9,6 +9,24 @@ export type InitialInventoryEmailSegment = {
   extraLine: string;
 };
 
+function withIndefiniteArticle(label: string): string {
+  const clean = label.trim();
+  if (!clean) return "that bike";
+  return `${/^[aeiou]/i.test(clean) ? "an" : "a"} ${clean}`;
+}
+
+export function buildInitialUnavailableInventorySmsReply(args: {
+  model?: string | null;
+  status?: InitialEmailInventoryStatus | null;
+}): string {
+  const model = String(args.model ?? "").trim();
+  const subject = model ? withIndefiniteArticle(model) : "that bike";
+  if (args.status === "sold") {
+    return `Thanks — that ${model || "bike"} is no longer available. I can check similar options, or I can keep an eye out and text you if one comes in.`;
+  }
+  return `Thanks — I’m not seeing ${subject} in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in.`;
+}
+
 export function buildInitialInventoryEmailSegment(args: {
   model?: string | null;
   bookingUrl?: string | null;

@@ -107,7 +107,10 @@ import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
 import { resolveRoutingParserDecision } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
-import { buildInitialInventoryEmailSegment } from "../domain/initialAdfEmailDraft.js";
+import {
+  buildInitialInventoryEmailSegment,
+  buildInitialUnavailableInventorySmsReply
+} from "../domain/initialAdfEmailDraft.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -3384,6 +3387,92 @@ async function buildInitialAdfInventoryStatusReply(args: {
   };
 }
 
+async function getModelOnlyInventoryAvailabilityStatus(
+  model?: string | null
+): Promise<"in_stock" | "on_hold" | "sold" | "not_found" | "unknown"> {
+  const modelText = String(model ?? "").trim();
+  if (!modelText || isGenericLeadModel(modelText)) return "unknown";
+  try {
+    const matches = await findInventoryMatches({ year: null, model: modelText });
+    if (!matches.length) return "not_found";
+    const [holds, solds] = await Promise.all([listInventoryHolds(), listInventorySolds()]);
+    let sawHold = false;
+    let sawSold = false;
+    for (const item of matches) {
+      const soldKey = normalizeInventorySoldKey(item.stockId, item.vin);
+      if (soldKey && solds?.[soldKey]) {
+        sawSold = true;
+        continue;
+      }
+      const holdKey = normalizeInventoryHoldKey(item.stockId, item.vin);
+      if (holdKey && holds?.[holdKey]) {
+        sawHold = true;
+        continue;
+      }
+      return "in_stock";
+    }
+    if (sawHold && !sawSold) return "on_hold";
+    if (sawSold && !sawHold) return "sold";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function buildInitialAdfUnavailableInventoryWatch(args: {
+  conv: any;
+  inquiryText: string;
+  initialAvailability: "in_stock" | "on_hold" | "sold" | "not_found" | "unknown";
+}): Promise<{ reply: string; watch: InventoryWatch } | null> {
+  if (args.initialAvailability !== "not_found" && args.initialAvailability !== "sold") return null;
+  const vehicle = args.conv?.lead?.vehicle ?? {};
+  const model =
+    normalizeVehicleModel(vehicle?.model ?? vehicle?.description ?? "", vehicle?.make ?? null) ??
+    normalizeDisplayCase(vehicle?.model ?? vehicle?.description ?? "");
+  if (!model || isGenericLeadModel(model)) return null;
+  const hasIdentifiers = !!String(vehicle?.stockId ?? "").trim() || !!String(vehicle?.vin ?? "").trim();
+  const customerYearRange = extractYearRangeFromText(args.inquiryText);
+  const customerSingleYear = extractSingleYearFromText(args.inquiryText);
+  const customerYearLabel =
+    customerYearRange?.min && customerYearRange?.max
+      ? `${customerYearRange.min}-${customerYearRange.max}`
+      : customerSingleYear
+        ? String(customerSingleYear)
+        : "";
+  const modelForReply = [customerYearLabel, model].filter(Boolean).join(" ").trim() || model;
+  const modelOnlyStatus =
+    !hasIdentifiers && !customerYearRange && !customerSingleYear
+      ? await getModelOnlyInventoryAvailabilityStatus(model)
+      : args.initialAvailability;
+  if (modelOnlyStatus === "in_stock" || modelOnlyStatus === "unknown") return null;
+  const nowIso = new Date().toISOString();
+  const watch: InventoryWatch = {
+    model,
+    status: "active",
+    createdAt: nowIso,
+    note: "initial_adf_unavailable_inventory"
+  };
+  if (customerYearRange?.min && customerYearRange?.max) {
+    watch.yearMin = customerYearRange.min;
+    watch.yearMax = customerYearRange.max;
+    watch.exactness = "model_range";
+  } else if (customerSingleYear) {
+    watch.year = customerSingleYear;
+    watch.exactness = "year_model";
+  } else {
+    watch.exactness = "model_only";
+  }
+  const condition = normalizeVehicleCondition(vehicle?.condition);
+  if (condition) watch.condition = condition;
+  return {
+    reply: buildInitialUnavailableInventorySmsReply({
+      model: modelForReply,
+      status: modelOnlyStatus
+    }),
+    watch
+  };
+}
+
 export async function handleSendgridInbound(req: Request, res: Response) {
   console.log("[sendgrid inbound] meta:", {
     contentType: req.header("content-type"),
@@ -5286,6 +5375,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
   const maybeAddInitialCallTodo = () => {
     if (!isInitialAdf) return;
+    if (conv.inventoryWatch?.status === "active" || conv.followUp?.reason === "inventory_watch") return;
     if (callbackRequestedInLead) {
       addTodo(
         conv,
@@ -7560,14 +7650,41 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     setFollowUpMode(conv, "manual_handoff", "composite_sales_inquiry");
     stopFollowUpCadence(conv, "manual_handoff");
   }
+  const initialAdfUnavailableInventoryWatch =
+    isInitialAdf &&
+    !initialAdfRiderCourseDecision &&
+    !initialCompositeSalesInquiryDecision &&
+    !isDepartmentLead &&
+    !isSellLead &&
+    !isCreditLead &&
+    !isWalkInLead &&
+    inferredBucket === "inventory_interest"
+      ? await buildInitialAdfUnavailableInventoryWatch({
+          conv,
+          inquiryText: effectiveInquiry,
+          initialAvailability
+        })
+      : null;
+  if (initialAdfUnavailableInventoryWatch) {
+    draft = initialAdfUnavailableInventoryWatch.reply;
+    suppressAvailabilityAppend = true;
+    conv.inventoryWatch = initialAdfUnavailableInventoryWatch.watch;
+    conv.inventoryWatches = [initialAdfUnavailableInventoryWatch.watch];
+    conv.inventoryWatchPending = undefined;
+    conv.dialogState = { name: "inventory_watch_active", updatedAt: new Date().toISOString() };
+    setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+    stopFollowUpCadence(conv, "inventory_watch");
+  }
   const initialAdfVehicleFactDecision = isInitialAdf && !initialCompositeSalesInquiryDecision
     && !initialAdfRiderCourseDecision
+    && !initialAdfUnavailableInventoryWatch
     ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
     : null;
   const initialAdfVehicleInfoDecision =
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision
       ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
       : null;
@@ -7628,6 +7745,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !isDepartmentLead &&
@@ -7653,6 +7771,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted
@@ -7672,6 +7791,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !preferredTestRideDateReply &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted
@@ -7708,6 +7828,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !isWalkInLead &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted &&
@@ -7750,6 +7871,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     !initialAdfVehicleFactDecision &&
     !initialAdfVehicleInfoDecision &&
     !initialAdfInventoryStatusAccepted &&
@@ -7794,6 +7916,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
+    !initialAdfUnavailableInventoryWatch &&
     /meta/i.test(leadSourceLower) &&
     inferredBucket === "general_inquiry" &&
     typeof draft === "string"
@@ -7947,6 +8070,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !conv.appointment?.bookedEventId &&
     conv.followUp?.mode !== "manual_handoff" &&
     conv.followUp?.mode !== "paused_indefinite" &&
+    conv.followUp?.mode !== "holding_inventory" &&
+    conv.followUp?.reason !== "inventory_watch" &&
+    !conv.inventoryWatch &&
     conv.classification?.bucket !== "finance_prequal" &&
     conv.classification?.bucket !== "service" &&
     conv.classification?.bucket !== "event_promo" &&
@@ -7966,6 +8092,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !conv.appointment?.bookedEventId &&
     conv.followUp?.mode !== "manual_handoff" &&
     conv.followUp?.mode !== "paused_indefinite" &&
+    conv.followUp?.mode !== "holding_inventory" &&
+    conv.followUp?.reason !== "inventory_watch" &&
+    !conv.inventoryWatch &&
     conv.classification?.bucket !== "finance_prequal" &&
     conv.classification?.bucket !== "service" &&
     conv.classification?.bucket !== "event_promo" &&
