@@ -36,6 +36,7 @@ function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "pr
   }
   if (message.direction === "in") {
     if (provider === "twilio") return "Customer";
+    if (provider === "web_widget") return "WEB TEXT WIDGET";
     if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
     if (provider === "sendgrid") return "Email";
   }

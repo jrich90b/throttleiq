@@ -843,6 +843,7 @@ function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "pr
   }
   if (message.direction === "in") {
     if (provider === "twilio") return "Customer";
+    if (provider === "web_widget") return "WEB TEXT WIDGET";
     if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
     if (provider === "sendgrid") return "Email";
   }
@@ -8332,6 +8333,7 @@ export default function Home() {
           provider === "voice_summary";
         const isSms =
           provider === "twilio" ||
+          provider === "web_widget" ||
           provider === "human" ||
           provider === "draft_ai" ||
           provider === "sendgrid_adf";
@@ -8374,7 +8376,7 @@ export default function Home() {
       .find(
         m =>
           m.direction === "in" &&
-          (m.provider === "twilio" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
+          (m.provider === "twilio" || m.provider === "web_widget" || m.provider === "sendgrid" || m.provider === "sendgrid_adf")
       );
     if (!lastInbound?.at) return false;
     if (
@@ -9005,7 +9007,10 @@ export default function Home() {
       Boolean(c.hasInboundTwilio) ||
       c.engagement?.source === "sms" ||
       (Array.isArray((c as any)?.messages) &&
-        (c as any).messages.some((m: any) => m?.direction === "in" && m?.provider === "twilio"));
+        (c as any).messages.some(
+          (m: any) =>
+            m?.direction === "in" && (m?.provider === "twilio" || m?.provider === "web_widget")
+        ));
     if (!twilioEngaged) return false;
     return hasPurchaseIntentSignal(c);
   };
