@@ -134,6 +134,38 @@ function run() {
   const seedPath = path.join(parsed.reportDir, "few_shot_seed_manual_outbound.json");
   const rows = readRows(seedPath);
 
+  if (rows.length === 0 && fs.existsSync(parsed.outPath)) {
+    let existingUpdatedAt: string | null = null;
+    try {
+      const existing = JSON.parse(fs.readFileSync(parsed.outPath, "utf8"));
+      existingUpdatedAt = typeof existing?.updatedAt === "string" ? existing.updatedAt : null;
+    } catch {
+      // ignore parse errors; fall through to normal behavior
+      existingUpdatedAt = null;
+    }
+    const summary = {
+      ok: true,
+      seedPath,
+      outPath: parsed.outPath,
+      minCount: parsed.minCount,
+      maxPerIntent: parsed.maxPerIntent,
+      loadedRows: 0,
+      wroteOutFile: false,
+      existingUpdatedAt,
+      promotedExamples: 0,
+      promotedByIntent: {}
+    };
+    const summaryPath = path.join(parsed.reportDir, "manual_outbound_promotion_summary.json");
+    try {
+      fs.mkdirSync(parsed.reportDir, { recursive: true });
+      fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + "\n");
+    } catch {
+      // non-fatal when report dir is unavailable
+    }
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
   const buckets = new Map<string, Map<string, { inboundText: string; reply: string; count: number; observedAt?: string }>>();
   for (const row of rows) {
     const inboundText = normText(row.inboundText);
@@ -187,21 +219,85 @@ function run() {
 
   let wroteOutFile = false;
   let existingUpdatedAt: string | null = null;
+  let existingCoreByIntent: Record<string, ManualReplyExample[]> = {};
   try {
     if (fs.existsSync(parsed.outPath)) {
       const existing = JSON.parse(fs.readFileSync(parsed.outPath, "utf8"));
       existingUpdatedAt = typeof existing?.updatedAt === "string" ? existing.updatedAt : null;
+      existingCoreByIntent =
+        existing?.byIntent && typeof existing.byIntent === "object" ? (existing.byIntent as any) : {};
       const existingCore = {
         version: Number(existing?.version) || 1,
         minCount: Number(existing?.minCount) || parsed.minCount,
         maxPerIntent: Number(existing?.maxPerIntent) || parsed.maxPerIntent,
         byIntent: existing?.byIntent && typeof existing.byIntent === "object" ? existing.byIntent : {}
       };
-      if (stableStringify(existingCore) === stableStringify(outCore)) {
+
+      const mergedByIntent: Record<string, ManualReplyExample[]> = (() => {
+        const merged: Record<string, ManualReplyExample[]> = {};
+        const intents = new Set<string>([
+          ...Object.keys(existingCoreByIntent ?? {}),
+          ...Object.keys(byIntent ?? {})
+        ]);
+        for (const intent of intents) {
+          const existingList = Array.isArray(existingCoreByIntent?.[intent]) ? existingCoreByIntent[intent] : [];
+          const nextList = Array.isArray(byIntent?.[intent]) ? byIntent[intent] : [];
+          const byKey = new Map<string, ManualReplyExample>();
+          for (const ex of existingList) {
+            const inboundText = normText(ex?.inboundText);
+            const reply = sanitizeManualReplyExampleReply(normText(ex?.reply));
+            if (!inboundText || !reply) continue;
+            const key = `${normKey(inboundText)}=>${normKey(reply)}`;
+            byKey.set(key, {
+              inboundText,
+              reply,
+              count: Number(ex?.count ?? 0) || 0,
+              observedAt: normText(ex?.observedAt) || undefined
+            });
+          }
+          for (const ex of nextList) {
+            const inboundText = normText(ex?.inboundText);
+            const reply = sanitizeManualReplyExampleReply(normText(ex?.reply));
+            if (!inboundText || !reply) continue;
+            const key = `${normKey(inboundText)}=>${normKey(reply)}`;
+            const current = byKey.get(key);
+            const observedAt = normText(ex?.observedAt) || undefined;
+            const count = Number(ex?.count ?? 0) || 0;
+            if (!current) {
+              byKey.set(key, { inboundText, reply, count, observedAt });
+              continue;
+            }
+            current.count = Math.max(current.count, count);
+            if (observedAt && (!current.observedAt || Date.parse(observedAt) > Date.parse(current.observedAt))) {
+              current.observedAt = observedAt;
+            }
+            byKey.set(key, current);
+          }
+          const mergedList = [...byKey.values()]
+            .sort((a, b) => {
+              const aCount = Number(a.count || 0);
+              const bCount = Number(b.count || 0);
+              if (bCount !== aCount) return bCount - aCount;
+              return Date.parse(b.observedAt ?? "") - Date.parse(a.observedAt ?? "");
+            })
+            .slice(0, parsed.maxPerIntent);
+          if (mergedList.length) merged[intent] = mergedList;
+        }
+        return merged;
+      })();
+
+      const mergedCore = {
+        version: 1,
+        minCount: parsed.minCount,
+        maxPerIntent: parsed.maxPerIntent,
+        byIntent: mergedByIntent
+      };
+
+      if (stableStringify(existingCore) === stableStringify(mergedCore)) {
         wroteOutFile = false;
       } else {
         const out: ManualReplyExamplesFile = {
-          ...(outCore as Omit<ManualReplyExamplesFile, "updatedAt" | "sourceDir">),
+          ...(mergedCore as Omit<ManualReplyExamplesFile, "updatedAt" | "sourceDir">),
           updatedAt: nowIso,
           sourceDir: parsed.reportDir
         };
