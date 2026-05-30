@@ -34,6 +34,7 @@ mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VO
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 AUDIT_JSON="$LOG_DIR/conversation_audit_$TS.json"
+FOLLOWUP_TASK_AUDIT_JSON="$LOG_DIR/followup_task_consistency_$TS.json"
 MINE_LOG="$LOG_DIR/edit_feedback_mine_$TS.log"
 RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
 WATCHDOG_JSON="$LOG_DIR/route_watchdog_$TS.json"
@@ -95,13 +96,19 @@ trap 'record_closed_loop_run "$?"' EXIT
 
   # Some scripts still read CONVERSATIONS_PATH (legacy) instead of CONVERSATIONS_DB_PATH.
   CONVERSATIONS_PATH="${CONVERSATIONS_PATH:-$CONVERSATIONS_DB_PATH}"
-  export DATA_DIR CONVERSATIONS_DB_PATH CONVERSATIONS_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR VOICE_FEEDBACK_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH TONE_QUALITY_OUT_DIR AGENT_MANAGER_OUT_DIR
+  export DATA_DIR CONVERSATIONS_DB_PATH CONVERSATIONS_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR VOICE_FEEDBACK_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH TONE_QUALITY_OUT_DIR AGENT_MANAGER_OUT_DIR FOLLOWUP_TASK_AUDIT_JSON
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
 
   echo "[feedback-loop] step=conversation_audit -> $AUDIT_JSON"
   npm run conversation:audit > "$AUDIT_JSON"
+
+  echo "[feedback-loop] step=followup_task_consistency_audit -> $FOLLOWUP_TASK_AUDIT_JSON"
+  npm run followup_task_consistency:audit -- \
+    --conversations "$CONVERSATIONS_DB_PATH" \
+    --since-hours "$AUDIT_SINCE_HOURS" \
+    --out "$FOLLOWUP_TASK_AUDIT_JSON"
 
   echo "[feedback-loop] step=edit_feedback_mine -> $MINE_LOG"
   npm run edit_feedback:mine | tee "$MINE_LOG"
@@ -147,12 +154,13 @@ trap 'record_closed_loop_run "$?"' EXIT
   fi
 
   echo "[feedback-loop] step=agent_manager_report"
-  npm run agent_manager:report -- --route-watchdog "$WATCHDOG_JSON"
+  FOLLOWUP_TASK_AUDIT_PATH="$FOLLOWUP_TASK_AUDIT_JSON" npm run agent_manager:report -- --route-watchdog "$WATCHDOG_JSON"
 
   if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" || -f "${FEEDBACK_LOOP_ENV_PATH}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
     if FEEDBACK_LOOP_ENV_PATH="$FEEDBACK_LOOP_ENV_PATH" \
       FEEDBACK_REPORT_AUDIT_PATH="$AUDIT_JSON" \
+      FEEDBACK_REPORT_FOLLOWUP_TASK_AUDIT_PATH="$FOLLOWUP_TASK_AUDIT_JSON" \
       FEEDBACK_REPORT_MINE_LOG_PATH="$MINE_LOG" \
       npm run edit_feedback:email; then
       echo "[feedback-loop] email_report=sent"

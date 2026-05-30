@@ -150,6 +150,12 @@ function main() {
     latestMatchingFile(feedbackLogDir, name => /^conversation_audit_.*\.json$/i.test(name)) ||
     path.join(parsed.reportRoot, "conversation_audit.json");
   const conversationAudit = readJson(conversationAuditPath);
+  const followupTaskAuditPath =
+    process.env.FOLLOWUP_TASK_AUDIT_PATH ||
+    process.env.FOLLOWUP_TASK_AUDIT_JSON ||
+    latestMatchingFile(feedbackLogDir, name => /^followup_task_consistency_.*\.json$/i.test(name)) ||
+    path.join(parsed.reportRoot, "followup_task_consistency.json");
+  const followupTaskAudit = readJson(followupTaskAuditPath);
   const routeWatchdogPath =
     parsed.routeWatchdogPath ||
     latestMatchingFile(feedbackLogDir, name => /^route_watchdog_.*\.json$/i.test(name)) ||
@@ -190,6 +196,10 @@ function main() {
   const orphanFollowUpCount = auditIssueCounts
     .filter((row: any) => /^orphan_followup_/i.test(String(row?.issue ?? "")))
     .reduce((sum: number, row: any) => sum + num(row?.count), 0);
+  const followupTaskFlagged = num(followupTaskAudit?.summary?.flaggedConversations);
+  const followupTaskIssueCounts = Array.isArray(followupTaskAudit?.summary?.issueCounts)
+    ? followupTaskAudit.summary.issueCounts
+    : [];
   const openOpsAnomalies = Array.isArray(opsAnomaliesRaw)
     ? opsAnomaliesRaw.filter((row: any) => String(row?.status ?? "open") === "open")
     : [];
@@ -243,6 +253,33 @@ function main() {
               )
               .slice(0, 10)
           : []
+      }
+    });
+  }
+
+  if (followupTaskFlagged > 0) {
+    const highRiskIssues = new Set([
+      "duplicate_open_todos_same_class",
+      "duplicate_open_todos_same_summary",
+      "active_cadence_with_open_followup_todo",
+      "active_cadence_with_dealer_ride_outcome_task",
+      "manual_or_hold_mode_with_active_customer_cadence"
+    ]);
+    const highRiskCount = followupTaskIssueCounts
+      .filter((row: any) => highRiskIssues.has(String(row?.issue ?? "")))
+      .reduce((sum: number, row: any) => sum + num(row?.count), 0);
+    pushTask(tasks, {
+      id: "followup-task-consistency",
+      priority: highRiskCount >= 5 || followupTaskFlagged >= 10 ? "P1" : "P2",
+      area: "ops",
+      title: "Review duplicate follow-up and task signals",
+      signal: `${followupTaskFlagged} conversation(s) have duplicate or conflicting follow-up/task state`,
+      recommendedAction:
+        "Review the flagged rows before backfilling or closing tasks. If a pattern repeats, add a single upsert/merge rule at the pipeline stage that creates the duplicate.",
+      evidence: {
+        followupTaskAuditPath,
+        issueCounts: followupTaskIssueCounts,
+        sample: Array.isArray(followupTaskAudit?.flagged) ? followupTaskAudit.flagged.slice(0, 10) : []
       }
     });
   }
@@ -376,11 +413,14 @@ function main() {
       voiceDir,
       opsAnomaliesPath,
       conversationAuditPath,
+      followupTaskAuditPath,
       routeWatchdogPath
     },
     metrics: {
       stuckTurns: stuckCount,
       orphanFollowUpSignals: orphanFollowUpCount,
+      followupTaskConsistencyFlags: followupTaskFlagged,
+      followupTaskIssueCounts,
       noResponseRouteOutcomes: noResponseCount,
       tonePassRate: tonePassRateResponded,
       tonePassRateAll,

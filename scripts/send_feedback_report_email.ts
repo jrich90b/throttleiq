@@ -110,6 +110,7 @@ async function run() {
     path.resolve(path.dirname(outDir), "agent_manager");
   const agentManagerJsonPath = path.join(agentManagerOutDir, "agent_manager_report.json");
   const agentManagerMdPath = path.join(agentManagerOutDir, "agent_manager_report.md");
+  const followupTaskAuditPath = String(process.env.FEEDBACK_REPORT_FOLLOWUP_TASK_AUDIT_PATH ?? "").trim();
 
   const summary = readJson(summaryPath);
   if (!summary) {
@@ -121,6 +122,7 @@ async function run() {
   const toneSummary = readJson(toneSummaryPath);
   const voiceSummary = readJson(voiceSummaryPath);
   const agentManagerSummary = readJson(agentManagerJsonPath);
+  const followupTaskAudit = followupTaskAuditPath ? readJson(followupTaskAuditPath) : null;
 
   const auditPath = String(process.env.FEEDBACK_REPORT_AUDIT_PATH ?? "").trim();
   const mineLogPath = String(process.env.FEEDBACK_REPORT_MINE_LOG_PATH ?? "").trim();
@@ -188,6 +190,14 @@ async function run() {
             .join("; ")
         : "none"
     }`,
+    `Follow-up/task consistency: ${
+      followupTaskAudit
+        ? `flagged=${num(followupTaskAudit?.summary?.flaggedConversations)} issues=${fmtCountRows(
+            followupTaskAudit?.summary?.issueCounts,
+            "issue"
+          )}`
+        : "not available"
+    }`,
     "",
     `Output directory: ${outDir}`
   ].join("\n");
@@ -219,6 +229,7 @@ async function run() {
     maybeAttach(voiceRowsPath, "voice_feedback_rows.json");
     maybeAttach(agentManagerJsonPath, "agent_manager_report.json");
     maybeAttach(agentManagerMdPath, "agent_manager_report.md", "text/markdown");
+    if (followupTaskAuditPath) maybeAttach(followupTaskAuditPath, path.basename(followupTaskAuditPath));
     if (attachFull) {
       maybeAttach(fixturesPath, "edit_replay_fixtures.json");
       maybeAttach(labeledPath, "edit_feedback_labeled.json");
@@ -240,6 +251,7 @@ async function run() {
       voiceRowsPath,
       agentManagerJsonPath,
       agentManagerMdPath,
+      ...(followupTaskAuditPath ? [followupTaskAuditPath] : []),
       ...(attachFull ? [fixturesPath, labeledPath] : []),
       ...(auditPath ? [auditPath] : []),
       ...(mineLogPath ? [mineLogPath] : [])
