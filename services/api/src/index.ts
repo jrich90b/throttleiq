@@ -43476,16 +43476,42 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
-    saveConversation(conv);
-    return respondRegenerateSkipped("dealer_ride_outcome_pending");
+    const reply = buildDealerLeadAppPostRideReply({
+      conv,
+      dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
+      agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+      inventoryStatus: "unknown"
+    });
+    recordRouteOutcome("regen", "dealer_ride_initial_thank_you_draft", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      noPurchase: true
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply);
   }
   if (regenDealerRideEventLead) {
     const dealerRideOutcome: any = conv?.dealerRide?.staffNotify?.outcome ?? null;
     if (!dealerRideOutcome?.status) {
       setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
       stopFollowUpCadence(conv, "manual_handoff");
-      saveConversation(conv);
-      return respondRegenerateSkipped("dealer_ride_outcome_pending");
+      const reply = buildDealerLeadAppPostRideReply({
+        conv,
+        dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
+        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        inventoryStatus: "unknown"
+      });
+      recordRouteOutcome("regen", "dealer_ride_initial_thank_you_draft", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        noPurchase: false
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
     }
     const reply = buildDealerRideOutcomeCustomerDraft({
       conv,

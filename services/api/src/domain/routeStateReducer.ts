@@ -163,7 +163,7 @@ export type TestRideBikeSelectionInput = {
 };
 
 export const DEALER_RIDE_NO_PURCHASE_SKIP_DRAFT =
-  "No customer reply needed — dealer ride outcome requires salesperson follow-up.";
+  "Customer thank-you draft needed — dealer ride outcome still requires salesperson follow-up.";
 
 export function nextActionFromState(input: RouteStateReducerInput): RouteStateDecision {
   if (input.dealerRideNoPurchaseAdf) {

@@ -5093,6 +5093,31 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
     return { ok: true, draft: invariant.draftText };
   };
+  const hasDealerRideInitialThankYouDraft = () =>
+    Array.isArray(conv.messages) &&
+    conv.messages.some((message: any) => {
+      if (message?.direction !== "out") return false;
+      const body = String(message?.body ?? "");
+      return /thanks again for coming in/i.test(body) && /\b(?:test ride|ride|demo)\b/i.test(body);
+    });
+  const publishDealerRideInitialThankYouDraft = async () => {
+    if (appointmentOutcomeWinsDealerRideOutcome(conv)) {
+      return { ok: false, reason: "appointment_outcome_wins" };
+    }
+    if (hasDealerRideInitialThankYouDraft()) {
+      return { ok: true, skipped: true, reason: "dealer_ride_initial_thank_you_exists" };
+    }
+    const profile = await getDealerProfile();
+    const draft = buildDealerLeadAppPostRideReply({
+      conv,
+      dealerName: profile?.dealerName,
+      agentName: profile?.agentName,
+      inventoryStatus: "unknown"
+    });
+    return publishEarlyAdfSmsDraft(draft);
+  };
+  const getPublishedDraftText = (result: Awaited<ReturnType<typeof publishDealerRideInitialThankYouDraft>>) =>
+    "draft" in result ? result.draft : undefined;
   if (isRideChallengeSignup) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
@@ -5216,6 +5241,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
+    const dealerRideInitialThankYou = !appointmentOutcomeWins
+      ? await publishDealerRideInitialThankYouDraft()
+      : { ok: false, reason: "appointment_outcome_wins" };
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
         conv,
@@ -5299,11 +5327,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
+      draft: getPublishedDraftText(dealerRideInitialThankYou),
+      draftStatus: dealerRideInitialThankYou,
       staffSms
     });
   }
   if (isDealerRideEventLead) {
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -5317,7 +5348,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply"
+      note: "dealer_ride_outcome_pending_customer_draft",
+      draft: getPublishedDraftText(dealerRideInitialThankYou),
+      draftStatus: dealerRideInitialThankYou
     });
   }
 
