@@ -1213,12 +1213,18 @@ async function loadFromDisk() {
     const list = parsed?.conversations ?? [];
     conversations.clear();
     leadKeyIndex.clear();
+    let scrubbedInternalOutboundCount = 0;
     for (const c of list) {
       // Defensive normalization: prevent one malformed row from taking down
       // list rendering/API responses.
       if (!Array.isArray((c as any)?.messages)) {
         (c as any).messages = [];
       }
+      const originalMessageCount = (c as any).messages.length;
+      (c as any).messages = (c as any).messages.filter(
+        (message: Partial<Message>) => !isInternalActionLogOutboundMessage(message)
+      );
+      scrubbedInternalOutboundCount += originalMessageCount - (c as any).messages.length;
       const leadKey = normalizeLeadKey(c?.leadKey || c?.id || "");
       if (!leadKey) continue;
       c.leadKey = leadKey;
@@ -1256,6 +1262,12 @@ async function loadFromDisk() {
     if (parsed?.questions?.length) questions.push(...parsed.questions);
 
     console.log(`📦 Loaded ${conversations.size} conversations from ${DB_PATH}`);
+    if (scrubbedInternalOutboundCount > 0) {
+      console.warn(
+        `[conversationStore] removed ${scrubbedInternalOutboundCount} internal action-log outbound message(s)`
+      );
+      scheduleSave();
+    }
   } catch (err: any) {
     if (err?.code === "ENOENT") {
       // First run, file doesn't exist yet.
@@ -1469,6 +1481,20 @@ function outboundAsksForShortList(body: string): boolean {
   );
 }
 
+export function isInternalOutboundActionLogBody(input: string): boolean {
+  const text = String(input ?? "").replace(/\s+/g, " ").trim();
+  return /^(?:Context note applied actions\b|Inventory check:)/i.test(text);
+}
+
+function isInternalActionLogOutboundMessage(message: Partial<Message>): boolean {
+  if (String(message.direction ?? "").trim().toLowerCase() !== "out") return false;
+  const from = String(message.from ?? "").trim().toLowerCase();
+  const provider = String(message.provider ?? "").trim().toLowerCase();
+  const customerFacingProvider =
+    provider === "human" || provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
+  return (from === "system" && customerFacingProvider) || isInternalOutboundActionLogBody(String(message.body ?? ""));
+}
+
 function markPendingShortListPrompt(conv: Conversation, source: string): void {
   const now = nowIso();
   const expiresAt = new Date(Date.now() + PENDING_SHORTLIST_TTL_MS).toISOString();
@@ -1535,6 +1561,23 @@ export function appendOutbound(
   actor?: { userId?: string | null; userName?: string | null },
   invariantHints?: DraftInvariantHints
 ) {
+  const providerKey = String(provider ?? "").trim().toLowerCase();
+  const customerFacingProvider =
+    providerKey === "human" || providerKey === "draft_ai" || providerKey === "twilio" || providerKey === "sendgrid";
+  if (
+    (String(from ?? "").trim().toLowerCase() === "system" && customerFacingProvider) ||
+    isInternalOutboundActionLogBody(body)
+  ) {
+    console.warn("[conversationStore] blocked internal action log from outbound timeline", {
+      convId: conv.id,
+      provider,
+      from,
+      to
+    });
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return;
+  }
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
   const lastInbound = [...(conv.messages || [])]

@@ -301,6 +301,20 @@ for (const relPath of targets) {
     const finding = classify(relPath, line, idx, context);
     if (finding) findings.push({ ...finding, line: idx + 1 });
   });
+  const source = lines.join("\n");
+  const systemOutboundPattern =
+    /appendOutbound\s*\(\s*conv\s*,\s*["']system["'][\s\S]{0,400}["'](?:human|draft_ai|twilio|sendgrid)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = systemOutboundPattern.exec(source))) {
+    const line = source.slice(0, match.index).split("\n").length;
+    findings.push({
+      file: relPath,
+      line,
+      kind: "legacy_other_direct",
+      code: "appendOutbound(conv, \"system\", ..., customer-facing provider)",
+      detail: "Internal system/action-log text must not be appended through the customer-facing outbound timeline."
+    });
+  }
 }
 
 const counts = findings.reduce<Record<string, number>>((acc, finding) => {

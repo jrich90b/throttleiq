@@ -4617,13 +4617,11 @@ async function clearLinkedInventoryAvailabilityConversations(
       changed = true;
     }
     if (changed) {
-      appendOutbound(
-        conv,
-        "system",
-        conv.leadKey,
-        `Inventory status cleared: ${[stockId, vin].filter(Boolean).join(" / ")} marked available.`,
-        "human"
-      );
+      console.log("[inventory-availability] cleared stale status", {
+        convId: conv.id,
+        stockId: stockId || null,
+        vin: vin || null
+      });
       saveConversation(conv);
       updated += 1;
     }
@@ -19161,13 +19159,11 @@ async function applyActionStateFromContextNote(
   }
 
   if (changed) {
-    appendOutbound(
-      conv,
-      "system",
-      conv.leadKey,
-      `Context note applied actions${actorName ? ` by ${actorName}` : ""}: ${reasons.join(", ")}.`,
-      "human"
-    );
+    console.log("[context-note-actions] applied", {
+      convId: conv.id,
+      actorName: actorName ?? null,
+      reasons
+    });
   }
   return { changed, reasons };
 }
@@ -31489,8 +31485,7 @@ app.post("/inventory/status", (req, res) => {
   // store status in a simple place; you can formalize later
   (conv.lead.vehicle as any).inventoryStatus = status;
 
-  // also log an internal note into the thread for visibility (optional)
-  appendOutbound(conv, "system", leadKey, `Inventory check: ${stockId} => ${status}`, "human");
+  console.log("[inventory-status] updated", { leadKey, stockId, status, url: url || null });
 
   return res.json({ ok: true, leadKey, stockId, status, url, conversation: conv });
 });
