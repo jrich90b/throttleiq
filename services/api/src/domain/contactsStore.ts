@@ -68,6 +68,10 @@ function normalizeEmail(input?: string): string | undefined {
   return trimmed || undefined;
 }
 
+function hasOwn(obj: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 async function ensureDirForFile(filePath: string) {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
@@ -183,14 +187,31 @@ export function updateContact(
   const existing = contacts.get(id);
   if (!existing) return null;
   const now = nowIso();
-  const nextPhone = normalizePhone(patch.phone ?? existing.phone);
+  const hasPhonePatch = hasOwn(patch, "phone");
+  const hasEmailPatch = hasOwn(patch, "email");
+  const nextPhone = hasPhonePatch ? normalizePhone(patch.phone) : normalizePhone(existing.phone);
+  const nextEmail = hasEmailPatch ? normalizeEmail(patch.email) : normalizeEmail(existing.email);
   const prevPhone = normalizePhone(existing.phone);
+  const prevEmail = normalizeEmail(existing.email);
   const leadKeyLooksPhone = !!(existing.leadKey && normalizePhone(existing.leadKey));
+  const leadKeyLooksEmail = !!(
+    existing.leadKey &&
+    prevEmail &&
+    normalizeEmail(existing.leadKey) === prevEmail
+  );
   let nextLeadKey = existing.leadKey;
-  if (patch.phone !== undefined) {
-    if (!existing.leadKey || leadKeyLooksPhone || (prevPhone && normalizePhone(existing.leadKey) === prevPhone)) {
+  if (hasPhonePatch) {
+    if (
+      !existing.leadKey ||
+      leadKeyLooksPhone ||
+      (prevPhone && normalizePhone(existing.leadKey) === prevPhone) ||
+      (leadKeyLooksEmail && nextPhone)
+    ) {
       nextLeadKey = nextPhone ?? existing.leadKey;
     }
+  }
+  if (hasEmailPatch && !nextEmail && leadKeyLooksEmail && nextPhone) {
+    nextLeadKey = nextPhone;
   }
   const next: ContactEntry = {
     ...existing,
@@ -198,7 +219,7 @@ export function updateContact(
     firstName: patch.firstName ?? existing.firstName,
     lastName: patch.lastName ?? existing.lastName,
     name: patch.name ?? existing.name,
-    email: normalizeEmail(patch.email ?? existing.email),
+    email: nextEmail,
     phone: nextPhone,
     leadSource: patch.leadSource ?? existing.leadSource,
     leadSourceId: patch.leadSourceId ?? existing.leadSourceId,

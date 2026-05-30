@@ -88,6 +88,7 @@
     "automation_run:record": "npx tsx scripts/record_automation_run.ts",
     "support_mail:poll": "npx tsx scripts/support_mail_poll.ts",
     "support_mail_policy:eval": "npx tsx scripts/support_mail_policy_eval.ts",
+    "contact_update:eval": "npx tsx scripts/contact_update_eval.ts",
     "mdf:portal": "npx tsx scripts/mdf_portal_runner.ts",
     "mdf:portal:daemon": "npx tsx scripts/mdf_portal_runner_daemon.ts",
     "tlp_debug:email": "npx tsx scripts/send_tlp_debug_email.ts",

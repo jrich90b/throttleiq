@@ -2763,18 +2763,26 @@ export function updateConversationContact(
   }
 ): void {
   const prevKey = normalizeLeadKey(conv.leadKey || "");
-  const nextKey = patch.phone ? normalizeLeadKey(patch.phone) : "";
+  const hasPhonePatch = Object.prototype.hasOwnProperty.call(patch, "phone");
+  const hasEmailPatch = Object.prototype.hasOwnProperty.call(patch, "email");
+  const nextKey = hasPhonePatch && patch.phone ? normalizeLeadKey(patch.phone) : "";
   const lead = (conv.lead = conv.lead ?? {});
 
   if (patch.firstName !== undefined) lead.firstName = patch.firstName;
   if (patch.lastName !== undefined) lead.lastName = patch.lastName;
   if (patch.name !== undefined) lead.name = patch.name;
-  if (patch.email !== undefined) lead.email = patch.email;
-  if (patch.phone !== undefined) {
+  if (hasEmailPatch) {
+    const nextEmail = String(patch.email ?? "").trim();
+    if (nextEmail) lead.email = nextEmail;
+    else delete lead.email;
+  }
+  if (hasPhonePatch) {
     if (nextKey) {
       lead.phone = nextKey;
-    } else {
+    } else if (patch.phone) {
       lead.phone = patch.phone;
+    } else {
+      delete lead.phone;
     }
   }
 
