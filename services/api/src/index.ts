@@ -11082,7 +11082,7 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     return `${intro} I appreciate you giving us the chance to help. If anything changes, just text me anytime.`;
   }
   if (args.secondaryStatus === "needs_follow_up" || args.outcome === "follow_up") {
-    return `${intro} I’ll follow up with the next steps we talked about.`;
+    return `${intro} I’ll check in with you, and if any questions come up before then, just text me anytime.`;
   }
   return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
 }

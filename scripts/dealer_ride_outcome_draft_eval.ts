@@ -43,6 +43,11 @@ const checks: Check[] = [
     true
   ),
   check(
+    "dealer_ride_outcome_follow_up_does_not_assume_agreed_next_steps",
+    source.includes("next steps we talked about"),
+    false
+  ),
+  check(
     "draft_queue_happens_before_staff_sms_confirmation_text",
     staffSmsQueueIndex > 0 &&
       staffSmsQueuedConfirmationIndex > 0 &&
