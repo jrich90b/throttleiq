@@ -14999,7 +14999,18 @@ async function maybeHandleStaffOutcomeSms(event: InboundMessageEvent): Promise<{
         name: String(staff.name ?? staff.firstName ?? staff.email ?? "").trim() || undefined
       }
     });
-    confirmation = "Saved FOLLOW UP outcome.";
+    const draftResult = await queueDealerRideOutcomeCustomerDraft({
+      conv,
+      unit,
+      outcome: "follow_up",
+      primaryStatus: "showed",
+      secondaryStatus: "needs_follow_up",
+      note,
+      source: "staff_outcome_sms"
+    });
+    confirmation = draftResult.queued
+      ? "Saved FOLLOW UP outcome and queued a customer thank-you draft."
+      : "Saved FOLLOW UP outcome.";
   }
 
   const outcomeTarget = getOutcomeStaffNotifyTarget(conv);
@@ -33432,6 +33443,16 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
             undefined
         }
       });
+      if (isDealerRideOutcomeTask && normalizedOutcome.secondaryStatus === "needs_follow_up") {
+        await queueDealerRideOutcomeCustomerDraft({
+          conv,
+          outcome: appointmentOutcomeStatus,
+          primaryStatus: normalizedOutcome.primaryStatus,
+          secondaryStatus: normalizedOutcome.secondaryStatus,
+          note: effectiveAppointmentOutcomeNote,
+          source: "todo_done_modal"
+        });
+      }
       if (conv.appointment) conv.appointment.updatedAt = nowIsoValue;
     }
     const resolution = String(req.body?.resolution ?? "resume").trim();
