@@ -344,6 +344,7 @@ import {
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
+  isDealerLocationQuestionText,
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
   isDealerTransactionPolicyParserAccepted,
@@ -51443,7 +51444,7 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
-  if (event.provider === "twilio" && wantsReminder(event.body)) {
+  if (event.provider === "twilio" && wantsReminder(event.body) && !isDealerLocationQuestionText(event.body ?? "")) {
     const pauseUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
     const dealerProfile = await getDealerProfileHot();
@@ -51455,9 +51456,7 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
-  const locationQuestion = /(where are you|what location|what address|address|located|location)\b/i.test(
-    textLower
-  );
+  const locationQuestion = isDealerLocationQuestionText(textLower);
   const weatherQuestion =
     /\b(nicest day|nice day|best day)\b/i.test(textLower) ||
     /\b(what(?:'s| is)|how(?:'s| is)|is it|will it|can i|can we|should i|should we)\b[^.!?]*\b(weather|forecast|temperature|temp|snow|cold|rain)\b/i.test(

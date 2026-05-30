@@ -50,6 +50,25 @@ export function shouldSuppressDispositionCloseout(conv: any, text: string): bool
   );
 }
 
+export function isDealerLocationQuestionText(text: string | null | undefined): boolean {
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return false;
+  if (/\b(?:my|their|his|her|customer|pickup|pick up|street)\s+address\b/.test(t)) return false;
+  return (
+    /\bwhere\s+(?:are|r)\s+(?:you|y'all|you guys)\b/.test(t) ||
+    /\bwhere\s+(?:is|'s)\s+(?:the\s+)?(?:dealership|dealer|store|shop|location)\b/.test(t) ||
+    /\bwhere\s+(?:are|is|'s)\s+(?:you\s+)?located\b/.test(t) ||
+    /\bwhat\s+(?:is|'s)?\s*(?:your|the|this|that)?\s*(?:store\s+|dealer\s+|dealership\s+)?address\b/.test(t) ||
+    /\bwhat\s+address\s+(?:is\s+)?(?:this|that|there|are\s+you\s+at|you\s+at)\b/.test(t) ||
+    /\bwhat\s+location\b/.test(t) ||
+    /\baddress\s+(?:is\s+)?(?:this|that|there|are\s+you\s+at|you\s+at)\b/.test(t)
+  );
+}
+
 function isStructuredFinanceInfoText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -104,7 +123,7 @@ function hasCompetingActiveIntentText(text: string): boolean {
     /\b(ready to buy|pull the trigger|i want (it|that bike)|i['’]?m interested|interested in|want to move forward)\b/.test(
       t
     );
-  return hasAvailabilityAsk || hasSchedulingAsk || hasActiveBuyingSignal;
+  return hasAvailabilityAsk || hasSchedulingAsk || hasActiveBuyingSignal || isDealerLocationQuestionText(t);
 }
 
 export function isDispositionParserAccepted(parsed: {

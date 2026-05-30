@@ -1,5 +1,6 @@
 import {
   canApplyDispositionCloseout,
+  isDealerLocationQuestionText,
   isDispositionParserAccepted
 } from "../services/api/src/domain/transitionSafety.ts";
 
@@ -14,6 +15,7 @@ const steppingBackText = "I think I'm going to keep my bike and hold off for now
 const financeInfoText = "I have $2,500 to put down and want to stay under $500/month.";
 const availabilityText = "Do you have any black street glides in stock?";
 const schedulingText = "Can I come in Monday at 3:45?";
+const locationQuestionText = "I cant not currently and remind me again what address is this at?";
 const affordabilityRideConfidenceText =
   "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.";
 
@@ -127,6 +129,22 @@ const cases: Case[] = [
       canApplyDispositionCloseout({
         conv: { followUp: { mode: "active" } },
         text: schedulingText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
+      })
+  },
+  {
+    id: "dealer_location_question_detected_with_not_currently_language",
+    expected: true,
+    run: () => isDealerLocationQuestionText(locationQuestionText)
+  },
+  {
+    id: "dealer_location_question_blocks_closeout_even_if_parser_accepts_disposition",
+    expected: false,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active" } },
+        text: locationQuestionText,
         parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
       })
