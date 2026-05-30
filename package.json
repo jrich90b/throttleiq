@@ -47,6 +47,7 @@
     "inbound_shadow:replay": "npx tsx scripts/inbound_shadow_replay.ts",
     "route_watchdog:run": "npx tsx scripts/route_audit_watchdog.ts",
     "inbound_pipeline:eval": "npx tsx scripts/inbound_pipeline_eval.ts",
+    "inbound_reply_cross_dealer:eval": "npx tsx scripts/inbound_reply_cross_dealer_eval.ts",
     "reply_path:audit": "npx tsx scripts/customer_reply_path_audit.ts",
     "language_corpus:mine": "npx tsx scripts/language_corpus_mine.ts",
     "voice_feedback:mine": "npx tsx scripts/voice_feedback_mine.ts",

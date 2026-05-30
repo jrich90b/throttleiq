@@ -403,6 +403,7 @@ import {
   extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
+  buildAcknowledgedInventoryWatchReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
@@ -413,6 +414,8 @@ import {
   getBroadScheduleWindowLabel,
   getScheduleDayOptionsLabel,
   hasRideChallengeSignupAcknowledgement,
+  hasInventoryWatchConfirmationText,
+  hasPriorOutOfStockNoticeForModel,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
   isBusinessHoursQuestionText,
@@ -425,6 +428,7 @@ import {
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
   hasExplicitCalendarDateForScheduleMemory,
+  isExplicitCustomerCallbackRequestText,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
   isUnlistedInventoryQuestionText,
@@ -443,6 +447,7 @@ import {
   isPurchaseDeliveryTimingText,
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
+  isScheduleContextStatusUpdateText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
@@ -3191,7 +3196,17 @@ function publishCustomerReplyDraft(args: {
     const to =
       String(args.to ?? "").trim() ||
       String(args.conv.leadKey ?? "").trim();
-    appendOutbound(args.conv, from, to, invariant.draftText, "draft_ai", undefined, args.mediaUrls);
+    appendOutbound(
+      args.conv,
+      from,
+      to,
+      invariant.draftText,
+      "draft_ai",
+      undefined,
+      args.mediaUrls,
+      undefined,
+      args.invariantHints
+    );
     draft = invariant.draftText;
   }
 
@@ -17336,6 +17351,43 @@ function hasScheduleOfferContext(lastOutboundText: string, dialogState: DialogSt
   );
 }
 
+function extractScheduleDayLabelFromContext(...texts: string[]): string {
+  const joined = texts.join(" ").toLowerCase();
+  const match = joined.match(
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/
+  );
+  const raw = match?.[1] ?? "";
+  const labels: Record<string, string> = {
+    today: "today",
+    tomorrow: "tomorrow",
+    monday: "Monday",
+    mon: "Monday",
+    tuesday: "Tuesday",
+    tue: "Tuesday",
+    tues: "Tuesday",
+    wednesday: "Wednesday",
+    wed: "Wednesday",
+    thursday: "Thursday",
+    thu: "Thursday",
+    thur: "Thursday",
+    thurs: "Thursday",
+    friday: "Friday",
+    fri: "Friday",
+    saturday: "Saturday",
+    sat: "Saturday",
+    sunday: "Sunday",
+    sun: "Sunday"
+  };
+  return labels[raw] ?? "";
+}
+
+function buildScheduleContextStatusUpdateReply(inboundText: string, lastOutboundText: string): string {
+  const dayLabel = extractScheduleDayLabelFromContext(inboundText, lastOutboundText);
+  const timeQuestion = dayLabel ? `what time ${dayLabel} works best?` : "what day and time works best?";
+  const prefix = /\b(?:sorry|my bad)\b/i.test(inboundText) ? "No worries" : "Sounds good";
+  return `${prefix} — ${timeQuestion}`;
+}
+
 function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string): string {
   if (getDialogState(conv) !== "schedule_offer_sent") return reply;
   if (!isSlotOfferMessage(reply)) return reply;
@@ -19851,9 +19903,18 @@ async function resolveDeterministicAvailabilityReply(args: {
   if (requestedModelMentions.length >= 2) {
     const requestedModels = requestedModelMentions.slice(0, 3);
     const rows: string[] = [];
+    const outboundTexts = (conv.messages ?? [])
+      .filter((m: any) => m?.direction === "out" && typeof m?.body === "string")
+      .map((m: any) => String(m.body ?? ""));
+    const confirmsWatch = hasInventoryWatchConfirmationText(args.text);
+    const acknowledgedWatchModels: string[] = [];
+    const availableRequestedLabels: string[] = [];
+    const availableOptionLines: string[] = [];
+    const otherRequestedLabels: string[] = [];
     let anyAvailable = false;
     for (const requestedModel of requestedModels) {
       const requestedLabel = normalizeDisplayCase(canonicalizeWatchModelLabel(requestedModel) || requestedModel);
+      otherRequestedLabels.push(requestedLabel);
       const requestedMatches = await findInventoryMatches({
         year: null,
         model: canonicalizeWatchModelLabel(requestedModel)
@@ -19861,7 +19922,13 @@ async function resolveDeterministicAvailabilityReply(args: {
       const requestedStatus = classifyInventoryMatches(requestedMatches, holds, solds);
       if (requestedStatus.available.length > 0) {
         anyAvailable = true;
+        availableRequestedLabels.push(requestedLabel);
         const top = requestedStatus.available[0];
+        availableOptionLines.push(
+          requestedStatus.available.length === 1
+            ? `${requestedLabel}: ${formatBudgetInventoryOption(top)}.`
+            : `${requestedLabel}: ${formatBudgetInventoryOption(top)} plus ${requestedStatus.available.length - 1} more.`
+        );
         rows.push(
           requestedStatus.available.length === 1
             ? `${requestedLabel}: yes — ${formatInventoryLine(top)} is available right now.`
@@ -19870,8 +19937,26 @@ async function resolveDeterministicAvailabilityReply(args: {
       } else if (requestedStatus.held.length > 0) {
         rows.push(`${requestedLabel}: I’m seeing one, but it’s on hold right now.`);
       } else {
+        if (
+          confirmsWatch &&
+          hasPriorOutOfStockNoticeForModel(outboundTexts, requestedLabel)
+        ) {
+          acknowledgedWatchModels.push(requestedLabel);
+          continue;
+        }
         rows.push(`${requestedLabel}: I’m not seeing one in stock right now.`);
       }
+    }
+    if (acknowledgedWatchModels.length > 0) {
+      return {
+        kind: "reply",
+        reply: buildAcknowledgedInventoryWatchReply({
+          watchModels: acknowledgedWatchModels,
+          alternativeOptionLines: availableOptionLines,
+          alternativeModels: availableRequestedLabels,
+          otherRequestedModels: otherRequestedLabels
+        })
+      };
     }
     const tail = anyAvailable
       ? "If one of those works, let me know what day and time you want to test ride it."
@@ -46298,7 +46383,9 @@ if (authToken && signature) {
         publishedText,
         "draft_ai",
         String(options?.providerMessageId ?? "").trim() || undefined,
-        mediaUrls
+        mediaUrls,
+        undefined,
+        invariantHints
       );
       saveConversation(conv);
       await flushConversationStore();
@@ -49063,8 +49150,13 @@ if (authToken && signature) {
     !preParserNonWatchPrimaryIntent &&
     !watchBlockedByDemoDayQuestion &&
     (earlyWatchIntentLLM || earlyWatchIntentText || earlyPromptedWatchAffirm);
+  const earlyWatchHasPrimaryAvailabilityQuestion =
+    isDirectInventoryAvailabilityQuestionText(event.body ?? "") ||
+    isExplicitAvailabilityQuestion(event.body ?? "");
   const earlyWatchAsSideEffectOnly =
-    earlyWatchIntent && hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
+    earlyWatchIntent &&
+    hasPrimaryIntentBeyondWatch(String(event.body ?? "")) &&
+    earlyWatchHasPrimaryAvailabilityQuestion;
   if (earlyWatchIntent) {
     const nowIso = new Date().toISOString();
     const leadVehicle = conv.lead?.vehicle ?? {};
@@ -49165,7 +49257,7 @@ if (authToken && signature) {
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
           const reply = buildInventoryWatchConfirmation(pref.watch);
-          return publishLiveTwilioReply(reply);
+          return publishLiveTwilioReply(reply, { shortAckIntent: false });
         }
       } else {
         conv.inventoryWatchPending = pending;
@@ -49799,10 +49891,15 @@ if (authToken && signature) {
     !parserCallbackIntent &&
     !(intentAccepted && intentParse?.intent === "callback") &&
     isImmediateChatCallbackAvailabilityText(event.body ?? "");
+  const explicitCallbackRequestFallback =
+    !parserCallbackIntent &&
+    !(intentAccepted && intentParse?.intent === "callback") &&
+    isExplicitCustomerCallbackRequestText(event.body ?? "");
   const llmCallbackRequested =
     parserCallbackIntent ||
     (intentAccepted && intentParse?.intent === "callback") ||
-    immediateChatCallbackFallback;
+    immediateChatCallbackFallback ||
+    explicitCallbackRequestFallback;
   const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
   const textingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const callbackRequestedOverride =
@@ -50546,6 +50643,25 @@ if (authToken && signature) {
     });
     return publishLiveTwilioReply(inventoryBrowse.reply);
   }
+  const scheduleContextStatusUpdate =
+    event.provider === "twilio" &&
+    !routeExecCallback &&
+    !routeExecPricing &&
+    !routeExecAvailability &&
+    isScheduleDialogState(getDialogState(conv)) &&
+    hasScheduleOfferContext(lastOutboundText, getDialogState(conv)) &&
+    isScheduleContextStatusUpdateText(event.body ?? "");
+  if (scheduleContextStatusUpdate) {
+    const reply = buildScheduleContextStatusUpdateReply(
+      String(event.body ?? ""),
+      lastOutboundText
+    );
+    setDialogState(conv, "schedule_request");
+    logRouteOutcome("schedule_context_status_update_ack", {
+      turnPrimaryIntent: routeExecutionIntent
+    });
+    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
+  }
   const frustrationAffectSignal =
     !!acceptedAffect?.needsEmpathy ||
     !!acceptedAffect?.hasNegativeSentiment ||
@@ -50742,6 +50858,30 @@ if (authToken && signature) {
     routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response";
   if (hasParserNoResponseFallback) {
     const noResponseInboundText = String(event.body ?? "");
+    const activeWatchForAck =
+      conv.inventoryWatch ??
+      (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
+        ? conv.inventoryWatches[0]
+        : null);
+    const watchAcknowledgementCandidate =
+      event.provider === "twilio" &&
+      !routeExecPricing &&
+      !routeExecScheduling &&
+      !routeExecCallback &&
+      !!activeWatchForAck &&
+      (watchHandledEarly || hasInventoryWatchConfirmationText(noResponseInboundText));
+    if (watchAcknowledgementCandidate) {
+      const rawReply = buildInventoryWatchConfirmation(activeWatchForAck);
+      const reply =
+        normalizeOutboundText(rawReply) === normalizeOutboundText(lastOutboundText)
+          ? "Will do — I’ll keep watching for it and text you when there’s a match."
+          : rawReply;
+      logRouteOutcome("routing_parser_no_response_inventory_watch_ack", {
+        turnPrimaryIntent: routeExecutionIntent,
+        parserReason: routingParserDecision.reason
+      });
+      return publishLiveTwilioReply(reply, { shortAckIntent: false });
+    }
     const noResponseSmallTalkSignal = await detectSmallTalkSignalWithFallback({
       text: noResponseInboundText,
       history: buildHistory(conv, 8),
@@ -51191,7 +51331,7 @@ if (authToken && signature) {
       }
     }
   }
-  if (routeExecCallback && !isScheduleDialogState(getDialogState(conv))) {
+  if (routeExecCallback) {
     setDialogState(conv, "callback_requested");
   }
   if (

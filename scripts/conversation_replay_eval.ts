@@ -278,6 +278,37 @@ const cases: Case[] = [
     }
   },
   {
+    id: "explicit_watch_ack_allowed_despite_short_ack_words",
+    expectedAllow: true,
+    input: {
+      inboundText: "I have no problem. let me know if you find something",
+      draftText: "Got it — I’ll keep an eye out for a 2022 Forty-Eight and text you as soon as one comes in.",
+      followUpMode: "holding_inventory",
+      followUpReason: "inventory_watch",
+      dialogState: "inventory_watch_active",
+      classificationBucket: "in_store",
+      classificationCta: "contact_us",
+      shortAckIntent: false
+    }
+  },
+  {
+    id: "availability_watch_ack_allowed_when_alternatives_answered",
+    expectedAllow: true,
+    input: {
+      inboundText:
+        "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout",
+      draftText:
+        "Got it - I’ll keep an eye out for an Iron 883 and text you if one comes in. Current options available right now: Breakout: 2025 Breakout plus 2 more. If either one interests you, I can send photos or more details.",
+      followUpMode: "holding_inventory",
+      followUpReason: "inventory_watch",
+      dialogState: "inventory_watch_active",
+      classificationBucket: "inventory_interest",
+      classificationCta: "request_a_quote",
+      turnAvailabilityIntent: true,
+      shortAckIntent: false
+    }
+  },
+  {
     id: "followup_paused_stale_inventory_prompt_still_blocked",
     expectedAllow: false,
     expectedReason: "paused_state_inventory_prompt_guard",

@@ -13,6 +13,7 @@ import {
   extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
+  buildAcknowledgedInventoryWatchReply,
   buildHumanModeSchedulingDraft,
   buildHiringManagerInquiryReply,
   buildInventoryOnlineCompletenessReply,
@@ -26,11 +27,14 @@ import {
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
   hasRideChallengeSignupAcknowledgement,
+  hasInventoryWatchConfirmationText,
+  hasPriorOutOfStockNoticeForModel,
   isAccessoryCustomizationRequestText,
   isAudioDemoStatusQuestionText,
   isBusinessHoursQuestionText,
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
+  isDealershipLocationQuestionText,
   isDealerLeadAppPostDemoRideAdfText,
   isDemoDayEventQuestionText,
   isDirectInventoryAvailabilityQuestionText,
@@ -41,6 +45,7 @@ import {
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
   hasExplicitCalendarDateForScheduleMemory,
+  isExplicitCustomerCallbackRequestText,
   isImmediateChatCallbackAvailabilityText,
   getScheduleDayOptionsLabel,
   inferAcceptedScheduleDayFromReplyText,
@@ -58,6 +63,7 @@ import {
   isPurchaseDeliveryContextText,
   isPurchaseDeliveryTimingText,
   isRegenerateSchedulingLanguageText,
+  isScheduleContextStatusUpdateText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
@@ -863,6 +869,36 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "address_question_with_remind_phrase_detected_as_location",
+    actual: isDealershipLocationQuestionText("I cant not currently and remind me again what address is this at?"),
+    expected: true
+  },
+  {
+    id: "email_address_question_not_dealer_location",
+    actual: isDealershipLocationQuestionText("What email address should I send it to?"),
+    expected: false
+  },
+  {
+    id: "explicit_callback_request_detected",
+    actual: isExplicitCustomerCallbackRequestText("Hey can you give me a call"),
+    expected: true
+  },
+  {
+    id: "customer_returning_call_not_callback_request",
+    actual: isExplicitCustomerCallbackRequestText("I can give you a call back later"),
+    expected: false
+  },
+  {
+    id: "schedule_context_confirmation_detects_yes_i_am",
+    actual: isScheduleContextStatusUpdateText("Yeah I am"),
+    expected: true
+  },
+  {
+    id: "schedule_context_apology_update_detected",
+    actual: isScheduleContextStatusUpdateText("Sorry just saw this"),
+    expected: true
+  },
+  {
     id: "customer_check_out_bike_plan_not_inventory_browse",
     actual: isInventoryBrowseLinkRequestText(
       "I'll come tomarow and check out bike after work, and if all goes great I'll take off work Thursday and pick up."
@@ -882,6 +918,37 @@ const cases: Case[] = [
       )
     ),
     expected: JSON.stringify(["Sportster", "Nightster"])
+  },
+  {
+    id: "watch_followup_detects_keep_an_eye_out_confirmation",
+    actual: hasInventoryWatchConfirmationText(
+      "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout"
+    ),
+    expected: true
+  },
+  {
+    id: "prior_out_of_stock_notice_detects_same_model",
+    actual: hasPriorOutOfStockNoticeForModel(
+      [
+        "Hi Armani - This is Alexandra at American Harley-Davidson. Thanks - I’m not seeing an Iron 883 in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in."
+      ],
+      "Iron 883"
+    ),
+    expected: true
+  },
+  {
+    id: "watch_followup_reply_acknowledges_without_repeating_unavailable_line",
+    actual: buildAcknowledgedInventoryWatchReply({
+      watchModels: ["Iron 883"],
+      alternativeOptionLines: [
+        "Fat Boy: 2011 Fat Boy $10,495 (Stock U587-11).",
+        "Breakout: 2025 Breakout $27,057 (Stock S9-25) plus 2 more."
+      ],
+      alternativeModels: ["Fat Boy", "Breakout"],
+      otherRequestedModels: ["Iron 883", "Fat Boy", "Breakout"]
+    }),
+    expected:
+      "Got it - I’ll keep an eye out for an Iron 883 and text you if one comes in. Current options available right now: Fat Boy: 2011 Fat Boy $10,495 (Stock U587-11). Breakout: 2025 Breakout $27,057 (Stock S9-25) plus 2 more. If either one interests you, I can send photos or more details."
   },
   {
     id: "direct_in_stock_alternatives_prioritize_availability",
@@ -1196,6 +1263,14 @@ const cases: Case[] = [
       return `${retired}:${conv.messages[0].draftStatus ?? "pending"}`;
     })(),
     expected: "0:pending"
+  },
+  {
+    id: "acknowledged_watch_reply_answers_available_alternatives",
+    actual: buildAcknowledgedInventoryWatchReply({
+      watchModels: ["Iron 883"],
+      alternativeOptionLines: ["Breakout: 2025 Breakout plus 2 more."]
+    }).includes("available right now"),
+    expected: true
   },
   {
     id: "truncated_department_draft_is_repaired",

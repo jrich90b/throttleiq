@@ -303,6 +303,66 @@ export function isImmediateChatCallbackAvailabilityText(textRaw: string | null |
   return availableNow && chatSignal;
 }
 
+export function isExplicitCustomerCallbackRequestText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (isCustomerReturningCallText(text)) return false;
+  if (/\b(?:text|email)\b/.test(text) && /\b(?:only|instead|rather|prefer)\b/.test(text)) return false;
+  if (/\b(?:don['’]?t|do not|no)\s+(?:call|phone)\b/.test(text)) return false;
+  return (
+    /\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:give me a call|call me|phone me|ring me)\b/.test(
+      text
+    ) ||
+    /\b(?:please\s+)?(?:give|shoot)\s+me\s+(?:a\s+)?call\b/.test(text) ||
+    /\b(?:please\s+)?call\s+me(?:\s+back)?\b/.test(text) ||
+    /\bhave\s+[\w .'-]{1,40}\s+call\s+me\b/.test(text)
+  );
+}
+
+export function isDealershipLocationQuestionText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/\b(?:email|billing|shipping|mailing|home|my)\s+address\b/.test(text)) return false;
+  return (
+    /\bwhere\s+(?:are\s+you|is\s+(?:this|it|the\s+(?:dealership|store))|are\s+you\s+located)\b/.test(
+      text
+    ) ||
+    /\bwhat(?:'s| is)?\s+(?:your|the)?\s*(?:store\s+|dealership\s+)?address\b/.test(text) ||
+    /\bremind\s+me(?:\s+again)?\s+what\s+address\b/.test(text) ||
+    /\b(?:what|which)\s+location\b/.test(text)
+  );
+}
+
+export function isScheduleContextStatusUpdateText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/[?]/.test(String(textRaw ?? ""))) return false;
+  if (
+    /\b(?:call me|give me a call|price|pricing|payment|trade|inventory|stock|available|availability|test ride|photo|video|address|where are you)\b/.test(
+      text
+    )
+  ) {
+    return false;
+  }
+  return (
+    /\b(?:sorry|my bad)\b[\s\S]{0,40}\b(?:just\s+)?saw\s+this\b/.test(text) ||
+    /^(?:yes|yeah|yep|yup|sure)\s+(?:i\s+am|i'?m|im)\b/.test(text) ||
+    /\b(?:i\s+am|i'?m|im)\s+(?:still\s+)?(?:coming|planning\s+to|going\s+to|able\s+to)\b/.test(
+      text
+    ) ||
+    /\b(?:i(?:'|’)ll|i will|we(?:'|’)ll|we will)\s+be\s+there\b/.test(text)
+  );
+}
+
 export function isBusinessHoursQuestionText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .toLowerCase()
@@ -929,6 +989,86 @@ export function selectRequestedAvailabilityModelMentions(
     selected.push(model);
   }
   return selected;
+}
+
+function normalizeInventoryWatchModelPhrase(textRaw: string | null | undefined): string {
+  return String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/\biron\s*883\b/g, "iron 883")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function hasInventoryWatchConfirmationText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase();
+  if (!text.trim()) return false;
+  return /\b(keep(?:ing)? an eye out|watch for|let me know when|let me know if|lmk when|lmk if|notify me|text me when|text me if|if you get one|when you get one|as soon as one comes in)\b/.test(
+    text
+  );
+}
+
+export function hasPriorOutOfStockNoticeForModel(
+  outboundTexts: Array<string | null | undefined>,
+  modelLabelRaw: string | null | undefined
+): boolean {
+  const modelLabel = normalizeInventoryWatchModelPhrase(modelLabelRaw);
+  if (!modelLabel) return false;
+  return outboundTexts.some(raw => {
+    const text = normalizeInventoryWatchModelPhrase(raw);
+    if (!text.includes(modelLabel)) return false;
+    return /\b(not seeing|do not see|don t see|don t have|do not have|no)\b/.test(text) &&
+      /\b(in stock|available|right now)\b/.test(text);
+  });
+}
+
+function formatPlainModelList(labelsRaw: Array<string | null | undefined>): string {
+  const labels = labelsRaw.map(label => String(label ?? "").trim()).filter(Boolean);
+  if (labels.length === 0) return "";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} or ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, or ${labels[labels.length - 1]}`;
+}
+
+function articleForModelLabel(labelRaw: string | null | undefined): "a" | "an" {
+  const label = String(labelRaw ?? "").trim();
+  return /^[aeiou8]/i.test(label) ? "an" : "a";
+}
+
+export function buildAcknowledgedInventoryWatchReply(args: {
+  watchModels: Array<string | null | undefined>;
+  alternativeOptionLines?: Array<string | null | undefined>;
+  alternativeModels?: Array<string | null | undefined>;
+  otherRequestedModels?: Array<string | null | undefined>;
+}): string {
+  const watchModels = args.watchModels.map(label => String(label ?? "").trim()).filter(Boolean);
+  const uniqueWatchModels = Array.from(new Set(watchModels));
+  const watchList = formatPlainModelList(uniqueWatchModels);
+  if (!watchList) return "Got it - I’ll keep an eye out and text you if one comes in.";
+
+  const watchNoun =
+    uniqueWatchModels.length === 1 ? `${articleForModelLabel(uniqueWatchModels[0])} ${watchList}` : watchList;
+  const alternativeModels = Array.from(
+    new Set((args.alternativeModels ?? []).map(label => String(label ?? "").trim()).filter(Boolean))
+  ).filter(label => !uniqueWatchModels.includes(label));
+  const otherRequestedModels = Array.from(
+    new Set((args.otherRequestedModels ?? []).map(label => String(label ?? "").trim()).filter(Boolean))
+  ).filter(label => !uniqueWatchModels.includes(label));
+  const alternativeOptionLines = (args.alternativeOptionLines ?? [])
+    .map(line => String(line ?? "").trim())
+    .filter(Boolean);
+
+  const base = `Got it - I’ll keep an eye out for ${watchNoun} and text you if one comes in.`;
+  if (alternativeOptionLines.length) {
+    return `${base} Current options available right now: ${alternativeOptionLines.join(" ")} If either one interests you, I can send photos or more details.`;
+  }
+  if (alternativeModels.length) {
+    return `${base} I can also check current ${formatPlainModelList(alternativeModels)} options if you want.`;
+  }
+  if (otherRequestedModels.length) {
+    return `${base} If ${formatPlainModelList(otherRequestedModels)} ${otherRequestedModels.length === 1 ? "is" : "are"} also in the mix, I can track that too.`;
+  }
+  return base;
 }
 
 export function isTimingOnlyFollowUpTopic(textRaw: string | null | undefined): boolean {

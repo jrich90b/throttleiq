@@ -11,7 +11,10 @@ import {
   normalizeSalesToneBase
 } from "./tone.js";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import { applyDraftStateInvariants } from "./draftStateInvariants.js";
+import {
+  applyDraftStateInvariants,
+  type DraftStateInvariantInput
+} from "./draftStateInvariants.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -24,6 +27,15 @@ export type MessageProvider =
   | "voice_call"
   | "voice_transcript"
   | "voice_summary";
+
+export type DraftInvariantHints = Pick<
+  DraftStateInvariantInput,
+  | "turnFinanceIntent"
+  | "turnAvailabilityIntent"
+  | "turnSchedulingIntent"
+  | "financeContextIntent"
+  | "shortAckIntent"
+>;
 
 export type VoiceContext = {
   summary: string;
@@ -1517,7 +1529,8 @@ export function appendOutbound(
   provider: MessageProvider = "draft_ai",
   providerMessageId?: string,
   mediaUrls?: string[],
-  actor?: { userId?: string | null; userName?: string | null }
+  actor?: { userId?: string | null; userName?: string | null },
+  invariantHints?: DraftInvariantHints
 ) {
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
@@ -1536,7 +1549,8 @@ export function appendOutbound(
       followUpReason: conv.followUp?.reason ?? null,
       dialogState: conv.dialogState?.name ?? null,
       classificationBucket: conv.classification?.bucket ?? null,
-      classificationCta: conv.classification?.cta ?? null
+      classificationCta: conv.classification?.cta ?? null,
+      ...(invariantHints ?? {})
     });
     if (!invariant.allow) {
       console.warn("[conversationStore] draft blocked by invariant", {
