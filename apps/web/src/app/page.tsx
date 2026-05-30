@@ -3473,6 +3473,10 @@ export default function Home() {
   const [approvalOutcome, setApprovalOutcome] = useState<ApprovalTodoOutcome>("contacted_follow_up");
   const [approvalOutcomeNote, setApprovalOutcomeNote] = useState("");
   const [approvalOutcomeSaving, setApprovalOutcomeSaving] = useState(false);
+  const [pendingInboxOutcomeOpen, setPendingInboxOutcomeOpen] = useState<{
+    convId: string;
+    kind: "appointment";
+  } | null>(null);
   const [appointmentVoiceSupported, setAppointmentVoiceSupported] = useState(false);
   const [appointmentVoiceTarget, setAppointmentVoiceTarget] = useState<"header" | "close" | null>(null);
   const [appointmentVoiceStatus, setAppointmentVoiceStatus] = useState("");
@@ -10417,6 +10421,31 @@ export default function Home() {
     setAppointmentOutcomeOpen(true);
   }
 
+  useEffect(() => {
+    if (!pendingInboxOutcomeOpen) return;
+    if (!selectedConv?.id || selectedConv.id !== pendingInboxOutcomeOpen.convId) return;
+    if (pendingInboxOutcomeOpen.kind === "appointment") {
+      openAppointmentOutcomeModal();
+    }
+    setPendingInboxOutcomeOpen(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingInboxOutcomeOpen, selectedConv?.id]);
+
+  function openOutcomeFromInbox(convId: string, kind: "appointment" | "dealer_ride", todo?: TodoItem | null) {
+    openConversation(convId);
+    if (kind === "dealer_ride" && todo) {
+      setAppointmentCloseTarget(todo);
+      setAppointmentClosePrimaryOutcome("showed");
+      setAppointmentCloseSecondaryOutcome("needs_follow_up");
+      setAppointmentCloseNote("");
+      setAppointmentCloseOpen(true);
+      return;
+    }
+    if (kind === "appointment") {
+      setPendingInboxOutcomeOpen({ convId, kind: "appointment" });
+    }
+  }
+
   async function saveAppointmentOutcomeFromHeader() {
     if (!selectedConv) return;
     setAppointmentOutcomeSaving(true);
@@ -13166,13 +13195,14 @@ export default function Home() {
             authUser={authUser}
             deleteConvFromList={deleteConvFromList}
             inboxTodoOwnerByConv={inboxTodoOwnerByConv}
-            openTasksByConv={openTasksByConv}
-            todoTaskTitle={todoTaskTitle}
-            todoTaskOwnerLabel={todoTaskOwnerLabel}
-            renderBookingLinkLine={renderBookingLinkLine}
-            loading={loading}
-          />
-        ) : null}
+	            openTasksByConv={openTasksByConv}
+	            todoTaskTitle={todoTaskTitle}
+	            todoTaskOwnerLabel={todoTaskOwnerLabel}
+	            renderBookingLinkLine={renderBookingLinkLine}
+	            openOutcomeFromInbox={openOutcomeFromInbox}
+	            loading={loading}
+	          />
+	        ) : null}
 
         {section === "todos" &&
         (authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (

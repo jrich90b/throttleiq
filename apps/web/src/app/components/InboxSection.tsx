@@ -71,6 +71,7 @@ export function InboxSection(props: any) {
     todoTaskTitle,
     todoTaskOwnerLabel,
     renderBookingLinkLine,
+    openOutcomeFromInbox,
     loading
   } = props;
 
@@ -307,10 +308,17 @@ export function InboxSection(props: any) {
                     const dealerRideOutcomeNeeded = openTasks.some(
                       (t: any) => isDealerRideOutcomeTodo(t) && !String(t?.dealerRideOutcomeStatus ?? "").trim()
                     );
+                    const dealerRideOutcomeTodo = dealerRideOutcomeNeeded
+                      ? openTasks.find(
+                          (t: any) =>
+                            isDealerRideOutcomeTodo(t) && !String(t?.dealerRideOutcomeStatus ?? "").trim()
+                        ) ?? null
+                      : null;
                     const outcomeNeeded = hasOutcomeReminderSent(c) || dealerRideOutcomeNeeded;
                     const outcomeNeededTitle = dealerRideOutcomeNeeded
                       ? "Demo ride outcome needed"
                       : "Outcome reminder SMS sent to salesperson";
+                    const outcomeNeededKind = dealerRideOutcomeNeeded ? "dealer_ride" : "appointment";
                     return (
                       <div key={c.id} className="flex items-stretch">
                         <button
@@ -397,13 +405,27 @@ export function InboxSection(props: any) {
 	                                  </span>
 	                                ) : null}
 	                                {outcomeNeeded ? (
-	                                  <span
+	                                  <button
+	                                    type="button"
 	                                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
 	                                    title={outcomeNeededTitle}
+	                                    onClick={e => {
+	                                      e.preventDefault();
+	                                      e.stopPropagation();
+	                                      if (typeof openOutcomeFromInbox !== "function") {
+	                                        openConversation(c.id);
+	                                        return;
+	                                      }
+	                                      openOutcomeFromInbox(
+	                                        c.id,
+	                                        outcomeNeededKind,
+	                                        outcomeNeededKind === "dealer_ride" ? dealerRideOutcomeTodo : null
+	                                      );
+	                                    }}
 	                                  >
 	                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
 	                                    Outcome needed
-	                                  </span>
+	                                  </button>
 	                                ) : null}
 	                              </div>
 	                              {getInboxVehicleLine(c) ? (
