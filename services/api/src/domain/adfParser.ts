@@ -51,10 +51,16 @@ function asArray<T>(v: T | T[] | undefined): T[] {
 
 function text(v: any): string | undefined {
   if (v == null) return undefined;
-  if (typeof v === "string") return v.trim();
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    return trimmed || undefined;
+  }
   if (typeof v === "number") return String(v);
   if (typeof v === "object") {
-    if (typeof v["#text"] === "string") return v["#text"].trim();
+    if (typeof v["#text"] === "string") {
+      const trimmed = v["#text"].trim();
+      return trimmed || undefined;
+    }
   }
   return undefined;
 }
@@ -234,7 +240,7 @@ function parseFromComment(comment?: string) {
     let value = String(direct ?? "").trim();
     if (!value) return undefined;
     value = value.replace(
-      /\s*(?:vehicle images\s*:|can we contact you via (?:email|phone|text)\?:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:)[\s\S]*/i,
+      /\s*(?:vehicle images\s*:|can we contact you via (?:email|phone|text)\?:|preferred\s+(?:contact\s+method|method\s+of\s+contact|contact\s+preference)\s*[:\-]?|email opt-?in\s*:|phone opt-?in\s*:|text opt-?in\s*:|mail opt-?in\s*:|preferred date\s*:|preferred time\s*:|valid motorcycle license\?\s*:|client_id\s*:|hdmc-campaign-tracking code\s*:|lead captured date\s*:|event name\s*:|\/\/\/customer information\/\/\/|parts and accessories interest\s*:|biker rider\?\s*:|language\s*:|purchase timeframe\s*:|source id\s*:|inventory year\s*:|inventory stock id\s*:|vin\s*:|first name\s*:|last name\s*:|phone\s*:|email\s*:)[\s\S]*/i,
       ""
     );
     value = value.replace(/^[>\-\s:]+/, "").trim();
@@ -353,7 +359,7 @@ function parseFromComment(comment?: string) {
     make: normalizeMake(makeMatch?.[1]?.trim()),
     model: modelMatch?.[1]?.trim() ?? requestedVehicleMatch?.[1]?.trim(),
     trim: trimMatch?.[1]?.trim() ?? itemDetails.trim,
-    color: colorMatch?.[1]?.trim() ?? itemDetails.color ?? itemColor,
+    color: colorMatch?.[1]?.trim() ?? itemColor ?? itemDetails.color,
     condition: parsedCondition,
     phone: phoneMatch?.[1]?.trim(),
     email: emailMatch?.[1]?.trim(),
