@@ -134,6 +134,7 @@ function main() {
   const languageDir = process.env.LANGUAGE_CORPUS_OUT_DIR || path.join(parsed.reportRoot, "language_corpus");
   const toneDir = process.env.TONE_QUALITY_OUT_DIR || path.join(parsed.reportRoot, "tone_quality");
   const voiceDir = process.env.VOICE_FEEDBACK_OUT_DIR || path.join(parsed.reportRoot, "voice_feedback");
+  const outcomeQaDir = process.env.OUTCOME_QA_OUT_DIR || path.join(parsed.reportRoot, "outcome_qa");
   const feedbackLogDir = path.join(parsed.reportRoot, "feedback_loop_logs");
   const opsAnomaliesPath =
     process.env.OPS_ANOMALIES_PATH ||
@@ -145,6 +146,7 @@ function main() {
   const manualPromotionSummary = readJson(path.join(languageDir, "manual_outbound_promotion_summary.json"));
   const toneSummary = readJson(path.join(toneDir, "tone_quality_summary.json"));
   const voiceSummary = readJson(path.join(voiceDir, "voice_feedback_summary.json"));
+  const outcomeQaReport = readJson(path.join(outcomeQaDir, "outcome_qa_report.json"));
   const opsAnomaliesRaw = readJson(opsAnomaliesPath);
   const conversationAuditPath =
     latestMatchingFile(feedbackLogDir, name => /^conversation_audit_.*\.json$/i.test(name)) ||
@@ -190,6 +192,11 @@ function main() {
     0,
     num(voiceSummary?.totalVoiceTranscripts) - num(voiceSummary?.withCustomerFacingOutbound)
   );
+  const outcomeQaFindingCount = num(outcomeQaReport?.summary?.findingCount);
+  const outcomeQaParserSeedCount = num(outcomeQaReport?.summary?.parserSeedCandidateCount);
+  const outcomeQaP1Count = Array.isArray(outcomeQaReport?.findings)
+    ? outcomeQaReport.findings.filter((row: any) => String(row?.severity ?? "") === "P1").length
+    : 0;
   const auditIssueCounts = Array.isArray(conversationAudit?.summary?.issueCounts)
     ? conversationAudit.summary.issueCounts
     : [];
@@ -311,6 +318,27 @@ function main() {
     });
   }
 
+  if (outcomeQaFindingCount > 0 || outcomeQaParserSeedCount > 0) {
+    pushTask(tasks, {
+      id: "outcome-qa-parser-work",
+      priority: outcomeQaP1Count > 0 ? "P1" : outcomeQaFindingCount > 0 ? "P2" : "P3",
+      area: "evals",
+      title: "Review outcome-note parser and guard recommendations",
+      signal: `${outcomeQaFindingCount} outcome QA finding(s), ${outcomeQaParserSeedCount} parser/few-shot candidate(s)`,
+      recommendedAction:
+        "Review outcome_qa_report. Promote repeated outcome-note patterns into parser few-shots/evals first; only change schema when existing labels cannot represent the note.",
+      evidence: {
+        outcomeQaDir,
+        findingsByIssue: outcomeQaReport?.summary?.findingsByIssue ?? [],
+        parserRecommendationsByType: outcomeQaReport?.summary?.parserRecommendationsByType ?? [],
+        sampleFindings: Array.isArray(outcomeQaReport?.findings) ? outcomeQaReport.findings.slice(0, 8) : [],
+        sampleParserSeeds: Array.isArray(outcomeQaReport?.parserSeedCandidates)
+          ? outcomeQaReport.parserSeedCandidates.slice(0, 8)
+          : []
+      }
+    });
+  }
+
   if (noResponseCount > 0) {
     pushTask(tasks, {
       id: "routing-no-response-outcomes",
@@ -413,6 +441,7 @@ function main() {
       languageDir,
       toneDir,
       voiceDir,
+      outcomeQaDir,
       opsAnomaliesPath,
       conversationAuditPath,
       followupTaskAuditPath,
@@ -433,6 +462,9 @@ function main() {
       promotedDeterministicRules: promotedRules,
       promotedManualExamples,
       voiceTranscriptsWithoutCustomerOutbound: voiceWithoutOutbound,
+      outcomeQaFindings: outcomeQaFindingCount,
+      outcomeQaParserSeedCandidates: outcomeQaParserSeedCount,
+      outcomeQaP1Findings: outcomeQaP1Count,
       openOpsAnomalies: openOpsAnomalies.length,
       recentOpsAnomalies: recentOpsAnomalies.length,
       opsAnomalyTypeCounts

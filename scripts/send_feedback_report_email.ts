@@ -105,6 +105,13 @@ async function run() {
   const toneFailuresPath = path.join(toneOutDir, "tone_quality_failures.json");
   const voiceSummaryPath = path.join(voiceOutDir, "voice_feedback_summary.json");
   const voiceRowsPath = path.join(voiceOutDir, "voice_feedback_rows.json");
+  const outcomeQaOutDir =
+    process.env.OUTCOME_QA_OUT_DIR ||
+    path.resolve(path.dirname(outDir), "outcome_qa");
+  const outcomeQaJsonPath =
+    String(process.env.FEEDBACK_REPORT_OUTCOME_QA_PATH ?? "").trim() ||
+    path.join(outcomeQaOutDir, "outcome_qa_report.json");
+  const outcomeQaMdPath = path.join(path.dirname(outcomeQaJsonPath), "outcome_qa_report.md");
   const agentManagerOutDir =
     process.env.AGENT_MANAGER_OUT_DIR ||
     path.resolve(path.dirname(outDir), "agent_manager");
@@ -121,6 +128,7 @@ async function run() {
   const summaryWindowStart = String(summary.windowStart ?? summary?.source?.windowStart ?? "").trim();
   const toneSummary = readJson(toneSummaryPath);
   const voiceSummary = readJson(voiceSummaryPath);
+  const outcomeQaSummary = readJson(outcomeQaJsonPath);
   const agentManagerSummary = readJson(agentManagerJsonPath);
   const followupTaskAudit = followupTaskAuditPath ? readJson(followupTaskAuditPath) : null;
 
@@ -177,6 +185,17 @@ async function run() {
       voiceSummary ? fmtCountRows(voiceSummary.outboundProviderStats, "provider") : "none"
     }`,
     "",
+    `Outcome QA: ${
+      outcomeQaSummary
+        ? `outcomes=${num(outcomeQaSummary?.summary?.outcomeCount)} findings=${num(
+            outcomeQaSummary?.summary?.findingCount
+          )} parser_seeds=${num(outcomeQaSummary?.summary?.parserSeedCandidateCount)}`
+        : "not available"
+    }`,
+    `Outcome QA issues: ${
+      outcomeQaSummary ? fmtCountRows(outcomeQaSummary?.summary?.findingsByIssue, "issue") : "none"
+    }`,
+    "",
     `Agent manager: ${
       agentManagerSummary
         ? `status=${agentManagerSummary.status ?? "unknown"} tasks=${Array.isArray(agentManagerSummary.tasks) ? agentManagerSummary.tasks.length : 0}`
@@ -227,6 +246,8 @@ async function run() {
     maybeAttach(toneFailuresPath, "tone_quality_failures.json");
     maybeAttach(voiceSummaryPath, "voice_feedback_summary.json");
     maybeAttach(voiceRowsPath, "voice_feedback_rows.json");
+    maybeAttach(outcomeQaJsonPath, "outcome_qa_report.json");
+    maybeAttach(outcomeQaMdPath, "outcome_qa_report.md", "text/markdown");
     maybeAttach(agentManagerJsonPath, "agent_manager_report.json");
     maybeAttach(agentManagerMdPath, "agent_manager_report.md", "text/markdown");
     if (followupTaskAuditPath) maybeAttach(followupTaskAuditPath, path.basename(followupTaskAuditPath));
@@ -249,6 +270,8 @@ async function run() {
       toneFailuresPath,
       voiceSummaryPath,
       voiceRowsPath,
+      outcomeQaJsonPath,
+      outcomeQaMdPath,
       agentManagerJsonPath,
       agentManagerMdPath,
       ...(followupTaskAuditPath ? [followupTaskAuditPath] : []),
