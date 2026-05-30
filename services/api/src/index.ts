@@ -39810,16 +39810,24 @@ app.post("/contacts", (req, res) => {
     String(req.body?.name ?? "").trim() ||
     [firstName, lastName].filter(Boolean).join(" ").trim() ||
     undefined;
-  const phoneRaw = String(req.body?.phone ?? "").trim();
-  const email = String(req.body?.email ?? "").trim() || undefined;
+  const leadKeyRaw = String(req.body?.leadKey ?? "").trim() || undefined;
+  const conversationIdRaw = String(req.body?.conversationId ?? "").trim() || undefined;
+  let phoneRaw = String(req.body?.phone ?? "").trim();
+  let emailRaw = String(req.body?.email ?? "").trim();
+  if (phoneRaw && !emailRaw && phoneRaw.includes("@")) {
+    emailRaw = phoneRaw;
+    phoneRaw = "";
+  }
+  const email = emailRaw || undefined;
   const phone = phoneRaw ? normalizePhone(phoneRaw) : undefined;
   if (!phone && !email) {
     return res.status(400).json({ ok: false, error: "Phone or email required" });
   }
-  const leadKey = phone || email;
+  const leadKey = leadKeyRaw || phone || email;
+  const conversationId = conversationIdRaw || leadKeyRaw || phone || email;
   let contact = upsertContact({
     leadKey,
-    conversationId: leadKey,
+    conversationId,
     firstName,
     lastName,
     name,

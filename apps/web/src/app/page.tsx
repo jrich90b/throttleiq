@@ -3256,6 +3256,7 @@ export default function Home() {
   const [reminderInlineLeadMinutes, setReminderInlineLeadMinutes] = useState("30");
   const [reminderInlineSaving, setReminderInlineSaving] = useState(false);
   const [contactInlineOpenId, setContactInlineOpenId] = useState<string | null>(null);
+  const [contactInlineContactId, setContactInlineContactId] = useState<string | null>(null);
   const [contactInlineSaving, setContactInlineSaving] = useState(false);
   const [contactInlineForm, setContactInlineForm] = useState({
     firstName: "",
@@ -7354,6 +7355,11 @@ export default function Home() {
     });
   }, [selectedContact?.id]);
 
+  useEffect(() => {
+    if (contactInlineOpenId) return;
+    setContactInlineContactId(null);
+  }, [contactInlineOpenId]);
+
   const selectedContactList = useMemo(
     () => contactLists.find(l => l.id === selectedContactListId) ?? null,
     [contactLists, selectedContactListId]
@@ -11067,6 +11073,7 @@ export default function Home() {
       phone,
       email
     });
+    setContactInlineContactId(linkedContact?.id ? String(linkedContact.id) : null);
     setTodoInlineOpenId(null);
     setTodoInlineText("");
     setTodoInlineTarget(isManager ? "lead_owner" : "self");
@@ -11091,8 +11098,10 @@ export default function Home() {
     }
     setContactInlineSaving(true);
     try {
-      const resp = await fetch("/api/contacts", {
-        method: "POST",
+      const contactId = String(contactInlineContactId ?? "").trim();
+      const url = contactId ? `/api/contacts/${encodeURIComponent(contactId)}` : "/api/contacts";
+      const resp = await fetch(url, {
+        method: contactId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...body,
@@ -11103,10 +11112,11 @@ export default function Home() {
       });
       const payload = await resp.json().catch(() => null);
       if (!resp.ok || !payload?.ok) {
-        window.alert(payload?.error ?? "Failed to create contact");
+        window.alert(payload?.error ?? "Failed to save contact");
         return;
       }
       setContactInlineOpenId(null);
+      setContactInlineContactId(null);
       setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
       setListActionsOpenId(null);
       setSaveToast("Contact saved");

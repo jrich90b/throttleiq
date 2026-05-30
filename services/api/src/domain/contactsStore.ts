@@ -189,6 +189,10 @@ export function updateContact(
   const now = nowIso();
   const hasPhonePatch = hasOwn(patch, "phone");
   const hasEmailPatch = hasOwn(patch, "email");
+  const nextConversationId =
+    patch.conversationId !== undefined
+      ? String(patch.conversationId ?? "").trim() || undefined
+      : existing.conversationId;
   const nextPhone = hasPhonePatch ? normalizePhone(patch.phone) : normalizePhone(existing.phone);
   const nextEmail = hasEmailPatch ? normalizeEmail(patch.email) : normalizeEmail(existing.email);
   const prevPhone = normalizePhone(existing.phone);
@@ -200,7 +204,11 @@ export function updateContact(
     normalizeEmail(existing.leadKey) === prevEmail
   );
   let nextLeadKey = existing.leadKey;
-  if (hasPhonePatch) {
+  const hasExplicitLeadKey = patch.leadKey !== undefined;
+  if (hasExplicitLeadKey) {
+    nextLeadKey = String(patch.leadKey ?? "").trim() || undefined;
+  }
+  if (!hasExplicitLeadKey && hasPhonePatch) {
     if (
       !existing.leadKey ||
       leadKeyLooksPhone ||
@@ -210,11 +218,12 @@ export function updateContact(
       nextLeadKey = nextPhone ?? existing.leadKey;
     }
   }
-  if (hasEmailPatch && !nextEmail && leadKeyLooksEmail && nextPhone) {
+  if (!hasExplicitLeadKey && hasEmailPatch && !nextEmail && leadKeyLooksEmail && nextPhone) {
     nextLeadKey = nextPhone;
   }
   const next: ContactEntry = {
     ...existing,
+    conversationId: nextConversationId,
     leadKey: nextLeadKey,
     firstName: patch.firstName ?? existing.firstName,
     lastName: patch.lastName ?? existing.lastName,
