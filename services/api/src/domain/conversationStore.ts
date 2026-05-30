@@ -3976,6 +3976,9 @@ export function addTodo(
   if (soldContext && reason !== "call" && options?.allowSoldLead !== true) {
     return null;
   }
+  if (reason === "note" && isInternalOutboundActionLogBody(summary)) {
+    return null;
+  }
   const ownerIdRaw = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
   const ownerNameRaw = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
   const ownerId = ownerIdRaw || undefined;

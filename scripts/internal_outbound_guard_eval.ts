@@ -12,9 +12,11 @@ const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "internal-outbound-guard
 process.env.CONVERSATIONS_DB_PATH = path.join(tempDir, "conversations.json");
 
 const {
+  addTodo,
   appendOutbound,
   getConversation,
   isInternalOutboundActionLogBody,
+  listOpenTodos,
   upsertConversationByLeadKey
 } = await import("../services/api/src/domain/conversationStore.ts");
 
@@ -31,6 +33,11 @@ appendOutbound(
   "human" as any
 );
 appendOutbound(conv, "salesperson", conv.leadKey, "Normal staff message to customer.", "human");
+const internalTodo = addTodo(
+  conv,
+  "note",
+  "Context note applied actions by Dealer ride outcome: context_note_follow_up_scheduled:Mon, Jun 1, 9:00 AM."
+);
 
 const reloaded = getConversation("+17165124027");
 const messages = reloaded?.messages ?? [];
@@ -43,6 +50,12 @@ const checks: Check[] = [
     true
   ),
   check("internal_action_log_blocked", messages.some(m => /Context note applied actions/i.test(m.body)), false),
+  check("internal_action_log_todo_blocked", internalTodo, null),
+  check(
+    "internal_action_log_open_todo_absent",
+    listOpenTodos().some(todo => /Context note applied actions/i.test(todo.summary)),
+    false
+  ),
   check("normal_human_outbound_allowed", messages.some(m => m.body === "Normal staff message to customer."), true)
 ];
 
