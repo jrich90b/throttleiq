@@ -9525,21 +9525,24 @@ export default function Home() {
     }
   }
 
-  async function markQuestionDone(q: QuestionItem) {
-    const outcome = questionOutcomeById[q.id] ?? q.outcome ?? "";
-    const followUpAction = questionFollowUpById[q.id] ?? q.followUpAction ?? "";
-    await fetch("/api/questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        convId: q.convId,
-        questionId: q.id,
-        outcome: outcome || undefined,
-        followUpAction: followUpAction || undefined
-      })
-    });
-    await load();
-  }
+	  async function markQuestionDone(q: QuestionItem) {
+	    const outcome = questionOutcomeById[q.id] ?? q.outcome ?? "";
+	    const followUpAction = questionFollowUpById[q.id] ?? q.followUpAction ?? "";
+	    await fetch("/api/questions", {
+	      method: "POST",
+	      headers: { "Content-Type": "application/json" },
+	      body: JSON.stringify({
+	        convId: q.convId,
+	        questionId: q.id,
+	        outcome: outcome || undefined,
+	        followUpAction: followUpAction || undefined
+	      })
+	    });
+	    await load();
+	    if (outcome === "hold") {
+	      await openHoldModal(q.convId);
+	    }
+	  }
 
   async function retryCrmLog(q: QuestionItem) {
     if (crmLogRunningByQuestionId[q.id]) return;
@@ -10419,6 +10422,7 @@ export default function Home() {
     setAppointmentOutcomeSaving(true);
     setAppointmentOutcomeError(null);
     try {
+      const shouldOpenHold = appointmentOutcomeSecondary === "hold";
       const resp = await fetch(`/api/conversations/${encodeURIComponent(selectedConv.id)}/appointment/outcome`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -10440,6 +10444,9 @@ export default function Home() {
       await load();
       setAppointmentOutcomeOpen(false);
       setSaveToast("Appointment outcome saved.");
+      if (shouldOpenHold) {
+        await openHoldModal(selectedConv.id);
+      }
     } catch (err: any) {
       setAppointmentOutcomeError(err?.message ?? "Failed to save appointment outcome");
     } finally {
@@ -13720,26 +13727,31 @@ export default function Home() {
                 </button>
                 <button
                   className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
-                  disabled={appointmentCloseSaving}
-                  onClick={async () => {
-                    if (!appointmentCloseTarget) return;
-                    setAppointmentCloseSaving(true);
-                    try {
-                      await markTodoDone(
-                        appointmentCloseTarget,
-                        "dismiss",
+	                  disabled={appointmentCloseSaving}
+	                  onClick={async () => {
+	                    if (!appointmentCloseTarget) return;
+	                    const convId = appointmentCloseTarget.convId;
+	                    const shouldOpenHold = appointmentCloseSecondaryOutcome === "hold";
+	                    setAppointmentCloseSaving(true);
+	                    try {
+	                      await markTodoDone(
+	                        appointmentCloseTarget,
+	                        "dismiss",
                         undefined,
                         appointmentCloseNote,
                         isDealerRideOutcomeTodo(appointmentCloseTarget) ? "showed" : appointmentClosePrimaryOutcome,
                         appointmentCloseSecondaryOutcome
-                      );
-                      setAppointmentCloseOpen(false);
-                      setAppointmentCloseTarget(null);
-                    } finally {
-                      setAppointmentCloseSaving(false);
-                    }
-                  }}
-                >
+	                      );
+	                      setAppointmentCloseOpen(false);
+	                      setAppointmentCloseTarget(null);
+	                      if (shouldOpenHold) {
+	                        await openHoldModal(convId);
+	                      }
+	                    } finally {
+	                      setAppointmentCloseSaving(false);
+	                    }
+	                  }}
+	                >
                   {appointmentCloseSaving ? "Saving..." : "Save & Close"}
                 </button>
               </div>
