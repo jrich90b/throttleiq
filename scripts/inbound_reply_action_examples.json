@@ -1,0 +1,128 @@
+[
+  {
+    "id": "explicit_callback_request_give_me_a_call",
+    "text": "Hey, can you give me a call?",
+    "history": [
+      { "direction": "out", "body": "What day and time works best to stop in?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "explicit_callback_request",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "returning_call_is_not_callback_request",
+    "text": "This is Darwin returning your call.",
+    "history": [
+      { "direction": "out", "body": "I just tried to call you." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "callback_requested",
+    "expected": {
+      "action": "none",
+      "explicit_action": false,
+      "should_reply": false
+    }
+  },
+  {
+    "id": "address_question_with_reminder_wording",
+    "text": "I cant not currently and remind me again what address is this at?",
+    "history": [
+      { "direction": "out", "body": "You can stop by when it works for you." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "dealer_location_question",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "email_address_question_not_dealer_location",
+    "text": "What email address should I send it to?",
+    "history": [
+      { "direction": "out", "body": "Please send over your insurance card." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "pricing_answered",
+    "expected": {
+      "action": "none",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "schedule_context_status_confirmation",
+    "text": "Yeah I am",
+    "history": [
+      { "direction": "out", "body": "Are you still planning to stop by Saturday?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_offer_sent",
+    "expected": {
+      "action": "schedule_context_status_update",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "schedule_context_delayed_reply",
+    "text": "Sorry just saw this",
+    "history": [
+      { "direction": "out", "body": "What time Saturday works best?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "schedule_context_status_update",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "location_question_outranks_schedule_ack",
+    "text": "Sorry just saw this — what address is this at?",
+    "history": [
+      { "direction": "out", "body": "What time Saturday works best?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "schedule_request",
+    "expected": {
+      "action": "dealer_location_question",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "watch_acknowledgement_active_watch",
+    "text": "I have no problem. let me know if you find something",
+    "history": [
+      { "direction": "out", "body": "I'm not seeing an Iron 883 right now, but I can keep an eye out." }
+    ],
+    "hasActiveInventoryWatch": true,
+    "dialogState": "inventory_watch_active",
+    "expected": {
+      "action": "inventory_watch_acknowledgement",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "watch_acknowledgement_multi_model",
+    "text": "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout",
+    "history": [
+      { "direction": "out", "body": "I'm not seeing an Iron 883 in stock right now." }
+    ],
+    "hasActiveInventoryWatch": true,
+    "dialogState": "inventory_watch_active",
+    "expected": {
+      "action": "inventory_watch_acknowledgement",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  }
+]

@@ -1693,6 +1693,22 @@ export type RoutingDecisionParse = {
   confidence?: number;
 };
 
+export type InboundReplyAction =
+  | "dealer_location_question"
+  | "explicit_callback_request"
+  | "schedule_context_status_update"
+  | "inventory_watch_acknowledgement"
+  | "none";
+
+export type InboundReplyActionParse = {
+  action: InboundReplyAction;
+  explicitAction: boolean;
+  shouldReply: boolean;
+  normalizedText?: string | null;
+  reason?: string | null;
+  confidence?: number;
+};
+
 export type AccessoryRequestParse = {
   action: "can_install" | "status_check" | "demo_request" | "pricing_request" | "none";
   explicitRequest: boolean;
@@ -2639,6 +2655,29 @@ const ROUTING_DECISION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     explicit_request: { type: "boolean" },
     fallback_action: { type: "string", enum: ["none", "clarify", "no_response"] },
     clarify_prompt: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action", "explicit_action", "should_reply", "normalized_text", "reason", "confidence"],
+  properties: {
+    action: {
+      type: "string",
+      enum: [
+        "dealer_location_question",
+        "explicit_callback_request",
+        "schedule_context_status_update",
+        "inventory_watch_acknowledgement",
+        "none"
+      ]
+    },
+    explicit_action: { type: "boolean" },
+    should_reply: { type: "boolean" },
+    normalized_text: { type: "string" },
+    reason: { type: "string" },
     confidence: { type: "number" }
   }
 };
@@ -5845,6 +5884,160 @@ output: {"primary_intent":"none","explicit_request":false,"fallback_action":"no_
     explicitRequest: !!parsed.explicit_request,
     fallbackAction,
     clarifyPrompt: cleanOptionalString(parsed.clarify_prompt),
+    confidence
+  };
+}
+
+export async function parseInboundReplyActionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  followUp?: any;
+  dialogState?: string | null;
+  classification?: { bucket?: string | null; cta?: string | null } | null;
+  hasActiveInventoryWatch?: boolean;
+}): Promise<InboundReplyActionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_INBOUND_REPLY_ACTION_PARSER_MODEL ||
+    process.env.OPENAI_ROUTING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_INBOUND_REPLY_ACTION_PARSER_MODEL_FALLBACK ||
+    process.env.OPENAI_ROUTING_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const followUp = args.followUp ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "Hey, can you give me a call?"
+history: "out: What day and time works best to stop in?"
+output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer requests a phone call","reason":"The customer explicitly asks for a call, so callback routing owns the turn even if prior context was scheduling.","confidence":0.97}`,
+    `EXAMPLE B
+inbound: "This is Darwin returning your call."
+history: "out: I just tried to call you."
+output: {"action":"none","explicit_action":false,"should_reply":false,"normalized_text":"","reason":"The customer reports they are returning a call but does not ask for a future callback.","confidence":0.94}`,
+    `EXAMPLE C
+inbound: "I cant not currently and remind me again what address is this at?"
+history: "out: You can stop by when it works for you."
+output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for the dealership address","reason":"The customer asks what address the dealership is at; location question outranks reminder/follow-up handling.","confidence":0.98}`,
+    `EXAMPLE D
+inbound: "What email address should I send it to?"
+history: "out: Please send over your insurance card."
+output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This asks for an email address, not the dealership physical address/location.","confidence":0.92}`,
+    `EXAMPLE E
+inbound: "Yeah I am"
+history: "out: Are you still planning to stop by Saturday?"
+output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer confirms the visit plan is still active","reason":"Recent outbound asked about a visit plan and the customer provides a status confirmation, so ask for the missing day/time detail instead of generic routing.","confidence":0.93}`,
+    `EXAMPLE F
+inbound: "Sorry just saw this"
+history: "out: What time Saturday works best?"
+output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer acknowledges delayed scheduling turn","reason":"The recent outbound was a scheduling question and the customer gives a scheduling-context status update without another ask.","confidence":0.91}`,
+    `EXAMPLE G
+inbound: "Sorry just saw this — what address is this at?"
+history: "out: What time Saturday works best?"
+output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for dealership address","reason":"A concrete location question in the latest turn outranks the schedule-status acknowledgement.","confidence":0.97}`,
+    `EXAMPLE H
+inbound: "I have no problem. let me know if you find something"
+history: "out: I'm not seeing an Iron 883 right now, but I can keep an eye out."
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to keep watching inventory","reason":"The customer accepts or confirms the active inventory watch after an out-of-stock/watch prompt.","confidence":0.96}`,
+    `EXAMPLE I
+inbound: "If you dont mind keeping an eye out cause it either the iron 883 or a Fat Boy im looking for a breakout"
+history: "out: I'm not seeing an Iron 883 in stock right now."
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to keep watching inventory options","reason":"The customer explicitly asks us to keep an eye out after inventory-watch/out-of-stock context.","confidence":0.97}`,
+    `EXAMPLE J
+inbound: "Let me know if any sales jobs open up."
+history: "out: Let me know if you want pricing on the Street Glide."
+output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This is not an inventory-watch acknowledgement for the active vehicle workflow.","confidence":0.9}`
+  ];
+  const prompt = [
+    "You parse one inbound customer turn for high-priority dealership reply actions.",
+    "Return only JSON matching the schema.",
+    "",
+    "Actions:",
+    "- dealer_location_question: customer asks for the dealership's physical location/address or where the store is.",
+    "- explicit_callback_request: customer explicitly asks someone to call them or says they are available/free to talk by phone now.",
+    "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask.",
+    "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
+    "- none: no matching high-priority action; leave the turn to the normal router.",
+    "",
+    "Priority rules:",
+    "- Latest explicit ask wins. A dealership address/location question outranks reminder, schedule, or watch context.",
+    "- Do not classify email/contact-address questions as dealer_location_question.",
+    "- Do not classify 'returning your call' as explicit_callback_request unless the customer asks for another call.",
+    "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
+    "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; otherwise choose none.",
+    "- The parser selects the action only. It never authors the final customer reply.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    `Known workflow state: ${JSON.stringify({
+      followUpMode: followUp?.mode ?? null,
+      followUpReason: followUp?.reason ?? null,
+      dialogState: args.dialogState ?? null,
+      bucket: args.classification?.bucket ?? null,
+      cta: args.classification?.cta ?? null,
+      hasActiveInventoryWatch: !!args.hasActiveInventoryWatch
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "inbound_reply_action_parser",
+      schema: INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 260,
+      debugTag: "llm-inbound-reply-action-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const actionRaw = String(parsed.action ?? "").toLowerCase();
+  let action: InboundReplyAction = "none";
+  if (
+    actionRaw === "dealer_location_question" ||
+    actionRaw === "explicit_callback_request" ||
+    actionRaw === "schedule_context_status_update" ||
+    actionRaw === "inventory_watch_acknowledgement"
+  ) {
+    action = actionRaw;
+  }
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    action,
+    explicitAction: !!parsed.explicit_action,
+    shouldReply: !!parsed.should_reply,
+    normalizedText: cleanOptionalString(parsed.normalized_text),
+    reason: cleanOptionalString(parsed.reason),
     confidence
   };
 }

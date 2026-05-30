@@ -168,6 +168,7 @@ import {
   parseIntentWithLLM,
   parsePricingPaymentsIntentWithLLM,
   parseRoutingDecisionWithLLM,
+  parseInboundReplyActionWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseVehicleInfoRequestWithLLM,
@@ -206,6 +207,7 @@ import type {
   WebFallbackReplyParse,
   InventoryEntityParse,
   InventoryStatusParse,
+  InboundReplyActionParse,
   JourneyIntentParse,
   ManualOutboundAppointmentParse,
   PricingPaymentsIntentParse,
@@ -6770,6 +6772,37 @@ function isCustomerAckActionParserAccepted(parsed: CustomerAckActionParse | null
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
   const min = Number(process.env.LLM_CUSTOMER_ACK_ACTION_CONFIDENCE_MIN ?? 0.74);
   return confidence >= min;
+}
+
+function inboundReplyActionConfidence(parsed: InboundReplyActionParse | null): number {
+  return typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence)
+    ? parsed.confidence
+    : 0;
+}
+
+function inboundReplyActionConfidenceMin(): number {
+  return Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
+}
+
+function isInboundReplyActionParserAccepted(parsed: InboundReplyActionParse | null): boolean {
+  if (!parsed || parsed.action === "none" || !parsed.explicitAction) return false;
+  return inboundReplyActionConfidence(parsed) >= inboundReplyActionConfidenceMin();
+}
+
+function isAcceptedInboundReplyAction(
+  parsed: InboundReplyActionParse | null,
+  action: Exclude<InboundReplyActionParse["action"], "none">
+): boolean {
+  return isInboundReplyActionParserAccepted(parsed) && parsed?.action === action;
+}
+
+function canUseInboundReplyActionFallback(args: {
+  parserEligible: boolean;
+  parsed: InboundReplyActionParse | null;
+}): boolean {
+  if (!args.parserEligible) return true;
+  if (!args.parsed) return true;
+  return inboundReplyActionConfidence(args.parsed) < inboundReplyActionConfidenceMin();
 }
 
 function isCadenceRegenerateContextParserAccepted(parsed: CadenceRegenerateContextParse | null): boolean {
@@ -17386,6 +17419,20 @@ function buildScheduleContextStatusUpdateReply(inboundText: string, lastOutbound
   const timeQuestion = dayLabel ? `what time ${dayLabel} works best?` : "what day and time works best?";
   const prefix = /\b(?:sorry|my bad)\b/i.test(inboundText) ? "No worries" : "Sounds good";
   return `${prefix} — ${timeQuestion}`;
+}
+
+function buildDealerLocationReply(conv: any, dealerProfile: any): string {
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+  const address = dealerProfile?.address;
+  const line1 = address?.line1 ?? "1149 Erie Ave.";
+  const city = address?.city ?? "North Tonawanda";
+  const state = address?.state ?? "NY";
+  const zip = address?.zip ?? "14120";
+  const replyRaw =
+    `Hi — this is ${agentName} at ${dealerName}. We’re located at ${line1}, ${city}, ${state} ${zip}. ` +
+    "Do you want pricing details or a quick model comparison?";
+  return ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
 }
 
 function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string): string {
@@ -43906,6 +43953,52 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserSchedulingIntent = regenRoutingIntentOverride === "scheduling";
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
+  const regenActiveInventoryWatchForAction =
+    conv.inventoryWatch ??
+    (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
+      ? conv.inventoryWatches[0]
+      : null);
+  const regenInboundReplyActionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const regenInboundReplyActionParse = regenInboundReplyActionParserEligible
+    ? await safeLlmParse("regen_inbound_reply_action_parser", () =>
+        parseInboundReplyActionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 10),
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null,
+          hasActiveInventoryWatch: !!regenActiveInventoryWatchForAction
+        })
+      )
+    : null;
+  if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && regenInboundReplyActionParse) {
+    console.log("[llm-inbound-reply-action-parser][regen]", regenInboundReplyActionParse);
+  }
+  const regenInboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
+    parserEligible: regenInboundReplyActionParserEligible,
+    parsed: regenInboundReplyActionParse
+  });
+  const regenParserLocationQuestion = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "dealer_location_question"
+  );
+  const regenParserExplicitCallbackRequest = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "explicit_callback_request"
+  );
+  const regenParserScheduleStatusUpdate = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "schedule_context_status_update"
+  );
+  const regenParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "inventory_watch_acknowledgement"
+  );
   const regenRoutePolicyMode = getRoutePolicyMode();
   const regenTestRideEligibilityReply =
     event.provider === "twilio"
@@ -44051,6 +44144,90 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
+  const regenInboundAtMsForAction = new Date(event.receivedAt).getTime();
+  const regenLastOutboundForAction = [...(conv.messages ?? [])]
+    .filter(m => m.direction === "out" && m.body)
+    .filter(m => {
+      if (!Number.isFinite(regenInboundAtMsForAction)) return true;
+      const atMs = new Date(m.at ?? "").getTime();
+      return !Number.isFinite(atMs) || atMs <= regenInboundAtMsForAction;
+    })
+    .slice(-1)[0];
+  const regenLastOutboundForActionText = String(regenLastOutboundForAction?.body ?? "");
+  const regenLocationQuestion =
+    regenParserLocationQuestion ||
+    (regenInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
+  if (event.provider === "twilio" && channel === "sms" && regenLocationQuestion) {
+    const reply = buildDealerLocationReply(conv, dealerProfile);
+    recordRouteOutcome("regen", "dealer_location_question", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      fallback: !regenParserLocationQuestion
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  const regenScheduleContextStatusUpdate =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !regenParserExplicitCallbackRequest &&
+    !regenParserPricingIntent &&
+    !regenParserAvailabilityIntent &&
+    isScheduleDialogState(getDialogState(conv)) &&
+    hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv)) &&
+    (regenParserScheduleStatusUpdate ||
+      (regenInboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
+  if (regenScheduleContextStatusUpdate) {
+    const reply = buildScheduleContextStatusUpdateReply(
+      String(event.body ?? ""),
+      regenLastOutboundForActionText
+    );
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "schedule_context_status_update_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      fallback: !regenParserScheduleStatusUpdate
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  const regenInventoryWatchAcknowledgementCandidate =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !!regenActiveInventoryWatchForAction &&
+    !regenParserPricingIntent &&
+    !regenParserSchedulingIntent &&
+    !regenParserCallbackIntent &&
+    regenParserInventoryWatchAcknowledgement;
+  if (regenInventoryWatchAcknowledgementCandidate) {
+    const rawReply = buildInventoryWatchConfirmation(regenActiveInventoryWatchForAction);
+    const reply =
+      normalizeOutboundText(rawReply) === normalizeOutboundText(regenLastOutboundForActionText)
+        ? "Will do — I’ll keep watching for it and text you when there’s a match."
+        : rawReply;
+    recordRouteOutcome("regen", "inventory_watch_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false,
+      shortAckIntent: false
+    });
+  }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
     const regenExplicitFinanceSignal =
@@ -44071,15 +44248,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (/\b(at|around|between|from)\b/i.test(regenNoResponseInboundText) ||
         /\b\d{1,2}(?::\d{2})?\s*(am|pm)?\b/i.test(regenNoResponseInboundText) ||
         /\b(schedule|appointment|come in|stop by|visit)\b/i.test(regenNoResponseInboundText));
-    const regenImmediateChatCallbackFallback = isImmediateChatCallbackAvailabilityText(
-      regenNoResponseInboundText
-    );
+    const regenImmediateChatCallbackFallback =
+      regenInboundReplyActionFallbackAllowed &&
+      isImmediateChatCallbackAvailabilityText(regenNoResponseInboundText);
     const regenExplicitCallbackSignal =
       regenParserCallbackIntent ||
+      regenParserExplicitCallbackRequest ||
       regenImmediateChatCallbackFallback ||
-      /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
-        regenNoResponseInboundText
-      );
+      (regenInboundReplyActionFallbackAllowed &&
+        /\b(call me|give me a call|can you call|please call|have .* call|reach me|contact me)\b/i.test(
+          regenNoResponseInboundText
+        ));
     const regenLastOutboundText = String(
       [...(conv.messages ?? [])]
         .filter(m => m.direction === "out" && m.body)
@@ -44089,6 +44268,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasRecentPricingPromptContext(conv) &&
       isFinanceFollowUpPromptText(regenLastOutboundText) &&
       isFinanceFollowUpAffirmationText(regenNoResponseInboundText);
+    const regenWatchAcknowledgementFallbackCandidate =
+      event.provider === "twilio" &&
+      channel === "sms" &&
+      !!regenActiveInventoryWatchForAction &&
+      !regenExplicitFinanceSignal &&
+      !regenExplicitSchedulingSignal &&
+      !regenExplicitCallbackSignal &&
+      (regenParserInventoryWatchAcknowledgement ||
+        (regenInboundReplyActionFallbackAllowed &&
+          hasInventoryWatchConfirmationText(regenNoResponseInboundText)));
+    if (regenWatchAcknowledgementFallbackCandidate) {
+      const rawReply = buildInventoryWatchConfirmation(regenActiveInventoryWatchForAction);
+      const reply =
+        normalizeOutboundText(rawReply) === normalizeOutboundText(regenLastOutboundText)
+          ? "Will do — I’ll keep watching for it and text you when there’s a match."
+          : rawReply;
+      recordRouteOutcome("regen", "routing_parser_no_response_inventory_watch_ack", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserReason: regenRoutingParserDecision.reason,
+        actionParserAction: regenInboundReplyActionParse?.action ?? null,
+        actionParserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+        fallback: !regenParserInventoryWatchAcknowledgement
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false,
+        turnSchedulingIntent: false,
+        shortAckIntent: false
+      });
+    }
     const regenNoResponseSmallTalkSignal = await detectSmallTalkSignalWithFallback({
       text: regenNoResponseInboundText,
       history,
@@ -45458,9 +45668,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const regenFinancePriorityHint = regenParserPricingIntent;
-  const regenCallbackFallback = isImmediateChatCallbackAvailabilityText(event.body ?? "");
+  const regenCallbackFallback =
+    regenInboundReplyActionFallbackAllowed && isImmediateChatCallbackAvailabilityText(event.body ?? "");
   const regenCallbackRequested =
-    !regenTextingTypoJoke && (regenParserCallbackIntent || regenCallbackFallback);
+    !regenTextingTypoJoke &&
+    (regenParserCallbackIntent || regenParserExplicitCallbackRequest || regenCallbackFallback);
   const regenRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
@@ -46508,6 +46720,52 @@ if (authToken && signature) {
   if (process.env.LLM_CUSTOMER_ACK_ACTION_PARSER_DEBUG === "1" && customerAckActionParse) {
     console.log("[llm-customer-ack-action-parse]", customerAckActionParse);
   }
+  const activeInventoryWatchForAction =
+    conv.inventoryWatch ??
+    (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
+      ? conv.inventoryWatches[0]
+      : null);
+  const inboundReplyActionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const inboundReplyActionParse = inboundReplyActionParserEligible
+    ? await safeLlmParse("inbound_reply_action_parser", () =>
+        parseInboundReplyActionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 10),
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null,
+          hasActiveInventoryWatch: !!activeInventoryWatchForAction
+        })
+      )
+    : null;
+  if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && inboundReplyActionParse) {
+    console.log("[llm-inbound-reply-action-parser][live]", inboundReplyActionParse);
+  }
+  const inboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
+    parserEligible: inboundReplyActionParserEligible,
+    parsed: inboundReplyActionParse
+  });
+  const inboundParserLocationQuestion = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "dealer_location_question"
+  );
+  const inboundParserExplicitCallbackRequest = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "explicit_callback_request"
+  );
+  const inboundParserScheduleStatusUpdate = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "schedule_context_status_update"
+  );
+  const inboundParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "inventory_watch_acknowledgement"
+  );
   const appointmentCancelOrRescheduleHint =
     event.provider === "twilio" &&
     !isFinanceDocsQuestionText(event.body ?? "") &&
@@ -46548,6 +46806,10 @@ if (authToken && signature) {
     hasFutureBuyingWindowHintText(event.body ?? "") ||
     appointmentCancelOrRescheduleHint ||
     immediateArrivalRequestFallback ||
+    inboundReplyActionParse?.action === "dealer_location_question" ||
+    inboundReplyActionParse?.action === "explicit_callback_request" ||
+    inboundReplyActionParse?.action === "schedule_context_status_update" ||
+    inboundReplyActionParse?.action === "inventory_watch_acknowledgement" ||
     customerAckActionParse?.action === "immediate_arrival_request";
   const customerAckNoResponse =
     customerAckActionAccepted &&
@@ -47081,7 +47343,10 @@ if (authToken && signature) {
       const humanModeWatchIntent =
         !humanModeDemoDayQuestion &&
         (humanModeWatchAction === "set_watch" ||
-          (!humanModeSemanticConfident && isWatchConfirmationIntentText(humanModeText)));
+          inboundParserInventoryWatchAcknowledgement ||
+          (!humanModeSemanticConfident &&
+            inboundReplyActionFallbackAllowed &&
+            isWatchConfirmationIntentText(humanModeText)));
       if (humanModeWatchIntent) {
         const humanModeInventoryEntityParserEligible =
           event.provider === "twilio" &&
@@ -49019,7 +49284,9 @@ if (authToken && signature) {
     schedulingSignalsBase.hasDayTime ||
     schedulingSignalsBase.hasDayOnlyAvailability ||
     schedulingSignalsBase.hasDayOnlyRequest;
-  const preParserLocationQuestion = isDealerLocationQuestionText(event.body ?? "");
+  const preParserLocationQuestion =
+    inboundParserLocationQuestion ||
+    (inboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
   const preParserNonWatchPrimaryIntent =
     preParserFinanceSignal || preParserSchedulingSignal || preParserLocationQuestion;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
@@ -49130,7 +49397,9 @@ if (authToken && signature) {
   });
   let watchHandledEarly = false;
   const earlyWatchIntentText =
-    !semanticWatchParserBlocksNewWatch && isWatchConfirmationIntentText(String(event.body ?? ""));
+    !semanticWatchParserBlocksNewWatch &&
+    inboundReplyActionFallbackAllowed &&
+    isWatchConfirmationIntentText(String(event.body ?? ""));
   const earlyWatchIntentLLM = !watchBlockedByDemoDayQuestion && semanticWatchAction === "set_watch";
   const earlyWatchPrompted = /\b(keep an eye|keep me posted|watch for|watch\b)\b/i.test(
     lastOutboundText
@@ -49143,13 +49412,17 @@ if (authToken && signature) {
     !schedulingSignalsBase.hasDayOnlyAvailability &&
     !schedulingSignalsBase.hasDayOnlyRequest &&
     !schedulingSignalsBase.explicit &&
+    inboundReplyActionFallbackAllowed &&
     !preParserNonWatchPrimaryIntent;
   const earlyWatchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
     !preParserNonWatchPrimaryIntent &&
     !watchBlockedByDemoDayQuestion &&
-    (earlyWatchIntentLLM || earlyWatchIntentText || earlyPromptedWatchAffirm);
+    (earlyWatchIntentLLM ||
+      inboundParserInventoryWatchAcknowledgement ||
+      earlyWatchIntentText ||
+      earlyPromptedWatchAffirm);
   const earlyWatchHasPrimaryAvailabilityQuestion =
     isDirectInventoryAvailabilityQuestionText(event.body ?? "") ||
     isExplicitAvailabilityQuestion(event.body ?? "");
@@ -49219,7 +49492,10 @@ if (authToken && signature) {
       if (
         pref.action === "ignore" &&
         pending.model &&
-        (isAffirmative(event.body) || earlyWatchIntentText || earlyWatchIntentLLM)
+        (isAffirmative(event.body) ||
+          earlyWatchIntentText ||
+          earlyWatchIntentLLM ||
+          inboundParserInventoryWatchAcknowledgement)
       ) {
         const watchColor = sanitizeColorPhrase(pending.color);
         const watch: InventoryWatch = {
@@ -49890,13 +50166,16 @@ if (authToken && signature) {
   const immediateChatCallbackFallback =
     !parserCallbackIntent &&
     !(intentAccepted && intentParse?.intent === "callback") &&
+    inboundReplyActionFallbackAllowed &&
     isImmediateChatCallbackAvailabilityText(event.body ?? "");
   const explicitCallbackRequestFallback =
     !parserCallbackIntent &&
     !(intentAccepted && intentParse?.intent === "callback") &&
+    inboundReplyActionFallbackAllowed &&
     isExplicitCustomerCallbackRequestText(event.body ?? "");
   const llmCallbackRequested =
     parserCallbackIntent ||
+    inboundParserExplicitCallbackRequest ||
     (intentAccepted && intentParse?.intent === "callback") ||
     immediateChatCallbackFallback ||
     explicitCallbackRequestFallback;
@@ -50650,7 +50929,8 @@ if (authToken && signature) {
     !routeExecAvailability &&
     isScheduleDialogState(getDialogState(conv)) &&
     hasScheduleOfferContext(lastOutboundText, getDialogState(conv)) &&
-    isScheduleContextStatusUpdateText(event.body ?? "");
+    (inboundParserScheduleStatusUpdate ||
+      (inboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
   if (scheduleContextStatusUpdate) {
     const reply = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
@@ -50658,7 +50938,10 @@ if (authToken && signature) {
     );
     setDialogState(conv, "schedule_request");
     logRouteOutcome("schedule_context_status_update_ack", {
-      turnPrimaryIntent: routeExecutionIntent
+      turnPrimaryIntent: routeExecutionIntent,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      fallback: !inboundParserScheduleStatusUpdate
     });
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
@@ -50858,18 +51141,16 @@ if (authToken && signature) {
     routingParserDecision.accepted && routingParserDecision.fallbackAction === "no_response";
   if (hasParserNoResponseFallback) {
     const noResponseInboundText = String(event.body ?? "");
-    const activeWatchForAck =
-      conv.inventoryWatch ??
-      (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
-        ? conv.inventoryWatches[0]
-        : null);
+    const activeWatchForAck = activeInventoryWatchForAction;
     const watchAcknowledgementCandidate =
       event.provider === "twilio" &&
       !routeExecPricing &&
       !routeExecScheduling &&
       !routeExecCallback &&
       !!activeWatchForAck &&
-      (watchHandledEarly || hasInventoryWatchConfirmationText(noResponseInboundText));
+      (watchHandledEarly ||
+        inboundParserInventoryWatchAcknowledgement ||
+        (inboundReplyActionFallbackAllowed && hasInventoryWatchConfirmationText(noResponseInboundText)));
     if (watchAcknowledgementCandidate) {
       const rawReply = buildInventoryWatchConfirmation(activeWatchForAck);
       const reply =
@@ -50878,7 +51159,10 @@ if (authToken && signature) {
           : rawReply;
       logRouteOutcome("routing_parser_no_response_inventory_watch_ack", {
         turnPrimaryIntent: routeExecutionIntent,
-        parserReason: routingParserDecision.reason
+        parserReason: routingParserDecision.reason,
+        actionParserAction: inboundReplyActionParse?.action ?? null,
+        actionParserConfidence: inboundReplyActionParse?.confidence ?? null,
+        fallback: !inboundParserInventoryWatchAcknowledgement && !watchHandledEarly
       });
       return publishLiveTwilioReply(reply, { shortAckIntent: false });
     }
@@ -51586,7 +51870,7 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
-  if (event.provider === "twilio" && wantsReminder(event.body) && !isDealerLocationQuestionText(event.body ?? "")) {
+  if (event.provider === "twilio" && wantsReminder(event.body) && !preParserLocationQuestion) {
     const pauseUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
     const dealerProfile = await getDealerProfileHot();
@@ -51598,7 +51882,7 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
-  const locationQuestion = isDealerLocationQuestionText(textLower);
+  const locationQuestion = preParserLocationQuestion;
   const weatherQuestion =
     /\b(nicest day|nice day|best day)\b/i.test(textLower) ||
     /\b(what(?:'s| is)|how(?:'s| is)|is it|will it|can i|can we|should i|should we)\b[^.!?]*\b(weather|forecast|temperature|temp|snow|cold|rain)\b/i.test(
@@ -51724,17 +52008,12 @@ if (authToken && signature) {
   }
   if (event.provider === "twilio" && locationQuestion) {
     const dealerProfile = await getDealerProfileHot();
-    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
-    const address = dealerProfile?.address;
-    const line1 = address?.line1 ?? "1149 Erie Ave.";
-    const city = address?.city ?? "North Tonawanda";
-    const state = address?.state ?? "NY";
-    const zip = address?.zip ?? "14120";
-    const replyRaw =
-      `Hi — this is ${agentName} at ${dealerName}. We’re located at ${line1}, ${city}, ${state} ${zip}. ` +
-      "Do you want pricing details or a quick model comparison?";
-    const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
+    const reply = buildDealerLocationReply(conv, dealerProfile);
+    logRouteOutcome("dealer_location_question", {
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      fallback: !inboundParserLocationQuestion
+    });
     return publishLiveTwilioReply(reply);
   }
 
@@ -51860,11 +52139,14 @@ if (authToken && signature) {
     }
   }
 
+  const pendingWatchConfirmIntent =
+    inboundParserInventoryWatchAcknowledgement ||
+    (inboundReplyActionFallbackAllowed && isWatchConfirmationIntentText(String(event.body ?? "")));
   if (
     event.provider === "twilio" &&
     conv.inventoryWatchPending &&
     isExplicitAvailabilityQuestion(textLower) &&
-    !isWatchConfirmationIntentText(String(event.body ?? ""))
+    !pendingWatchConfirmIntent
   ) {
     // Customer asked a fresh availability question; don't force pending watch clarification.
     conv.inventoryWatchPending = undefined;
@@ -51883,7 +52165,7 @@ if (authToken && signature) {
     const explicitRequested = parseRequestedDayTime(String(event.body ?? ""), tz);
     const hasDayTime = schedulingSignals.hasDayTime;
     const hasDayOnlyAvailability = schedulingSignals.hasDayOnlyAvailability;
-    const watchConfirmIntent = isWatchConfirmationIntentText(String(event.body ?? ""));
+    const watchConfirmIntent = pendingWatchConfirmIntent;
     const watchAsSideEffectOnly = hasPrimaryIntentBeyondWatch(String(event.body ?? ""));
     // If the customer explicitly asks for a day/time, let scheduling handle it.
     // But when the text is an explicit watch-confirmation intent, do not let
@@ -52561,7 +52843,9 @@ if (authToken && signature) {
     lastOutboundText
   );
   const watchIntentText =
-    !semanticWatchParserBlocksNewWatch && isWatchConfirmationIntentText(String(event.body ?? ""));
+    !semanticWatchParserBlocksNewWatch &&
+    inboundReplyActionFallbackAllowed &&
+    isWatchConfirmationIntentText(String(event.body ?? ""));
   const promptedWatchAffirm =
     !watchBlockedByDemoDayQuestion &&
     (watchPrompted || confirmedOutboundWatchOffer) &&
@@ -52569,10 +52853,15 @@ if (authToken && signature) {
     !schedulingSignals.hasDayTime &&
     !schedulingSignals.hasDayOnlyAvailability &&
     !schedulingSignals.hasDayOnlyRequest &&
+    inboundReplyActionFallbackAllowed &&
     !schedulingExplicit;
   const explicitWatchIntent =
     !watchBlockedByDemoDayQuestion &&
-    (semanticWatchAction === "set_watch" || watchIntentText || promptedWatchAffirm || confirmedOutboundWatchOffer);
+    (semanticWatchAction === "set_watch" ||
+      inboundParserInventoryWatchAcknowledgement ||
+      watchIntentText ||
+      promptedWatchAffirm ||
+      (inboundReplyActionFallbackAllowed && confirmedOutboundWatchOffer));
   const watchIntent =
     event.provider === "twilio" &&
     !conv.inventoryWatchPending &&
