@@ -262,6 +262,8 @@ function main() {
       "duplicate_open_todos_same_class",
       "duplicate_open_todos_same_summary",
       "active_cadence_with_open_followup_todo",
+      "active_cadence_with_open_staff_followup_todo",
+      "stale_cadence_generated_followup_todo",
       "active_cadence_with_dealer_ride_outcome_task",
       "manual_or_hold_mode_with_active_customer_cadence"
     ]);

@@ -307,6 +307,14 @@ export function inferTodoTaskClass(
   return "todo";
 }
 
+export function isCadenceGeneratedFollowUpTodoSummary(summary?: string | null): boolean {
+  const text = String(summary ?? "").replace(/\s+/g, " ").trim();
+  return (
+    /^call customer \(initial reply sent\)\.?$/i.test(text) ||
+    /^call customer \(follow[- ]?up\):/i.test(text)
+  );
+}
+
 export type InternalQuestion = {
   id: string;
   convId: string;
@@ -3973,6 +3981,25 @@ export function addTodo(
   const ownerId = ownerIdRaw || undefined;
   const ownerName = ownerNameRaw || undefined;
   const incomingTaskClass = taskClass ?? inferTodoTaskClass(reason, summary, schedule);
+  const incomingIsCadenceGeneratedFollowUp =
+    incomingTaskClass === "followup" && isCadenceGeneratedFollowUpTodoSummary(summary);
+  const retireSupersededCadenceGeneratedFollowUps = (keepId?: string) => {
+    if (incomingTaskClass !== "followup" || incomingIsCadenceGeneratedFollowUp) return 0;
+    let count = 0;
+    const doneAt = nowIso();
+    for (const task of todos) {
+      if (task.convId !== conv.id || task.status !== "open") continue;
+      if (keepId && task.id === keepId) continue;
+      const existingClass = task.taskClass ?? inferTodoTaskClass(task.reason, task.summary, task);
+      if (!task.taskClass) task.taskClass = existingClass;
+      if (existingClass !== "followup") continue;
+      if (!isCadenceGeneratedFollowUpTodoSummary(task.summary)) continue;
+      task.status = "done";
+      task.doneAt = doneAt;
+      count += 1;
+    }
+    return count;
+  };
   const existing = options?.skipMerge
     ? null
     : todos.find(t => {
@@ -4037,6 +4064,7 @@ export function addTodo(
     if (schedule?.reminderSentAt) {
       existing.reminderSentAt = schedule.reminderSentAt;
     }
+    retireSupersededCadenceGeneratedFollowUps(existing.id);
     conv.updatedAt = nowIso();
     scheduleSave();
     return existing;
@@ -4062,6 +4090,7 @@ export function addTodo(
     reminderSentAt: schedule?.reminderSentAt
   };
   todos.push(task);
+  retireSupersededCadenceGeneratedFollowUps(task.id);
   conv.updatedAt = nowIso();
   scheduleSave();
   return task;
@@ -4075,7 +4104,7 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
   const hasActiveCustomerCadence =
     conv?.followUpCadence?.status === "active" &&
     String(conv?.followUpCadence?.kind ?? "standard").toLowerCase() !== "post_sale";
-  if (/^call customer \(initial reply sent\)\.?$/i.test(summaryText) && hasActiveCustomerCadence) {
+  if (isCadenceGeneratedFollowUpTodoSummary(summaryText) && hasActiveCustomerCadence) {
     return null;
   }
   const isFinancePrequalOrCreditApp =

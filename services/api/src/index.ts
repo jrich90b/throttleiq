@@ -496,6 +496,7 @@ import {
   addTodo,
   addCallTodoIfMissing,
   inferTodoTaskClass,
+  isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
   addInternalQuestion,
   listOpenQuestions,
@@ -24581,9 +24582,15 @@ async function processDueFollowUps() {
   const convs = getAllConversations();
   const convById = new Map(convs.map(c => [c.id, c]));
   const openTodos = listOpenTodos();
+  const shouldTodoHoldCustomerCadence = (todo: any): boolean => {
+    const reason = String(todo?.reason ?? "").trim().toLowerCase();
+    if (reason !== "call") return true;
+    if (isCadenceGeneratedFollowUpTodoSummary(todo?.summary)) return false;
+    return true;
+  };
   const todoConvIds = new Set(
     openTodos
-      .filter(t => t.reason !== "call")
+      .filter(shouldTodoHoldCustomerCadence)
       .map(t => t.convId)
   );
   const callbackReminderTz = cfg.timezone || "America/New_York";

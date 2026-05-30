@@ -31,6 +31,17 @@ const store = {
       followUp: { mode: "active", updatedAt: now },
       followUpCadence: { status: "active", kind: "standard", nextDueAt: now },
       messages: []
+    },
+    {
+      id: "conv_staff_task",
+      leadKey: "+17160000003",
+      mode: "suggest",
+      status: "open",
+      updatedAt: now,
+      lead: { firstName: "Staff", lastName: "Task", leadRef: "S1" },
+      followUp: { mode: "active", updatedAt: now },
+      followUpCadence: { status: "active", kind: "standard", nextDueAt: now },
+      messages: []
     }
   ],
   todos: [
@@ -53,6 +64,16 @@ const store = {
       summary: "Call customer (follow-up): confirm next steps.",
       status: "open",
       createdAt: now
+    },
+    {
+      id: "todo_staff",
+      convId: "conv_staff_task",
+      leadKey: "+17160000003",
+      reason: "call",
+      taskClass: "followup",
+      summary: "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status.",
+      status: "open",
+      createdAt: now
     }
   ],
   questions: []
@@ -73,12 +94,15 @@ if (result.status !== 0) {
 }
 
 const parsed = JSON.parse(result.stdout);
-const issues = parsed.flagged?.[0]?.issues ?? [];
+const byId = new Map<string, any>((parsed.flagged ?? []).map((row: any) => [String(row.id), row]));
+const doubleIssues = byId.get("conv_double")?.issues ?? [];
+const staffIssues = byId.get("conv_staff_task")?.issues ?? [];
 const checks = [
-  ["one_conversation_flagged", parsed.summary.flaggedConversations, 1],
-  ["duplicate_class_detected", issues.includes("duplicate_open_todos_same_class"), true],
-  ["duplicate_summary_detected", issues.includes("duplicate_open_todos_same_summary"), true],
-  ["active_cadence_with_open_followup_detected", issues.includes("active_cadence_with_open_followup_todo"), true]
+  ["two_conversations_flagged", parsed.summary.flaggedConversations, 2],
+  ["duplicate_class_detected", doubleIssues.includes("duplicate_open_todos_same_class"), true],
+  ["duplicate_summary_detected", doubleIssues.includes("duplicate_open_todos_same_summary"), true],
+  ["stale_cadence_generated_followup_detected", doubleIssues.includes("stale_cadence_generated_followup_todo"), true],
+  ["staff_followup_conflict_detected", staffIssues.includes("active_cadence_with_open_staff_followup_todo"), true]
 ] as const;
 
 let passed = 0;

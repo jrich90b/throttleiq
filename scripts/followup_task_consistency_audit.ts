@@ -98,6 +98,14 @@ function isDealerRideOutcomeTask(todo: AnyObj): boolean {
   );
 }
 
+function isCadenceGeneratedFollowUpTodo(todo: AnyObj): boolean {
+  const summary = normalizeText(todo?.summary);
+  return (
+    /^call customer \(initial reply sent\)\.?$/i.test(summary) ||
+    /^call customer \(follow[- ]?up\):/i.test(summary)
+  );
+}
+
 function taskPreview(todo: AnyObj) {
   return {
     id: todo?.id ?? null,
@@ -183,9 +191,15 @@ function run() {
     }
 
     const openFollowUpTodos = openTodos.filter(todo => inferTaskClass(todo) === "followup");
-    if (activeCadence && openFollowUpTodos.length > 0) {
-      issuePush(issues, "active_cadence_with_open_followup_todo");
-      evidence.openFollowUpTodos = openFollowUpTodos.map(taskPreview);
+    const cadenceGeneratedFollowUpTodos = openFollowUpTodos.filter(isCadenceGeneratedFollowUpTodo);
+    const staffFollowUpTodos = openFollowUpTodos.filter(todo => !isCadenceGeneratedFollowUpTodo(todo));
+    if (activeCadence && cadenceGeneratedFollowUpTodos.length > 0) {
+      issuePush(issues, "stale_cadence_generated_followup_todo");
+      evidence.staleCadenceGeneratedFollowUpTodos = cadenceGeneratedFollowUpTodos.map(taskPreview);
+    }
+    if (activeCadence && staffFollowUpTodos.length > 0) {
+      issuePush(issues, "active_cadence_with_open_staff_followup_todo");
+      evidence.openStaffFollowUpTodos = staffFollowUpTodos.map(taskPreview);
     }
 
     const openDealerRideTasks = openTodos.filter(isDealerRideOutcomeTask);

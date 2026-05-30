@@ -47,6 +47,19 @@ const suppressedTodo = store.addCallTodoIfMissing(
 assert.equal(suppressedTodo, null, "active cadence should suppress only the generic initial call todo");
 assert.equal(openTodosFor(withCadence.id).length, 0);
 
+const cadenceFollowUp = makeConversation("cadence-generated-followup");
+store.startFollowUpCadence(cadenceFollowUp, "2026-05-28T16:00:00.000Z", "America/New_York");
+const suppressedCadenceTodo = store.addCallTodoIfMissing(
+  cadenceFollowUp,
+  "Call customer (follow-up): confirm inventory and availability for the bike."
+);
+assert.equal(
+  suppressedCadenceTodo,
+  null,
+  "active cadence should not create a separate visible call task for its own follow-up"
+);
+assert.equal(openTodosFor(cadenceFollowUp.id).length, 0);
+
 const phonePreferred = makeConversation("adf-phone-preferred");
 store.startFollowUpCadence(phonePreferred, "2026-05-28T16:00:00.000Z", "America/New_York");
 const phoneTodo = store.addCallTodoIfMissing(
@@ -55,6 +68,15 @@ const phoneTodo = store.addCallTodoIfMissing(
 );
 assert.ok(phoneTodo, "phone-preferred leads still need a human call task");
 assert.equal(openTodosFor(phonePreferred.id).length, 1);
+
+const staffTaskConv = makeConversation("staff-task-with-cadence");
+store.startFollowUpCadence(staffTaskConv, "2026-05-28T16:00:00.000Z", "America/New_York");
+const staffTask = store.addCallTodoIfMissing(
+  staffTaskConv,
+  "Dealer ride follow-up needed: thank customer, confirm how to proceed, and update lead status."
+);
+assert.ok(staffTask, "staff-owned follow-up tasks should still be visible while cadence is active");
+assert.equal(openTodosFor(staffTaskConv.id).length, 1);
 
 await store.flushConversationStore();
 

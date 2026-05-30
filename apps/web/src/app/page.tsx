@@ -1244,6 +1244,35 @@ function todoTaskOwnerLabel(todo: TodoItem | null | undefined): string {
   return String(todo.ownerDisplayName ?? todo.departmentOwnerName ?? todo.ownerName ?? "").trim();
 }
 
+function isCadenceGeneratedFollowUpTodo(todo: TodoItem | null | undefined): boolean {
+  const summary = String(todo?.summary ?? "").replace(/\s+/g, " ").trim();
+  return (
+    /^call customer \(initial reply sent\)\.?$/i.test(summary) ||
+    /^call customer \(follow[- ]?up\):/i.test(summary)
+  );
+}
+
+function shouldOpenTaskHoldCadence(todo: TodoItem | null | undefined): boolean {
+  if (!todo) return false;
+  if (isCadenceGeneratedFollowUpTodo(todo)) return false;
+  const reason = String(todo.reason ?? "").toLowerCase();
+  const taskClass = String(todo.taskClass ?? "").toLowerCase();
+  if (reason === "note") return false;
+  return (
+    taskClass === "followup" ||
+    taskClass === "appointment" ||
+    taskClass === "reminder" ||
+    reason === "call" ||
+    reason === "approval" ||
+    reason === "payments" ||
+    reason === "pricing" ||
+    reason === "manager" ||
+    reason === "service" ||
+    reason === "parts" ||
+    reason === "apparel"
+  );
+}
+
 type QuestionItem = {
   id: string;
   convId: string;
@@ -8584,6 +8613,14 @@ export default function Home() {
     );
     return selectedConv.followUpCadence ?? listItem?.followUpCadence ?? null;
   }, [selectedConv, conversations]);
+  const selectedVisibleOpenTasks = useMemo(() => {
+    const cadenceActive = selectedCadence?.status === "active";
+    return selectedOpenTasks.filter(task => !(cadenceActive && isCadenceGeneratedFollowUpTodo(task)));
+  }, [selectedOpenTasks, selectedCadence?.status]);
+  const selectedCadenceHeldByOpenTask = useMemo(() => {
+    if (selectedCadence?.status !== "active") return false;
+    return selectedVisibleOpenTasks.some(shouldOpenTaskHoldCadence);
+  }, [selectedCadence?.status, selectedVisibleOpenTasks]);
   const cadenceAlerts = useMemo(() => {
     const alerts = conversations
       .map(c => {
@@ -19666,8 +19703,8 @@ export default function Home() {
                 ) : null}
               </div>
             ) : null}
-            {selectedOpenTasks.length ? (() => {
-              const primaryTask = selectedOpenTasks[0];
+            {selectedVisibleOpenTasks.length ? (() => {
+              const primaryTask = selectedVisibleOpenTasks[0];
               const ownerLabel = todoTaskOwnerLabel(primaryTask);
               const detail = todoTaskDetail(primaryTask);
               const taskTitle = todoTaskTitle(primaryTask);
@@ -19682,7 +19719,7 @@ export default function Home() {
                 <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium text-sky-950">
-                      {selectedOpenTasks.length === 1 ? "Open task" : `${selectedOpenTasks.length} open tasks`}
+                      {selectedVisibleOpenTasks.length === 1 ? "Open task" : `${selectedVisibleOpenTasks.length} open tasks`}
                     </div>
                     <div className="mt-0.5 text-xs font-semibold text-sky-900">
                       {taskTitle}
@@ -19710,7 +19747,12 @@ export default function Home() {
                 {cadenceResolveNotice}
               </div>
             ) : null}
-            {cadenceAlert ? (
+            {selectedCadenceHeldByOpenTask && selectedCadence?.nextDueAt ? (
+              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                Auto follow-up is held while the open task is handled. Next cadence due:{" "}
+                {formatCadenceDate(selectedCadence.nextDueAt)}
+              </div>
+            ) : cadenceAlert ? (
               <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>
                   <div className="font-medium text-amber-900">
@@ -19728,7 +19770,8 @@ export default function Home() {
                 </button>
               </div>
             ) : null}
-            {!cadenceAlert &&
+            {!selectedCadenceHeldByOpenTask &&
+            !cadenceAlert &&
             selectedCadence?.status === "active" &&
             selectedCadence?.nextDueAt ? (
               <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
