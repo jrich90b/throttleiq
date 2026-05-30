@@ -76,6 +76,21 @@ function readRows(filePath: string): ManualSeedRow[] {
   }
 }
 
+function stableStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const normalize = (input: any): any => {
+    if (input == null) return input;
+    if (Array.isArray(input)) return input.map(normalize);
+    if (typeof input !== "object") return input;
+    if (seen.has(input)) return "[Circular]";
+    seen.add(input);
+    const out: Record<string, any> = {};
+    for (const key of Object.keys(input).sort()) out[key] = normalize(input[key]);
+    return out;
+  };
+  return JSON.stringify(normalize(value));
+}
+
 function normText(input: unknown): string {
   return String(input ?? "")
     .replace(/\s+/g, " ")
@@ -163,17 +178,63 @@ function run() {
     byIntent[intentHint] = promoted;
   }
 
-  const out: ManualReplyExamplesFile = {
+  const outCore = {
     version: 1,
-    updatedAt: nowIso,
-    sourceDir: parsed.reportDir,
     minCount: parsed.minCount,
     maxPerIntent: parsed.maxPerIntent,
     byIntent
   };
 
-  fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
-  fs.writeFileSync(parsed.outPath, JSON.stringify(out, null, 2) + "\n");
+  let wroteOutFile = false;
+  let existingUpdatedAt: string | null = null;
+  try {
+    if (fs.existsSync(parsed.outPath)) {
+      const existing = JSON.parse(fs.readFileSync(parsed.outPath, "utf8"));
+      existingUpdatedAt = typeof existing?.updatedAt === "string" ? existing.updatedAt : null;
+      const existingCore = {
+        version: Number(existing?.version) || 1,
+        minCount: Number(existing?.minCount) || parsed.minCount,
+        maxPerIntent: Number(existing?.maxPerIntent) || parsed.maxPerIntent,
+        byIntent: existing?.byIntent && typeof existing.byIntent === "object" ? existing.byIntent : {}
+      };
+      if (stableStringify(existingCore) === stableStringify(outCore)) {
+        wroteOutFile = false;
+      } else {
+        const out: ManualReplyExamplesFile = {
+          ...(outCore as Omit<ManualReplyExamplesFile, "updatedAt" | "sourceDir">),
+          updatedAt: nowIso,
+          sourceDir: parsed.reportDir
+        };
+        fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
+        fs.writeFileSync(parsed.outPath, JSON.stringify(out, null, 2) + "\n");
+        wroteOutFile = true;
+      }
+    } else {
+      const out: ManualReplyExamplesFile = {
+        ...(outCore as Omit<ManualReplyExamplesFile, "updatedAt" | "sourceDir">),
+        updatedAt: nowIso,
+        sourceDir: parsed.reportDir
+      };
+      fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
+      fs.writeFileSync(parsed.outPath, JSON.stringify(out, null, 2) + "\n");
+      wroteOutFile = true;
+    }
+  } catch {
+    // Best-effort: only write if we couldn't read/compare.
+    const out: ManualReplyExamplesFile = {
+      ...(outCore as Omit<ManualReplyExamplesFile, "updatedAt" | "sourceDir">),
+      updatedAt: nowIso,
+      sourceDir: parsed.reportDir
+    };
+    fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
+    fs.writeFileSync(parsed.outPath, JSON.stringify(out, null, 2) + "\n");
+    wroteOutFile = true;
+  }
+
+  const promotedByIntent = Object.fromEntries(
+    Object.entries(byIntent).map(([intent, examples]) => [intent, examples.length])
+  );
+  const promotedExamples = Object.values(promotedByIntent).reduce((sum, n) => sum + Number(n || 0), 0);
 
   const summary = {
     ok: true,
@@ -182,9 +243,10 @@ function run() {
     minCount: parsed.minCount,
     maxPerIntent: parsed.maxPerIntent,
     loadedRows: rows.length,
-    promotedByIntent: Object.fromEntries(
-      Object.entries(byIntent).map(([intent, examples]) => [intent, examples.length])
-    )
+    wroteOutFile,
+    existingUpdatedAt,
+    promotedExamples,
+    promotedByIntent
   };
   const summaryPath = path.join(parsed.reportDir, "manual_outbound_promotion_summary.json");
   try {

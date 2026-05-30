@@ -128,6 +128,21 @@ function loadExistingRules(outPath: string): DeterministicToneRulesFile | null {
   }
 }
 
+function stableStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  const normalize = (input: any): any => {
+    if (input == null) return input;
+    if (Array.isArray(input)) return input.map(normalize);
+    if (typeof input !== "object") return input;
+    if (seen.has(input)) return "[Circular]";
+    seen.add(input);
+    const out: Record<string, any> = {};
+    for (const key of Object.keys(input).sort()) out[key] = normalize(input[key]);
+    return out;
+  };
+  return JSON.stringify(normalize(value));
+}
+
 function run() {
   const parsed = parseArgs(process.argv.slice(2));
   const nowIso = new Date().toISOString();
@@ -203,21 +218,56 @@ function run() {
     }));
 
   const existing = loadExistingRules(parsed.outPath);
-  const next: DeterministicToneRulesFile = {
+  const manual = existing?.manual ?? { rewriteRules: [], blockedExactDrafts: [] };
+  const rewriteRulesCore = rewriteRules.map(({ updatedAt: _updatedAt, ...rest }) => rest);
+  const blockedExactDraftsCore = blockedExactDrafts.map(({ updatedAt: _updatedAt, ...rest }) => rest);
+  const nextCore = {
     version: 1,
-    updatedAt: nowIso,
     auto: {
-      sourceDir: parsed.reportDir,
       minCount: parsed.minCount,
-      rewriteRules,
-      blockedExactDrafts
+      rewriteRules: rewriteRulesCore,
+      blockedExactDrafts: blockedExactDraftsCore
     },
-    manual: existing?.manual ?? { rewriteRules: [], blockedExactDrafts: [] }
+    manual
   };
+  const existingCore = existing
+    ? {
+        version: Number(existing.version) || 1,
+        auto: {
+          minCount: Number(existing.auto?.minCount) || parsed.minCount,
+          rewriteRules: Array.isArray(existing.auto?.rewriteRules)
+            ? existing.auto!.rewriteRules.map(({ updatedAt: _updatedAt, ...rest }) => rest)
+            : [],
+          blockedExactDrafts: Array.isArray(existing.auto?.blockedExactDrafts)
+            ? existing.auto!.blockedExactDrafts.map(({ updatedAt: _updatedAt, ...rest }) => rest)
+            : []
+        },
+        manual: existing.manual ?? { rewriteRules: [], blockedExactDrafts: [] }
+      }
+    : null;
 
-  fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
-  fs.writeFileSync(parsed.outPath, JSON.stringify(next, null, 2) + "\n");
+  let wroteOutFile = false;
+  const existingUpdatedAt = existing?.updatedAt ?? null;
+  if (existingCore && stableStringify(existingCore) === stableStringify(nextCore)) {
+    wroteOutFile = false;
+  } else {
+    const next: DeterministicToneRulesFile = {
+      version: 1,
+      updatedAt: nowIso,
+      auto: {
+        sourceDir: parsed.reportDir,
+        minCount: parsed.minCount,
+        rewriteRules,
+        blockedExactDrafts
+      },
+      manual
+    };
+    fs.mkdirSync(path.dirname(parsed.outPath), { recursive: true });
+    fs.writeFileSync(parsed.outPath, JSON.stringify(next, null, 2) + "\n");
+    wroteOutFile = true;
+  }
 
+  const promotedRules = rewriteRules.length + blockedExactDrafts.length;
   const summary = {
     ok: true,
     reportDir: parsed.reportDir,
@@ -228,6 +278,9 @@ function run() {
       positiveRows: positiveRows.length,
       negativeRows: negativeRows.length
     },
+    wroteOutFile,
+    existingUpdatedAt,
+    promotedRules,
     promoted: {
       rewriteRules: rewriteRules.length,
       blockedExactDrafts: blockedExactDrafts.length

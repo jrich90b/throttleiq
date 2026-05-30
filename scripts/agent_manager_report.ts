@@ -55,6 +55,15 @@ function num(input: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function sumNumberValues(input: unknown): number {
+  if (!input || typeof input !== "object") return 0;
+  let total = 0;
+  for (const value of Object.values(input as Record<string, unknown>)) {
+    total += num(value);
+  }
+  return total;
+}
+
 function latestMatchingFile(dir: string, matcher: (name: string) => boolean): string | null {
   if (!fs.existsSync(dir)) return null;
   const rows = fs
@@ -165,8 +174,12 @@ function main() {
   const negativeSeeds = Array.isArray(languageSummary?.seedExports?.negativeFeedback)
     ? languageSummary.seedExports.negativeFeedback.length
     : num(languageSummary?.negativeFeedbackRows ?? languageSummary?.negativeFeedbackCount);
-  const promotedRules = num(promotionSummary?.promotedRules ?? promotionSummary?.writtenRules);
-  const promotedManualExamples = num(manualPromotionSummary?.promotedExamples ?? manualPromotionSummary?.writtenExamples);
+  const promotedRules =
+    num(promotionSummary?.promotedRules ?? promotionSummary?.writtenRules) ||
+    sumNumberValues(promotionSummary?.promoted);
+  const promotedManualExamples =
+    num(manualPromotionSummary?.promotedExamples ?? manualPromotionSummary?.writtenExamples) ||
+    sumNumberValues(manualPromotionSummary?.promotedByIntent);
   const voiceWithoutOutbound = Math.max(
     0,
     num(voiceSummary?.totalVoiceTranscripts) - num(voiceSummary?.withCustomerFacingOutbound)
