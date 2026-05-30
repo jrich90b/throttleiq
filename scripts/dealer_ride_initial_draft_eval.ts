@@ -33,12 +33,22 @@ const generalDealerRidePublishesDraft =
 const regenPendingDrafts =
   regenPendingBlock.includes("buildDealerLeadAppPostRideReply") &&
   regenPendingBlock.includes("respondWithSmsRegeneratedDraft(reply)");
+const initialBuilderPrefersLeadOwner =
+  apiRoute.includes("args.conv?.leadOwner?.name") &&
+  apiRoute.includes("args.conv?.leadOwner?.firstName") &&
+  apiRoute.includes("This is ${senderFirst} at ${dealerName}");
+const regenBuilderPrefersLeadOwner =
+  apiIndex.includes("args.conv?.leadOwner?.name") &&
+  apiIndex.includes("args.conv?.leadOwner?.firstName") &&
+  apiIndex.includes("This is ${senderFirst} at ${dealerName}");
 
 const checks: Check[] = [
   check("initial_adf_has_guarded_customer_thank_you_helper", initialRouteBlock, true),
   check("no_purchase_dla_initial_path_publishes_customer_draft", noPurchasePublishesDraft, true),
   check("general_dla_initial_path_publishes_customer_draft", generalDealerRidePublishesDraft, true),
   check("regenerate_pending_dla_path_publishes_customer_draft", regenPendingDrafts, true),
+  check("initial_dla_thank_you_prefers_lead_owner_name", initialBuilderPrefersLeadOwner, true),
+  check("regen_dla_thank_you_prefers_lead_owner_name", regenBuilderPrefersLeadOwner, true),
   check(
     "legacy_no_customer_reply_note_removed",
     apiRoute.includes("dealer_ride_outcome_pending_no_customer_reply"),

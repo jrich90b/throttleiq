@@ -10957,7 +10957,14 @@ function buildDealerLeadAppPostRideReply(args: {
   const firstName = normalizeDisplayCase(args.conv?.lead?.firstName);
   const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
   const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
-  const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const senderFull =
+    String(args.conv?.leadOwner?.name ?? "").trim() ||
+    String(args.conv?.leadOwner?.firstName ?? "").trim() ||
+    String(args.conv?.lead?.salesperson ?? args.conv?.latestLead?.salesperson ?? "").trim() ||
+    String(args.agentName ?? "").trim() ||
+    "Alexandra";
+  const senderFirst =
+    normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
   const dealerLeadAppText = [
     args.conv?.lead?.comment,
     args.conv?.latestLead?.comment,
@@ -10972,7 +10979,7 @@ function buildDealerLeadAppPostRideReply(args: {
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
     ) || "that bike";
-  const intro = `${greeting}This is ${agentName} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
     return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
   }
