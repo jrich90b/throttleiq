@@ -546,6 +546,7 @@ import {
   removeSuppression
 } from "./domain/suppressionStore.js";
 import { buildKpiOverview } from "./domain/kpiAnalytics.js";
+import { isPhoneLogConversation } from "./domain/phoneLogLead.js";
 import {
   tlpLogCustomerContact,
   tlpMarkDealershipVisitDelivered,
@@ -8896,6 +8897,9 @@ async function buildRecentManualTestRideAvailabilityCadenceOverride(args: {
     isTestRideDialogState(getDialogState(conv));
   if (!isTestRideContext) return null;
 
+  const preferred = resolveCadencePreferredModelContext(conv);
+  const preferredModel = String(preferred?.model ?? "").trim();
+
   const recentOutbounds = [...(conv?.messages ?? [])]
     .reverse()
     .filter((m: any) => m?.direction === "out" && m?.provider !== "draft_ai" && String(m?.body ?? "").trim())
@@ -8931,6 +8935,11 @@ async function buildRecentManualTestRideAvailabilityCadenceOverride(args: {
   const sourceBody = String((unavailableSource ?? source)?.body ?? "");
   const model = findMentionedModel(sourceBody);
   if (!model || isUnknownCadenceModel(model)) return null;
+  if (preferredModel && normalizeModelText(preferredModel) !== normalizeModelText(model)) {
+    // The customer changed models since this earlier availability/test-ride note.
+    // Prefer the current model context over repeating stale "not in stock" messaging.
+    return null;
+  }
   const year = extractYearSingle(sourceBody);
   const modelLabel = formatModelLabelForFollowUp(year ? String(year) : null, model);
   const firstName = normalizeDisplayCase(args.name || "there");
@@ -31524,7 +31533,8 @@ app.get("/analytics/kpi", async (req, res) => {
       leadScope: (leadScope || "include_walkins") as
         | "online_only"
         | "include_walkins"
-        | "walkin_only",
+        | "walkin_only"
+        | "phone_log_only",
       callOwnerId: callOwnerId || "all",
       appointmentSetter: (appointmentSetter || "all") as
         | "all"
@@ -31603,10 +31613,15 @@ app.get("/conversations/:id", async (req, res) => {
   const emailDraft = conv.emailDraft ?? null;
   const leadSource = conv.lead?.source ?? null;
   const walkIn = inferDisplayWalkIn(conv) ? true : null;
+  const phoneLog = isPhoneLogConversation(conv) ? true : null;
+  const conversationForResponse =
+    phoneLog && conv.lead?.email
+      ? { ...conv, lead: { ...conv.lead, email: undefined } }
+      : conv;
   res.json({
     ok: true,
     systemMode: getSystemMode(),
-    conversation: { ...conv, emailDraft, leadSource, walkIn }
+    conversation: { ...conversationForResponse, emailDraft, leadSource, walkIn, phoneLog }
   });
 });
 
@@ -35489,6 +35504,31 @@ function findConversationForContact(input: {
       const leadKey = String(conv?.leadKey ?? "").trim();
       if (phone && (leadPhone === phone || leadKey === phone)) return true;
       if (email && (leadEmail === email || leadKey === email)) return true;
+      return false;
+    }) ?? null
+  );
+}
+
+function findContactForSubmittedLink(input: {
+  conversationId?: string;
+  leadKey?: string;
+  phone?: string;
+  email?: string;
+}): ReturnType<typeof listContacts>[number] | null {
+  const conversationId = String(input.conversationId ?? "").trim();
+  const leadKey = String(input.leadKey ?? "").trim();
+  const phone = input.phone ? normalizePhone(String(input.phone)) : "";
+  const email = normalizeContactText(input.email);
+  return (
+    listContacts().find(contact => {
+      const contactConversationId = String(contact.conversationId ?? "").trim();
+      const contactLeadKey = String(contact.leadKey ?? "").trim();
+      const contactPhone = contact.phone ? normalizePhone(String(contact.phone)) : "";
+      const contactEmail = normalizeContactText(contact.email);
+      if (conversationId && contactConversationId === conversationId) return true;
+      if (leadKey && contactLeadKey.toLowerCase() === leadKey.toLowerCase()) return true;
+      if (phone && contactPhone === phone) return true;
+      if (email && contactEmail === email) return true;
       return false;
     }) ?? null
   );
@@ -39825,15 +39865,32 @@ app.post("/contacts", (req, res) => {
   }
   const leadKey = leadKeyRaw || phone || email;
   const conversationId = conversationIdRaw || leadKeyRaw || phone || email;
-  let contact = upsertContact({
-    leadKey,
+  const linkedContact = findContactForSubmittedLink({
     conversationId,
-    firstName,
-    lastName,
-    name,
+    leadKey,
     phone,
     email
   });
+  let contact = linkedContact
+    ? updateContact(linkedContact.id, {
+        leadKey,
+        conversationId,
+        firstName,
+        lastName,
+        name,
+        phone,
+        email
+      })
+    : upsertContact({
+        leadKey,
+        conversationId,
+        firstName,
+        lastName,
+        name,
+        phone,
+        email
+      });
+  if (!contact) return res.status(500).json({ ok: false, error: "Contact save failed" });
   contact = syncContactIntoConversation(contact);
   return res.json({ ok: true, contact });
 });

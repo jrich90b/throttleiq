@@ -27,7 +27,16 @@ type Conversation = {
   messages: Message[];
 };
 
-function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider" | "actorUserName">): string {
+function isPhoneLogAdfBody(text?: string | null) {
+  const raw = String(text ?? "");
+  if (/phone log\s*\(adf\)/i.test(raw)) return true;
+  if (!/source:\s*traffic\s*log\s*pro/i.test(raw)) return false;
+  return /\b(called|customer\s+called|phone\s+call|call\s+log|spoke\s+(to|with)|talked\s+(to|with)|voicemail)\b/i.test(raw);
+}
+
+function getMessageProviderDisplayLabel(
+  message: Pick<Message, "direction" | "provider" | "actorUserName" | "body">
+): string {
   const provider = String(message.provider ?? "").trim();
   const actorName = String(message.actorUserName ?? "").trim();
   if (message.direction === "out") {
@@ -37,7 +46,7 @@ function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "pr
   if (message.direction === "in") {
     if (provider === "twilio") return "Customer";
     if (provider === "web_widget") return "WEB TEXT WIDGET";
-    if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
+    if (provider === "sendgrid_adf") return isPhoneLogAdfBody(message.body) ? "PHONE LOG (ADF)" : "WEB LEAD (ADF)";
     if (provider === "sendgrid") return "Email";
   }
   return provider || "?";

@@ -1,9 +1,10 @@
 import type { Conversation, Message } from "./conversationStore.js";
 import { dayKey } from "./schedulerConfig.js";
 import { localPartsToUtcDate } from "./schedulerEngine.js";
+import { isPhoneLogConversation } from "./phoneLogLead.js";
 
 type LeadTypeFilter = "all" | "new" | "used" | "walk_in";
-type LeadScopeFilter = "online_only" | "include_walkins" | "walkin_only";
+type LeadScopeFilter = "online_only" | "include_walkins" | "walkin_only" | "phone_log_only";
 type AppointmentSetterFilter =
   | "all"
   | "ai_sms"
@@ -478,11 +479,13 @@ function activeKpiLeadCycle(conv: Conversation): { lead: Conversation["lead"]; a
 }
 
 function sourceLabel(conv: Conversation): string {
+  if (isPhoneLogConversation(conv)) return "Phone Log";
   const src = String(activeKpiLeadCycle(conv).lead?.source ?? "").trim();
   return src || "Unknown";
 }
 
 function isWalkIn(conv: Conversation): boolean {
+  if (isPhoneLogConversation(conv)) return false;
   const lead = activeKpiLeadCycle(conv).lead;
   if (lead?.walkIn) return true;
   return /traffic log pro/i.test(String(lead?.source ?? ""));
@@ -788,9 +791,12 @@ function leadMatchesFilters(
   const leadType = (String(filters.leadType ?? "all").trim().toLowerCase() || "all") as LeadTypeFilter;
   const leadScope = (String(filters.leadScope ?? "include_walkins").trim().toLowerCase() ||
     "include_walkins") as LeadScopeFilter;
+  const phoneLogLead = isPhoneLogConversation(conv);
+  if (leadScope === "phone_log_only" && !phoneLogLead) return false;
+  if (leadScope !== "phone_log_only" && phoneLogLead && leadScope !== "include_walkins") return false;
   if (leadScope === "online_only" && isExcludedFromOnlineKpiBucket(conv)) return false;
-  if (leadScope === "walkin_only" && !isExcludedFromOnlineKpiBucket(conv)) return false;
-  if (leadType === "walk_in" && !isExcludedFromOnlineKpiBucket(conv)) return false;
+  if (leadScope === "walkin_only" && (!isExcludedFromOnlineKpiBucket(conv) || phoneLogLead)) return false;
+  if (leadType === "walk_in" && (!isExcludedFromOnlineKpiBucket(conv) || phoneLogLead)) return false;
   if (leadType === "new" && normalizeCondition(conv) !== "new") return false;
   if (leadType === "used" && normalizeCondition(conv) !== "used") return false;
 

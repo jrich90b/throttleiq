@@ -15,6 +15,7 @@ import {
   applyDraftStateInvariants,
   type DraftStateInvariantInput
 } from "./draftStateInvariants.js";
+import { isPhoneLogConversation } from "./phoneLogLead.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -370,6 +371,8 @@ export type DialogStateName =
 export type LeadProfile = {
   leadRef?: string;
   source?: string;
+  sourceType?: "phone_log" | string;
+  phoneLog?: boolean;
   name?: string;
   firstName?: string;
   lastName?: string;
@@ -2158,6 +2161,7 @@ function adfMessageAtMs(message: Message | null | undefined): number | null {
 }
 
 export function inferWalkIn(conv: Conversation): boolean {
+  if (isPhoneLogConversation(conv)) return false;
   if (conv.lead?.walkIn) return true;
   if (String(conv.dialogState?.name ?? "") === "walk_in_active") return true;
   const firstAdfBody = firstAdfMessage(conv)?.body ?? "";
@@ -2651,6 +2655,7 @@ export function listConversations() {
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
       const inferredWalkIn = inferDisplayWalkIn(c);
+      const phoneLog = isPhoneLogConversation(c);
       const hasInboundTwilio = c.messages.some(
         m => m.direction === "in" && String(m.provider ?? "").toLowerCase() === "twilio"
       );
@@ -2675,6 +2680,7 @@ export function listConversations() {
         contactPreference: c.contactPreference,
         preferredContactMethod: c.lead?.preferredContactMethod ?? null,
         leadSource,
+        phoneLog: phoneLog ? true : null,
         hasInboundTwilio,
         hotDealSticky,
         dealTemperature,

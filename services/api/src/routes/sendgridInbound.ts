@@ -45,6 +45,12 @@ import type { InventoryWatch } from "../domain/conversationStore.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
+import {
+  PHONE_LOG_SOURCE_TYPE,
+  buildTrafficLogProPhoneLogLeadKey,
+  isTrafficLogProPhoneLog,
+  shouldSuppressPhoneLogEmail
+} from "../domain/phoneLogLead.js";
 import { resolveChannel, resolveLeadRule, type LeadBucket, type LeadCTA } from "../domain/leadSourceRules.js";
 import {
   parseDealershipFaqTopicWithLLM,
@@ -4016,7 +4022,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     leadSourceLower.includes("facebook marketplace");
   const leadPhone = lead.phone?.trim() || undefined;
   const leadEmail = lead.email?.trim() || undefined;
-  const leadEmailForConversation = isMarketplaceRelaySource ? undefined : leadEmail;
+  const isTlpPhoneLog = isTrafficLogProPhoneLog({
+    leadSource,
+    sourceFromId: meta.sourceFromId,
+    inquiry: lead.inquiry,
+    comment: lead.comment
+  });
+  const suppressPhoneLogEmail = shouldSuppressPhoneLogEmail({ isPhoneLog: isTlpPhoneLog });
+  const leadEmailForConversation = isMarketplaceRelaySource || suppressPhoneLogEmail ? undefined : leadEmail;
   const relayOnlyMarketplaceLead = isMarketplaceRelaySource && !leadPhone;
   const rule = resolveLeadRule(leadSource, leadSourceId);
   const journeyText = [lead.comment, lead.inquiry].filter(Boolean).join(" ").trim();
@@ -4025,6 +4038,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const leadKey =
     leadPhone ||
     leadEmailForConversation ||
+    (isTlpPhoneLog && leadRef ? buildTrafficLogProPhoneLogLeadKey(leadRef) : "") ||
     (isMarketplaceRelaySource && leadRef ? `adf_ref_${leadRef}` : "") ||
     `unknown_${Date.now()}`;
 
@@ -4097,6 +4111,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   mergeConversationLead(conv, {
     leadRef,
     source: leadSource,
+    sourceType: isTlpPhoneLog ? PHONE_LOG_SOURCE_TYPE : undefined,
+    phoneLog: isTlpPhoneLog ? true : undefined,
     sourceId: leadSourceId,
     firstName: lead.firstName,
     lastName: lead.lastName,
@@ -4237,11 +4253,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
     [
-      `WEB LEAD (ADF)`,
+      isTlpPhoneLog ? `PHONE LOG (ADF)` : `WEB LEAD (ADF)`,
       leadSource ? `Source: ${leadSource}` : null,
       leadRef ? `Ref: ${leadRef}` : null,
       lead.firstName || lead.lastName ? `Name: ${(lead.firstName ?? "").trim()} ${(lead.lastName ?? "").trim()}`.trim() : null,
-      lead.email ? `Email: ${lead.email}` : null,
+      leadEmailForConversation ? `Email: ${leadEmailForConversation}` : null,
       lead.phone ? `Phone: ${lead.phone}` : null,
       lead.stockId ? `Stock: ${lead.stockId}` : null,
       lead.vin ? `VIN: ${lead.vin}` : null,
@@ -4264,7 +4280,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     leadRef,
     leadSource,
     phone: leadPhone,
-    email: leadEmailForConversation ?? leadEmail,
+    email: leadEmailForConversation,
     stockId: lead.stockId,
     vin: lead.vin,
     inquiry: effectiveInquiry
@@ -4303,6 +4319,49 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (isTrafficLogProPayloadHint &&
       /\bapp\s*id\s*:/i.test([lead.comment, lead.inquiry, inquiryRaw].filter(Boolean).join(" ")) &&
       !walkInSignalHint);
+  if (isTlpPhoneLog) {
+    if (conv.lead) {
+      conv.lead.phoneLog = true;
+      conv.lead.sourceType = PHONE_LOG_SOURCE_TYPE;
+      if (suppressPhoneLogEmail) conv.lead.email = undefined;
+    }
+    setConversationClassification(conv, {
+      bucket: "callback_request",
+      cta: "callback",
+      channel: "task",
+      ruleName: "traffic_log_pro_phone_log"
+    });
+    appendInbound(conv, event);
+    discardPendingDrafts(conv, "new_inbound");
+    const note = String(effectiveInquiry || lead.inquiry || lead.comment || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    const customerName =
+      [conv.lead?.firstName, conv.lead?.lastName].filter(Boolean).join(" ").trim() ||
+      conv.leadKey ||
+      "customer";
+    addTodo(
+      conv,
+      "other",
+      `Phone log follow-up for ${customerName}${note ? `: ${note}` : "."}`,
+      event.providerMessageId
+    );
+    setFollowUpMode(conv, "manual_handoff", "traffic_log_pro_phone_log");
+    stopFollowUpCadence(conv, "manual_handoff");
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: "callback_request",
+      cta: "callback",
+      channel: "task",
+      note: "traffic_log_pro_phone_log"
+    });
+  }
   const adfHistory = buildEffectiveHistory(conv, 6);
   const safeParser = async <T>(label: string, run: () => Promise<T | null>): Promise<T | null> => {
     try {
@@ -4735,11 +4794,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const channel = resolveChannel({
     leadSource,
     sourceId: leadSourceId,
-    hasSms: !!lead.phone,
-    hasEmail: !!lead.email,
-    hasPhone: !!lead.phone,
-    primaryChannel:
-      lead.preferredContactMethod === "email"
+    hasSms: !!leadPhone,
+    hasEmail: !!leadEmailForConversation,
+    hasPhone: !!leadPhone,
+    primaryChannel: isTlpPhoneLog
+      ? "task"
+      : lead.preferredContactMethod === "email"
         ? "email"
         : lead.preferredContactMethod === "sms"
           ? "sms"

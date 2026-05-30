@@ -10,9 +10,13 @@ type Check = {
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "contact-update-eval-"));
 process.env.CONTACTS_DB_PATH = path.join(tempDir, "contacts.json");
+process.env.CONVERSATIONS_DB_PATH = path.join(tempDir, "conversations.json");
 
 const { upsertContact, updateContact } = await import(
   "../services/api/src/domain/contactsStore.ts"
+);
+const { getConversation, updateConversationContact, upsertConversationByLeadKey } = await import(
+  "../services/api/src/domain/conversationStore.ts"
 );
 
 function check(id: string, actual: unknown, expected: unknown): Check {
@@ -41,13 +45,31 @@ const preserveEmail = upsertContact({
 });
 const renamed = updateContact(preserveEmail.id, { firstName: "Kept" });
 
+const conv = upsertConversationByLeadKey("old@example.com", "suggest");
+conv.lead = {
+  firstName: "Email",
+  lastName: "Only",
+  email: "old@example.com"
+};
+updateConversationContact(conv, {
+  email: "",
+  phone: "716-692-7200",
+  firstName: "Email",
+  lastName: "Only"
+});
+const movedConv = getConversation("+17166927200");
+
 const checks: Check[] = [
   check("converted_contact_exists", Boolean(phoneOnly), true),
   check("converted_email_cleared", phoneOnly?.email, undefined),
   check("converted_phone_normalized", phoneOnly?.phone, "+17166927200"),
   check("converted_lead_key_moves_to_phone", phoneOnly?.leadKey, "+17166927200"),
   check("unmentioned_email_preserved", renamed?.email, "keep@example.com"),
-  check("unmentioned_phone_preserved", renamed?.phone, "+17165550101")
+  check("unmentioned_phone_preserved", renamed?.phone, "+17165550101"),
+  check("conversation_lead_key_moves_to_phone", conv.leadKey, "+17166927200"),
+  check("conversation_email_cleared", conv.lead?.email, undefined),
+  check("conversation_phone_set", conv.lead?.phone, "+17166927200"),
+  check("conversation_reindexed_by_phone", movedConv?.id, conv.id)
 ];
 
 let passed = 0;

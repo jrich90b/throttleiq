@@ -284,7 +284,8 @@ function cleanAdfLeadForDisplay(text?: string | null) {
   if (!text) return "";
   const raw = String(text).replace(/\r\n/g, "\n").trim();
   if (!raw) return "";
-  if (!/web lead\s*\(adf\)/i.test(raw)) return raw;
+  const isPhoneLog = isPhoneLogAdfBody(raw);
+  if (!/web lead\s*\(adf\)|phone log\s*\(adf\)/i.test(raw)) return raw;
 
   const inquiryIdx = raw.toLowerCase().lastIndexOf("inquiry:");
   let inquiry = inquiryIdx >= 0 ? raw.slice(inquiryIdx + "inquiry:".length).trim() : "";
@@ -298,9 +299,16 @@ function cleanAdfLeadForDisplay(text?: string | null) {
     .trim();
 
   if (!inquiry) {
-    return "WEB LEAD (ADF)\nInquiry: (open View lead for full details)";
+    return `${isPhoneLog ? "PHONE LOG" : "WEB LEAD"} (ADF)\nInquiry: (open View lead for full details)`;
   }
-  return `WEB LEAD (ADF)\nInquiry:\n${inquiry}`;
+  return `${isPhoneLog ? "PHONE LOG" : "WEB LEAD"} (ADF)\nInquiry:\n${inquiry}`;
+}
+
+function isPhoneLogAdfBody(text?: string | null) {
+  const raw = String(text ?? "");
+  if (/phone log\s*\(adf\)/i.test(raw)) return true;
+  if (!/source:\s*traffic\s*log\s*pro/i.test(raw)) return false;
+  return /\b(called|customer\s+called|phone\s+call|call\s+log|spoke\s+(to|with)|talked\s+(to|with)|voicemail)\b/i.test(raw);
 }
 
 function maskBookingLink(text?: string | null) {
@@ -709,6 +717,7 @@ type ConversationListItem = {
     assignedAt?: string;
   } | null;
   leadSource?: string | null;
+  phoneLog?: boolean | null;
   campaignThread?: {
     status?: "campaign" | "linked_open" | "passed";
     campaignId?: string;
@@ -834,7 +843,9 @@ type Message = {
   };
 };
 
-function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "provider" | "actorUserName">): string {
+function getMessageProviderDisplayLabel(
+  message: Pick<Message, "direction" | "provider" | "actorUserName" | "body">
+): string {
   const provider = String(message.provider ?? "").trim();
   const actorName = String(message.actorUserName ?? "").trim();
   if (message.direction === "out") {
@@ -844,7 +855,7 @@ function getMessageProviderDisplayLabel(message: Pick<Message, "direction" | "pr
   if (message.direction === "in") {
     if (provider === "twilio") return "Customer";
     if (provider === "web_widget") return "WEB TEXT WIDGET";
-    if (provider === "sendgrid_adf") return "WEB LEAD (ADF)";
+    if (provider === "sendgrid_adf") return isPhoneLogAdfBody(message.body) ? "PHONE LOG (ADF)" : "WEB LEAD (ADF)";
     if (provider === "sendgrid") return "Email";
   }
   if (provider === "voice_call") return "call";
@@ -973,6 +984,8 @@ type ConversationDetail = {
   lead?: {
     leadRef?: string;
     source?: string;
+    sourceType?: string;
+    phoneLog?: boolean;
     name?: string;
     firstName?: string;
     lastName?: string;
@@ -994,6 +1007,7 @@ type ConversationDetail = {
       condition?: string;
     };
   };
+  phoneLog?: boolean | null;
   originalLead?: {
     leadRef?: string;
     source?: string;
@@ -1667,7 +1681,7 @@ function contactDisplayName(c: ContactItem): string {
 }
 
 type KpiLeadType = "all" | "new" | "used" | "walk_in";
-type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only";
+type KpiLeadScope = "online_only" | "include_walkins" | "walkin_only" | "phone_log_only";
 type KpiAppointmentSetter =
   | "all"
   | "ai_sms"
@@ -11115,6 +11129,41 @@ export default function Home() {
         window.alert(payload?.error ?? "Failed to save contact");
         return;
       }
+      const updatedContact = payload?.contact as ContactItem | undefined;
+      if (updatedContact?.id) {
+        setContacts(prev => {
+          const exists = prev.some(contact => contact.id === updatedContact.id);
+          return exists
+            ? prev.map(contact => (contact.id === updatedContact.id ? { ...contact, ...updatedContact } : contact))
+            : [updatedContact, ...prev];
+        });
+        setSelectedContact(updatedContact);
+      }
+      const contactPhone = String(updatedContact?.phone ?? body.phone ?? "").trim();
+      const contactEmail = String(updatedContact?.email ?? "").trim();
+      const contactLeadKey = String(updatedContact?.leadKey ?? "").trim();
+      const contactName = [updatedContact?.firstName ?? body.firstName, updatedContact?.lastName ?? body.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      setSelectedConv(prev => {
+        if (!prev || (prev.id !== c.id && prev.leadKey !== c.leadKey)) return prev;
+        const nextFirstName = (updatedContact?.firstName ?? body.firstName) || prev.lead?.firstName;
+        const nextLastName = (updatedContact?.lastName ?? body.lastName) || prev.lead?.lastName;
+        const nextName = (updatedContact?.name ?? contactName) || prev.lead?.name;
+        return {
+          ...prev,
+          leadKey: contactLeadKey || prev.leadKey,
+          lead: {
+            ...(prev.lead ?? {}),
+            firstName: nextFirstName,
+            lastName: nextLastName,
+            name: nextName,
+            phone: contactPhone || undefined,
+            email: contactEmail || undefined
+          }
+        };
+      });
       setContactInlineOpenId(null);
       setContactInlineContactId(null);
       setContactInlineForm({ firstName: "", lastName: "", phone: "", email: "" });
@@ -11122,8 +11171,8 @@ export default function Home() {
       setSaveToast("Contact saved");
       setTimeout(() => setSaveToast(null), 2000);
       await load();
-      if (payload?.contact?.id) {
-        setSelectedContact(payload.contact as ContactItem);
+      if (selectedConv?.id === c.id || selectedConv?.leadKey === c.leadKey) {
+        await loadConversation(c.id);
       }
     } finally {
       setContactInlineSaving(false);
@@ -11184,6 +11233,9 @@ export default function Home() {
       const updated = payload.contact as ContactItem;
       setSelectedContact(updated);
       setContacts(prev => prev.map(c => (c.id === updated.id ? { ...c, ...updated } : c)));
+      if (selectedConv?.id && String(updated.conversationId ?? "") === selectedConv.id) {
+        await loadConversation(selectedConv.id);
+      }
       setContactEdit(false);
       setEditingUserId(null);
       setShowNewUserForm(false);
@@ -13072,6 +13124,7 @@ export default function Home() {
               >
                 <option value="online_only">Online / Web ADF</option>
                 <option value="walkin_only">Walk-in / standalone DLA</option>
+                <option value="phone_log_only">Phone logs</option>
                 <option value="include_walkins">All origins</option>
               </select>
             </div>
@@ -15652,8 +15705,10 @@ export default function Home() {
                   Scope:{" "}
                   {kpiLeadScopeFilter === "walkin_only"
                     ? "Walk-ins only"
+                    : kpiLeadScopeFilter === "phone_log_only"
+                      ? "Phone logs only"
                     : kpiLeadScopeFilter === "include_walkins"
-                      ? "Online + walk-ins"
+                      ? "Online + walk-ins + phone logs"
                       : "Online / Web ADF leads"}
                 </p>
               </div>

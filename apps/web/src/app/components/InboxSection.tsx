@@ -84,6 +84,27 @@ export function InboxSection(props: any) {
     return !!conversation?.sale?.soldAt || soldByCadence || (status === "closed" && soldByReason);
   };
 
+  const isPhoneLogConversation = (conversation: any) => {
+    const lead = conversation?.lead ?? {};
+    if (conversation?.phoneLog === true) return true;
+    if (lead?.phoneLog === true || String(lead?.sourceType ?? "").trim().toLowerCase() === "phone_log") {
+      return true;
+    }
+    const source = String(lead?.source ?? conversation?.leadSource ?? "").trim();
+    if (!/traffic\s*log\s*pro/i.test(source)) return false;
+    const body = [
+      lead?.inquiry,
+      lead?.walkInComment,
+      conversation?.lastMessage?.body,
+      ...(Array.isArray(conversation?.messages) ? conversation.messages.map((m: any) => m?.body) : [])
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return /\b(called|customer\s+called|phone\s+call|call\s+log|spoke\s+(to|with)|talked\s+(to|with)|voicemail)\b/i.test(
+      body
+    );
+  };
+
   const getInboxVehicleLine = (conversation: any) => {
     const fallback = String(conversation?.vehicleDescription ?? "").trim();
     if (!isSoldConversation(conversation)) return fallback;
@@ -345,7 +366,7 @@ export function InboxSection(props: any) {
 	                                </div>
 	                              </div>
 	                              <div className="mt-1 flex flex-wrap items-center gap-2">
-	                                {c.walkIn ? (
+	                                {c.walkIn && !isPhoneLogConversation(c) ? (
 	                                  <span
 	                                    className="text-blue-600 text-lg leading-none"
 	                                    title="Walk-in"
@@ -451,7 +472,13 @@ export function InboxSection(props: any) {
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">
-                              {c.mode === "human" ? <span title="Human override">👤</span> : null}
+                              {isPhoneLogConversation(c) ? (
+                                <span title="Phone log" aria-label="Phone log">
+                                  📞
+                                </span>
+                              ) : c.mode === "human" ? (
+                                <span title="Human override">👤</span>
+                              ) : null}
                               <button
                                 className={`text-xs px-2 py-1 rounded border ${
                                   c.mode === "human" ? "bg-gray-100" : "bg-blue-50"
