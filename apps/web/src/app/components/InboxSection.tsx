@@ -153,6 +153,13 @@ export function InboxSection(props: any) {
     return true;
   };
 
+  const isDealerRideOutcomeTodo = (todo: any): boolean => {
+    return (
+      String(todo?.sourceMessageId ?? "").startsWith("dealer_ride_outcome:") ||
+      /\bdealer ride outcome needed\b/i.test(String(todo?.summary ?? ""))
+    );
+  };
+
   return (
     <>
       <div className="mt-4 flex items-center justify-between">
@@ -297,6 +304,13 @@ export function InboxSection(props: any) {
                     const openTaskOwner = primaryOpenTask
                       ? (todoTaskOwnerLabel?.(primaryOpenTask) ?? "")
                       : "";
+                    const dealerRideOutcomeNeeded = openTasks.some(
+                      (t: any) => isDealerRideOutcomeTodo(t) && !String(t?.dealerRideOutcomeStatus ?? "").trim()
+                    );
+                    const outcomeNeeded = hasOutcomeReminderSent(c) || dealerRideOutcomeNeeded;
+                    const outcomeNeededTitle = dealerRideOutcomeNeeded
+                      ? "Demo ride outcome needed"
+                      : "Outcome reminder SMS sent to salesperson";
                     return (
                       <div key={c.id} className="flex items-stretch">
                         <button
@@ -377,10 +391,10 @@ export function InboxSection(props: any) {
                                     Campaign reply
                                   </span>
                                 ) : null}
-                                {hasOutcomeReminderSent(c) ? (
+                                {outcomeNeeded ? (
                                   <span
                                     className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
-                                    title="Outcome reminder SMS sent to salesperson"
+                                    title={outcomeNeededTitle}
                                   >
                                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                                     Outcome needed
