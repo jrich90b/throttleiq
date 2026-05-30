@@ -21443,11 +21443,22 @@ export default function Home() {
                     </button>
                   )
                 ) : null}
-                {mode === "suggest" && selectedConv.mode !== "human" && messageFilter !== "calls" ? (
+                {messageFilter !== "calls" ? (
                   <button
-                    className={`px-4 py-2 border rounded text-xs ${regenBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                    className={`px-4 py-2 border rounded text-xs ${
+                      regenBusy || mode !== "suggest" || selectedConv.mode === "human"
+                        ? "opacity-50 cursor-not-allowed"
+                        : ""
+                    }`}
+                    title={
+                      mode !== "suggest"
+                        ? "Switch system mode to Suggest to regenerate."
+                        : selectedConv.mode === "human"
+                          ? "Switch this conversation back to AI to regenerate."
+                          : "Regenerate an AI draft for the latest inbound."
+                    }
                     onClick={regenerateDraft}
-                    disabled={regenBusy}
+                    disabled={regenBusy || mode !== "suggest" || selectedConv.mode === "human"}
                   >
                     Regenerate
                   </button>
