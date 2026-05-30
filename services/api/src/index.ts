@@ -11061,7 +11061,7 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     "Alexandra";
   const senderFirst = normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
   const modelLabel = getDealerRideOutcomeModelLabel(args.conv, args.unit);
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in today.`;
+  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
 
   if (args.secondaryStatus === "sold" || args.outcome === "sold") {
     return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;
@@ -33457,7 +33457,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
             undefined
         }
       });
-      if (isDealerRideOutcomeTask && normalizedOutcome.secondaryStatus === "needs_follow_up") {
+      if (isDealerRideOutcomeTask) {
         await queueDealerRideOutcomeCustomerDraft({
           conv,
           outcome: appointmentOutcomeStatus,

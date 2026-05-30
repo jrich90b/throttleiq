@@ -27,9 +27,19 @@ const checks: Check[] = [
   ),
   check(
     "todo_done_modal_follow_up_queues_customer_thank_you_draft",
-    /isDealerRideOutcomeTask && normalizedOutcome\.secondaryStatus === "needs_follow_up"[\s\S]{0,320}queueDealerRideOutcomeCustomerDraft\s*\(\{[\s\S]{0,260}source: "todo_done_modal"/.test(
+    /if \(isDealerRideOutcomeTask\) \{[\s\S]{0,320}queueDealerRideOutcomeCustomerDraft\s*\(\{[\s\S]{0,260}source: "todo_done_modal"/.test(
       source
     ),
+    true
+  ),
+  check(
+    "todo_done_modal_not_ready_is_not_gated_out",
+    source.includes('isDealerRideOutcomeTask && normalizedOutcome.secondaryStatus === "needs_follow_up"'),
+    false
+  ),
+  check(
+    "dealer_ride_outcome_draft_thanks_for_test_ride",
+    /Thanks again for coming in for the test ride on the \$\{modelLabel\}/.test(source),
     true
   ),
   check(
