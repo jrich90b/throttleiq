@@ -14338,11 +14338,17 @@ function getCallbackReminderLeadMinutes(): number {
   return Math.max(5, Math.min(24 * 60, Math.round(raw)));
 }
 
-function buildCallbackTodoSummary(timeHint?: string | null, focus?: string | null): string {
-  const hint = String(timeHint ?? "").trim();
-  const followUpFocus = trimTodoDetail(String(focus ?? "").trim(), 140);
-  if (hint && followUpFocus) return `Call requested: ${hint}. Follow-up: ${followUpFocus}.`;
-  if (hint) return `Call requested: ${hint}.`;
+function buildCallbackTodoSummary(args: {
+  timeHint?: string | null;
+  focus?: string | null;
+  dueLabel?: string | null;
+}): string {
+  const hint = String(args.timeHint ?? "").trim();
+  const dueLabel = String(args.dueLabel ?? "").trim();
+  const followUpFocus = trimTodoDetail(String(args.focus ?? "").trim(), 140);
+  const timeLabel = dueLabel || hint;
+  if (timeLabel && followUpFocus) return `Call requested: ${timeLabel}. Follow-up: ${followUpFocus}.`;
+  if (timeLabel) return `Call requested: ${timeLabel}.`;
   if (followUpFocus) return `Call requested. Follow-up: ${followUpFocus}.`;
   return "Call requested.";
 }
@@ -14486,7 +14492,6 @@ function addOrUpdateCallbackCallTodo(
   }
 ) {
   const callbackTimeHint = String(args.callbackTimeHint ?? "").trim();
-  const summary = buildCallbackTodoSummary(callbackTimeHint, args.focus);
   const parseSource = String(args.parseSourceText ?? "").trim();
   let schedule = buildCallbackTodoSchedule(
     callbackTimeHint || parseSource || "",
@@ -14498,7 +14503,34 @@ function addOrUpdateCallbackCallTodo(
       schedule = fallback;
     }
   }
+  const dueLabel = schedule.dueAt ? formatSlotLocal(String(schedule.dueAt), args.timezone) : "";
+  const summary = buildCallbackTodoSummary({
+    timeHint: callbackTimeHint,
+    focus: args.focus,
+    dueLabel
+  });
   return addTodo(conv, "call", summary, args.sourceMessageId, args.owner, schedule);
+}
+
+function isHoldPausedConversation(conv: any): boolean {
+  if (!conv) return false;
+  if (conv.hold) return true;
+  const followUpReason = String(conv.followUp?.reason ?? "").trim().toLowerCase();
+  if (followUpReason === "unit_hold" || followUpReason === "order_hold" || followUpReason === "appointment_hold") {
+    return true;
+  }
+  const pauseReason = String(conv.followUpCadence?.pauseReason ?? "").trim().toLowerCase();
+  const stopReason = String(conv.followUpCadence?.stopReason ?? "").trim().toLowerCase();
+  if (pauseReason === "unit_hold" || pauseReason === "order_hold") return true;
+  if (stopReason === "unit_hold" || stopReason === "order_hold") return true;
+  if (String(conv.closedReason ?? "").toLowerCase().includes("hold")) return true;
+  return false;
+}
+
+function hasExplicitTimeToken(text: string | null | undefined): boolean {
+  const source = String(text ?? "").trim();
+  if (!source) return false;
+  return /\b(\d{1,2}(:\d{2})?\s*(am|pm)\b|noon\b|midnight\b)\b/i.test(source);
 }
 
 async function sendImmediateCallbackLinkSms(opts: {
@@ -19057,20 +19089,26 @@ async function applyActionStateFromContextNote(
   ) {
     const cfg = await getSchedulerConfigHot();
     const timezone = cfg.timezone || "America/New_York";
-    const owner = resolveCallbackTodoOwner(conv);
-    const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
-      callbackTimeHint: followUpWindowHint || scheduleSource,
-      focus: callbackFocus,
-      parseSourceText: scheduleSource,
-      owner,
-      timezone
-    });
-    if (callbackTodo) {
-      changed = true;
-      const dueLabel = callbackTodo.dueAt ? formatSlotLocal(String(callbackTodo.dueAt), timezone) : null;
-      reasons.push(
-        dueLabel ? `context_note_follow_up_scheduled:${dueLabel}` : "context_note_follow_up_added"
-      );
+    const holdPaused = isHoldPausedConversation(conv);
+    const explicitTimeOk = hasExplicitTimeToken(followUpWindowHint || scheduleSource);
+    if (!holdPaused || explicitTimeOk) {
+      const owner = resolveCallbackTodoOwner(conv);
+      const callbackTodo = addOrUpdateCallbackCallTodo(conv, {
+        callbackTimeHint: followUpWindowHint || scheduleSource,
+        focus: callbackFocus,
+        parseSourceText: scheduleSource,
+        owner,
+        timezone
+      });
+      if (callbackTodo) {
+        changed = true;
+        const dueLabel = callbackTodo.dueAt ? formatSlotLocal(String(callbackTodo.dueAt), timezone) : null;
+        reasons.push(
+          dueLabel ? `context_note_follow_up_scheduled:${dueLabel}` : "context_note_follow_up_added"
+        );
+      }
+    } else {
+      reasons.push("context_note_follow_up_skipped_on_hold");
     }
   }
 
@@ -19114,10 +19152,12 @@ async function applyActionStateFromContextNote(
   }
 
   if (changed) {
-    addTodo(
+    appendOutbound(
       conv,
-      "note",
-      `Context note applied actions${actorName ? ` by ${actorName}` : ""}: ${reasons.join(", ")}.`
+      "system",
+      conv.leadKey,
+      `Context note applied actions${actorName ? ` by ${actorName}` : ""}: ${reasons.join(", ")}.`,
+      "human"
     );
   }
   return { changed, reasons };
