@@ -88,6 +88,15 @@ const financeNeedsInfoCases = [
     expected: true
   },
   {
+    id: "manual_combined_thread_text_detected_as_finance_needs_info",
+    text: [
+      "Thanks — I received your credit application. I’ll have our finance team reach out shortly.",
+      "Harley just needs some more info."
+    ].join(" "),
+    conv: creditAppConv,
+    expected: true
+  },
+  {
     id: "generic_more_info_about_bike_not_finance",
     text: "Can you send me more info on the bike when you get a chance?",
     conv: { lead: { inquiry: "Interested in a 2025 Heritage Classic" }, messages: [] },

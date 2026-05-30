@@ -9734,6 +9734,9 @@ function hasCadenceFinanceDocsSignal(conv: any): boolean {
     .join(" ");
   const text = `${agentContext} ${walkInComment} ${recentHistory}`.trim();
   if (!text) return false;
+  // Catch common “credit application needs more info” phrasing even when the thread doesn't mention
+  // a specific document keyword (e.g. "Harley just needs some more info").
+  if (isManualOutboundCreditAppNeedsMoreInfoText(text, conv)) return true;
   const hasDocTerm =
     /\b(docs?|documents?|paperwork|references?|pay\s*stubs?|proof of (income|residence|address|insurance)|co-?signer|cosigner|binder|insurance card)\b/.test(
       text
