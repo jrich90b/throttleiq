@@ -86,7 +86,10 @@ import {
   applyDraftStateInvariants,
   repairLikelyTruncatedDraftText
 } from "../services/api/src/domain/draftStateInvariants.ts";
-import { detectSchedulingSignals } from "../services/api/src/domain/legacyRegexFallback.ts";
+import {
+  detectSchedulingSignals,
+  hasPrimaryIntentBeyondWatch
+} from "../services/api/src/domain/legacyRegexFallback.ts";
 import { isLogisticsProgressUpdateText } from "../services/api/src/domain/transitionSafety.ts";
 
 type Case = {
@@ -135,6 +138,11 @@ const cases: Case[] = [
   {
     id: "manual_outbound_schedule_you_in_between_window_confirms",
     actual: isManualOutboundBookingConfirmationText("Hey Rafael, sorry, that would work ill schedule you in between 11-12 tomorrow"),
+    expected: true
+  },
+  {
+    id: "dealer_address_question_is_primary_intent_beyond_watch",
+    actual: hasPrimaryIntentBeyondWatch("I cant not currently and remind me again what address is this at?"),
     expected: true
   },
   {

@@ -199,9 +199,10 @@ export function hasPrimaryIntentBeyondWatch(text: string): boolean {
   if (isPaymentText(t) || isDownPaymentQuestion(t)) return true;
   if (productInfoIntent) return true;
   return (
-    /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight|stop in|come in|come by|stop by|look at)\b/.test(
+    /\b(price|pricing|otd|monthly|apr|term|trade|trade in|appraisal|finance|financing|credit app|credit application|apply|application|schedule|book|appointment|test ride|available|availability|in stock|how many|what do you have|other options|another option|photos?|video|walkaround|specs?|engine|weight|stop in|come in|come by|stop by|look at|where are you|where is|where's|what address|what location|located)\b/.test(
       t
     ) ||
+    /\b(?:your|the|this|that|dealer|dealership|store)\s+address\b/.test(t) ||
     /\b(do you have|what do you have|any .* in[-\s]?stock)\b/.test(t)
   );
 }

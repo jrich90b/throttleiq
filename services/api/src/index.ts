@@ -48932,7 +48932,9 @@ if (authToken && signature) {
     schedulingSignalsBase.hasDayTime ||
     schedulingSignalsBase.hasDayOnlyAvailability ||
     schedulingSignalsBase.hasDayOnlyRequest;
-  const preParserNonWatchPrimaryIntent = preParserFinanceSignal || preParserSchedulingSignal;
+  const preParserLocationQuestion = isDealerLocationQuestionText(event.body ?? "");
+  const preParserNonWatchPrimaryIntent =
+    preParserFinanceSignal || preParserSchedulingSignal || preParserLocationQuestion;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
   const isTradeLead = isTradeConversationLead(conv);
   const unifiedTradeTargetAmount = Number(unifiedSemanticSlotParse?.tradeTargetValue?.amount);
