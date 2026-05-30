@@ -20,6 +20,111 @@ function normalizeManualContextText(value: string | null | undefined): string {
     .trim();
 }
 
+function hasCreditApplicationContext(value: string, conv?: any): boolean {
+  if (
+    /\b(?:credit|finance|financing|hdfs|lender)\b/.test(value) ||
+    /\b(?:credit|finance|financing)\s+(?:app|application)\b/.test(value) ||
+    /\bapplication\b.{0,40}\b(?:submitted|approval|approved|pending|needs?|more info|information)\b/.test(value)
+  ) {
+    return true;
+  }
+
+  const followUpReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  if (/\b(?:credit_app|finance|financing|hdfs|prequal)\b/.test(followUpReason)) return true;
+  if (
+    conv?.classification?.bucket === "finance_prequal" ||
+    conv?.classification?.cta === "hdfs_coa" ||
+    conv?.classification?.cta === "prequalify"
+  ) {
+    return true;
+  }
+  if (String(conv?.financeOutcome?.status ?? "").trim()) return true;
+
+  const leadText = [
+    conv?.lead?.source,
+    conv?.lead?.inquiry,
+    conv?.lead?.notes,
+    conv?.lead?.summary
+  ]
+    .map(part => String(part ?? "").toLowerCase())
+    .join(" ");
+  if (/\b(?:app id|credit app|credit application|finance application|prequal|hdfs)\b/.test(leadText)) {
+    return true;
+  }
+
+  const historyText = Array.isArray(conv?.messages)
+    ? conv.messages
+        .slice(-12)
+        .map((message: any) => String(message?.body ?? "").toLowerCase())
+        .join(" ")
+    : "";
+  return /\b(?:app id|credit app|credit application|finance application|prequal|hdfs)\b/.test(historyText);
+}
+
+function financeDocsNeededTermPattern(): RegExp {
+  return /\b(?:more info|more information|additional info|some info|docs?|documents?|paperwork|references?|pay stubs?|proof|co-?signer|items?|insurance cards?|insurance binder|binder|verification of insurance|driver'?s license|drivers license|license photo)\b/;
+}
+
+export function hasRecentContactedVoiceContext(conv?: any, maxAgeHours = 48): boolean {
+  const voice = conv?.voiceContext ?? null;
+  if (!voice?.contacted) return false;
+  const updatedMs = Date.parse(String(voice?.updatedAt ?? ""));
+  if (!Number.isFinite(updatedMs)) return false;
+  return Date.now() - updatedMs <= Math.max(1, maxAgeHours) * 60 * 60 * 1000;
+}
+
+export function shouldHoldManualFinanceDocsForRecentVoiceContact(
+  text: string | null | undefined,
+  conv?: any
+): boolean {
+  if (!hasRecentContactedVoiceContext(conv)) return false;
+  const value = normalizeManualContextText(text);
+  if (!value) return false;
+  if (!hasCreditApplicationContext(value, conv)) return false;
+  const asksForCustomerDocs =
+    /\b(?:need|needs|needed|will need|still need|require|requires|required|bring|provide|send|text|upload)\b/.test(
+      value
+    ) && financeDocsNeededTermPattern().test(value);
+  return asksForCustomerDocs;
+}
+
+export function isManualOutboundCreditAppNeedsMoreInfoText(
+  text: string | null | undefined,
+  conv?: any
+): boolean {
+  const value = normalizeManualContextText(text);
+  if (!value) return false;
+  if (!hasCreditApplicationContext(value, conv)) return false;
+
+  if (
+    /\b(?:if|when)\s+you\s+need\b.{0,80}\b(?:more info|more information|additional info|details?)\b/.test(
+      value
+    ) ||
+    /\byou\s+(?:need|want|wanted|asked for|were looking for)\b.{0,80}\b(?:more info|more information|additional info|details?)\b/.test(
+      value
+    )
+  ) {
+    return false;
+  }
+
+  const subjectNeedsInfo =
+    new RegExp(
+      "\\b(?:harley|hdfs|lender|finance(?: team| department| dept)?|credit|application|app|we|i|they)\\b.{0,90}\\b(?:need|needs|needed|still need|will need|require|requires|required|requested|asking for|looking for|waiting on|missing)\\b.{0,90}" +
+        financeDocsNeededTermPattern().source
+    ).test(
+      value
+    );
+  const infoNeeded =
+    new RegExp(
+      financeDocsNeededTermPattern().source +
+        ".{0,90}\\b(?:needed|required|missing|pending|for (?:your )?(?:credit|finance|financing) (?:app|application))\\b"
+    ).test(
+      value
+    );
+
+  return subjectNeedsInfo || infoNeeded;
+}
+
 export function isSparseManualConversationContext(conv: any): boolean {
   const leadSource = String(conv?.lead?.source ?? conv?.leadSource ?? "").trim();
   const bucket = String(conv?.classification?.bucket ?? "").trim();

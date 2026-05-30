@@ -137,6 +137,10 @@ function main() {
   const toneSummary = readJson(path.join(toneDir, "tone_quality_summary.json"));
   const voiceSummary = readJson(path.join(voiceDir, "voice_feedback_summary.json"));
   const opsAnomaliesRaw = readJson(opsAnomaliesPath);
+  const conversationAuditPath =
+    latestMatchingFile(feedbackLogDir, name => /^conversation_audit_.*\.json$/i.test(name)) ||
+    path.join(parsed.reportRoot, "conversation_audit.json");
+  const conversationAudit = readJson(conversationAuditPath);
   const routeWatchdogPath =
     parsed.routeWatchdogPath ||
     latestMatchingFile(feedbackLogDir, name => /^route_watchdog_.*\.json$/i.test(name)) ||
@@ -167,6 +171,12 @@ function main() {
     0,
     num(voiceSummary?.totalVoiceTranscripts) - num(voiceSummary?.withCustomerFacingOutbound)
   );
+  const auditIssueCounts = Array.isArray(conversationAudit?.summary?.issueCounts)
+    ? conversationAudit.summary.issueCounts
+    : [];
+  const orphanFollowUpCount = auditIssueCounts
+    .filter((row: any) => /^orphan_followup_/i.test(String(row?.issue ?? "")))
+    .reduce((sum: number, row: any) => sum + num(row?.count), 0);
   const openOpsAnomalies = Array.isArray(opsAnomaliesRaw)
     ? opsAnomaliesRaw.filter((row: any) => String(row?.status ?? "open") === "open")
     : [];
@@ -196,6 +206,30 @@ function main() {
       evidence: {
         routeWatchdogPath,
         sample: Array.isArray(routeWatchdog?.stuckTurns?.rows) ? routeWatchdog.stuckTurns.rows.slice(0, 5) : []
+      }
+    });
+  }
+
+  if (orphanFollowUpCount > 0) {
+    pushTask(tasks, {
+      id: "cadence-orphan-followups",
+      priority: orphanFollowUpCount >= 5 ? "P1" : "P2",
+      area: "ops",
+      title: "Review open conversations with no cadence, watch, appointment, or task",
+      signal: `${orphanFollowUpCount} orphan follow-up signal(s) in conversation audit`,
+      recommendedAction:
+        "Inspect the listed threads. Backfill only true misses; then add a named pipeline hook or task rule for repeated patterns.",
+      evidence: {
+        conversationAuditPath,
+        issueCounts: auditIssueCounts.filter((row: any) => /^orphan_followup_/i.test(String(row?.issue ?? ""))),
+        sample: Array.isArray(conversationAudit?.flagged)
+          ? conversationAudit.flagged
+              .filter((row: any) =>
+                Array.isArray(row?.issues) &&
+                row.issues.some((issue: string) => /^orphan_followup_/i.test(String(issue)))
+              )
+              .slice(0, 10)
+          : []
       }
     });
   }
@@ -328,10 +362,12 @@ function main() {
       toneDir,
       voiceDir,
       opsAnomaliesPath,
+      conversationAuditPath,
       routeWatchdogPath
     },
     metrics: {
       stuckTurns: stuckCount,
+      orphanFollowUpSignals: orphanFollowUpCount,
       noResponseRouteOutcomes: noResponseCount,
       tonePassRate: tonePassRateResponded,
       tonePassRateAll,

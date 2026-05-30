@@ -33,6 +33,88 @@ function isShortAckNoAction(text: unknown): boolean {
   );
 }
 
+function normalizeText(input: unknown): string {
+  return String(input ?? "")
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function lastCustomerVisibleOutbound(messages: AnyObj[]): AnyObj | null {
+  const providers = new Set(["twilio", "sendgrid", "human"]);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m?.direction !== "out") continue;
+    if (!providers.has(String(m?.provider ?? "").toLowerCase())) continue;
+    if (normalizeText(m?.body)) return m;
+  }
+  return null;
+}
+
+function hasActiveFollowUpCadence(conv: AnyObj): boolean {
+  return conv?.followUpCadence?.status === "active" && !!String(conv?.followUpCadence?.nextDueAt ?? "").trim();
+}
+
+function hasActiveInventoryWatch(conv: AnyObj): boolean {
+  return (
+    String(conv?.followUp?.mode ?? "") === "holding_inventory" ||
+    !!conv?.inventoryWatch ||
+    (Array.isArray(conv?.inventoryWatches) && conv.inventoryWatches.length > 0)
+  );
+}
+
+function hasFutureAppointment(conv: AnyObj): boolean {
+  const ms = Date.parse(String(conv?.appointment?.whenIso ?? ""));
+  return Number.isFinite(ms) && ms > Date.now();
+}
+
+function hasRecentContactedVoiceContext(conv: AnyObj, maxAgeHours = 48): boolean {
+  if (conv?.voiceContext?.contacted !== true) return false;
+  const updatedMs = Date.parse(String(conv?.voiceContext?.updatedAt ?? ""));
+  if (!Number.isFinite(updatedMs)) return false;
+  return Date.now() - updatedMs <= Math.max(1, maxAgeHours) * 60 * 60 * 1000;
+}
+
+function inferOrphanFollowUpIssues(conv: AnyObj, messages: AnyObj[], openTodos: AnyObj[]): string[] {
+  if (String(conv?.status ?? "open") === "closed") return [];
+  if (openTodos.length > 0) return [];
+  if (hasActiveFollowUpCadence(conv) || hasActiveInventoryWatch(conv) || hasFutureAppointment(conv)) return [];
+  // A recent completed phone conversation can be an intentional manual hold.
+  if (hasRecentContactedVoiceContext(conv)) return [];
+
+  const outbound = lastCustomerVisibleOutbound(messages);
+  const text = normalizeText(outbound?.body);
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  const issues: string[] = [];
+  const financeDocsTerm =
+    /\b(?:credit|finance|financing|application|app|insurance|binder|documents?|docs?|references?|pay stubs?|proof|co-?signer|info|information)\b/.test(
+      lower
+    );
+  if (
+    /\b(?:need|needs|needed|still need|will need|waiting on|missing|required|requires)\b/.test(lower) &&
+    financeDocsTerm
+  ) {
+    issuePush(issues, "orphan_followup_finance_docs_waiting");
+  }
+  if (
+    /\b(?:i|we|someone|team|finance team)\s*(?:will|can|should|need to)\s+(?:call|reach out|follow up|get back|send|text)\b/.test(
+      lower
+    )
+  ) {
+    issuePush(issues, "orphan_followup_promised_staff_action");
+  }
+  if (
+    /\?\s*$/.test(text) &&
+    /\b(?:interested|want|which|what|when|would|could|can|any bikes|works|come in|stop by|pique your interest)\b/.test(
+      lower
+    )
+  ) {
+    issuePush(issues, "orphan_followup_open_customer_question");
+  }
+  return issues;
+}
+
 function loadStore(filePath: string): { conversations: AnyObj[]; todos: AnyObj[] } {
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (Array.isArray(raw)) return { conversations: raw, todos: [] };
@@ -95,6 +177,8 @@ function run() {
       continue;
     }
     scopedConversations += 1;
+    const convTodos = todos.filter(t => t?.convId === conv?.id);
+    const openTodos = convTodos.filter(t => String(t?.status ?? "open") === "open");
 
     const pendingDrafts = messages.filter(
       m => m?.direction === "out" && m?.provider === "draft_ai" && m?.draftStatus !== "stale"
@@ -166,9 +250,12 @@ function run() {
       issuePush(issues, "missing_phone_identity");
     }
 
+    for (const orphanIssue of inferOrphanFollowUpIssues(conv, messages, openTodos)) {
+      issuePush(issues, orphanIssue);
+    }
+
     if (issues.length > 0) {
-      const convTodos = todos.filter(t => t?.convId === conv?.id);
-      const openTodos = convTodos.filter(t => String(t?.status ?? "open") === "open");
+      const visibleOutbound = lastCustomerVisibleOutbound(messages);
       results.push({
         id: conv?.id,
         leadKey: conv?.leadKey,
@@ -187,6 +274,10 @@ function run() {
         dialogState,
         lastInboundAt: toIso(lastInbound?.at),
         lastOutboundAt: toIso(lastOutbound?.at),
+        lastInboundPreview: normalizeText(lastInbound?.body).slice(0, 220) || null,
+        lastCustomerVisibleOutboundAt: toIso(visibleOutbound?.at),
+        lastCustomerVisibleOutboundPreview: normalizeText(visibleOutbound?.body).slice(0, 220) || null,
+        recentContactedVoiceContext: hasRecentContactedVoiceContext(conv),
         pendingDraftCount: pendingDrafts.length,
         openTodoCount: openTodos.length,
         issues

@@ -41,7 +41,9 @@ import {
   isSupportMailSummarySafeToAutoTrash
 } from "./domain/supportMailPolicy.js";
 import {
-  detectManualOutboundCadenceContext
+  detectManualOutboundCadenceContext,
+  isManualOutboundCreditAppNeedsMoreInfoText,
+  shouldHoldManualFinanceDocsForRecentVoiceContact
 } from "./domain/manualCadenceContext.js";
 import {
   addAgentTask,
@@ -40414,8 +40416,13 @@ app.post("/conversations/:id/send", async (req, res) => {
     console.warn("[scheduler] preferred salesperson resolve failed:", err?.message ?? err);
   }
 
+  let skipManualCadenceAdvanceOnce = false;
   const applyManualCadenceAdvance = (hadOutbound: boolean) => {
     if (!hadOutbound) return;
+    if (skipManualCadenceAdvanceOnce) {
+      skipManualCadenceAdvanceOnce = false;
+      return;
+    }
     if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
     if (conv.followUpCadence.kind === "post_sale") return;
     advanceFollowUpCadence(conv, schedulerTimezone);
@@ -40487,6 +40494,103 @@ app.post("/conversations/:id/send", async (req, res) => {
     // We only collect soft department mention tags for analytics/context.
     appendManualOutboundDepartmentSoftTags(conv, outboundBody, opts);
     return;
+  };
+  const activateManualFinanceNeedsInfoCadence = (
+    outboundBody: string,
+    opts?: {
+      channel?: "sms" | "email" | null;
+      sourceMessageId?: string | null;
+    }
+  ): boolean => {
+    if (!isManualOutboundCreditAppNeedsMoreInfoText(outboundBody, conv)) return false;
+    if (conv.status === "closed" || conv.followUpCadence?.kind === "post_sale") return false;
+
+    const updatedAt = new Date().toISOString();
+    const sourceId = String(opts?.sourceMessageId ?? "").trim() || undefined;
+    const voiceHold = shouldHoldManualFinanceDocsForRecentVoiceContact(outboundBody, conv);
+    const lowerOutbound = String(outboundBody ?? "").toLowerCase();
+    const docsOnlyRequest =
+      /\b(?:insurance cards?|insurance binder|verification of insurance|driver'?s license|drivers license|license photo)\b/i.test(
+        lowerOutbound
+      );
+    if (!docsOnlyRequest) {
+      conv.financeOutcome = {
+        status: "needs_more_info",
+        updatedAt,
+        sourceMessageId: sourceId,
+        reasonText: "Manual outbound indicated finance/credit application needs more information."
+      };
+    }
+    conv.financeDocs = {
+      ...(conv.financeDocs ?? {}),
+      status: "pending",
+      requestedAt: conv.financeDocs?.requestedAt ?? updatedAt,
+      updatedAt
+    };
+    if (/insurance\s+cards?/i.test(lowerOutbound)) conv.financeDocs.insuranceRequested = true;
+    if (/insurance\s+binder|\bbinder\b|verification of insurance/i.test(lowerOutbound)) {
+      conv.financeDocs.binderRequested = true;
+    }
+    if (/driver'?s license|drivers license|license photo/i.test(lowerOutbound)) {
+      conv.financeDocs.licenseRequested = true;
+    }
+    conv.manualContext = {
+      status: "inferred",
+      contextTag: "finance_docs",
+      followUpReason: "credit_app_needs_info",
+      source: "manual_outbound",
+      channel: opts?.channel ?? null,
+      confidence: 0.91,
+      reason: voiceHold
+        ? "manual_outbound_finance_docs_voice_hold"
+        : "manual_outbound_credit_app_needs_info",
+      updatedAt
+    };
+    if (voiceHold) {
+      setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info_voice_hold");
+      stopFollowUpCadence(conv, "manual_handoff");
+      recordRouteOutcome("manual", "manual_outbound_finance_docs_voice_hold", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null
+      });
+      return true;
+    }
+    setFollowUpMode(conv, "active", "credit_app_needs_info");
+
+    const existingCadence = conv.followUpCadence ?? null;
+    const reuseExistingFinanceCadence =
+      existingCadence?.status === "active" &&
+      String(existingCadence?.contextTag ?? "").trim().toLowerCase() === "finance_docs";
+    const anchorAt = reuseExistingFinanceCadence
+      ? String(existingCadence?.anchorAt ?? "").trim() || updatedAt
+      : updatedAt;
+    conv.followUpCadence = {
+      ...(existingCadence ?? {}),
+      status: "active",
+      anchorAt,
+      nextDueAt:
+        (reuseExistingFinanceCadence ? String(existingCadence?.nextDueAt ?? "").trim() : "") ||
+        computeFollowUpDueAt(anchorAt, FOLLOW_UP_DAY_OFFSETS[0], schedulerTimezone),
+      stepIndex: reuseExistingFinanceCadence && Number.isFinite(Number(existingCadence?.stepIndex))
+        ? Math.max(0, Number(existingCadence?.stepIndex))
+        : 0,
+      kind: "engaged",
+      contextTag: "finance_docs",
+      contextTagUpdatedAt: updatedAt,
+      pausedUntil: undefined,
+      pauseReason: undefined,
+      stopReason: undefined,
+      scheduleInviteCount: existingCadence?.scheduleInviteCount ?? 0,
+      scheduleMuted: existingCadence?.scheduleMuted ?? false
+    };
+    skipManualCadenceAdvanceOnce = true;
+    recordRouteOutcome("manual", "manual_outbound_finance_needs_info_followup", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      channel: opts?.channel ?? null
+    });
+    return true;
   };
   const maybeBookManualOutboundAppointmentEvent = async (opts?: {
     channel?: "sms" | "email" | null;
@@ -40664,6 +40768,10 @@ app.post("/conversations/:id/send", async (req, res) => {
       channel: opts?.channel ?? "manual",
       source: "manual_outbound"
     });
+
+    if (activateManualFinanceNeedsInfoCadence(text, opts)) {
+      return;
+    }
 
     const lower = text.toLowerCase();
     const explicitWatchVerb =
