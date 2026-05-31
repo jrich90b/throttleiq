@@ -68,6 +68,25 @@ import {
   updateMdfClaim,
   type MdfClaimStatus
 } from "./domain/mdfClaimStore.js";
+import {
+  addWarrantyRmaCase,
+  addWarrantyRmaManual,
+  deleteWarrantyRmaManual,
+  getWarrantyRmaCase,
+  getWarrantyRmaManual,
+  listWarrantyRmaCases,
+  listWarrantyRmaManuals,
+  updateWarrantyRmaCase,
+  type WarrantyRmaManualDocument,
+  type WarrantyRmaStatus
+} from "./domain/warrantyRmaStore.js";
+import { analyzeWarrantyRmaSubmission, extractWarrantyRmaIntake } from "./domain/warrantyRmaAssistant.js";
+import {
+  deleteWarrantyRmaManualVectors,
+  getWarrantyRmaVectorStatus,
+  indexWarrantyRmaManuals,
+  searchWarrantyRmaManualChunks
+} from "./domain/warrantyRmaVectorStore.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -38081,6 +38100,471 @@ async function generateCampaignEmailImageVariantsWithNanoBanana(args: {
   }
   return out;
 }
+
+const WARRANTY_RMA_DOCUMENT_TYPES = new Set(["warranty_manual", "policy", "parts_reference", "other"]);
+const WARRANTY_RMA_STATUSES = new Set([
+  "draft",
+  "needs_info",
+  "ready_for_dms",
+  "dms_queued",
+  "submitted",
+  "closed",
+  "denied"
+]);
+
+function warrantyRmaUploadExt(originalName: string, mimeType: string): string {
+  const originalExt = path.extname(originalName || "").toLowerCase();
+  if ([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".md", ".csv", ".json", ".xml"].includes(originalExt)) {
+    return originalExt;
+  }
+  if (mimeType === "application/pdf") return ".pdf";
+  if (mimeType === "image/png") return ".png";
+  if (mimeType === "image/jpeg") return ".jpg";
+  if (mimeType === "image/webp") return ".webp";
+  if (mimeType === "application/json") return ".json";
+  if (mimeType === "application/xml" || mimeType === "text/xml") return ".xml";
+  if (mimeType === "text/csv") return ".csv";
+  if (mimeType === "text/markdown") return ".md";
+  return ".txt";
+}
+
+function warrantyRmaMimeTypeForStorage(mimeType: string, ext: string): string {
+  if (mimeType && mimeType !== "application/octet-stream") return mimeType;
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".json") return "application/json";
+  if (ext === ".xml") return "application/xml";
+  if (ext === ".csv") return "text/csv";
+  if (ext === ".md") return "text/markdown";
+  return "text/plain";
+}
+
+function safeWarrantyRmaUploadBase(originalName: string): string {
+  return (
+    path
+      .basename(originalName || "warranty-rma-document", path.extname(originalName || ""))
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "warranty-rma-document"
+  );
+}
+
+function normalizeWarrantyRmaDocumentType(raw: unknown): WarrantyRmaManualDocument["documentType"] {
+  const value = String(raw ?? "").trim();
+  return WARRANTY_RMA_DOCUMENT_TYPES.has(value) ? (value as WarrantyRmaManualDocument["documentType"]) : "warranty_manual";
+}
+
+function normalizeWarrantyRmaStatus(raw: unknown): WarrantyRmaStatus | null {
+  const value = String(raw ?? "").trim();
+  return WARRANTY_RMA_STATUSES.has(value) ? (value as WarrantyRmaStatus) : null;
+}
+
+function normalizeWarrantyRmaSelectedManualIds(raw: unknown): string[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(/[,|\s]+/)
+      : [];
+  const maxDocuments = Math.max(1, Math.min(20, Number(process.env.WARRANTY_RMA_MAX_REVIEW_DOCUMENTS ?? 12)));
+  return Array.from(new Set(list.map(value => String(value ?? "").trim()).filter(Boolean))).slice(0, maxDocuments);
+}
+
+function warrantyRmaStatusForReview(review: Awaited<ReturnType<typeof analyzeWarrantyRmaSubmission>>): WarrantyRmaStatus {
+  if (review.requiredInfo?.length) return "needs_info";
+  if (review.status === "likely_warranty" && Number(review.confidence ?? 0) >= 0.75) return "ready_for_dms";
+  return "draft";
+}
+
+function warrantyRmaReferenceText(manual: WarrantyRmaManualDocument): string {
+  return [
+    manual.title,
+    manual.fileName,
+    manual.documentType,
+    manual.notes
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function rankWarrantyRmaManualsForSubmission(
+  manuals: WarrantyRmaManualDocument[],
+  submission: {
+    claimType?: string;
+    partNumber?: string;
+    partDescription?: string;
+    issueDescription?: string;
+    vin?: string;
+    roNumber?: string;
+    invoiceNumber?: string;
+    requestedAction?: string;
+    notes?: string;
+  }
+): WarrantyRmaManualDocument[] {
+  const sourceText = [
+    submission.claimType,
+    submission.partNumber,
+    submission.partDescription,
+    submission.issueDescription,
+    submission.vin,
+    submission.roNumber,
+    submission.invoiceNumber,
+    submission.requestedAction,
+    submission.notes
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const wantsRma = /\b(rma|return|replacement|credit|shipping|freight|damaged|shortage|wrong part)\b/.test(sourceText);
+  const wantsVehicle = /\b(vin|mileage|repair order|ro\b|labor|job time|engine|motorcycle|bike|vehicle|warranty claim|pre_delivery|pre-delivery)\b/.test(sourceText) || Boolean(submission.vin);
+  const wantsParts = /\b(part|p\/a|parts|accessory|apparel|merch|invoice|order|receipt|general_merchandise|parts_accessory)\b/.test(sourceText);
+  const wantsRecall = /\b(recall|campaign|service card|program)\b/.test(sourceText);
+  const wantsGoodwill = /\b(goodwill|good will|customer satisfaction|policy adjustment)\b/.test(sourceText);
+  const wantsPreDelivery = /\b(prd|pre_delivery|pre-delivery|pre delivery|loose parts?)\b/.test(sourceText);
+  const wantsGeneralMerchandise = /\b(gm\b|general_merchandise|general merchandise|apparel|licensing)\b/.test(sourceText);
+  const wantsEngineReturn = /\b(engine_return|engine return|longblock|long block|core return)\b/.test(sourceText);
+
+  return manuals
+    .map((manual, index) => {
+      const haystack = warrantyRmaReferenceText(manual);
+      let score = 0;
+      if (/claim|processing|guide|guideline|status|reason|code|condition|concern/.test(haystack)) score += 2;
+      if (wantsRma && /\b(rma|return|shipping|freight|damaged|bulk|conversion|shipexec)\b/.test(haystack)) score += 10;
+      if (wantsVehicle && /\b(vehicle|motorcycle|mc\b|gm\b|warranty manual|engine|longblock|epa|frt|gdw|dem|ems|hfr|dfs)\b/.test(haystack)) score += 8;
+      if (wantsParts && /\b(parts|pna|prd|loose parts|part)\b/.test(haystack)) score += 8;
+      if (wantsRecall && /\b(recall|campaign|service card)\b/.test(haystack)) score += 8;
+      if (wantsGoodwill && /\b(goodwill|gdw|customer concern|concern code)\b/.test(haystack)) score += 8;
+      if (wantsPreDelivery && /\b(prd|pre-delivery|pre delivery|loose parts)\b/.test(haystack)) score += 10;
+      if (wantsGeneralMerchandise && /\b(gm\b|general merchandise|apparel|licensing)\b/.test(haystack)) score += 10;
+      if (wantsEngineReturn && /\b(engine|longblock|long block|core return)\b/.test(haystack)) score += 10;
+      for (const token of sourceText.match(/[a-z0-9-]{4,}/g) ?? []) {
+        if (haystack.includes(token)) score += 1;
+      }
+      return { manual, score, index };
+    })
+    .sort((a, b) => b.score - a.score || new Date(b.manual.updatedAt).getTime() - new Date(a.manual.updatedAt).getTime() || a.index - b.index)
+    .map(row => row.manual);
+}
+
+function requireWarrantyRmaAccess(req: any, res: any, next: any) {
+  if (AUTH_DISABLED) return next();
+  const role = req.user?.role;
+  if (
+    role === "manager" ||
+    role === "parts" ||
+    role === "service" ||
+    req.user?.permissions?.canAccessTodos ||
+    req.user?.permissions?.canViewAllTasks
+  ) {
+    return next();
+  }
+  return res.status(403).json({ ok: false, error: "forbidden" });
+}
+
+app.get("/warranty-rma/manuals", requireWarrantyRmaAccess, (_req, res) => {
+  return res.json({ ok: true, manuals: listWarrantyRmaManuals() });
+});
+
+app.post("/warranty-rma/manuals", requireWarrantyRmaAccess, upload.single("file"), async (req, res) => {
+  const file = req.file as Express.Multer.File | undefined;
+  if (!file) return res.status(400).json({ ok: false, error: "Upload a warranty/RMA document." });
+  const mimeType = String(file.mimetype ?? "").toLowerCase();
+  const originalName = String(file.originalname ?? "warranty-rma-document");
+  const ext = warrantyRmaUploadExt(originalName, mimeType);
+  const allowedMime = new Set([
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "application/octet-stream"
+  ]);
+  const allowedExt = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".md", ".csv", ".json", ".xml"]);
+  if (!allowedMime.has(mimeType) || !allowedExt.has(ext)) {
+    return res.status(400).json({ ok: false, error: "Only PDF, image, text, CSV, JSON, and XML documents are supported." });
+  }
+  const maxBytes = Math.max(
+    1,
+    Number(process.env.WARRANTY_RMA_MAX_UPLOAD_BYTES ?? 75 * 1024 * 1024)
+  );
+  if (Number(file.size ?? file.buffer.length ?? 0) > maxBytes) {
+    const maxMb = Math.max(1, Math.floor(maxBytes / (1024 * 1024)));
+    return res.status(400).json({ ok: false, error: `Each warranty/RMA document must be ${maxMb}MB or smaller.` });
+  }
+  try {
+    const uploadDir = path.resolve(getDataDir(), "uploads", "warranty-rma", "manuals");
+    await fs.promises.mkdir(uploadDir, { recursive: true });
+    const fileName = `wrm_${Date.now()}_${crypto.randomBytes(4).toString("hex")}_${safeWarrantyRmaUploadBase(originalName)}${ext}`;
+    const storagePath = path.join(uploadDir, fileName);
+    await fs.promises.writeFile(storagePath, file.buffer);
+    const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+    const url = publicBase
+      ? `${publicBase.replace(/\/$/, "")}/uploads/warranty-rma/manuals/${fileName}`
+      : `/uploads/warranty-rma/manuals/${fileName}`;
+    const user = (req as any).user ?? null;
+    const manual = addWarrantyRmaManual({
+      title: String(req.body?.title ?? "").trim() || originalName,
+      fileName,
+      mimeType: warrantyRmaMimeTypeForStorage(mimeType, ext),
+      size: Number(file.size ?? file.buffer.length ?? 0),
+      storagePath,
+      url,
+      documentType: normalizeWarrantyRmaDocumentType(req.body?.documentType),
+      notes: String(req.body?.notes ?? "").trim() || undefined,
+      uploadedByUserId: user?.id,
+      uploadedByUserName: user?.name || user?.email
+    });
+    return res.json({ ok: true, manual });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Warranty/RMA document could not be stored."
+    });
+  }
+});
+
+app.delete("/warranty-rma/manuals/:id", requireWarrantyRmaAccess, async (req, res) => {
+  const existing = getWarrantyRmaManual(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA document not found." });
+  const deleted = deleteWarrantyRmaManual(req.params.id);
+  if (deleted?.storagePath) {
+    await fs.promises.unlink(deleted.storagePath).catch(() => undefined);
+  }
+  const vectorDelete = await deleteWarrantyRmaManualVectors(req.params.id);
+  return res.json({ ok: true, deleted: true, vectorDelete });
+});
+
+app.get("/warranty-rma/vector/status", requireWarrantyRmaAccess, (_req, res) => {
+  return res.json({ ok: true, vector: getWarrantyRmaVectorStatus() });
+});
+
+app.post("/warranty-rma/vector/reindex", requireWarrantyRmaAccess, async (req, res) => {
+  const manualIds = normalizeWarrantyRmaSelectedManualIds(req.body?.manualIds);
+  try {
+    const result = await indexWarrantyRmaManuals(listWarrantyRmaManuals(), {
+      manualIds: manualIds.length ? manualIds : undefined
+    });
+    return res.json({ ok: true, result });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Warranty/RMA references could not be indexed."
+    });
+  }
+});
+
+app.post("/warranty-rma/vector/search", requireWarrantyRmaAccess, async (req, res) => {
+  const query = String(req.body?.query ?? "").trim();
+  if (!query) return res.status(400).json({ ok: false, error: "Search query is required." });
+  const manualIds = normalizeWarrantyRmaSelectedManualIds(req.body?.manualIds);
+  try {
+    const matches = await searchWarrantyRmaManualChunks({
+      query,
+      manualIds: manualIds.length ? manualIds : undefined,
+      topK: Number(req.body?.topK ?? process.env.WARRANTY_RMA_VECTOR_TOP_K ?? 8)
+    });
+    return res.json({ ok: true, matches });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Warranty/RMA vector search failed."
+    });
+  }
+});
+
+app.post("/warranty-rma/intake/extract", requireWarrantyRmaAccess, upload.array("files", 8), async (req, res) => {
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  if (!files.length) {
+    return res.status(400).json({ ok: false, error: "Upload at least one invoice, repair order, work order, photo, or PDF." });
+  }
+  const allowedMime = new Set([
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "application/octet-stream"
+  ]);
+  const allowedExt = new Set([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt", ".md", ".csv", ".json", ".xml"]);
+  const maxBytes = Math.max(1, Number(process.env.WARRANTY_RMA_INTAKE_MAX_UPLOAD_BYTES ?? 35 * 1024 * 1024));
+  const normalized = [];
+  for (const file of files) {
+    const mimeType = warrantyRmaMimeTypeForStorage(String(file.mimetype ?? "").toLowerCase(), warrantyRmaUploadExt(file.originalname, file.mimetype));
+    const ext = warrantyRmaUploadExt(file.originalname, mimeType);
+    if (!allowedMime.has(mimeType) || !allowedExt.has(ext)) {
+      return res.status(400).json({ ok: false, error: "Only PDF, image, text, CSV, JSON, and XML evidence files are supported." });
+    }
+    if (Number(file.size ?? file.buffer.length ?? 0) > maxBytes) {
+      const maxMb = Math.max(1, Math.floor(maxBytes / (1024 * 1024)));
+      return res.status(400).json({ ok: false, error: `Each intake evidence file must be ${maxMb}MB or smaller.` });
+    }
+    normalized.push({
+      name: file.originalname || "warranty-rma-evidence",
+      mimeType,
+      buffer: file.buffer
+    });
+  }
+  try {
+    const extraction = await extractWarrantyRmaIntake(normalized);
+    return res.json({ ok: true, extraction });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Warranty/RMA intake extraction failed."
+    });
+  }
+});
+
+app.get("/warranty-rma/cases", requireWarrantyRmaAccess, (_req, res) => {
+  return res.json({ ok: true, cases: listWarrantyRmaCases() });
+});
+
+app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
+  const partNumber = String(req.body?.partNumber ?? "").trim();
+  const issueDescription = String(req.body?.issueDescription ?? "").trim();
+  if (!partNumber) return res.status(400).json({ ok: false, error: "Part number is required." });
+  if (!issueDescription) return res.status(400).json({ ok: false, error: "Issue description is required." });
+
+  const selectedManualIds = normalizeWarrantyRmaSelectedManualIds(req.body?.selectedManualIds);
+  const submission = {
+    partNumber,
+    issueDescription,
+    partDescription: String(req.body?.partDescription ?? "").trim() || undefined,
+    claimType: String(req.body?.claimType ?? "").trim() || undefined,
+    customerName: String(req.body?.customerName ?? "").trim() || undefined,
+    roNumber: String(req.body?.roNumber ?? "").trim() || undefined,
+    invoiceNumber: String(req.body?.invoiceNumber ?? "").trim() || undefined,
+    orderNumber: String(req.body?.orderNumber ?? "").trim() || undefined,
+    vin: String(req.body?.vin ?? "").trim() || undefined,
+    mileage: String(req.body?.mileage ?? "").trim() || undefined,
+    invoiceDate: String(req.body?.invoiceDate ?? "").trim() || undefined,
+    workOrderDate: String(req.body?.workOrderDate ?? "").trim() || undefined,
+    serviceStartDate: String(req.body?.serviceStartDate ?? "").trim() || undefined,
+    serviceEndDate: String(req.body?.serviceEndDate ?? "").trim() || undefined,
+    purchaseDate: String(req.body?.purchaseDate ?? "").trim() || undefined,
+    installDate: String(req.body?.installDate ?? "").trim() || undefined,
+    failureDate: String(req.body?.failureDate ?? "").trim() || undefined,
+    quantity: String(req.body?.quantity ?? "").trim() || undefined,
+    laborHours: String(req.body?.laborHours ?? "").trim() || undefined,
+    jobTimeCode: String(req.body?.jobTimeCode ?? "").trim() || undefined,
+    technicianName: String(req.body?.technicianName ?? "").trim() || undefined,
+    dealerNumber: String(req.body?.dealerNumber ?? "").trim() || undefined,
+    authorizationNumber: String(req.body?.authorizationNumber ?? "").trim() || undefined,
+    customerConcernCode: String(req.body?.customerConcernCode ?? "").trim() || undefined,
+    conditionCode: String(req.body?.conditionCode ?? "").trim() || undefined,
+    carrierName: String(req.body?.carrierName ?? "").trim() || undefined,
+    bolNumber: String(req.body?.bolNumber ?? "").trim() || undefined,
+    returnAuthorizationNumber: String(req.body?.returnAuthorizationNumber ?? "").trim() || undefined,
+    cause: String(req.body?.cause ?? "").trim() || undefined,
+    correction: String(req.body?.correction ?? "").trim() || undefined,
+    requestedAction: String(req.body?.requestedAction ?? "").trim() || undefined,
+    notes: String(req.body?.notes ?? "").trim() || undefined
+  };
+  const maxReviewDocuments = Math.max(1, Math.min(20, Number(process.env.WARRANTY_RMA_MAX_REVIEW_DOCUMENTS ?? 12)));
+  const manualPool = selectedManualIds.length
+    ? selectedManualIds.map(id => getWarrantyRmaManual(id)).filter((manual): manual is WarrantyRmaManualDocument => Boolean(manual))
+    : rankWarrantyRmaManualsForSubmission(listWarrantyRmaManuals(), submission).slice(0, maxReviewDocuments);
+  try {
+    const review = await analyzeWarrantyRmaSubmission({ submission, manuals: manualPool });
+    const user = (req as any).user ?? null;
+    const created = addWarrantyRmaCase({
+      ...submission,
+      selectedManualIds: selectedManualIds.length ? selectedManualIds : manualPool.map(manual => manual.id),
+      review,
+      status: warrantyRmaStatusForReview(review),
+      createdByUserId: user?.id,
+      createdByUserName: user?.name || user?.email
+    });
+    return res.json({ ok: true, case: created });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : "Warranty/RMA case could not be reviewed."
+    });
+  }
+});
+
+app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, (req, res) => {
+  const patch: Record<string, unknown> = {};
+  if (req.body?.status !== undefined) {
+    const status = normalizeWarrantyRmaStatus(req.body.status);
+    if (!status) return res.status(400).json({ ok: false, error: "Invalid warranty/RMA status." });
+    patch.status = status;
+  }
+  for (const key of [
+    "title",
+    "notes",
+    "partDescription",
+    "claimType",
+    "customerName",
+    "roNumber",
+    "invoiceNumber",
+    "orderNumber",
+    "vin",
+    "mileage",
+    "invoiceDate",
+    "workOrderDate",
+    "serviceStartDate",
+    "serviceEndDate",
+    "purchaseDate",
+    "installDate",
+    "failureDate",
+    "quantity",
+    "laborHours",
+    "jobTimeCode",
+    "technicianName",
+    "dealerNumber",
+    "authorizationNumber",
+    "customerConcernCode",
+    "conditionCode",
+    "carrierName",
+    "bolNumber",
+    "returnAuthorizationNumber",
+    "cause",
+    "correction",
+    "requestedAction"
+  ] as const) {
+    if (req.body?.[key] !== undefined) patch[key] = String(req.body[key] ?? "").trim() || undefined;
+  }
+  if (req.body?.selectedManualIds !== undefined) {
+    patch.selectedManualIds = normalizeWarrantyRmaSelectedManualIds(req.body.selectedManualIds);
+  }
+  const updated = updateWarrantyRmaCase(req.params.id, patch as any);
+  if (!updated) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
+  return res.json({ ok: true, case: updated });
+});
+
+app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, (req, res) => {
+  const existing = getWarrantyRmaCase(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
+
+  const updated = updateWarrantyRmaCase(req.params.id, {
+    dmsPush: {
+      status: "not_configured",
+      message: "DMS API integration is not configured yet. The payload draft is saved for mapping.",
+      updatedAt: new Date().toISOString()
+    }
+  });
+  return res.json({
+    ok: true,
+    case: updated,
+    dmsPush: updated?.dmsPush,
+    message: "DMS API integration is not configured yet. The payload draft is saved for mapping."
+  });
+});
 
 app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });

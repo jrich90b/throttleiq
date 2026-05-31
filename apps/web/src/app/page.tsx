@@ -12543,6 +12543,14 @@ export default function Home() {
                 MDF Assistant
               </button>
             ) : null}
+            {isManager || authUser?.role === "parts" || authUser?.role === "service" ? (
+              <a
+                href="/warranty-rma"
+                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-center text-sm font-semibold text-[var(--foreground)] transition hover:bg-[var(--surface)] md:flex-none lr-tablet-header-tab"
+              >
+                Warranty/RMA
+              </a>
+            ) : null}
           </div>
         </div>
       </header>
