@@ -38565,7 +38565,7 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
   const updated = updateWarrantyRmaCase(req.params.id, {
     dmsPush: {
       status: "not_configured",
-      message: "DMS API integration is not configured yet. The payload draft is saved for mapping.",
+      message: "TALON/Warranty-Link integration is not configured yet. The claim packet is saved for manual review against the TALON work order.",
       updatedAt: new Date().toISOString()
     }
   });
@@ -38573,7 +38573,7 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
     ok: true,
     case: updated,
     dmsPush: updated?.dmsPush,
-    message: "DMS API integration is not configured yet. The payload draft is saved for mapping."
+    message: "TALON/Warranty-Link integration is not configured yet. The claim packet is saved for manual review against the TALON work order."
   });
 });
 

@@ -333,11 +333,11 @@ function fallbackReview(submission: WarrantyRmaSubmission, reason: string): Warr
     nextSteps: [
       "Review the warranty manual and supporting documents.",
       "Confirm proof of purchase, install date, and failure details.",
-      "Submit to the DMS only after the DMS API mapping is configured."
+      "Use this packet to review the TALON work order and verify/transmit the claim in Warranty-Link."
     ],
     dms: {
       status: "not_configured",
-      nextStep: "Connect the dealer management system API and map required warranty/RMA fields."
+      nextStep: "TALON/Warranty-Link integration is not connected; use this packet for manual review against the TALON work order."
     }
   };
 }
@@ -723,13 +723,13 @@ export async function extractWarrantyRmaIntake(files: WarrantyRmaUploadedFile[])
   const prompt = [
     "You are a Harley-Davidson dealership warranty/RMA administrator intake assistant.",
     "Read the uploaded evidence files, photos, invoices, repair orders, work orders, customer notes, and labels.",
-    "Extract structured claim intake facts for a warranty or return-merchandise authorization submission.",
+    "Extract structured claim intake facts for a warranty or return-merchandise authorization review packet.",
     "Do not guess. Leave fields blank unless the value is visible or explicitly stated.",
     "Normalize VINs, part numbers, dates, repair order numbers, invoice numbers, customer names, mileage, quantity, labor hours, and job time codes when present.",
     "Extract service start/end dates, authorization numbers, customer concern codes, condition codes, carrier names, BOL numbers, and return authorization numbers when present.",
     "Use claimType for likely categories such as warranty, RMA, parts warranty, goodwill, recall, freight/shipping damage, or unknown.",
     WARRANTY_RMA_INTAKE_FIELD_GUIDANCE,
-    "requiredInfo should list only missing items that would likely block a clean claim review or DMS submission.",
+    "requiredInfo should list only missing items that would likely block a clean TALON/Warranty-Link review or manual submission.",
     "Return only the structured JSON schema."
   ].join("\n");
 
@@ -810,7 +810,7 @@ export async function analyzeWarrantyRmaSubmission(args: {
       ? "Use retrieved excerpts first. If a retrieved excerpt is not enough to support the answer, say what is missing instead of guessing."
       : "",
     "Use short manualReferences excerpts from the reference material. Do not include long copyrighted passages.",
-    "Build a DMS payload draft, but keep dms.status as not_configured unless a DMS API mapping is explicitly available in system configuration.",
+    "Build a warranty claim packet for TALON/Warranty-Link review. Do not claim to create a TALON work order. Keep dms.status as not_configured unless a dealer-system integration is explicitly available in system configuration.",
     "",
     "Submission:",
     args.submission.claimType ? `Claim type: ${args.submission.claimType}` : "",

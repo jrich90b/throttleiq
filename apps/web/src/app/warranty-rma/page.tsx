@@ -260,8 +260,8 @@ type WarrantyRmaVectorStatus = {
 const statusLabels: Record<WarrantyRmaStatus, string> = {
   draft: "Draft",
   needs_info: "Needs info",
-  ready_for_dms: "Ready for DMS",
-  dms_queued: "DMS queued",
+  ready_for_dms: "Ready for handoff",
+  dms_queued: "Handoff queued",
   submitted: "Submitted",
   closed: "Closed",
   denied: "Denied"
@@ -337,7 +337,7 @@ const requiredProfiles: Record<string, { source: string; items: RequirementItem[
       { label: "Service end date", fields: ["serviceEndDate"] },
       { label: "Primary labor / job time code", anyOf: ["jobTimeCode", "laborHours"] },
       { label: "Customer concern and condition codes", fields: ["customerConcernCode", "conditionCode"] },
-      { label: "Confirm part is registered to VIN", detail: "Document check before DMS submit." }
+      { label: "Confirm part is registered to VIN", detail: "Document check before TALON/Warranty-Link review." }
     ]
   },
   pre_delivery_warranty: {
@@ -390,7 +390,7 @@ const requiredProfiles: Record<string, { source: string; items: RequirementItem[
       { label: "Service end date", fields: ["serviceEndDate"] },
       { label: "Recall/campaign labor or 8888 code", anyOf: ["jobTimeCode", "laborHours"] },
       { label: "Replacement parts used", fields: ["partNumber"] },
-      { label: "Keep recall on separate work order", detail: "Document check before DMS submit." }
+      { label: "Keep recall on separate TALON work order", detail: "Document check before Warranty-Link transmit." }
     ]
   },
   goodwill: {
@@ -417,7 +417,7 @@ const requiredProfiles: Record<string, { source: string; items: RequirementItem[
       { label: "Service start date", fields: ["serviceStartDate"] },
       { label: "Service end date", fields: ["serviceEndDate"] },
       { label: "Condition and concern codes", fields: ["conditionCode", "customerConcernCode"] },
-      { label: "One item per claim when part/size/condition differ", detail: "Document check before DMS submit." }
+      { label: "One item per claim when part/size/condition differ", detail: "Document check before TALON/Warranty-Link review." }
     ]
   },
   engine_return: {
@@ -673,11 +673,11 @@ export default function WarrantyRmaPage() {
     try {
       const response = await fetch(`/api/warranty-rma/cases/${encodeURIComponent(id)}/dms-push`, { method: "POST" });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "DMS handoff could not be prepared.");
+      if (!response.ok || !data.ok) throw new Error(data.error || "Claim packet could not be prepared.");
       if (data.case) setCases(prev => prev.map(item => (item.id === id ? data.case : item)));
-      setNotice(data.message || "DMS handoff prepared.");
+      setNotice(data.message || "Claim packet prepared for TALON/Warranty-Link review.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "DMS handoff could not be prepared.");
+      setError(err instanceof Error ? err.message : "Claim packet could not be prepared.");
     } finally {
       setCaseActionBusy(null);
     }
@@ -894,11 +894,11 @@ export default function WarrantyRmaPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">New submission</div>
                 <h2 className="mt-1 text-lg font-semibold">Review a part issue</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  The assistant checks uploaded manuals, drafts required fields, and holds DMS submission until the API is mapped.
+                  The assistant checks uploaded manuals and prepares a claim packet for TALON/Warranty-Link review.
                 </p>
               </div>
               <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-                DMS not connected
+                TALON handoff not connected
               </span>
             </div>
 
@@ -908,8 +908,8 @@ export default function WarrantyRmaPage() {
                   <div>
                     <div className="text-xs font-semibold uppercase tracking-wide text-orange-700">Intake evidence</div>
                     <p className="mt-1 text-sm text-slate-700">
-                      Upload photos, invoices, work orders, labels, PDFs, or notes. The assistant extracts names, part numbers,
-                      VINs, dates, complaint/cause/correction, and claim details into the form.
+                      Upload photos, invoices, TALON work-order printouts or exports, labels, PDFs, or notes. The assistant extracts
+                      names, part numbers, VINs, dates, complaint/cause/correction, and claim details into the form.
                     </p>
                   </div>
                   <button
@@ -1247,7 +1247,7 @@ function CaseDetail(props: {
             onClick={() => void props.onDms(item.id)}
             disabled={props.busyKey === `${item.id}:dms`}
           >
-            Prepare DMS push
+            Prepare claim packet
           </button>
         </div>
       </div>
@@ -1261,14 +1261,14 @@ function CaseDetail(props: {
         <ListBlock title="Required info" rows={review.requiredInfo} empty="No missing items reported." />
         <ListBlock title="Next steps" rows={review.nextSteps} empty="No next steps reported." />
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">DMS handoff</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">TALON/Warranty-Link handoff</div>
           <div className="mt-2 text-sm font-semibold text-slate-900">{item.dmsPush.status.replace(/_/g, " ")}</div>
           <p className="mt-1 text-sm text-slate-600">{item.dmsPush.message || review.dms.nextStep}</p>
         </div>
       </div>
 
       <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">DMS payload draft</div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Warranty claim packet</div>
         <dl className="mt-3 grid gap-3 md:grid-cols-2">
           <PayloadField label="Claim type" value={review.dmsPayloadDraft.claimType} />
           <PayloadField label="Part number" value={review.dmsPayloadDraft.partNumber} />
