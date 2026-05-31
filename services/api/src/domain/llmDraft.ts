@@ -1243,6 +1243,16 @@ export type CadencePersonalizationParse = {
   confidence?: number;
 };
 
+const CADENCE_PERSONALIZATION_LINE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["line", "confidence"],
+  properties: {
+    line: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
 export type CadenceRegenerateContextState =
   | "active_test_ride"
   | "held_inventory_update"
@@ -1269,22 +1279,18 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
   if (!history.length) return null;
-  const schema: { [key: string]: unknown } = {
-    type: "object",
-    additionalProperties: false,
-    required: ["line", "confidence"],
-    properties: {
-      line: { type: "string" },
-      confidence: { type: "number" }
-    }
-  };
+  const examples = [
+    'input: "in: I am at training in Boston all week." output: {"line":"Hope training in Boston went well.","confidence":0.88}',
+    'input: "in: My daughter graduates tomorrow, then I can stop in." output: {"line":"","confidence":0.95}',
+    'input: "in: I had surgery last week and cannot ride yet." output: {"line":"","confidence":0.96}',
+    'input: "in: Sounds good, thanks." output: {"line":"","confidence":0.93}'
+  ];
   const prompt = [
     "You write one optional, human, follow-up personalization line for dealership SMS.",
     "Return only JSON matching the schema.",
     "",
     "Goal:",
     "- Use a concrete personal/situational detail from recent conversation/context when available.",
-    "- Example style: \"Hope training in Boston went well.\"",
     "",
     "Rules:",
     "- line must be a single sentence, natural tone, 4-16 words.",
@@ -1298,6 +1304,9 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
     "- Avoid assuming an ongoing event is still happening.",
     "- Do not use weather or riding-condition small talk.",
     "",
+    "Examples:",
+    ...examples,
+    "",
     `Recent messages/context:\n${history.join("\n")}`
   ].join("\n");
   try {
@@ -1305,7 +1314,7 @@ export async function parseCadencePersonalizationLineWithLLM(args: {
       model,
       prompt,
       schemaName: "cadence_personalization_line",
-      schema,
+      schema: CADENCE_PERSONALIZATION_LINE_JSON_SCHEMA,
       maxOutputTokens: 80,
       debugTag: "llm-cadence-personalization"
     });
@@ -1341,6 +1350,14 @@ export async function parseAffectWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'input: "Customer: This is getting ridiculous. Nobody has called me back." output: {"primary_affect":"frustrated","explicit_affect":true,"needs_empathy":true,"has_humor":false,"has_positive_energy":false,"has_negative_sentiment":true,"tone_intensity":0.82,"confidence":0.96}',
+    'input: "Customer: I am super excited to come see it tomorrow!" output: {"primary_affect":"excited","explicit_affect":true,"needs_empathy":false,"has_humor":false,"has_positive_energy":true,"has_negative_sentiment":false,"tone_intensity":0.74,"confidence":0.95}',
+    'input: "Customer: lol if this thing fits me I may be in trouble" output: {"primary_affect":"humorous","explicit_affect":true,"needs_empathy":false,"has_humor":true,"has_positive_energy":true,"has_negative_sentiment":false,"tone_intensity":0.48,"confidence":0.91}',
+    'input: "Customer: I am nervous about the payment and the credit app." output: {"primary_affect":"anxious","explicit_affect":true,"needs_empathy":true,"has_humor":false,"has_positive_energy":false,"has_negative_sentiment":true,"tone_intensity":0.68,"confidence":0.93}',
+    'input: "Customer: I am not sure what you mean by hold." output: {"primary_affect":"confused","explicit_affect":true,"needs_empathy":false,"has_humor":false,"has_positive_energy":false,"has_negative_sentiment":false,"tone_intensity":0.44,"confidence":0.9}',
+    'input: "Customer: ok thanks" output: {"primary_affect":"neutral","explicit_affect":false,"needs_empathy":false,"has_humor":false,"has_positive_energy":false,"has_negative_sentiment":false,"tone_intensity":0.15,"confidence":0.94}'
+  ];
   const prompt = [
     "You parse customer affect for dealership conversations.",
     "Return only JSON matching the schema.",
@@ -1359,6 +1376,9 @@ export async function parseAffectWithLLM(args: {
     "- Focus on the latest inbound message first; use history only to disambiguate.",
     "- If uncertain, choose primary_affect=none with lower confidence.",
     "- A short acknowledgment like 'ok thanks' is usually neutral unless clear frustration/excitement appears.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -4169,6 +4189,18 @@ export async function parseDialogActWithLLM(args: {
 
   const history = (args.history ?? []).slice(-4).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'input: "Customer: I like buying from a dealer because private party stuff sketches me out" output: {"act":"trust_concern","topic":"used_inventory","explicit_request":false,"next_action":"reassure_then_clarify","ask_focus":"condition","confidence":0.94}',
+    'input: "Customer: That payment is way higher than I expected" output: {"act":"objection","topic":"pricing","explicit_request":false,"next_action":"empathize_then_offer_help","ask_focus":"budget","confidence":0.92}',
+    'input: "Customer: I am not putting any money down today." output: {"act":"objection","topic":"pricing","explicit_request":false,"next_action":"empathize_then_offer_help","ask_focus":"budget","confidence":0.91}',
+    'input: "Customer: I am trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs." output: {"act":"clarification","topic":"pricing","explicit_request":false,"next_action":"ask_one_clarifier","ask_focus":"budget","confidence":0.9}',
+    'input: "Customer: I keep getting different answers and it is frustrating" output: {"act":"frustration","topic":"general","explicit_request":false,"next_action":"empathize_then_offer_help","ask_focus":"other","confidence":0.93}',
+    'input: "Customer: I only trust dealer service, independents burned me before." output: {"act":"trust_concern","topic":"service","explicit_request":false,"next_action":"reassure_then_clarify","ask_focus":"other","confidence":0.92}',
+    'input: "Customer: I would rather stay used if possible" output: {"act":"preference","topic":"used_inventory","explicit_request":false,"next_action":"ask_one_clarifier","ask_focus":"budget","confidence":0.91}',
+    'input: "Customer: What do you mean by demo?" output: {"act":"clarification","topic":"general","explicit_request":true,"next_action":"normal_flow","ask_focus":"other","confidence":0.93}',
+    'input: "Customer: Do you have any Road Glide 3s in stock?" output: {"act":"none","topic":"used_inventory","explicit_request":true,"next_action":"normal_flow","ask_focus":"none","confidence":0.96}',
+    'input: "Customer: ok thank you" output: {"act":"none","topic":"general","explicit_request":false,"next_action":"normal_flow","ask_focus":"none","confidence":0.95}'
+  ];
   const prompt = [
     "You are a dialog-act classifier for dealership inbound messages.",
     "Return only JSON that matches the provided schema.",
@@ -4182,7 +4214,11 @@ export async function parseDialogActWithLLM(args: {
     "- clarification covers uncertain/ambiguous statements asking for understanding but not a concrete inventory/pricing/scheduling ask.",
     "- If message contains a direct inventory/pricing/scheduling/trade/service request, set explicit_request=true and next_action=normal_flow.",
     "- ask_focus should point to the single best follow-up clarifier for no-request statements.",
+    "- Customer self-reflection about affordability, confidence, experience, or whether they can ride is not an explicit request unless they ask a question or ask for action.",
     "- confidence is a number from 0 to 1.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -4940,6 +4976,13 @@ export async function parseTradePayoffWithLLM(args: {
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const existing = args.tradePayoff ?? null;
+  const examples = [
+    'input: "Customer: No lien no payoff. I own it and have the title." output: {"payoff_status":"no_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.98}',
+    'input: "Customer: I still owe on it through Eaglemark." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.95}',
+    'input: "Customer: I did not have the lien holder info. Do you have the lien holder address?" output: {"payoff_status":"has_lien","needs_lien_holder_info":true,"provides_lien_holder_info":false,"confidence":0.94}',
+    'input: "Customer: Lien holder is Eaglemark Savings Bank, PO Box 277940 Sacramento CA 95827." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":true,"confidence":0.96}',
+    'input: "Customer: I can come by Friday afternoon to look at it." output: {"payoff_status":"unknown","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.93}'
+  ];
   const prompt = [
     "You are a parser for dealership trade-in lien/payoff messages.",
     "Return only JSON that matches the provided schema.",
@@ -4954,6 +4997,9 @@ export async function parseTradePayoffWithLLM(args: {
     "- Spelling mistakes are common (e.g., lein).",
     "- If message is unrelated to liens/payoff, return unknown/false/false with lower confidence.",
     "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       vehicle: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -6524,6 +6570,14 @@ export async function parseJourneyIntentWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'input: "Customer: I want to trade my Heritage and look at a Street Glide." output: {"journey_intent":"sale_trade","explicit_request":true,"confidence":0.96}',
+    'input: "Customer: How much are payments on the 2025 Heritage?" output: {"journey_intent":"sale_trade","explicit_request":true,"confidence":0.97}',
+    'input: "Customer: My brake lever is sticking and I need service." output: {"journey_intent":"service_support","explicit_request":true,"confidence":0.96}',
+    'input: "Customer: I signed up for the giveaway at the event." output: {"journey_intent":"marketing_event","explicit_request":false,"confidence":0.9}',
+    'input: "Customer: Thanks, I will think about it." output: {"journey_intent":"none","explicit_request":false,"confidence":0.95}',
+    'input: "Customer: I already bought elsewhere." output: {"journey_intent":"none","explicit_request":false,"confidence":0.93}'
+  ];
   const prompt = [
     "You are a parser for inbound dealership customer messages.",
     "Return only JSON that matches the provided schema.",
@@ -6539,6 +6593,9 @@ export async function parseJourneyIntentWithLLM(args: {
     "- If uncertain between sale_trade and anything else, choose none.",
     "- explicit_request=true only when the customer clearly asks for action.",
     "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
@@ -6609,6 +6666,16 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'input: "Staff: She showed up and rode the trike. Needs a follow up next week." output: {"outcome":"showed_up","explicit_outcome":true,"follow_up_window_text":"next week","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.95}',
+    'input: "Staff: No showed today, call her tomorrow to reschedule." output: {"outcome":"no_show","explicit_outcome":true,"follow_up_window_text":"tomorrow","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.97}',
+    'input: "Staff: Sold and delivered the 2026 Street Glide 3." output: {"outcome":"sold","explicit_outcome":true,"follow_up_window_text":"","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":2026,"unit_make":"","unit_model":"Street Glide 3","unit_trim":"","confidence":0.98}',
+    'input: "Staff: Put him on hold until next Friday for the incoming Road Glide." output: {"outcome":"hold","explicit_outcome":true,"follow_up_window_text":"next Friday","unit_stock_id":"","unit_vin":"","unit_on_order":true,"unit_year":0,"unit_make":"","unit_model":"Road Glide","unit_trim":"","confidence":0.95}',
+    'input: "Staff: Waiting on financing and a cosigner, follow up in a few days." output: {"outcome":"follow_up","explicit_outcome":true,"follow_up_window_text":"a few days","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.94}',
+    'input: "Staff: Bought elsewhere, close it out." output: {"outcome":"lost","explicit_outcome":true,"follow_up_window_text":"","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.97}',
+    'input: "Staff: He asked about coffee and chatted with Stone." output: {"outcome":"other","explicit_outcome":true,"follow_up_window_text":"","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.8}',
+    'input: "Staff: please call me when you can" output: {"outcome":"none","explicit_outcome":false,"follow_up_window_text":"","unit_stock_id":"","unit_vin":"","unit_on_order":false,"unit_year":0,"unit_make":"","unit_model":"","unit_trim":"","confidence":0.94}'
+  ];
   const prompt = [
     "You parse internal salesperson SMS updates about post-ride/test-ride outcomes.",
     "Return only JSON matching the schema.",
@@ -6633,6 +6700,9 @@ export async function parseStaffOutcomeUpdateWithLLM(args: {
     "- If no_show + follow-up appear, choose no_show.",
     "- If hold + follow-up appear, choose hold.",
     "- If uncertain, choose none with low confidence.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       leadRef: lead?.leadRef ?? null,
@@ -6717,17 +6787,20 @@ export async function parseAppointmentOutcomeFollowUpPlanWithLLM(args: {
     (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
   const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'note: "Needs a little getting used to the trike. Not sure if he is really interested. Invite him back to ride a Heritage Softail" output: {"follow_up_needed":true,"customer_status":"uncertain","primary_concern":"comfort_confidence","recommended_action":"offer_alternative_ride","target_vehicle_model":"Heritage Softail","target_vehicle_year":"","target_vehicle_condition":"any","original_vehicle_model":"","follow_up_window_text":"","follow_up_date_text":"","message_angle":"compare_alternative","urgency":"unknown","draft_sms":"Thanks again for coming in. If it helps, we can have you ride a Heritage Softail too so you can compare the feel.","reasoning":"Customer was unsure on trike comfort and note asks to invite alternative ride.","confidence":0.94}',
+    'note: "Loved the bike but payment was high, wants numbers with 2k down" output: {"follow_up_needed":true,"customer_status":"needs_more_info","primary_concern":"price_payment","recommended_action":"send_numbers","target_vehicle_model":"","target_vehicle_year":"","target_vehicle_condition":"unknown","original_vehicle_model":"","follow_up_window_text":"","follow_up_date_text":"","message_angle":"numbers_next_step","urgency":"today","draft_sms":"Thanks again for coming in. I can work numbers with $2,000 down and follow up with options for you.","reasoning":"Customer liked bike but needs payment options.","confidence":0.95}',
+    'note: "No showed, call tomorrow" output: {"follow_up_needed":true,"customer_status":"unknown","primary_concern":"timing","recommended_action":"call_customer","target_vehicle_model":"","target_vehicle_year":"","target_vehicle_condition":"unknown","original_vehicle_model":"","follow_up_window_text":"tomorrow","follow_up_date_text":"tomorrow","message_angle":"appointment_invite","urgency":"tomorrow","draft_sms":"","reasoning":"No-show note asks for a call tomorrow, not a customer SMS draft.","confidence":0.96}',
+    'note: "Reach back out on 5/22" output: {"follow_up_needed":true,"customer_status":"unknown","primary_concern":"timing","recommended_action":"soft_check_in","target_vehicle_model":"","target_vehicle_year":"","target_vehicle_condition":"unknown","original_vehicle_model":"","follow_up_window_text":"5/22","follow_up_date_text":"5/22","message_angle":"soft_check_in","urgency":"this_week","draft_sms":"Just checking in like we discussed. Let me know if you want to revisit anything or if another time works better.","reasoning":"Specific follow-up date with no other context.","confidence":0.92}',
+    'note: "Wife needs to see it, bring her back Saturday" output: {"follow_up_needed":true,"customer_status":"interested","primary_concern":"needs_spouse_or_friend","recommended_action":"invite_back","target_vehicle_model":"","target_vehicle_year":"","target_vehicle_condition":"unknown","original_vehicle_model":"","follow_up_window_text":"Saturday","follow_up_date_text":"Saturday","message_angle":"appointment_invite","urgency":"this_week","draft_sms":"Thanks again for coming in. If Saturday works, bring her by and we can go over it together.","reasoning":"Spouse needs to see vehicle and note asks to invite back.","confidence":0.95}',
+    'note: "Bought elsewhere" output: {"follow_up_needed":false,"customer_status":"lost","primary_concern":"none","recommended_action":"no_follow_up","target_vehicle_model":"","target_vehicle_year":"","target_vehicle_condition":"unknown","original_vehicle_model":"","follow_up_window_text":"","follow_up_date_text":"","message_angle":"no_message","urgency":"unknown","draft_sms":"","reasoning":"Customer bought elsewhere; no follow-up needed.","confidence":0.98}'
+  ];
   const prompt = [
     "You parse messy salesperson appointment/test-ride outcome notes into an actionable follow-up plan.",
     "Return only JSON matching the schema.",
     "",
-    "Common notes and expected interpretation:",
-    '- "Needs a little getting used to the trike. Not sure if he is really interested. Invite him back to ride a Heritage Softail" -> follow_up_needed=true, customer_status=uncertain, primary_concern=comfort_confidence, recommended_action=offer_alternative_ride, target_vehicle_model=Heritage Softail, message_angle=compare_alternative.',
-    '- "Loved the bike but payment was high, wants numbers with 2k down" -> recommended_action=send_numbers, primary_concern=price_payment, message_angle=numbers_next_step.',
-    '- "No showed, call tomorrow" -> recommended_action=call_customer, urgency=tomorrow.',
-    '- "Reach back out on 5/22" -> follow_up_window_text=5/22, follow_up_date_text=5/22, urgency=this_week.',
-    '- "Wife needs to see it, bring her back Saturday" -> primary_concern=needs_spouse_or_friend, recommended_action=invite_back, urgency=this_week.',
-    '- "Bought elsewhere" -> follow_up_needed=false, customer_status=lost, recommended_action=no_follow_up.',
+    "Examples:",
+    ...examples,
     "",
     "Rules:",
     "- Do not invent stock numbers or facts.",
@@ -6844,6 +6917,14 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
+  const examples = [
+    'input: "Summary: Customer is approved pending final signatures." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.96,"reason_text":"approved pending final signatures"}',
+    'input: "Summary: Harley approved him with a cosigner." output: {"outcome":"approved","explicit_outcome":true,"confidence":0.95,"reason_text":"approved with a cosigner"}',
+    'input: "Summary: Could not approve the application." output: {"outcome":"declined","explicit_outcome":true,"confidence":0.97,"reason_text":"could not approve application"}',
+    'input: "Summary: Lender needs proof of income and insurance before moving forward." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.96,"reason_text":"needs proof of income and insurance"}',
+    'input: "Summary: Needs a co-signer and residence history." output: {"outcome":"needs_more_info","explicit_outcome":true,"confidence":0.95,"reason_text":"needs co-signer and residence history"}',
+    'input: "Summary: Customer asked about rates and said he will think about it." output: {"outcome":"none","explicit_outcome":false,"confidence":0.93,"reason_text":""}'
+  ];
   const prompt = [
     "You parse dealership call transcripts/summaries for finance outcome.",
     "Return only JSON matching the schema.",
@@ -6859,6 +6940,9 @@ export async function parseFinanceOutcomeFromCallWithLLM(args: {
     "- 'Needs cosigner' or 'waiting on docs' should map to needs_more_info unless explicitly 'not approved/declined'.",
     "- explicit_outcome=true only when clearly stated.",
     "- reason_text should be short phrase from transcript/summary when approved/declined/needs_more_info; else empty string.",
+    "",
+    "Examples:",
+    ...examples,
     "",
     `Known lead info: ${JSON.stringify({
       leadRef: lead?.leadRef ?? null,
