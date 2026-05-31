@@ -5131,10 +5131,62 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const isRideChallengeSignup =
     isRideChallengeLead &&
     !hasRideChallengeSignupAcknowledgement(conv.messages);
-  const publishEarlyAdfSmsDraft = (text: string, mediaUrls?: string[]) => {
+
+  let cachedInitialDealerProfile: any | undefined;
+  const getInitialDealerProfile = async () => {
+    if (cachedInitialDealerProfile !== undefined) return cachedInitialDealerProfile;
+    cachedInitialDealerProfile = await getDealerProfile();
+    return cachedInitialDealerProfile;
+  };
+
+  const applyInitialAdfPrefix = async (text: string) => {
+    if (!isInitialAdf) return text;
+    const profile = await getInitialDealerProfile();
+    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+    const agentName = profile?.agentName ?? "Brooke";
+    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+    const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
+    const prefixLower = prefix.toLowerCase();
+    let body = String(text ?? "").trim();
+    if (body.toLowerCase().startsWith(prefixLower)) return body;
+    const leadSourceLower = String(conv.lead?.source ?? "").toLowerCase();
+    const isMetaLead = /meta/.test(leadSourceLower);
+    const modelLabel = formatModelLabel(
+      conv?.lead?.vehicle?.year ?? null,
+      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
+    );
+    body = body.replace(/^hi\s+[^—]+—\s*/i, "");
+    body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
+    if (isMetaLead) {
+      body = body.replace(/^thanks\s*[-—]\s*i saw you wanted to learn more about[^.]*\.\s*/i, "");
+      body = body.replace(/^thanks\s*[-—]\s*/i, "");
+      if (!/\b(meta|facebook)\b/i.test(body)) {
+        const metaLine = modelLabel
+          ? `I saw your Meta inquiry come over for the ${modelLabel}.`
+          : "I saw your Meta inquiry come over.";
+        body = `${metaLine} ${body}`.trim();
+      }
+    }
+    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Strip any pre-existing identity intro so initial ADF always uses one
+    // consistent profile-based line and never double-introduces.
+    body = body.replace(/\bthis is\s+[^.]{1,80}?\s+at\s+[^.]{2,120}\.?\s*/gi, "");
+    const agentEsc = esc(agentName);
+    const dealerEsc = esc(dealerName);
+    body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
+    if (firstName) {
+      const firstEsc = esc(firstName);
+      body = body.replace(new RegExp(`\\b(thanks\\s+for\\s+(?:the\\s+)?note),\\s*${firstEsc}\\s*[—-]\\s*`, "ig"), "$1 — ");
+    }
+    return `${prefix}${body}`.trim();
+  };
+
+  const publishEarlyAdfSmsDraft = async (text: string, mediaUrls?: string[]) => {
+    const prefixed = await applyInitialAdfPrefix(text);
     const invariant = applyDraftStateInvariants({
       inboundText: event.body ?? "",
-      draftText: text,
+      draftText: prefixed,
       followUpMode: conv.followUp?.mode ?? null,
       followUpReason: conv.followUp?.reason ?? null,
       dialogState: conv.dialogState?.name ?? null,
@@ -5177,7 +5229,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       agentName: profile?.agentName,
       inventoryStatus: "unknown"
     });
-    return publishEarlyAdfSmsDraft(draft);
+    return await publishEarlyAdfSmsDraft(draft);
   };
   const getPublishedDraftText = (result: Awaited<ReturnType<typeof publishDealerRideInitialThankYouDraft>>) =>
     "draft" in result ? result.draft : undefined;
@@ -5188,7 +5240,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const ack = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
     const dueAt = await applyRideChallengeReminderCadence();
-    publishEarlyAdfSmsDraft(ack);
+    await publishEarlyAdfSmsDraft(ack);
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -5416,56 +5468,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draftStatus: dealerRideInitialThankYou
     });
   }
-
-  let cachedInitialDealerProfile: any | undefined;
-  const getInitialDealerProfile = async () => {
-    if (cachedInitialDealerProfile !== undefined) return cachedInitialDealerProfile;
-    cachedInitialDealerProfile = await getDealerProfile();
-    return cachedInitialDealerProfile;
-  };
-
-  const applyInitialAdfPrefix = async (text: string) => {
-    if (!isInitialAdf) return text;
-    const profile = await getInitialDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
-    const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
-    const prefixLower = prefix.toLowerCase();
-    let body = String(text ?? "").trim();
-    if (body.toLowerCase().startsWith(prefixLower)) return body;
-    const leadSourceLower = String(conv.lead?.source ?? "").toLowerCase();
-    const isMetaLead = /meta/.test(leadSourceLower);
-    const modelLabel = formatModelLabel(
-      conv?.lead?.vehicle?.year ?? null,
-      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
-    );
-    body = body.replace(/^hi\s+[^—]+—\s*/i, "");
-    body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
-    if (isMetaLead) {
-      body = body.replace(/^thanks\s*[-—]\s*i saw you wanted to learn more about[^.]*\.\s*/i, "");
-      body = body.replace(/^thanks\s*[-—]\s*/i, "");
-      if (!/\b(meta|facebook)\b/i.test(body)) {
-        const metaLine = modelLabel
-          ? `I saw your Meta inquiry come over for the ${modelLabel}.`
-          : "I saw your Meta inquiry come over.";
-        body = `${metaLine} ${body}`.trim();
-      }
-    }
-    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Strip any pre-existing identity intro so initial ADF always uses one
-    // consistent profile-based line and never double-introduces.
-    body = body.replace(/\bthis is\s+[^.]{1,80}?\s+at\s+[^.]{2,120}\.?\s*/gi, "");
-    const agentEsc = esc(agentName);
-    const dealerEsc = esc(dealerName);
-    body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
-    if (firstName) {
-      const firstEsc = esc(firstName);
-      body = body.replace(new RegExp(`\\b(thanks\\s+for\\s+(?:the\\s+)?note),\\s*${firstEsc}\\s*[—-]\\s*`, "ig"), "$1 — ");
-    }
-    return `${prefix}${body}`.trim();
-  };
 
   const isServiceLead = inferredBucket === "service" || inferredCta === "service_request" || serviceVinRequest;
   const isPartsLead = inferredBucket === "parts" || inferredCta === "parts_request" || inferredCta === "parts_inquiry";

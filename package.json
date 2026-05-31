@@ -26,6 +26,7 @@
     "inventory_entity:eval": "LLM_ENABLED=1 LLM_INVENTORY_ENTITY_PARSER_ENABLED=1 npx tsx scripts/inventory_entity_eval.ts",
     "inventory_status:eval": "LLM_ENABLED=1 LLM_INVENTORY_STATUS_PARSER_ENABLED=1 npx tsx scripts/inventory_status_eval.ts",
     "inventory_fact_answer:eval": "npx tsx scripts/inventory_fact_answer_eval.ts",
+    "recent_vehicle_discussion:eval": "npx tsx scripts/recent_vehicle_discussion_eval.ts",
     "appointment_timing:eval": "LLM_ENABLED=1 LLM_APPOINTMENT_TIMING_PARSER_ENABLED=1 node -r dotenv/config ./node_modules/.bin/tsx scripts/appointment_timing_eval.ts",
     "customer_ack_action:eval": "LLM_ENABLED=1 LLM_CUSTOMER_ACK_ACTION_PARSER_ENABLED=1 npx tsx scripts/customer_ack_action_eval.ts",
     "inbound_reply_action:eval": "LLM_ENABLED=1 LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED=1 npx tsx scripts/inbound_reply_action_eval.ts",
