@@ -174,6 +174,18 @@ function resolveCatalogCodesForLabel(catalog: Catalog, catalogCodes: Set<string>
   for (const entry of aliasEntries) {
     if (labelKey === entry.key || labelKey.includes(entry.key)) return entry.codes;
   }
+
+  const familyEntries = Object.entries(catalog.families ?? {})
+    .map(([raw, codes]) => ({
+      key: normalizeKey(raw),
+      codes: codeSet(codes)
+    }))
+    .filter(entry => entry.key.length >= 4 && entry.codes.size)
+    .sort((left, right) => right.key.length - left.key.length);
+
+  for (const entry of familyEntries) {
+    if (labelKey === entry.key || labelKey.includes(entry.key)) return entry.codes;
+  }
   return new Set();
 }
 
@@ -381,7 +393,8 @@ async function auditRuntimeWatches(catalog: Catalog): Promise<RuntimeWatchSummar
       }
 
       if (model && isLikelyHarleyWatch(catalog, watch)) {
-        const codes = resolveCatalogCodesForLabel(catalog, catalogCodes, model);
+        const resolutionText = [model, watch?.note].map(value => String(value ?? "").trim()).filter(Boolean).join(" ");
+        const codes = resolveCatalogCodesForLabel(catalog, catalogCodes, resolutionText);
         if (!codes.size) {
           addFinding(
             conv,
