@@ -112,6 +112,13 @@ async function run() {
     String(process.env.FEEDBACK_REPORT_OUTCOME_QA_PATH ?? "").trim() ||
     path.join(outcomeQaOutDir, "outcome_qa_report.json");
   const outcomeQaMdPath = path.join(path.dirname(outcomeQaJsonPath), "outcome_qa_report.md");
+  const vehicleWatchQaOutDir =
+    process.env.VEHICLE_WATCH_QA_OUT_DIR ||
+    path.resolve(path.dirname(outDir), "vehicle_watch_qa");
+  const vehicleWatchQaJsonPath =
+    String(process.env.FEEDBACK_REPORT_VEHICLE_WATCH_QA_PATH ?? "").trim() ||
+    path.join(vehicleWatchQaOutDir, "vehicle_watch_catalog_report.json");
+  const vehicleWatchQaMdPath = path.join(path.dirname(vehicleWatchQaJsonPath), "vehicle_watch_catalog_report.md");
   const agentManagerOutDir =
     process.env.AGENT_MANAGER_OUT_DIR ||
     path.resolve(path.dirname(outDir), "agent_manager");
@@ -129,6 +136,7 @@ async function run() {
   const toneSummary = readJson(toneSummaryPath);
   const voiceSummary = readJson(voiceSummaryPath);
   const outcomeQaSummary = readJson(outcomeQaJsonPath);
+  const vehicleWatchQaSummary = readJson(vehicleWatchQaJsonPath);
   const agentManagerSummary = readJson(agentManagerJsonPath);
   const followupTaskAudit = followupTaskAuditPath ? readJson(followupTaskAuditPath) : null;
 
@@ -196,6 +204,41 @@ async function run() {
       outcomeQaSummary ? fmtCountRows(outcomeQaSummary?.summary?.findingsByIssue, "issue") : "none"
     }`,
     "",
+    `Vehicle watch QA: ${
+      vehicleWatchQaSummary
+        ? `status=${vehicleWatchQaSummary.ok ? "ok" : "needs_review"} checks=${num(
+            vehicleWatchQaSummary?.summary?.checkCount
+          )} findings=${num(vehicleWatchQaSummary?.summary?.failureCount)} 2026_models=${num(
+            vehicleWatchQaSummary?.summary?.configured2026ModelCount
+          )}/${num(vehicleWatchQaSummary?.summary?.official2026ModelCount)} alias_bridges=${num(
+            vehicleWatchQaSummary?.summary?.aliasBridgeCount
+          )} family_aliases=${num(vehicleWatchQaSummary?.summary?.familyAliasCount)}`
+        : "not available"
+    }`,
+    `Vehicle watch runtime: ${
+      vehicleWatchQaSummary?.runtimeWatch
+        ? `watch_conversations=${num(vehicleWatchQaSummary.runtimeWatch.watchConversations)} active_watches=${num(
+            vehicleWatchQaSummary.runtimeWatch.activeWatchCount
+          )} prompted=${num(vehicleWatchQaSummary.runtimeWatch.promptedWatchCount)} findings=${num(
+            vehicleWatchQaSummary.runtimeWatch.findingCount
+          )}`
+        : "not available"
+    }`,
+    `Vehicle watch findings: ${
+      Array.isArray(vehicleWatchQaSummary?.findings) && vehicleWatchQaSummary.findings.length
+        ? vehicleWatchQaSummary.findings
+            .slice(0, 5)
+            .map((finding: AnyObj) => finding.message ?? "unknown")
+            .join("; ")
+        : Array.isArray(vehicleWatchQaSummary?.runtimeWatch?.findings) &&
+            vehicleWatchQaSummary.runtimeWatch.findings.length
+          ? vehicleWatchQaSummary.runtimeWatch.findings
+              .slice(0, 5)
+              .map((finding: AnyObj) => `${finding.issue ?? "runtime_watch"}: ${finding.message ?? "unknown"}`)
+              .join("; ")
+        : "none"
+    }`,
+    "",
     `Agent manager: ${
       agentManagerSummary
         ? `status=${agentManagerSummary.status ?? "unknown"} tasks=${Array.isArray(agentManagerSummary.tasks) ? agentManagerSummary.tasks.length : 0}`
@@ -248,6 +291,8 @@ async function run() {
     maybeAttach(voiceRowsPath, "voice_feedback_rows.json");
     maybeAttach(outcomeQaJsonPath, "outcome_qa_report.json");
     maybeAttach(outcomeQaMdPath, "outcome_qa_report.md", "text/markdown");
+    maybeAttach(vehicleWatchQaJsonPath, "vehicle_watch_catalog_report.json");
+    maybeAttach(vehicleWatchQaMdPath, "vehicle_watch_catalog_report.md", "text/markdown");
     maybeAttach(agentManagerJsonPath, "agent_manager_report.json");
     maybeAttach(agentManagerMdPath, "agent_manager_report.md", "text/markdown");
     if (followupTaskAuditPath) maybeAttach(followupTaskAuditPath, path.basename(followupTaskAuditPath));
@@ -272,6 +317,8 @@ async function run() {
       voiceRowsPath,
       outcomeQaJsonPath,
       outcomeQaMdPath,
+      vehicleWatchQaJsonPath,
+      vehicleWatchQaMdPath,
       agentManagerJsonPath,
       agentManagerMdPath,
       ...(followupTaskAuditPath ? [followupTaskAuditPath] : []),

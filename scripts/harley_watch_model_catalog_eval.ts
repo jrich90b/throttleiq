@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 type Catalog = {
@@ -7,6 +7,70 @@ type Catalog = {
 };
 
 const root = process.cwd();
+
+type CliArgs = {
+  out?: string;
+  markdown?: string;
+};
+
+type CheckResult = {
+  ok: boolean;
+  message: string;
+};
+
+type CatalogReport = {
+  ok: boolean;
+  generatedAt: string;
+  summary: {
+    checkCount: number;
+    failureCount: number;
+    official2026ModelCount: number;
+    configured2026ModelCount: number;
+    aliasBridgeCount: number;
+    familyAliasCount: number;
+  };
+  runtimeWatch?: RuntimeWatchSummary;
+  checks: CheckResult[];
+  findings: CheckResult[];
+  fatalError?: string;
+};
+
+type RuntimeWatchFinding = {
+  issue: string;
+  message: string;
+  conversationId?: string;
+  customerName?: string;
+  leadRef?: string;
+  watch?: unknown;
+};
+
+type RuntimeWatchSummary = {
+  sourcePath?: string;
+  conversationsChecked: number;
+  watchConversations: number;
+  activeWatchCount: number;
+  promptedWatchCount: number;
+  skippedUnrecognizedNonHarleyCount: number;
+  findingCount: number;
+  findings: RuntimeWatchFinding[];
+};
+
+const checks: CheckResult[] = [];
+
+function parseArgs(argv = process.argv.slice(2)): CliArgs {
+  const args: CliArgs = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const value = argv[i];
+    if (value === "--out") {
+      args.out = argv[i + 1];
+      i += 1;
+    } else if (value === "--markdown" || value === "--md") {
+      args.markdown = argv[i + 1];
+      i += 1;
+    }
+  }
+  return args;
+}
 
 function normalizeKey(value: string): string {
   return String(value ?? "")
@@ -33,12 +97,19 @@ async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(path.resolve(root, file), "utf8")) as T;
 }
 
-function fail(message: string): never {
-  throw new Error(message);
+async function readOptionalJson<T>(file: string | undefined): Promise<T | null> {
+  if (!file) return null;
+  try {
+    return JSON.parse(await readFile(path.resolve(root, file), "utf8")) as T;
+  } catch (error) {
+    const code = (error as any)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
 }
 
 function assert(condition: unknown, message: string): void {
-  if (!condition) fail(message);
+  checks.push({ ok: Boolean(condition), message });
 }
 
 function getAlias(catalog: Catalog, label: string): Set<string> {
@@ -133,7 +204,292 @@ const familyAliases = [
   "Touring"
 ];
 
+function resolveConversationsPath(): string | undefined {
+  const explicit = String(process.env.CONVERSATIONS_DB_PATH || process.env.CONVERSATIONS_PATH || "").trim();
+  if (explicit) return explicit;
+  const dataDir = String(process.env.DATA_DIR || "").trim();
+  return dataDir ? path.join(dataDir, "conversations.json") : undefined;
+}
+
+function extractConversations(raw: any): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.conversations)) return raw.conversations;
+  if (raw?.conversations && typeof raw.conversations === "object") {
+    return Object.values(raw.conversations);
+  }
+  if (raw && typeof raw === "object") {
+    return Object.values(raw).filter(value => {
+      if (!value || typeof value !== "object") return false;
+      return Boolean(
+        (value as any).messages ||
+          (value as any).inventoryWatch ||
+          (value as any).inventoryWatches ||
+          (value as any).followUp ||
+          (value as any).dialogState
+      );
+    });
+  }
+  return [];
+}
+
+function watchKey(watch: any): string {
+  return JSON.stringify({
+    model: normalizeKey(watch?.model ?? ""),
+    make: normalizeKey(watch?.make ?? ""),
+    year: watch?.year ?? null,
+    yearMin: watch?.yearMin ?? null,
+    yearMax: watch?.yearMax ?? null,
+    color: normalizeKey(watch?.color ?? ""),
+    trim: normalizeKey(watch?.trim ?? ""),
+    condition: normalizeKey(watch?.condition ?? "")
+  });
+}
+
+function activeWatchList(conv: any): any[] {
+  const raw = [
+    conv?.inventoryWatch,
+    ...(Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [])
+  ].filter(Boolean);
+  const seen = new Set<string>();
+  return raw.filter(watch => {
+    const key = watchKey(watch);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return !watch?.status || String(watch.status).toLowerCase() === "active";
+  });
+}
+
+function dialogStateName(conv: any): string {
+  return normalizeKey(typeof conv?.dialogState === "string" ? conv.dialogState : conv?.dialogState?.name ?? "");
+}
+
+function isLikelyHarleyWatch(catalog: Catalog, watch: any): boolean {
+  const make = normalizeKey(watch?.make ?? "");
+  const model = normalizeKey(watch?.model ?? "");
+  if (make.includes("harley") || make.includes("davidson")) return true;
+  if (model && getAlias(catalog, model).size) return true;
+  return /\b(street|road|glide|iron|sportster|softail|fat boy|fat bob|breakout|heritage|low rider|pan america|nightster|freewheeler|tri glide|cvo|electra|road king)\b/i.test(
+    String(watch?.model ?? "")
+  );
+}
+
+function sameWatchIdentity(left: any, right: any): boolean {
+  return watchKey(left) === watchKey(right);
+}
+
+async function auditRuntimeWatches(catalog: Catalog): Promise<RuntimeWatchSummary | undefined> {
+  const sourcePath = resolveConversationsPath();
+  const raw = await readOptionalJson<any>(sourcePath);
+  if (!raw) return undefined;
+
+  const conversations = extractConversations(raw);
+  const findings: RuntimeWatchFinding[] = [];
+  let watchConversations = 0;
+  let activeWatchCount = 0;
+  let promptedWatchCount = 0;
+  let skippedUnrecognizedNonHarleyCount = 0;
+
+  const addFinding = (conv: any, issue: string, message: string, watch?: unknown) => {
+    findings.push({
+      issue,
+      message,
+      conversationId: conv?.id ? String(conv.id) : undefined,
+      customerName: conv?.customerName || conv?.name ? String(conv.customerName || conv.name) : undefined,
+      leadRef: conv?.leadRef ? String(conv.leadRef) : undefined,
+      watch
+    });
+  };
+
+  for (const conv of conversations) {
+    const watches = activeWatchList(conv);
+    const state = dialogStateName(conv);
+    const prompted = state === "inventory watch prompted";
+    const activeState = state === "inventory watch active";
+    const followUpReason = normalizeKey(conv?.followUp?.reason ?? "");
+    const hasWatchContext = watches.length > 0 || activeState || prompted || followUpReason === "inventory watch";
+
+    if (!hasWatchContext) continue;
+    watchConversations += 1;
+    if (prompted) promptedWatchCount += 1;
+    activeWatchCount += watches.length;
+
+    if (!watches.length && (activeState || followUpReason === "inventory watch") && !prompted) {
+      addFinding(
+        conv,
+        "missing_active_watch",
+        "Conversation is marked as inventory watch, but no active inventoryWatch record is present."
+      );
+    }
+
+    if (conv?.inventoryWatch && Array.isArray(conv?.inventoryWatches) && conv.inventoryWatches[0]) {
+      if (!sameWatchIdentity(conv.inventoryWatch, conv.inventoryWatches[0])) {
+        addFinding(
+          conv,
+          "primary_watch_mismatch",
+          "inventoryWatch and inventoryWatches[0] do not describe the same watch.",
+          { primary: conv.inventoryWatch, firstListItem: conv.inventoryWatches[0] }
+        );
+      }
+    }
+
+    for (const watch of watches) {
+      const model = String(watch?.model ?? "").trim();
+      if (!model) {
+        addFinding(conv, "active_watch_missing_model", "Active inventory watch is missing a model.", watch);
+      }
+
+      const year = Number(watch?.year ?? NaN);
+      const yearMin = Number(watch?.yearMin ?? NaN);
+      const yearMax = Number(watch?.yearMax ?? NaN);
+      const nextYear = new Date().getUTCFullYear() + 1;
+      if (Number.isFinite(year) && (year < 1903 || year > nextYear)) {
+        addFinding(conv, "watch_year_out_of_range", `Watch year ${year} is outside the expected Harley range.`, watch);
+      }
+      if (Number.isFinite(yearMin) && Number.isFinite(yearMax) && yearMin > yearMax) {
+        addFinding(conv, "watch_year_range_reversed", "Watch yearMin is greater than yearMax.", watch);
+      }
+
+      if (model && isLikelyHarleyWatch(catalog, watch)) {
+        const codes = getAlias(catalog, model);
+        if (!codes.size) {
+          addFinding(
+            conv,
+            "harley_watch_model_missing_catalog_codes",
+            `Harley watch model "${model}" does not resolve to model catalog codes.`,
+            watch
+          );
+        }
+      } else if (model) {
+        skippedUnrecognizedNonHarleyCount += 1;
+      }
+    }
+  }
+
+  return {
+    sourcePath,
+    conversationsChecked: conversations.length,
+    watchConversations,
+    activeWatchCount,
+    promptedWatchCount,
+    skippedUnrecognizedNonHarleyCount,
+    findingCount: findings.length,
+    findings
+  };
+}
+
+function buildReport(input: {
+  official2026ModelCount: number;
+  configured2026ModelCount: number;
+  runtimeWatch?: RuntimeWatchSummary;
+}): CatalogReport {
+  const findings = checks.filter(check => !check.ok);
+  const totalFailureCount = findings.length + (input.runtimeWatch?.findingCount ?? 0);
+  return {
+    ok: totalFailureCount === 0,
+    generatedAt: new Date().toISOString(),
+    summary: {
+      checkCount: checks.length,
+      failureCount: totalFailureCount,
+      official2026ModelCount: input.official2026ModelCount,
+      configured2026ModelCount: input.configured2026ModelCount,
+      aliasBridgeCount: catalogBridges.length,
+      familyAliasCount: familyAliases.length
+    },
+    runtimeWatch: input.runtimeWatch,
+    checks,
+    findings
+  };
+}
+
+function buildFatalReport(message: string): CatalogReport {
+  return {
+    ok: false,
+    generatedAt: new Date().toISOString(),
+    summary: {
+      checkCount: checks.length,
+      failureCount: checks.filter(check => !check.ok).length + 1,
+      official2026ModelCount: Object.values(official2026ByFamily).flat().length,
+      configured2026ModelCount: 0,
+      aliasBridgeCount: catalogBridges.length,
+      familyAliasCount: familyAliases.length
+    },
+    checks,
+    findings: [...checks.filter(check => !check.ok), { ok: false, message }],
+    fatalError: message
+  };
+}
+
+function reportMarkdown(report: CatalogReport): string {
+  const lines = [
+    "# Vehicle Watch Catalog QA",
+    "",
+    `Generated: ${report.generatedAt}`,
+    `Status: ${report.ok ? "OK" : "Needs review"}`,
+    "",
+    "## Summary",
+    "",
+    `- Checks: ${report.summary.checkCount}`,
+    `- Findings: ${report.summary.failureCount}`,
+    `- Official 2026 models expected: ${report.summary.official2026ModelCount}`,
+    `- 2026 models configured: ${report.summary.configured2026ModelCount}`,
+    `- Alias bridges checked: ${report.summary.aliasBridgeCount}`,
+    `- Family aliases checked: ${report.summary.familyAliasCount}`,
+    ...(report.runtimeWatch
+      ? [
+          `- Runtime watch conversations: ${report.runtimeWatch.watchConversations}`,
+          `- Runtime active watches: ${report.runtimeWatch.activeWatchCount}`,
+          `- Runtime watch findings: ${report.runtimeWatch.findingCount}`
+        ]
+      : ["- Runtime watch audit: not available"]),
+    "",
+    "## Findings",
+    ""
+  ];
+
+  if (!report.findings.length) {
+    lines.push("- None");
+  } else {
+    for (const finding of report.findings) {
+      lines.push(`- ${finding.message}`);
+    }
+  }
+
+  lines.push("", "## Runtime Watch Findings", "");
+  if (!report.runtimeWatch) {
+    lines.push("- Not available");
+  } else if (!report.runtimeWatch.findings.length) {
+    lines.push("- None");
+  } else {
+    for (const finding of report.runtimeWatch.findings) {
+      const label = [
+        finding.customerName,
+        finding.leadRef ? `Lead ${finding.leadRef}` : "",
+        finding.conversationId ? `Conversation ${finding.conversationId}` : ""
+      ]
+        .filter(Boolean)
+        .join(" - ");
+      lines.push(`- ${finding.issue}${label ? ` (${label})` : ""}: ${finding.message}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function writeArtifacts(report: CatalogReport, args: CliArgs): Promise<void> {
+  if (args.out) {
+    const filePath = path.resolve(root, args.out);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, `${JSON.stringify(report, null, 2)}\n`);
+  }
+  if (args.markdown) {
+    const filePath = path.resolve(root, args.markdown);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, reportMarkdown(report));
+  }
+}
+
 async function main(): Promise<void> {
+  const args = parseArgs();
   const modelsByYear = await readJson<Record<string, string[]>>("services/api/data/models_by_year.json");
   const catalog = await readJson<Catalog>("services/api/src/domain/model_codes_by_family.json");
   const apiSource = await readFile(path.resolve(root, "services/api/src/index.ts"), "utf8");
@@ -189,13 +545,34 @@ async function main(): Promise<void> {
   assert(webSource.includes('"cruiser"'), "UI watch family matching does not include Cruiser");
   assert(webSource.includes('"sport"'), "UI watch family matching does not include Sport");
 
-  console.log(
-    `Harley watch model catalog OK: ${official2026.length} official 2026 models, ` +
-      `${catalogBridges.length} alias bridges, ${familyAliases.length} family aliases.`
-  );
+  const runtimeWatch = await auditRuntimeWatches(catalog);
+  const report = buildReport({
+    official2026ModelCount: official2026.length,
+    configured2026ModelCount: (modelsByYear["2026"] ?? []).length,
+    runtimeWatch
+  });
+  await writeArtifacts(report, args);
+
+  if (report.ok) {
+    console.log(
+      `Harley watch model catalog OK: ${official2026.length} official 2026 models, ` +
+        `${catalogBridges.length} alias bridges, ${familyAliases.length} family aliases.`
+    );
+    return;
+  }
+
+  for (const finding of report.findings) {
+    console.error(`[harley-watch-model-catalog-eval] ${finding.message}`);
+  }
+  for (const finding of report.runtimeWatch?.findings ?? []) {
+    console.error(`[harley-watch-model-catalog-eval] ${finding.issue}: ${finding.message}`);
+  }
+  process.exitCode = 1;
 }
 
-main().catch(err => {
-  console.error("[harley-watch-model-catalog-eval] failed:", err instanceof Error ? err.message : err);
+main().catch(async err => {
+  const message = err instanceof Error ? err.message : String(err);
+  await writeArtifacts(buildFatalReport(message), parseArgs()).catch(() => {});
+  console.error("[harley-watch-model-catalog-eval] failed:", message);
   process.exit(1);
 });
