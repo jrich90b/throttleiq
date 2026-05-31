@@ -216,6 +216,34 @@
     }
   },
   {
+    "id": "watch_road_glide_trike_alias",
+    "text": "Text me if a Road Glide Trike comes in.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "road glide 3"
+    }
+  },
+  {
+    "id": "watch_pan_am_limited_alias",
+    "text": "Keep an eye out for a Pan Am Limited in black.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "pan america",
+      "watch_color_contains": "black"
+    }
+  },
+  {
+    "id": "watch_cvo_street_glide_3_limited",
+    "text": "Let me know if you get a CVO Street Glide 3 Limited.",
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "cvo street glide 3"
+    }
+  },
+  {
     "id": "demo_day_question_not_watch",
     "text": "Let me know if you guys have a demo day like Kawasaki",
     "expected": {

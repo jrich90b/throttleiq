@@ -3558,7 +3558,7 @@ function isStreetGlide3Variant(model: string | null | undefined): boolean {
   const t = normalizeModelName(String(model ?? ""));
   if (!t) return false;
   return (
-    /\bflhlt\b/.test(t) ||
+    /\bflhlt(?:se)?\b/.test(t) ||
     /\bstreet glide(?:\s+limited)?\s*(3|iii)\b/.test(t) ||
     /\bstreet glide limited iii\b/.test(t) ||
     /\bstreet glide trike\b/.test(t)
@@ -3570,6 +3570,9 @@ type InventoryWatchFamilyId =
   | "tri_glide"
   | "touring"
   | "grand_american_touring"
+  | "cruiser"
+  | "sport"
+  | "adventure_touring"
   | "softail"
   | "dyna"
   | "cvo"
@@ -3655,7 +3658,9 @@ function detectGenericWatchFamilyLabel(model: string | null | undefined): Invent
     return "heritage";
   }
   if (tokens.includes("sportster") || is883ModelToken(joined)) return "sportster";
-  if (hasSeq(["pan", "america"]) || hasSeq(["pan", "america", "1250"])) return "pan_america";
+  if (hasSeq(["pan", "america"]) || hasSeq(["pan", "am"]) || hasSeq(["pan", "america", "1250"])) {
+    return "pan_america";
+  }
   if (tokens.includes("vrod") || hasSeq(["v", "rod"])) return "v_rod";
   if (tokens.includes("nightster") || tokens.some(token => /^rh975/.test(token))) return "nightster";
 
@@ -3664,6 +3669,9 @@ function detectGenericWatchFamilyLabel(model: string | null | undefined): Invent
   if (tokensExactly(tokens, ["tri", "glide"])) return "tri_glide";
   if (tokensExactly(tokens, ["touring"])) return "touring";
   if (tokensExactly(tokens, ["grand", "american", "touring"])) return "grand_american_touring";
+  if (tokensExactly(tokens, ["cruiser"]) || tokensExactly(tokens, ["cruisers"])) return "cruiser";
+  if (tokensExactly(tokens, ["sport"]) || tokensExactly(tokens, ["sports"])) return "sport";
+  if (tokensExactly(tokens, ["adventure", "touring"])) return "adventure_touring";
   if (tokensExactly(tokens, ["softail"])) return "softail";
   if (tokensExactly(tokens, ["dyna"])) return "dyna";
   if (tokensExactly(tokens, ["cvo"])) return "cvo";
@@ -3730,6 +3738,12 @@ function modelBelongsToGenericWatchFamily(
     (tokens.includes("super") && tokens.includes("glide")) || tokens.includes("fxr");
   const modelHasCvo = tokens.includes("cvo");
   const modelHasNightster = tokens.includes("nightster") || tokens.some(token => /^rh975/.test(token));
+  const modelHasSportsterS =
+    (tokens.includes("sportster") && tokens.includes("s")) || tokens.some(token => /^rh1250/.test(token));
+  const modelHasPanAmerica =
+    containsTokenSequenceTokens(tokens, ["pan", "america"]) ||
+    containsTokenSequenceTokens(tokens, ["pan", "am"]) ||
+    tokens.some(token => /^ra1250/.test(token));
   switch (familyId) {
     case "trike":
       return (
@@ -3752,6 +3766,19 @@ function modelBelongsToGenericWatchFamily(
         modelHasUltraLimited ||
         modelHasTourGlide
       );
+    case "cruiser":
+      return (
+        modelHasHeritage ||
+        modelHasStreetBob ||
+        modelHasFatBob ||
+        modelHasFatBoy ||
+        modelHasBreakout ||
+        modelHasLowRider
+      );
+    case "sport":
+      return modelHasNightster || modelHasSportsterS;
+    case "adventure_touring":
+      return modelHasPanAmerica;
     case "softail":
       return (
         modelHasSoftail ||
@@ -3824,10 +3851,7 @@ function modelBelongsToGenericWatchFamily(
         tokens.some(token => /^rh1250/.test(token) || /^xl883/.test(token) || /^xl1200/.test(token))
       );
     case "pan_america":
-      return (
-        containsTokenSequenceTokens(tokens, ["pan", "america"]) ||
-        tokens.some(token => /^ra1250/.test(token))
-      );
+      return modelHasPanAmerica;
     case "v_rod":
       return (
         tokens.includes("vrod") ||
@@ -3883,14 +3907,17 @@ function canonicalizeWatchModelLabel(model: string | null | undefined): string {
     return "Tri Glide";
   }
   if (isRoadGlide3Variant(cleaned)) return "Road Glide 3";
-  if (isStreetGlide3Variant(cleaned)) return "Street Glide 3 Limited";
+  if (isStreetGlide3Variant(cleaned)) {
+    if (/\bcvo\b/.test(t) || /\bflhltse\b/.test(t)) return "CVO Street Glide 3 Limited";
+    return "Street Glide 3 Limited";
+  }
   if (/\bstreet glide limited iii\b/.test(t)) {
     return "Street Glide 3 Limited";
   }
   if (/\bflhxxx\b/.test(t) || /\bstreet glide trike\b/.test(t)) return "Street Glide Trike";
-  if (/\bra1250st\b/.test(t) || /\bpan america(?:\s+1250)?\s+st\b/.test(t)) return "Pan America 1250 ST";
-  if (/\bra1250s\b/.test(t) || /\bpan america(?:\s+1250)?\s+special\b/.test(t)) return "Pan America Special";
-  if (/\bra1250l\b/.test(t) || /\bpan america(?:\s+1250)?\s+l(?:imited)?\b/.test(t)) return "Pan America 1250 L";
+  if (/\bra1250st\b/.test(t) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+st\b/.test(t)) return "Pan America 1250 ST";
+  if (/\bra1250s\b/.test(t) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+special\b/.test(t)) return "Pan America 1250 Special";
+  if (/\bra1250l\b/.test(t) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+(?:l|limited)\b/.test(t)) return "Pan America 1250 Limited";
   if (/\brh1250s\b/.test(t) || /\bsportster\s+s\b/.test(t)) return "Sportster S";
   if (/\brh975s\b/.test(t) || /\bnightster\s+special\b/.test(t)) return "Nightster Special";
   if (/\brh975\b/.test(t) || /\bnightster\b/.test(t)) return "Nightster";
@@ -11091,6 +11118,7 @@ function normalizeModelText(val?: string | null): string {
     .replace(/\banniversary\s+edition\b/g, " ")
     .replace(/\banniversary\b/g, " ")
     .replace(/\bstreet\s+glide\s+limited\s+iii\b/g, "street glide 3 limited")
+    .replace(/\bpan[-\s]+am\b/g, "pan america")
     .replace(/\btri\s*glyc(?:eride|erides|erid(?:es)?)\b/g, "tri glide")
     .replace(/\btri\s+glide(?:\s+ultra)?\b/g, "tri glide")
     // common typing/plural variants that affect trim-specific matching
@@ -12108,6 +12136,8 @@ const DEFAULT_HARLEY_MODELS = [
   "Sportster S",
   "Nightster S",
   "Pan Am",
+  "Pan America 1250 Limited",
+  "Pan America 1250 Special",
   "Pan America ST",
   "Pan Am ST",
   "Heritage Classic Liberty Edition",
@@ -12120,6 +12150,7 @@ const DEFAULT_HARLEY_MODELS = [
   "Street Glide Limited III",
   "Pan America Special",
   "Pan America Limited",
+  "Pan Am Limited",
   "XG500",
   "XG750",
   "XG750A",

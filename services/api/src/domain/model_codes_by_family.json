@@ -185,6 +185,7 @@
       "FLHRSE4",
       "FLHRSE5",
       "FLHRSE5ANV",
+      "FLHRSEI",
       "FLHRSEI2",
       "FLHRSI",
       "FLHRXS",
@@ -443,6 +444,7 @@
       "FLHRSE4",
       "FLHRSE5",
       "FLHRSE5ANV",
+      "FLHRSEI",
       "FLHRSEI2"
     ],
     "cvo springer": [
@@ -529,6 +531,9 @@
       "XL1200X"
     ],
     "freewheeler": [
+      "FLRT"
+    ],
+    "free wheeler": [
       "FLRT"
     ],
     "fxdr 114": [
@@ -635,6 +640,15 @@
     "road glide 3": [
       "FLTRT"
     ],
+    "road glide iii": [
+      "FLTRT"
+    ],
+    "road glide trike": [
+      "FLTRT"
+    ],
+    "road glide 3 trike": [
+      "FLTRT"
+    ],
     "road glide custom": [
       "FLTRX"
     ],
@@ -666,6 +680,7 @@
       "FLHRSE4",
       "FLHRSE5",
       "FLHRSE5ANV",
+      "FLHRSEI",
       "FLHRSEI2",
       "FLHRSI",
       "FLHRXS"
@@ -762,6 +777,16 @@
     ],
     "tri glide ultra": [
       "FLHTCUTG"
+    ],
+    "tri glide": [
+      "FLHTCUTG",
+      "FLHTCUTGANV",
+      "FLHTCUTGSE"
+    ],
+    "triglide": [
+      "FLHTCUTG",
+      "FLHTCUTGANV",
+      "FLHTCUTGSE"
     ],
     "v-rod": [
       "VRSCA",
@@ -1337,10 +1362,30 @@
       "RA1250L",
       "RA1250SE"
     ],
+    "pan am": [
+      "RA1250",
+      "RA1250S",
+      "RA1250ST",
+      "RA1250L",
+      "RA1250SE"
+    ],
+    "pan am 1250": [
+      "RA1250",
+      "RA1250S",
+      "RA1250ST",
+      "RA1250L",
+      "RA1250SE"
+    ],
     "pan america special": [
       "RA1250S"
     ],
     "pan america 1250 special": [
+      "RA1250S"
+    ],
+    "pan am special": [
+      "RA1250S"
+    ],
+    "pan am 1250 special": [
       "RA1250S"
     ],
     "pan america st": [
@@ -1351,10 +1396,36 @@
       "RA1250ST",
       "RA1240ST"
     ],
+    "pan am st": [
+      "RA1250ST",
+      "RA1240ST"
+    ],
+    "pan am 1250 st": [
+      "RA1250ST",
+      "RA1240ST"
+    ],
     "pan america limited": [
       "RA1250L"
     ],
     "pan america 1250 limited": [
+      "RA1250L"
+    ],
+    "pan america l": [
+      "RA1250L"
+    ],
+    "pan america 1250 l": [
+      "RA1250L"
+    ],
+    "pan am limited": [
+      "RA1250L"
+    ],
+    "pan am 1250 limited": [
+      "RA1250L"
+    ],
+    "pan am l": [
+      "RA1250L"
+    ],
+    "pan am 1250 l": [
       "RA1250L"
     ],
     "sport": [
@@ -1420,8 +1491,29 @@
     "street glide limited": [
       "FLHXL"
     ],
+    "street glide 3": [
+      "FLHLT",
+      "FLHLTSE"
+    ],
     "street glide 3 limited": [
       "FLHLT",
+      "FLHLTSE"
+    ],
+    "street glide limited 3": [
+      "FLHLT",
+      "FLHLTSE"
+    ],
+    "street glide limited iii": [
+      "FLHLT",
+      "FLHLTSE"
+    ],
+    "cvo street glide 3": [
+      "FLHLTSE"
+    ],
+    "cvo street glide 3 limited": [
+      "FLHLTSE"
+    ],
+    "cvo street glide limited 3": [
       "FLHLTSE"
     ],
     "cvo street glide st": [

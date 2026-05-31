@@ -6091,6 +6091,7 @@ export default function Home() {
   function normalizeModelMatchText(value: string): string {
     return String(value ?? "")
       .toLowerCase()
+      .replace(/\bpan[-\s]+am\b/g, "pan america")
       .replace(/[^a-z0-9]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
@@ -6139,6 +6140,9 @@ export default function Home() {
     | "tri_glide"
     | "touring"
     | "grand_american_touring"
+    | "cruiser"
+    | "sport"
+    | "adventure_touring"
     | "softail"
     | "dyna"
     | "cvo"
@@ -6176,6 +6180,9 @@ export default function Home() {
     if (tokensExactly(tokens, ["tri", "glide"])) return "tri_glide";
     if (tokensExactly(tokens, ["touring"])) return "touring";
     if (tokensExactly(tokens, ["grand", "american", "touring"])) return "grand_american_touring";
+    if (tokensExactly(tokens, ["cruiser"]) || tokensExactly(tokens, ["cruisers"])) return "cruiser";
+    if (tokensExactly(tokens, ["sport"]) || tokensExactly(tokens, ["sports"])) return "sport";
+    if (tokensExactly(tokens, ["adventure", "touring"])) return "adventure_touring";
     if (tokensExactly(tokens, ["softail"])) return "softail";
     if (tokensExactly(tokens, ["dyna"])) return "dyna";
     if (tokensExactly(tokens, ["cvo"])) return "cvo";
@@ -6198,7 +6205,12 @@ export default function Home() {
       return "heritage";
     }
     if (tokensExactly(tokens, ["sportster"])) return "sportster";
-    if (tokensExactly(tokens, ["pan", "america"]) || tokensExactly(tokens, ["pan", "america", "1250"])) {
+    if (
+      tokensExactly(tokens, ["pan", "america"]) ||
+      tokensExactly(tokens, ["pan", "america", "1250"]) ||
+      tokensExactly(tokens, ["pan", "am"]) ||
+      tokensExactly(tokens, ["pan", "am", "1250"])
+    ) {
       return "pan_america";
     }
     if (tokensExactly(tokens, ["vrod"]) || tokensExactly(tokens, ["v", "rod"])) return "v_rod";
@@ -6265,6 +6277,13 @@ export default function Home() {
       (optionTokens.includes("super") && optionTokens.includes("glide")) || optionTokens.includes("fxr");
     const optionHasCvo = optionTokens.includes("cvo");
     const optionHasNightster = optionTokens.includes("nightster") || optionTokens.some(token => /^rh975/.test(token));
+    const optionHasSportsterS =
+      (optionTokens.includes("sportster") && optionTokens.includes("s")) ||
+      optionTokens.some(token => /^rh1250/.test(token));
+    const optionHasPanAmerica =
+      containsTokenSequence(optionTokens, ["pan", "america"]) ||
+      containsTokenSequence(optionTokens, ["pan", "am"]) ||
+      optionTokens.some(token => /^ra1250/.test(token));
     switch (familyId) {
       case "trike":
         return (
@@ -6287,6 +6306,19 @@ export default function Home() {
           optionHasUltraLimited ||
           optionHasTourGlide
         );
+      case "cruiser":
+        return (
+          optionHasHeritage ||
+          optionHasStreetBob ||
+          optionHasFatBob ||
+          optionHasFatBoy ||
+          optionHasBreakout ||
+          optionHasLowRider
+        );
+      case "sport":
+        return optionHasNightster || optionHasSportsterS;
+      case "adventure_touring":
+        return optionHasPanAmerica;
       case "softail":
         return (
           optionHasSoftail ||
@@ -6359,10 +6391,7 @@ export default function Home() {
           optionTokens.some(token => /^rh1250/.test(token) || /^xl883/.test(token) || /^xl1200/.test(token))
         );
       case "pan_america":
-        return (
-          containsTokenSequence(optionTokens, ["pan", "america"]) ||
-          optionTokens.some(token => /^ra1250/.test(token))
-        );
+        return optionHasPanAmerica;
       case "v_rod":
         return (
           optionTokens.includes("vrod") ||

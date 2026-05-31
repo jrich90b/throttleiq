@@ -2072,12 +2072,19 @@ function extractWalkInModelHint(text?: string | null): string | undefined {
   if (/\b(883\s*roadster|roadster\s*883)\b/.test(t)) return "883 Roadster";
   if (/\b(sportster\s*883|xl\s*883|xl883c)\b/.test(t)) return "Sportster 883";
   if (/\b(sportster|xl883c|xl\s*883|883)\b/.test(t)) return "Sportster";
-  if (/\b(road glide\s*(3|iii)|fltrt)\b/.test(t)) return "Road Glide 3";
+  if (/\b(road glide\s*(3|iii|trike)|fltrt)\b/.test(t)) return "Road Glide 3";
   if (/\b(street glide(?:\s+limited)?\s*(3|iii)|street glide limited iii|flhlt)\b/.test(t)) {
-    return "Street Glide 3 Limited";
+    return /\bcvo\b/.test(t) || /\bflhltse\b/.test(t)
+      ? "CVO Street Glide 3 Limited"
+      : "Street Glide 3 Limited";
   }
   if (/\b(tri[\s-]?glide|tri\s*glyc(?:eride|erides|erid(?:es)?)|flhtcutg)\b/.test(t)) {
     return "Tri Glide";
+  }
+  if (/\b(?:ra1250st|pan[\s-]+(?:america|am)(?:\s+1250)?\s+st)\b/.test(t)) return "Pan America 1250 ST";
+  if (/\b(?:ra1250s|pan[\s-]+(?:america|am)(?:\s+1250)?\s+special)\b/.test(t)) return "Pan America 1250 Special";
+  if (/\b(?:ra1250l|pan[\s-]+(?:america|am)(?:\s+1250)?\s+(?:l|limited))\b/.test(t)) {
+    return "Pan America 1250 Limited";
   }
   return undefined;
 }
@@ -2762,7 +2769,7 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   }
   // Collapse known Harley code/name aliases to one canonical label so watch matching
   // and UI state do not split equivalent models into separate entries.
-  if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii)\b/.test(normalized)) {
+  if (/\bfltrt\b/.test(normalized) || /\broad glide\s*(?:3|iii|trike)\b/.test(normalized)) {
     return "Road Glide 3";
   }
   if (
@@ -2770,7 +2777,9 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
     /\bstreet glide(?:\s+limited)?\s*(?:3|iii)\b/.test(normalized) ||
     /\bstreet glide limited iii\b/.test(normalized)
   ) {
-    return "Street Glide 3 Limited";
+    return /\bcvo\b/.test(normalized) || /\bflhltse\b/.test(normalized)
+      ? "CVO Street Glide 3 Limited"
+      : "Street Glide 3 Limited";
   }
   if (
     /\bflhtcutg\b/.test(normalized) ||
@@ -2782,14 +2791,14 @@ function normalizeVehicleModel(raw?: string | null, make?: string | null): strin
   if (/\bflhxxx\b/.test(normalized) || /\bstreet glide trike\b/.test(normalized)) {
     return "Street Glide Trike";
   }
-  if (/\bra1250st\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+st\b/.test(normalized)) {
+  if (/\bra1250st\b/.test(normalized) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+st\b/.test(normalized)) {
     return "Pan America 1250 ST";
   }
-  if (/\bra1250s\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+special\b/.test(normalized)) {
-    return "Pan America Special";
+  if (/\bra1250s\b/.test(normalized) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+special\b/.test(normalized)) {
+    return "Pan America 1250 Special";
   }
-  if (/\bra1250l\b/.test(normalized) || /\bpan america(?:\s+1250)?\s+l(?:imited)?\b/.test(normalized)) {
-    return "Pan America 1250 L";
+  if (/\bra1250l\b/.test(normalized) || /\bpan[\s-]+(?:america|am)(?:\s+1250)?\s+(?:l|limited)\b/.test(normalized)) {
+    return "Pan America 1250 Limited";
   }
   if (/\brh1250s\b/.test(normalized) || /\bsportster\s+s\b/.test(normalized)) {
     return "Sportster S";

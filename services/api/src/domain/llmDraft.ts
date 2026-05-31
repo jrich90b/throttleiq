@@ -7761,6 +7761,12 @@ export async function parseSemanticSlotsWithLLM(args: {
   const dialogState = String(args.dialogState ?? "").trim();
   const voiceExamples = [
     'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","year_min":0,"year_max":0,"color":"black","condition":"new","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: text me if a road glide trike comes in" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: keep an eye out for a Pan Am Limited" output: {"watch_action":"set_watch","watch":{"model":"Pan America 1250 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: let me know if you get a CVO Street Glide 3 Limited" output: {"watch_action":"set_watch","watch":{"model":"CVO Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Keep an eye out for a 2020 Road Glide in black under $18k." output: {"watch_action":"set_watch","watch":{"model":"Road Glide","year":"2020","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":18000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Staff: We will keep an eye out for a XG500 or XG750 for you." output: {"watch_action":"set_watch","watch":{"model":"XG500 or XG750","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Staff: I will keep an eye out for a pre owned tri-glide in the $15-20 thousand range for you." output: {"watch_action":"set_watch","watch":{"model":"Tri Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
     'input: "Customer: lmk if you get a 23 lrs in black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
@@ -7802,6 +7808,8 @@ export async function parseSemanticSlotsWithLLM(args: {
     "",
     "Rules:",
     "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
+    "- Strong set_watch phrases include 'keep an eye out for', 'watch for', 'text me if', 'let me know if/lmk if', 'when one comes in', and staff-authored 'I/we will keep an eye out for'.",
+    "- If department_intent is parts, service, or apparel, watch_action must be none even when the text says 'let me know if' or 'in stock'.",
     "- Treat shorthand as valid intent/model cues (e.g., 'lmk' = let me know, 'lrs'/'fxlrs' = Low Rider S).",
     "- Phrases like 'if one lands', 'if one comes in', 'when one lands', or 'shoot me a text' are set_watch when recent history, lead vehicle, existing watch, or pending watch provides the model context.",
     "- Explicit 'watch for fxlrs/lrs' is set_watch and should normalize the model to Low Rider S.",
@@ -7892,9 +7900,14 @@ export async function parseSemanticSlotsWithLLM(args: {
       : "unknown";
 
   // Guard against risky false positives.
+  const hasExplicitWatchSetPhrase =
+    /\b(?:keep(?:ing)? an eye out for|watch for|text me if|let me know if|lmk if|notify me if|keep me posted if)\b/.test(
+      textLower
+    ) || /\b(?:i|we)\s+(?:will|can|'ll|ll)\s+keep an eye out for\b/.test(textLower);
   const hasWatchSetCue =
     !isDemoDayEventQuestionText(text) &&
-    ((/\b(lmk|let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
+    (hasExplicitWatchSetPhrase ||
+      (/\b(lmk|let me know|keep me posted|keep an eye out|watch for|notify me|text me|shoot me (a )?text|send (one|it) my way)\b/.test(
         textLower
       ) &&
         /\b(if|when|once|as soon as|get|got|comes? in|lands?|in stock|available)\b/.test(textLower)) ||
@@ -7962,6 +7975,9 @@ export async function parseSemanticSlotsWithLLM(args: {
   if (departmentIntent === "none" && hasPartsCue) departmentIntent = "parts";
   if (departmentIntent === "none" && hasServiceCue && !serviceContextOnlyCue) departmentIntent = "service";
   if (departmentIntent === "none" && hasApparelCue) departmentIntent = "apparel";
+  if (departmentIntent !== "none" && watchAction === "set_watch") {
+    watchAction = "none";
+  }
   if (watchAction === "set_watch" && !model) {
     const historyText = history.join("\n").toLowerCase();
     const contextText = `${historyText}\n${lead?.vehicle?.model ?? ""}\n${lead?.vehicle?.description ?? ""}`;
