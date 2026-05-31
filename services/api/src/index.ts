@@ -2462,6 +2462,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/support-mail/poll") ||
     pathname.startsWith("/personal-mail/poll") ||
     pathname.startsWith("/mdf/portal-runner") ||
+    pathname.startsWith("/warranty-rma/portal-runner") ||
     pathname.startsWith("/provider-browser-runner") ||
     pathname.startsWith("/debug/inbound") ||
     pathname.startsWith("/debug/incidents") ||
@@ -33640,6 +33641,7 @@ const allowedAgentKinds: AgentTaskKind[] = [
   "quickbooks",
   "prospect_research",
   "mdf_portal",
+  "warranty_rma_portal",
   "provider_browser",
   "linear_ticket",
   "sop",
@@ -33865,6 +33867,8 @@ function agentKindDefaultTitle(kind: AgentTaskKind): string {
       return "Research prospect";
     case "mdf_portal":
       return "Prepare MDF portal draft";
+    case "warranty_rma_portal":
+      return "Prepare H-Dnet warranty draft";
     case "provider_browser":
       return "Run provider browser setup";
     case "linear_ticket":
@@ -33881,6 +33885,7 @@ function agentTaskApprovalReason(kind: AgentTaskKind, instructions: string): str
   if (kind === "quickbooks") return "QuickBooks work can affect billing/accounting, so review is required first.";
   if (kind === "agreement") return "Agreement work can affect legal/commercial terms, so review is required before sending.";
   if (kind === "mdf_portal") return "MDF portal work uploads files and fills an external portal, so human approval is required before execution.";
+  if (kind === "warranty_rma_portal") return "H-Dnet warranty portal work fills an external claim draft, so human approval is required before execution.";
   if (kind === "provider_browser") return "Provider browser work can affect external accounts, so the runner must stop before billing, compliance, credential, or final-submit actions.";
   if (kind === "email") return "Customer or prospect emails should be approved before sending.";
   if (text.match(/\b(send|invoice|charge|refund|pay|payment|sign|execute|delete|cancel subscription|change subscription)\b/)) {
@@ -38675,6 +38680,105 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
   });
 });
 
+app.post("/warranty-rma/cases/:id/portal-task", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
+  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  const existing = getWarrantyRmaCase(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
+
+  const hdnetDraftPacket = existing.hdnetDraftPacket ?? buildHdnetDraftPacket({ ...existing, review: existing.review });
+  const user = (req as any).user ?? null;
+  const profile = (await getDealerProfileHot().catch(() => null)) as any;
+  const clientName = String(profile?.dealerName ?? profile?.name ?? "").trim() || "Dealer";
+  const fieldLines = Object.entries(hdnetDraftPacket.fields)
+    .map(([key, value]) => `- ${key}: ${String(value || "missing")}`)
+    .join("\n");
+  const labor8888Lines = hdnetDraftPacket.detailRows.labor8888.length
+    ? hdnetDraftPacket.detailRows.labor8888
+        .map(row => `- row ${row.row}: labor=${row.laborCode || "missing"}; hours=${row.hours || "missing"}; comments=${row.comments || "missing"}`)
+        .join("\n")
+    : "- none";
+  const otherLaborLines = hdnetDraftPacket.detailRows.otherLabor.length
+    ? hdnetDraftPacket.detailRows.otherLabor
+        .map(row => `- ${row.row}: ${row.laborCode || "missing"}`)
+        .join("\n")
+    : "- none";
+  const otherDetailLines = hdnetDraftPacket.detailRows.otherDetails.length
+    ? hdnetDraftPacket.detailRows.otherDetails
+        .map(row => `- row ${row.row}: type=${row.type}; cost=${row.cost || "missing"}; comments=${row.comments || "missing"}`)
+        .join("\n")
+    : "- none";
+
+  const task = await addAgentTask({
+    provider: "codex",
+    kind: "warranty_rma_portal",
+    title: `Fill H-Dnet warranty draft: ${existing.title}`,
+    clientName,
+    priority: "high",
+    risk: "approval_required",
+    approval: {
+      required: true,
+      reason: "Open H-Dnet Warranty-Link, fill a claim draft from this packet, and stop before final submit."
+    },
+    requestedBy: {
+      id: String(user?.id ?? "").trim() || undefined,
+      name: String(user?.name ?? "").trim() || undefined,
+      email: String(user?.email ?? "").trim() || undefined,
+      role: String(user?.role ?? "").trim() || undefined
+    },
+    instructions: [
+      `[warranty-rma-portal:${existing.id}]`,
+      "Use logged-in Chrome browser control to prepare an H-Dnet Warranty-Link draft from this saved LeadRider warranty/RMA packet.",
+      "Do not submit the claim. Stop after fields are filled or at the review/save-draft step and report exactly what was filled and what still needs human review.",
+      "",
+      `Warranty/RMA case ID: ${existing.id}`,
+      `Title: ${existing.title}`,
+      `Status: ${existing.status}`,
+      `Part number: ${existing.partNumber}`,
+      `Claim type: ${existing.claimType || existing.review?.dmsPayloadDraft?.claimType || "needs review"}`,
+      `Form: ${hdnetDraftPacket.formTitle}`,
+      `Form source: ${hdnetDraftPacket.formSource}`,
+      `Reason: ${hdnetDraftPacket.reason}`,
+      "",
+      "H-Dnet field packet:",
+      fieldLines || "- no fields",
+      "",
+      "Labor 8888 detail rows:",
+      labor8888Lines,
+      "",
+      "Other labor rows:",
+      otherLaborLines,
+      "",
+      "Other detail rows:",
+      otherDetailLines,
+      "",
+      "Missing fields:",
+      hdnetDraftPacket.missing.length ? hdnetDraftPacket.missing.map(item => `- ${item}`).join("\n") : "- none flagged",
+      "",
+      "Warnings:",
+      hdnetDraftPacket.warnings.length ? hdnetDraftPacket.warnings.map(item => `- ${item}`).join("\n") : "- none",
+      "",
+      "Browser automation rules:",
+      "- Use the user's logged-in H-Dnet session when possible.",
+      "- If H-Dnet/Microsoft login appears and Chrome has already autofilled saved credentials, the runner may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials.",
+      "- If autofill is not already present, MFA appears, the form cannot be confidently identified, or missing required fields block progress, stop and report the blocker.",
+      "- Never click final submit. Save as draft only when clearly available; otherwise leave the filled form open for review."
+    ].join("\n")
+  });
+
+  const message = `H-Dnet portal draft task created: ${task.id}. The runner will prepare ${hdnetDraftPacket.formTitle} and stop before final submit.`;
+  const updated = updateWarrantyRmaCase(existing.id, {
+    status: "dms_queued",
+    hdnetDraftPacket,
+    dmsPush: {
+      status: "queued",
+      message,
+      updatedAt: new Date().toISOString()
+    }
+  });
+  return res.json({ ok: true, task, case: updated ?? existing, message });
+});
+
 app.get("/campaigns", requireManager, (_req, res) => {
   return res.json({ ok: true, campaigns: listCampaigns() });
 });
@@ -39080,6 +39184,40 @@ function mdfPortalClaimIdFromTask(task: AgentTask): string {
   return match?.[1] ?? "";
 }
 
+function warrantyRmaPortalCaseIdFromTask(task: AgentTask): string {
+  const match = task.instructions.match(/\[warranty-rma-portal:([^\]]+)\]/);
+  return match?.[1] ?? "";
+}
+
+function canUseWarrantyRmaPortalRunner(req: any) {
+  const configured = String(
+    process.env.WARRANTY_RMA_PORTAL_RUNNER_TOKEN ??
+      process.env.MDF_PORTAL_RUNNER_TOKEN ??
+      process.env.AUTOMATION_RUN_WRITE_TOKEN ??
+      ""
+  ).trim();
+  const provided = String(
+    req.header("x-warranty-rma-portal-token") ||
+      req.header("x-mdf-portal-token") ||
+      req.header("authorization")?.replace(/^Bearer\s+/i, "") ||
+      ""
+  ).trim();
+  return !!configured && !!provided && configured === provided;
+}
+
+async function requireWarrantyRmaPortalRunner(req: any, res: any): Promise<boolean> {
+  if (!canUseWarrantyRmaPortalRunner(req)) {
+    res.status(401).json({ ok: false, error: "invalid warranty/RMA portal runner token" });
+    return false;
+  }
+  const machine = await validateMdfPortalRunnerMachine(req);
+  if (!machine.ok) {
+    res.status(machine.status).json({ ok: false, error: machine.error.replace(/\bMDF runner\b/g, "portal runner") });
+    return false;
+  }
+  return true;
+}
+
 app.get("/mdf/portal-runner/registration", requireManager, async (_req, res) => {
   const registration = await readMdfRunnerRegistry();
   const active =
@@ -39268,6 +39406,45 @@ app.patch("/mdf/portal-runner/tasks/:id", async (req, res) => {
   const existing = tasks.find(task => task.id === req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Agent task not found" });
   if (existing.kind !== "mdf_portal") return res.status(400).json({ ok: false, error: "Only MDF portal tasks can use this runner." });
+  const summary = String(req.body?.summary ?? "").trim().slice(0, 6000);
+  const links = Array.isArray(req.body?.links)
+    ? req.body.links.map((link: unknown) => String(link ?? "").trim()).filter(Boolean).slice(0, 20)
+    : undefined;
+  const updated = await updateAgentTaskStatus(req.params.id, statusRaw as AgentTaskStatus, {
+    summary: summary || existing.output?.summary,
+    links: links ?? existing.output?.links
+  });
+  return res.json({ ok: true, task: updated ?? existing });
+});
+
+app.get("/warranty-rma/portal-runner/tasks", async (req, res) => {
+  if (!(await requireWarrantyRmaPortalRunner(req, res))) return;
+  await warrantyRmaStoreReady;
+  const limit = Number(req.query.limit ?? "50");
+  const tasks = (await listAgentTasks(Number.isFinite(limit) ? limit : 50))
+    .filter(task => task.kind === "warranty_rma_portal")
+    .map(task => {
+      const caseId = warrantyRmaPortalCaseIdFromTask(task);
+      return {
+        task,
+        case: caseId ? getWarrantyRmaCase(caseId) : null
+      };
+    });
+  return res.json({ ok: true, tasks });
+});
+
+app.patch("/warranty-rma/portal-runner/tasks/:id", async (req, res) => {
+  if (!(await requireWarrantyRmaPortalRunner(req, res))) return;
+  const statusRaw = String(req.body?.status ?? "").trim().toLowerCase();
+  if (!allowedAgentStatuses.includes(statusRaw as AgentTaskStatus)) {
+    return res.status(400).json({ ok: false, error: "Invalid task status." });
+  }
+  const tasks = await listAgentTasks(1000);
+  const existing = tasks.find(task => task.id === req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Agent task not found" });
+  if (existing.kind !== "warranty_rma_portal") {
+    return res.status(400).json({ ok: false, error: "Only warranty/RMA portal tasks can use this runner." });
+  }
   const summary = String(req.body?.summary ?? "").trim().slice(0, 6000);
   const links = Array.isArray(req.body?.links)
     ? req.body.links.map((link: unknown) => String(link ?? "").trim()).filter(Boolean).slice(0, 20)

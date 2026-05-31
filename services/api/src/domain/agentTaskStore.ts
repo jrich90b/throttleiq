@@ -11,6 +11,7 @@ export type AgentTaskKind =
   | "quickbooks"
   | "prospect_research"
   | "mdf_portal"
+  | "warranty_rma_portal"
   | "provider_browser"
   | "linear_ticket"
   | "sop"

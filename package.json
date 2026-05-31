@@ -103,6 +103,8 @@
     "contact_update:eval": "npx tsx scripts/contact_update_eval.ts",
     "warranty_rma:eval": "npx tsx scripts/warranty_rma_eval.ts",
     "warranty_rma:index": "npx tsx scripts/warranty_rma_vector_index.ts",
+    "warranty_rma:portal": "npx tsx scripts/warranty_rma_portal_runner.ts",
+    "warranty_rma:portal:daemon": "npx tsx scripts/warranty_rma_portal_runner_daemon.ts",
     "mdf:portal": "npx tsx scripts/mdf_portal_runner.ts",
     "mdf:portal:daemon": "npx tsx scripts/mdf_portal_runner_daemon.ts",
     "tlp_debug:email": "npx tsx scripts/send_tlp_debug_email.ts",

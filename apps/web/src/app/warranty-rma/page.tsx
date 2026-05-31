@@ -733,6 +733,23 @@ export default function WarrantyRmaPage() {
     }
   }
 
+  async function createPortalTask(id: string) {
+    setCaseActionBusy(`${id}:portal`);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/warranty-rma/cases/${encodeURIComponent(id)}/portal-task`, { method: "POST" });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "H-Dnet portal task could not be created.");
+      if (data.case) setCases(prev => prev.map(item => (item.id === id ? data.case : item)));
+      setNotice(data.message || "H-Dnet portal draft task created. The local runner will stop before final submit.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "H-Dnet portal task could not be created.");
+    } finally {
+      setCaseActionBusy(null);
+    }
+  }
+
   function toggleManualSelection(id: string) {
     setSelectedManualIds(prev => (prev.includes(id) ? prev.filter(value => value !== id) : [...prev, id]));
   }
@@ -1176,6 +1193,7 @@ export default function WarrantyRmaPage() {
               busyKey={caseActionBusy}
               onStatus={updateCaseStatus}
               onDms={prepareDmsPush}
+              onPortalTask={createPortalTask}
             />
           </section>
           ) : null}
@@ -1275,6 +1293,7 @@ function CaseDetail(props: {
   busyKey: string | null;
   onStatus: (id: string, status: WarrantyRmaStatus) => Promise<void>;
   onDms: (id: string) => Promise<void>;
+  onPortalTask: (id: string) => Promise<void>;
 }) {
   const item = props.selectedCase;
   if (!item) {
@@ -1325,6 +1344,14 @@ function CaseDetail(props: {
             disabled={props.busyKey === `${item.id}:dms`}
           >
             Prepare claim packet
+          </button>
+          <button
+            type="button"
+            className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800 hover:bg-orange-100 disabled:opacity-60"
+            onClick={() => void props.onPortalTask(item.id)}
+            disabled={props.busyKey === `${item.id}:portal`}
+          >
+            Start H-Dnet draft
           </button>
         </div>
       </div>
