@@ -13,6 +13,7 @@ export type WarrantyRmaStatus =
   | "denied";
 
 export type WarrantyRmaDmsStatus = "not_configured" | "ready" | "queued" | "pushed" | "failed";
+export type WarrantyRmaManualScope = "global" | "dealer";
 
 export type WarrantyRmaManualDocument = {
   id: string;
@@ -23,6 +24,7 @@ export type WarrantyRmaManualDocument = {
   storagePath: string;
   url?: string;
   documentType?: "warranty_manual" | "policy" | "parts_reference" | "other";
+  scope?: WarrantyRmaManualScope;
   notes?: string;
   uploadedByUserId?: string;
   uploadedByUserName?: string;
@@ -120,6 +122,10 @@ function normalizeDmsStatus(raw: unknown): WarrantyRmaDmsStatus {
   return "not_configured";
 }
 
+export function normalizeWarrantyRmaManualScope(raw: unknown): WarrantyRmaManualScope {
+  return String(raw ?? "").trim() === "dealer" ? "dealer" : "global";
+}
+
 function titleFromCase(input: { partNumber?: string; customerName?: string; issueDescription?: string }) {
   const part = String(input.partNumber ?? "").trim();
   const customer = String(input.customerName ?? "").trim();
@@ -166,6 +172,7 @@ async function loadFromDisk() {
         fileName: String(row.fileName ?? "").trim() || "warranty-document",
         mimeType: String(row.mimeType ?? "").trim() || "application/octet-stream",
         size: Number(row.size ?? 0),
+        scope: normalizeWarrantyRmaManualScope(row.scope),
         createdAt: String(row.createdAt ?? "").trim() || nowIso(),
         updatedAt: String(row.updatedAt ?? "").trim() || nowIso()
       });
@@ -199,7 +206,7 @@ async function loadFromDisk() {
   }
 }
 
-void loadFromDisk();
+export const warrantyRmaStoreReady = loadFromDisk();
 
 export function listWarrantyRmaManuals(): WarrantyRmaManualDocument[] {
   return Array.from(manuals.values()).sort(
@@ -217,6 +224,7 @@ export function addWarrantyRmaManual(input: Omit<WarrantyRmaManualDocument, "id"
     ...input,
     id: makeId("wrm_doc"),
     title: String(input.title ?? "").trim() || String(input.fileName ?? "").trim() || "Warranty document",
+    scope: normalizeWarrantyRmaManualScope(input.scope),
     createdAt: now,
     updatedAt: now
   };

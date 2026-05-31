@@ -3,8 +3,10 @@ import dotenv from "dotenv";
 dotenv.config();
 dotenv.config({ path: "services/api/.env", override: false });
 
-const { listWarrantyRmaManuals } = await import("../services/api/src/domain/warrantyRmaStore.ts");
+const { listWarrantyRmaManuals, warrantyRmaStoreReady } = await import("../services/api/src/domain/warrantyRmaStore.ts");
 const { getWarrantyRmaVectorStatus, indexWarrantyRmaManuals } = await import("../services/api/src/domain/warrantyRmaVectorStore.ts");
+
+await warrantyRmaStoreReady;
 
 const manualIds = process.argv
   .slice(2)
@@ -34,6 +36,7 @@ console.log(
       ok: true,
       indexName: result.indexName,
       namespace: result.namespace,
+      namespaces: result.namespaces,
       documentsConsidered: result.documentsConsidered,
       documentsIndexed: result.documentsIndexed,
       chunksUpserted: result.chunksUpserted,

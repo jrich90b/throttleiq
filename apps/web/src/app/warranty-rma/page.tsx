@@ -19,6 +19,7 @@ type WarrantyRmaManualDocument = {
   size: number;
   url?: string;
   documentType?: "warranty_manual" | "policy" | "parts_reference" | "other";
+  scope?: "global" | "dealer";
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -247,6 +248,10 @@ type WarrantyRmaVectorStatus = {
   missing: string[];
   indexName: string;
   namespace: string;
+  globalNamespace?: string;
+  dealerNamespace?: string;
+  legacyNamespace?: string;
+  searchNamespaces?: string[];
   embeddingModel: string;
   apiVersion: string;
   hostConfigured: boolean;
@@ -447,6 +452,7 @@ export default function WarrantyRmaPage() {
   const [caseForm, setCaseForm] = useState<CaseForm>(emptyCaseForm);
   const [manualTitle, setManualTitle] = useState("");
   const [manualType, setManualType] = useState<WarrantyRmaManualDocument["documentType"]>("warranty_manual");
+  const [manualScope, setManualScope] = useState<"global" | "dealer">("global");
   const [manualNotes, setManualNotes] = useState("");
   const [showReferenceManager, setShowReferenceManager] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -515,6 +521,7 @@ export default function WarrantyRmaPage() {
       form.append("file", file);
       form.append("title", manualTitle || file.name);
       form.append("documentType", manualType || "warranty_manual");
+      form.append("scope", manualScope);
       form.append("notes", manualNotes);
       const response = await fetch("/api/warranty-rma/manuals", { method: "POST", body: form });
       const data = await response.json();
@@ -718,8 +725,8 @@ export default function WarrantyRmaPage() {
               </span>
             </div>
             <p className="mt-3 text-sm text-slate-600">
-              References are used behind the scenes. Leave selection automatic, or manage documents when you need to upload
-              or force a specific manual.
+              Global Harley references can be reused across dealers. Dealer references stay isolated for that rooftop.
+              Leave selection automatic, or choose exact documents when a claim needs a specific manual.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-800">
@@ -761,7 +768,7 @@ export default function WarrantyRmaPage() {
             </div>
             <div className="mt-2 text-xs text-slate-500">
               {vectorStatus?.configured
-                ? `Pinecone index ${vectorStatus.indexName}, namespace ${vectorStatus.namespace}, model ${vectorStatus.embeddingModel}.`
+                ? `Pinecone index ${vectorStatus.indexName}; global ${vectorStatus.globalNamespace || vectorStatus.namespace}; dealer ${vectorStatus.dealerNamespace || "not set"}${vectorStatus.legacyNamespace ? `; legacy ${vectorStatus.legacyNamespace}` : ""}; model ${vectorStatus.embeddingModel}.`
                 : vectorStatus?.missing?.length
                   ? `Add ${vectorStatus.missing.join(", ")} to enable Pinecone retrieval.`
                   : "Pinecone retrieval status is not available."}
@@ -786,6 +793,18 @@ export default function WarrantyRmaPage() {
                     <option value="parts_reference">Parts reference</option>
                     <option value="other">Other</option>
                   </select>
+                  <select
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950"
+                    value={manualScope}
+                    onChange={event => setManualScope(event.target.value === "dealer" ? "dealer" : "global")}
+                  >
+                    <option value="global">Global Harley reference</option>
+                    <option value="dealer">Dealer private reference</option>
+                  </select>
+                  <div className="text-xs text-slate-500">
+                    Use global for Harley-Davidson policy/manual docs. Use dealer private for store-specific process notes,
+                    internal pricing, or dealer-only forms.
+                  </div>
                   <textarea
                     className="min-h-20 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950"
                     value={manualNotes}
@@ -824,7 +843,7 @@ export default function WarrantyRmaPage() {
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold text-slate-900">{manual.title}</span>
                               <span className="mt-0.5 block text-xs text-slate-500">
-                                {manual.documentType?.replace(/_/g, " ") || "document"} · {formatBytes(manual.size)}
+                                {(manual.scope === "dealer" ? "dealer private" : "global")} · {manual.documentType?.replace(/_/g, " ") || "document"} · {formatBytes(manual.size)}
                               </span>
                             </span>
                           </label>

@@ -10,6 +10,10 @@ process.env.WARRANTY_RMA_DB_PATH = path.join(tempDir, "warranty_rma.json");
 process.env.PINECONE_API_KEY = "";
 process.env.PINECONE_WARRANTY_INDEX = "";
 process.env.PINECONE_INDEX = "";
+delete process.env.PINECONE_WARRANTY_GLOBAL_NAMESPACE;
+delete process.env.PINECONE_WARRANTY_DEALER_NAMESPACE;
+delete process.env.PINECONE_WARRANTY_LEGACY_NAMESPACE;
+delete process.env.PINECONE_WARRANTY_NAMESPACE;
 process.env.WARRANTY_RMA_VECTOR_MANIFEST_PATH = path.join(tempDir, "warranty_rma_vector_index.json");
 
 const { analyzeWarrantyRmaSubmission, extractWarrantyRmaIntake } = await import("../services/api/src/domain/warrantyRmaAssistant.ts");
@@ -23,8 +27,11 @@ const {
   addWarrantyRmaManual,
   listWarrantyRmaCases,
   listWarrantyRmaManuals,
-  updateWarrantyRmaCase
+  updateWarrantyRmaCase,
+  warrantyRmaStoreReady
 } = await import("../services/api/src/domain/warrantyRmaStore.ts");
+
+await warrantyRmaStoreReady;
 
 const manualPath = path.join(tempDir, "parts-policy.txt");
 await fs.writeFile(manualPath, "Warranty claims require proof of purchase and technician failure notes.", "utf8");
@@ -39,11 +46,30 @@ const manual = addWarrantyRmaManual({
 });
 assert.equal(listWarrantyRmaManuals().length, 1);
 assert.equal(manual.title, "Parts Warranty Policy");
+assert.equal(manual.scope, "global");
+
+const dealerManualPath = path.join(tempDir, "dealer-process.txt");
+await fs.writeFile(dealerManualPath, "Dealer-specific RMA notes: attach internal counter slip before submission.", "utf8");
+const dealerManual = addWarrantyRmaManual({
+  title: "Dealer RMA Process",
+  fileName: "dealer-process.txt",
+  mimeType: "text/plain",
+  size: 78,
+  storagePath: dealerManualPath,
+  documentType: "other",
+  scope: "dealer"
+});
+assert.equal(listWarrantyRmaManuals().length, 2);
+assert.equal(dealerManual.scope, "dealer");
 
 const vectorStatus = getWarrantyRmaVectorStatus();
 assert.equal(vectorStatus.configured, false);
 assert.ok(vectorStatus.missing.includes("PINECONE_API_KEY"));
 assert.ok(vectorStatus.missing.includes("PINECONE_WARRANTY_INDEX"));
+assert.equal(vectorStatus.namespace, "warranty-rma-global");
+assert.equal(vectorStatus.globalNamespace, "warranty-rma-global");
+assert.equal(vectorStatus.dealerNamespace, "dealer-default");
+assert.deepEqual(vectorStatus.searchNamespaces, ["warranty-rma-global", "dealer-default"]);
 const chunks = chunkWarrantyRmaTextForVectorIndex(
   "Warranty claim processing requires the part number, repair order, customer concern, condition code, diagnosis, and correction. ".repeat(30)
 );
@@ -51,6 +77,7 @@ assert.ok(chunks.length > 1);
 const vectorNoop = await indexWarrantyRmaManuals([manual]);
 assert.equal(vectorNoop.configured, false);
 assert.ok(vectorNoop.errors[0]?.error.includes("PINECONE_API_KEY"));
+assert.deepEqual(vectorNoop.namespaces, []);
 
 const review = await analyzeWarrantyRmaSubmission({
   submission: {

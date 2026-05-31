@@ -425,6 +425,7 @@ function vectorReferenceInputs(matches: WarrantyRmaVectorMatch[]) {
       `Document: ${match.title || match.fileName || match.manualId}`,
       match.fileName ? `File: ${match.fileName}` : "",
       match.documentType ? `Type: ${match.documentType}` : "",
+      match.scope ? `Scope: ${match.scope}` : "",
       `Chunk: ${match.chunkIndex + 1}${match.chunkCount ? ` of ${match.chunkCount}` : ""}`,
       `Score: ${Number.isFinite(match.score) ? match.score.toFixed(4) : "n/a"}`,
       "",

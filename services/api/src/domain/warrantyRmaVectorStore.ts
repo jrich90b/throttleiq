@@ -29,6 +29,8 @@ type WarrantyRmaVectorManifest = {
       contentHash: string;
       chunkCount: number;
       vectorIds: string[];
+      namespace?: string;
+      scope?: "global" | "dealer";
       indexedAt: string;
     }
   >;
@@ -39,6 +41,10 @@ export type WarrantyRmaVectorStatus = {
   missing: string[];
   indexName: string;
   namespace: string;
+  globalNamespace: string;
+  dealerNamespace: string;
+  legacyNamespace?: string;
+  searchNamespaces: string[];
   embeddingModel: string;
   apiVersion: string;
   hostConfigured: boolean;
@@ -48,6 +54,7 @@ export type WarrantyRmaVectorIndexResult = {
   configured: boolean;
   indexName: string;
   namespace: string;
+  namespaces: string[];
   documentsConsidered: number;
   documentsIndexed: number;
   chunksUpserted: number;
@@ -63,6 +70,8 @@ export type WarrantyRmaVectorMatch = {
   title: string;
   fileName: string;
   documentType: string;
+  namespace: string;
+  scope: "global" | "dealer" | "legacy";
   chunkIndex: number;
   chunkCount: number;
   text: string;
@@ -81,8 +90,27 @@ function vectorIndexName() {
   return env("PINECONE_WARRANTY_INDEX") || env("PINECONE_INDEX");
 }
 
-function vectorNamespace() {
-  return env("PINECONE_WARRANTY_NAMESPACE") || "warranty-rma";
+function vectorGlobalNamespace() {
+  return env("PINECONE_WARRANTY_GLOBAL_NAMESPACE") || "warranty-rma-global";
+}
+
+function vectorDealerNamespace() {
+  const explicit = env("PINECONE_WARRANTY_DEALER_NAMESPACE");
+  if (explicit) return explicit;
+  const dealerSlug = env("DEALER_SLUG") || env("DEALER_ID") || env("TENANT_SLUG");
+  return dealerSlug ? `dealer-${dealerSlug.replace(/[^a-z0-9_-]+/gi, "-").toLowerCase()}` : "dealer-default";
+}
+
+function vectorLegacyNamespace() {
+  return env("PINECONE_WARRANTY_LEGACY_NAMESPACE") || env("PINECONE_WARRANTY_NAMESPACE") || undefined;
+}
+
+function uniqueNamespaces(namespaces: Array<string | undefined>) {
+  return Array.from(new Set(namespaces.map(value => String(value ?? "").trim()).filter(Boolean)));
+}
+
+function activeSearchNamespaces() {
+  return uniqueNamespaces([vectorGlobalNamespace(), vectorDealerNamespace(), vectorLegacyNamespace()]);
 }
 
 function vectorEmbeddingModel() {
@@ -106,7 +134,11 @@ export function getWarrantyRmaVectorStatus(): WarrantyRmaVectorStatus {
     configured: missing.length === 0,
     missing,
     indexName: vectorIndexName(),
-    namespace: vectorNamespace(),
+    namespace: vectorGlobalNamespace(),
+    globalNamespace: vectorGlobalNamespace(),
+    dealerNamespace: vectorDealerNamespace(),
+    legacyNamespace: vectorLegacyNamespace(),
+    searchNamespaces: activeSearchNamespaces(),
     embeddingModel: vectorEmbeddingModel(),
     apiVersion: pineconeApiVersion(),
     hostConfigured: Boolean(directPineconeHost())
@@ -264,12 +296,21 @@ function vectorIdForManualChunk(manualId: string, chunkIndex: number) {
   return `wrm_${safeManualId}_${String(chunkIndex).padStart(4, "0")}`;
 }
 
+function manualScope(manual: WarrantyRmaManualDocument): "global" | "dealer" {
+  return manual.scope === "dealer" ? "dealer" : "global";
+}
+
+export function namespaceForWarrantyRmaManual(manual: WarrantyRmaManualDocument) {
+  return manualScope(manual) === "dealer" ? vectorDealerNamespace() : vectorGlobalNamespace();
+}
+
 function metadataForChunk(
   manual: WarrantyRmaManualDocument,
   chunk: string,
   contentHash: string,
   chunkIndex: number,
-  chunkCount: number
+  chunkCount: number,
+  namespace: string
 ) {
   return {
     source: VECTOR_SOURCE,
@@ -277,6 +318,8 @@ function metadataForChunk(
     title: manual.title,
     fileName: manual.fileName,
     documentType: manual.documentType ?? "other",
+    scope: manualScope(manual),
+    namespace,
     contentHash,
     chunkIndex,
     chunkCount,
@@ -284,13 +327,13 @@ function metadataForChunk(
   };
 }
 
-async function deleteVectorIds(ids: string[]) {
+async function deleteVectorIds(ids: string[], namespace: string) {
   let deleted = 0;
   for (let i = 0; i < ids.length; i += 1000) {
     const batch = ids.slice(i, i + 1000);
     if (!batch.length) continue;
     await pineconeDataRequest("/vectors/delete", {
-      namespace: vectorNamespace(),
+      namespace,
       ids: batch
     });
     deleted += batch.length;
@@ -309,6 +352,7 @@ export async function indexWarrantyRmaManuals(
     configured: status.configured,
     indexName: status.indexName,
     namespace: status.namespace,
+    namespaces: [],
     documentsConsidered: candidates.length,
     documentsIndexed: 0,
     chunksUpserted: 0,
@@ -322,8 +366,11 @@ export async function indexWarrantyRmaManuals(
   }
 
   const manifest = await loadManifest();
+  const namespacesTouched = new Set<string>();
   for (const manual of candidates) {
     try {
+      const namespace = namespaceForWarrantyRmaManual(manual);
+      namespacesTouched.add(namespace);
       const text = await extractWarrantyRmaManualText(manual);
       const chunks = chunkWarrantyRmaTextForVectorIndex(text);
       if (!chunks.length) {
@@ -332,12 +379,14 @@ export async function indexWarrantyRmaManuals(
       }
       const contentHash = sha256(text);
       const previous = manifest.manuals[manual.id];
-      if (previous?.contentHash === contentHash && previous.chunkCount === chunks.length) {
+      if (previous?.contentHash === contentHash && previous.chunkCount === chunks.length && previous.namespace === namespace) {
         result.skipped.push({ manualId: manual.id, title: manual.title, reason: "Already indexed." });
         continue;
       }
-      if (previous?.vectorIds?.length) {
-        result.chunksDeleted += await deleteVectorIds(previous.vectorIds);
+      if (previous?.vectorIds?.length && previous.namespace && previous.namespace !== namespace) {
+        result.chunksDeleted += await deleteVectorIds(previous.vectorIds, previous.namespace);
+      } else if (previous?.vectorIds?.length && previous.namespace === namespace) {
+        result.chunksDeleted += await deleteVectorIds(previous.vectorIds, namespace);
       }
 
       const vectorIds = chunks.map((_, index) => vectorIdForManualChunk(manual.id, index));
@@ -349,11 +398,11 @@ export async function indexWarrantyRmaManuals(
           return {
             id: vectorIds[chunkIndex],
             values: embeddings[offset],
-            metadata: metadataForChunk(manual, chunk, contentHash, chunkIndex, chunks.length)
+            metadata: metadataForChunk(manual, chunk, contentHash, chunkIndex, chunks.length, namespace)
           };
         });
         await pineconeDataRequest("/vectors/upsert", {
-          namespace: vectorNamespace(),
+          namespace,
           vectors
         });
         result.chunksUpserted += vectors.length;
@@ -364,6 +413,8 @@ export async function indexWarrantyRmaManuals(
         contentHash,
         chunkCount: chunks.length,
         vectorIds,
+        namespace,
+        scope: manualScope(manual),
         indexedAt: nowIso()
       };
       result.documentsIndexed += 1;
@@ -376,6 +427,7 @@ export async function indexWarrantyRmaManuals(
     }
   }
   await saveManifest(manifest);
+  result.namespaces = Array.from(namespacesTouched);
   return result;
 }
 
@@ -396,7 +448,10 @@ export async function deleteWarrantyRmaManualVectors(manualId: string): Promise<
     return { configured: true, deleted: 0 };
   }
   try {
-    const deleted = await deleteVectorIds(previous.vectorIds);
+    let deleted = 0;
+    for (const namespace of uniqueNamespaces([previous.namespace, ...activeSearchNamespaces()])) {
+      deleted += await deleteVectorIds(previous.vectorIds, namespace);
+    }
     delete manifest.manuals[id];
     await saveManifest(manifest);
     return { configured: true, deleted };
@@ -416,6 +471,12 @@ function queryFilter(manualIds: string[] | undefined) {
   return { source: { "$eq": VECTOR_SOURCE } };
 }
 
+function scopeForNamespace(namespace: string): "global" | "dealer" | "legacy" {
+  if (namespace === vectorDealerNamespace()) return "dealer";
+  if (namespace === vectorGlobalNamespace()) return "global";
+  return "legacy";
+}
+
 export async function searchWarrantyRmaManualChunks(args: {
   query: string;
   manualIds?: string[];
@@ -427,31 +488,52 @@ export async function searchWarrantyRmaManualChunks(args: {
   const [embedding] = await embedTexts([query]);
   if (!embedding) return [];
   const topK = Math.max(1, Math.min(24, Number(args.topK ?? process.env.WARRANTY_RMA_VECTOR_TOP_K ?? 8)));
-  const response = await pineconeDataRequest("/query", {
-    namespace: vectorNamespace(),
-    vector: embedding,
-    topK,
-    includeMetadata: true,
-    filter: queryFilter(args.manualIds)
-  });
-  const matches: any[] = Array.isArray(response.matches) ? response.matches : [];
-  return matches
-    .map((match: any): WarrantyRmaVectorMatch => {
-      const metadata = match?.metadata && typeof match.metadata === "object" ? match.metadata : {};
-      return {
-        id: String(match?.id ?? ""),
-        score: Number(match?.score ?? 0),
-        manualId: String(metadata.manualId ?? ""),
-        title: String(metadata.title ?? ""),
-        fileName: String(metadata.fileName ?? ""),
-        documentType: String(metadata.documentType ?? ""),
-        chunkIndex: Number(metadata.chunkIndex ?? 0),
-        chunkCount: Number(metadata.chunkCount ?? 0),
-        text: String(metadata.text ?? "")
-      };
+  const filter = queryFilter(args.manualIds);
+  const namespaceResults = await Promise.allSettled(
+    activeSearchNamespaces().map(async namespace => {
+      const response = await pineconeDataRequest("/query", {
+        namespace,
+        vector: embedding,
+        topK,
+        includeMetadata: true,
+        filter
+      });
+      const matches: any[] = Array.isArray(response.matches) ? response.matches : [];
+      return matches.map((match: any): WarrantyRmaVectorMatch => {
+        const metadata = match?.metadata && typeof match.metadata === "object" ? match.metadata : {};
+        const metadataScope = String(metadata.scope ?? "");
+        return {
+          id: String(match?.id ?? ""),
+          score: Number(match?.score ?? 0),
+          manualId: String(metadata.manualId ?? ""),
+          title: String(metadata.title ?? ""),
+          fileName: String(metadata.fileName ?? ""),
+          documentType: String(metadata.documentType ?? ""),
+          namespace,
+          scope:
+            metadataScope === "global" || metadataScope === "dealer" || metadataScope === "legacy"
+              ? metadataScope
+              : scopeForNamespace(namespace),
+          chunkIndex: Number(metadata.chunkIndex ?? 0),
+          chunkCount: Number(metadata.chunkCount ?? 0),
+          text: String(metadata.text ?? "")
+        };
+      });
     })
-    .filter((match: WarrantyRmaVectorMatch) => match.id && match.text)
-    .sort((a: WarrantyRmaVectorMatch, b: WarrantyRmaVectorMatch) => b.score - a.score);
+  );
+  const deduped = new Map<string, WarrantyRmaVectorMatch>();
+  for (const match of namespaceResults
+    .flatMap(result => (result.status === "fulfilled" ? result.value : []))
+    .filter((match: WarrantyRmaVectorMatch) => match.id && match.text)) {
+    const key = [match.manualId, match.chunkIndex, match.text.slice(0, 160)].join(":");
+    const previous = deduped.get(key);
+    if (!previous || previous.scope === "legacy" || match.score > previous.score) {
+      deduped.set(key, match);
+    }
+  }
+  return Array.from(deduped.values())
+    .sort((a: WarrantyRmaVectorMatch, b: WarrantyRmaVectorMatch) => b.score - a.score)
+    .slice(0, topK);
 }
 
 export function warrantyRmaVectorQueryForSubmission(submission: WarrantyRmaSubmission) {

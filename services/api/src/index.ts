@@ -76,7 +76,9 @@ import {
   getWarrantyRmaManual,
   listWarrantyRmaCases,
   listWarrantyRmaManuals,
+  normalizeWarrantyRmaManualScope,
   updateWarrantyRmaCase,
+  warrantyRmaStoreReady,
   type WarrantyRmaManualDocument,
   type WarrantyRmaStatus
 } from "./domain/warrantyRmaStore.js";
@@ -38264,11 +38266,13 @@ function requireWarrantyRmaAccess(req: any, res: any, next: any) {
   return res.status(403).json({ ok: false, error: "forbidden" });
 }
 
-app.get("/warranty-rma/manuals", requireWarrantyRmaAccess, (_req, res) => {
+app.get("/warranty-rma/manuals", requireWarrantyRmaAccess, async (_req, res) => {
+  await warrantyRmaStoreReady;
   return res.json({ ok: true, manuals: listWarrantyRmaManuals() });
 });
 
 app.post("/warranty-rma/manuals", requireWarrantyRmaAccess, upload.single("file"), async (req, res) => {
+  await warrantyRmaStoreReady;
   const file = req.file as Express.Multer.File | undefined;
   if (!file) return res.status(400).json({ ok: false, error: "Upload a warranty/RMA document." });
   const mimeType = String(file.mimetype ?? "").toLowerCase();
@@ -38318,6 +38322,7 @@ app.post("/warranty-rma/manuals", requireWarrantyRmaAccess, upload.single("file"
       storagePath,
       url,
       documentType: normalizeWarrantyRmaDocumentType(req.body?.documentType),
+      scope: normalizeWarrantyRmaManualScope(req.body?.scope),
       notes: String(req.body?.notes ?? "").trim() || undefined,
       uploadedByUserId: user?.id,
       uploadedByUserName: user?.name || user?.email
@@ -38332,6 +38337,7 @@ app.post("/warranty-rma/manuals", requireWarrantyRmaAccess, upload.single("file"
 });
 
 app.delete("/warranty-rma/manuals/:id", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
   const existing = getWarrantyRmaManual(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA document not found." });
   const deleted = deleteWarrantyRmaManual(req.params.id);
@@ -38347,6 +38353,7 @@ app.get("/warranty-rma/vector/status", requireWarrantyRmaAccess, (_req, res) => 
 });
 
 app.post("/warranty-rma/vector/reindex", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
   const manualIds = normalizeWarrantyRmaSelectedManualIds(req.body?.manualIds);
   try {
     const result = await indexWarrantyRmaManuals(listWarrantyRmaManuals(), {
@@ -38428,11 +38435,13 @@ app.post("/warranty-rma/intake/extract", requireWarrantyRmaAccess, upload.array(
   }
 });
 
-app.get("/warranty-rma/cases", requireWarrantyRmaAccess, (_req, res) => {
+app.get("/warranty-rma/cases", requireWarrantyRmaAccess, async (_req, res) => {
+  await warrantyRmaStoreReady;
   return res.json({ ok: true, cases: listWarrantyRmaCases() });
 });
 
 app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
   const partNumber = String(req.body?.partNumber ?? "").trim();
   const issueDescription = String(req.body?.issueDescription ?? "").trim();
   if (!partNumber) return res.status(400).json({ ok: false, error: "Part number is required." });
@@ -38497,7 +38506,8 @@ app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
   }
 });
 
-app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, (req, res) => {
+app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
   const patch: Record<string, unknown> = {};
   if (req.body?.status !== undefined) {
     const status = normalizeWarrantyRmaStatus(req.body.status);
@@ -38547,7 +38557,8 @@ app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, (req, res) => {
   return res.json({ ok: true, case: updated });
 });
 
-app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, (req, res) => {
+app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (req, res) => {
+  await warrantyRmaStoreReady;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
 
