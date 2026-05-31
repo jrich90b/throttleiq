@@ -63,6 +63,23 @@ MDF_PORTAL_CDP_URL="http://127.0.0.1:9222"
 
 The runner checks that URL before connecting. If it cannot connect, or if no CDP URL is configured, it opens the guided fallback in the normal desktop browser. Browser Use will not run against a fresh unauthenticated browser unless `MDF_BROWSER_USE_ALLOW_FRESH_BROWSER=1` is set.
 
+## Saved Chrome Login
+
+The runner may use the dedicated Chrome profile's normal saved-session and saved-password behavior. It does **not** read, extract, store, or send the H-DNet password to LeadRider.
+
+Default behavior:
+
+- If H-DNet is already logged in, continue through H-DNet SSO.
+- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, click `Next` / `Sign in`.
+- If Chrome has not autofilled, MFA is required, or the page asks for a manual step, stop and leave the login page visible for the user.
+- Never enter credentials into a direct Ansira login page; return to H-DNet SSO.
+
+To turn this off for a runner:
+
+```bash
+MDF_PORTAL_USE_SAVED_CHROME_LOGIN=0
+```
+
 ## Browser Use
 
 Install Browser Use in the Python environment used by `MDF_BROWSER_USE_PYTHON`. If Browser Use is not installed, the runner still opens the portal and packet checklist but does not fill fields automatically.
@@ -74,6 +91,7 @@ Useful environment variables:
 - `MDF_PORTAL_RUNNER_MACHINE_PATH`
 - `MDF_PORTAL_RUNNER_REGISTRY_PATH`
 - `MDF_PORTAL_RUNNER_HEARTBEAT_TTL_MS`
+- `MDF_PORTAL_USE_SAVED_CHROME_LOGIN`
 - `MDF_BROWSER_USE_PYTHON`
 - `MDF_BROWSER_USE_MODEL`
 - `MDF_BROWSER_USE_MAX_STEPS`

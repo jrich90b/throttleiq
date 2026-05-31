@@ -78,6 +78,7 @@ type RunnerOptions = {
   apiBase: string;
   token: string;
   maxSteps: string;
+  useSavedChromeLogin: boolean;
 };
 
 const hDNetHomeUrl = "https://h-dnet.com";
@@ -136,7 +137,8 @@ function parseArgs(argv: string[]): RunnerOptions {
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
     token: process.env.MDF_PORTAL_RUNNER_TOKEN?.trim() || process.env.AUTOMATION_RUN_WRITE_TOKEN?.trim() || "",
-    maxSteps: process.env.MDF_BROWSER_USE_MAX_STEPS?.trim() || "35"
+    maxSteps: process.env.MDF_BROWSER_USE_MAX_STEPS?.trim() || "35",
+    useSavedChromeLogin: osFlag("MDF_PORTAL_USE_SAVED_CHROME_LOGIN", true)
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -177,6 +179,10 @@ function parseArgs(argv: string[]): RunnerOptions {
       i += 1;
     } else if (arg.startsWith("--max-steps=")) {
       out.maxSteps = arg.slice("--max-steps=".length);
+    } else if (arg === "--use-saved-login") {
+      out.useSavedChromeLogin = true;
+    } else if (arg === "--no-saved-login") {
+      out.useSavedChromeLogin = false;
     } else if (arg === "--dry-run") {
       out.dryRun = true;
     } else if (arg === "--list") {
@@ -211,6 +217,8 @@ Options:
   --cdp-url <url>           Logged-in Chrome CDP URL. Also supported: MDF_PORTAL_CDP_URL.
   --api-base <url>          Optional live API base. Also supported: MDF_PORTAL_API_BASE_URL.
   --token <token>           Optional runner token. Also supported: MDF_PORTAL_RUNNER_TOKEN.
+  --use-saved-login         Let Chrome saved login/autofill advance H-DNet login when available.
+  --no-saved-login          Stop immediately when H-DNet login is required.
   --guided                  Open a guided checklist fallback instead of browser-use.
   --idle-ok                 Exit cleanly when no MDF portal task is available.
   --dry-run                 Build the packet and prompt without opening a browser.
@@ -383,10 +391,12 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Do not click final submit.",
     "- Stop at the final review/save-draft step.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
-      "- Start at h-dnet.com. Do not open the saved Marketing Development Fund launcher URL directly.",
-      "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
-      "- If the browser is not logged into H-DNet, stop on the H-DNet/Microsoft login screen and let the user sign in manually.",
-      "- If the browser lands on an Ansira login page, stop and go back to h-dnet.com; do not enter credentials directly into Ansira.",
+    "- Start at h-dnet.com. Do not open the saved Marketing Development Fund launcher URL directly.",
+    "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
+    options.useSavedChromeLogin
+      ? "- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, you may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for manual login/MFA if autofill is not already present."
+      : "- If the browser is not logged into H-DNet, stop on the H-DNet/Microsoft login screen and let the user sign in manually.",
+    "- If the browser lands on an Ansira login page, stop and go back to h-dnet.com; do not enter credentials directly into Ansira.",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,
@@ -652,6 +662,7 @@ portal_url = ${JSON.stringify(portalUrl)}
 html_url = ${JSON.stringify(htmlUrl)}
 prompt_path = ${JSON.stringify(promptPath)}
 blocked_summary = ${JSON.stringify(blockedSummary.slice(0, 1200))}
+use_saved_chrome_login = ${JSON.stringify(options.useSavedChromeLogin)}
 
 def safe_js(expr):
     try:
@@ -680,6 +691,45 @@ try:
 """)
     toolbox_clicked = False
     mdf_clicked = False
+    saved_login_clicked = False
+    if isinstance(text_info, dict) and text_info.get("login") and use_saved_chrome_login:
+        saved_login_clicked = bool(safe_js("""
+(() => {
+  const autofilled = (selectors) => selectors.some(selector =>
+    [...document.querySelectorAll(selector)].some(node => {
+      if (node.disabled || node.readOnly) return false;
+      try { if (node.matches(':-webkit-autofill')) return true; } catch {}
+      return false;
+    })
+  );
+  const click = (labels) => {
+    const wanted = new Set(labels.map(label => label.toLowerCase()));
+    const nodes = [...document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')];
+    const el = nodes.find(node => wanted.has(String(node.textContent || node.getAttribute('aria-label') || node.value || '').trim().toLowerCase()));
+    if (!el) return false;
+    el.click();
+    return true;
+  };
+  const text = document.body?.innerText || '';
+  if (/stay signed in|keep me signed in/i.test(text)) return click(['yes', 'continue']);
+  if (autofilled(['input[type="password"]'])) return click(['sign in', 'log in', 'continue', 'submit']);
+  if (autofilled(['input[type="email"]', 'input[name="loginfmt"]', 'input[name="username"]', 'input[name="UserName"]'])) return click(['next', 'continue', 'sign in']);
+  return false;
+})()
+"""))
+        time.sleep(5)
+        text_info = safe_js("""
+(() => {
+  const text = document.body?.innerText || '';
+  return {
+    login: /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text),
+    hasToolbox: !!document.querySelector('.avaQuickLinksExtension.headerExtension'),
+    hasCreateClaim: /Create Claim/i.test(text),
+    url: location.href,
+    title: document.title
+  };
+})()
+""")
     if isinstance(text_info, dict) and text_info.get("hasToolbox") and not text_info.get("login"):
         toolbox_clicked = bool(safe_js("""
 (() => {
@@ -711,6 +761,7 @@ try:
         "portalProbe": text_info,
         "toolboxClicked": toolbox_clicked,
         "mdfClicked": mdf_clicked,
+        "savedLoginClicked": saved_login_clicked,
         "packet": packet_info,
         "promptPath": prompt_path,
         "htmlUrl": html_url,
@@ -744,7 +795,9 @@ except Exception as exc:
   }
   const probe = payload.portalProbe && typeof payload.portalProbe === "object" ? payload.portalProbe : {};
   const state = probe.login
-    ? "The runner browser is on the H-DNet/Microsoft login path."
+    ? payload.savedLoginClicked
+      ? "The runner tried Chrome saved login/autofill, but the browser is still on the H-DNet/Microsoft login path."
+      : "The runner browser is on the H-DNet/Microsoft login path."
     : payload.mdfClicked
       ? "The runner clicked the H-DNet toolbox MDF link and opened the packet checklist."
       : probe.hasToolbox
@@ -1009,15 +1062,94 @@ function isLoginPage(text: string): boolean {
   return /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text);
 }
 
-async function openMdfSsoEntry(page: any, portalUrl: string): Promise<any> {
+async function hasChromeAutofilledInput(page: any, selectors: string[]): Promise<boolean> {
+  return page.evaluate((inputSelectors: string[]) => {
+    for (const selector of inputSelectors) {
+      for (const node of Array.from(document.querySelectorAll(selector))) {
+        const input = node as HTMLInputElement;
+        if (!input || input.disabled || input.readOnly) continue;
+        try {
+          if (input.matches?.(":-webkit-autofill")) return true;
+        } catch {
+          // Some Chromium pages block pseudo-class checks; never inspect the credential value as fallback.
+        }
+      }
+    }
+    return false;
+  }, selectors).catch(() => false);
+}
+
+async function clickLoginAction(page: any, labels: string[]): Promise<boolean> {
+  return page.evaluate((buttonLabels: string[]) => {
+    const wanted = new Set(buttonLabels.map(label => label.trim().toLowerCase()));
+    const candidates = Array.from(
+      document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')
+    ) as HTMLElement[];
+    for (const node of candidates) {
+      const text = String(
+        node.textContent ||
+          node.getAttribute("aria-label") ||
+          (node instanceof HTMLInputElement ? node.value : "") ||
+          ""
+      ).trim().toLowerCase();
+      if (!wanted.has(text)) continue;
+      node.click();
+      return true;
+    }
+    return false;
+  }, labels).catch(() => false);
+}
+
+async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{ attempted: boolean; advanced: boolean }> {
+  if (!options.useSavedChromeLogin) return { attempted: false, advanced: false };
+  let attempted = false;
+  for (let step = 0; step < 3; step += 1) {
+    const text = await pageBodyText(page);
+    const url = page.url();
+    if (!isLoginPage(text) && !/login\.microsoftonline\.com/i.test(url)) {
+      return { attempted, advanced: attempted };
+    }
+    const staySignedIn = /stay signed in|keep me signed in/i.test(text);
+    const emailReady = await hasChromeAutofilledInput(page, [
+      'input[type="email"]',
+      'input[name="loginfmt"]',
+      'input[name="username"]',
+      'input[name="UserName"]'
+    ]);
+    const passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+    let clicked = false;
+    if (staySignedIn) {
+      clicked = await clickLoginAction(page, ["Yes", "Continue"]);
+    } else if (passwordReady) {
+      clicked = await clickLoginAction(page, ["Sign in", "Log in", "Continue", "Submit"]);
+    } else if (emailReady) {
+      clicked = await clickLoginAction(page, ["Next", "Continue", "Sign in"]);
+    }
+    if (!clicked) break;
+    attempted = true;
+    await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+  }
+  const finalText = await pageBodyText(page);
+  return {
+    attempted,
+    advanced: attempted && !isLoginPage(finalText) && !/login\.microsoftonline\.com/i.test(page.url())
+  };
+}
+
+async function openMdfSsoEntry(page: any, portalUrl: string, options: RunnerOptions): Promise<any> {
   const startUrl = /h-?dnet\.com/i.test(portalUrl || "") ? portalUrl : hDNetHomeUrl;
   await page.goto(startUrl, {
     waitUntil: "domcontentloaded",
     timeout: 60_000
   });
   await page.waitForTimeout(5000);
-  const text = await pageBodyText(page);
-  if (isLoginPage(text)) return page;
+  let text = await pageBodyText(page);
+  if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(page.url())) {
+    await trySavedChromeLogin(page, options);
+    text = await pageBodyText(page);
+    if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(page.url())) return page;
+  }
 
   const toolbox = page.locator(".avaQuickLinksExtension.headerExtension").first();
   if (!(await toolbox.count())) return page;
@@ -1041,15 +1173,17 @@ async function openMdfSsoEntry(page: any, portalUrl: string): Promise<any> {
   return page;
 }
 
-async function openAnsiraClaimFormThroughHNet(page: any, portalUrl: string): Promise<{ page: any; blocker: string | null }> {
+async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions): Promise<{ page: any; blocker: string | null }> {
   if (!/app\.ansira\.com\/member/i.test(page.url())) {
-    page = await openMdfSsoEntry(page, portalUrl);
+    page = await openMdfSsoEntry(page, options.portalUrl, options);
   }
   let text = await pageBodyText(page);
   if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
     return {
       page,
-      blocker: "The MDF runner is at the H-DNet/Microsoft sign-in screen. Sign in through H-DNet, then create a fresh portal draft task."
+      blocker: options.useSavedChromeLogin
+        ? "The MDF runner is at the H-DNet/Microsoft sign-in screen. Chrome saved login/autofill was tried when available, but manual login or MFA is still required."
+        : "The MDF runner is at the H-DNet/Microsoft sign-in screen. Sign in through H-DNet, then create a fresh portal draft task."
     };
   }
 
@@ -1067,7 +1201,7 @@ async function openAnsiraClaimFormThroughHNet(page: any, portalUrl: string): Pro
   await page.waitForTimeout(3000);
   text = await pageBodyText(page);
   if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
-    page = await openMdfSsoEntry(page, portalUrl);
+    page = await openMdfSsoEntry(page, options.portalUrl, options);
     text = await pageBodyText(page);
     if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url()) || !/app\.ansira\.com\/member/i.test(page.url())) {
       return {
@@ -1109,7 +1243,13 @@ async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: nu
     timeout: 60_000
   });
   await page.waitForTimeout(4000);
-  const text = await pageBodyText(page);
+  let text = await pageBodyText(page);
+  const savedLogin = await trySavedChromeLogin(page, options);
+  if (savedLogin.attempted) {
+    await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+    text = await pageBodyText(page);
+  }
   const url = page.url();
   await browser.close();
 
@@ -1123,7 +1263,9 @@ async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: nu
   if (isLoginPage(text) || /login\.microsoftonline\.com/i.test(url)) {
     return {
       code: 0,
-      summary: "H-DNet login page is open in the MDF runner browser. Enter your password/MFA there, then click Start portal draft again.",
+      summary: options.useSavedChromeLogin
+        ? "H-DNet login page is open in the MDF runner browser. Chrome saved login/autofill was tried when available, but password or MFA still needs a person. Finish login there, then click Start portal draft again."
+        : "H-DNet login page is open in the MDF runner browser. Enter your password/MFA there, then click Start portal draft again.",
       links: [url]
     };
   }
@@ -1155,7 +1297,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   if (!page) throw new Error("No Chrome page available for the MDF portal runner.");
 
   await page.bringToFront();
-  const ansiraResult = await openAnsiraClaimFormThroughHNet(page, options.portalUrl);
+  const ansiraResult = await openAnsiraClaimFormThroughHNet(page, options);
   page = ansiraResult.page;
   const loginBlocker = ansiraResult.blocker;
   if (loginBlocker) {

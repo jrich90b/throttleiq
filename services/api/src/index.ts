@@ -38880,7 +38880,8 @@ app.post("/mdf/portal-login-task", requireManager, async (req, res) => {
     instructions: [
       "[mdf-login]",
       "Open https://h-dnet.com in the managed MDF runner browser.",
-      "If login is required, stop on the H-DNet/Microsoft login screen so the user can enter password/MFA.",
+      "If H-DNet/Microsoft login is required and Chrome has already autofilled saved credentials, click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials.",
+      "If autofill is not already present, MFA is required, or the page asks for any manual step, stop on the login screen so the user can finish login.",
       "Do not open the direct Ansira login page and do not fill any MDF claim from this task."
     ].join("\n")
   });
@@ -38972,9 +38973,10 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
       "",
       "Browser automation rules:",
       "- Use the user's logged-in session when possible.",
+      "- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, the runner may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials.",
       "- MDF is accessed through H-DNet SSO: click the H-DNet header toolbox icon and choose Marketing Development Fund from My Toolbox if the browser is not already in Ansira.",
       "- Do not type portal credentials into the direct Ansira login page; use the H-DNet toolbox SSO route instead.",
-      "- If login, MFA, missing files, or an uncertain field blocks progress, stop and report the blocker.",
+      "- If autofill is not already present, MFA appears, missing files, or an uncertain field blocks progress, stop and report the blocker.",
       "- Never click final submit. Save as draft or stop at the review page."
     ]
       .filter(Boolean)
@@ -39156,6 +39158,7 @@ MDF_PORTAL_API_BASE_URL=${apiBase}
 MDF_PORTAL_RUNNER_TOKEN=${runnerToken}
 MDF_PORTAL_CDP_URL=http://127.0.0.1:9222
 MDF_HDNET_URL=https://h-dnet.com
+MDF_PORTAL_USE_SAVED_CHROME_LOGIN=1
 MDF_PORTAL_USE_BROWSER_HARNESS_RESCUE=1
 ENV
 
@@ -39229,7 +39232,8 @@ launchctl load "\${PLIST_RUNNER}"
 
 echo ""
 echo "LeadRider MDF runner installed."
-echo "A dedicated Chrome window should open to H-DNet. Log into H-DNet there, then use MDF Assistant > Start portal draft."
+echo "A dedicated Chrome window should open to H-DNet. Log into H-DNet there and save the password in Chrome if you want the runner to use Chrome autofill on future logins."
+echo "The runner never reads or stores H-DNet credentials. If autofill/MFA needs help, finish login in that Chrome window, then use MDF Assistant > Start portal draft."
 echo "Runner logs:"
 echo "  \${LOG_DIR}/leadrider-mdf-runner.out.log"
 echo "  \${LOG_DIR}/leadrider-mdf-runner.err.log"

@@ -75,7 +75,10 @@ async def run() -> int:
                 "If you are on H-DNet, click the header toolbox icon with CSS selector "
                 "`.avaQuickLinksExtension.headerExtension`, then choose `Marketing Development Fund` "
                 "from My Toolbox. If you land on an Ansira login page, go back to H-DNet and use "
-                "the toolbox SSO route instead of typing credentials."
+                "the toolbox SSO route instead of typing credentials. If H-DNet/Microsoft login "
+                "appears and Chrome has already autofilled saved credentials, you may click Next "
+                "or Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for "
+                "manual login/MFA if autofill is not already present."
             ),
             prompt,
             "Important final rule: do not click final submit. Stop at draft/review and report what remains.",
