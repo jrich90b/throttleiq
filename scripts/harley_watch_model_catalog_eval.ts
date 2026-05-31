@@ -147,6 +147,36 @@ function allCatalogCodes(catalog: Catalog): Set<string> {
   return out;
 }
 
+function resolveCatalogCodesForLabel(catalog: Catalog, catalogCodes: Set<string>, label: string): Set<string> {
+  const exact = getAlias(catalog, label);
+  if (exact.size) return exact;
+
+  const tokenMatches = new Set<string>();
+  for (const rawToken of String(label ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)) {
+    const token = rawToken.replace(/_{2,}/g, "_");
+    if (catalogCodes.has(token)) tokenMatches.add(token);
+  }
+  if (tokenMatches.size) return tokenMatches;
+
+  const labelKey = normalizeKey(label);
+  const aliasEntries = Object.entries(catalog.aliases ?? {})
+    .map(([raw, codes]) => ({
+      key: normalizeKey(raw),
+      codes: codeSet(codes)
+    }))
+    .filter(entry => entry.key.length >= 5 && entry.codes.size)
+    .sort((left, right) => right.key.length - left.key.length);
+
+  for (const entry of aliasEntries) {
+    if (labelKey === entry.key || labelKey.includes(entry.key)) return entry.codes;
+  }
+  return new Set();
+}
+
 function leadingModelCode(raw: string): string | null {
   const parts = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
   if (parts.length < 3) return null;
@@ -283,6 +313,7 @@ async function auditRuntimeWatches(catalog: Catalog): Promise<RuntimeWatchSummar
   if (!raw) return undefined;
 
   const conversations = extractConversations(raw);
+  const catalogCodes = allCatalogCodes(catalog);
   const findings: RuntimeWatchFinding[] = [];
   let watchConversations = 0;
   let activeWatchCount = 0;
@@ -350,7 +381,7 @@ async function auditRuntimeWatches(catalog: Catalog): Promise<RuntimeWatchSummar
       }
 
       if (model && isLikelyHarleyWatch(catalog, watch)) {
-        const codes = getAlias(catalog, model);
+        const codes = resolveCatalogCodesForLabel(catalog, catalogCodes, model);
         if (!codes.size) {
           addFinding(
             conv,
