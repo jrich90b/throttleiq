@@ -98,6 +98,13 @@ assert.ok(freightHints.includes("product damaged in shipping"));
 const freightQuery = warrantyRmaVectorQueryForSubmission(freightSubmission);
 assert.match(freightQuery, /Preferred warranty\/RMA reference terms: .*FRT/i);
 assert.match(freightQuery, /BOL: BOL-8812/i);
+const dealerStockHints = warrantyRmaRetrievalHintsForSubmission({
+  claimType: "dealer_stock_parts",
+  partNumber: "50700000",
+  issueDescription: "Dealer stock footpeg has a manufacturing defect."
+});
+assert.ok(dealerStockHints.includes("DFS"));
+assert.ok(dealerStockHints.some(item => /over-the-counter/i.test(item)));
 const rankedMatches = rankWarrantyRmaVectorMatchesForSubmission(
   [
     {
@@ -228,6 +235,47 @@ const hdnetLongPacket = buildHdnetDraftPacket({
 });
 assert.equal(hdnetLongPacket.formKind, "long");
 assert.equal(hdnetLongPacket.detailRows.otherLabor.length, 15);
+
+const dfsPacket = buildHdnetDraftPacket({
+  claimType: "dealer_stock_parts",
+  partNumber: "50700000",
+  partDescription: "Footpeg",
+  issueDescription: "Dealer stock part has a visible manufacturing defect.",
+  serviceStartDate: "2026-05-29",
+  serviceEndDate: "2026-05-30",
+  quantity: "1",
+  customerConcernCode: "9901",
+  conditionCode: "9110",
+  notes: "Dealer Stock. Part received 05/15/2026."
+});
+assert.equal(dfsPacket.fields.strEventType, "DFS");
+assert.equal(dfsPacket.fields.strVIN, "");
+assert.equal(dfsPacket.fields.strMileage, "");
+assert.equal(dfsPacket.fields.strWorkOrder, "");
+assert.equal(dfsPacket.fields.strPrimaryLabor, "");
+assert.equal(dfsPacket.missing.includes("VIN or crankcase number"), false);
+assert.equal(dfsPacket.missing.includes("Odometer reading"), false);
+assert.equal(dfsPacket.missing.includes("Work order"), false);
+assert.equal(dfsPacket.missing.includes("Primary labor code"), false);
+assert.ok(dfsPacket.warnings.some(item => /manually-created non-vehicle/i.test(item)));
+
+const gmPacket = buildHdnetDraftPacket({
+  claimType: "general_merchandise",
+  partNumber: "99000-24DM",
+  partDescription: "Apparel",
+  issueDescription: "Logo stitching separated at purchase.",
+  serviceStartDate: "2026-05-29",
+  serviceEndDate: "2026-05-30",
+  purchaseDate: "2026-05-20",
+  quantity: "1",
+  customerConcernCode: "9901",
+  conditionCode: "9110",
+  notes: "Retailed to customer on 05/20/2026."
+});
+assert.equal(gmPacket.fields.strEventType, "GM");
+assert.equal(gmPacket.missing.includes("VIN or crankcase number"), false);
+assert.equal(gmPacket.missing.includes("Work order"), false);
+assert.equal(gmPacket.missing.includes("Primary labor code"), false);
 
 const extraction = await extractWarrantyRmaIntake([
   {

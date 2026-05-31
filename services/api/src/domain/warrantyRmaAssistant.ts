@@ -727,7 +727,7 @@ export async function extractWarrantyRmaIntake(files: WarrantyRmaUploadedFile[])
     "Do not guess. Leave fields blank unless the value is visible or explicitly stated.",
     "Normalize VINs, part numbers, dates, repair order numbers, invoice numbers, customer names, mileage, quantity, labor hours, and job time codes when present.",
     "Extract service start/end dates, authorization numbers, customer concern codes, condition codes, carrier names, BOL numbers, and return authorization numbers when present.",
-    "Use claimType for likely categories such as warranty, RMA, parts warranty, goodwill, recall, freight/shipping damage, or unknown.",
+    "Use claimType for likely categories such as motorcycle_warranty, parts_accessory_warranty/PNA, dealer_stock_parts/DFS, general_merchandise/GM, RMA, goodwill, recall, freight/shipping damage, or unknown.",
     WARRANTY_RMA_INTAKE_FIELD_GUIDANCE,
     "requiredInfo should list only missing items that would likely block a clean TALON/Warranty-Link review or manual submission.",
     "Return only the structured JSON schema."

@@ -76,6 +76,7 @@ const LONG_LABOR_8888_ROWS = ["2", "4"];
 const CLAIM_TYPE_TO_EVENT_TYPE: Record<string, { code: string; warning?: string }> = {
   motorcycle_warranty: { code: "MC" },
   parts_accessory_warranty: { code: "PNA" },
+  dealer_stock_parts: { code: "DFS" },
   pre_delivery_warranty: { code: "PRD" },
   freight_damage: { code: "FRT" },
   goodwill: { code: "GDW" },
@@ -152,6 +153,7 @@ function limitField(label: string, value: string, max: number, warnings: string[
 function normalizeClaimType(value: string): string {
   const raw = clean(value).toLowerCase().replace(/[-\s]+/g, "_");
   if (!raw) return "";
+  if (raw.includes("dfs") || raw.includes("dealer_stock") || raw.includes("over_the_counter")) return "dealer_stock_parts";
   if (raw.includes("pna") || raw.includes("parts_accessory") || raw.includes("parts_warranty") || raw.includes("accessory")) return "parts_accessory_warranty";
   if (raw.includes("prd") || raw.includes("pre_delivery")) return "pre_delivery_warranty";
   if (raw.includes("frt") || raw.includes("freight") || raw.includes("shipping_damage")) return "freight_damage";
@@ -162,6 +164,10 @@ function normalizeClaimType(value: string): string {
   if (raw.includes("engine") || raw.includes("core") || raw.includes("longblock") || raw.includes("long_block") || raw.includes("rem")) return "engine_return";
   if (raw.includes("mc") || raw.includes("motorcycle") || raw.includes("vehicle")) return "motorcycle_warranty";
   return raw;
+}
+
+function isManualNonVehicleWarranty(claimType: string): boolean {
+  return claimType === "dealer_stock_parts" || claimType === "general_merchandise";
 }
 
 function normalizeDetailType(value: string): HdnetDetailType {
@@ -210,6 +216,12 @@ export function buildHdnetDraftPacket(input: HdnetDraftInput): HdnetDraftPacket 
     warning: claimType ? `No safe H-Dnet event type code is mapped for ${claimType}; review the claim guide before entry.` : undefined
   };
   if (eventType.warning) warnings.push(eventType.warning);
+  const manualNonVehicle = isManualNonVehicleWarranty(claimType);
+  if (manualNonVehicle) {
+    warnings.push(
+      `${eventType.code || claimType.toUpperCase()} is a manually-created non-vehicle Warranty-Link claim. Leave VIN, odometer, work order, owner, and primary labor blank unless H-Dnet explicitly requires otherwise.`
+    );
+  }
 
   const fields: Record<string, string> = {};
   addDateFields(fields, "strStartDate", reviewField(input, "serviceStartDate") || reviewField(input, "workOrderDate"));
@@ -221,15 +233,15 @@ export function buildHdnetDraftPacket(input: HdnetDraftInput): HdnetDraftPacket 
   );
 
   const problemDescription = prefer(input.review?.dmsPayloadDraft.complaint, input.issueDescription, reviewField(input, "notes"));
-  fields.strCustName = limitField("Owner last name", lastName(reviewField(input, "customerName")), 33, warnings);
+  fields.strCustName = manualNonVehicle ? "" : limitField("Owner last name", lastName(reviewField(input, "customerName")), 33, warnings);
   fields.strCrankCase = "";
-  fields.strVIN = limitField("VIN", reviewField(input, "vin"), 17, warnings).toUpperCase();
-  fields.strMileage = limitField("Odometer reading", reviewField(input, "mileage"), 20, warnings);
-  fields.strWorkOrder = limitField("Work order", prefer(reviewField(input, "roNumber"), reviewField(input, "orderNumber")), 15, warnings);
+  fields.strVIN = manualNonVehicle ? "" : limitField("VIN", reviewField(input, "vin"), 17, warnings).toUpperCase();
+  fields.strMileage = manualNonVehicle ? "" : limitField("Odometer reading", reviewField(input, "mileage"), 20, warnings);
+  fields.strWorkOrder = manualNonVehicle ? "" : limitField("Work order", prefer(reviewField(input, "roNumber"), reviewField(input, "orderNumber")), 15, warnings);
   fields.strEventType = limitField("Event type", eventType.code, 3, warnings);
   fields.strQty = limitField("Quantity", reviewField(input, "quantity") || "1", 3, warnings);
   fields.strProbPart = limitField("Problem part number", reviewField(input, "partNumber"), 19, warnings).toUpperCase();
-  fields.strPrimaryLabor = limitField("Primary labor code", reviewField(input, "jobTimeCode"), 4, warnings);
+  fields.strPrimaryLabor = manualNonVehicle ? "" : limitField("Primary labor code", reviewField(input, "jobTimeCode"), 4, warnings);
   fields.strConcernCode = limitField("Customer concern code", reviewField(input, "customerConcernCode"), 4, warnings);
   fields.strConditionCode = limitField("Condition code", reviewField(input, "conditionCode"), 4, warnings);
   fields.strEventAuth = limitField("Dealer authorization code", reviewField(input, "authorizationNumber"), 6, warnings);
@@ -248,14 +260,16 @@ export function buildHdnetDraftPacket(input: HdnetDraftInput): HdnetDraftPacket 
   if (!allDateFieldsPresent(fields, "strStartDate")) missing.push("Service start date");
   if (!allDateFieldsPresent(fields, "strEndDate")) missing.push("Service end date");
   if (!allDateFieldsPresent(fields, "strProbDate")) missing.push("Problem date");
-  missingIfEmpty(missing, "Owner last name", fields.strCustName);
-  if (!fields.strVIN && !fields.strCrankCase) missing.push("VIN or crankcase number");
-  missingIfEmpty(missing, "Odometer reading", fields.strMileage);
-  missingIfEmpty(missing, "Work order", fields.strWorkOrder);
+  if (!manualNonVehicle) {
+    missingIfEmpty(missing, "Owner last name", fields.strCustName);
+    if (!fields.strVIN && !fields.strCrankCase) missing.push("VIN or crankcase number");
+    missingIfEmpty(missing, "Odometer reading", fields.strMileage);
+    missingIfEmpty(missing, "Work order", fields.strWorkOrder);
+  }
   missingIfEmpty(missing, "Event type", fields.strEventType);
   missingIfEmpty(missing, "Quantity", fields.strQty);
   missingIfEmpty(missing, "Problem part number", fields.strProbPart);
-  missingIfEmpty(missing, "Primary labor code", fields.strPrimaryLabor);
+  if (!manualNonVehicle) missingIfEmpty(missing, "Primary labor code", fields.strPrimaryLabor);
   missingIfEmpty(missing, "Customer concern code", fields.strConcernCode);
   missingIfEmpty(missing, "Condition code", fields.strConditionCode);
   missingIfEmpty(missing, "Problem description", fields.strProbDesc);

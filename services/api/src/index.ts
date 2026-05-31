@@ -79,6 +79,7 @@ import {
   normalizeWarrantyRmaManualScope,
   updateWarrantyRmaCase,
   warrantyRmaStoreReady,
+  type WarrantyRmaCaseEntry,
   type WarrantyRmaManualDocument,
   type WarrantyRmaStatus
 } from "./domain/warrantyRmaStore.js";
@@ -38206,22 +38207,58 @@ async function warrantyRmaCapabilities() {
     process.env.WARRANTY_RMA_WORKFLOW ?? profile?.warrantyRma?.workflow ?? profile?.warrantyRmaWorkflow
   );
   const submissionEnabled = workflow === "non_talon_submission";
+  const talonNonVehicleEnabled = workflow === "talon_reference";
+  const casePreparationEnabled = submissionEnabled || talonNonVehicleEnabled;
   return {
     workflow,
     submissionEnabled,
-    modeLabel: submissionEnabled ? "Non-TALON submission workspace" : "TALON reference mode",
+    casePreparationEnabled,
+    talonNonVehicleEnabled,
+    modeLabel: submissionEnabled ? "Non-TALON submission workspace" : "TALON warranty review mode",
     message: submissionEnabled
       ? "This dealer is configured for standalone warranty/RMA case preparation."
-      : "This dealer uses TALON as the work-order source of record. Build and cash out work orders in TALON, then verify/transmit the claim in Warranty-Link."
+      : "This dealer uses TALON as the work-order source of record for vehicle/work-order claims. Non-vehicle warranty/RMA packets can still be prepared here for review and future connector handoff."
   };
 }
 
-async function requireWarrantyRmaSubmissionEnabled(res: any): Promise<boolean> {
+function normalizeWarrantyRmaClaimTypeForRouting(raw: unknown): string {
+  const value = String(raw ?? "").trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (!value) return "";
+  if (value.includes("dfs") || value.includes("dealer_stock") || value.includes("over_the_counter")) return "dealer_stock_parts";
+  if (value.includes("gm") || value.includes("general_merchandise") || value.includes("apparel")) return "general_merchandise";
+  if (value.includes("rma") || value.includes("return")) return "parts_rma";
+  if (value.includes("pna") || value.includes("parts_accessory") || value.includes("parts_warranty") || value.includes("accessory")) return "parts_accessory_warranty";
+  if (value.includes("prd") || value.includes("pre_delivery")) return "pre_delivery_warranty";
+  if (value.includes("frt") || value.includes("freight") || value.includes("shipping_damage")) return "freight_damage";
+  if (value.includes("gdw") || value.includes("goodwill")) return "goodwill";
+  if (value.includes("engine") || value.includes("core") || value.includes("longblock") || value.includes("long_block") || value.includes("rem")) return "engine_return";
+  if (value.includes("recall") || value.includes("campaign")) return "recall_campaign";
+  if (value.includes("mc") || value.includes("motorcycle") || value.includes("vehicle")) return "motorcycle_warranty";
+  return value;
+}
+
+function warrantyRmaTalonManualPortalClaim(raw: unknown): boolean {
+  const claimType = normalizeWarrantyRmaClaimTypeForRouting(raw);
+  return claimType === "dealer_stock_parts" || claimType === "general_merchandise";
+}
+
+function warrantyRmaHandoffMessage(existing: WarrantyRmaCaseEntry, hdnetDraftPacket: ReturnType<typeof buildHdnetDraftPacket>, capabilities: Awaited<ReturnType<typeof warrantyRmaCapabilities>>) {
+  const claimType = normalizeWarrantyRmaClaimTypeForRouting(existing.claimType || existing.review?.dmsPayloadDraft?.claimType);
+  if (capabilities.workflow === "talon_reference") {
+    if (claimType === "dealer_stock_parts" || claimType === "general_merchandise" || claimType === "parts_rma") {
+      return `${hdnetDraftPacket.formTitle} is ready for non-vehicle TALON/Warranty-Link handoff review. The connector is not configured yet, so use this packet for manual entry/review until the API is available.`;
+    }
+    return `${hdnetDraftPacket.formTitle} is ready as a TALON work-order review packet. Build/cash out the warranty work in TALON, then verify/transmit the generated Warranty-Link claim.`;
+  }
+  return `${hdnetDraftPacket.formTitle} is ready for H-Dnet portal review. Portal automation is not connected yet, so review the packet and enter it manually in H-Dnet.`;
+}
+
+async function requireWarrantyRmaCasePreparationEnabled(res: any): Promise<boolean> {
   const capabilities = await warrantyRmaCapabilities();
-  if (capabilities.submissionEnabled) return true;
+  if (capabilities.casePreparationEnabled) return true;
   res.status(403).json({
     ok: false,
-    error: "Warranty/RMA case preparation is disabled for TALON dealers.",
+    error: "Warranty/RMA case preparation is disabled for this dealer.",
     capabilities
   });
   return false;
@@ -38440,7 +38477,7 @@ app.post("/warranty-rma/vector/search", requireWarrantyRmaAccess, async (req, re
 });
 
 app.post("/warranty-rma/intake/extract", requireWarrantyRmaAccess, upload.array("files", 8), async (req, res) => {
-  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  if (!(await requireWarrantyRmaCasePreparationEnabled(res))) return;
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (!files.length) {
     return res.status(400).json({ ok: false, error: "Upload at least one invoice, repair order, work order, photo, or PDF." });
@@ -38495,7 +38532,7 @@ app.get("/warranty-rma/cases", requireWarrantyRmaAccess, async (_req, res) => {
 
 app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
-  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  if (!(await requireWarrantyRmaCasePreparationEnabled(res))) return;
   const partNumber = String(req.body?.partNumber ?? "").trim();
   const issueDescription = String(req.body?.issueDescription ?? "").trim();
   if (!partNumber) return res.status(400).json({ ok: false, error: "Part number is required." });
@@ -38564,7 +38601,7 @@ app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
 
 app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
-  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  if (!(await requireWarrantyRmaCasePreparationEnabled(res))) return;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
   const patch: Record<string, unknown> = {};
@@ -38658,11 +38695,12 @@ app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) 
 
 app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
-  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  if (!(await requireWarrantyRmaCasePreparationEnabled(res))) return;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
   const hdnetDraftPacket = existing.hdnetDraftPacket ?? buildHdnetDraftPacket({ ...existing, review: existing.review });
-  const message = `${hdnetDraftPacket.formTitle} is ready for H-Dnet portal review. Portal automation is not connected yet, so review the packet and enter it manually in H-Dnet.`;
+  const capabilities = await warrantyRmaCapabilities();
+  const message = warrantyRmaHandoffMessage(existing, hdnetDraftPacket, capabilities);
 
   const updated = updateWarrantyRmaCase(req.params.id, {
     hdnetDraftPacket,
@@ -38682,11 +38720,19 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
 
 app.post("/warranty-rma/cases/:id/portal-task", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
-  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  if (!(await requireWarrantyRmaCasePreparationEnabled(res))) return;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
 
   const hdnetDraftPacket = existing.hdnetDraftPacket ?? buildHdnetDraftPacket({ ...existing, review: existing.review });
+  const capabilities = await warrantyRmaCapabilities();
+  if (capabilities.workflow === "talon_reference" && !warrantyRmaTalonManualPortalClaim(existing.claimType || existing.review?.dmsPayloadDraft?.claimType)) {
+    return res.status(403).json({
+      ok: false,
+      error:
+        "This claim type should be created from the TALON source record. Use the packet as a review checklist, then verify/transmit the generated Warranty-Link claim."
+    });
+  }
   const user = (req as any).user ?? null;
   const profile = (await getDealerProfileHot().catch(() => null)) as any;
   const clientName = String(profile?.dealerName ?? profile?.name ?? "").trim() || "Dealer";

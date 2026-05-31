@@ -289,6 +289,8 @@ type WarrantyRmaVectorStatus = {
 type WarrantyRmaCapabilities = {
   workflow: "talon_reference" | "non_talon_submission";
   submissionEnabled: boolean;
+  casePreparationEnabled?: boolean;
+  talonNonVehicleEnabled?: boolean;
   modeLabel: string;
   message: string;
 };
@@ -317,6 +319,7 @@ const claimTypeOptions = [
   { value: "", label: "Unknown / let assistant classify" },
   { value: "motorcycle_warranty", label: "Warranty claim - motorcycle (MC)" },
   { value: "parts_accessory_warranty", label: "Parts/accessory warranty (PNA)" },
+  { value: "dealer_stock_parts", label: "Dealer-stock / over-the-counter parts (DFS)" },
   { value: "pre_delivery_warranty", label: "Pre-delivery warranty (PRD)" },
   { value: "freight_damage", label: "Freight damage (FRT)" },
   { value: "parts_rma", label: "Parts RMA / return" },
@@ -374,6 +377,19 @@ const requiredProfiles: Record<string, { source: string; items: RequirementItem[
       { label: "Primary labor / job time code", anyOf: ["jobTimeCode", "laborHours"] },
       { label: "Customer concern and condition codes", fields: ["customerConcernCode", "conditionCode"] },
       { label: "Confirm part is registered to VIN", detail: "Document check before TALON/Warranty-Link review." }
+    ]
+  },
+  dealer_stock_parts: {
+    source: "DFS Claim Type Processing Guide, Warranty Condition Codes, Customer Concern Codes",
+    items: [
+      { label: "Problem part number", fields: ["partNumber"] },
+      { label: "Part description", fields: ["partDescription"] },
+      { label: "Quantity", fields: ["quantity"] },
+      { label: "Service start date / date problem reported", fields: ["serviceStartDate"] },
+      { label: "Service end date / customer made whole", fields: ["serviceEndDate"] },
+      { label: "Customer concern and condition codes", fields: ["customerConcernCode", "conditionCode"] },
+      { label: "Retail vs dealer-stock note", anyOf: ["notes", "customerName"] },
+      { label: "No VIN, mileage, work order, or primary labor", detail: "DFS is manually created in Warranty-Link; authorized labor uses 8888 detail only." }
     ]
   },
   pre_delivery_warranty: {
@@ -501,9 +517,11 @@ export default function WarrantyRmaPage() {
   const [capabilities, setCapabilities] = useState<WarrantyRmaCapabilities>({
     workflow: "talon_reference",
     submissionEnabled: false,
-    modeLabel: "TALON reference mode",
+    casePreparationEnabled: true,
+    talonNonVehicleEnabled: true,
+    modeLabel: "TALON warranty review mode",
     message:
-      "This dealer uses TALON as the work-order source of record. Build and cash out work orders in TALON, then verify/transmit the claim in Warranty-Link."
+      "This dealer uses TALON as the work-order source of record for vehicle/work-order claims. Non-vehicle warranty/RMA packets can still be prepared here for review and future connector handoff."
   });
   const [caseActionBusy, setCaseActionBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -520,6 +538,8 @@ export default function WarrantyRmaPage() {
     [caseForm, manuals, selectedManualIds]
   );
   const submissionsEnabled = capabilities.submissionEnabled === true;
+  const casePreparationEnabled = capabilities.casePreparationEnabled === true || submissionsEnabled;
+  const talonReferenceMode = capabilities.workflow === "talon_reference" && !submissionsEnabled;
 
   useEffect(() => {
     void loadWorkspace();
@@ -955,29 +975,29 @@ export default function WarrantyRmaPage() {
             </div>
           ) : null}
 
-          {!submissionsEnabled ? (
+          {talonReferenceMode ? (
             <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">{capabilities.modeLabel}</div>
-              <h2 className="mt-1 text-lg font-semibold text-slate-950">Use TALON for claim work</h2>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">TALON stays the source of record</h2>
               <p className="mt-2 text-sm text-slate-700">{capabilities.message}</p>
               <div className="mt-3 grid gap-2 text-sm text-slate-700 md:grid-cols-3">
                 <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
-                  <div className="font-semibold text-slate-900">1. Build the work order</div>
-                  <div className="mt-1 text-xs">Create and maintain the work order in TALON.</div>
+                  <div className="font-semibold text-slate-900">Vehicle claims</div>
+                  <div className="mt-1 text-xs">Build and cash out the warranty work order in TALON.</div>
                 </div>
                 <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
-                  <div className="font-semibold text-slate-900">2. Cash out warranty work</div>
-                  <div className="mt-1 text-xs">Let TALON create the Warranty-Link claim from the source record.</div>
+                  <div className="font-semibold text-slate-900">Non-vehicle claims</div>
+                  <div className="mt-1 text-xs">Prepare DFS/GM/RMA packets here for review and future connector handoff.</div>
                 </div>
                 <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
-                  <div className="font-semibold text-slate-900">3. Verify and transmit</div>
+                  <div className="font-semibold text-slate-900">Final submission</div>
                   <div className="mt-1 text-xs">Use Warranty-Link for final review and submission.</div>
                 </div>
               </div>
             </section>
           ) : null}
 
-          {submissionsEnabled ? (
+          {casePreparationEnabled ? (
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
@@ -988,7 +1008,7 @@ export default function WarrantyRmaPage() {
                 </p>
               </div>
               <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-                H-Dnet portal draft
+                {talonReferenceMode ? "TALON/Warranty-Link handoff" : "H-Dnet portal draft"}
               </span>
             </div>
 
@@ -1140,7 +1160,7 @@ export default function WarrantyRmaPage() {
           </section>
           ) : null}
 
-          {submissionsEnabled ? (
+          {casePreparationEnabled ? (
           <section className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
@@ -1194,6 +1214,7 @@ export default function WarrantyRmaPage() {
               onStatus={updateCaseStatus}
               onDms={prepareDmsPush}
               onPortalTask={createPortalTask}
+              capabilities={capabilities}
             />
           </section>
           ) : null}
@@ -1294,6 +1315,7 @@ function CaseDetail(props: {
   onStatus: (id: string, status: WarrantyRmaStatus) => Promise<void>;
   onDms: (id: string) => Promise<void>;
   onPortalTask: (id: string) => Promise<void>;
+  capabilities: WarrantyRmaCapabilities;
 }) {
   const item = props.selectedCase;
   if (!item) {
@@ -1305,6 +1327,7 @@ function CaseDetail(props: {
   }
   const review = item.review;
   const hdnetPacket = item.hdnetDraftPacket;
+  const portalTaskAllowed = warrantyRmaPortalTaskAllowed(item, props.capabilities);
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1343,16 +1366,18 @@ function CaseDetail(props: {
             onClick={() => void props.onDms(item.id)}
             disabled={props.busyKey === `${item.id}:dms`}
           >
-            Prepare claim packet
+            Prepare handoff packet
           </button>
-          <button
-            type="button"
-            className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800 hover:bg-orange-100 disabled:opacity-60"
-            onClick={() => void props.onPortalTask(item.id)}
-            disabled={props.busyKey === `${item.id}:portal`}
-          >
-            Start H-Dnet draft
-          </button>
+          {portalTaskAllowed ? (
+            <button
+              type="button"
+              className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-800 hover:bg-orange-100 disabled:opacity-60"
+              onClick={() => void props.onPortalTask(item.id)}
+              disabled={props.busyKey === `${item.id}:portal`}
+            >
+              Start H-Dnet draft
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -1366,7 +1391,11 @@ function CaseDetail(props: {
         <ListBlock title="Next steps" rows={review.nextSteps} empty="No next steps reported." />
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {hdnetPacket ? "H-Dnet handoff" : "Warranty handoff"}
+            {props.capabilities.workflow === "talon_reference"
+              ? "TALON/Warranty-Link handoff"
+              : hdnetPacket
+                ? "H-Dnet handoff"
+                : "Warranty handoff"}
           </div>
           <div className="mt-2 text-sm font-semibold text-slate-900">{item.dmsPush.status.replace(/_/g, " ")}</div>
           <p className="mt-1 text-sm text-slate-600">{item.dmsPush.message || review.dms.nextStep}</p>
@@ -1565,6 +1594,7 @@ function normalizeClaimTypeValue(value: string | undefined) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return "";
   if (raw.includes("mc") || raw.includes("motorcycle")) return "motorcycle_warranty";
+  if (raw.includes("dfs") || raw.includes("dealer stock") || raw.includes("over the counter")) return "dealer_stock_parts";
   if (raw.includes("pna") || raw.includes("parts warranty") || raw.includes("accessory")) return "parts_accessory_warranty";
   if (raw.includes("prd") || raw.includes("pre-delivery") || raw.includes("pre delivery")) return "pre_delivery_warranty";
   if (raw.includes("frt") || raw.includes("freight") || raw.includes("shipping damage")) return "freight_damage";
@@ -1601,10 +1631,18 @@ function buildRequirementSummary(caseForm: CaseForm, manuals: WarrantyRmaManualD
   };
 }
 
+function warrantyRmaPortalTaskAllowed(item: WarrantyRmaCaseEntry, capabilities: WarrantyRmaCapabilities) {
+  if (capabilities.submissionEnabled) return true;
+  if (capabilities.workflow !== "talon_reference") return false;
+  const claimType = normalizeClaimTypeValue(item.claimType || item.review?.dmsPayloadDraft?.claimType);
+  return claimType === "dealer_stock_parts" || claimType === "general_merchandise";
+}
+
 function referenceKeywordsForClaimType(claimType: string) {
   const map: Record<string, string[]> = {
     motorcycle_warranty: ["mc claim", "warranty condition", "customer concern"],
     parts_accessory_warranty: ["pna claim", "warranty condition", "customer concern"],
+    dealer_stock_parts: ["dfs claim", "dealer stock", "over-the-counter"],
     pre_delivery_warranty: ["prd claim", "loose parts"],
     freight_damage: ["frt claim", "product damaged in shipping"],
     parts_rma: ["product damaged in shipping", "shipexec", "loose parts"],

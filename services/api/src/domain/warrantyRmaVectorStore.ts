@@ -500,6 +500,11 @@ const CLAIM_RETRIEVAL_HINTS: WarrantyRmaRetrievalHintGroup[] = [
     matchPatterns: [/\bpna\b/i, /parts? accessory/i, /\bp&a\b/i, /parts? warranty/i, /accessory warranty/i]
   },
   {
+    key: "dealer_stock_parts",
+    aliases: ["DFS", "dealer stock parts", "over-the-counter parts", "counter parts warranty", "dealer inventory parts"],
+    matchPatterns: [/\bdfs\b/i, /dealer stock parts?/i, /over[- ]the[- ]counter parts?/i, /counter parts? warranty/i, /dealer inventory parts?/i]
+  },
+  {
     key: "motorcycle_warranty",
     aliases: ["MC", "motorcycle warranty", "vehicle warranty", "warranty manual", "VIN", "mileage", "customer concern code", "condition code"],
     matchPatterns: [/\bmc\b/i, /motorcycle warranty/i, /vehicle warranty/i, /warranty manual/i, /\bvin\b/i, /mileage/i, /concern code/i, /condition code/i]
