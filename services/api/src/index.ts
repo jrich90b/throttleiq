@@ -38179,6 +38179,48 @@ function warrantyRmaStatusForReview(review: Awaited<ReturnType<typeof analyzeWar
   return "draft";
 }
 
+type WarrantyRmaWorkflow = "talon_reference" | "non_talon_submission";
+
+function normalizeWarrantyRmaWorkflow(raw: unknown): WarrantyRmaWorkflow {
+  const value = String(raw ?? "").trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (
+    value === "non_talon_submission" ||
+    value === "non_talon" ||
+    value === "standalone_submission" ||
+    value === "manual_submission"
+  ) {
+    return "non_talon_submission";
+  }
+  return "talon_reference";
+}
+
+async function warrantyRmaCapabilities() {
+  const profile = (await getDealerProfileHot().catch(() => null)) as any;
+  const workflow = normalizeWarrantyRmaWorkflow(
+    process.env.WARRANTY_RMA_WORKFLOW ?? profile?.warrantyRma?.workflow ?? profile?.warrantyRmaWorkflow
+  );
+  const submissionEnabled = workflow === "non_talon_submission";
+  return {
+    workflow,
+    submissionEnabled,
+    modeLabel: submissionEnabled ? "Non-TALON submission workspace" : "TALON reference mode",
+    message: submissionEnabled
+      ? "This dealer is configured for standalone warranty/RMA case preparation."
+      : "This dealer uses TALON as the work-order source of record. Build and cash out work orders in TALON, then verify/transmit the claim in Warranty-Link."
+  };
+}
+
+async function requireWarrantyRmaSubmissionEnabled(res: any): Promise<boolean> {
+  const capabilities = await warrantyRmaCapabilities();
+  if (capabilities.submissionEnabled) return true;
+  res.status(403).json({
+    ok: false,
+    error: "Warranty/RMA case preparation is disabled for TALON dealers.",
+    capabilities
+  });
+  return false;
+}
+
 function warrantyRmaReferenceText(manual: WarrantyRmaManualDocument): string {
   return [
     manual.title,
@@ -38265,6 +38307,10 @@ function requireWarrantyRmaAccess(req: any, res: any, next: any) {
   }
   return res.status(403).json({ ok: false, error: "forbidden" });
 }
+
+app.get("/warranty-rma/capabilities", requireWarrantyRmaAccess, async (_req, res) => {
+  return res.json({ ok: true, capabilities: await warrantyRmaCapabilities() });
+});
 
 app.get("/warranty-rma/manuals", requireWarrantyRmaAccess, async (_req, res) => {
   await warrantyRmaStoreReady;
@@ -38388,6 +38434,7 @@ app.post("/warranty-rma/vector/search", requireWarrantyRmaAccess, async (req, re
 });
 
 app.post("/warranty-rma/intake/extract", requireWarrantyRmaAccess, upload.array("files", 8), async (req, res) => {
+  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   if (!files.length) {
     return res.status(400).json({ ok: false, error: "Upload at least one invoice, repair order, work order, photo, or PDF." });
@@ -38442,6 +38489,7 @@ app.get("/warranty-rma/cases", requireWarrantyRmaAccess, async (_req, res) => {
 
 app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
+  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
   const partNumber = String(req.body?.partNumber ?? "").trim();
   const issueDescription = String(req.body?.issueDescription ?? "").trim();
   if (!partNumber) return res.status(400).json({ ok: false, error: "Part number is required." });
@@ -38508,6 +38556,7 @@ app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
 
 app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
+  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
   const patch: Record<string, unknown> = {};
   if (req.body?.status !== undefined) {
     const status = normalizeWarrantyRmaStatus(req.body.status);
@@ -38559,6 +38608,7 @@ app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) 
 
 app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
+  if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
 

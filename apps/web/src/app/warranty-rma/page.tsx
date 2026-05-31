@@ -257,6 +257,13 @@ type WarrantyRmaVectorStatus = {
   hostConfigured: boolean;
 };
 
+type WarrantyRmaCapabilities = {
+  workflow: "talon_reference" | "non_talon_submission";
+  submissionEnabled: boolean;
+  modeLabel: string;
+  message: string;
+};
+
 const statusLabels: Record<WarrantyRmaStatus, string> = {
   draft: "Draft",
   needs_info: "Needs info",
@@ -462,6 +469,13 @@ export default function WarrantyRmaPage() {
   const [indexingReferences, setIndexingReferences] = useState(false);
   const [lastExtraction, setLastExtraction] = useState<WarrantyRmaIntakeExtraction | null>(null);
   const [vectorStatus, setVectorStatus] = useState<WarrantyRmaVectorStatus | null>(null);
+  const [capabilities, setCapabilities] = useState<WarrantyRmaCapabilities>({
+    workflow: "talon_reference",
+    submissionEnabled: false,
+    modeLabel: "TALON reference mode",
+    message:
+      "This dealer uses TALON as the work-order source of record. Build and cash out work orders in TALON, then verify/transmit the claim in Warranty-Link."
+  });
   const [caseActionBusy, setCaseActionBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -476,6 +490,7 @@ export default function WarrantyRmaPage() {
     () => buildRequirementSummary(caseForm, manuals, selectedManualIds),
     [caseForm, manuals, selectedManualIds]
   );
+  const submissionsEnabled = capabilities.submissionEnabled === true;
 
   useEffect(() => {
     void loadWorkspace();
@@ -485,9 +500,12 @@ export default function WarrantyRmaPage() {
     setLoading(true);
     setError(null);
     try {
-      const [manualsResponse, casesResponse, vectorData] = await Promise.all([
+      const [manualsResponse, casesResponse, capabilitiesData, vectorData] = await Promise.all([
         fetch("/api/warranty-rma/manuals", { cache: "no-store" }),
         fetch("/api/warranty-rma/cases", { cache: "no-store" }),
+        fetch("/api/warranty-rma/capabilities", { cache: "no-store" })
+          .then(async response => ({ response, data: await response.json().catch(() => null) }))
+          .catch(() => null),
         fetch("/api/warranty-rma/vector/status", { cache: "no-store" })
           .then(async response => ({ response, data: await response.json().catch(() => null) }))
           .catch(() => null)
@@ -496,6 +514,9 @@ export default function WarrantyRmaPage() {
       const casesData = await casesResponse.json();
       if (!manualsResponse.ok || !manualsData.ok) throw new Error(manualsData.error || "Could not load manuals.");
       if (!casesResponse.ok || !casesData.ok) throw new Error(casesData.error || "Could not load cases.");
+      if (capabilitiesData?.response.ok && capabilitiesData.data?.ok && capabilitiesData.data.capabilities) {
+        setCapabilities(capabilitiesData.data.capabilities);
+      }
       if (vectorData?.response.ok && vectorData.data?.ok) setVectorStatus(vectorData.data.vector ?? null);
       setManuals(manualsData.manuals ?? []);
       setCases(casesData.cases ?? []);
@@ -888,6 +909,29 @@ export default function WarrantyRmaPage() {
             </div>
           ) : null}
 
+          {!submissionsEnabled ? (
+            <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">{capabilities.modeLabel}</div>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">Use TALON for claim work</h2>
+              <p className="mt-2 text-sm text-slate-700">{capabilities.message}</p>
+              <div className="mt-3 grid gap-2 text-sm text-slate-700 md:grid-cols-3">
+                <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-slate-900">1. Build the work order</div>
+                  <div className="mt-1 text-xs">Create and maintain the work order in TALON.</div>
+                </div>
+                <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-slate-900">2. Cash out warranty work</div>
+                  <div className="mt-1 text-xs">Let TALON create the Warranty-Link claim from the source record.</div>
+                </div>
+                <div className="rounded-lg border border-amber-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-slate-900">3. Verify and transmit</div>
+                  <div className="mt-1 text-xs">Use Warranty-Link for final review and submission.</div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {submissionsEnabled ? (
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
@@ -1048,7 +1092,9 @@ export default function WarrantyRmaPage() {
               </button>
             </div>
           </section>
+          ) : null}
 
+          {submissionsEnabled ? (
           <section className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
@@ -1103,6 +1149,7 @@ export default function WarrantyRmaPage() {
               onDms={prepareDmsPush}
             />
           </section>
+          ) : null}
         </div>
       </div>
     </main>

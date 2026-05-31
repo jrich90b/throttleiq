@@ -51,6 +51,9 @@ export type DealerProfile = {
     webBannerFit?: "auto" | "cover" | "contain";
     webBannerInsetPercent?: number;
   };
+  warrantyRma?: {
+    workflow?: "talon_reference" | "non_talon_submission";
+  };
   taxRate?: number;
 };
 
