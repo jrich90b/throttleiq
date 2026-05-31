@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import type { WarrantyRmaManualDocument } from "./warrantyRmaStore.js";
 import {
+  rankWarrantyRmaVectorMatchesForSubmission,
   searchWarrantyRmaManualChunks,
   warrantyRmaVectorQueryForSubmission,
   type WarrantyRmaVectorMatch
@@ -603,6 +604,22 @@ const WARRANTY_RMA_INTAKE_SCHEMA = {
   }
 };
 
+const WARRANTY_RMA_INTAKE_FIELD_GUIDANCE = [
+  "Field separation rules:",
+  "- symptom is the customer complaint, observed problem, damage description, or issue description.",
+  "- cause is the diagnosis/root cause only when stated, such as failed internal switch, freight damage, incorrect part shipped, or open circuit.",
+  "- correction is the action performed or requested, such as replaced switch, request RMA, request credit, repair completed, or replacement requested.",
+  "- Do not copy the same sentence into symptom, cause, and correction. Leave cause/correction blank when the evidence does not state them.",
+  "",
+  "Few-shot examples:",
+  "Example A evidence: Customer states left heated grip is inoperative. Tech found open circuit in grip. Replaced left grip.",
+  "Example A fields: symptom=left heated grip is inoperative; cause=open circuit in grip; correction=replaced left grip.",
+  "Example B evidence: Box arrived crushed and fairing trim is scratched. UPS delivery, BOL 8812. Customer requests replacement.",
+  "Example B fields: symptom=fairing trim arrived scratched in crushed box; cause=freight/shipping damage; correction=replacement requested.",
+  "Example C evidence: Customer says switch failed after install. No diagnosis yet.",
+  "Example C fields: symptom=switch failed after install; cause=; correction=."
+].join("\n");
+
 function fallbackIntakeExtraction(files: WarrantyRmaUploadedFile[], reason: string): WarrantyRmaIntakeExtraction {
   return {
     status: process.env.LLM_ENABLED === "1" ? "needs_review" : "disabled",
@@ -711,7 +728,7 @@ export async function extractWarrantyRmaIntake(files: WarrantyRmaUploadedFile[])
     "Normalize VINs, part numbers, dates, repair order numbers, invoice numbers, customer names, mileage, quantity, labor hours, and job time codes when present.",
     "Extract service start/end dates, authorization numbers, customer concern codes, condition codes, carrier names, BOL numbers, and return authorization numbers when present.",
     "Use claimType for likely categories such as warranty, RMA, parts warranty, goodwill, recall, freight/shipping damage, or unknown.",
-    "Use symptom for the customer/technician complaint, cause for known diagnosis, and correction for repair/replacement action.",
+    WARRANTY_RMA_INTAKE_FIELD_GUIDANCE,
     "requiredInfo should list only missing items that would likely block a clean claim review or DMS submission.",
     "Return only the structured JSON schema."
   ].join("\n");
@@ -769,11 +786,12 @@ export async function analyzeWarrantyRmaSubmission(args: {
     return fallbackReview(args.submission, "LLM warranty/RMA review is not enabled.");
   }
 
-  const vectorMatches = await searchWarrantyRmaManualChunks({
+  const rawVectorMatches = await searchWarrantyRmaManualChunks({
     query: warrantyRmaVectorQueryForSubmission(args.submission),
     manualIds: args.manuals.map(manual => manual.id),
     topK: Number(process.env.WARRANTY_RMA_VECTOR_TOP_K ?? 8)
   }).catch(() => []);
+  const vectorMatches = rankWarrantyRmaVectorMatchesForSubmission(rawVectorMatches, args.submission);
   const inputs = vectorMatches.length ? vectorReferenceInputs(vectorMatches) : await manualInputs(args.manuals);
   if (!inputs.length) {
     return fallbackReview(args.submission, "No warranty/RMA manual documents are available for review.");

@@ -477,6 +477,125 @@ function scopeForNamespace(namespace: string): "global" | "dealer" | "legacy" {
   return "legacy";
 }
 
+type WarrantyRmaRetrievalHintGroup = {
+  key: string;
+  aliases: string[];
+  matchPatterns: RegExp[];
+};
+
+const CLAIM_RETRIEVAL_HINTS: WarrantyRmaRetrievalHintGroup[] = [
+  {
+    key: "freight_damage",
+    aliases: ["FRT", "freight damage", "shipping damage", "product damaged in shipping", "carrier", "BOL", "ShipExec"],
+    matchPatterns: [/\bfrt\b/i, /freight/i, /shipping damage/i, /damaged in shipping/i, /carrier/i, /\bbol\b/i, /shipexec/i]
+  },
+  {
+    key: "parts_rma",
+    aliases: ["RMA", "return merchandise authorization", "parts return", "replacement", "credit", "shortage", "wrong part", "return authorization"],
+    matchPatterns: [/\brma\b/i, /return merchandise/i, /parts? return/i, /shortage/i, /wrong part/i, /return authorization/i]
+  },
+  {
+    key: "parts_accessory_warranty",
+    aliases: ["PNA", "parts accessory warranty", "P&A warranty", "parts warranty", "accessory warranty", "part number", "invoice"],
+    matchPatterns: [/\bpna\b/i, /parts? accessory/i, /\bp&a\b/i, /parts? warranty/i, /accessory warranty/i]
+  },
+  {
+    key: "motorcycle_warranty",
+    aliases: ["MC", "motorcycle warranty", "vehicle warranty", "warranty manual", "VIN", "mileage", "customer concern code", "condition code"],
+    matchPatterns: [/\bmc\b/i, /motorcycle warranty/i, /vehicle warranty/i, /warranty manual/i, /\bvin\b/i, /mileage/i, /concern code/i, /condition code/i]
+  },
+  {
+    key: "pre_delivery_warranty",
+    aliases: ["PRD", "pre-delivery", "pre delivery", "loose parts", "setup claim"],
+    matchPatterns: [/\bprd\b/i, /pre[- ]delivery/i, /loose parts?/i, /setup claim/i]
+  },
+  {
+    key: "recall_campaign",
+    aliases: ["recall", "campaign", "dealer service card", "service card"],
+    matchPatterns: [/recall/i, /campaign/i, /dealer service card/i, /service card/i]
+  },
+  {
+    key: "goodwill",
+    aliases: ["GDW", "goodwill", "good will", "customer satisfaction", "policy adjustment"],
+    matchPatterns: [/\bgdw\b/i, /good ?will/i, /customer satisfaction/i, /policy adjustment/i]
+  },
+  {
+    key: "general_merchandise",
+    aliases: ["GM", "general merchandise", "apparel", "licensed merchandise"],
+    matchPatterns: [/\bgm\b/i, /general merchandise/i, /apparel/i, /licensed merchandise/i]
+  },
+  {
+    key: "engine_return",
+    aliases: ["engine return", "longblock", "long block", "core return"],
+    matchPatterns: [/engine return/i, /long ?block/i, /core return/i]
+  }
+];
+
+function normalizedClaimSignal(submission: WarrantyRmaSubmission) {
+  const source = [
+    submission.claimType,
+    submission.issueDescription,
+    submission.partDescription,
+    submission.requestedAction,
+    submission.carrierName,
+    submission.bolNumber,
+    submission.returnAuthorizationNumber,
+    submission.cause,
+    submission.correction,
+    submission.notes
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return source.toLowerCase().replace(/[_-]+/g, " ");
+}
+
+export function warrantyRmaRetrievalHintsForSubmission(submission: WarrantyRmaSubmission): string[] {
+  const source = normalizedClaimSignal(submission);
+  if (!source) return [];
+  const hints = new Set<string>();
+  for (const group of CLAIM_RETRIEVAL_HINTS) {
+    const keyMatches = source.includes(group.key.replace(/_/g, " "));
+    const aliasMatches = group.aliases.some(alias => source.includes(alias.toLowerCase()));
+    const patternMatches = group.matchPatterns.some(pattern => pattern.test(source));
+    if (keyMatches || aliasMatches || patternMatches) {
+      for (const alias of group.aliases) hints.add(alias);
+    }
+  }
+  return Array.from(hints).slice(0, 28);
+}
+
+function retrievalBoostForMatch(match: WarrantyRmaVectorMatch, submission: WarrantyRmaSubmission) {
+  const hints = warrantyRmaRetrievalHintsForSubmission(submission);
+  if (!hints.length) return 0;
+  const haystack = [
+    match.title,
+    match.fileName,
+    match.documentType,
+    match.text.slice(0, 600)
+  ]
+    .join(" ")
+    .toLowerCase();
+  let hits = 0;
+  for (const hint of hints) {
+    if (haystack.includes(hint.toLowerCase())) hits += 1;
+  }
+  return Math.min(0.12, hits * 0.025);
+}
+
+export function rankWarrantyRmaVectorMatchesForSubmission(
+  matches: WarrantyRmaVectorMatch[],
+  submission: WarrantyRmaSubmission
+): WarrantyRmaVectorMatch[] {
+  return matches
+    .map((match, index) => ({
+      match,
+      index,
+      boostedScore: match.score + retrievalBoostForMatch(match, submission)
+    }))
+    .sort((a, b) => b.boostedScore - a.boostedScore || b.match.score - a.match.score || a.index - b.index)
+    .map(row => row.match);
+}
+
 export async function searchWarrantyRmaManualChunks(args: {
   query: string;
   manualIds?: string[];
@@ -537,8 +656,10 @@ export async function searchWarrantyRmaManualChunks(args: {
 }
 
 export function warrantyRmaVectorQueryForSubmission(submission: WarrantyRmaSubmission) {
+  const retrievalHints = warrantyRmaRetrievalHintsForSubmission(submission);
   return [
     submission.claimType ? `Claim type: ${submission.claimType}` : "",
+    retrievalHints.length ? `Preferred warranty/RMA reference terms: ${retrievalHints.join(", ")}` : "",
     submission.partNumber ? `Part number: ${submission.partNumber}` : "",
     submission.partDescription ? `Part description: ${submission.partDescription}` : "",
     submission.issueDescription ? `Issue: ${submission.issueDescription}` : "",

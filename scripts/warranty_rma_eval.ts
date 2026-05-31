@@ -20,7 +20,10 @@ const { analyzeWarrantyRmaSubmission, extractWarrantyRmaIntake } = await import(
 const {
   chunkWarrantyRmaTextForVectorIndex,
   getWarrantyRmaVectorStatus,
-  indexWarrantyRmaManuals
+  indexWarrantyRmaManuals,
+  rankWarrantyRmaVectorMatchesForSubmission,
+  warrantyRmaRetrievalHintsForSubmission,
+  warrantyRmaVectorQueryForSubmission
 } = await import("../services/api/src/domain/warrantyRmaVectorStore.ts");
 const {
   addWarrantyRmaCase,
@@ -78,6 +81,54 @@ const vectorNoop = await indexWarrantyRmaManuals([manual]);
 assert.equal(vectorNoop.configured, false);
 assert.ok(vectorNoop.errors[0]?.error.includes("PINECONE_API_KEY"));
 assert.deepEqual(vectorNoop.namespaces, []);
+
+const freightSubmission = {
+  claimType: "freight_damage",
+  partNumber: "57000345",
+  partDescription: "Fairing trim",
+  issueDescription: "Box arrived crushed and the trim was scratched.",
+  carrierName: "UPS",
+  bolNumber: "BOL-8812",
+  requestedAction: "Replacement requested"
+};
+const freightHints = warrantyRmaRetrievalHintsForSubmission(freightSubmission);
+assert.ok(freightHints.includes("FRT"));
+assert.ok(freightHints.includes("product damaged in shipping"));
+const freightQuery = warrantyRmaVectorQueryForSubmission(freightSubmission);
+assert.match(freightQuery, /Preferred warranty\/RMA reference terms: .*FRT/i);
+assert.match(freightQuery, /BOL: BOL-8812/i);
+const rankedMatches = rankWarrantyRmaVectorMatchesForSubmission(
+  [
+    {
+      id: "generic",
+      score: 0.72,
+      manualId: "generic",
+      title: "Generic Warranty Manual",
+      fileName: "generic.pdf",
+      documentType: "policy",
+      namespace: "warranty-rma-global",
+      scope: "global",
+      chunkIndex: 0,
+      chunkCount: 1,
+      text: "General warranty review."
+    },
+    {
+      id: "frt",
+      score: 0.70,
+      manualId: "frt",
+      title: "FRT Claim Type Processing Guide",
+      fileName: "FRT-Claim-Type-Processing-Guide.pdf",
+      documentType: "policy",
+      namespace: "warranty-rma-global",
+      scope: "global",
+      chunkIndex: 0,
+      chunkCount: 1,
+      text: "Freight damage and product damaged in shipping claim instructions."
+    }
+  ],
+  freightSubmission
+);
+assert.equal(rankedMatches[0]?.manualId, "frt");
 
 const review = await analyzeWarrantyRmaSubmission({
   submission: {
