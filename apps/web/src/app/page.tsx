@@ -12383,7 +12383,11 @@ export default function Home() {
           <div className="w-full max-w-md rounded-lg border border-slate-700 bg-[#101522] p-4 text-slate-100 shadow-xl">
             <div className="text-base font-semibold">Report issue</div>
             <div className="mt-1 text-xs text-slate-400">
-              This creates an internal review item for routing, tasks, cadence, integrations, tone, or UI problems.
+              This creates a support review item, opens an ops ticket when ticketing is connected, and queues the
+              support workflow for follow-up.
+            </div>
+            <div className="mt-3 rounded border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+              Status: draft now, then submitted after Send, then support review, then resolved or follow-up requested.
             </div>
             {reportIssueTarget ? (
               <div className="mt-3 rounded border border-slate-700 bg-slate-950/60 p-2 text-xs text-slate-300">
@@ -19685,6 +19689,8 @@ export default function Home() {
                     { key: "service", label: "Service" },
                     { key: "finance_docs", label: "Finance/docs" },
                     { key: "appointment", label: "Appointment" },
+                    { key: "parts", label: "Parts" },
+                    { key: "apparel", label: "Apparel" },
                     { key: "no_cadence", label: "No cadence" }
                   ].map(option => (
                     <button

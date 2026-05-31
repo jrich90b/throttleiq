@@ -120,6 +120,30 @@ function markdownReport(report: AnyObj, tasks: TaskCandidate[]): string {
     }
   }
 
+  const outcomeQaRecommendations = report.outcomeQaParserRecommendations ?? {};
+  const outcomeQaByType = Array.isArray(outcomeQaRecommendations.byType) ? outcomeQaRecommendations.byType : [];
+  const outcomeQaSamples = Array.isArray(outcomeQaRecommendations.sample) ? outcomeQaRecommendations.sample : [];
+  if (outcomeQaByType.length > 0 || outcomeQaSamples.length > 0) {
+    lines.push("", "## Outcome QA Parser Recommendations", "");
+    if (outcomeQaByType.length > 0) {
+      lines.push(
+        `Recommendation types: ${outcomeQaByType.map((row: AnyObj) => `${row.type}=${row.count}`).join(", ")}`
+      );
+      lines.push("");
+    }
+    if (outcomeQaSamples.length > 0) {
+      for (const seed of outcomeQaSamples) {
+        lines.push(
+          `- ${seed.recommendation} -> ${seed.parserTarget} (${seed.customerName ?? seed.leadRef ?? seed.id})`
+        );
+        lines.push(`  - Note: ${String(seed.note ?? "").slice(0, 220)}`);
+        lines.push(`  - Expected: ${JSON.stringify(seed.proposedExpected ?? {})}`);
+      }
+    } else {
+      lines.push("Outcome QA found recommendation counts, but no parser seed samples were present in the report.");
+    }
+  }
+
   lines.push("", "## Metrics", "");
   for (const [key, value] of Object.entries(report.metrics ?? {})) {
     lines.push(`- ${key}: ${JSON.stringify(value)}`);
@@ -194,6 +218,20 @@ function main() {
   );
   const outcomeQaFindingCount = num(outcomeQaReport?.summary?.findingCount);
   const outcomeQaParserSeedCount = num(outcomeQaReport?.summary?.parserSeedCandidateCount);
+  const outcomeQaParserRecommendationSamples = Array.isArray(outcomeQaReport?.parserSeedCandidates)
+    ? outcomeQaReport.parserSeedCandidates.slice(0, 10).map((seed: any) => ({
+        id: seed?.id,
+        recommendation: seed?.recommendation,
+        parserTarget: seed?.parserTarget,
+        confidenceTarget: seed?.confidenceTarget,
+        customerName: seed?.customerName ?? null,
+        leadRef: seed?.leadRef ?? null,
+        note: seed?.note,
+        proposedExpected: seed?.proposedExpected,
+        reason: seed?.reason,
+        cueTags: Array.isArray(seed?.cueTags) ? seed.cueTags : []
+      }))
+    : [];
   const outcomeQaP1Count = Array.isArray(outcomeQaReport?.findings)
     ? outcomeQaReport.findings.filter((row: any) => String(row?.severity ?? "") === "P1").length
     : 0;
@@ -446,6 +484,10 @@ function main() {
       conversationAuditPath,
       followupTaskAuditPath,
       routeWatchdogPath
+    },
+    outcomeQaParserRecommendations: {
+      byType: outcomeQaReport?.summary?.parserRecommendationsByType ?? [],
+      sample: outcomeQaParserRecommendationSamples
     },
     metrics: {
       stuckTurns: stuckCount,

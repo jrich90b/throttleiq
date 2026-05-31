@@ -13202,11 +13202,13 @@ async function applyFinanceOutcomeStatusFromSignal(
   conv: any,
   status: "approved" | "declined" | "needs_more_info",
   note?: string,
-  sourceMessageId?: string
+  sourceMessageId?: string,
+  opts?: { syncAppointmentOutcome?: boolean }
 ): Promise<void> {
   const nowIsoValue = nowIso();
   const sourceId = String(sourceMessageId ?? "").trim() || undefined;
   const reasonText = String(note ?? "").trim();
+  const syncAppointmentOutcome = opts?.syncAppointmentOutcome !== false;
   if (status === "declined") {
     const cfg = await getSchedulerConfigHot();
     conv.followUp = {
@@ -13221,7 +13223,7 @@ async function applyFinanceOutcomeStatusFromSignal(
       stepIndex: 0,
       kind: "long_term"
     };
-    if (conv.appointment) {
+    if (syncAppointmentOutcome && conv.appointment) {
       conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
       conv.appointment.staffNotify.outcome = {
         status: "financing_declined",
@@ -13245,7 +13247,7 @@ async function applyFinanceOutcomeStatusFromSignal(
   } else if (status === "needs_more_info") {
     setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
     stopFollowUpCadence(conv, "manual_handoff");
-    if (conv.appointment) {
+    if (syncAppointmentOutcome && conv.appointment) {
       conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
       conv.appointment.staffNotify.outcome = {
         status: "financing_needs_info",
@@ -13269,7 +13271,7 @@ async function applyFinanceOutcomeStatusFromSignal(
   } else {
     setFollowUpMode(conv, "manual_handoff", "credit_app_approved");
     stopFollowUpCadence(conv, "manual_handoff");
-    if (conv.appointment) {
+    if (syncAppointmentOutcome && conv.appointment) {
       conv.appointment.staffNotify = conv.appointment.staffNotify ?? {};
       conv.appointment.staffNotify.outcome = {
         status: "follow_up",
@@ -13874,6 +13876,44 @@ function buildAppointmentOutcomeFollowUpMessage(conv: any, note: string): string
   return `Hey ${firstName}, just checking in after your visit. If you want to come back in and compare another option, send me a day that works for you.`;
 }
 
+function upsertOutcomeFollowUpTodo(args: {
+  conv: any;
+  summary: string;
+  sourceKey: string;
+  dueAt: string;
+}): void {
+  const convId = String(args.conv?.id ?? "").trim();
+  const sourceKey = String(args.sourceKey ?? "").trim();
+  if (!convId || !sourceKey) return;
+  const existing = listOpenTodos().find(
+    todo =>
+      todo.convId === convId &&
+      todo.status === "open" &&
+      String(todo.sourceMessageId ?? "").trim() === sourceKey
+  );
+  if (existing) {
+    const previousDueAt = String(existing.dueAt ?? "").trim();
+    existing.summary = args.summary;
+    existing.dueAt = args.dueAt;
+    existing.taskClass = "followup";
+    existing.reason = existing.reason ?? "note";
+    if (previousDueAt && previousDueAt !== args.dueAt) {
+      existing.reminderSentAt = undefined;
+    }
+    return;
+  }
+  addTodo(
+    args.conv,
+    "note",
+    args.summary,
+    sourceKey,
+    undefined,
+    { dueAt: args.dueAt },
+    "followup",
+    { skipMerge: true }
+  );
+}
+
 function resolveOutcomeFollowUpDueAt(args: {
   note: string;
   plan?: AppointmentOutcomeFollowUpPlanParse | null;
@@ -13990,15 +14030,12 @@ async function activateAppointmentOutcomeFollowUp(args: {
       updatedByUserName: String(args.actor?.name ?? "").trim() || undefined
     });
   }
-  addTodo(
+  upsertOutcomeFollowUpTodo({
     conv,
-    "note",
-    `Appointment outcome follow-up scheduled${nextDueAt ? ` for ${formatSlotLocal(nextDueAt, timezone)}` : ""}${note ? `: ${note}` : "."}`,
-    `appointment_outcome_follow_up:${String(conv.appointment?.bookedEventId ?? conv.appointment?.whenIso ?? conv.id ?? "").trim()}`,
-    undefined,
-    { dueAt: nextDueAt },
-    "followup"
-  );
+    summary: `Appointment outcome follow-up scheduled${nextDueAt ? ` for ${formatSlotLocal(nextDueAt, timezone)}` : ""}${note ? `: ${note}` : "."}`,
+    sourceKey: `appointment_outcome_follow_up:${String(conv.appointment?.bookedEventId ?? conv.appointment?.whenIso ?? conv.id ?? "").trim()}`,
+    dueAt: nextDueAt
+  });
   return { activated: true, nextDueAt };
 }
 
@@ -26314,6 +26351,8 @@ type ManualContextChoice =
   | "seller_intake"
   | "buyer_interest"
   | "service"
+  | "parts"
+  | "apparel"
   | "finance_docs"
   | "appointment"
   | "no_cadence";
@@ -26322,6 +26361,8 @@ const MANUAL_CONTEXT_CHOICES = new Set<ManualContextChoice>([
   "seller_intake",
   "buyer_interest",
   "service",
+  "parts",
+  "apparel",
   "finance_docs",
   "appointment",
   "no_cadence"
@@ -26410,6 +26451,20 @@ async function applyManualContextChoice(args: {
     stopRelatedCadences(conv, "service_request", { setMode: "manual_handoff" });
     setManualContext("service", "service_request");
     return "Service context saved; sales cadence paused.";
+  }
+  if (choice === "parts" || choice === "apparel") {
+    const bucket = choice;
+    const cta = choice === "parts" ? "parts_request" : "apparel_request";
+    conv.classification = {
+      ...(conv.classification ?? {}),
+      bucket,
+      cta
+    };
+    setFollowUpMode(conv, "manual_handoff", cta);
+    stopFollowUpCadence(conv, cta);
+    stopRelatedCadences(conv, cta, { setMode: "manual_handoff" });
+    setManualContext(bucket, cta);
+    return `${choice === "parts" ? "Parts" : "Apparel"} context saved; sales cadence paused.`;
   }
   if (choice === "finance_docs") {
     setFollowUpMode(conv, "manual_handoff", "finance_docs_manual_context");
@@ -29852,17 +29907,24 @@ app.get("/public/appointment/outcome", async (req, res) => {
   if (!token) return res.status(400).send("Missing token");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
-  const isAppointmentOutcome = !!conv.appointment;
+  const isFinanceOutcome = isFinanceOutcomeTokenForConversation(conv, token);
+  const isAppointmentOutcome = isAppointmentOutcomeTokenForConversation(conv, token);
+  const isDealerRideOutcome = isDealerRideOutcomeTokenForConversation(conv, token);
   const cfg = await getSchedulerConfigHot();
   const whenIso = conv.appointment?.whenIso ?? "";
-  const whenText = whenIso ? formatSlotLocal(whenIso, cfg.timezone) : isAppointmentOutcome ? "appointment" : "dealer ride";
+  const whenText = whenIso && isAppointmentOutcome
+    ? formatSlotLocal(whenIso, cfg.timezone)
+    : isDealerRideOutcome
+      ? "dealer ride"
+      : isFinanceOutcome
+        ? "finance outcome"
+        : "appointment";
   const customer = conv.lead?.name ?? conv.leadName ?? conv.leadKey ?? "Customer";
   const vehicle =
     conv.vehicleDescription ??
     conv.lead?.vehicle?.model ??
     conv.lead?.vehicle?.description ??
     "the bike";
-  const isFinanceOutcome = isFinanceOutcomeTokenForConversation(conv, token);
   if (isFinanceOutcome) {
     const currentStatus = String(conv?.financeOutcome?.status ?? "").trim();
     const html = `<!doctype html>
@@ -30693,6 +30755,8 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
   if (!token) return res.status(400).send("Missing data");
   const conv = findConversationByOutcomeToken(token);
   if (!conv) return res.status(404).send("Not found");
+  const isDealerRideOutcome = isDealerRideOutcomeTokenForConversation(conv, token);
+  const isAppointmentOutcome = isAppointmentOutcomeTokenForConversation(conv, token);
   const financeOutcomeRaw = String(req.body?.financeOutcome ?? "").trim().toLowerCase();
   if (isFinanceOutcomeTokenForConversation(conv, token) && financeOutcomeRaw) {
     const nowIso = new Date().toISOString();
@@ -30762,29 +30826,16 @@ app.post("/public/appointment/outcome", upload.none(), async (req, res) => {
     const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
     const err = await applyOutcomeSold(conv, unit, effectiveNote || undefined, nowIso, soldById, "");
     if (err) return res.status(400).send(err);
-  } else if (outcome === "financing_declined") {
-    const cfg = await getSchedulerConfigHot();
-    conv.followUp = {
-      mode: "active",
-      reason: "financing_declined",
-      updatedAt: nowIso
-    };
-    conv.followUpCadence = {
-      status: "active",
-      anchorAt: nowIso,
-      nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-      stepIndex: 0,
-      kind: "long_term"
-    };
-    await notifyBusinessManagerFinancingDeclined(conv, effectiveNote);
-  } else if (outcome === "financing_needs_info") {
-    setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
-    stopFollowUpCadence(conv, "manual_handoff");
-    await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", effectiveNote || undefined);
+  } else if (outcome === "financing_declined" || outcome === "financing_needs_info") {
+    await applyFinanceOutcomeStatusFromSignal(
+      conv,
+      outcome === "financing_declined" ? "declined" : "needs_more_info",
+      effectiveNote || undefined,
+      `public_appointment_outcome:${token}`,
+      { syncAppointmentOutcome: isAppointmentOutcome }
+    );
   }
 
-  const isDealerRideOutcome = isDealerRideOutcomeTokenForConversation(conv, token);
-  const isAppointmentOutcome = isAppointmentOutcomeTokenForConversation(conv, token);
   const outcomeTarget =
     isDealerRideOutcome && !isAppointmentOutcome
       ? (() => {
@@ -32310,24 +32361,21 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
     const appointmentOutcomeStatus = normalizedOutcome.legacyStatus;
     let appointmentOutcomeMarkedSold = false;
     if (appointmentOutcomeStatus === "financing_declined") {
-      const cfg = await getSchedulerConfigHot();
-      conv.followUp = {
-        mode: "active",
-        reason: "financing_declined",
-        updatedAt: nowIso
-      };
-      conv.followUpCadence = {
-        status: "active",
-        anchorAt: nowIso,
-        nextDueAt: computeFollowUpDueAt(nowIso, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-        stepIndex: 0,
-        kind: "long_term"
-      };
-      await notifyBusinessManagerFinancingDeclined(conv, appointmentOutcomeNote || undefined);
+      await applyFinanceOutcomeStatusFromSignal(
+        conv,
+        "declined",
+        appointmentOutcomeNote || undefined,
+        `appointment_outcome:${conv.appointment?.bookedEventId ?? conv.appointment?.whenIso ?? conv.id}`,
+        { syncAppointmentOutcome: true }
+      );
     } else if (appointmentOutcomeStatus === "financing_needs_info") {
-      setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
-      stopFollowUpCadence(conv, "manual_handoff");
-      await notifyBusinessManagerFinanceOutcome(conv, "needs_more_info", appointmentOutcomeNote || undefined);
+      await applyFinanceOutcomeStatusFromSignal(
+        conv,
+        "needs_more_info",
+        appointmentOutcomeNote || undefined,
+        `appointment_outcome:${conv.appointment?.bookedEventId ?? conv.appointment?.whenIso ?? conv.id}`,
+        { syncAppointmentOutcome: true }
+      );
     } else if (appointmentOutcomeStatus === "sold") {
       const cfg = await getSchedulerConfigHot();
       const soldById = conv.appointment?.bookedSalespersonId ?? conv.leadOwner?.id ?? "";
@@ -33348,27 +33396,20 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         appointmentOutcomeNote ||
         (appointmentOutcomeStatus === "no_change" ? "No change / already on hold." : "");
       if (appointmentOutcomeStatus === "financing_declined") {
-        const cfg = await getSchedulerConfigHot();
-        conv.followUp = {
-          mode: "active",
-          reason: "financing_declined",
-          updatedAt: nowIsoValue
-        };
-        conv.followUpCadence = {
-          status: "active",
-          anchorAt: nowIsoValue,
-          nextDueAt: computeFollowUpDueAt(nowIsoValue, FINANCE_DECLINED_DAY_OFFSETS[0], cfg.timezone),
-          stepIndex: 0,
-          kind: "long_term"
-        };
-        await notifyBusinessManagerFinancingDeclined(conv, effectiveAppointmentOutcomeNote || undefined);
+        await applyFinanceOutcomeStatusFromSignal(
+          conv,
+          "declined",
+          effectiveAppointmentOutcomeNote || undefined,
+          `todo_appointment_outcome:${task?.id ?? existingTask?.id ?? conv.id}`,
+          { syncAppointmentOutcome: !isDealerRideOutcomeTask }
+        );
       } else if (appointmentOutcomeStatus === "financing_needs_info") {
-        setFollowUpMode(conv, "manual_handoff", "credit_app_needs_info");
-        stopFollowUpCadence(conv, "manual_handoff");
-        await notifyBusinessManagerFinanceOutcome(
+        await applyFinanceOutcomeStatusFromSignal(
           conv,
           "needs_more_info",
-          effectiveAppointmentOutcomeNote || undefined
+          effectiveAppointmentOutcomeNote || undefined,
+          `todo_appointment_outcome:${task?.id ?? existingTask?.id ?? conv.id}`,
+          { syncAppointmentOutcome: !isDealerRideOutcomeTask }
         );
       } else if (appointmentOutcomeStatus === "sold") {
         const cfg = await getSchedulerConfigHot();

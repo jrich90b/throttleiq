@@ -21,6 +21,7 @@ TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
 AGENT_MANAGER_OUT_DIR="${AGENT_MANAGER_OUT_DIR:-$REPORT_ROOT/agent_manager}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 FEEDBACK_LOOP_ENV_PATH="${FEEDBACK_LOOP_ENV_PATH:-/home/ubuntu/throttleiq-runtime/.feedback_loop.env}"
+NIGHTLY_ROLLBACK_ON_EVAL_FAIL="${NIGHTLY_ROLLBACK_ON_EVAL_FAIL:-1}"
 
 if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   # Load dealer/runtime-specific feedback loop env (recipient, sender, optional attachment flags).
@@ -41,6 +42,40 @@ RUN_LOG="$LOG_DIR/feedback_loop_$TS.log"
 WATCHDOG_JSON="$LOG_DIR/route_watchdog_$TS.json"
 REPLAY_LOG="$LOG_DIR/conversation_replay_$TS.log"
 ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
+BACKUP_DIR="$LOG_DIR/feedback_loop_nightly_backups_$TS"
+mkdir -p "$BACKUP_DIR"
+
+backup_runtime_file() {
+  local src="$1"
+  local backup="$2"
+  local existed_flag_var="$3"
+  if [[ -f "$src" ]]; then
+    cp "$src" "$backup"
+    printf -v "$existed_flag_var" "1"
+    echo "[feedback-loop] backup saved: $src -> $backup"
+  else
+    printf -v "$existed_flag_var" "0"
+    echo "[feedback-loop] backup skipped: $src did not exist before promotion"
+  fi
+}
+
+restore_runtime_file() {
+  local dest="$1"
+  local backup="$2"
+  local existed_before="$3"
+  if [[ "$existed_before" == "1" ]]; then
+    if [[ -f "$backup" ]]; then
+      cp "$backup" "$dest"
+      echo "[feedback-loop] rollback restored: $dest"
+    else
+      echo "[feedback-loop] rollback warning: missing backup for $dest at $backup"
+      return 1
+    fi
+  else
+    rm -f "$dest"
+    echo "[feedback-loop] rollback removed newly-created file: $dest"
+  fi
+}
 
 record_closed_loop_run() {
   local exit_code="$1"
@@ -94,6 +129,7 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] TONE_QUALITY_OUT_DIR=$TONE_QUALITY_OUT_DIR"
   echo "[feedback-loop] AGENT_MANAGER_OUT_DIR=$AGENT_MANAGER_OUT_DIR"
   echo "[feedback-loop] FEEDBACK_LOOP_ENV_PATH=$FEEDBACK_LOOP_ENV_PATH"
+  echo "[feedback-loop] NIGHTLY_ROLLBACK_ON_EVAL_FAIL=$NIGHTLY_ROLLBACK_ON_EVAL_FAIL"
   echo "[feedback-loop] FEEDBACK_REPORT_EMAIL_TO=${FEEDBACK_REPORT_EMAIL_TO:-}"
 
   # Some scripts still read CONVERSATIONS_PATH (legacy) instead of CONVERSATIONS_DB_PATH.
@@ -126,6 +162,14 @@ trap 'record_closed_loop_run "$?"' EXIT
     --conversations "$CONVERSATIONS_DB_PATH" \
     --out-dir "$OUTCOME_QA_OUT_DIR"
 
+  TONE_BACKUP_PATH="$BACKUP_DIR/deterministic_tone_rules.before.json"
+  MANUAL_BACKUP_PATH="$BACKUP_DIR/manual_reply_examples.before.json"
+  had_tone_backup=0
+  had_manual_backup=0
+  echo "[feedback-loop] step=runtime_promotion_backup -> $BACKUP_DIR"
+  backup_runtime_file "$DETERMINISTIC_TONE_RULES_PATH" "$TONE_BACKUP_PATH" had_tone_backup
+  backup_runtime_file "$MANUAL_REPLY_EXAMPLES_PATH" "$MANUAL_BACKUP_PATH" had_manual_backup
+
   echo "[feedback-loop] step=deterministic_rules_promote"
   npm run deterministic_rules:promote
 
@@ -133,7 +177,20 @@ trap 'record_closed_loop_run "$?"' EXIT
   npm run manual_outbound:promote
 
   echo "[feedback-loop] step=language_seed_eval"
-  npm run language_seed:eval
+  if npm run language_seed:eval; then
+    echo "[feedback-loop] language_seed_eval=pass"
+  else
+    echo "[feedback-loop] language_seed_eval=fail"
+    if [[ "$NIGHTLY_ROLLBACK_ON_EVAL_FAIL" == "1" ]]; then
+      echo "[feedback-loop] rollback=started reason=language_seed_eval_failed"
+      restore_runtime_file "$DETERMINISTIC_TONE_RULES_PATH" "$TONE_BACKUP_PATH" "$had_tone_backup" || true
+      restore_runtime_file "$MANUAL_REPLY_EXAMPLES_PATH" "$MANUAL_BACKUP_PATH" "$had_manual_backup" || true
+      echo "[feedback-loop] rollback=completed"
+    else
+      echo "[feedback-loop] rollback=skipped NIGHTLY_ROLLBACK_ON_EVAL_FAIL=$NIGHTLY_ROLLBACK_ON_EVAL_FAIL"
+    fi
+    exit 1
+  fi
 
   echo "[feedback-loop] step=tone_quality_eval"
   TONE_QUALITY_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run tone_quality:eval

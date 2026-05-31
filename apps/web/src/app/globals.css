@@ -3063,7 +3063,7 @@ input[type="reset"],
     linear-gradient(180deg, #090d14 0%, #070b12 100%) !important;
 }
 
-@media (min-width: 640px) and (max-width: 767.98px) {
+@media (min-width: 640px) and (max-width: 1023.98px) {
   .lr-tablet-header-row {
     flex-direction: row !important;
     align-items: center !important;
@@ -3098,9 +3098,9 @@ input[type="reset"],
 
   .lr-tablet-list-panel {
     display: block !important;
-    flex: 0 0 20rem !important;
-    width: 20rem !important;
-    min-width: 20rem !important;
+    flex: 0 0 clamp(19rem, 41vw, 23rem) !important;
+    width: clamp(19rem, 41vw, 23rem) !important;
+    min-width: clamp(19rem, 41vw, 23rem) !important;
   }
 
   .lr-tablet-main-panel {
@@ -3110,7 +3110,16 @@ input[type="reset"],
   }
 
   .lr-app-theme .lr-tablet-main-panel {
-    padding: 1rem !important;
+    padding: clamp(0.75rem, 2vw, 1rem) !important;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 860px) {
+  .lr-tablet-list-panel {
+    flex-basis: clamp(18rem, 43vw, 20rem) !important;
+    width: clamp(18rem, 43vw, 20rem) !important;
+    min-width: clamp(18rem, 43vw, 20rem) !important;
+    padding: 0.85rem !important;
   }
 }
 
@@ -3801,8 +3810,166 @@ input[type="reset"],
   background-color: var(--accent);
 }
 
+.lr-inbox-row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.lr-inbox-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  min-width: 0;
+}
+
+.lr-inbox-icon-pill,
+.lr-inbox-pill,
+.lr-inbox-outcome-pill,
+.lr-inbox-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 999px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.lr-inbox-icon-pill {
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lr-inbox-pill {
+  max-width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.68rem;
+}
+
+.lr-inbox-pill-muted {
+  background: rgba(148, 163, 184, 0.12);
+  color: #dbe6f7;
+}
+
+.lr-inbox-pill-info {
+  background: rgba(96, 165, 250, 0.16);
+  color: #cfe4ff;
+  border-color: rgba(96, 165, 250, 0.36);
+}
+
+.lr-inbox-pill-good {
+  background: rgba(52, 211, 153, 0.16);
+  color: #bbf7d0;
+  border-color: rgba(52, 211, 153, 0.32);
+}
+
+.lr-inbox-pill-warn {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.36);
+}
+
+.lr-inbox-outcome-pill {
+  gap: 0.35rem;
+  padding: 0.34rem 0.5rem;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(52, 211, 153, 0.16);
+  color: #bbf7d0;
+  border-color: rgba(52, 211, 153, 0.36);
+  animation: lr-response-dot-pulse 2.4s ease-in-out infinite;
+}
+
+.lr-inbox-meta-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  max-width: 7.5rem;
+  flex: 0 0 auto;
+}
+
+.lr-inbox-meta-pill {
+  justify-content: center;
+  min-height: 1.45rem;
+  padding: 0.28rem 0.48rem;
+  background: rgba(255, 255, 255, 0.055);
+  color: #dbe6f7;
+  font-size: 0.68rem;
+}
+
+.lr-inbox-meta-pill.is-ai {
+  background: rgba(251, 127, 4, 0.15);
+  border-color: rgba(251, 127, 4, 0.42);
+  color: #ffd7ad;
+}
+
+.lr-inbox-meta-pill.is-human {
+  background: rgba(148, 163, 184, 0.16);
+  color: #f4f8ff;
+}
+
+.lr-inbox-task-line {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  margin-top: 0.45rem;
+  color: #d5e6ff;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.lr-inbox-task-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #7dd3fc;
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.14);
+}
+
+.lr-inbox-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.65rem;
+  margin-top: 0.55rem;
+  color: #aebbd2;
+  font-size: 0.73rem;
+}
+
+@media (max-width: 860px) {
+  .lr-inbox-row {
+    padding: 0.85rem !important;
+  }
+
+  .lr-inbox-row-main {
+    gap: 0.55rem;
+  }
+
+  .lr-inbox-meta-pills {
+    max-width: 5.5rem;
+  }
+
+  .lr-inbox-pill,
+  .lr-inbox-outcome-pill,
+  .lr-inbox-meta-pill {
+    font-size: 0.64rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .lr-response-needed-dot {
+  .lr-response-needed-dot,
+  .lr-inbox-outcome-pill {
     animation: none;
   }
 }

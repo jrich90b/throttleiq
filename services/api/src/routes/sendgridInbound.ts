@@ -1817,6 +1817,47 @@ function toEmailStyledBody(body: string, conv: any): string {
 function setEmailDraft(conv: any, text: string): void {
   conv.emailDraft = toEmailStyledBody(text, conv);
 }
+
+type EmailReplyDraftInvariantHints = {
+  turnFinanceIntent?: boolean;
+  turnAvailabilityIntent?: boolean;
+  turnSchedulingIntent?: boolean;
+  financeContextIntent?: boolean;
+  shortAckIntent?: boolean;
+};
+
+function publishGuardedEmailReplyDraft(args: {
+  conv: any;
+  event: InboundMessageEvent;
+  text: string;
+  invariantHints?: EmailReplyDraftInvariantHints;
+}): { ok: true; draft: string } | { ok: false; reason: string } {
+  const invariant = applyDraftStateInvariants({
+    inboundText: args.event.body ?? "",
+    draftText: args.text,
+    followUpMode: args.conv.followUp?.mode ?? null,
+    followUpReason: args.conv.followUp?.reason ?? null,
+    dialogState: args.conv.dialogState?.name ?? null,
+    classificationBucket: args.conv.classification?.bucket ?? null,
+    classificationCta: args.conv.classification?.cta ?? null,
+    ...(args.invariantHints ?? {})
+  });
+  if (!invariant.allow) {
+    return { ok: false, reason: invariant.reason ?? "draft_invariant_blocked" };
+  }
+  setEmailDraft(args.conv, invariant.draftText);
+  return { ok: true, draft: args.conv.emailDraft };
+}
+
+function emailReplyInvariantHintsFromOrchestratorResult(result: Awaited<ReturnType<typeof orchestrateInbound>>): EmailReplyDraftInvariantHints {
+  const signals = result.debugFlow?.signals;
+  if (!signals) return {};
+  return {
+    turnFinanceIntent: signals.financeRequest || signals.wantsPayments || signals.pricingIntent,
+    turnAvailabilityIntent: signals.wantsAvailability,
+    turnSchedulingIntent: signals.wantsScheduling
+  };
+}
 import { getSystemMode } from "../domain/settingsStore.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
@@ -3908,6 +3949,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       agentNameOverride: String(conv?.manualSender?.userName ?? "").trim() || undefined
     });
 
+    let draftToPublish = result.draft;
     if (result.handoff?.required) {
       addTodo(conv, result.handoff.reason, event.body, event.providerMessageId);
       setFollowUpMode(conv, "manual_handoff", `handoff:${result.handoff.reason}`);
@@ -3915,12 +3957,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       if (result.handoff.reason === "pricing" || result.handoff.reason === "payments") {
         markPricingEscalated(conv);
       }
-      setEmailDraft(conv, result.handoff.ack);
+      draftToPublish = result.handoff.ack;
     } else if (result.autoClose?.reason) {
       closeConversation(conv, result.autoClose.reason);
-      setEmailDraft(conv, result.draft);
-    } else {
-      setEmailDraft(conv, result.draft);
+    }
+
+    const published = publishGuardedEmailReplyDraft({
+      conv,
+      event,
+      text: draftToPublish,
+      invariantHints: emailReplyInvariantHintsFromOrchestratorResult(result)
+    });
+    if (!published.ok) {
+      addTodo(
+        conv,
+        "other",
+        `Review email reply before sending; draft guard blocked automatic publication (${published.reason}).`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "draft_guard_blocked");
+      stopFollowUpCadence(conv, "manual_handoff");
     }
 
     saveConversation(conv);

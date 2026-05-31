@@ -26,6 +26,8 @@ type FileScanContext = {
   liveTwilioEnd?: number;
   regenerateStart?: number;
   regenerateEnd?: number;
+  sendgridEmailReplyStart?: number;
+  sendgridEmailReplyEnd?: number;
 };
 
 const controlledReplyPipeline = [
@@ -73,6 +75,14 @@ function findLineIndex(lines: string[], pattern: string): number | undefined {
 }
 
 function buildScanContext(relPath: string, lines: string[]): FileScanContext {
+  if (relPath.endsWith("sendgridInbound.ts")) {
+    const sendgridEmailReplyStart = findLineIndex(lines, "if (!adfXml) {");
+    const sendgridAdfStart = findLineIndex(lines, 'console.log("[sendgrid inbound] to:"');
+    return {
+      sendgridEmailReplyStart,
+      sendgridEmailReplyEnd: sendgridAdfStart != null ? sendgridAdfStart - 1 : undefined
+    };
+  }
   if (!relPath.endsWith("index.ts")) return {};
   const liveTwilioStart = findLineIndex(lines, 'app.post("/webhooks/twilio"');
   const liveTwilioVoiceStart = findLineIndex(lines, 'app.post("/webhooks/twilio/voice"');
@@ -199,6 +209,8 @@ function classify(relPath: string, line: string, idx: number, context: FileScanC
   }
 
   if (relPath.endsWith("sendgridInbound.ts")) {
+    const inSendgridEmailReplyRoute = inRange(idx, context.sendgridEmailReplyStart, context.sendgridEmailReplyEnd);
+
     if (trimmed.includes("await orchestrateInbound(")) {
       return {
         file: relPath,
@@ -209,6 +221,7 @@ function classify(relPath: string, line: string, idx: number, context: FileScanC
       };
     }
     if (
+      trimmed.includes("publishGuardedEmailReplyDraft(") ||
       trimmed.includes("publishAdfDraftForPreferredContact(") ||
       trimmed.includes("publishAdfEmailDraft(") ||
       trimmed.includes("publishEarlyAdfSmsDraft(") ||
@@ -220,16 +233,16 @@ function classify(relPath: string, line: string, idx: number, context: FileScanC
         line: lineNo,
         kind: "primary",
         code: trimmed,
-        detail: "ADF customer-facing text is handed to the controlled local publication boundary."
+        detail: "SendGrid customer-facing text is handed to the controlled local publication boundary."
       };
     }
-    if (trimmed.includes("setEmailDraft(conv, result.")) {
+    if (inSendgridEmailReplyRoute && trimmed.includes("setEmailDraft(conv,")) {
       return {
         file: relPath,
         line: lineNo,
-        kind: "primary",
+        kind: "legacy_email_reply_direct",
         code: trimmed,
-        detail: "Email draft is published from orchestrator output."
+        detail: "Non-ADF email reply assigns a customer-facing draft outside the final invariant publication guard."
       };
     }
     if (trimmed.includes('appendOutbound(conv, "dealership", leadKey,')) {
@@ -256,18 +269,18 @@ function classify(relPath: string, line: string, idx: number, context: FileScanC
       return {
         file: relPath,
         line: lineNo,
-        kind: "primary",
+        kind: "legacy_email_reply_direct",
         code: trimmed,
-        detail: "Email handoff acknowledgement is orchestrator output."
+        detail: "Non-ADF email handoff acknowledgement bypasses the final invariant publication guard."
       };
     }
     if (trimmed.includes("setEmailDraft(conv, result.draft")) {
       return {
         file: relPath,
         line: lineNo,
-        kind: "primary",
+        kind: "legacy_email_reply_direct",
         code: trimmed,
-        detail: "Email draft is orchestrator output."
+        detail: "Non-ADF email reply draft bypasses the final invariant publication guard."
       };
     }
     if (trimmed.includes("appendOutbound(conv, emailFrom, emailTo!, signed, \"sendgrid\"")) {

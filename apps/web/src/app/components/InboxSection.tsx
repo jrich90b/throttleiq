@@ -340,6 +340,11 @@ export function InboxSection(props: any) {
                       ? "Demo ride outcome needed"
                       : "Outcome reminder SMS sent to salesperson";
                     const outcomeNeededKind = dealerRideOutcomeNeeded ? "dealer_ride" : "appointment";
+                    const inboxOwner = c.leadOwner?.name || c.leadOwner?.id || inboxTodoOwnerByConv.get(c.id);
+                    const updatedLabel =
+                      c.status === "closed" && c.closedAt
+                        ? `closed: ${new Date(c.closedAt).toLocaleString()}`
+                        : `updated: ${new Date(c.updatedAt).toLocaleString()}`;
                     return (
                       <div key={c.id} className="flex items-stretch">
                         <button
@@ -348,141 +353,109 @@ export function InboxSection(props: any) {
                             linkedOpenCampaign ? "bg-gray-50/70 opacity-70" : ""
                           } ${selectedId === c.id ? "bg-[color:rgba(63,126,255,0.18)]" : ""}`}
                         >
-	                          <div className="flex items-center justify-between gap-3">
-	                            <div className="min-w-0">
-	                              <div className="flex items-start gap-2">
-	                                {needsResponse ? (
-	                                  <span
-	                                    className="lr-response-needed-dot mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-	                                    title="Needs response"
-	                                    aria-label="Needs response"
-	                                  />
-	                                ) : null}
-	                                <div
-	                                  className="min-w-0 flex-1 font-medium text-gray-900 whitespace-normal break-words line-clamp-2"
-	                                  title={c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
-	                                >
-	                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
-	                                </div>
-	                              </div>
-	                              <div className="mt-1 flex flex-wrap items-center gap-2">
-	                                {c.walkIn && !isPhoneLogConversation(c) ? (
-	                                  <span
-	                                    className="text-blue-600 text-lg leading-none"
-	                                    title="Walk-in"
-	                                    aria-label="Walk-in"
-	                                  >
-	                                    <svg
-	                                      viewBox="0 0 24 24"
-	                                      width="18"
-	                                      height="18"
-	                                      fill="currentColor"
-	                                      aria-hidden="true"
-	                                    >
-	                                      <path d="M13.5 5.5c.83 0 1.5-.67 1.5-1.5S14.33 2.5 13.5 2.5 12 3.17 12 4s.67 1.5 1.5 1.5zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2V15.5l-2.1-2 .6-3c1.3 1.5 3.1 2.5 5.2 2.5V11c-1.5 0-2.8-.9-3.4-2.1l-1-1.6c-.4-.6-1.1-1-1.8-1-.3 0-.5.1-.8.1L8 9.3V12h2V9.9l1.8-1z" />
-	                                    </svg>
-	                                  </span>
-	                                ) : null}
-	                                {renderDealTemperatureIcon(getDealTemperature(c), "text-lg")}
-	                                {c.contactPreference === "call_only" ? (
-	                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
-	                                    Prefers Call
-	                                  </span>
-	                                ) : null}
-	                                {c.status === "closed" ? (
-	                                  <span
-	                                    className={`text-xs px-2 py-1 rounded border ${
-	                                      isSoldConversation(c)
-	                                        ? "bg-blue-50 text-blue-700 border-blue-200"
-	                                        : "bg-gray-50"
-	                                    }`}
-	                                  >
-	                                    {isSoldConversation(c) ? "Sold" : "Closed"}
-	                                  </span>
-	                                ) : c.followUpCadence?.pauseReason === "manual_hold" ||
-	                                  c.followUpCadence?.pauseReason === "unit_hold" ||
-	                                  c.followUpCadence?.pauseReason === "order_hold" ||
-	                                  c.followUpCadence?.stopReason === "unit_hold" ||
-	                                  c.followUpCadence?.stopReason === "order_hold" ||
-	                                  c.followUp?.reason === "manual_hold" ||
-	                                  c.followUp?.reason === "unit_hold" ||
-	                                  c.followUp?.reason === "order_hold" ||
-	                                  !!c.hold ? (
-	                                  <span className="text-xs px-2 py-1 rounded border bg-red-100 text-red-700 border-red-200">
-	                                    Hold
-	                                  </span>
-	                                ) : null}
-	                                {linkedOpenCampaign ? (
-	                                  <span className="text-xs px-2 py-1 rounded border bg-gray-100 text-gray-700 border-gray-300">
-	                                    Open in Inbox
-	                                  </span>
-	                                ) : null}
-	                                {campaignReply ? (
-	                                  <span
-	                                    className="text-xs px-2 py-1 rounded border bg-emerald-100 text-emerald-800 border-emerald-200"
-	                                    title="Customer replied to a campaign message"
-	                                  >
-	                                    Campaign reply
-	                                  </span>
-	                                ) : null}
-	                                {outcomeNeeded ? (
-	                                  <button
-	                                    type="button"
-	                                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse"
-	                                    title={outcomeNeededTitle}
-	                                    onClick={e => {
-	                                      e.preventDefault();
-	                                      e.stopPropagation();
-	                                      if (typeof openOutcomeFromInbox !== "function") {
-	                                        openConversation(c.id);
-	                                        return;
-	                                      }
-	                                      openOutcomeFromInbox(
-	                                        c.id,
-	                                        outcomeNeededKind,
-	                                        outcomeNeededKind === "dealer_ride" ? dealerRideOutcomeTodo : null
-	                                      );
-	                                    }}
-	                                  >
-	                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-	                                    Outcome needed
-	                                  </button>
-	                                ) : null}
-	                              </div>
-	                              {getInboxVehicleLine(c) ? (
-	                                <div className="text-xs text-gray-500 mt-1 truncate">{getInboxVehicleLine(c)}</div>
-	                              ) : null}
-                              {openTasks.length ? (
-                                <div className="mt-1 flex min-w-0">
+                          <div className="lr-inbox-row-main">
+                            <div className="min-w-0">
+                              <div className="flex items-start gap-2">
+                                {needsResponse ? (
                                   <span
-                                    className="inline-flex max-w-full items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-800"
-                                    title={[
-                                      openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`,
-                                      openTaskOwner ? `Owner: ${openTaskOwner}` : ""
-                                    ]
-                                      .filter(Boolean)
-                                      .join(" • ")}
-                                  >
-                                    <span className="truncate">
-                                      {openTasks.length === 1 ? `Task: ${openTaskTitle}` : `${openTasks.length} open tasks`}
-                                    </span>
-                                  </span>
+                                    className="lr-response-needed-dot mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                                    title="Needs response"
+                                    aria-label="Needs response"
+                                  />
+                                ) : null}
+                                <div
+                                  className="min-w-0 flex-1 font-medium text-gray-900 whitespace-normal break-words line-clamp-2"
+                                  title={c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
+                                >
+                                  {c.leadName && c.leadName.length > 0 ? c.leadName : c.leadKey}
                                 </div>
-                              ) : null}
+                              </div>
+                              <div className="lr-inbox-badge-row">
+                                {c.walkIn && !isPhoneLogConversation(c) ? (
+                                  <span
+                                    className="lr-inbox-icon-pill text-blue-600"
+                                    title="Walk-in"
+                                    aria-label="Walk-in"
+                                  >
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      width="16"
+                                      height="16"
+                                      fill="currentColor"
+                                      aria-hidden="true"
+                                    >
+                                      <path d="M13.5 5.5c.83 0 1.5-.67 1.5-1.5S14.33 2.5 13.5 2.5 12 3.17 12 4s.67 1.5 1.5 1.5zM9.8 8.9L7 23h2.1l1.8-8 2.1 2v6h2V15.5l-2.1-2 .6-3c1.3 1.5 3.1 2.5 5.2 2.5V11c-1.5 0-2.8-.9-3.4-2.1l-1-1.6c-.4-.6-1.1-1-1.8-1-.3 0-.5.1-.8.1L8 9.3V12h2V9.9l1.8-1z" />
+                                    </svg>
+                                  </span>
+                                ) : null}
+                                {renderDealTemperatureIcon(getDealTemperature(c), "text-base")}
+                                {c.contactPreference === "call_only" ? (
+                                  <span className="lr-inbox-pill lr-inbox-pill-warn">Call only</span>
+                                ) : null}
+                                {c.status === "closed" ? (
+                                  <span
+                                    className={`lr-inbox-pill ${
+                                      isSoldConversation(c) ? "lr-inbox-pill-info" : "lr-inbox-pill-muted"
+                                    }`}
+                                  >
+                                    {isSoldConversation(c) ? "Sold" : "Closed"}
+                                  </span>
+                                ) : c.followUpCadence?.pauseReason === "manual_hold" ||
+                                  c.followUpCadence?.pauseReason === "unit_hold" ||
+                                  c.followUpCadence?.pauseReason === "order_hold" ||
+                                  c.followUpCadence?.stopReason === "unit_hold" ||
+                                  c.followUpCadence?.stopReason === "order_hold" ||
+                                  c.followUp?.reason === "manual_hold" ||
+                                  c.followUp?.reason === "unit_hold" ||
+                                  c.followUp?.reason === "order_hold" ||
+                                  !!c.hold ? (
+                                  <span className="lr-inbox-pill lr-inbox-pill-warn">Hold</span>
+                                ) : null}
+                                {linkedOpenCampaign ? (
+                                  <span className="lr-inbox-pill lr-inbox-pill-muted">Open in Inbox</span>
+                                ) : null}
+                                {campaignReply ? (
+                                  <span
+                                    className="lr-inbox-pill lr-inbox-pill-good"
+                                    title="Customer replied to a campaign message"
+                                  >
+                                    Campaign reply
+                                  </span>
+                                ) : null}
+                                {outcomeNeeded ? (
+                                  <button
+                                    type="button"
+                                    className="lr-inbox-outcome-pill"
+                                    title={outcomeNeededTitle}
+                                    onClick={e => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (typeof openOutcomeFromInbox !== "function") {
+                                        openConversation(c.id);
+                                        return;
+                                      }
+                                      openOutcomeFromInbox(
+                                        c.id,
+                                        outcomeNeededKind,
+                                        outcomeNeededKind === "dealer_ride" ? dealerRideOutcomeTodo : null
+                                      );
+                                    }}
+                                  >
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                    Outcome
+                                  </button>
+                                ) : null}
+                              </div>
                             </div>
 
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="lr-inbox-meta-pills">
                               {isPhoneLogConversation(c) ? (
-                                <span title="Phone log" aria-label="Phone log">
-                                  📞
+                                <span className="lr-inbox-meta-pill" title="Phone log" aria-label="Phone log">
+                                  Call
                                 </span>
-                              ) : c.mode === "human" ? (
-                                <span title="Human override">👤</span>
                               ) : null}
                               <button
-                                className={`text-xs px-2 py-1 rounded border ${
-                                  c.mode === "human" ? "bg-gray-100" : "bg-blue-50"
-                                }`}
+                                className={`lr-inbox-meta-pill ${c.mode === "human" ? "is-human" : "is-ai"}`}
                                 title={c.mode === "human" ? "Switch to AI" : "Switch to Human"}
                                 onClick={e => {
                                   e.stopPropagation();
@@ -491,10 +464,16 @@ export function InboxSection(props: any) {
                               >
                                 {c.mode === "human" ? "Human" : "AI"}
                               </button>
-                              {c.pendingDraft ? <span className="text-xs px-2 py-1 rounded border">Draft</span> : null}
-                              <span className="text-xs px-2 py-1 rounded border">{c.messageCount}</span>
+                              {c.pendingDraft ? <span className="lr-inbox-meta-pill">Draft</span> : null}
+                              <span className="lr-inbox-meta-pill" title={`${c.messageCount} messages`}>
+                                {c.messageCount}
+                              </span>
                             </div>
                           </div>
+
+                          {getInboxVehicleLine(c) ? (
+                            <div className="text-xs text-gray-500 mt-1 truncate">{getInboxVehicleLine(c)}</div>
+                          ) : null}
 
                           <div className="text-sm text-gray-700 mt-2 line-clamp-2">
                             {c.pendingDraftPreview ? (
@@ -504,18 +483,27 @@ export function InboxSection(props: any) {
                             )}
                           </div>
 
-                          <div className="text-xs text-gray-500 mt-2">
-                            {c.status === "closed" && c.closedAt
-                              ? `closed: ${new Date(c.closedAt).toLocaleString()}`
-                              : `updated: ${new Date(c.updatedAt).toLocaleString()}`}
+                          {openTasks.length ? (
+                            <div
+                              className="lr-inbox-task-line"
+                              title={[
+                                openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`,
+                                openTaskOwner ? `Owner: ${openTaskOwner}` : ""
+                              ]
+                                .filter(Boolean)
+                                .join(" • ")}
+                            >
+                              <span className="lr-inbox-task-dot" />
+                              <span className="truncate">
+                                {openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`}
+                              </span>
+                            </div>
+                          ) : null}
+
+                          <div className="lr-inbox-card-footer">
+                            <span>{updatedLabel}</span>
+                            {inboxOwner ? <span>Owner: {inboxOwner}</span> : null}
                           </div>
-                          {(() => {
-                            const inboxOwner =
-                              c.leadOwner?.name || c.leadOwner?.id || inboxTodoOwnerByConv.get(c.id);
-                            return inboxOwner ? (
-                              <div className="text-xs text-[var(--accent)] mt-1">Owner: {inboxOwner}</div>
-                            ) : null;
-                          })()}
                           {linkedOpenCampaign ? (
                             <div className="text-xs text-gray-500 mt-1">Open conversation exists in Inbox.</div>
                           ) : null}
