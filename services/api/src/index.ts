@@ -83,6 +83,7 @@ import {
   type WarrantyRmaStatus
 } from "./domain/warrantyRmaStore.js";
 import { analyzeWarrantyRmaSubmission, extractWarrantyRmaIntake } from "./domain/warrantyRmaAssistant.js";
+import { buildHdnetDraftPacket } from "./domain/warrantyRmaHdnet.js";
 import {
   deleteWarrantyRmaManualVectors,
   getWarrantyRmaVectorStatus,
@@ -38536,11 +38537,13 @@ app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
     : rankWarrantyRmaManualsForSubmission(listWarrantyRmaManuals(), submission).slice(0, maxReviewDocuments);
   try {
     const review = await analyzeWarrantyRmaSubmission({ submission, manuals: manualPool });
+    const hdnetDraftPacket = buildHdnetDraftPacket({ ...submission, review });
     const user = (req as any).user ?? null;
     const created = addWarrantyRmaCase({
       ...submission,
       selectedManualIds: selectedManualIds.length ? selectedManualIds : manualPool.map(manual => manual.id),
       review,
+      hdnetDraftPacket,
       status: warrantyRmaStatusForReview(review),
       createdByUserId: user?.id,
       createdByUserName: user?.name || user?.email
@@ -38557,6 +38560,8 @@ app.post("/warranty-rma/cases", requireWarrantyRmaAccess, async (req, res) => {
 app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) => {
   await warrantyRmaStoreReady;
   if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
+  const existing = getWarrantyRmaCase(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
   const patch: Record<string, unknown> = {};
   if (req.body?.status !== undefined) {
     const status = normalizeWarrantyRmaStatus(req.body.status);
@@ -38601,8 +38606,48 @@ app.patch("/warranty-rma/cases/:id", requireWarrantyRmaAccess, async (req, res) 
   if (req.body?.selectedManualIds !== undefined) {
     patch.selectedManualIds = normalizeWarrantyRmaSelectedManualIds(req.body.selectedManualIds);
   }
+  const hdnetFieldKeys = new Set([
+    "notes",
+    "partDescription",
+    "claimType",
+    "customerName",
+    "roNumber",
+    "invoiceNumber",
+    "orderNumber",
+    "vin",
+    "mileage",
+    "invoiceDate",
+    "workOrderDate",
+    "serviceStartDate",
+    "serviceEndDate",
+    "purchaseDate",
+    "installDate",
+    "failureDate",
+    "quantity",
+    "laborHours",
+    "jobTimeCode",
+    "technicianName",
+    "dealerNumber",
+    "authorizationNumber",
+    "customerConcernCode",
+    "conditionCode",
+    "carrierName",
+    "bolNumber",
+    "returnAuthorizationNumber",
+    "cause",
+    "correction",
+    "requestedAction"
+  ]);
+  if (Object.keys(patch).some(key => hdnetFieldKeys.has(key))) {
+    patch.hdnetDraftPacket = buildHdnetDraftPacket({
+      ...existing,
+      ...patch,
+      issueDescription: existing.issueDescription,
+      partNumber: existing.partNumber,
+      review: existing.review
+    });
+  }
   const updated = updateWarrantyRmaCase(req.params.id, patch as any);
-  if (!updated) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
   return res.json({ ok: true, case: updated });
 });
 
@@ -38611,11 +38656,14 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
   if (!(await requireWarrantyRmaSubmissionEnabled(res))) return;
   const existing = getWarrantyRmaCase(req.params.id);
   if (!existing) return res.status(404).json({ ok: false, error: "Warranty/RMA case not found." });
+  const hdnetDraftPacket = existing.hdnetDraftPacket ?? buildHdnetDraftPacket({ ...existing, review: existing.review });
+  const message = `${hdnetDraftPacket.formTitle} is ready for H-Dnet portal review. Portal automation is not connected yet, so review the packet and enter it manually in H-Dnet.`;
 
   const updated = updateWarrantyRmaCase(req.params.id, {
+    hdnetDraftPacket,
     dmsPush: {
       status: "not_configured",
-      message: "TALON/Warranty-Link integration is not configured yet. The claim packet is saved for manual review against the TALON work order.",
+      message,
       updatedAt: new Date().toISOString()
     }
   });
@@ -38623,7 +38671,7 @@ app.post("/warranty-rma/cases/:id/dms-push", requireWarrantyRmaAccess, async (re
     ok: true,
     case: updated,
     dmsPush: updated?.dmsPush,
-    message: "TALON/Warranty-Link integration is not configured yet. The claim packet is saved for manual review against the TALON work order."
+    message
   });
 });
 

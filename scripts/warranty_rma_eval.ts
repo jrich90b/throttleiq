@@ -17,6 +17,7 @@ delete process.env.PINECONE_WARRANTY_NAMESPACE;
 process.env.WARRANTY_RMA_VECTOR_MANIFEST_PATH = path.join(tempDir, "warranty_rma_vector_index.json");
 
 const { analyzeWarrantyRmaSubmission, extractWarrantyRmaIntake } = await import("../services/api/src/domain/warrantyRmaAssistant.ts");
+const { buildHdnetDraftPacket } = await import("../services/api/src/domain/warrantyRmaHdnet.ts");
 const {
   chunkWarrantyRmaTextForVectorIndex,
   getWarrantyRmaVectorStatus,
@@ -167,6 +168,67 @@ assert.equal(review.dmsPayloadDraft.cause, "Internal switch failure");
 assert.equal(review.dmsPayloadDraft.correction, "Replace switch");
 assert.ok(review.requiredInfo.some(item => /warranty manual|proof of purchase/i.test(item)));
 
+const hdnetPacket = buildHdnetDraftPacket({
+  claimType: "motorcycle_warranty",
+  partNumber: "HD-12345",
+  partDescription: "Replacement switch",
+  issueDescription: "Customer says the replacement switch failed after install and no longer starts the bike.",
+  customerName: "Pat Customer",
+  roNumber: "RO-8812345678901",
+  serviceStartDate: "2026-05-29",
+  serviceEndDate: "2026-05-30",
+  failureDate: "05/28/2026",
+  vin: "1hd1krp16pb123456",
+  mileage: "1205",
+  quantity: "1",
+  jobTimeCode: "1234",
+  laborHours: "0.4",
+  customerConcernCode: "9901",
+  conditionCode: "9110",
+  authorizationNumber: "1234567",
+  cause: "Internal switch failure",
+  correction: "Replace switch",
+  requestedAction: "Warranty review"
+});
+assert.equal(hdnetPacket.formKind, "short");
+assert.equal(hdnetPacket.fields.strEventType, "MC");
+assert.equal(hdnetPacket.fields.strCustName, "Customer");
+assert.equal(hdnetPacket.fields.strVIN, "1HD1KRP16PB123456");
+assert.equal(hdnetPacket.fields.strWorkOrder, "RO-881234567890");
+assert.equal(hdnetPacket.fields.strStartDateMM, "05");
+assert.equal(hdnetPacket.fields.strStartDateDD, "29");
+assert.equal(hdnetPacket.fields.strStartDateYY, "26");
+assert.equal(hdnetPacket.fields.strProbDateMM, "05");
+assert.equal(hdnetPacket.fields.strProbDateDD, "28");
+assert.equal(hdnetPacket.fields.strProbDateYY, "26");
+assert.equal(hdnetPacket.fields.strProbDesc.length, 30);
+assert.equal(hdnetPacket.detailRows.otherLabor.length, 0);
+assert.ok(hdnetPacket.warnings.some(item => /shortened to 30 characters/i.test(item)));
+assert.ok(hdnetPacket.warnings.some(item => /do not duplicate/i.test(item)));
+assert.equal(hdnetPacket.missing.includes("VIN or crankcase number"), false);
+
+const hdnetLongPacket = buildHdnetDraftPacket({
+  claimType: "motorcycle_warranty",
+  partNumber: "HD-12345",
+  issueDescription: "Extra labor details required.",
+  customerName: "Pat Customer",
+  roNumber: "RO-1",
+  serviceStartDate: "2026-05-29",
+  serviceEndDate: "2026-05-30",
+  failureDate: "2026-05-30",
+  vin: "1HD1KRP16PB123456",
+  mileage: "1205",
+  quantity: "1",
+  jobTimeCode: "1234",
+  customerConcernCode: "9901",
+  conditionCode: "9110",
+  detailRows: {
+    otherLabor: Array.from({ length: 15 }, (_, index) => ({ laborCode: String(7000 + index) }))
+  }
+});
+assert.equal(hdnetLongPacket.formKind, "long");
+assert.equal(hdnetLongPacket.detailRows.otherLabor.length, 15);
+
 const extraction = await extractWarrantyRmaIntake([
   {
     name: "repair-order.txt",
@@ -194,11 +256,13 @@ const created = addWarrantyRmaCase({
   correction: "Replace switch",
   selectedManualIds: [manual.id],
   review,
+  hdnetDraftPacket: hdnetPacket,
   status: "needs_info",
   createdByUserName: "Warranty Eval"
 });
 assert.equal(listWarrantyRmaCases().length, 1);
 assert.equal(created.dmsPush.status, "not_configured");
+assert.equal(created.hdnetDraftPacket?.formKind, "short");
 assert.equal(created.partDescription, "Replacement switch");
 assert.equal(created.customerName, "Pat Customer");
 assert.equal(created.invoiceDate, "2026-05-30");

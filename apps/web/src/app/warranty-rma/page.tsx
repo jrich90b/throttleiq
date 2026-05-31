@@ -79,6 +79,34 @@ type WarrantyRmaReview = {
   };
 };
 
+type HdnetDraftPacket = {
+  formKind: "short" | "long";
+  formTitle: string;
+  formSource: string;
+  reason: string;
+  fields: Record<string, string>;
+  missing: string[];
+  warnings: string[];
+  detailRows: {
+    labor8888: Array<{
+      row: string;
+      laborCode: string;
+      hours: string;
+      comments: string;
+    }>;
+    otherLabor: Array<{
+      row: string;
+      laborCode: string;
+    }>;
+    otherDetails: Array<{
+      row: string;
+      type: "Sublet" | "Note" | "Materials" | "Towing";
+      cost: string;
+      comments: string;
+    }>;
+  };
+};
+
 type WarrantyRmaCaseEntry = {
   id: string;
   title: string;
@@ -117,6 +145,7 @@ type WarrantyRmaCaseEntry = {
   notes?: string;
   selectedManualIds: string[];
   review: WarrantyRmaReview;
+  hdnetDraftPacket?: HdnetDraftPacket;
   dmsPush: {
     status: "not_configured" | "ready" | "queued" | "pushed" | "failed";
     message?: string;
@@ -696,7 +725,7 @@ export default function WarrantyRmaPage() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "Claim packet could not be prepared.");
       if (data.case) setCases(prev => prev.map(item => (item.id === id ? data.case : item)));
-      setNotice(data.message || "Claim packet prepared for TALON/Warranty-Link review.");
+      setNotice(data.message || "Claim packet prepared for H-Dnet portal review.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Claim packet could not be prepared.");
     } finally {
@@ -938,11 +967,11 @@ export default function WarrantyRmaPage() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">New submission</div>
                 <h2 className="mt-1 text-lg font-semibold">Review a part issue</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  The assistant checks uploaded manuals and prepares a claim packet for TALON/Warranty-Link review.
+                  The assistant checks uploaded manuals and prepares a reviewed H-Dnet short or long claim packet.
                 </p>
               </div>
               <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
-                TALON handoff not connected
+                H-Dnet portal draft
               </span>
             </div>
 
@@ -1256,6 +1285,7 @@ function CaseDetail(props: {
     );
   }
   const review = item.review;
+  const hdnetPacket = item.hdnetDraftPacket;
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1308,7 +1338,9 @@ function CaseDetail(props: {
         <ListBlock title="Required info" rows={review.requiredInfo} empty="No missing items reported." />
         <ListBlock title="Next steps" rows={review.nextSteps} empty="No next steps reported." />
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">TALON/Warranty-Link handoff</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {hdnetPacket ? "H-Dnet handoff" : "Warranty handoff"}
+          </div>
           <div className="mt-2 text-sm font-semibold text-slate-900">{item.dmsPush.status.replace(/_/g, " ")}</div>
           <p className="mt-1 text-sm text-slate-600">{item.dmsPush.message || review.dms.nextStep}</p>
         </div>
@@ -1354,6 +1386,8 @@ function CaseDetail(props: {
         </dl>
       </div>
 
+      {hdnetPacket ? <HdnetPacketBlock packet={hdnetPacket} /> : null}
+
       <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3">
         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Manual references</div>
         <div className="mt-3 space-y-3">
@@ -1372,6 +1406,93 @@ function CaseDetail(props: {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const hdnetFieldLabels: Array<{ key: string; label: string }> = [
+  { key: "strStartDateMM", label: "Start MM" },
+  { key: "strStartDateDD", label: "Start DD" },
+  { key: "strStartDateYY", label: "Start YY" },
+  { key: "strEndDateMM", label: "End MM" },
+  { key: "strEndDateDD", label: "End DD" },
+  { key: "strEndDateYY", label: "End YY" },
+  { key: "strCustName", label: "Owner last name" },
+  { key: "strCrankCase", label: "Crankcase" },
+  { key: "strVIN", label: "VIN" },
+  { key: "strMileage", label: "Odometer" },
+  { key: "strWorkOrder", label: "Work order" },
+  { key: "strEventType", label: "Event type" },
+  { key: "strQty", label: "Quantity" },
+  { key: "strProbPart", label: "Problem part" },
+  { key: "strPrimaryLabor", label: "Primary labor" },
+  { key: "strConcernCode", label: "Concern code" },
+  { key: "strConditionCode", label: "Condition code" },
+  { key: "strProbDateMM", label: "Problem MM" },
+  { key: "strProbDateDD", label: "Problem DD" },
+  { key: "strProbDateYY", label: "Problem YY" },
+  { key: "strEventAuth", label: "Auth code" },
+  { key: "strProbDesc", label: "Problem desc" },
+  { key: "strNotes", label: "Notes" }
+];
+
+function HdnetPacketBlock(props: { packet: HdnetDraftPacket }) {
+  const packet = props.packet;
+  const detailCount =
+    packet.detailRows.labor8888.length + packet.detailRows.otherLabor.length + packet.detailRows.otherDetails.length;
+  return (
+    <div className="mt-4 rounded-lg border border-orange-200 bg-orange-50 p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-orange-700">H-Dnet claim packet</div>
+          <div className="mt-1 text-sm font-semibold text-slate-950">{packet.formTitle}</div>
+          <p className="mt-1 text-xs text-slate-600">{packet.reason}</p>
+        </div>
+        <span className="w-fit rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-orange-700">
+          {packet.formKind === "short" ? "Short claim" : "Long claim"} · {detailCount} detail rows
+        </span>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <ListBlock title="Missing before entry" rows={packet.missing} empty="No required H-Dnet fields missing." />
+        <ListBlock title="H-Dnet warnings" rows={packet.warnings} empty="No warnings reported." />
+      </div>
+
+      <dl className="mt-3 grid gap-2 md:grid-cols-3">
+        {hdnetFieldLabels.map(row => (
+          <PayloadField
+            key={row.key}
+            label={row.label}
+            value={packet.fields[row.key] || ""}
+            wide={row.key === "strNotes"}
+          />
+        ))}
+      </dl>
+
+      {detailCount ? (
+        <div className="mt-3 rounded-lg border border-orange-100 bg-white p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Detail rows</div>
+          <div className="mt-2 space-y-2 text-sm text-slate-700">
+            {packet.detailRows.labor8888.map(row => (
+              <div key={`8888-${row.row}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                Labor 8888 row {row.row}: {row.laborCode || "not set"} · {row.hours || "hours not set"} · {row.comments || "no comments"}
+              </div>
+            ))}
+            {packet.detailRows.otherLabor.map(row => (
+              <div key={`labor-${row.row}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                Other labor {row.row}: {row.laborCode}
+              </div>
+            ))}
+            {packet.detailRows.otherDetails.map(row => (
+              <div key={`detail-${row.row}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                {row.type} row {row.row}: {row.cost || "no cost"} · {row.comments || "no comments"}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <p className="mt-3 text-xs text-slate-500">{packet.formSource}</p>
     </div>
   );
 }

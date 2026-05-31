@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { dataPath } from "./dataDir.js";
+import type { HdnetDraftPacket } from "./warrantyRmaHdnet.js";
 import type { WarrantyRmaReview } from "./warrantyRmaAssistant.js";
 
 export type WarrantyRmaStatus =
@@ -70,6 +71,7 @@ export type WarrantyRmaCaseEntry = {
   notes?: string;
   selectedManualIds: string[];
   review: WarrantyRmaReview;
+  hdnetDraftPacket?: HdnetDraftPacket;
   dmsPush: {
     status: WarrantyRmaDmsStatus;
     message?: string;
@@ -189,6 +191,7 @@ async function loadFromDisk() {
         partNumber: String(row.partNumber ?? "").trim(),
         issueDescription: String(row.issueDescription ?? "").trim(),
         selectedManualIds,
+        hdnetDraftPacket: row.hdnetDraftPacket,
         dmsPush: {
           status: normalizeDmsStatus(row.dmsPush?.status),
           message: String(row.dmsPush?.message ?? "").trim() || undefined,
@@ -286,6 +289,7 @@ export function addWarrantyRmaCase(input: {
   notes?: string;
   selectedManualIds?: string[];
   review: WarrantyRmaReview;
+  hdnetDraftPacket?: HdnetDraftPacket;
   status?: WarrantyRmaStatus;
   createdByUserId?: string;
   createdByUserName?: string;
@@ -329,9 +333,12 @@ export function addWarrantyRmaCase(input: {
     notes: String(input.notes ?? "").trim() || undefined,
     selectedManualIds: input.selectedManualIds ?? [],
     review: input.review,
+    hdnetDraftPacket: input.hdnetDraftPacket,
     dmsPush: {
       status: "not_configured",
-      message: "DMS API integration is not configured yet."
+      message: input.hdnetDraftPacket
+        ? `${input.hdnetDraftPacket.formTitle} prepared for H-Dnet portal review. Portal automation is not connected yet.`
+        : "DMS API integration is not configured yet."
     },
     createdByUserId: input.createdByUserId,
     createdByUserName: input.createdByUserName,
@@ -352,6 +359,7 @@ export function updateWarrantyRmaCase(
       | "status"
       | "notes"
       | "review"
+      | "hdnetDraftPacket"
       | "dmsPush"
       | "partDescription"
       | "claimType"
