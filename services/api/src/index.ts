@@ -36815,7 +36815,19 @@ function buildCampaignImagePrompt(args: {
       ]
     : [];
   const outputGuardrails: string[] = [];
-  if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
+  if (preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1) {
+    const flyerW = campaignFlyerWidth();
+    const flyerH = campaignFlyerHeight();
+    const ratio = (flyerW / Math.max(1, flyerH)).toFixed(3);
+    outputGuardrails.push(
+      "Output framing requirements (critical):",
+      `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
+      "- Fill the full background/canvas, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
+      "- Print-safe area: keep important content at least 4% from the left/right/top edges and at least 6% above the bottom edge.",
+      "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
+      "- If space is tight, reduce copy and font size before moving text toward the page edge."
+    );
+  } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
     const bannerH = campaignWebBannerHeight(args.dealerProfile);
     const ratio = (bannerW / Math.max(1, bannerH)).toFixed(3);
@@ -37126,6 +37138,10 @@ function campaignFlyerHeight(): number {
   return Math.max(1100, Math.min(7000, Number(process.env.CAMPAIGN_FLYER_8_5X11_HEIGHT ?? 3300)));
 }
 
+function campaignFlyerSafeInsetPercent(): number {
+  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 4)));
+}
+
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
   const fromProfile = Number((profile as any)?.campaign?.webBannerWidth);
   const fromLegacy = Number((profile as any)?.webBannerWidth);
@@ -37223,6 +37239,63 @@ async function applyWebBannerInsetBackdrop(
     .clone()
     .resize(width, height, { fit: "cover", position: "centre" })
     .blur(14)
+    .toBuffer();
+  const fg = await rotated
+    .clone()
+    .resize(innerW, innerH, {
+      fit: "contain",
+      position: "centre",
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+    })
+    .png()
+    .toBuffer();
+  return sharp(bg, { failOn: "none", animated: false })
+    .composite([{ input: fg, gravity: "centre" }])
+    .jpeg({ quality: 95, mozjpeg: true, chromaSubsampling: "4:2:0" })
+    .toBuffer()
+    .catch(() => buffer);
+}
+
+async function applyCampaignSafeInsetBackdrop(
+  buffer: Buffer,
+  width: number,
+  height: number,
+  insetPercent: number
+): Promise<Buffer> {
+  const pct = Math.max(0, Math.min(15, Number(insetPercent || 0)));
+  if (!(pct > 0)) return buffer;
+  const insetRatio = pct / 100;
+  const innerW = Math.max(1, Math.round(width * (1 - insetRatio * 2)));
+  const innerH = Math.max(1, Math.round(height * (1 - insetRatio * 2)));
+  if (innerW >= width || innerH >= height) return buffer;
+
+  const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
+  let sampled = { r: 255, g: 255, b: 255 };
+  try {
+    const avg = await rotated
+      .clone()
+      .resize(1, 1, { fit: "fill" })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    if (avg.length >= 3) {
+      sampled = {
+        r: Number(avg[0] ?? 255),
+        g: Number(avg[1] ?? 255),
+        b: Number(avg[2] ?? 255)
+      };
+    }
+  } catch {
+    sampled = { r: 255, g: 255, b: 255 };
+  }
+  const bg = await rotated
+    .clone()
+    .resize(width, height, {
+      fit: "cover",
+      position: "centre",
+      background: { r: sampled.r, g: sampled.g, b: sampled.b, alpha: 1 }
+    })
+    .blur(10)
     .toBuffer();
   const fg = await rotated
     .clone()
@@ -37509,12 +37582,22 @@ async function normalizeCampaignImageForProfile(
     );
   }
   if (profile === "flyer_8_5x11") {
-    return normalizeCampaignImageForExactFrame(
+    const normalized = await normalizeCampaignImageForExactFrame(
       buffer,
       campaignFlyerWidth(),
       campaignFlyerHeight(),
       { fit: "contain_blur" }
     );
+    const insetBuffer = await applyCampaignSafeInsetBackdrop(
+      normalized.buffer,
+      normalized.width,
+      normalized.height,
+      campaignFlyerSafeInsetPercent()
+    ).catch(() => normalized.buffer);
+    return {
+      ...normalized,
+      buffer: insetBuffer
+    };
   }
   return normalizeCampaignImageForMms(buffer);
 }

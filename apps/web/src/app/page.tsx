@@ -4796,11 +4796,31 @@ export default function Home() {
   <title>${title}</title>
   <style>
     html, body { margin: 0; padding: 0; background: #fff; }
-    .wrap { margin: 0 auto; width: 100%; max-width: 8.5in; }
-    img { display: block; width: 100%; height: auto; }
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .wrap {
+      width: 8in;
+      height: 10.5in;
+      max-width: calc(100vw - 0.5in);
+      max-height: calc(100vh - 0.5in);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;
+      background: #fff;
+    }
+    img {
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
     @media print {
-      @page { size: auto; margin: 0.25in; }
-      html, body { background: #fff; }
+      @page { size: Letter portrait; margin: 0.25in; }
+      html, body { width: 8in; height: 10.5in; min-height: 10.5in; background: #fff; }
+      body { display: flex; align-items: center; justify-content: center; }
+      .wrap { width: 8in; height: 10.5in; max-width: 8in; max-height: 10.5in; page-break-inside: avoid; }
     }
   </style>
 </head>
