@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   buildTlpBrowserUsePrompt,
   resolveTlpBrowserUseScriptPath,
@@ -52,6 +55,9 @@ assert.match(deliveredPrompt, /RESULT_STATUS: saved/i);
 assert.ok(resolveTlpBrowserUseScriptPath()?.endsWith("scripts/tlp_crm_browser_use.py"));
 
 const previousFlag = process.env.TLP_BROWSER_USE_RESCUE;
+const previousPortalFlag = process.env.TLP_PORTAL_USE_BROWSER_USE;
+const previousScript = process.env.TLP_BROWSER_USE_SCRIPT_PATH;
+const previousPython = process.env.TLP_BROWSER_USE_PYTHON;
 delete process.env.TLP_BROWSER_USE_RESCUE;
 delete process.env.TLP_PORTAL_USE_BROWSER_USE;
 const disabled = await runTlpBrowserUseRescue(
@@ -66,5 +72,54 @@ assert.equal(disabled.attempted, false);
 assert.equal(disabled.skipped, true);
 assert.match(disabled.summary, /disabled/i);
 if (previousFlag !== undefined) process.env.TLP_BROWSER_USE_RESCUE = previousFlag;
+if (previousPortalFlag !== undefined) process.env.TLP_PORTAL_USE_BROWSER_USE = previousPortalFlag;
+
+const tempDir = await mkdtemp(path.join(tmpdir(), "tlp-browser-use-rescue-eval-"));
+try {
+  const fakeScript = path.join(tempDir, "fake-runner.js");
+  await writeFile(
+    fakeScript,
+    `
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const resultPath = args[args.indexOf("--result") + 1];
+fs.writeFileSync(resultPath, JSON.stringify({
+  ok: true,
+  blocked: false,
+  summary: args.join(" ")
+}));
+`,
+    "utf8"
+  );
+  process.env.TLP_BROWSER_USE_RESCUE = "1";
+  process.env.TLP_BROWSER_USE_SCRIPT_PATH = fakeScript;
+  process.env.TLP_BROWSER_USE_PYTHON = process.execPath;
+  const attached = await runTlpBrowserUseRescue(
+    {
+      action: "log_customer_contact",
+      leadRef: "11338",
+      note: "Use fake runner to prove CDP and portal URL options pass through."
+    },
+    new Error("primary failed"),
+    {
+      cdpUrl: "http://127.0.0.1:9222",
+      portalUrl: "https://tlpcrm.com/current-lead"
+    }
+  );
+  assert.equal(attached.attempted, true);
+  assert.equal(attached.ok, true);
+  assert.match(attached.summary, /--cdp-url http:\/\/127\.0\.0\.1:9222/);
+  assert.match(attached.summary, /--portal-url https:\/\/tlpcrm\.com\/current-lead/);
+} finally {
+  await rm(tempDir, { recursive: true, force: true });
+  if (previousFlag !== undefined) process.env.TLP_BROWSER_USE_RESCUE = previousFlag;
+  else delete process.env.TLP_BROWSER_USE_RESCUE;
+  if (previousPortalFlag !== undefined) process.env.TLP_PORTAL_USE_BROWSER_USE = previousPortalFlag;
+  else delete process.env.TLP_PORTAL_USE_BROWSER_USE;
+  if (previousScript !== undefined) process.env.TLP_BROWSER_USE_SCRIPT_PATH = previousScript;
+  else delete process.env.TLP_BROWSER_USE_SCRIPT_PATH;
+  if (previousPython !== undefined) process.env.TLP_BROWSER_USE_PYTHON = previousPython;
+  else delete process.env.TLP_BROWSER_USE_PYTHON;
+}
 
 console.log("tlp_browser_use_rescue_eval passed");

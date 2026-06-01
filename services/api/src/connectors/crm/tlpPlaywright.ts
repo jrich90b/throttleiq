@@ -1,8 +1,10 @@
 // services/api/src/connectors/crm/tlpPlaywright.ts
-import { mkdir, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { runTlpBrowserUseRescue } from "./tlpBrowserUse.js";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { runTlpBrowserUseRescue, tlpBrowserUseRescueEnabled } from "./tlpBrowserUse.js";
 
 export type TlpLogCustomerContactArgs = {
   leadRef: string;          // Ref #
@@ -46,9 +48,17 @@ const SHORT_TIMEOUT_MS = Number(process.env.TLP_SHORT_TIMEOUT_MS ?? 15_000);
 const NAV_TIMEOUT_MS = Number(process.env.TLP_NAV_TIMEOUT_MS ?? 60_000);
 const DEBUG = process.env.TLP_DEBUG !== "0";
 const DEBUG_DIR = process.env.TLP_DEBUG_DIR ?? "/tmp/tlp-debug";
+const TLP_VIEWPORT = { width: 1440, height: 900 };
+const TLP_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 type StepFn = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 type LeadLookupResult = { page: Page; row: Locator };
+type TlpBrowserSession = {
+  context: BrowserContext;
+  cdpUrl?: string;
+  close: () => Promise<void>;
+};
 
 function sanitizeLabel(label: string): string {
   return label.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
@@ -93,13 +103,69 @@ function resolveOpenPageFromContext(context: BrowserContext): Page {
   return candidate;
 }
 
-async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> {
+async function reserveLocalPort(): Promise<number> {
+  return await new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(err => (err ? reject(err) : resolvePort(port)));
+    });
+  });
+}
+
+function shouldExposePlaywrightCdp(): boolean {
+  if (!tlpBrowserUseRescueEnabled()) return false;
+  if (process.env.TLP_BROWSER_USE_CDP_URL || process.env.MDF_PORTAL_CDP_URL) return false;
+  return process.env.TLP_BROWSER_USE_ATTACH_PLAYWRIGHT !== "0";
+}
+
+async function createTlpBrowserSession(): Promise<TlpBrowserSession> {
   const headless = (process.env.TLP_HEADLESS ?? "true").toLowerCase() === "true";
+  if (shouldExposePlaywrightCdp()) {
+    const requestedPort = Number(process.env.TLP_BROWSER_USE_PLAYWRIGHT_CDP_PORT || "0");
+    const port = Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : await reserveLocalPort();
+    const profileRoot = process.env.TLP_BROWSER_USE_PROFILE_ROOT || DEBUG_DIR || join(tmpdir(), "tlp-browser-use");
+    await mkdir(profileRoot, { recursive: true });
+    const userDataDir = await mkdtemp(join(profileRoot, "playwright-cdp-"));
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      headless,
+      viewport: TLP_VIEWPORT,
+      userAgent: TLP_USER_AGENT,
+      args: [`--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${port}`]
+    });
+    return {
+      context,
+      cdpUrl: `http://127.0.0.1:${port}`,
+      close: async () => {
+        await context.close().catch(() => undefined);
+        await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    };
+  }
+
   const browser = await chromium.launch({ headless });
+  const context = await browser.newContext({
+    viewport: TLP_VIEWPORT,
+    userAgent: TLP_USER_AGENT
+  });
+  return {
+    context,
+    close: async () => {
+      await context.close().catch(() => undefined);
+      await browser.close().catch(() => undefined);
+    }
+  };
+}
+
+async function withBrowser<T>(fn: (session: TlpBrowserSession) => Promise<T>): Promise<T> {
+  const session = await createTlpBrowserSession();
   try {
-    return await fn(browser);
+    return await fn(session);
   } finally {
-    await browser.close();
+    await session.close();
   }
 }
 
@@ -1580,12 +1646,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
   const categoryValue = args.categoryValue ?? "MOTORCYCLES";
   const contactedValue: "YES" | "NO" = args.contactedValue ?? "YES";
 
-  await withBrowser(async (browser) => {
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    });
+  await withBrowser(async ({ context, cdpUrl }) => {
     const page = await context.newPage();
     page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
@@ -1619,12 +1680,10 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
 
       // 6) Submit
       await submitLog(page, step);
-      await context.close();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[tlp] log failed", { leadRef: args.leadRef, step: currentStep, error: message });
       await captureDebugArtifacts(page, currentStep);
-      await context.close().catch(() => undefined);
       const rescue = await runTlpBrowserUseRescue(
         {
           action: "log_customer_contact",
@@ -1634,7 +1693,8 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
           categoryValue,
           contactedValue
         },
-        error
+        error,
+        { cdpUrl, portalUrl: page.isClosed() ? undefined : page.url() }
       );
       if (rescue.ok) {
         console.warn("[tlp] log browser-use rescue completed", {
@@ -1659,12 +1719,7 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
 }
 
 export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDeliveredArgs): Promise<void> {
-  await withBrowser(async (browser) => {
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    });
+  await withBrowser(async ({ context, cdpUrl }) => {
     const page = await context.newPage();
     page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
@@ -1683,12 +1738,10 @@ export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDe
       await loginTlp(page, step);
       await openDealershipVisitByRef(page, args.leadRef, step, args.phone ?? args.details?.phone);
       await markDeliveredStep(page, step, args.note, args.details);
-      await context.close();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[tlp] delivered mark failed", { leadRef: args.leadRef, step: currentStep, error: message });
       await captureDebugArtifacts(page, currentStep);
-      await context.close().catch(() => undefined);
       const rescue = await runTlpBrowserUseRescue(
         {
           action: "mark_dealership_visit_delivered",
@@ -1697,7 +1750,8 @@ export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDe
           note: args.note,
           details: args.details as Record<string, unknown> | undefined
         },
-        error
+        error,
+        { cdpUrl, portalUrl: page.isClosed() ? undefined : page.url() }
       );
       if (rescue.ok) {
         console.warn("[tlp] delivered browser-use rescue completed", {

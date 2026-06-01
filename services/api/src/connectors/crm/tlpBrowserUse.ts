@@ -35,6 +35,11 @@ export type TlpBrowserUseRescueResult = {
   code?: number;
 };
 
+export type TlpBrowserUseRescueOptions = {
+  cdpUrl?: string;
+  portalUrl?: string;
+};
+
 function yes(value: unknown): boolean {
   return /^(1|true|yes|on)$/i.test(String(value ?? "").trim());
 }
@@ -98,6 +103,7 @@ export function buildTlpBrowserUsePrompt(args: TlpBrowserUseRescueArgs, original
     "- Do not send SMS, email, chat, or any customer-facing message.",
     "- Do not change any customer record unless the lead ref or phone clearly matches this task.",
     "- If the portal is on login or MFA, stop and report that manual login is needed. Do not type, reveal, read, or copy credentials.",
+    "- If attached to an already-authenticated TLP browser, prefer the current authenticated tab/context and do not restart auth.",
     "- If saved browser autofill is already present, you may click Next, Continue, Sign in, or Yes to proceed.",
     "- If the matching lead is ambiguous, stop and report ambiguity.",
     "- Save/submit the CRM update only after verifying the matching lead and exact fields.",
@@ -196,7 +202,8 @@ async function runProcess(
 
 export async function runTlpBrowserUseRescue(
   args: TlpBrowserUseRescueArgs,
-  originalError: unknown
+  originalError: unknown,
+  options: TlpBrowserUseRescueOptions = {}
 ): Promise<TlpBrowserUseRescueResult> {
   if (!tlpBrowserUseRescueEnabled()) {
     return { attempted: false, ok: false, skipped: true, summary: "TLP browser-use rescue is disabled." };
@@ -216,9 +223,9 @@ export async function runTlpBrowserUseRescue(
   await writeFile(promptPath, buildTlpBrowserUsePrompt(args, originalError), "utf8");
 
   const python = String(process.env.TLP_BROWSER_USE_PYTHON || process.env.MDF_BROWSER_USE_PYTHON || "python3").trim();
-  const portalUrl = String(process.env.TLP_BROWSER_USE_PORTAL_URL || process.env.TLP_BASE_URL || "https://tlpcrm.com").trim();
+  const portalUrl = String(options.portalUrl || process.env.TLP_BROWSER_USE_PORTAL_URL || process.env.TLP_BASE_URL || "https://tlpcrm.com").trim();
   const maxSteps = String(process.env.TLP_BROWSER_USE_MAX_STEPS || "35");
-  const cdpUrl = String(process.env.TLP_BROWSER_USE_CDP_URL || process.env.MDF_PORTAL_CDP_URL || "").trim();
+  const cdpUrl = String(options.cdpUrl || process.env.TLP_BROWSER_USE_CDP_URL || process.env.MDF_PORTAL_CDP_URL || "").trim();
   const timeoutSeconds = Math.max(60, Number(process.env.TLP_BROWSER_USE_TIMEOUT_SECONDS || "600"));
   const processArgs = [scriptPath, "--prompt", promptPath, "--portal-url", portalUrl, "--result", resultPath, "--max-steps", maxSteps];
   if (cdpUrl) processArgs.push("--cdp-url", cdpUrl);
