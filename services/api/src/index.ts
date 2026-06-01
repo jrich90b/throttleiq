@@ -36822,10 +36822,13 @@ function buildCampaignImagePrompt(args: {
     outputGuardrails.push(
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
-      "- Fill the full background/canvas, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
+      "- Use the full page as one continuous flyer design surface, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
       "- Print-safe area: keep important content at least 4% from the left/right/top edges and at least 6% above the bottom edge.",
       "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
       "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
+      "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
+      "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
+      "- The flyer artwork itself must be one edge-to-edge design; use internal design spacing for print safety instead of shrinking the poster onto another background.",
       "- If space is tight, reduce copy and font size before moving text toward the page edge."
     );
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
@@ -37587,7 +37590,7 @@ async function normalizeCampaignImageForProfile(
       buffer,
       campaignFlyerWidth(),
       campaignFlyerHeight(),
-      { fit: "contain_blur" }
+      { fit: "contain" }
     );
     const insetBuffer = await applyCampaignSafeInsetBackdrop(
       normalized.buffer,
