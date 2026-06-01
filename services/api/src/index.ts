@@ -36825,6 +36825,7 @@ function buildCampaignImagePrompt(args: {
       "- Fill the full background/canvas, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
       "- Print-safe area: keep important content at least 4% from the left/right/top edges and at least 6% above the bottom edge.",
       "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
+      "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
       "- If space is tight, reduce copy and font size before moving text toward the page edge."
     );
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
@@ -37139,7 +37140,7 @@ function campaignFlyerHeight(): number {
 }
 
 function campaignFlyerSafeInsetPercent(): number {
-  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 4)));
+  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 0)));
 }
 
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
