@@ -35,6 +35,13 @@ def choose_llm():
     return ChatOpenAI(model=model)
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def run() -> int:
     args = parse_args()
     prompt_path = Path(args.prompt)
@@ -79,7 +86,7 @@ async def run() -> int:
         ]
     )
 
-    browser_kwargs: dict[str, object] = {"headless": False}
+    browser_kwargs: dict[str, object] = {"headless": env_bool("TLP_BROWSER_USE_HEADLESS", False)}
     if args.cdp_url:
         browser_kwargs["cdp_url"] = args.cdp_url
     elif os.getenv("TLP_BROWSER_USE_CLOUD", "").strip().lower() in {"1", "true", "yes"}:
