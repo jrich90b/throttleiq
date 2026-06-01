@@ -315,20 +315,41 @@ const statusClasses: Record<WarrantyRmaStatus, string> = {
   denied: "bg-red-100 text-red-800"
 };
 
-const claimTypeOptions = [
-  { value: "", label: "Unknown / let assistant classify" },
-  { value: "motorcycle_warranty", label: "Warranty claim - motorcycle (MC)" },
-  { value: "parts_accessory_warranty", label: "Parts/accessory warranty (PNA)" },
-  { value: "dealer_stock_parts", label: "Dealer-stock / over-the-counter parts (DFS)" },
-  { value: "pre_delivery_warranty", label: "Pre-delivery warranty (PRD)" },
-  { value: "freight_damage", label: "Freight damage (FRT)" },
-  { value: "parts_rma", label: "Parts RMA / return" },
-  { value: "recall_campaign", label: "Recall / campaign" },
-  { value: "goodwill", label: "Goodwill (GDW)" },
-  { value: "general_merchandise", label: "General merchandise (GM)" },
-  { value: "engine_return", label: "Engine/core return" },
-  { value: "other", label: "Other" }
+type ClaimTypeOption = {
+  value: string;
+  label: string;
+  group: "classification" | "talon" | "manual" | "other";
+};
+
+const claimTypeOptions: ClaimTypeOption[] = [
+  { value: "", label: "Unknown / let assistant classify", group: "classification" },
+  { value: "motorcycle_warranty", label: "Warranty claim - motorcycle (MC)", group: "talon" },
+  { value: "parts_accessory_warranty", label: "Parts/accessory warranty (PNA)", group: "talon" },
+  { value: "pre_delivery_warranty", label: "Pre-delivery warranty (PRD)", group: "talon" },
+  { value: "freight_damage", label: "Freight damage (FRT)", group: "talon" },
+  { value: "recall_campaign", label: "Recall / campaign", group: "talon" },
+  { value: "goodwill", label: "Goodwill (GDW)", group: "talon" },
+  { value: "engine_return", label: "Engine/core return", group: "talon" },
+  { value: "dealer_stock_parts", label: "Dealer-stock / over-the-counter parts (DFS)", group: "manual" },
+  { value: "general_merchandise", label: "General merchandise (GM)", group: "manual" },
+  { value: "parts_rma", label: "Parts RMA / return packet", group: "manual" },
+  { value: "other", label: "Other", group: "other" }
 ];
+
+const claimTypeGroupLabels: Record<ClaimTypeOption["group"], string> = {
+  classification: "Assistant classification",
+  talon: "TALON work-order review",
+  manual: "Manual Warranty-Link / RMA packet",
+  other: "Other review"
+};
+
+type ClaimWorkflowInfo = {
+  badge: string;
+  title: string;
+  detail: string;
+  actionLabel: string;
+  tone: "slate" | "amber" | "orange" | "blue";
+};
 
 type RequirementItem = {
   label: string;
@@ -540,6 +561,7 @@ export default function WarrantyRmaPage() {
   const submissionsEnabled = capabilities.submissionEnabled === true;
   const casePreparationEnabled = capabilities.casePreparationEnabled === true || submissionsEnabled;
   const talonReferenceMode = capabilities.workflow === "talon_reference" && !submissionsEnabled;
+  const selectedWorkflow = claimWorkflowInfo(caseForm.claimType, capabilities);
 
   useEffect(() => {
     void loadWorkspace();
@@ -1001,10 +1023,14 @@ export default function WarrantyRmaPage() {
           <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">New submission</div>
-                <h2 className="mt-1 text-lg font-semibold">Review a part issue</h2>
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {talonReferenceMode ? "New review" : "New submission"}
+                </div>
+                <h2 className="mt-1 text-lg font-semibold">{talonReferenceMode ? "New warranty/RMA review" : "Review a part issue"}</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  The assistant checks uploaded manuals and prepares a reviewed H-Dnet short or long claim packet.
+                  {talonReferenceMode
+                    ? "The assistant checks the documents, builds the claim packet, and keeps TALON as the source of record for vehicle/work-order claims."
+                    : "The assistant checks uploaded manuals and prepares a reviewed H-Dnet short or long claim packet."}
                 </p>
               </div>
               <span className="inline-flex w-fit rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
@@ -1061,12 +1087,16 @@ export default function WarrantyRmaPage() {
                 ) : null}
               </div>
 
-              <SelectField
-                label="Claim type"
-                value={caseForm.claimType}
-                options={claimTypeOptions}
-                onChange={value => setCaseForm(prev => ({ ...prev, claimType: value }))}
-              />
+              <div className="md:col-span-2">
+                <ClaimTypeField
+                  value={caseForm.claimType}
+                  capabilities={capabilities}
+                  onChange={value => setCaseForm(prev => ({ ...prev, claimType: value }))}
+                />
+              </div>
+              <div className="md:col-span-2">
+                <ClaimWorkflowNotice info={selectedWorkflow} />
+              </div>
               <Field label="Part number" value={caseForm.partNumber} onChange={value => setCaseForm(prev => ({ ...prev, partNumber: value }))} />
               <Field label="Part description" value={caseForm.partDescription} onChange={value => setCaseForm(prev => ({ ...prev, partDescription: value }))} />
               <Field label="Customer name" value={caseForm.customerName} onChange={value => setCaseForm(prev => ({ ...prev, customerName: value }))} />
@@ -1237,27 +1267,69 @@ function Field(props: { label: string; value: string; onChange: (value: string) 
   );
 }
 
-function SelectField(props: {
-  label: string;
+function ClaimTypeField(props: {
   value: string;
-  options: Array<{ value: string; label: string }>;
+  capabilities: WarrantyRmaCapabilities;
   onChange: (value: string) => void;
 }) {
+  const groups: ClaimTypeOption["group"][] = ["classification", "talon", "manual", "other"];
+  const talonMode = props.capabilities.workflow === "talon_reference" && !props.capabilities.submissionEnabled;
   return (
     <label className="block">
-      <span className="text-sm font-semibold text-slate-700">{props.label}</span>
+      <span className="text-sm font-semibold text-slate-700">Claim type</span>
       <select
         className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950"
         value={props.value}
         onChange={event => props.onChange(event.target.value)}
       >
-        {props.options.map(option => (
-          <option key={option.value || "unknown"} value={option.value}>
-            {option.label}
-          </option>
-        ))}
+        {groups.map(group => {
+          const rows = claimTypeOptions.filter(option => option.group === group);
+          if (!rows.length) return null;
+          return (
+            <optgroup key={group} label={claimTypeGroupLabels[group]}>
+              {rows.map(option => (
+                <option key={option.value || "unknown"} value={option.value}>
+                  {claimOptionLabel(option, talonMode)}
+                </option>
+              ))}
+            </optgroup>
+          );
+        })}
       </select>
     </label>
+  );
+}
+
+function claimOptionLabel(option: ClaimTypeOption, talonMode: boolean) {
+  if (!talonMode) return option.label;
+  if (option.group === "talon") return `${option.label} - TALON review only`;
+  if (option.value === "dealer_stock_parts" || option.value === "general_merchandise") return `${option.label} - Warranty-Link draft eligible`;
+  if (option.value === "parts_rma") return `${option.label} - RMA packet`;
+  return option.label;
+}
+
+function ClaimWorkflowNotice(props: { info: ClaimWorkflowInfo }) {
+  const color =
+    props.info.tone === "orange"
+      ? "border-orange-200 bg-orange-50 text-orange-800"
+      : props.info.tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : props.info.tone === "blue"
+          ? "border-blue-200 bg-blue-50 text-blue-800"
+          : "border-slate-200 bg-slate-50 text-slate-700";
+  return (
+    <div className={`rounded-lg border p-3 ${color}`}>
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide opacity-80">{props.info.badge}</div>
+          <div className="mt-1 text-sm font-semibold text-slate-950">{props.info.title}</div>
+          <p className="mt-1 text-sm text-slate-700">{props.info.detail}</p>
+        </div>
+        <span className="w-fit shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+          {props.info.actionLabel}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -1328,6 +1400,7 @@ function CaseDetail(props: {
   const review = item.review;
   const hdnetPacket = item.hdnetDraftPacket;
   const portalTaskAllowed = warrantyRmaPortalTaskAllowed(item, props.capabilities);
+  const workflowInfo = claimWorkflowInfo(item.claimType || review.dmsPayloadDraft.claimType, props.capabilities);
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1340,6 +1413,9 @@ function CaseDetail(props: {
             </span>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
               {review.status.replace(/_/g, " ")} · {Math.round((review.confidence || 0) * 100)}%
+            </span>
+            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
+              {workflowInfo.actionLabel}
             </span>
           </div>
         </div>
@@ -1366,7 +1442,7 @@ function CaseDetail(props: {
             onClick={() => void props.onDms(item.id)}
             disabled={props.busyKey === `${item.id}:dms`}
           >
-            Prepare handoff packet
+            {props.capabilities.workflow === "talon_reference" ? "Prepare TALON packet" : "Prepare handoff packet"}
           </button>
           {portalTaskAllowed ? (
             <button
@@ -1375,10 +1451,14 @@ function CaseDetail(props: {
               onClick={() => void props.onPortalTask(item.id)}
               disabled={props.busyKey === `${item.id}:portal`}
             >
-              Start H-Dnet draft
+              Start Warranty-Link draft
             </button>
           ) : null}
         </div>
+      </div>
+
+      <div className="mt-4">
+        <ClaimWorkflowNotice info={workflowInfo} />
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
@@ -1607,6 +1687,85 @@ function normalizeClaimTypeValue(value: string | undefined) {
   return "other";
 }
 
+function manualPortalClaimType(claimType: string) {
+  return claimType === "dealer_stock_parts" || claimType === "general_merchandise";
+}
+
+function talonWorkOrderClaimType(claimType: string) {
+  return [
+    "motorcycle_warranty",
+    "parts_accessory_warranty",
+    "pre_delivery_warranty",
+    "freight_damage",
+    "recall_campaign",
+    "goodwill",
+    "engine_return"
+  ].includes(claimType);
+}
+
+function claimWorkflowInfo(rawClaimType: string | undefined, capabilities: WarrantyRmaCapabilities): ClaimWorkflowInfo {
+  const claimType = normalizeClaimTypeValue(rawClaimType);
+  const talonMode = capabilities.workflow === "talon_reference" && !capabilities.submissionEnabled;
+
+  if (!talonMode) {
+    return {
+      badge: "H-Dnet workspace",
+      title: "Standalone warranty/RMA submission flow",
+      detail: "This dealer is configured for direct case preparation. The assistant can prepare a reviewed H-Dnet packet, and final submission still requires human review.",
+      actionLabel: "Portal draft available",
+      tone: "orange"
+    };
+  }
+
+  if (!claimType) {
+    return {
+      badge: "Assistant classification",
+      title: "Let the assistant classify the claim",
+      detail: "Upload the evidence and leave this blank when you are unsure. If it classifies as a vehicle/work-order claim, TALON stays the source of record.",
+      actionLabel: "Review first",
+      tone: "slate"
+    };
+  }
+
+  if (manualPortalClaimType(claimType)) {
+    return {
+      badge: "Warranty-Link draft eligible",
+      title: "Manual non-vehicle claim",
+      detail: "LeadRider can prepare the DFS/GM review packet and start a Warranty-Link draft task. Final review and submission remain manual.",
+      actionLabel: "Draft task allowed",
+      tone: "orange"
+    };
+  }
+
+  if (claimType === "parts_rma") {
+    return {
+      badge: "RMA packet",
+      title: "Return/RMA review packet",
+      detail: "LeadRider can organize the evidence and RMA fields, but the final route may be ShipExec, Warranty-Link, or TALON depending on the reason. Automatic portal draft is held until connector mapping is approved.",
+      actionLabel: "Packet only",
+      tone: "blue"
+    };
+  }
+
+  if (talonWorkOrderClaimType(claimType)) {
+    return {
+      badge: "TALON review only",
+      title: "Vehicle/work-order claim",
+      detail: "Use LeadRider for extraction, checklist, manual references, and handoff packet. Build and cash out the actual warranty work order in TALON, then verify/transmit through Warranty-Link.",
+      actionLabel: "Create in TALON",
+      tone: "amber"
+    };
+  }
+
+  return {
+    badge: "Needs routing review",
+    title: "Confirm the claim route",
+    detail: "Use the assistant output to decide whether this belongs in TALON, Warranty-Link, RMA, or another Harley-Davidson process before starting a draft.",
+    actionLabel: "Review route",
+    tone: "slate"
+  };
+}
+
 function buildRequirementSummary(caseForm: CaseForm, manuals: WarrantyRmaManualDocument[], selectedManualIds: string[]) {
   const normalizedType = normalizeClaimTypeValue(caseForm.claimType);
   const profile = requiredProfiles[normalizedType || "unknown"] ?? requiredProfiles.other;
@@ -1635,7 +1794,7 @@ function warrantyRmaPortalTaskAllowed(item: WarrantyRmaCaseEntry, capabilities: 
   if (capabilities.submissionEnabled) return true;
   if (capabilities.workflow !== "talon_reference") return false;
   const claimType = normalizeClaimTypeValue(item.claimType || item.review?.dmsPayloadDraft?.claimType);
-  return claimType === "dealer_stock_parts" || claimType === "general_merchandise";
+  return manualPortalClaimType(claimType);
 }
 
 function referenceKeywordsForClaimType(claimType: string) {
