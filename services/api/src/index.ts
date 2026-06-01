@@ -36823,9 +36823,11 @@ function buildCampaignImagePrompt(args: {
     outputGuardrails.push(
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
-      "- Generate the campaign artwork/background only. LeadRider will typeset final event details in a controlled print-safe panel after generation.",
+      "- Generate full-bleed magazine advertisement artwork/background only. LeadRider will typeset final event details after generation.",
+      "- The art should feel like a polished premium magazine ad: editorial, high-impact, cohesive, and dimensional. Avoid generic clip-art flyer/template composition.",
       "- Do not render small footer/event-detail text, address blocks, dates, disclaimers, or dense body copy in the artwork.",
       "- A short large theme mark/headline is acceptable only if it helps the visual concept and stays fully inside the frame.",
+      "- Leave a darker, visually simple lower-third/lower-half area where final copy can be overlaid cleanly.",
       "- Keep all dealer logos, eagle marks, bikes/riders, and key artwork at least 8% below the top edge and 6% above the bottom edge.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
       "- Bottom-edge safety: keep key artwork fully visible with clear breathing room below it.",
@@ -36833,7 +36835,7 @@ function buildCampaignImagePrompt(args: {
       "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
       "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
       "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
-      "- The final page text will be added separately, so prioritize clean artwork, brand feel, and composition over trying to include every written campaign detail."
+      "- The final page text will be added separately, so prioritize clean artwork, brand feel, lighting, hierarchy, and composition over trying to include every written campaign detail."
     );
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
@@ -37322,6 +37324,7 @@ function buildCampaignFlyerCopy(context?: CampaignFlyerLayoutContext): {
       if (part.length < 8) return false;
       const lower = part.toLowerCase();
       if (title && lower === title.toLowerCase()) return false;
+      if (/^celebrate\b/i.test(part) && /freedom|party|event|ride|sale/i.test(title)) return false;
       if (/^(create|generate|make|change|replace|remove|ensure|use)\b/i.test(part)) return false;
       if (addressLine && addressLine.toLowerCase().includes(lower)) return false;
       return true;
@@ -37347,34 +37350,38 @@ function campaignFlyerTextSvg(
 ): Buffer {
   const copy = buildCampaignFlyerCopy(context);
   const scale = width / 2550;
-  const panelY = Math.round(height * 0.655);
-  const panelH = height - panelY;
   const marginX = Math.round(width * 0.056);
   const textWidth = width - marginX * 2;
-  const stripeH = Math.max(16, Math.round(height * 0.009));
-  let titleFont = Math.max(58, Math.round(116 * scale));
+  const copyTop = Math.round(height * 0.535);
+  const liveBottom = height - Math.round(height * 0.067);
+  const accentH = Math.max(18, Math.round(height * 0.012));
+  const kickerFont = Math.max(26, Math.round(38 * scale));
+  let titleFont = Math.max(66, Math.round(124 * scale));
   let titleLines = wrapCampaignFlyerText(
     copy.title.toUpperCase(),
-    Math.floor(textWidth / (titleFont * 0.56)),
+    Math.floor(textWidth / (titleFont * 0.54)),
     3
   );
   if (titleLines.length > 2 || titleLines.some(line => line.length > 30)) {
-    titleFont = Math.max(50, Math.round(96 * scale));
+    titleFont = Math.max(58, Math.round(104 * scale));
     titleLines = wrapCampaignFlyerText(
       copy.title.toUpperCase(),
-      Math.floor(textWidth / (titleFont * 0.55)),
+      Math.floor(textWidth / (titleFont * 0.53)),
       3
     );
   }
 
   const titleLineH = Math.round(titleFont * 1.06);
-  const dateFont = Math.max(36, Math.round(62 * scale));
-  const locationFont = Math.max(30, Math.round(45 * scale));
-  const detailFont = Math.max(30, Math.round(48 * scale));
+  const dateFont = Math.max(40, Math.round(62 * scale));
+  const locationFont = Math.max(30, Math.round(42 * scale));
+  const detailFont = Math.max(30, Math.round(43 * scale));
   const footerFont = Math.max(26, Math.round(36 * scale));
   const dateLineH = Math.round(dateFont * 1.18);
   const locationLineH = Math.round(locationFont * 1.25);
   const detailLineH = Math.round(detailFont * 1.32);
+  const kickerLine =
+    normalizeCampaignFlyerCopyText(context?.dealerName).toUpperCase() ||
+    "DEALERSHIP EVENT";
   const dateLines = wrapCampaignFlyerText(
     copy.dateLine ?? "",
     Math.floor(textWidth / (dateFont * 0.53)),
@@ -37386,17 +37393,17 @@ function campaignFlyerTextSvg(
     2
   );
   const footerLine = copy.website ? truncateCampaignFlyerLine(copy.website, 72) : "";
-  const footerY = height - Math.round(panelH * 0.105);
+  const footerY = liveBottom;
   const estimatedDetailsStart =
-    panelY +
-    stripeH +
-    Math.round(panelH * 0.13) +
+    copyTop +
+    kickerFont +
+    Math.round(34 * scale) +
     titleLines.length * titleLineH +
-    Math.round(36 * scale) +
+    Math.round(30 * scale) +
     dateLines.length * dateLineH +
     (dateLines.length ? Math.round(20 * scale) : 0) +
     locationLines.length * locationLineH +
-    Math.round(30 * scale);
+    Math.round(28 * scale);
   const maxDetailLines = Math.max(
     1,
     Math.min(4, Math.floor((footerY - Math.round(footerFont * 1.6) - estimatedDetailsStart) / detailLineH))
@@ -37406,8 +37413,15 @@ function campaignFlyerTextSvg(
     Math.floor(textWidth / (detailFont * 0.49)),
     maxDetailLines
   );
-  let y = panelY + stripeH + Math.round(panelH * 0.13);
-  const tspans = (lines: string[], fontSize: number, lineHeight: number, color: string, weight = 700) => {
+  let y = copyTop + Math.round(48 * scale);
+  const tspans = (
+    lines: string[],
+    fontSize: number,
+    lineHeight: number,
+    color: string,
+    weight = 700,
+    extraAttrs = ""
+  ) => {
     const rows = lines
       .map((line, idx) => {
         const rowY = y + idx * lineHeight;
@@ -37416,27 +37430,46 @@ function campaignFlyerTextSvg(
       .join("");
     y += Math.max(0, lines.length) * lineHeight;
     return lines.length
-      ? `<text font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="${weight}" fill="${color}">${rows}</text>`
+      ? `<text font-family="Impact, Arial Black, Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="${weight}" fill="${color}" ${extraAttrs}>${rows}</text>`
       : "";
   };
 
-  const titleSvg = tspans(titleLines, titleFont, titleLineH, "#101827", 900);
-  y += Math.round(36 * scale);
-  const dateSvg = tspans(dateLines, dateFont, dateLineH, "#e85d24", 800);
-  y += dateLines.length ? Math.round(20 * scale) : 0;
-  const locationSvg = tspans(locationLines, locationFont, locationLineH, "#1f2937", 700);
+  const kickerSvg = `<text x="${marginX}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${kickerFont}" font-weight="900" letter-spacing="${Math.round(5 * scale)}" fill="#f97316" filter="url(#campaignFlyerTextShadow)">${escapeCampaignFlyerSvgText(kickerLine)}</text>`;
+  y += kickerFont + Math.round(34 * scale);
+  const titleSvg = tspans(titleLines, titleFont, titleLineH, "#ffffff", 900, 'filter="url(#campaignFlyerTextShadow)"');
   y += Math.round(30 * scale);
-  const detailSvg = tspans(detailLines, detailFont, detailLineH, "#273142", 600);
+  const dateSvg = tspans(dateLines, dateFont, dateLineH, "#ff7a2f", 900, 'filter="url(#campaignFlyerTextShadow)"');
+  y += dateLines.length ? Math.round(20 * scale) : 0;
+  const locationSvg = tspans(locationLines, locationFont, locationLineH, "#ffffff", 800, 'filter="url(#campaignFlyerTextShadow)"');
+  y += Math.round(28 * scale);
+  const detailSvg = tspans(detailLines, detailFont, detailLineH, "#f8fafc", 700, 'filter="url(#campaignFlyerTextShadow)"');
   const footerSvg = footerLine
-    ? `<text x="${marginX}" y="${footerY}" font-family="Arial, Helvetica, sans-serif" font-size="${footerFont}" font-weight="800" fill="#e85d24">${escapeCampaignFlyerSvgText(footerLine.toUpperCase())}</text>`
+    ? `<text x="${marginX}" y="${footerY}" font-family="Arial, Helvetica, sans-serif" font-size="${footerFont}" font-weight="900" letter-spacing="${Math.round(2 * scale)}" fill="#ff7a2f" filter="url(#campaignFlyerTextShadow)">${escapeCampaignFlyerSvgText(footerLine.toUpperCase())}</text>`
     : "";
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <rect x="0" y="${panelY}" width="${width}" height="${height - panelY}" fill="#fffaf4"/>
-  <rect x="0" y="${panelY}" width="${width}" height="${stripeH}" fill="#e85d24"/>
-  <rect x="0" y="${panelY + stripeH}" width="${width}" height="${Math.max(7, Math.round(stripeH * 0.45))}" fill="#14213d"/>
-  <rect x="${marginX}" y="${panelY + stripeH + Math.round(panelH * 0.06)}" width="${textWidth}" height="${Math.max(4, Math.round(4 * scale))}" fill="#e5e7eb"/>
+  <defs>
+    <linearGradient id="campaignFlyerLowerFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#05070d" stop-opacity="0"/>
+      <stop offset="0.28" stop-color="#070a12" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#070a12" stop-opacity="0.96"/>
+    </linearGradient>
+    <linearGradient id="campaignFlyerSideFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#05070d" stop-opacity="0.62"/>
+      <stop offset="0.56" stop-color="#05070d" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#05070d" stop-opacity="0.34"/>
+    </linearGradient>
+    <filter id="campaignFlyerTextShadow" x="-10%" y="-30%" width="120%" height="170%">
+      <feDropShadow dx="0" dy="${Math.max(3, Math.round(7 * scale))}" stdDeviation="${Math.max(3, Math.round(7 * scale))}" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#campaignFlyerSideFade)"/>
+  <rect x="0" y="${Math.round(height * 0.39)}" width="${width}" height="${height - Math.round(height * 0.39)}" fill="url(#campaignFlyerLowerFade)"/>
+  <path d="M0 ${copyTop - Math.round(86 * scale)} L${width} ${copyTop - Math.round(190 * scale)} L${width} ${copyTop - Math.round(145 * scale)} L0 ${copyTop - Math.round(41 * scale)} Z" fill="#e85d24" opacity="0.9"/>
+  <path d="M0 ${copyTop - Math.round(42 * scale)} L${width} ${copyTop - Math.round(146 * scale)} L${width} ${copyTop - Math.round(130 * scale)} L0 ${copyTop - Math.round(26 * scale)} Z" fill="#ffffff" opacity="0.85"/>
+  <rect x="0" y="${height - accentH}" width="${width}" height="${accentH}" fill="#e85d24"/>
+  ${kickerSvg}
   ${titleSvg}
   ${dateSvg}
   ${locationSvg}
@@ -37486,11 +37519,6 @@ async function normalizeCampaignFlyerWithControlledLayout(
 }> {
   const width = campaignFlyerWidth();
   const height = campaignFlyerHeight();
-  const panelY = Math.round(height * 0.655);
-  const heroX = Math.round(width * 0.035);
-  const heroY = Math.round(height * 0.04);
-  const heroW = width - heroX * 2;
-  const heroH = Math.max(1, panelY - heroY - Math.round(height * 0.035));
   const avg = await sampleCampaignFlyerAverageRgb(buffer);
   const heroBg = campaignFlyerReadableBackground(avg);
   const rotatedSource = sharp(buffer, { failOn: "none", animated: false }).rotate();
@@ -37507,32 +37535,25 @@ async function normalizeCampaignFlyerWithControlledLayout(
           .clone()
           .extract({ left: 0, top: 0, width: sourceW, height: Math.max(1, Math.round(sourceH * artworkCropRatio)) })
       : rotatedSource.clone();
-  const heroArt = await artworkSource
-    .resize(heroW, heroH, {
-      fit: "contain",
+  const fullBleedArt = await artworkSource
+    .resize(width, height, {
+      fit: "cover",
       position: "centre",
       background: { ...heroBg, alpha: 1 }
     })
     .jpeg({ quality: 94, mozjpeg: true, chromaSubsampling: "4:2:0" })
     .toBuffer();
-  const backgroundSvg = Buffer.from(`
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <rect x="0" y="0" width="${width}" height="${height}" fill="#fffaf4"/>
-  <rect x="0" y="0" width="${width}" height="${panelY}" fill="rgb(${heroBg.r},${heroBg.g},${heroBg.b})"/>
-  <rect x="${heroX}" y="${heroY}" width="${heroW}" height="${heroH}" rx="0" fill="rgb(${heroBg.r},${heroBg.g},${heroBg.b})"/>
-</svg>`);
   const textSvg = campaignFlyerTextSvg(width, height, context);
   const composed = await sharp({
     create: {
       width,
       height,
       channels: 3,
-      background: "#fffaf4"
+      background: { ...heroBg, alpha: 1 }
     }
   })
     .composite([
-      { input: backgroundSvg, left: 0, top: 0 },
-      { input: heroArt, left: heroX, top: heroY },
+      { input: fullBleedArt, left: 0, top: 0 },
       { input: textSvg, left: 0, top: 0 }
     ])
     .png()
