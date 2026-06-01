@@ -37178,6 +37178,10 @@ type CampaignFlyerLayoutContext = {
   website?: string;
 };
 
+type CampaignFlyerNormalizeOptions = {
+  safeInsetPercent?: number;
+};
+
 function escapeCampaignFlyerSvgText(value: string): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -37519,7 +37523,8 @@ function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number 
 
 async function normalizeCampaignFlyerWithControlledLayout(
   buffer: Buffer,
-  _context?: CampaignFlyerLayoutContext
+  _context?: CampaignFlyerLayoutContext,
+  options?: CampaignFlyerNormalizeOptions
 ): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -37541,7 +37546,7 @@ async function normalizeCampaignFlyerWithControlledLayout(
       : 0;
   const fit = aspectDrift > 0.035 ? "contain" : "cover";
   const sampledBg = fit === "contain" ? campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(buffer)) : null;
-  const composed = await sharp(buffer, { failOn: "none", animated: false })
+  let composed = await sharp(buffer, { failOn: "none", animated: false })
     .rotate()
     .resize(width, height, {
       fit,
@@ -37550,6 +37555,37 @@ async function normalizeCampaignFlyerWithControlledLayout(
     })
     .png()
     .toBuffer();
+
+  const safeInsetPercent = Math.max(
+    0,
+    Math.min(10, Number(options?.safeInsetPercent ?? campaignFlyerSafeInsetPercent() ?? 0))
+  );
+  if (safeInsetPercent > 0) {
+    const insetX = Math.round(width * (safeInsetPercent / 100));
+    const insetY = Math.round(height * (safeInsetPercent / 100));
+    const innerWidth = Math.max(1, width - insetX * 2);
+    const innerHeight = Math.max(1, height - insetY * 2);
+    const background = campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(composed));
+    const inner = await sharp(composed, { failOn: "none", animated: false })
+      .resize(innerWidth, innerHeight, {
+        fit: "contain",
+        position: "centre",
+        background: { ...background, alpha: 1 }
+      })
+      .png()
+      .toBuffer();
+    composed = await sharp({
+      create: {
+        width,
+        height,
+        channels: 4,
+        background: { ...background, alpha: 1 }
+      }
+    })
+      .composite([{ input: inner, left: insetX, top: insetY }])
+      .png()
+      .toBuffer();
+  }
 
   const maxBytes = campaignFlyerMaxBytes();
   let quality = Math.max(65, Math.min(95, Number(process.env.CAMPAIGN_FLYER_QUALITY ?? 92)));
@@ -38116,6 +38152,7 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
   targets: CampaignAssetTarget[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   flyerLayoutContext?: CampaignFlyerLayoutContext;
+  flyerSafeInsetPercent?: number;
 }): Promise<CampaignGeneratedAsset[]> {
   const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
   if (!sourceBuffer || !sourceBuffer.length) return [];
@@ -38144,7 +38181,9 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
       const sourceForTarget = target === "web_banner" ? workingSourceBuffer : trimmedBuffer;
       const normalized =
         target === "flyer_8_5x11"
-          ? await normalizeCampaignFlyerWithControlledLayout(sourceForTarget, args.flyerLayoutContext)
+          ? await normalizeCampaignFlyerWithControlledLayout(sourceForTarget, args.flyerLayoutContext, {
+              safeInsetPercent: args.flyerSafeInsetPercent
+            })
           : await normalizeCampaignImageForProfile(sourceForTarget, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
@@ -40872,7 +40911,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           sourceImageUrl: generatedImageUrl,
           targets: targetAssetTargets,
           dealerProfile,
-          flyerLayoutContext
+          flyerLayoutContext,
+          flyerSafeInsetPercent: editFromCurrent && target === "flyer_8_5x11" ? 6 : undefined
         }),
         perTargetTimeoutMs,
         `normalize target ${target}`
@@ -40941,7 +40981,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
             sourceImageUrl: emergencyAnchorUrl,
             targets: uniqueTargets,
             dealerProfile,
-            flyerLayoutContext
+            flyerLayoutContext,
+            flyerSafeInsetPercent: editFromCurrent ? 6 : undefined
           }),
           Math.max(perTargetTimeoutMs, 120_000),
           "normalize emergency anchor targets"
@@ -40976,7 +41017,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           sourceImageUrl: styleLockReferenceUrl,
           targets: missingTargets,
           dealerProfile,
-          flyerLayoutContext
+          flyerLayoutContext,
+          flyerSafeInsetPercent: editFromCurrent ? 6 : undefined
         }),
         perTargetTimeoutMs,
         "normalize missing targets from style lock source"
