@@ -36825,6 +36825,8 @@ function buildCampaignImagePrompt(args: {
       "- Use the full page as one continuous flyer design surface, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
       "- Print-safe area: keep important content at least 4% from the left/right/top edges and at least 6% above the bottom edge.",
       "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
+      "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch or crop at the top edge.",
+      "- If using a decorative background pattern, only nonessential pattern may extend to the page edge; key marks and readable content must stay fully inside the live area.",
       "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
       "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
       "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
