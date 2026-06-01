@@ -1909,7 +1909,7 @@ type CampaignEntry = {
   assetGenerationStatus?: CampaignAssetGenerationMap;
   sourceHits?: CampaignSourceHit[];
   metadata?: Record<string, unknown>;
-  generatedBy?: "nano_banana" | "llm_fallback" | "template";
+  generatedBy?: "nano_banana" | "openai_edit" | "deterministic_text_layer" | "llm_fallback" | "template";
   createdAt?: string;
   updatedAt?: string;
 };

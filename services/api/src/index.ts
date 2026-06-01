@@ -37494,6 +37494,138 @@ function campaignFlyerTextSvg(
   return Buffer.from(svg);
 }
 
+function extractCampaignFlyerHeadlineReplacement(editPrompt?: string | null): string | null {
+  const prompt = normalizeCampaignFlyerCopyText(editPrompt);
+  if (!prompt) return null;
+  const lower = prompt.toLowerCase();
+  const namesTopText = /\b(?:top|headline|header|title|masthead)\b/.test(lower);
+  const asksExactText =
+    /\b(?:read|reads|say|says|spell|spelling|correct|replace|change|rename)\b/.test(lower) &&
+    /\b(?:exactly|to|as)\b/.test(lower);
+  if (!namesTopText || !asksExactText) return null;
+
+  const patterns = [
+    /\b(?:reads?|says?)\s+exactly\s*[:\-]?\s*(?:"([^"]+)"|'([^']+)'|([^.;\n]+))/i,
+    /\b(?:to\s+read|to\s+say)\s+exactly\s*[:\-]?\s*(?:"([^"]+)"|'([^']+)'|([^.;\n]+))/i,
+    /\b(?:change|replace|correct|rename)\b.{0,96}?\b(?:to|as)\s*(?:"([^"]+)"|'([^']+)'|([^.;\n]+))/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    const raw = match?.[1] ?? match?.[2] ?? match?.[3] ?? "";
+    const cleaned = normalizeCampaignFlyerCopyText(raw)
+      .replace(/\b(?:keep|preserve|leave|do\s+not|don't)\b[\s\S]*$/i, "")
+      .replace(/^[:"'“”‘’\s-]+/g, "")
+      .replace(/[.;:,!"'“”‘’\s-]+$/g, "")
+      .trim();
+    if (cleaned.length >= 3 && cleaned.length <= 90) return cleaned;
+  }
+
+  return null;
+}
+
+function campaignFlyerHeadlineReplacementLines(headline: string): string[] {
+  const normalized = normalizeCampaignFlyerCopyText(headline);
+  if (!normalized) return [];
+  const harleyMatch = normalized.match(/^(.*?)\s+(harley[- ]davidson)$/i);
+  if (harleyMatch?.[1] && harleyMatch?.[2]) {
+    return [harleyMatch[1].trim(), harleyMatch[2].trim()].filter(Boolean);
+  }
+  const lines = wrapCampaignFlyerText(normalized, normalized.length > 24 ? 18 : 28, 2);
+  return lines.length ? lines : [normalized];
+}
+
+function campaignFlyerHeadlineReplacementSvg(width: number, height: number, headline: string): Buffer {
+  const scale = width / 2550;
+  const panelH = Math.round(height * 0.315);
+  const lines = campaignFlyerHeadlineReplacementLines(headline).map(line => line.toUpperCase());
+  const longest = Math.max(1, ...lines.map(line => line.length));
+  const baseFont = lines.length > 1 ? 198 : 230;
+  const fittedFont = Math.min(baseFont, Math.floor((width * 0.78) / Math.max(0.48, longest * 0.43)));
+  const fontSize = Math.max(Math.round(112 * scale), Math.round(fittedFont * scale));
+  const lineHeight = Math.round(fontSize * 0.92);
+  const startY = Math.round(panelH * (lines.length > 1 ? 0.39 : 0.55));
+  const centerX = Math.round(width / 2);
+  const letterSpacing = Math.max(1, Math.round(3.5 * scale));
+  const textRows = lines
+    .slice(0, 2)
+    .map((line, index) => {
+      const y = startY + index * lineHeight;
+      const text = escapeCampaignFlyerSvgText(line);
+      return `
+    <text x="${centerX}" y="${y}" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="${fontSize}" font-weight="900" letter-spacing="${letterSpacing}" fill="#17110b" stroke="#17110b" stroke-width="${Math.round(34 * scale)}" stroke-linejoin="round" paint-order="stroke fill">${text}</text>
+    <text x="${centerX}" y="${y}" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="${fontSize}" font-weight="900" letter-spacing="${letterSpacing}" fill="#f5e9bd" stroke="#f2a528" stroke-width="${Math.round(22 * scale)}" stroke-linejoin="round" paint-order="stroke fill">${text}</text>
+    <text x="${centerX}" y="${y}" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="${fontSize}" font-weight="900" letter-spacing="${letterSpacing}" fill="#f7efd0" stroke="#0c6f98" stroke-width="${Math.round(7 * scale)}" stroke-linejoin="round" paint-order="stroke fill">${text}</text>`;
+    })
+    .join("");
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <linearGradient id="campaignHeadlinePanelFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#050609" stop-opacity="1"/>
+      <stop offset="0.72" stop-color="#050609" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#050609" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="campaignHeadlineDropShadow" x="-10%" y="-40%" width="120%" height="180%">
+      <feDropShadow dx="0" dy="${Math.max(4, Math.round(9 * scale))}" stdDeviation="${Math.max(4, Math.round(7 * scale))}" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="${width}" height="${panelH}" fill="#050609"/>
+  <rect x="0" y="${Math.round(panelH * 0.72)}" width="${width}" height="${Math.round(panelH * 0.28)}" fill="url(#campaignHeadlinePanelFade)"/>
+  <path d="M${Math.round(width * 0.08)} ${Math.round(panelH * 0.19)} C${Math.round(width * 0.24)} ${Math.round(panelH * 0.04)}, ${Math.round(width * 0.76)} ${Math.round(panelH * 0.04)}, ${Math.round(width * 0.92)} ${Math.round(panelH * 0.19)}" fill="none" stroke="#f2a528" stroke-width="${Math.round(12 * scale)}" opacity="0.9"/>
+  <g filter="url(#campaignHeadlineDropShadow)">
+    ${textRows}
+  </g>
+</svg>`;
+  return Buffer.from(svg);
+}
+
+async function renderCampaignFlyerDeterministicHeadlineEdit(args: {
+  sourceImageUrl: string;
+  headline: string;
+}): Promise<string | null> {
+  const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
+  if (!sourceBuffer || !sourceBuffer.length || !(await isDecodableImageBuffer(sourceBuffer))) return null;
+  const width = campaignFlyerWidth();
+  const height = campaignFlyerHeight();
+  const meta = await sharp(sourceBuffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const sourceW = Number(meta?.width ?? 0);
+  const sourceH = Number(meta?.height ?? 0);
+  const sourceAspect = sourceW > 0 && sourceH > 0 ? sourceW / sourceH : null;
+  const targetAspect = width / Math.max(1, height);
+  const aspectDrift =
+    sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0
+      ? Math.abs(sourceAspect / targetAspect - 1)
+      : 0;
+  const sampledBg = aspectDrift > 0.035 ? campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(sourceBuffer)) : null;
+  const base = await sharp(sourceBuffer, { failOn: "none", animated: false })
+    .rotate()
+    .resize(width, height, {
+      fit: aspectDrift > 0.035 ? "contain" : "cover",
+      position: "centre",
+      background: sampledBg ? { ...sampledBg, alpha: 1 } : undefined
+    })
+    .png()
+    .toBuffer();
+  const overlay = campaignFlyerHeadlineReplacementSvg(width, height, args.headline);
+  const buffer = await sharp(base, { failOn: "none", animated: false })
+    .composite([{ input: overlay, left: 0, top: 0 }])
+    .png()
+    .toBuffer();
+  const saved = await saveCampaignGeneratedImage(
+    {
+      buffer,
+      mimeType: "image/png",
+      ext: ".png",
+      width,
+      height
+    },
+    "campaign_text_layer"
+  );
+  return saved.url;
+}
+
 async function sampleCampaignFlyerAverageRgb(buffer: Buffer): Promise<{ r: number; g: number; b: number }> {
   try {
     const avg = await sharp(buffer, { failOn: "none", animated: false })
@@ -40456,6 +40588,7 @@ app.post("/campaigns", requireManager, (req, res) => {
     generatedBy:
       req.body?.generatedBy === "nano_banana" ||
       req.body?.generatedBy === "openai_edit" ||
+      req.body?.generatedBy === "deterministic_text_layer" ||
       req.body?.generatedBy === "llm_fallback" ||
       req.body?.generatedBy === "template"
         ? req.body.generatedBy
@@ -40505,6 +40638,7 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
     req.body?.generatedBy !== undefined &&
     (req.body.generatedBy === "nano_banana" ||
       req.body.generatedBy === "openai_edit" ||
+      req.body.generatedBy === "deterministic_text_layer" ||
       req.body.generatedBy === "llm_fallback" ||
       req.body.generatedBy === "template")
   ) {
@@ -40949,14 +41083,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       styleLockAnchorTarget,
       ...uniqueTargets.filter(target => target !== styleLockAnchorTarget)
     ];
-    const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback" | "openai_edit">();
+    const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback" | "openai_edit" | "deterministic_text_layer">();
     let totalReferenceCount = 0;
     const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 240_000));
     type TargetRenderResult = {
       target: CampaignAssetTarget;
       sourceImageUrl: string;
       assets: CampaignGeneratedAsset[];
-      usedGenerator: "nano_banana_vertex" | "openai_fallback" | "openai_edit";
+      usedGenerator: "nano_banana_vertex" | "openai_fallback" | "openai_edit" | "deterministic_text_layer";
       referenceCount: number;
     };
 
@@ -41030,7 +41164,21 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
               ...inspirationContextImageUrls
             ]);
       const editSourceImageUrl = editFromCurrent ? targetReferenceImageUrls[0] : undefined;
-      const generatedImageUrlOpenAiEdit = editSourceImageUrl
+      const deterministicHeadlineReplacement =
+        editSourceImageUrl && editFromCurrent && target === "flyer_8_5x11"
+          ? extractCampaignFlyerHeadlineReplacement(editPrompt)
+          : null;
+      const generatedImageUrlDeterministicText = deterministicHeadlineReplacement && editSourceImageUrl
+        ? await runCampaignTaskWithTimeout(
+            renderCampaignFlyerDeterministicHeadlineEdit({
+              sourceImageUrl: editSourceImageUrl,
+              headline: deterministicHeadlineReplacement
+            }),
+            perTargetTimeoutMs,
+            `deterministic text edit target ${target}`
+          )
+        : null;
+      const generatedImageUrlOpenAiEdit = editSourceImageUrl && !generatedImageUrlDeterministicText
         ? await runCampaignTaskWithTimeout(
             generateCampaignImageEditWithOpenAI({
               name,
@@ -41064,13 +41212,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
             }),
             perTargetTimeoutMs,
             `nano target ${target}`
-          );
+      );
       const generatedImageUrlNano = generatedImageNano?.url ?? null;
       const hasReferenceAnchors = targetReferenceImageUrls.length > 0;
       const allowReflessOpenAiFallback =
         String(process.env.CAMPAIGN_ALLOW_REFERENCELESS_OPENAI_FALLBACK ?? "0").trim() === "1";
       const canUseOpenAiFallback = (!hasReferenceAnchors || allowReflessOpenAiFallback) && !strictReferenceLock;
       const generatedImageUrl: string | null =
+        generatedImageUrlDeterministicText ||
         generatedImageUrlOpenAiEdit ||
         generatedImageUrlNano ||
         (canUseOpenAiFallback
@@ -41117,9 +41266,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         assets: targetAssets,
         usedGenerator: generatedImageUrlOpenAiEdit
           ? "openai_edit"
-          : generatedImageUrlNano
-            ? "nano_banana_vertex"
-            : "openai_fallback",
+          : generatedImageUrlDeterministicText
+            ? "deterministic_text_layer"
+            : generatedImageUrlNano
+              ? "nano_banana_vertex"
+              : "openai_fallback",
         referenceCount: generatedImageNano?.referenceCount ?? 0
       };
     };
@@ -41245,9 +41396,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         generatorsUsed.size > 1
           ? "mixed"
           : generatorsUsed.has("nano_banana_vertex")
-            ? "nano_banana_vertex"
-            : generatorsUsed.has("openai_edit")
-              ? "openai_edit"
+          ? "nano_banana_vertex"
+          : generatorsUsed.has("openai_edit")
+            ? "openai_edit"
+            : generatorsUsed.has("deterministic_text_layer")
+              ? "deterministic_text_layer"
               : "openai_fallback";
       effectiveGenerated = {
         ...generated,
@@ -41273,7 +41426,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           ? "nano_banana"
           : generatorsUsed.has("openai_edit")
             ? "openai_edit"
-            : generated.generatedBy
+            : generatorsUsed.has("deterministic_text_layer")
+              ? "deterministic_text_layer"
+              : generated.generatedBy
       };
     }
   }
