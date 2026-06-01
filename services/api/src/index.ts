@@ -10,7 +10,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
@@ -38604,6 +38604,89 @@ async function generateCampaignImageWithOpenAI(args: {
   }
 }
 
+async function generateCampaignImageEditWithOpenAI(args: {
+  name: string;
+  channel: CampaignChannel;
+  assetTargets?: CampaignAssetTarget[];
+  prompt?: string;
+  description?: string;
+  tags: CampaignTag[];
+  dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  sourceHits?: Array<{ title?: string; snippet?: string; url?: string }>;
+  sourceImageUrl: string;
+}): Promise<string | null> {
+  if (String(process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_ENABLED ?? "1") === "0") return null;
+  const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+  const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
+  if (!sourceBuffer || !sourceBuffer.length || !(await isDecodableImageBuffer(sourceBuffer))) return null;
+
+  const model = String(
+    process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_MODEL ??
+      process.env.CAMPAIGN_OPENAI_IMAGE_MODEL ??
+      "gpt-image-1"
+  ).trim();
+  const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
+  const defaultSize = preferredTarget === "flyer_8_5x11" || preferredTarget === "instagram_story" ? "1024x1536" : "auto";
+  const rawSize = String(process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_SIZE ?? defaultSize).trim();
+  const allowedSizes = new Set(["auto", "1024x1024", "1536x1024", "1024x1536"]);
+  const size = allowedSizes.has(rawSize) ? (rawSize as any) : (defaultSize as any);
+  const imagePrompt = buildCampaignImagePrompt(args);
+
+  try {
+    const timeoutMs = Math.max(5_000, Number(process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_TIMEOUT_MS ?? 90_000));
+    const client = new OpenAI({ apiKey, timeout: timeoutMs });
+    const imageFile = await toFile(sourceBuffer, "campaign-edit-source.jpg", { type: "image/jpeg" });
+    const imgResp: any = await client.images.edit({
+      model,
+      image: imageFile,
+      prompt: imagePrompt,
+      size,
+      quality: "high",
+      input_fidelity: "high",
+      output_format: "png"
+    });
+    recordOpenAIUsage(imgResp, {
+      feature: "campaign_studio",
+      operation: "campaign_image_edit",
+      requestKind: "images.edit",
+      model,
+      metadata: { channel: args.channel, size, preferredTarget }
+    });
+    const first = Array.isArray(imgResp?.data) ? imgResp.data[0] : null;
+    let buffer: Buffer | null = null;
+    let ext = ".png";
+    if (first?.b64_json) {
+      buffer = Buffer.from(String(first.b64_json), "base64");
+    } else if (first?.url) {
+      const url = String(first.url).trim();
+      if (url) {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const ctype = String(resp.headers.get("content-type") ?? "").toLowerCase();
+          if (ctype && !ctype.includes("image")) return null;
+          const arr = await resp.arrayBuffer();
+          buffer = Buffer.from(arr);
+          if (ctype.includes("jpeg")) ext = ".jpg";
+          else if (ctype.includes("webp")) ext = ".webp";
+        }
+      }
+    }
+    if (!buffer || !buffer.length || !(await isDecodableImageBuffer(buffer))) return null;
+    const fileName = `campaign_edit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const dir = path.resolve(getDataDir(), "uploads", "campaigns");
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path.join(dir, fileName), buffer);
+    const publicBase = process.env.PUBLIC_BASE_URL ?? "";
+    return publicBase
+      ? `${publicBase.replace(/\/$/, "")}/uploads/campaigns/${fileName}`
+      : `/uploads/campaigns/${fileName}`;
+  } catch (err: any) {
+    console.warn("[campaign] openai image edit failed:", err?.message ?? err);
+    return null;
+  }
+}
+
 function campaignEmailNanoVariantTargets(): CampaignAssetTarget[] {
   const raw = String(
     process.env.CAMPAIGN_EMAIL_NANO_VARIANT_TARGETS ?? "web_banner,facebook_post,instagram_post"
@@ -40301,6 +40384,7 @@ app.post("/campaigns", requireManager, (req, res) => {
     createdByUserName: campaignCreatorDisplayName(user),
     generatedBy:
       req.body?.generatedBy === "nano_banana" ||
+      req.body?.generatedBy === "openai_edit" ||
       req.body?.generatedBy === "llm_fallback" ||
       req.body?.generatedBy === "template"
         ? req.body.generatedBy
@@ -40349,6 +40433,7 @@ app.patch("/campaigns/:id", requireManager, (req, res) => {
   if (
     req.body?.generatedBy !== undefined &&
     (req.body.generatedBy === "nano_banana" ||
+      req.body.generatedBy === "openai_edit" ||
       req.body.generatedBy === "llm_fallback" ||
       req.body.generatedBy === "template")
   ) {
@@ -40793,14 +40878,14 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       styleLockAnchorTarget,
       ...uniqueTargets.filter(target => target !== styleLockAnchorTarget)
     ];
-    const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback">();
+    const generatorsUsed = new Set<"nano_banana_vertex" | "openai_fallback" | "openai_edit">();
     let totalReferenceCount = 0;
     const perTargetTimeoutMs = Math.max(15_000, Number(process.env.CAMPAIGN_PER_TARGET_TIMEOUT_MS ?? 240_000));
     type TargetRenderResult = {
       target: CampaignAssetTarget;
       sourceImageUrl: string;
       assets: CampaignGeneratedAsset[];
-      usedGenerator: "nano_banana_vertex" | "openai_fallback";
+      usedGenerator: "nano_banana_vertex" | "openai_fallback" | "openai_edit";
       referenceCount: number;
     };
 
@@ -40873,28 +40958,49 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
               ...(styleLockRefUrl ? [styleLockRefUrl] : []),
               ...inspirationContextImageUrls
             ]);
-      const generatedImageNano = await runCampaignTaskWithTimeout(
-        generateCampaignImageWithNanoBanana({
-          name,
-          channel,
-          assetTargets: targetAssetTargets,
-          prompt: targetPrompt,
-          description: targetDescription,
-          tags,
-          dealerProfile,
-          sourceHits: generated.sourceHits,
-          referenceImageUrls: targetReferenceImageUrls,
-          designImageUrls
-        }),
-        perTargetTimeoutMs,
-        `nano target ${target}`
-      );
+      const editSourceImageUrl = editFromCurrent ? targetReferenceImageUrls[0] : undefined;
+      const generatedImageUrlOpenAiEdit = editSourceImageUrl
+        ? await runCampaignTaskWithTimeout(
+            generateCampaignImageEditWithOpenAI({
+              name,
+              channel,
+              assetTargets: targetAssetTargets,
+              prompt: targetPrompt,
+              description: targetDescription,
+              tags,
+              dealerProfile,
+              sourceHits: generated.sourceHits,
+              sourceImageUrl: editSourceImageUrl
+            }),
+            perTargetTimeoutMs,
+            `openai edit target ${target}`
+          )
+        : null;
+      const generatedImageNano = generatedImageUrlOpenAiEdit
+        ? null
+        : await runCampaignTaskWithTimeout(
+            generateCampaignImageWithNanoBanana({
+              name,
+              channel,
+              assetTargets: targetAssetTargets,
+              prompt: targetPrompt,
+              description: targetDescription,
+              tags,
+              dealerProfile,
+              sourceHits: generated.sourceHits,
+              referenceImageUrls: targetReferenceImageUrls,
+              designImageUrls
+            }),
+            perTargetTimeoutMs,
+            `nano target ${target}`
+          );
       const generatedImageUrlNano = generatedImageNano?.url ?? null;
       const hasReferenceAnchors = targetReferenceImageUrls.length > 0;
       const allowReflessOpenAiFallback =
         String(process.env.CAMPAIGN_ALLOW_REFERENCELESS_OPENAI_FALLBACK ?? "0").trim() === "1";
       const canUseOpenAiFallback = (!hasReferenceAnchors || allowReflessOpenAiFallback) && !strictReferenceLock;
       const generatedImageUrl: string | null =
+        generatedImageUrlOpenAiEdit ||
         generatedImageUrlNano ||
         (canUseOpenAiFallback
           ? await runCampaignTaskWithTimeout(
@@ -40938,7 +41044,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         target,
         sourceImageUrl: generatedImageUrl,
         assets: targetAssets,
-        usedGenerator: generatedImageUrlNano ? "nano_banana_vertex" : "openai_fallback",
+        usedGenerator: generatedImageUrlOpenAiEdit
+          ? "openai_edit"
+          : generatedImageUrlNano
+            ? "nano_banana_vertex"
+            : "openai_fallback",
         referenceCount: generatedImageNano?.referenceCount ?? 0
       };
     };
@@ -41065,7 +41175,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           ? "mixed"
           : generatorsUsed.has("nano_banana_vertex")
             ? "nano_banana_vertex"
-            : "openai_fallback";
+            : generatorsUsed.has("openai_edit")
+              ? "openai_edit"
+              : "openai_fallback";
       effectiveGenerated = {
         ...generated,
         finalImageUrl: generatedFinalImageUrl,
@@ -41086,7 +41198,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           ),
           missingAssetTargets: missingTargets
         },
-        generatedBy: generatorsUsed.has("nano_banana_vertex") ? "nano_banana" : generated.generatedBy
+        generatedBy: generatorsUsed.has("nano_banana_vertex")
+          ? "nano_banana"
+          : generatorsUsed.has("openai_edit")
+            ? "openai_edit"
+            : generated.generatedBy
       };
     }
   }

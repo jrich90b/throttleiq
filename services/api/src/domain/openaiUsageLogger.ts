@@ -15,7 +15,12 @@ type OpenAIUsageContext = {
   feature: string;
   operation: string;
   model?: string | null;
-  requestKind?: "responses.create" | "responses.parse" | "audio.transcriptions.create" | "images.generate";
+  requestKind?:
+    | "responses.create"
+    | "responses.parse"
+    | "audio.transcriptions.create"
+    | "images.generate"
+    | "images.edit";
   dealerId?: string | null;
   conversationId?: string | null;
   leadRef?: string | null;
@@ -125,4 +130,3 @@ export function recordOpenAIUsage(response: any, context: OpenAIUsageContext): v
     // Usage logging is accounting support only; never block customer workflows.
   }
 }
-

@@ -74,7 +74,7 @@ export type CampaignEntry = {
   metadata?: Record<string, unknown>;
   createdByUserId?: string;
   createdByUserName?: string;
-  generatedBy?: "nano_banana" | "llm_fallback" | "template";
+  generatedBy?: "nano_banana" | "openai_edit" | "llm_fallback" | "template";
   createdAt: string;
   updatedAt: string;
 };
