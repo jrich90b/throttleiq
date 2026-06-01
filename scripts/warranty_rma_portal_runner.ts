@@ -69,6 +69,9 @@ type RunnerOptions = {
 };
 
 const hDNetHomeUrl = "https://h-dnet.com";
+const hdnetWarrantyClaimHomePattern = /\/service\/warranty\/claim\/~scripts\/claim_home\.asp/i;
+const hdnetShortClaimPattern = /\/service\/warranty\/claim\/~scripts\/Claim_NewExpressWty\.asp/i;
+const hdnetLongClaimPattern = /\/service\/warranty\/claim\/~scripts\/Claim_AddLongClaim\.asp/i;
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 loadEnvFile(path.join(rootDir, ".env"));
@@ -562,11 +565,81 @@ async function locatePortalPage(options: RunnerOptions) {
     pages.find(openPage => openPage.url() === "about:blank" || openPage.url().startsWith("chrome://newtab")) ??
     (await (browser.contexts()[0] ?? (await browser.newContext())).newPage());
   await page.bringToFront();
-  if (!/h-?dnet\.com|inet\.apps\.h-dnet\.com|login\.microsoftonline\.com/i.test(page.url())) {
+  const currentUrl = page.url();
+  const portalUrl = options.portalUrl || hDNetHomeUrl;
+  const shouldUseConfiguredPortal =
+    portalUrl &&
+    portalUrl !== hDNetHomeUrl &&
+    !/login\.microsoftonline\.com/i.test(currentUrl) &&
+    !hdnetShortClaimPattern.test(currentUrl) &&
+    !hdnetLongClaimPattern.test(currentUrl) &&
+    currentUrl !== portalUrl;
+  if (shouldUseConfiguredPortal || !/h-?dnet\.com|inet\.apps\.h-dnet\.com|login\.microsoftonline\.com/i.test(currentUrl)) {
     await page.goto(options.portalUrl || hDNetHomeUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.waitForTimeout(4000);
   }
   return { browser, page };
+}
+
+function claimFormLinkLabel(packet: HdnetDraftPacket): RegExp {
+  return packet.formKind === "long" ? /Add\s+Long\s+Claim/i : /Add\s+Short\s+Claim/i;
+}
+
+async function findClaimFormHref(page: any, packet: HdnetDraftPacket): Promise<string> {
+  return page.evaluate((kind: "short" | "long") => {
+    const wantedText = kind === "long" ? /Add\s+Long\s+Claim/i : /Add\s+Short\s+Claim/i;
+    const wantedHref = kind === "long" ? /Claim_AddLongClaim\.asp/i : /Claim_NewExpressWty\.asp/i;
+    for (const link of Array.from(document.links)) {
+      const text = String(link.textContent || "").trim();
+      const href = String((link as HTMLAnchorElement).href || "");
+      if (wantedText.test(text) || wantedHref.test(href)) return href;
+    }
+    return "";
+  }, packet.formKind).catch(() => "");
+}
+
+async function openClaimFormFromHome(page: any, packet: HdnetDraftPacket): Promise<boolean> {
+  const href = await findClaimFormHref(page, packet);
+  if (href) {
+    await page.goto(href, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2500);
+    return true;
+  }
+  const link = page.getByRole?.("link", { name: claimFormLinkLabel(packet) });
+  if (!link) return false;
+  try {
+    await link.first().click({ timeout: 10_000 });
+    await page.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureWarrantyClaimForm(page: any, packet: HdnetDraftPacket, options: RunnerOptions): Promise<void> {
+  if (options.portalUrl && options.portalUrl !== hDNetHomeUrl) {
+    await page.goto(options.portalUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2500);
+    let text = await pageBodyText(page);
+    if (
+      hdnetWarrantyClaimHomePattern.test(page.url()) ||
+      (/WARRANTY CLAIM HOME/i.test(text) && /Add\s+(Short|Long)\s+Claim/i.test(text))
+    ) {
+      await openClaimFormFromHome(page, packet);
+    }
+    return;
+  }
+
+  let presentFieldCount = await countVisiblePacketFields(page, packet);
+  if (presentFieldCount > 0) return;
+
+  const text = await pageBodyText(page);
+  const currentUrl = page.url();
+  const onClaimHome = hdnetWarrantyClaimHomePattern.test(currentUrl) || /WARRANTY CLAIM HOME/i.test(text);
+  if (onClaimHome && /Add\s+(Short|Long)\s+Claim/i.test(text)) {
+    await openClaimFormFromHome(page, packet);
+  }
 }
 
 async function setFormValueByName(page: any, name: string, value: string): Promise<"filled" | "missing" | "disabled"> {
@@ -636,6 +709,7 @@ async function runPlaywrightPortalDraft(
     };
   }
 
+  await ensureWarrantyClaimForm(page, packet, options);
   const presentFieldCount = await countVisiblePacketFields(page, packet);
   if (presentFieldCount === 0 || options.guided) {
     const url = page.url();
@@ -644,7 +718,7 @@ async function runPlaywrightPortalDraft(
       code: 2,
       summary:
         `H-Dnet is open, but the runner is not on a recognizable ${packet.formTitle} form. ` +
-        "Open Warranty-Link, choose Add New Short/Long Warranty Claim as appropriate, then rerun this task.",
+        "Open Warranty-Link, choose Add Short Claim or Add Long Claim as appropriate, then rerun this task.",
       links: [url]
     };
   }
