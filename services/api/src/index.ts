@@ -36819,6 +36819,7 @@ function buildCampaignImagePrompt(args: {
     const flyerW = campaignFlyerWidth();
     const flyerH = campaignFlyerHeight();
     const ratio = (flyerW / Math.max(1, flyerH)).toFixed(3);
+    const hasReferenceImages = normalizeCampaignUrlArray(args.referenceImageUrls ?? []).length > 0;
     outputGuardrails.push(
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
@@ -36833,6 +36834,17 @@ function buildCampaignImagePrompt(args: {
       "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
       "- If space is tight, simplify copy and reduce type size before moving text or key artwork toward the page edge."
     );
+    if (hasReferenceImages) {
+      outputGuardrails.push(
+        "",
+        "Reference style lock (critical):",
+        "- Treat the primary uploaded reference image as the art direction source, not loose inspiration.",
+        "- Match the reference image's layout language, typography style, headline scale, color treatment, texture/grain, lighting, logo placement, spacing rhythm, and overall magazine-ad feel.",
+        "- Replace the campaign content/details while preserving the reference's visual system and hierarchy.",
+        "- Do not switch to a different illustration style, different type era, generic patriotic template, or unrelated bike-ad layout.",
+        "- Use additional uploaded design assets as supporting elements only; they must not override the primary reference style."
+      );
+    }
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
     const bannerH = campaignWebBannerHeight(args.dealerProfile);
@@ -38205,7 +38217,10 @@ function inferMimeTypeFromPathOrUrl(raw: string): string | null {
   return null;
 }
 
-async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefined): Promise<any[]> {
+async function buildNanoBananaReferenceParts(
+  rawUrls: string[] | null | undefined,
+  opts?: { primaryStyleAnchor?: boolean }
+): Promise<any[]> {
   const urls = normalizeCampaignUrlArray(rawUrls ?? []);
   if (!urls.length) return [];
 
@@ -38228,9 +38243,28 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
 
   const out: any[] = [];
   const seen = new Set<string>();
+  let acceptedIndex = 0;
+
+  const pushReference = (mimeType: string, data: Buffer) => {
+    acceptedIndex += 1;
+    if (opts?.primaryStyleAnchor) {
+      out.push({
+        text:
+          acceptedIndex === 1
+            ? "Reference image 1: PRIMARY STYLE ANCHOR. Match this image's layout language, typography treatment, texture, color palette, spacing, and magazine-ad hierarchy. Replace content only."
+            : `Reference image ${acceptedIndex}: supporting visual/asset reference. Use only if it does not conflict with the primary style anchor.`
+      });
+    }
+    out.push({
+      inlineData: {
+        mimeType,
+        data: data.toString("base64")
+      }
+    });
+  };
 
   for (const raw of urls) {
-    if (out.length >= maxRefs) break;
+    if (acceptedIndex >= maxRefs) break;
     const trimmed = String(raw ?? "").trim();
     if (!trimmed || seen.has(trimmed)) continue;
     seen.add(trimmed);
@@ -38246,12 +38280,7 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
         if (!allowedMime.has(inferred)) continue;
         const buffer = await fs.promises.readFile(localPath);
         if (!buffer.length || buffer.length > maxBytesPerImage) continue;
-        out.push({
-          inlineData: {
-            mimeType: inferred,
-            data: buffer.toString("base64")
-          }
-        });
+        pushReference(inferred, buffer);
       } catch {
         // ignore local ref failures
       }
@@ -38280,12 +38309,7 @@ async function buildNanoBananaReferenceParts(rawUrls: string[] | null | undefine
       if (!allowedMime.has(ctype)) continue;
       const arr = await resp.arrayBuffer();
       if (!arr.byteLength || arr.byteLength > maxBytesPerImage) continue;
-      out.push({
-        inlineData: {
-          mimeType: ctype,
-          data: Buffer.from(arr).toString("base64")
-        }
-      });
+      pushReference(ctype, Buffer.from(arr));
     } catch {
       // ignore remote ref failures
     } finally {
@@ -38340,7 +38364,10 @@ async function generateCampaignImageWithNanoBanana(args: {
     );
     const maxAttempts = Math.max(1, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_ATTEMPTS ?? 3));
     const baseBackoffMs = Math.max(250, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_BACKOFF_MS ?? 2500));
-    const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls);
+    const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
+    const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls, {
+      primaryStyleAnchor: preferredTarget === "flyer_8_5x11"
+    });
     const parts = [{ text: imagePrompt }, ...referenceParts];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
@@ -40738,7 +40765,9 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           ].join("\n")
         : undefined;
       const strictReferenceDirective = strictReferenceLock
-        ? `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
+        ? target === "flyer_8_5x11"
+          ? `Reference-lock requirement (critical): use the primary uploaded reference image as the magazine-ad style source of truth. Preserve its layout language, typography family/weight feel, headline scale, copy hierarchy, color palette, texture/grain, image treatment, logo placement, spacing rhythm, and overall art direction. Adapt only the campaign content/details for ${targetLabel}; do not drift to a generic patriotic flyer or unrelated motorcycle-ad style.`
+          : `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
         : undefined;
       const styleLockDirective = styleLockRefUrl
         ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the anchor image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
@@ -40751,11 +40780,18 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         [description, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
-      const targetReferenceImageUrls = normalizeCampaignUrlArray([
-        ...designImageUrls,
-        ...(styleLockRefUrl ? [styleLockRefUrl] : []),
-        ...inspirationContextImageUrls
-      ]);
+      const targetReferenceImageUrls =
+        target === "flyer_8_5x11"
+          ? normalizeCampaignUrlArray([
+              ...inspirationContextImageUrls,
+              ...(styleLockRefUrl ? [styleLockRefUrl] : []),
+              ...designImageUrls
+            ])
+          : normalizeCampaignUrlArray([
+              ...designImageUrls,
+              ...(styleLockRefUrl ? [styleLockRefUrl] : []),
+              ...inspirationContextImageUrls
+            ]);
       const generatedImageNano = await runCampaignTaskWithTimeout(
         generateCampaignImageWithNanoBanana({
           name,
