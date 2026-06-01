@@ -26,6 +26,8 @@ assert.match(logPrompt, /Lead ref: 11338/i);
 assert.match(logPrompt, /Do not send SMS, email, chat, or any customer-facing message/i);
 assert.match(logPrompt, /Customer called asking about the 2022 Street Glide/i);
 assert.match(logPrompt, /Save\/submit the contact log/i);
+assert.match(logPrompt, /RESULT_STATUS: saved/i);
+assert.match(logPrompt, /RESULT_STATUS: blocked/i);
 
 const deliveredPrompt = buildTlpBrowserUsePrompt(
   {
@@ -45,6 +47,7 @@ assert.match(deliveredPrompt, /Task: mark dealership visit outcome as delivered\
 assert.match(deliveredPrompt, /Street Glide 3 Limited/i);
 assert.match(deliveredPrompt, /stockId: T58-25/i);
 assert.match(deliveredPrompt, /Save\/submit the internal CRM update/i);
+assert.match(deliveredPrompt, /RESULT_STATUS: saved/i);
 
 assert.ok(resolveTlpBrowserUseScriptPath()?.endsWith("scripts/tlp_crm_browser_use.py"));
 

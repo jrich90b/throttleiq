@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -40,6 +41,39 @@ def env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def classify_result(summary: str) -> tuple[bool, bool]:
+    status_matches = re.findall(r"RESULT_STATUS:\s*(saved|blocked|error)\b", summary, flags=re.IGNORECASE)
+    if status_matches:
+        status = status_matches[-1].lower()
+        return status == "saved", status in {"blocked", "error"}
+
+    blocked_patterns = [
+        r"\bmanual login\b",
+        r"\blogin (is )?required\b",
+        r"\bmfa\b",
+        r"\bpassword\b",
+        r"\bmissing autofill\b",
+        r"\bno evidence of browser autofill\b",
+        r"\bambiguous\b",
+        r"\bnot saved\b",
+        r"\bunable to\b",
+        r"\bcould not\b",
+        r"\bfailed\b",
+    ]
+    if any(re.search(pattern, summary, flags=re.IGNORECASE) for pattern in blocked_patterns):
+        return False, True
+
+    saved_patterns = [
+        r"\bcrm update (was )?saved\b",
+        r"\bcontact log (was )?saved\b",
+        r"\binternal crm update (was )?saved\b",
+        r"\bsaved/submitted\b",
+        r"\bsubmitted successfully\b",
+    ]
+    saved = any(re.search(pattern, summary, flags=re.IGNORECASE) for pattern in saved_patterns)
+    return saved, not saved
 
 
 async def run() -> int:
@@ -82,7 +116,12 @@ async def run() -> int:
                 "Do not read, type, copy, reveal, or transmit credentials."
             ),
             prompt,
-            "Final rule: only save the exact internal CRM update described above. Do not message the customer.",
+            (
+                "Final rule: only save the exact internal CRM update described above. Do not message the customer. "
+                "End your final answer with exactly one status line: RESULT_STATUS: saved, RESULT_STATUS: blocked, "
+                "or RESULT_STATUS: error. Use saved only after visible CRM save/submit confirmation. Use blocked for "
+                "login, MFA, missing autofill, ambiguity, or no save confirmation."
+            ),
         ]
     )
 
@@ -98,19 +137,20 @@ async def run() -> int:
     history = await agent.run(max_steps=max(5, args.max_steps))
 
     summary = str(history)
+    ok, blocked = classify_result(summary)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(
         json.dumps(
             {
-                "ok": True,
-                "blocked": False,
+                "ok": ok,
+                "blocked": blocked,
                 "summary": summary[-6000:],
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-    return 0
+    return 0 if ok else 2
 
 
 if __name__ == "__main__":
