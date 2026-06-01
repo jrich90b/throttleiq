@@ -36797,13 +36797,14 @@ function buildCampaignImagePrompt(args: {
     !tagSet.has("sales");
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
   const selectedTargetCount = Array.isArray(args.assetTargets) ? args.assetTargets.length : 0;
-  const strictPromptDetailLock = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
+  const controlledFlyerLayout = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
+  const strictPromptDetailLock = !controlledFlyerLayout && selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
   const requiredPromptDetails = extractPromptRequiredDetails({
     prompt: args.prompt,
     description: args.description,
     strict: strictPromptDetailLock
   });
-  const promptDetailGuardrails = requiredPromptDetails.length
+  const promptDetailGuardrails = !controlledFlyerLayout && requiredPromptDetails.length
     ? [
         "Prompt fidelity requirements (critical):",
         strictPromptDetailLock
@@ -36822,17 +36823,17 @@ function buildCampaignImagePrompt(args: {
     outputGuardrails.push(
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
-      "- Use the full page as one continuous flyer design surface, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
-      "- Print-safe area: keep important content at least 4% from the left/right edges, at least 8% below the top edge, and at least 8% above the bottom edge.",
-      "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
+      "- Generate the campaign artwork/background only. LeadRider will typeset final event details in a controlled print-safe panel after generation.",
+      "- Do not render small footer/event-detail text, address blocks, dates, disclaimers, or dense body copy in the artwork.",
+      "- A short large theme mark/headline is acceptable only if it helps the visual concept and stays fully inside the frame.",
+      "- Keep all dealer logos, eagle marks, bikes/riders, and key artwork at least 8% below the top edge and 6% above the bottom edge.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
-      "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
+      "- Bottom-edge safety: keep key artwork fully visible with clear breathing room below it.",
       "- If using a decorative background pattern, only nonessential pattern may extend to the page edge; key marks, brand marks, eagles, bikes/riders, and readable content must stay fully inside the live area.",
       "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
       "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
       "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
-      "- The flyer artwork itself must be one edge-to-edge design; use internal design spacing for print safety instead of shrinking the poster onto another background.",
-      "- If space is tight, reduce copy and font size before moving text toward the page edge."
+      "- The final page text will be added separately, so prioritize clean artwork, brand feel, and composition over trying to include every written campaign detail."
     );
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
@@ -37147,6 +37148,365 @@ function campaignFlyerHeight(): number {
 
 function campaignFlyerSafeInsetPercent(): number {
   return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 0)));
+}
+
+function campaignFlyerMaxBytes(): number {
+  return Math.max(
+    1_000_000,
+    Math.min(20_000_000, Number(process.env.CAMPAIGN_FLYER_MAX_BYTES ?? 6_000_000))
+  );
+}
+
+type CampaignFlyerLayoutContext = {
+  name?: string;
+  prompt?: string;
+  description?: string;
+  dealerName?: string;
+  website?: string;
+};
+
+function escapeCampaignFlyerSvgText(value: string): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function normalizeCampaignFlyerCopyText(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripCampaignFlyerDesignInstructions(value: string): string {
+  let text = normalizeCampaignFlyerCopyText(value);
+  text = text.replace(
+    /\b(?:in the design|for the design|design note|visual direction|layout instruction|make sure|ensure|change the|replace the|remove the|use the uploaded|use uploaded|with the uploaded)\b[\s\S]*$/i,
+    ""
+  );
+  return normalizeCampaignFlyerCopyText(text);
+}
+
+function campaignFlyerRemoveLiteral(source: string, literal: string | null | undefined): string {
+  const value = String(literal ?? "").trim();
+  if (!value) return source;
+  return source.split(value).join(" ");
+}
+
+function truncateCampaignFlyerLine(value: string, maxChars: number): string {
+  const text = normalizeCampaignFlyerCopyText(value);
+  if (text.length <= maxChars) return text;
+  const slice = text.slice(0, Math.max(0, maxChars - 3)).trimEnd();
+  return `${slice.replace(/[,.:\-\s]+$/g, "")}...`;
+}
+
+function wrapCampaignFlyerText(raw: string, maxChars: number, maxLines: number): string[] {
+  const text = normalizeCampaignFlyerCopyText(raw);
+  if (!text) return [];
+  const safeMax = Math.max(8, Math.floor(maxChars || 0));
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length <= safeMax || !current) {
+      current = next;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+    if (lines.length >= maxLines) break;
+  }
+  if (lines.length < maxLines && current) lines.push(current);
+  if (lines.length > maxLines) lines.length = maxLines;
+  if (lines.length === maxLines) {
+    const consumed = lines.slice(0, maxLines - 1).join(" ");
+    const remaining = text.slice(consumed.length).trim();
+    if (remaining && remaining.length > lines[maxLines - 1].length) {
+      lines[maxLines - 1] = truncateCampaignFlyerLine(remaining, safeMax);
+    } else {
+      lines[maxLines - 1] = truncateCampaignFlyerLine(lines[maxLines - 1], safeMax);
+    }
+  }
+  return lines.filter(Boolean);
+}
+
+function buildCampaignFlyerCopy(context?: CampaignFlyerLayoutContext): {
+  title: string;
+  dateLine?: string;
+  locationLine?: string;
+  details: string[];
+  website?: string;
+} {
+  const name = normalizeCampaignFlyerCopyText(context?.name);
+  const dealerName = normalizeCampaignFlyerCopyText(context?.dealerName);
+  const website = normalizeCampaignFlyerCopyText(context?.website).replace(/^https?:\/\//i, "");
+  const sourceText = stripCampaignFlyerDesignInstructions(
+    [context?.prompt, context?.description].map(value => String(value ?? "").trim()).filter(Boolean).join(". ")
+  );
+
+  const dateMatch = sourceText.match(
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+[a-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:\s+(?:from|at)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*[-\u2013\u2014]\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)?/i
+  );
+  const dateLine = normalizeCampaignFlyerCopyText(dateMatch?.[0]);
+  const addressMatch = sourceText.match(
+    /\b\d{2,6}\s+[a-z0-9.' -]+(?:ave|avenue|street|st|road|rd|blvd|boulevard|drive|dr|lane|ln|pkwy|parkway|hwy|highway|route|rt)\.?,?\s+[a-z.' -]+,?\s+[a-z]{2}\s+\d{5}(?:-\d{4})?/i
+  );
+  const addressLine = normalizeCampaignFlyerCopyText(addressMatch?.[0]);
+  const title =
+    name ||
+    truncateCampaignFlyerLine(
+      sourceText.split(/[.!?]/).map(part => normalizeCampaignFlyerCopyText(part)).find(Boolean) ||
+        "Dealership Event",
+      82
+    );
+  const locationLine = addressLine
+    ? dealerName && !addressLine.toLowerCase().includes(dealerName.toLowerCase())
+      ? `${dealerName} | ${addressLine}`
+      : addressLine
+    : dealerName || undefined;
+
+  let detailsSource = sourceText;
+  detailsSource = campaignFlyerRemoveLiteral(detailsSource, dateLine);
+  detailsSource = campaignFlyerRemoveLiteral(detailsSource, addressLine);
+  if (dealerName) {
+    detailsSource = detailsSource.replace(new RegExp(`\\bat\\s+${dealerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"), " ");
+  }
+  detailsSource = normalizeCampaignFlyerCopyText(detailsSource);
+  const detailCandidates = detailsSource
+    .split(/(?:[.!?;]\s+|\s+\|\s+)/)
+    .map(part => normalizeCampaignFlyerCopyText(part))
+    .filter(part => {
+      if (part.length < 8) return false;
+      const lower = part.toLowerCase();
+      if (title && lower === title.toLowerCase()) return false;
+      if (/^(create|generate|make|change|replace|remove|ensure|use)\b/i.test(part)) return false;
+      if (addressLine && addressLine.toLowerCase().includes(lower)) return false;
+      return true;
+    });
+  const details = Array.from(new Set(detailCandidates)).slice(0, 4);
+  if (!details.length && sourceText && sourceText.toLowerCase() !== title.toLowerCase()) {
+    details.push(truncateCampaignFlyerLine(sourceText, 160));
+  }
+
+  return {
+    title,
+    dateLine: dateLine || undefined,
+    locationLine,
+    details,
+    website: website || undefined
+  };
+}
+
+function campaignFlyerTextSvg(
+  width: number,
+  height: number,
+  context?: CampaignFlyerLayoutContext
+): Buffer {
+  const copy = buildCampaignFlyerCopy(context);
+  const scale = width / 2550;
+  const panelY = Math.round(height * 0.655);
+  const panelH = height - panelY;
+  const marginX = Math.round(width * 0.056);
+  const textWidth = width - marginX * 2;
+  const stripeH = Math.max(16, Math.round(height * 0.009));
+  let titleFont = Math.max(58, Math.round(116 * scale));
+  let titleLines = wrapCampaignFlyerText(
+    copy.title.toUpperCase(),
+    Math.floor(textWidth / (titleFont * 0.56)),
+    3
+  );
+  if (titleLines.length > 2 || titleLines.some(line => line.length > 30)) {
+    titleFont = Math.max(50, Math.round(96 * scale));
+    titleLines = wrapCampaignFlyerText(
+      copy.title.toUpperCase(),
+      Math.floor(textWidth / (titleFont * 0.55)),
+      3
+    );
+  }
+
+  const titleLineH = Math.round(titleFont * 1.06);
+  const dateFont = Math.max(36, Math.round(62 * scale));
+  const locationFont = Math.max(30, Math.round(45 * scale));
+  const detailFont = Math.max(30, Math.round(48 * scale));
+  const footerFont = Math.max(26, Math.round(36 * scale));
+  const dateLineH = Math.round(dateFont * 1.18);
+  const locationLineH = Math.round(locationFont * 1.25);
+  const detailLineH = Math.round(detailFont * 1.32);
+  const dateLines = wrapCampaignFlyerText(
+    copy.dateLine ?? "",
+    Math.floor(textWidth / (dateFont * 0.53)),
+    2
+  );
+  const locationLines = wrapCampaignFlyerText(
+    copy.locationLine ?? "",
+    Math.floor(textWidth / (locationFont * 0.52)),
+    2
+  );
+  const footerLine = copy.website ? truncateCampaignFlyerLine(copy.website, 72) : "";
+  const footerY = height - Math.round(panelH * 0.105);
+  const estimatedDetailsStart =
+    panelY +
+    stripeH +
+    Math.round(panelH * 0.13) +
+    titleLines.length * titleLineH +
+    Math.round(36 * scale) +
+    dateLines.length * dateLineH +
+    (dateLines.length ? Math.round(20 * scale) : 0) +
+    locationLines.length * locationLineH +
+    Math.round(30 * scale);
+  const maxDetailLines = Math.max(
+    1,
+    Math.min(4, Math.floor((footerY - Math.round(footerFont * 1.6) - estimatedDetailsStart) / detailLineH))
+  );
+  const detailLines = wrapCampaignFlyerText(
+    copy.details.join(" | "),
+    Math.floor(textWidth / (detailFont * 0.49)),
+    maxDetailLines
+  );
+  let y = panelY + stripeH + Math.round(panelH * 0.13);
+  const tspans = (lines: string[], fontSize: number, lineHeight: number, color: string, weight = 700) => {
+    const rows = lines
+      .map((line, idx) => {
+        const rowY = y + idx * lineHeight;
+        return `<tspan x="${marginX}" y="${rowY}">${escapeCampaignFlyerSvgText(line)}</tspan>`;
+      })
+      .join("");
+    y += Math.max(0, lines.length) * lineHeight;
+    return lines.length
+      ? `<text font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="${weight}" fill="${color}">${rows}</text>`
+      : "";
+  };
+
+  const titleSvg = tspans(titleLines, titleFont, titleLineH, "#101827", 900);
+  y += Math.round(36 * scale);
+  const dateSvg = tspans(dateLines, dateFont, dateLineH, "#e85d24", 800);
+  y += dateLines.length ? Math.round(20 * scale) : 0;
+  const locationSvg = tspans(locationLines, locationFont, locationLineH, "#1f2937", 700);
+  y += Math.round(30 * scale);
+  const detailSvg = tspans(detailLines, detailFont, detailLineH, "#273142", 600);
+  const footerSvg = footerLine
+    ? `<text x="${marginX}" y="${footerY}" font-family="Arial, Helvetica, sans-serif" font-size="${footerFont}" font-weight="800" fill="#e85d24">${escapeCampaignFlyerSvgText(footerLine.toUpperCase())}</text>`
+    : "";
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect x="0" y="${panelY}" width="${width}" height="${height - panelY}" fill="#fffaf4"/>
+  <rect x="0" y="${panelY}" width="${width}" height="${stripeH}" fill="#e85d24"/>
+  <rect x="0" y="${panelY + stripeH}" width="${width}" height="${Math.max(7, Math.round(stripeH * 0.45))}" fill="#14213d"/>
+  <rect x="${marginX}" y="${panelY + stripeH + Math.round(panelH * 0.06)}" width="${textWidth}" height="${Math.max(4, Math.round(4 * scale))}" fill="#e5e7eb"/>
+  ${titleSvg}
+  ${dateSvg}
+  ${locationSvg}
+  ${detailSvg}
+  ${footerSvg}
+</svg>`;
+  return Buffer.from(svg);
+}
+
+async function sampleCampaignFlyerAverageRgb(buffer: Buffer): Promise<{ r: number; g: number; b: number }> {
+  try {
+    const avg = await sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(1, 1, { fit: "fill" })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    if (avg.length >= 3) {
+      return { r: Number(avg[0] ?? 24), g: Number(avg[1] ?? 24), b: Number(avg[2] ?? 24) };
+    }
+  } catch {
+    // fall through to default
+  }
+  return { r: 16, g: 24, b: 39 };
+}
+
+function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number }): { r: number; g: number; b: number } {
+  const lum = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+  if (lum > 185) return { r: 16, g: 24, b: 39 };
+  return {
+    r: Math.max(8, Math.min(90, Math.round(rgb.r * 0.75))),
+    g: Math.max(12, Math.min(90, Math.round(rgb.g * 0.75))),
+    b: Math.max(18, Math.min(105, Math.round(rgb.b * 0.75)))
+  };
+}
+
+async function normalizeCampaignFlyerWithControlledLayout(
+  buffer: Buffer,
+  context?: CampaignFlyerLayoutContext
+): Promise<{
+  buffer: Buffer;
+  mimeType: "image/jpeg";
+  ext: ".jpg";
+  width: number;
+  height: number;
+  quality: number;
+}> {
+  const width = campaignFlyerWidth();
+  const height = campaignFlyerHeight();
+  const panelY = Math.round(height * 0.655);
+  const heroX = Math.round(width * 0.035);
+  const heroY = Math.round(height * 0.04);
+  const heroW = width - heroX * 2;
+  const heroH = Math.max(1, panelY - heroY - Math.round(height * 0.035));
+  const avg = await sampleCampaignFlyerAverageRgb(buffer);
+  const heroBg = campaignFlyerReadableBackground(avg);
+  const heroArt = await sharp(buffer, { failOn: "none", animated: false })
+    .rotate()
+    .resize(heroW, heroH, {
+      fit: "contain",
+      position: "centre",
+      background: { ...heroBg, alpha: 1 }
+    })
+    .jpeg({ quality: 94, mozjpeg: true, chromaSubsampling: "4:2:0" })
+    .toBuffer();
+  const backgroundSvg = Buffer.from(`
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="#fffaf4"/>
+  <rect x="0" y="0" width="${width}" height="${panelY}" fill="rgb(${heroBg.r},${heroBg.g},${heroBg.b})"/>
+  <rect x="${heroX}" y="${heroY}" width="${heroW}" height="${heroH}" rx="0" fill="rgb(${heroBg.r},${heroBg.g},${heroBg.b})"/>
+</svg>`);
+  const textSvg = campaignFlyerTextSvg(width, height, context);
+  const composed = await sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: "#fffaf4"
+    }
+  })
+    .composite([
+      { input: backgroundSvg, left: 0, top: 0 },
+      { input: heroArt, left: heroX, top: heroY },
+      { input: textSvg, left: 0, top: 0 }
+    ])
+    .png()
+    .toBuffer();
+
+  const maxBytes = campaignFlyerMaxBytes();
+  let quality = Math.max(65, Math.min(95, Number(process.env.CAMPAIGN_FLYER_QUALITY ?? 92)));
+  const minQuality = Math.max(50, Math.min(90, Number(process.env.CAMPAIGN_FLYER_MIN_QUALITY ?? 72)));
+  const render = async (q: number) =>
+    sharp(composed, { failOn: "none", animated: false })
+      .jpeg({ quality: q, mozjpeg: true, chromaSubsampling: "4:2:0" })
+      .toBuffer();
+  let out = await render(quality);
+  while (out.length > maxBytes && quality > minQuality) {
+    quality = Math.max(minQuality, quality - 4);
+    out = await render(quality);
+  }
+
+  return {
+    buffer: out,
+    mimeType: "image/jpeg",
+    ext: ".jpg",
+    width,
+    height,
+    quality
+  };
 }
 
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
@@ -37690,6 +38050,7 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
   sourceImageUrl: string;
   targets: CampaignAssetTarget[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
+  flyerLayoutContext?: CampaignFlyerLayoutContext;
 }): Promise<CampaignGeneratedAsset[]> {
   const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
   if (!sourceBuffer || !sourceBuffer.length) return [];
@@ -37716,7 +38077,10 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
     try {
       const profile = campaignImageOutputProfileForAssetTarget(target);
       const sourceForTarget = target === "web_banner" ? workingSourceBuffer : trimmedBuffer;
-      const normalized = await normalizeCampaignImageForProfile(sourceForTarget, profile, args.dealerProfile);
+      const normalized =
+        target === "flyer_8_5x11"
+          ? await normalizeCampaignFlyerWithControlledLayout(sourceForTarget, args.flyerLayoutContext)
+          : await normalizeCampaignImageForProfile(sourceForTarget, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
         id: `${target}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -40217,6 +40581,13 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const save = req.body?.save !== false;
 
   const dealerProfile = await getDealerProfile();
+  const flyerLayoutContext: CampaignFlyerLayoutContext = {
+    name,
+    prompt,
+    description,
+    dealerName: String((dealerProfile as any)?.dealerName ?? "").trim() || undefined,
+    website: String((dealerProfile as any)?.website ?? "").trim() || undefined
+  };
   let emailNanoVariantUrls: string[] = [];
   const shouldGenerateEmailVariants =
     !editFromCurrent &&
@@ -40399,7 +40770,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         buildCampaignGeneratedAssetsFromSource({
           sourceImageUrl: generatedImageUrl,
           targets: targetAssetTargets,
-          dealerProfile
+          dealerProfile,
+          flyerLayoutContext
         }),
         perTargetTimeoutMs,
         `normalize target ${target}`
@@ -40467,7 +40839,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           buildCampaignGeneratedAssetsFromSource({
             sourceImageUrl: emergencyAnchorUrl,
             targets: uniqueTargets,
-            dealerProfile
+            dealerProfile,
+            flyerLayoutContext
           }),
           Math.max(perTargetTimeoutMs, 120_000),
           "normalize emergency anchor targets"
@@ -40501,7 +40874,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         buildCampaignGeneratedAssetsFromSource({
           sourceImageUrl: styleLockReferenceUrl,
           targets: missingTargets,
-          dealerProfile
+          dealerProfile,
+          flyerLayoutContext
         }),
         perTargetTimeoutMs,
         "normalize missing targets from style lock source"
