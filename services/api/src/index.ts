@@ -40693,6 +40693,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
   const requestedImageAssetTargets = requestedAssetTargets.filter(campaignAssetTargetRequiresGeneratedImage);
   const tags = normalizeCampaignTags(req.body?.tags);
   const prompt = String(req.body?.prompt ?? "").trim() || undefined;
+  const editPrompt = editFromCurrent ? String(req.body?.editPrompt ?? "").trim() || undefined : undefined;
   const description = String(req.body?.description ?? "").trim() || undefined;
   let inspirationImageUrls = normalizeCampaignUrlArray(req.body?.inspirationImageUrls);
   const assetImageUrls = normalizeCampaignUrlArray(req.body?.assetImageUrls);
@@ -40823,6 +40824,20 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const editModeDirective = editFromCurrent
         ? [
             "Edit-mode requirement (critical):",
+            editPrompt
+              ? `Requested edit from user (highest priority): ${editPrompt}`
+              : undefined,
+            editPrompt
+              ? "- Treat the requested edit as the exact instruction for this run. Do not ignore it because of text visible in the reference image."
+              : undefined,
+            editPrompt && /\b(?:spell|spelling|correct|typo|text|headline|word|words|read|reads|replace|change)\b/i.test(editPrompt)
+              ? [
+                  "Exact text-edit requirement:",
+                  "- If the user asks for text to read a specific way, render that replacement text exactly.",
+                  "- Correct misspelled or malformed words from the current image even when the reference image shows the old incorrect spelling.",
+                  "- Preserve surrounding artwork/style, but the corrected text is more important than copying the old lettering exactly."
+                ].join("\n")
+              : undefined,
             "- Preserve the current image layout, subject, color palette, type hierarchy, visual style, and overall design identity.",
             "- Apply only the requested change and required output-safety corrections.",
             "- If the request is a layout/safety correction, keep the edit minimal: move or scale affected elements just enough to make them fully visible.",
@@ -40839,11 +40854,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the anchor image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
         : undefined;
       const targetPrompt: string | undefined =
-        [prompt, editModeDirective, strictReferenceDirective, styleLockDirective]
+        [editPrompt ? `Requested edit: ${editPrompt}` : undefined, prompt, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetDescription: string | undefined =
-        [description, editModeDirective, strictReferenceDirective, styleLockDirective]
+        [editPrompt ? `Requested edit: ${editPrompt}` : undefined, description, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
       const targetReferenceImageUrls =

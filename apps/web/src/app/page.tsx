@@ -2893,6 +2893,7 @@ export default function Home() {
   const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<CampaignGeneratedAsset[]>([]);
   const [campaignTargetToGenerate, setCampaignTargetToGenerate] = useState<CampaignAssetTarget>("sms");
   const [campaignEditFromCurrentImage, setCampaignEditFromCurrentImage] = useState(false);
+  const [campaignEditInstruction, setCampaignEditInstruction] = useState("");
   const [campaignEmailIncludePrimaryImage, setCampaignEmailIncludePrimaryImage] = useState(true);
   const [campaignEmailContextPickerId, setCampaignEmailContextPickerId] = useState("");
   const [campaignEmailContextCampaignIds, setCampaignEmailContextCampaignIds] = useState<string[]>([]);
@@ -3716,6 +3717,7 @@ export default function Home() {
       setCampaignGeneratedAt("");
       setCampaignFinalImageUrl("");
       setCampaignGeneratedAssets([]);
+      setCampaignEditInstruction("");
       return;
     }
     const buildMode: CampaignBuildMode =
@@ -3769,6 +3771,7 @@ export default function Home() {
     setCampaignGeneratedAt(String(entry.updatedAt ?? entry.createdAt ?? ""));
     setCampaignGeneratedAssets(generatedAssets);
     setCampaignFinalImageUrl(String(entry.finalImageUrl ?? "").trim() || generatedAssets[0]?.url || "");
+    setCampaignEditInstruction("");
   }
 
   function resetCampaignDraft() {
@@ -4945,6 +4948,9 @@ export default function Home() {
     const includeMediaContext = isScratchBuild;
     const basePrompt = stripCampaignEmailReferenceContext(String(campaignForm.prompt ?? "").trim());
     const payloadPrompt = basePrompt || undefined;
+    const editInstruction = editFromCurrent
+      ? stripCampaignEmailReferenceContext(String(campaignEditInstruction ?? "").trim())
+      : "";
     const baseInspirationImageUrls = parseCampaignUrlsText(campaignForm.inspirationImageUrlsText);
     const inspirationImageUrlsRaw = editFromCurrent
       ? (currentTargetAssetUrl ? [currentTargetAssetUrl] : [])
@@ -4981,6 +4987,7 @@ export default function Home() {
         replaceTarget: opts?.replaceTarget !== false,
         editFromCurrent,
         prompt: payloadPrompt,
+        editPrompt: editInstruction || undefined,
         description: String(campaignForm.description ?? "").trim() || undefined,
         inspirationImageUrls,
         assetImageUrls,
@@ -14974,8 +14981,20 @@ export default function Home() {
                   </span>
                 </label>
                 {campaignEditFromCurrentImage ? (
-                  <div className="text-[11px] text-gray-600">
-                    Edits the current {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === campaignActiveTarget)?.label ?? "output"} using your prompt (for example date/text tweaks).
+                  <div className="space-y-2">
+                    <label className="block text-xs text-gray-600">
+                      Edit instruction
+                      <textarea
+                        className="mt-1 w-full border rounded-xl px-3 py-2 text-sm min-h-[84px]"
+                        placeholder='Example: Correct the top headline to read exactly "American Harley-Davidson" and keep every other design element the same.'
+                        value={campaignEditInstruction}
+                        onChange={e => setCampaignEditInstruction(e.target.value)}
+                        disabled={campaignGenerating || campaignSaving}
+                      />
+                    </label>
+                    <div className="text-[11px] text-gray-600">
+                      Edits the current {CAMPAIGN_ASSET_TARGET_OPTIONS.find(opt => opt.value === campaignActiveTarget)?.label ?? "output"}. Use exact replacement text for spelling/date changes.
+                    </div>
                   </div>
                 ) : null}
                 {!campaignHasCurrentBaseImage ? (
