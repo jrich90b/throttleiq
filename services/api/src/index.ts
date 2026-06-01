@@ -36826,6 +36826,7 @@ function buildCampaignImagePrompt(args: {
       "- The ad should feel like a polished premium magazine ad: editorial, high-impact, cohesive, dimensional, and professionally typeset. Avoid generic clip-art flyer/template composition.",
       "- Match the typography style to the magazine ad/art direction and keep fonts, colors, shadows, and spacing integrated with the image.",
       "- Use the full page edge-to-edge with no white border, no boxed artwork, no poster-on-background layout, and no separate template panel.",
+      "- Do not create blurred, smeared, copied, mirrored, or stretched edge fill. The artwork must naturally fill the page.",
       "- Print-safe live area: keep every important logo, headline, date, address, CTA, bike/rider, and readable text at least 6% away from all four page edges.",
       "- The outer 6% perimeter may contain background texture/color only; no important text, logos, faces, wheels, or key artwork should enter that trim-risk area.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
@@ -37514,33 +37515,12 @@ async function normalizeCampaignFlyerWithControlledLayout(
 }> {
   const width = campaignFlyerWidth();
   const height = campaignFlyerHeight();
-  const safePercent = Math.max(
-    0,
-    Math.min(8, Number(process.env.CAMPAIGN_FLYER_PRINT_SAFE_PERIMETER_PERCENT ?? 4.5))
-  );
-  const insetX = Math.round(width * (safePercent / 100));
-  const insetY = Math.round(height * (safePercent / 100));
-  const innerW = Math.max(1, width - insetX * 2);
-  const innerH = Math.max(1, height - insetY * 2);
-  const innerAd = await sharp(buffer, { failOn: "none", animated: false })
+  const composed = await sharp(buffer, { failOn: "none", animated: false })
     .rotate()
-    .resize(innerW, innerH, {
+    .resize(width, height, {
       fit: "cover",
       position: "centre"
     })
-    .jpeg({ quality: 94, mozjpeg: true, chromaSubsampling: "4:2:0" })
-    .toBuffer();
-  const bottom = Math.max(0, height - innerH - insetY);
-  const right = Math.max(0, width - innerW - insetX);
-  const composed = await sharp(innerAd, { failOn: "none", animated: false })
-    .extend({
-      top: insetY,
-      left: insetX,
-      bottom,
-      right,
-      extendWith: "copy"
-    })
-    .resize(width, height, { fit: "cover", position: "centre" })
     .png()
     .toBuffer();
 
