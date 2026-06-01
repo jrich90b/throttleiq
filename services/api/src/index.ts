@@ -36823,10 +36823,11 @@ function buildCampaignImagePrompt(args: {
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
       "- Use the full page as one continuous flyer design surface, but keep every letter, logo, offer, QR/CTA, date, address, and footer fully inside a print-safe live area.",
-      "- Print-safe area: keep important content at least 4% from the left/right/top edges and at least 6% above the bottom edge.",
+      "- Print-safe area: keep important content at least 4% from the left/right edges, at least 8% below the top edge, and at least 8% above the bottom edge.",
       "- Never place text on the bottom edge or crop any descenders/letters; leave clear breathing room below the last line of text.",
-      "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch or crop at the top edge.",
-      "- If using a decorative background pattern, only nonessential pattern may extend to the page edge; key marks and readable content must stay fully inside the live area.",
+      "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
+      "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
+      "- If using a decorative background pattern, only nonessential pattern may extend to the page edge; key marks, brand marks, eagles, bikes/riders, and readable content must stay fully inside the live area.",
       "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
       "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
       "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
@@ -40321,9 +40322,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const editModeDirective = editFromCurrent
         ? [
             "Edit-mode requirement (critical):",
-            "- Apply the requested change clearly and visibly in the subject/composition.",
-            "- Do not return a near-identical image with only minor background or sky color tweaks unless explicitly requested.",
-            "- Keep dealership/brand style and bike realism intact while making the requested edit obvious."
+            "- Preserve the current image layout, subject, color palette, type hierarchy, visual style, and overall design identity.",
+            "- Apply only the requested change and required output-safety corrections.",
+            "- If the request is a layout/safety correction, keep the edit minimal: move or scale affected elements just enough to make them fully visible.",
+            "- Do not redesign the flyer, change the campaign concept, or replace the main artwork unless explicitly requested."
           ].join("\n")
         : undefined;
       const strictReferenceDirective = strictReferenceLock

@@ -2965,6 +2965,11 @@ export default function Home() {
     return String(campaignFinalImageUrl ?? "").trim();
   }, [campaignGeneratedAssets, campaignActiveTarget, campaignFinalImageUrl]);
   const campaignHasCurrentBaseImage = Boolean(campaignCurrentBaseImageUrl);
+  useEffect(() => {
+    if (campaignActiveTarget === "flyer_8_5x11" && campaignHasCurrentBaseImage) {
+      setCampaignEditFromCurrentImage(true);
+    }
+  }, [campaignActiveTarget, campaignHasCurrentBaseImage]);
   const campaignPrimaryGeneratedImageUrl = useMemo(() => {
     const finalUrl = String(campaignFinalImageUrl ?? "").trim();
     if (finalUrl && looksLikeCampaignImageUrl(finalUrl)) return finalUrl;
