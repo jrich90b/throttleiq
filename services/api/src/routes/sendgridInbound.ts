@@ -5044,7 +5044,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredCta === "prequalify" ||
       /coa|credit application|apply for credit|finance application|prequal/i.test(leadSourceLower) ||
       adfFinanceContextSignal);
+  const creditLeadBucket = "finance_prequal" as const;
+  const creditLeadCta = isPrequalLead ? ("prequalify" as const) : ("hdfs_coa" as const);
+  const applyCreditLeadClassification = () => {
+    setConversationClassification(conv, {
+      bucket: creditLeadBucket,
+      cta: creditLeadCta,
+      channel,
+      ruleName: isPrequalLead ? "prequal_lead" : "credit_app"
+    });
+    conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
+  };
   if (isCreditLead) {
+    applyCreditLeadClassification();
     if (!creditTodoCreated) {
       addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
     }
@@ -6153,16 +6165,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
     setFollowUpMode(conv, "manual_handoff", "credit_app");
     stopFollowUpCadence(conv, "manual_handoff");
+    applyCreditLeadClassification();
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
+    saveConversation(conv);
+    await flushConversationStore();
     return res.status(200).json({
       ok: true,
       parsed: true,
       leadKey,
       lead,
       leadSource,
-      bucket: inferredBucket,
-      cta: inferredCta,
+      bucket: creditLeadBucket,
+      cta: creditLeadCta,
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",

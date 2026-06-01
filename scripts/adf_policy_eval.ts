@@ -92,6 +92,14 @@ const cases: Case[] = [
     }
   },
   {
+    id: "marketplace_apply_for_credit_routes_finance_prequal",
+    expected: true,
+    run: () => {
+      const rule = resolveLeadRule("Marketplace - Apply for Credit");
+      return rule.bucket === "finance_prequal" && rule.cta === "hdfs_coa";
+    }
+  },
+  {
     id: "marketplace_sell_my_bike_routes_trade_sell",
     expected: true,
     run: () => {

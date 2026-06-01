@@ -309,6 +309,16 @@ const RULES: LeadRule[] = [
     tone: "short_conversational"
   },
   {
+    name: "marketplace_apply_for_credit",
+    match: {
+      equals: ["Marketplace - Apply for Credit"],
+      prefix: ["Marketplace - Apply for Credit"]
+    },
+    bucket: "finance_prequal",
+    cta: "hdfs_coa",
+    tone: "professional_privacy_forward"
+  },
+  {
     name: "marketplace_sell_my_bike",
     match: {
       equals: ["Marketplace - Sell My Bike"],
