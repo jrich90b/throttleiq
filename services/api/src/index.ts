@@ -37359,14 +37359,14 @@ function campaignFlyerTextSvg(
   let titleFont = Math.max(66, Math.round(124 * scale));
   let titleLines = wrapCampaignFlyerText(
     copy.title.toUpperCase(),
-    Math.floor(textWidth / (titleFont * 0.54)),
+    Math.floor(textWidth / (titleFont * 0.72)),
     3
   );
   if (titleLines.length > 2 || titleLines.some(line => line.length > 30)) {
     titleFont = Math.max(58, Math.round(104 * scale));
     titleLines = wrapCampaignFlyerText(
       copy.title.toUpperCase(),
-      Math.floor(textWidth / (titleFont * 0.53)),
+      Math.floor(textWidth / (titleFont * 0.72)),
       3
     );
   }
@@ -37527,7 +37527,7 @@ async function normalizeCampaignFlyerWithControlledLayout(
   const sourceH = Math.max(0, Math.round(Number(sourceMeta?.height ?? 0)));
   const artworkCropRatio = Math.max(
     0.55,
-    Math.min(0.9, Number(process.env.CAMPAIGN_FLYER_ARTWORK_CROP_RATIO ?? 0.72))
+    Math.min(0.9, Number(process.env.CAMPAIGN_FLYER_ARTWORK_CROP_RATIO ?? 0.64))
   );
   const artworkSource =
     sourceW > 0 && sourceH > 0 && sourceH / Math.max(1, sourceW) > 1.08
