@@ -73,6 +73,9 @@
       10
     ]
   },
+  "warrantyRma": {
+    "workflow": "talon_reference"
+  },
   "policies": {
     "firstTimeRider": {
       "riderCourseName": "Riding Academy course",

@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
+import { runTlpBrowserUseRescue } from "./tlpBrowserUse.js";
 
 export type TlpLogCustomerContactArgs = {
   leadRef: string;          // Ref #
@@ -1570,6 +1571,11 @@ async function submitLog(page: Page, step: StepFn) {
   await page.waitForTimeout(1000);
 }
 
+function rescueErrorMessage(primary: string, summary: string): string {
+  const compact = summary.replace(/\s+/g, " ").trim().slice(0, 500);
+  return compact ? `${primary}; browser-use rescue failed or did not complete: ${compact}` : primary;
+}
+
 export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Promise<void> {
   const categoryValue = args.categoryValue ?? "MOTORCYCLES";
   const contactedValue: "YES" | "NO" = args.contactedValue ?? "YES";
@@ -1618,7 +1624,35 @@ export async function tlpLogCustomerContact(args: TlpLogCustomerContactArgs): Pr
       const message = error instanceof Error ? error.message : String(error);
       console.error("[tlp] log failed", { leadRef: args.leadRef, step: currentStep, error: message });
       await captureDebugArtifacts(page, currentStep);
-      await context.close();
+      await context.close().catch(() => undefined);
+      const rescue = await runTlpBrowserUseRescue(
+        {
+          action: "log_customer_contact",
+          leadRef: args.leadRef,
+          phone: args.phone,
+          note: args.note,
+          categoryValue,
+          contactedValue
+        },
+        error
+      );
+      if (rescue.ok) {
+        console.warn("[tlp] log browser-use rescue completed", {
+          leadRef: args.leadRef,
+          promptPath: rescue.promptPath,
+          resultPath: rescue.resultPath
+        });
+        return;
+      }
+      if (rescue.attempted) {
+        console.warn("[tlp] log browser-use rescue did not complete", {
+          leadRef: args.leadRef,
+          summary: rescue.summary,
+          promptPath: rescue.promptPath,
+          resultPath: rescue.resultPath
+        });
+        throw new Error(rescueErrorMessage(message, rescue.summary));
+      }
       throw error;
     }
   });
@@ -1654,7 +1688,34 @@ export async function tlpMarkDealershipVisitDelivered(args: TlpDealershipVisitDe
       const message = error instanceof Error ? error.message : String(error);
       console.error("[tlp] delivered mark failed", { leadRef: args.leadRef, step: currentStep, error: message });
       await captureDebugArtifacts(page, currentStep);
-      await context.close();
+      await context.close().catch(() => undefined);
+      const rescue = await runTlpBrowserUseRescue(
+        {
+          action: "mark_dealership_visit_delivered",
+          leadRef: args.leadRef,
+          phone: args.phone ?? args.details?.phone,
+          note: args.note,
+          details: args.details as Record<string, unknown> | undefined
+        },
+        error
+      );
+      if (rescue.ok) {
+        console.warn("[tlp] delivered browser-use rescue completed", {
+          leadRef: args.leadRef,
+          promptPath: rescue.promptPath,
+          resultPath: rescue.resultPath
+        });
+        return;
+      }
+      if (rescue.attempted) {
+        console.warn("[tlp] delivered browser-use rescue did not complete", {
+          leadRef: args.leadRef,
+          summary: rescue.summary,
+          promptPath: rescue.promptPath,
+          resultPath: rescue.resultPath
+        });
+        throw new Error(rescueErrorMessage(message, rescue.summary));
+      }
       throw error;
     }
   });

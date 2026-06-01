@@ -3403,6 +3403,7 @@ export default function Home() {
     campaignWebBannerHeight: "",
     campaignWebBannerInsetPercent: "",
     campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
+    warrantyRmaWorkflow: "talon_reference" as "talon_reference" | "non_talon_submission",
     taxRate: "8"
   });
   const [selectedReferenceSite, setSelectedReferenceSite] = useState("");
@@ -6946,6 +6947,19 @@ export default function Home() {
           campaignWebBannerFitRaw === "contain" || campaignWebBannerFitRaw === "cover"
             ? campaignWebBannerFitRaw
             : "auto";
+        const warrantyRmaWorkflowRaw = String(
+          profile?.warrantyRma?.workflow ?? profile?.warrantyRmaWorkflow ?? ""
+        )
+          .trim()
+          .toLowerCase()
+          .replace(/[-\s]+/g, "_");
+        const warrantyRmaWorkflow =
+          warrantyRmaWorkflowRaw === "non_talon_submission" ||
+          warrantyRmaWorkflowRaw === "non_talon" ||
+          warrantyRmaWorkflowRaw === "standalone_submission" ||
+          warrantyRmaWorkflowRaw === "manual_submission"
+            ? "non_talon_submission"
+            : "talon_reference";
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -7032,6 +7046,7 @@ export default function Home() {
               ? String(campaignWebBannerInsetPercent)
               : "",
           campaignWebBannerFit: campaignWebBannerFit as "auto" | "cover" | "contain",
+          warrantyRmaWorkflow: warrantyRmaWorkflow as "talon_reference" | "non_talon_submission",
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -11660,6 +11675,13 @@ export default function Home() {
             dealerProfileForm.campaignWebBannerFit === "cover"
               ? dealerProfileForm.campaignWebBannerFit
               : "auto"
+        },
+        warrantyRma: {
+          ...(((dealerProfile as any)?.warrantyRma ?? {}) as Record<string, any>),
+          workflow:
+            dealerProfileForm.warrantyRmaWorkflow === "non_talon_submission"
+              ? "non_talon_submission"
+              : "talon_reference"
         },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
@@ -17345,6 +17367,63 @@ export default function Home() {
                   </label>
                   <div className="text-xs text-slate-600">
                     Used when a lead asks about international shipping/export. If neither option is checked, the assistant declines international shipping.
+                  </div>
+                </div>
+                <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">Warranty/RMA workflow</div>
+                      <div className="text-xs text-slate-600">
+                        Controls whether this dealer prepares warranty cases as TALON reference packets or full H-Dnet submission packets.
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
+                      {dealerProfileForm.warrantyRmaWorkflow === "non_talon_submission" ? "Non-TALON" : "TALON"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {([
+                      {
+                        value: "talon_reference",
+                        label: "TALON dealer",
+                        helper:
+                          "Vehicle/work-order warranty claims stay in TALON. LeadRider prepares review packets and manual DFS/GM draft support."
+                      },
+                      {
+                        value: "non_talon_submission",
+                        label: "Non-TALON / H-Dnet submission",
+                        helper:
+                          "LeadRider prepares standalone H-Dnet warranty/RMA submission packets for this dealer."
+                      }
+                    ] as const).map(option => (
+                      <label
+                        key={option.value}
+                        className={`block rounded-lg border p-3 text-sm cursor-pointer ${
+                          dealerProfileForm.warrantyRmaWorkflow === option.value
+                            ? "border-orange-500 bg-orange-50"
+                            : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 font-semibold">
+                          <input
+                            type="radio"
+                            name="warranty-rma-workflow"
+                            checked={dealerProfileForm.warrantyRmaWorkflow === option.value}
+                            onChange={() =>
+                              setDealerProfileForm({
+                                ...dealerProfileForm,
+                                warrantyRmaWorkflow: option.value
+                              })
+                            }
+                          />
+                          {option.label}
+                        </div>
+                        <div className="mt-2 text-xs leading-relaxed text-slate-600">{option.helper}</div>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    American Harley should stay on TALON dealer mode. Use the H-Dnet submission option for dealers that do not run TALON.
                   </div>
                 </div>
                 <div className="border rounded-lg p-3 space-y-3">

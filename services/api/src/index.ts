@@ -31407,6 +31407,19 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
       };
     }
   }
+  const incomingWarrantyRma =
+    incoming?.warrantyRma && typeof incoming.warrantyRma === "object" ? incoming.warrantyRma : null;
+  if (incomingWarrantyRma) {
+    incoming.warrantyRma = {
+      ...incomingWarrantyRma,
+      workflow: normalizeWarrantyRmaWorkflow(incomingWarrantyRma.workflow)
+    };
+  } else if (incoming.warrantyRmaWorkflow !== undefined) {
+    incoming.warrantyRma = {
+      workflow: normalizeWarrantyRmaWorkflow(incoming.warrantyRmaWorkflow)
+    };
+  }
+  delete incoming.warrantyRmaWorkflow;
   const merged = {
     ...current,
     ...incoming,
@@ -31445,6 +31458,10 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     campaign: {
       ...(current?.campaign ?? {}),
       ...(incoming?.campaign ?? {})
+    },
+    warrantyRma: {
+      ...(current?.warrantyRma ?? {}),
+      ...(incoming?.warrantyRma ?? {})
     }
   };
   const saved = await saveDealerProfile(merged);
