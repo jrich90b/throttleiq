@@ -37530,11 +37530,23 @@ async function normalizeCampaignFlyerWithControlledLayout(
 }> {
   const width = campaignFlyerWidth();
   const height = campaignFlyerHeight();
+  const sourceMeta = await sharp(buffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const sourceW = Number(sourceMeta?.width ?? 0);
+  const sourceH = Number(sourceMeta?.height ?? 0);
+  const sourceAspect = sourceW > 0 && sourceH > 0 ? sourceW / sourceH : null;
+  const targetAspect = width / Math.max(1, height);
+  const aspectDrift =
+    sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0
+      ? Math.abs(sourceAspect / targetAspect - 1)
+      : 0;
+  const fit = aspectDrift > 0.035 ? "contain" : "cover";
+  const sampledBg = fit === "contain" ? campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(buffer)) : null;
   const composed = await sharp(buffer, { failOn: "none", animated: false })
     .rotate()
     .resize(width, height, {
-      fit: "cover",
-      position: "centre"
+      fit,
+      position: "centre",
+      background: sampledBg ? { ...sampledBg, alpha: 1 } : undefined
     })
     .png()
     .toBuffer();
@@ -40758,13 +40770,25 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
     ): Promise<TargetRenderResult | null> => {
       const targetAssetTargets: CampaignAssetTarget[] = [target];
       const targetLabel = campaignAssetTargetLabel(target);
+      const flyerEditSafeAreaDirective =
+        editFromCurrent && target === "flyer_8_5x11"
+          ? [
+              "Flyer edit print-safety requirement (critical):",
+              "- Preserve the current magazine-ad styling, typography, layout language, texture, and art direction.",
+              "- Do not enlarge, shift, or regenerate elements in a way that pushes text, logos, people, bikes, wheels, or key artwork into the trim/bleed perimeter.",
+              "- Keep the outer 6% perimeter on all four sides as background/texture only.",
+              "- If any current element is close to or outside the safe live area, scale and reposition the design inward while keeping the same visual style.",
+              "- The edit is not complete unless every readable text line, logo, face, wheel, motorcycle, CTA, and footer line is fully visible inside the safe live area."
+            ].join("\n")
+          : undefined;
       const editModeDirective = editFromCurrent
         ? [
             "Edit-mode requirement (critical):",
             "- Preserve the current image layout, subject, color palette, type hierarchy, visual style, and overall design identity.",
             "- Apply only the requested change and required output-safety corrections.",
             "- If the request is a layout/safety correction, keep the edit minimal: move or scale affected elements just enough to make them fully visible.",
-            "- Do not redesign the flyer, change the campaign concept, or replace the main artwork unless explicitly requested."
+            "- Do not redesign the flyer, change the campaign concept, or replace the main artwork unless explicitly requested.",
+            flyerEditSafeAreaDirective
           ].join("\n")
         : undefined;
       const strictReferenceDirective = strictReferenceLock
