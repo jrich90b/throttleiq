@@ -37190,6 +37190,43 @@ function stripCampaignFlyerDesignInstructions(value: string): string {
   return normalizeCampaignFlyerCopyText(text);
 }
 
+function cleanCampaignFlyerTitleCandidate(value: string): string {
+  let text = stripCampaignFlyerDesignInstructions(value);
+  text = text.replace(
+    /\s+\d{2,6}\s+[a-z0-9.' -]+(?:ave|avenue|street|st|road|rd|blvd|boulevard|drive|dr|lane|ln|pkwy|parkway|hwy|highway|route|rt)\b[\s\S]*$/i,
+    ""
+  );
+  text = text.replace(/[,.:\-\s]+$/g, "");
+  return normalizeCampaignFlyerCopyText(text);
+}
+
+function inferCampaignFlyerTitle(rawName: string, sourceText: string): string {
+  const cleanName = cleanCampaignFlyerTitleCandidate(rawName);
+  const nameLooksLikeInstructions =
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(cleanName) ||
+    /\b(?:in the design|make sure|change the|replace the|remove the)\b/i.test(rawName) ||
+    cleanName.length > 110;
+  if (cleanName && !nameLooksLikeInstructions) return cleanName;
+
+  const combined = [rawName, sourceText].map(value => String(value ?? "").trim()).filter(Boolean).join(" ");
+  const candidates: string[] = [];
+  const eventTitleRe =
+    /\b([A-Z0-9][A-Za-z0-9'& -]{2,120}?\b(?:party|event|ride|sale|open house|demo day|bike night|anniversary)(?:\s+at\s+[A-Z][A-Za-z0-9'& -]{2,80})?)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = eventTitleRe.exec(combined))) {
+    const candidate = cleanCampaignFlyerTitleCandidate(match[1] ?? "");
+    if (candidate && candidate.length >= 10 && candidate.length <= 120) candidates.push(candidate);
+  }
+  const explicit = candidates.at(-1);
+  if (explicit) return explicit;
+
+  const firstSentence = cleanCampaignFlyerTitleCandidate(
+    sourceText.split(/[.!?]/).map(part => normalizeCampaignFlyerCopyText(part)).find(Boolean) || ""
+  );
+  if (firstSentence) return truncateCampaignFlyerLine(firstSentence, 82);
+  return "Dealership Event";
+}
+
 function campaignFlyerRemoveLiteral(source: string, literal: string | null | undefined): string {
   const value = String(literal ?? "").trim();
   if (!value) return source;
@@ -37241,7 +37278,7 @@ function buildCampaignFlyerCopy(context?: CampaignFlyerLayoutContext): {
   details: string[];
   website?: string;
 } {
-  const name = normalizeCampaignFlyerCopyText(context?.name);
+  const rawName = normalizeCampaignFlyerCopyText(context?.name);
   const dealerName = normalizeCampaignFlyerCopyText(context?.dealerName);
   const website = normalizeCampaignFlyerCopyText(context?.website).replace(/^https?:\/\//i, "");
   const sourceText = stripCampaignFlyerDesignInstructions(
@@ -37256,13 +37293,7 @@ function buildCampaignFlyerCopy(context?: CampaignFlyerLayoutContext): {
     /\b\d{2,6}\s+[a-z0-9.' -]+(?:ave|avenue|street|st|road|rd|blvd|boulevard|drive|dr|lane|ln|pkwy|parkway|hwy|highway|route|rt)\.?,?\s+[a-z.' -]+,?\s+[a-z]{2}\s+\d{5}(?:-\d{4})?/i
   );
   const addressLine = normalizeCampaignFlyerCopyText(addressMatch?.[0]);
-  const title =
-    name ||
-    truncateCampaignFlyerLine(
-      sourceText.split(/[.!?]/).map(part => normalizeCampaignFlyerCopyText(part)).find(Boolean) ||
-        "Dealership Event",
-      82
-    );
+  const title = inferCampaignFlyerTitle(rawName, sourceText);
   const locationLine = addressLine
     ? dealerName && !addressLine.toLowerCase().includes(dealerName.toLowerCase())
       ? `${dealerName} | ${addressLine}`
