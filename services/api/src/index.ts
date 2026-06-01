@@ -38604,6 +38604,29 @@ async function generateCampaignImageWithOpenAI(args: {
   }
 }
 
+async function buildCampaignImageEditMask(
+  sourceBuffer: Buffer,
+  promptText: string,
+  preferredTarget?: CampaignAssetTarget
+): Promise<Buffer | null> {
+  const lower = String(promptText ?? "").toLowerCase();
+  const isFlyer = preferredTarget === "flyer_8_5x11";
+  const editsTopHeadline = /\b(?:top|headline|header|title|masthead)\b/.test(lower);
+  const editsLowerCopy = /\b(?:bottom|footer|date|time|address|details|website|url|music|vendor|vendors)\b/.test(lower);
+  if (!isFlyer || !editsTopHeadline || editsLowerCopy) return null;
+  const meta = await sharp(sourceBuffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return null;
+  const editHeight = Math.round(height * 0.34);
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="white" fill-opacity="1"/>
+  <rect x="0" y="0" width="${width}" height="${editHeight}" fill="white" fill-opacity="0"/>
+</svg>`;
+  return sharp(Buffer.from(svg), { failOn: "none" }).png().toBuffer();
+}
+
 async function generateCampaignImageEditWithOpenAI(args: {
   name: string;
   channel: CampaignChannel;
@@ -38637,9 +38660,18 @@ async function generateCampaignImageEditWithOpenAI(args: {
     const timeoutMs = Math.max(5_000, Number(process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_TIMEOUT_MS ?? 90_000));
     const client = new OpenAI({ apiKey, timeout: timeoutMs });
     const imageFile = await toFile(sourceBuffer, "campaign-edit-source.jpg", { type: "image/jpeg" });
+    const maskBuffer = await buildCampaignImageEditMask(
+      sourceBuffer,
+      imagePrompt,
+      preferredTarget ?? undefined
+    ).catch(() => null);
+    const maskFile = maskBuffer?.length
+      ? await toFile(maskBuffer, "campaign-edit-mask.png", { type: "image/png" })
+      : undefined;
     const imgResp: any = await client.images.edit({
       model,
       image: imageFile,
+      ...(maskFile ? { mask: maskFile } : {}),
       prompt: imagePrompt,
       size,
       quality: "high",
