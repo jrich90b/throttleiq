@@ -36797,14 +36797,13 @@ function buildCampaignImagePrompt(args: {
     !tagSet.has("sales");
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
   const selectedTargetCount = Array.isArray(args.assetTargets) ? args.assetTargets.length : 0;
-  const controlledFlyerLayout = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
-  const strictPromptDetailLock = !controlledFlyerLayout && selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
+  const strictPromptDetailLock = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
   const requiredPromptDetails = extractPromptRequiredDetails({
     prompt: args.prompt,
     description: args.description,
     strict: strictPromptDetailLock
   });
-  const promptDetailGuardrails = !controlledFlyerLayout && requiredPromptDetails.length
+  const promptDetailGuardrails = requiredPromptDetails.length
     ? [
         "Prompt fidelity requirements (critical):",
         strictPromptDetailLock
@@ -36823,19 +36822,15 @@ function buildCampaignImagePrompt(args: {
     outputGuardrails.push(
       "Output framing requirements (critical):",
       `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
-      "- Generate full-bleed magazine advertisement artwork/background only. LeadRider will typeset final event details after generation.",
-      "- The art should feel like a polished premium magazine ad: editorial, high-impact, cohesive, and dimensional. Avoid generic clip-art flyer/template composition.",
-      "- Do not render small footer/event-detail text, address blocks, dates, disclaimers, or dense body copy in the artwork.",
-      "- A short large theme mark/headline is acceptable only if it helps the visual concept and stays fully inside the frame.",
-      "- Leave a darker, visually simple lower-third/lower-half area where final copy can be overlaid cleanly.",
-      "- Keep all dealer logos, eagle marks, bikes/riders, and key artwork at least 8% below the top edge and 6% above the bottom edge.",
+      "- Create the complete final full-bleed magazine advertisement, including typography, hierarchy, artwork, and final copy as one cohesive design.",
+      "- The ad should feel like a polished premium magazine ad: editorial, high-impact, cohesive, dimensional, and professionally typeset. Avoid generic clip-art flyer/template composition.",
+      "- Match the typography style to the magazine ad/art direction and keep fonts, colors, shadows, and spacing integrated with the image.",
+      "- Use the full page edge-to-edge with no white border, no boxed artwork, no poster-on-background layout, and no separate template panel.",
+      "- Print-safe live area: keep every important logo, headline, date, address, CTA, bike/rider, and readable text at least 6% away from all four page edges.",
+      "- The outer 6% perimeter may contain background texture/color only; no important text, logos, faces, wheels, or key artwork should enter that trim-risk area.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
-      "- Bottom-edge safety: keep key artwork fully visible with clear breathing room below it.",
-      "- If using a decorative background pattern, only nonessential pattern may extend to the page edge; key marks, brand marks, eagles, bikes/riders, and readable content must stay fully inside the live area.",
-      "- Do not create a visible outer mat, border, padded backdrop, or separate background frame around the flyer.",
-      "- Do not create a blurred duplicate background, blurred edge fill, soft-focus outer background, or poster-on-background layout.",
-      "- If a reference/current image has blurred edge fill or a smaller flyer sitting on a blurred background, remove that treatment and render only the core flyer design.",
-      "- The final page text will be added separately, so prioritize clean artwork, brand feel, lighting, hierarchy, and composition over trying to include every written campaign detail."
+      "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
+      "- If space is tight, simplify copy and reduce type size before moving text or key artwork toward the page edge."
     );
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
     const bannerW = campaignWebBannerWidth(args.dealerProfile);
@@ -37508,7 +37503,7 @@ function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number 
 
 async function normalizeCampaignFlyerWithControlledLayout(
   buffer: Buffer,
-  context?: CampaignFlyerLayoutContext
+  _context?: CampaignFlyerLayoutContext
 ): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -37519,43 +37514,33 @@ async function normalizeCampaignFlyerWithControlledLayout(
 }> {
   const width = campaignFlyerWidth();
   const height = campaignFlyerHeight();
-  const avg = await sampleCampaignFlyerAverageRgb(buffer);
-  const heroBg = campaignFlyerReadableBackground(avg);
-  const rotatedSource = sharp(buffer, { failOn: "none", animated: false }).rotate();
-  const sourceMeta = await rotatedSource.clone().metadata().catch(() => null);
-  const sourceW = Math.max(0, Math.round(Number(sourceMeta?.width ?? 0)));
-  const sourceH = Math.max(0, Math.round(Number(sourceMeta?.height ?? 0)));
-  const artworkCropRatio = Math.max(
-    0.55,
-    Math.min(0.9, Number(process.env.CAMPAIGN_FLYER_ARTWORK_CROP_RATIO ?? 0.64))
+  const safePercent = Math.max(
+    0,
+    Math.min(8, Number(process.env.CAMPAIGN_FLYER_PRINT_SAFE_PERIMETER_PERCENT ?? 4.5))
   );
-  const artworkSource =
-    sourceW > 0 && sourceH > 0 && sourceH / Math.max(1, sourceW) > 1.08
-      ? rotatedSource
-          .clone()
-          .extract({ left: 0, top: 0, width: sourceW, height: Math.max(1, Math.round(sourceH * artworkCropRatio)) })
-      : rotatedSource.clone();
-  const fullBleedArt = await artworkSource
-    .resize(width, height, {
+  const insetX = Math.round(width * (safePercent / 100));
+  const insetY = Math.round(height * (safePercent / 100));
+  const innerW = Math.max(1, width - insetX * 2);
+  const innerH = Math.max(1, height - insetY * 2);
+  const innerAd = await sharp(buffer, { failOn: "none", animated: false })
+    .rotate()
+    .resize(innerW, innerH, {
       fit: "cover",
-      position: "centre",
-      background: { ...heroBg, alpha: 1 }
+      position: "centre"
     })
     .jpeg({ quality: 94, mozjpeg: true, chromaSubsampling: "4:2:0" })
     .toBuffer();
-  const textSvg = campaignFlyerTextSvg(width, height, context);
-  const composed = await sharp({
-    create: {
-      width,
-      height,
-      channels: 3,
-      background: { ...heroBg, alpha: 1 }
-    }
-  })
-    .composite([
-      { input: fullBleedArt, left: 0, top: 0 },
-      { input: textSvg, left: 0, top: 0 }
-    ])
+  const bottom = Math.max(0, height - innerH - insetY);
+  const right = Math.max(0, width - innerW - insetX);
+  const composed = await sharp(innerAd, { failOn: "none", animated: false })
+    .extend({
+      top: insetY,
+      left: insetX,
+      bottom,
+      right,
+      extendWith: "copy"
+    })
+    .resize(width, height, { fit: "cover", position: "centre" })
     .png()
     .toBuffer();
 
