@@ -37196,6 +37196,14 @@ function cleanCampaignFlyerTitleCandidate(value: string): string {
     /\s+\d{2,6}\s+[a-z0-9.' -]+(?:ave|avenue|street|st|road|rd|blvd|boulevard|drive|dr|lane|ln|pkwy|parkway|hwy|highway|route|rt)\b[\s\S]*$/i,
     ""
   );
+  const dealerEventTitle = text.match(
+    /^([\s\S]*?\b(?:party|event|ride|sale|open house|demo day|bike night|anniversary)\s+at\s+[a-z0-9'& -]*?harley[- ]davidson)\b/i
+  );
+  if (dealerEventTitle?.[1]) text = dealerEventTitle[1];
+  const lateDetailMarker = text.search(
+    /\b(?:celebrate|monday|tuesday|wednesday|thursday|friday|saturday|sunday|live music|food on|supporting veteran|vendors)\b/i
+  );
+  if (lateDetailMarker > 32) text = text.slice(0, lateDetailMarker);
   text = text.replace(/[,.:\-\s]+$/g, "");
   return normalizeCampaignFlyerCopyText(text);
 }
@@ -37485,8 +37493,21 @@ async function normalizeCampaignFlyerWithControlledLayout(
   const heroH = Math.max(1, panelY - heroY - Math.round(height * 0.035));
   const avg = await sampleCampaignFlyerAverageRgb(buffer);
   const heroBg = campaignFlyerReadableBackground(avg);
-  const heroArt = await sharp(buffer, { failOn: "none", animated: false })
-    .rotate()
+  const rotatedSource = sharp(buffer, { failOn: "none", animated: false }).rotate();
+  const sourceMeta = await rotatedSource.clone().metadata().catch(() => null);
+  const sourceW = Math.max(0, Math.round(Number(sourceMeta?.width ?? 0)));
+  const sourceH = Math.max(0, Math.round(Number(sourceMeta?.height ?? 0)));
+  const artworkCropRatio = Math.max(
+    0.55,
+    Math.min(0.9, Number(process.env.CAMPAIGN_FLYER_ARTWORK_CROP_RATIO ?? 0.72))
+  );
+  const artworkSource =
+    sourceW > 0 && sourceH > 0 && sourceH / Math.max(1, sourceW) > 1.08
+      ? rotatedSource
+          .clone()
+          .extract({ left: 0, top: 0, width: sourceW, height: Math.max(1, Math.round(sourceH * artworkCropRatio)) })
+      : rotatedSource.clone();
+  const heroArt = await artworkSource
     .resize(heroW, heroH, {
       fit: "contain",
       position: "centre",
