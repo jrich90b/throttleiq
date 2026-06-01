@@ -41125,7 +41125,8 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
                   "Exact text-edit requirement:",
                   "- If the user asks for text to read a specific way, render that replacement text exactly.",
                   "- Correct misspelled or malformed words from the current image even when the reference image shows the old incorrect spelling.",
-                  "- Preserve surrounding artwork/style, but the corrected text is more important than copying the old lettering exactly."
+                  "- Preserve surrounding artwork/style, but the corrected text is more important than copying the old lettering exactly.",
+                  "- Integrate corrected text into the existing poster/flyer artwork. Do not place corrected text in a new separate rectangle, header panel, white box, or detached overlay unless the current design already uses that exact treatment."
                 ].join("\n")
               : undefined,
             "- Preserve the current image layout, subject, color palette, type hierarchy, visual style, and overall design identity.",
@@ -41164,8 +41165,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
               ...inspirationContextImageUrls
             ]);
       const editSourceImageUrl = editFromCurrent ? targetReferenceImageUrls[0] : undefined;
+      const deterministicFlyerTextEditEnabled =
+        String(process.env.CAMPAIGN_DETERMINISTIC_FLYER_TEXT_EDIT_ENABLED ?? "0").trim() === "1";
       const deterministicHeadlineReplacement =
-        editSourceImageUrl && editFromCurrent && target === "flyer_8_5x11"
+        deterministicFlyerTextEditEnabled && editSourceImageUrl && editFromCurrent && target === "flyer_8_5x11"
           ? extractCampaignFlyerHeadlineReplacement(editPrompt)
           : null;
       const generatedImageUrlDeterministicText = deterministicHeadlineReplacement && editSourceImageUrl
