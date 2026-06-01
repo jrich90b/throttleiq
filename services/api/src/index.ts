@@ -38609,6 +38609,25 @@ async function buildCampaignImageEditMask(
   promptText: string,
   preferredTarget?: CampaignAssetTarget
 ): Promise<Buffer | null> {
+  const editHeight = await campaignTopHeadlineEditHeight(sourceBuffer, promptText, preferredTarget);
+  if (!editHeight) return null;
+  const meta = await sharp(sourceBuffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return null;
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="white" fill-opacity="1"/>
+  <rect x="0" y="0" width="${width}" height="${editHeight}" fill="white" fill-opacity="0"/>
+</svg>`;
+  return sharp(Buffer.from(svg), { failOn: "none" }).png().toBuffer();
+}
+
+async function campaignTopHeadlineEditHeight(
+  sourceBuffer: Buffer,
+  promptText: string,
+  preferredTarget?: CampaignAssetTarget
+): Promise<number | null> {
   const lower = String(promptText ?? "").toLowerCase();
   const isFlyer = preferredTarget === "flyer_8_5x11";
   const editsTopHeadline = /\b(?:top|headline|header|title|masthead)\b/.test(lower);
@@ -38618,13 +38637,33 @@ async function buildCampaignImageEditMask(
   const width = Number(meta?.width ?? 0);
   const height = Number(meta?.height ?? 0);
   if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return null;
-  const editHeight = Math.round(height * 0.34);
-  const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <rect x="0" y="0" width="${width}" height="${height}" fill="white" fill-opacity="1"/>
-  <rect x="0" y="0" width="${width}" height="${editHeight}" fill="white" fill-opacity="0"/>
-</svg>`;
-  return sharp(Buffer.from(svg), { failOn: "none" }).png().toBuffer();
+  return Math.round(height * 0.34);
+}
+
+async function lockCampaignImageEditOutsideTopRegion(
+  sourceBuffer: Buffer,
+  editedBuffer: Buffer,
+  promptText: string,
+  preferredTarget?: CampaignAssetTarget
+): Promise<Buffer> {
+  const editHeight = await campaignTopHeadlineEditHeight(sourceBuffer, promptText, preferredTarget);
+  if (!editHeight) return editedBuffer;
+  const meta = await sharp(sourceBuffer, { failOn: "none", animated: false }).metadata().catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= editHeight) return editedBuffer;
+  const normalizedEdited = await sharp(editedBuffer, { failOn: "none", animated: false })
+    .resize(width, height, { fit: "cover", position: "centre" })
+    .png()
+    .toBuffer();
+  const lockedLower = await sharp(sourceBuffer, { failOn: "none", animated: false })
+    .extract({ left: 0, top: editHeight, width, height: height - editHeight })
+    .png()
+    .toBuffer();
+  return sharp(normalizedEdited, { failOn: "none", animated: false })
+    .composite([{ input: lockedLower, left: 0, top: editHeight }])
+    .png()
+    .toBuffer();
 }
 
 async function generateCampaignImageEditWithOpenAI(args: {
@@ -38705,6 +38744,7 @@ async function generateCampaignImageEditWithOpenAI(args: {
       }
     }
     if (!buffer || !buffer.length || !(await isDecodableImageBuffer(buffer))) return null;
+    buffer = await lockCampaignImageEditOutsideTopRegion(sourceBuffer, buffer, imagePrompt, preferredTarget ?? undefined);
     const fileName = `campaign_edit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
     const dir = path.resolve(getDataDir(), "uploads", "campaigns");
     await fs.promises.mkdir(dir, { recursive: true });
