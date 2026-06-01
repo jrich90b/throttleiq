@@ -36832,7 +36832,9 @@ function buildCampaignImagePrompt(args: {
       "- The outer 6% perimeter may contain background texture/color only; no important text, logos, faces, wheels, or key artwork should enter that trim-risk area.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
       "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
-      "- If space is tight, simplify copy and reduce type size before moving text or key artwork toward the page edge."
+      "- If space is tight, simplify copy and reduce type size before moving text or key artwork toward the page edge.",
+      "- Copy accuracy: use only copy/details from the campaign prompt, dealer name, dealer website, and provided reference assets.",
+      "- Do not invent extra slogans, footer lines, disclaimers, legal copy, product claims, event details, phone numbers, or filler text."
     );
     if (hasReferenceImages) {
       outputGuardrails.push(
@@ -36842,7 +36844,8 @@ function buildCampaignImagePrompt(args: {
         "- Match the reference image's layout language, typography style, headline scale, color treatment, texture/grain, lighting, logo placement, spacing rhythm, and overall magazine-ad feel.",
         "- Replace the campaign content/details while preserving the reference's visual system and hierarchy.",
         "- Do not switch to a different illustration style, different type era, generic patriotic template, or unrelated bike-ad layout.",
-        "- Use additional uploaded design assets as supporting elements only; they must not override the primary reference style."
+        "- Use additional uploaded design assets as supporting elements only; they must not override the primary reference style.",
+        "- Do not copy incorrect reference text verbatim unless it is also present in the campaign prompt; preserve style, not stale copy."
       );
     }
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
@@ -38251,7 +38254,7 @@ async function buildNanoBananaReferenceParts(
       out.push({
         text:
           acceptedIndex === 1
-            ? "Reference image 1: PRIMARY STYLE ANCHOR. Match this image's layout language, typography treatment, texture, color palette, spacing, and magazine-ad hierarchy. Replace content only."
+            ? "Reference image 1: PRIMARY STYLE ANCHOR. Match this image's layout language, typography treatment, texture, color palette, spacing, and magazine-ad hierarchy. Replace content only. Do not copy stale reference copy or invent extra footer text."
             : `Reference image ${acceptedIndex}: supporting visual/asset reference. Use only if it does not conflict with the primary style anchor.`
       });
     }
@@ -40766,7 +40769,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         : undefined;
       const strictReferenceDirective = strictReferenceLock
         ? target === "flyer_8_5x11"
-          ? `Reference-lock requirement (critical): use the primary uploaded reference image as the magazine-ad style source of truth. Preserve its layout language, typography family/weight feel, headline scale, copy hierarchy, color palette, texture/grain, image treatment, logo placement, spacing rhythm, and overall art direction. Adapt only the campaign content/details for ${targetLabel}; do not drift to a generic patriotic flyer or unrelated motorcycle-ad style.`
+          ? `Reference-lock requirement (critical): use the primary uploaded reference image as the magazine-ad style source of truth. Preserve its layout language, typography family/weight feel, headline scale, copy hierarchy, color palette, texture/grain, image treatment, logo placement, spacing rhythm, and overall art direction. Adapt only the campaign content/details for ${targetLabel}; do not drift to a generic patriotic flyer or unrelated motorcycle-ad style. Do not invent extra copy, stale reference text, footer lines, or claims not present in the campaign prompt/dealer profile.`
           : `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
         : undefined;
       const styleLockDirective = styleLockRefUrl
