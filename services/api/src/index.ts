@@ -38631,8 +38631,7 @@ async function campaignTopHeadlineEditHeight(
   const lower = String(promptText ?? "").toLowerCase();
   const isFlyer = preferredTarget === "flyer_8_5x11";
   const editsTopHeadline = /\b(?:top|headline|header|title|masthead)\b/.test(lower);
-  const editsLowerCopy = /\b(?:bottom|footer|date|time|address|details|website|url|music|vendor|vendors)\b/.test(lower);
-  if (!isFlyer || !editsTopHeadline || editsLowerCopy) return null;
+  if (!isFlyer || !editsTopHeadline) return null;
   const meta = await sharp(sourceBuffer, { failOn: "none", animated: false }).metadata().catch(() => null);
   const width = Number(meta?.width ?? 0);
   const height = Number(meta?.height ?? 0);
