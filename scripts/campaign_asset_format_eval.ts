@@ -58,8 +58,16 @@ const referenceOrder = campaignTargetReferenceImageUrls({
   designImageUrls: ["/uploads/campaigns/dealer-logo.png", "/uploads/campaigns/reference-style.jpg"]
 });
 assert.deepEqual(referenceOrder, [
-  "/uploads/campaigns/reference-style.jpg",
   "/uploads/campaigns/generated-anchor.jpg",
+  "/uploads/campaigns/reference-style.jpg",
+  "/uploads/campaigns/dealer-logo.png"
+]);
+const initialReferenceOrder = campaignTargetReferenceImageUrls({
+  inspirationContextImageUrls: ["/uploads/campaigns/reference-style.jpg"],
+  designImageUrls: ["/uploads/campaigns/dealer-logo.png", "/uploads/campaigns/reference-style.jpg"]
+});
+assert.deepEqual(initialReferenceOrder, [
+  "/uploads/campaigns/reference-style.jpg",
   "/uploads/campaigns/dealer-logo.png"
 ]);
 assert.equal(campaignUsesPrimaryStyleAnchor(referenceOrder), true);

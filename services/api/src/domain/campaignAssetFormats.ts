@@ -113,7 +113,10 @@ export function campaignTargetReferenceImageUrls(args: {
   const inspiration = normalizeReferenceUrls(args.inspirationContextImageUrls ?? []);
   const styleLock = normalizeReferenceUrls([args.styleLockRefUrl]);
   const design = normalizeReferenceUrls(args.designImageUrls ?? []);
-  return normalizeReferenceUrls([...inspiration, ...styleLock, ...design]);
+  if (styleLock.length) {
+    return normalizeReferenceUrls([...styleLock, ...inspiration, ...design]);
+  }
+  return normalizeReferenceUrls([...inspiration, ...design]);
 }
 
 export function campaignUsesPrimaryStyleAnchor(referenceImageUrls: Array<unknown> | null | undefined): boolean {
