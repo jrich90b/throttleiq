@@ -4181,6 +4181,19 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   return task;
 }
 
+export function markOpenCallTodosDoneForCompletedVoiceAttempt(convId: string): number {
+  let count = 0;
+  const doneAt = nowIso();
+  for (const task of todos) {
+    if (task.convId !== convId || task.status !== "open" || task.reason !== "call") continue;
+    task.status = "done";
+    task.doneAt = doneAt;
+    count += 1;
+  }
+  if (count > 0) scheduleSave();
+  return count;
+}
+
 export function markTodoReminderSent(
   convId: string,
   todoId: string,

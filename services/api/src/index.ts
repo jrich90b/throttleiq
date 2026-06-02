@@ -540,6 +540,7 @@ import {
   markQuestionDone,
   markTodoDone,
   markTodoReminderSent,
+  markOpenCallTodosDoneForCompletedVoiceAttempt,
   markOpenTodosDoneForConversation,
   markOpenTodosDoneForConversationByClass,
   markOpenTodosResolvedByCommunication,
@@ -48178,10 +48179,6 @@ app.post("/conversations/:id/call", async (req, res) => {
       callMessage.actorUserName = ownerNameRaw || agentName || undefined;
       callMessage.callMethod = agentDigits ? "extension" : "cell";
     }
-    const callTodos = listOpenTodos().filter(t => t.convId === conv.id && t.reason === "call");
-    for (const todo of callTodos) {
-      markTodoDone(conv.id, todo.id);
-    }
     saveConversation(conv);
     await flushConversationStore();
     return res.json({ ok: true, callSid: call.sid, agentPhone: agentTo, customerPhone });
@@ -57668,6 +57665,9 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             sourceMessageId: recordingSid || bodyCallSid || callbackCallSid || undefined
           });
         }
+      }
+      if (!inboundCall) {
+        markOpenCallTodosDoneForCompletedVoiceAttempt(conv.id);
       }
 
       const transcriptProviderId = callScopedMessageId;
