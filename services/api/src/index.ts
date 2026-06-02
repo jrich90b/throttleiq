@@ -615,6 +615,11 @@ import {
 } from "./domain/campaignStore.js";
 import { generateCampaignContent } from "./domain/campaignBuilder.js";
 import {
+  campaignAssetFramePromptLines,
+  campaignAssetFrameSpec,
+  campaignOpenAiImageSizeForTarget
+} from "./domain/campaignAssetFormats.js";
+import {
   clearMetaIntegrationRecord,
   getMetaIntegrationRecord,
   getMetaIntegrationStatus,
@@ -36969,64 +36974,15 @@ function buildCampaignImagePrompt(args: {
       );
     }
   } else if (preferredTarget === "web_banner" && selectedTargetCount <= 1) {
-    const bannerW = campaignWebBannerWidth(args.dealerProfile);
-    const bannerH = campaignWebBannerHeight(args.dealerProfile);
-    const ratio = (bannerW / Math.max(1, bannerH)).toFixed(3);
-    outputGuardrails.push(
-      "Output framing requirements (critical):",
-      `- Compose as a wide horizontal web banner at ${bannerW}x${bannerH} (~${ratio}:1).`,
-      "- Fill the frame edge-to-edge (no borders, no letterboxing, no padding).",
-      "- Keep composition slightly zoomed out (avoid tight close-crops).",
-      "- Keep all essential text/logo/CTA inside a center safe area (~68% width, ~52% height).",
-      "- Leave extra vertical headroom: avoid placing critical content in the top/bottom ~24% of the frame."
-    );
+    outputGuardrails.push(...campaignAssetFramePromptLines(preferredTarget, args.dealerProfile));
   } else if (selectedTargetCount <= 1 && preferredTarget) {
-    const socialDims: Record<
-      CampaignAssetTarget,
-      { width: number; height: number; label: string }
-    > = {
-      sms: { width: campaignMmsWidth(), height: campaignMmsHeight(), label: "SMS" },
-      email: { width: campaignEmailWidth(), height: campaignEmailWidth(), label: "Email" },
-      facebook_post: {
-        width: campaignFacebookPostWidth(),
-        height: campaignFacebookPostHeight(),
-        label: "Facebook post"
-      },
-      instagram_post: {
-        width: campaignInstagramPostWidth(),
-        height: campaignInstagramPostHeight(),
-        label: "Instagram post"
-      },
-      instagram_story: {
-        width: campaignInstagramStoryWidth(),
-        height: campaignInstagramStoryHeight(),
-        label: "Instagram story"
-      },
-      web_banner: {
-        width: campaignWebBannerWidth(args.dealerProfile),
-        height: campaignWebBannerHeight(args.dealerProfile),
-        label: "Web banner"
-      },
-      flyer_8_5x11: {
-        width: campaignFlyerWidth(),
-        height: campaignFlyerHeight(),
-        label: "Flyer (8.5x11)"
-      }
-    };
-    const frame = socialDims[preferredTarget];
-    const ratio = (frame.width / Math.max(1, frame.height)).toFixed(3);
-    outputGuardrails.push(
-      "Output framing requirements (critical):",
-      `- Compose exactly for ${frame.label} at ${frame.width}x${frame.height} (~${ratio}:1).`,
-      "- Fill the full canvas edge-to-edge.",
-      "- Do NOT include any border, frame, gutter, white strip, or letterboxing.",
-      "- Keep key text/logo/CTA fully inside the live image area."
-    );
+    outputGuardrails.push(...campaignAssetFramePromptLines(preferredTarget, args.dealerProfile));
   } else if (selectedTargetCount > 1) {
     outputGuardrails.push(
       "Cross-channel framing requirements (critical):",
       "- Compose with a strong centered subject and keep key text/logo/CTA inside a generous central safe area.",
-      "- Avoid placing important text near edges so social, SMS, and banner variants remain readable after resizing."
+      "- Avoid placing important text near edges so social, SMS, and banner variants remain readable after resizing.",
+      "- Use format-specific padding when each selected target is rendered: feed posts should keep important content inside the square live area, stories should avoid top/bottom UI zones, banners should keep copy in the center band, and flyers should keep print-safe margins."
     );
   }
   const tagGuardrails = suppressFinanceTrade
@@ -37104,11 +37060,11 @@ function extensionForMimeType(mimeType: string | null | undefined): string {
 }
 
 function campaignMmsWidth(): number {
-  return Math.max(320, Math.min(2048, Number(process.env.CAMPAIGN_MMS_IMAGE_WIDTH ?? 1080)));
+  return campaignAssetFrameSpec("sms").width;
 }
 
 function campaignMmsHeight(): number {
-  return Math.max(320, Math.min(3072, Number(process.env.CAMPAIGN_MMS_IMAGE_HEIGHT ?? 1350)));
+  return campaignAssetFrameSpec("sms").height;
 }
 
 function campaignMmsMaxBytes(): number {
@@ -37124,7 +37080,7 @@ function campaignMmsMinQuality(): number {
 }
 
 function campaignEmailWidth(): number {
-  return Math.max(480, Math.min(2400, Number(process.env.CAMPAIGN_EMAIL_IMAGE_WIDTH ?? 1200)));
+  return campaignAssetFrameSpec("email").width;
 }
 
 function campaignEmailMaxHeight(): number {
@@ -37257,27 +37213,27 @@ function campaignImageOutputProfileForAssetTarget(target: CampaignAssetTarget): 
 }
 
 function campaignFacebookPostWidth(): number {
-  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_FACEBOOK_POST_WIDTH ?? 1080)));
+  return campaignAssetFrameSpec("facebook_post").width;
 }
 
 function campaignFacebookPostHeight(): number {
-  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_FACEBOOK_POST_HEIGHT ?? 1080)));
+  return campaignAssetFrameSpec("facebook_post").height;
 }
 
 function campaignInstagramPostWidth(): number {
-  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_POST_WIDTH ?? 1080)));
+  return campaignAssetFrameSpec("instagram_post").width;
 }
 
 function campaignInstagramPostHeight(): number {
-  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_POST_HEIGHT ?? 1350)));
+  return campaignAssetFrameSpec("instagram_post").height;
 }
 
 function campaignInstagramStoryWidth(): number {
-  return Math.max(640, Math.min(4096, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_WIDTH ?? 1080)));
+  return campaignAssetFrameSpec("instagram_story").width;
 }
 
 function campaignInstagramStoryHeight(): number {
-  return Math.max(960, Math.min(6144, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_HEIGHT ?? 1920)));
+  return campaignAssetFrameSpec("instagram_story").height;
 }
 
 function campaignFlyerTrimWidth(): number {
@@ -38003,23 +37959,11 @@ async function normalizeCampaignFlyerWithControlledLayout(
 }
 
 function campaignWebBannerWidth(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
-  const fromProfile = Number((profile as any)?.campaign?.webBannerWidth);
-  const fromLegacy = Number((profile as any)?.webBannerWidth);
-  const candidate = Number.isFinite(fromProfile) ? fromProfile : fromLegacy;
-  if (Number.isFinite(candidate) && candidate >= 640 && candidate <= 6000) {
-    return Math.round(candidate);
-  }
-  return Math.max(640, Math.min(6000, Number(process.env.CAMPAIGN_WEB_BANNER_WIDTH ?? 1920)));
+  return campaignAssetFrameSpec("web_banner", profile).width;
 }
 
 function campaignWebBannerHeight(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
-  const fromProfile = Number((profile as any)?.campaign?.webBannerHeight);
-  const fromLegacy = Number((profile as any)?.webBannerHeight);
-  const candidate = Number.isFinite(fromProfile) ? fromProfile : fromLegacy;
-  if (Number.isFinite(candidate) && candidate >= 120 && candidate <= 3000) {
-    return Math.round(candidate);
-  }
-  return Math.max(120, Math.min(3000, Number(process.env.CAMPAIGN_WEB_BANNER_HEIGHT ?? 600)));
+  return campaignAssetFrameSpec("web_banner", profile).height;
 }
 
 function campaignWebBannerInsetPercent(profile?: Awaited<ReturnType<typeof getDealerProfile>>): number {
@@ -38892,7 +38836,9 @@ async function generateCampaignImageWithOpenAI(args: {
   const apiKey = String(process.env.OPENAI_API_KEY ?? "").trim();
   if (!apiKey) return null;
   const model = String(process.env.CAMPAIGN_OPENAI_IMAGE_MODEL ?? "gpt-image-1").trim();
-  const rawSize = String(process.env.CAMPAIGN_OPENAI_IMAGE_SIZE ?? "1024x1024").trim();
+  const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
+  const defaultSize = campaignOpenAiImageSizeForTarget(preferredTarget);
+  const rawSize = String(process.env.CAMPAIGN_OPENAI_IMAGE_SIZE ?? defaultSize).trim();
   const allowedSizes = new Set([
     "auto",
     "256x256",
@@ -38903,7 +38849,7 @@ async function generateCampaignImageWithOpenAI(args: {
     "1792x1024",
     "1024x1792"
   ]);
-  const size = allowedSizes.has(rawSize) ? (rawSize as any) : ("1024x1024" as any);
+  const size = allowedSizes.has(rawSize) ? (rawSize as any) : (defaultSize as any);
   const imagePrompt = buildCampaignImagePrompt(args);
   try {
     const timeoutMs = Math.max(5_000, Number(process.env.CAMPAIGN_OPENAI_IMAGE_TIMEOUT_MS ?? 45_000));
@@ -38918,7 +38864,7 @@ async function generateCampaignImageWithOpenAI(args: {
       operation: "campaign_image_fallback",
       requestKind: "images.generate",
       model,
-      metadata: { channel: args.channel, size }
+      metadata: { channel: args.channel, size, preferredTarget }
     });
     const first = Array.isArray(imgResp?.data) ? imgResp.data[0] : null;
     let buffer: Buffer | null = null;
@@ -39045,7 +38991,7 @@ async function generateCampaignImageEditWithOpenAI(args: {
       "gpt-image-1"
   ).trim();
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
-  const defaultSize = preferredTarget === "flyer_8_5x11" || preferredTarget === "instagram_story" ? "1024x1536" : "auto";
+  const defaultSize = campaignOpenAiImageSizeForTarget(preferredTarget);
   const rawSize = String(process.env.CAMPAIGN_OPENAI_IMAGE_EDIT_SIZE ?? defaultSize).trim();
   const allowedSizes = new Set(["auto", "1024x1024", "1536x1024", "1024x1536"]);
   const size = allowedSizes.has(rawSize) ? (rawSize as any) : (defaultSize as any);
