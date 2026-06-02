@@ -36783,7 +36783,9 @@ function buildCampaignImagePrompt(args: {
     .join("\n");
   const referenceBlock = references || "(none)";
   const designImageUrls = normalizeCampaignUrlArray(args.designImageUrls ?? []);
+  const referenceImageUrls = normalizeCampaignUrlArray(args.referenceImageUrls ?? []);
   const designImageCount = designImageUrls.length;
+  const referenceImageCount = referenceImageUrls.length;
   const hasLogoLikeDesignAsset = designImageUrls.some(isLogoLikeDesignAsset);
   const hasPlacePhotos = Array.isArray(args.referenceImageUrls)
     ? args.referenceImageUrls.some(url =>
@@ -36827,6 +36829,17 @@ function buildCampaignImagePrompt(args: {
     "- Use fewer words and larger readable type when needed; omit optional decorative copy instead of rendering cramped or misspelled text.",
     "- Before finalizing, check every visible word for spelling and remove any optional line that cannot be rendered accurately."
   ];
+  const referenceFidelityGuardrails = referenceImageCount
+    ? [
+        "Reference fidelity requirements (critical):",
+        `- ${referenceImageCount} uploaded reference image${referenceImageCount === 1 ? " is" : "s are"} the visual source of truth.`,
+        "- Match the primary reference as closely as possible in look and feel: composition map, subject scale, spacing, typography era, texture, color palette, contrast, shadows, illustration/photo treatment, and overall mood.",
+        "- Preserve the reference's visual system first; adapt only the campaign copy, dealer details, required output size, and print-safe spacing.",
+        "- Do not reinterpret the reference into a different design genre, template, era, layout, or generic motorcycle ad.",
+        "- If multiple references conflict, use the first reference image as the style anchor and use later references only as supporting assets/details.",
+        "- Preserve style, not stale or misspelled reference copy; replace reference wording with the campaign's correct copy."
+      ]
+    : [];
   const outputGuardrails: string[] = [];
   if (preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1) {
     const flyerW = campaignFlyerWidth();
@@ -36857,6 +36870,8 @@ function buildCampaignImagePrompt(args: {
         "Reference style lock (critical):",
         "- Treat the primary uploaded reference image as the art direction source, not loose inspiration.",
         "- Match the reference image's layout language, typography style, headline scale, color treatment, texture/grain, lighting, logo placement, spacing rhythm, and overall magazine-ad feel.",
+        "- Keep the generated flyer visually close enough that a user would recognize it as the same design family at a glance.",
+        "- Preserve the same major composition relationships: where the headline lives, where the main illustration/photo lives, how ribbons/badges/logos are placed, and how the lower copy block is grouped.",
         "- Replace the campaign content/details while preserving the reference's visual system and hierarchy.",
         "- Do not switch to a different illustration style, different type era, generic patriotic template, or unrelated bike-ad layout.",
         "- Use additional uploaded design assets as supporting elements only; they must not override the primary reference style.",
@@ -36971,6 +36986,7 @@ function buildCampaignImagePrompt(args: {
     `Direction: ${primary}`,
     ...tagGuardrails,
     ...(designAssetGuardrails.length ? ["", ...designAssetGuardrails] : []),
+    ...(referenceFidelityGuardrails.length ? ["", ...referenceFidelityGuardrails] : []),
     "",
     ...textAccuracyGuardrails,
     ...(promptDetailGuardrails.length ? ["", ...promptDetailGuardrails] : []),
