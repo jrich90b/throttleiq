@@ -26488,6 +26488,10 @@ function getMetaRedirectUri() {
   return `${publicBase}/integrations/meta/callback`;
 }
 
+function getMetaLoginConfigId() {
+  return String(process.env.META_LOGIN_CONFIG_ID ?? process.env.META_FACEBOOK_LOGIN_CONFIG_ID ?? "").trim();
+}
+
 function getMetaStateSecret() {
   const configured = String(process.env.META_OAUTH_STATE_SECRET ?? "").trim();
   if (configured) return configured;
@@ -26996,13 +27000,19 @@ app.get("/integrations/meta/start", requireManager, async (_req, res) => {
   }
   const existing = await getMetaIntegrationRecord();
   const state = buildMetaOAuthState(existing?.pageId);
+  const loginConfigId = getMetaLoginConfigId();
   const url = new URL("https://www.facebook.com/v23.0/dialog/oauth");
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", META_OAUTH_SCOPES.join(","));
+  if (loginConfigId) {
+    url.searchParams.set("config_id", loginConfigId);
+    url.searchParams.set("override_default_response_type", "true");
+  } else {
+    url.searchParams.set("scope", META_OAUTH_SCOPES.join(","));
+  }
   url.searchParams.set("state", state);
-  return res.json({ ok: true, url: url.toString() });
+  return res.json({ ok: true, url: url.toString(), loginConfig: Boolean(loginConfigId) });
 });
 
 app.get("/integrations/meta/status", requireManager, async (_req, res) => {
