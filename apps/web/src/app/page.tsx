@@ -2971,6 +2971,11 @@ export default function Home() {
       setCampaignEditFromCurrentImage(true);
     }
   }, [campaignActiveTarget, campaignHasCurrentBaseImage]);
+  useEffect(() => {
+    if (!campaignHasCurrentBaseImage) {
+      setCampaignEditFromCurrentImage(false);
+    }
+  }, [campaignHasCurrentBaseImage]);
   const campaignPrimaryGeneratedImageUrl = useMemo(() => {
     const finalUrl = String(campaignFinalImageUrl ?? "").trim();
     if (finalUrl && looksLikeCampaignImageUrl(finalUrl)) return finalUrl;
@@ -4928,7 +4933,7 @@ export default function Home() {
       setCampaignError("Email output moved to Email Builder.");
       return;
     }
-    const editFromCurrent = Boolean(opts?.editFromCurrent);
+    const requestedEditFromCurrent = Boolean(opts?.editFromCurrent);
     const currentTargetAssetUrl = (() => {
       const byTarget = (campaignGeneratedAssets ?? []).find(
         row => String(row?.target ?? "").trim() === target
@@ -4940,9 +4945,9 @@ export default function Home() {
       }
       return String(campaignFinalImageUrl ?? "").trim();
     })();
-    if (editFromCurrent && !currentTargetAssetUrl) {
-      setCampaignError("No current generated image found for this output. Generate once first, then apply edits.");
-      return;
+    const editFromCurrent = requestedEditFromCurrent && Boolean(currentTargetAssetUrl);
+    if (requestedEditFromCurrent && !currentTargetAssetUrl) {
+      setCampaignEditFromCurrentImage(false);
     }
     const isScratchBuild = campaignForm.buildMode === "design_from_scratch";
     const includeMediaContext = isScratchBuild;
