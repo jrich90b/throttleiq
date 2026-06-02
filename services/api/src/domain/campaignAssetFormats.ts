@@ -15,6 +15,18 @@ export type CampaignAssetFrameSpec = {
   safeInsetY: number;
 };
 
+function normalizeReferenceUrls(values: Array<unknown> | null | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const trimmed = String(value ?? "").trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
   const n = Number(value);
   const candidate = Number.isFinite(n) ? n : fallback;
@@ -91,6 +103,21 @@ export function campaignOpenAiImageSizeForTarget(target: CampaignAssetTarget | n
   if (target === "sms" || target === "instagram_story" || target === "flyer_8_5x11") return "1024x1536";
   if (target === "facebook_post" || target === "instagram_post" || target === "email") return "1024x1024";
   return "1024x1024";
+}
+
+export function campaignTargetReferenceImageUrls(args: {
+  inspirationContextImageUrls?: Array<unknown> | null;
+  styleLockRefUrl?: unknown;
+  designImageUrls?: Array<unknown> | null;
+}): string[] {
+  const inspiration = normalizeReferenceUrls(args.inspirationContextImageUrls ?? []);
+  const styleLock = normalizeReferenceUrls([args.styleLockRefUrl]);
+  const design = normalizeReferenceUrls(args.designImageUrls ?? []);
+  return normalizeReferenceUrls([...inspiration, ...styleLock, ...design]);
+}
+
+export function campaignUsesPrimaryStyleAnchor(referenceImageUrls: Array<unknown> | null | undefined): boolean {
+  return normalizeReferenceUrls(referenceImageUrls ?? []).length > 0;
 }
 
 export function campaignAssetFramePromptLines(

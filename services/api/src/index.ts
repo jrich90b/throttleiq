@@ -617,7 +617,9 @@ import { generateCampaignContent } from "./domain/campaignBuilder.js";
 import {
   campaignAssetFramePromptLines,
   campaignAssetFrameSpec,
-  campaignOpenAiImageSizeForTarget
+  campaignOpenAiImageSizeForTarget,
+  campaignTargetReferenceImageUrls,
+  campaignUsesPrimaryStyleAnchor
 } from "./domain/campaignAssetFormats.js";
 import {
   clearMetaIntegrationRecord,
@@ -38719,9 +38721,8 @@ async function generateCampaignImageWithNanoBanana(args: {
     );
     const maxAttempts = Math.max(1, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_ATTEMPTS ?? 3));
     const baseBackoffMs = Math.max(250, Number(process.env.CAMPAIGN_NANO_BANANA_RETRY_BACKOFF_MS ?? 2500));
-    const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
     const referenceParts = await buildNanoBananaReferenceParts(args.referenceImageUrls, {
-      primaryStyleAnchor: preferredTarget === "flyer_8_5x11"
+      primaryStyleAnchor: campaignUsesPrimaryStyleAnchor(args.referenceImageUrls)
     });
     const parts = [{ text: imagePrompt }, ...referenceParts];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -41312,7 +41313,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
       const strictReferenceDirective = strictReferenceLock
         ? target === "flyer_8_5x11"
           ? `Reference-lock requirement (critical): use the primary uploaded reference image as the magazine-ad style source of truth. Preserve its layout language, typography family/weight feel, headline scale, copy hierarchy, color palette, texture/grain, image treatment, logo placement, spacing rhythm, and overall art direction. Adapt only the campaign content/details for ${targetLabel}; do not drift to a generic patriotic flyer or unrelated motorcycle-ad style. Do not invent extra copy, stale reference text, footer lines, or claims not present in the campaign prompt/dealer profile.`
-          : `Reference-lock requirement (critical): use uploaded reference images as the primary visual source of truth. Closely match core subject, style, color palette, typography hierarchy, and branding cues. Do not drift to unrelated concepts, products, scenes, or text. Adapt composition for ${targetLabel} while preserving the same campaign identity.`
+          : `Reference-lock requirement (critical): use the primary uploaded reference image as the visual style source of truth for ${targetLabel}. Preserve its layout language, typography family/weight feel, headline scale, copy hierarchy, color palette, texture/grain, image treatment, logo placement, spacing rhythm, and overall art direction. Adapt only the composition crop/spacing needed for ${targetLabel}'s frame and safe-area rules. Do not drift to a generic social post, unrelated motorcycle-ad style, different era, different font style, different illustration/photo treatment, or unrelated concept. Do not invent extra copy, stale reference text, footer lines, or claims not present in the campaign prompt/dealer profile.`
         : undefined;
       const styleLockDirective = styleLockRefUrl
         ? `Style-lock requirement: match the same campaign theme, color palette, brand look, and message hierarchy as the anchor image while adapting composition to ${targetLabel}. Keep headline/offer intent consistent across all outputs.`
@@ -41325,18 +41326,11 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
         [editPrompt ? `Requested edit: ${editPrompt}` : undefined, description, editModeDirective, strictReferenceDirective, styleLockDirective]
           .filter((value): value is string => Boolean(String(value ?? "").trim()))
           .join("\n\n") || undefined;
-      const targetReferenceImageUrls =
-        target === "flyer_8_5x11"
-          ? normalizeCampaignUrlArray([
-              ...inspirationContextImageUrls,
-              ...(styleLockRefUrl ? [styleLockRefUrl] : []),
-              ...designImageUrls
-            ])
-          : normalizeCampaignUrlArray([
-              ...designImageUrls,
-              ...(styleLockRefUrl ? [styleLockRefUrl] : []),
-              ...inspirationContextImageUrls
-            ]);
+      const targetReferenceImageUrls = campaignTargetReferenceImageUrls({
+        inspirationContextImageUrls,
+        styleLockRefUrl,
+        designImageUrls
+      });
       const editSourceImageUrl = editFromCurrent ? targetReferenceImageUrls[0] : undefined;
       const deterministicFlyerTextEditEnabled =
         String(process.env.CAMPAIGN_DETERMINISTIC_FLYER_TEXT_EDIT_ENABLED ?? "0").trim() === "1";

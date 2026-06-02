@@ -2,7 +2,9 @@ import { strict as assert } from "node:assert";
 import {
   campaignAssetFramePromptLines,
   campaignAssetFrameSpec,
-  campaignOpenAiImageSizeForTarget
+  campaignOpenAiImageSizeForTarget,
+  campaignTargetReferenceImageUrls,
+  campaignUsesPrimaryStyleAnchor
 } from "../services/api/src/domain/campaignAssetFormats.js";
 
 function assertFrame(
@@ -49,5 +51,18 @@ assert.match(instagramPrompt, /footer\/URL text is pinned to the bottom edge/);
 const storyPrompt = campaignAssetFramePromptLines("instagram_story").join("\n");
 assert.match(storyPrompt, /1080x1920/);
 assert.match(storyPrompt, /Story UI safety/);
+
+const referenceOrder = campaignTargetReferenceImageUrls({
+  inspirationContextImageUrls: ["/uploads/campaigns/reference-style.jpg"],
+  styleLockRefUrl: "/uploads/campaigns/generated-anchor.jpg",
+  designImageUrls: ["/uploads/campaigns/dealer-logo.png", "/uploads/campaigns/reference-style.jpg"]
+});
+assert.deepEqual(referenceOrder, [
+  "/uploads/campaigns/reference-style.jpg",
+  "/uploads/campaigns/generated-anchor.jpg",
+  "/uploads/campaigns/dealer-logo.png"
+]);
+assert.equal(campaignUsesPrimaryStyleAnchor(referenceOrder), true);
+assert.equal(campaignUsesPrimaryStyleAnchor([]), false);
 
 console.log("Campaign asset format checks passed.");
