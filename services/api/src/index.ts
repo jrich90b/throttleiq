@@ -36814,6 +36814,19 @@ function buildCampaignImagePrompt(args: {
         ...requiredPromptDetails.map((item, idx) => `- Required detail ${idx + 1}: ${item}`)
       ]
     : [];
+  const textAccuracyGuardrails = [
+    "Text accuracy requirements (critical):",
+    "- Treat all visible words as final production copy, not decorative texture.",
+    `- Spell the dealer name exactly as: ${dealerName}`,
+    website
+      ? `- If the website is shown, spell it exactly as: ${website}`
+      : "- Do not invent a website or URL.",
+    "- Copy names, dates, times, addresses, phone numbers, prices, sponsor names, event titles, and model names exactly from the campaign direction and required details.",
+    "- Do not add extra letters, malformed words, pseudo-text, gibberish, repeated characters, or placeholder copy.",
+    "- Do not copy misspelled text from a reference image unless the same spelling appears in the campaign direction.",
+    "- Use fewer words and larger readable type when needed; omit optional decorative copy instead of rendering cramped or misspelled text.",
+    "- Before finalizing, check every visible word for spelling and remove any optional line that cannot be rendered accurately."
+  ];
   const outputGuardrails: string[] = [];
   if (preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1) {
     const flyerW = campaignFlyerWidth();
@@ -36958,6 +36971,8 @@ function buildCampaignImagePrompt(args: {
     `Direction: ${primary}`,
     ...tagGuardrails,
     ...(designAssetGuardrails.length ? ["", ...designAssetGuardrails] : []),
+    "",
+    ...textAccuracyGuardrails,
     ...(promptDetailGuardrails.length ? ["", ...promptDetailGuardrails] : []),
     ...(placePhotoGuardrails.length ? ["", ...placePhotoGuardrails] : []),
     ...(outputGuardrails.length ? ["", ...outputGuardrails] : []),
