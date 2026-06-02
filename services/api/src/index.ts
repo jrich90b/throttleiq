@@ -93,7 +93,7 @@ import {
 } from "./domain/warrantyRmaVectorStore.js";
 import {
   buildInventoryWatchScanPlan,
-  inventoryWatchItemMatchesLastNotifiedStock,
+  inventoryWatchGroupMatchesLastNotifiedStock,
   inventorySnapshotKey,
   loadInventorySnapshotFile,
   saveInventorySnapshotFile,
@@ -4021,8 +4021,8 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   return true;
 }
 
-function inventoryWatchAlreadyNotifiedStock(watch: InventoryWatch, item: any): boolean {
-  return inventoryWatchItemMatchesLastNotifiedStock(watch.lastNotifiedStockId, item);
+function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item: any): boolean {
+  return inventoryWatchGroupMatchesLastNotifiedStock(watches, item);
 }
 
 async function processInventoryWatchlist(targetConvId?: string) {
@@ -4098,7 +4098,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
         // Only notify on newly-arrived inventory so a just-created watch does not
         // immediately fire against units that were already in stock.
         const match = candidateItems.find(i => {
-          if (inventoryWatchAlreadyNotifiedStock(watch, i)) return false;
+          if (inventoryWatchGroupAlreadyNotifiedStock(watches, i)) return false;
           return inventoryItemMatchesWatch(i, watch);
         });
         if (!match) continue;

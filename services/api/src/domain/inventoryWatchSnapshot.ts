@@ -82,6 +82,15 @@ export function inventoryWatchItemMatchesLastNotifiedStock(
   return candidates.includes(last);
 }
 
+export function inventoryWatchGroupMatchesLastNotifiedStock(
+  watches: Array<{ lastNotifiedStockId?: string | null }> | null | undefined,
+  item: any
+): boolean {
+  return (watches ?? []).some(watch =>
+    inventoryWatchItemMatchesLastNotifiedStock(watch?.lastNotifiedStockId, item)
+  );
+}
+
 export async function loadInventorySnapshotFile(filePath: string): Promise<InventorySnapshotLoadResult> {
   try {
     const raw = await fs.readFile(filePath, "utf8");

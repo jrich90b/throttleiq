@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   buildInventorySnapshot,
   buildInventoryWatchScanPlan,
+  inventoryWatchGroupMatchesLastNotifiedStock,
   inventoryWatchItemMatchesLastNotifiedStock,
   loadInventorySnapshotFile,
   saveInventorySnapshotFile
@@ -98,6 +99,17 @@ async function main() {
       stockId: "S7-26",
       vin: "1HD1YWZ10TB032949"
     }),
+    true
+  );
+  assert.equal(
+    inventoryWatchGroupMatchesLastNotifiedStock(
+      [
+        { lastNotifiedStockId: "U121-22" },
+        {},
+        { lastNotifiedStockId: null }
+      ],
+      { stockId: "U121-22", vin: "1HD1LC312NC404193", model: "Forty-Eight" }
+    ),
     true
   );
 
