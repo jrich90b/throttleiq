@@ -23,13 +23,15 @@ Common options:
   --replace-pm2               Replace the PM2 process so it runs from this repo path.
   --skip-local-checks         Skip local API typecheck before SSH deploy.
   --backup-retention-count N  Keep only the newest N runtime backups after backup. Default: 12.
+  --health-attempts N         Number of post-restart health attempts. Default: 15.
   --dry-run                   Check local/remote readiness without changing server.
 
 Environment variable equivalents:
   DEPLOY_HOST, DEPLOY_REPO, DEPLOY_BRANCH, DEPLOY_DATA_DIR,
   DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
   DEPLOY_API_PORT, DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
-  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_COUNT, DEPLOY_DRY_RUN
+  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_COUNT, DEPLOY_HEALTH_ATTEMPTS,
+  DEPLOY_DRY_RUN
 USAGE
 }
 
@@ -94,6 +96,10 @@ while [[ $# -gt 0 ]]; do
       DEPLOY_BACKUP_RETENTION_COUNT="${2:-}"
       shift 2
       ;;
+    --health-attempts)
+      DEPLOY_HEALTH_ATTEMPTS="${2:-}"
+      shift 2
+      ;;
     --dry-run)
       DEPLOY_DRY_RUN=1
       shift
@@ -132,6 +138,7 @@ DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
 DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
 DEPLOY_BACKUP_RETENTION_COUNT="${DEPLOY_BACKUP_RETENTION_COUNT:-12}"
+DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-15}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
 require_cmd() {
@@ -163,6 +170,7 @@ if [[ -n "$DEPLOY_API_PORT" ]]; then
   echo "  api port:   $DEPLOY_API_PORT"
 fi
 echo "  health:     $DEPLOY_HEALTH_URL"
+echo "  attempts:   $DEPLOY_HEALTH_ATTEMPTS"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
 echo "  backups:    keep newest $DEPLOY_BACKUP_RETENTION_COUNT"
 echo
@@ -181,6 +189,7 @@ remote_env=(
   "DEPLOY_PM2_PROCESS=$(shell_quote "$DEPLOY_PM2_PROCESS")"
   "DEPLOY_API_PORT=$(shell_quote "$DEPLOY_API_PORT")"
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
+  "DEPLOY_HEALTH_ATTEMPTS=$(shell_quote "$DEPLOY_HEALTH_ATTEMPTS")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
   "DEPLOY_BACKUP_RETENTION_COUNT=$(shell_quote "$DEPLOY_BACKUP_RETENTION_COUNT")"
@@ -319,7 +328,10 @@ fi
 pm2 save >/dev/null
 
 echo "Checking API health..."
-for attempt in 1 2 3 4 5; do
+if [[ ! "$DEPLOY_HEALTH_ATTEMPTS" =~ ^[0-9]+$ || "$DEPLOY_HEALTH_ATTEMPTS" -lt 1 ]]; then
+  DEPLOY_HEALTH_ATTEMPTS=15
+fi
+for ((attempt = 1; attempt <= DEPLOY_HEALTH_ATTEMPTS; attempt += 1)); do
   if curl -fsS "$DEPLOY_HEALTH_URL" >/tmp/leadrider-api-health.json; then
     cat /tmp/leadrider-api-health.json
     echo
