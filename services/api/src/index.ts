@@ -36830,9 +36830,11 @@ function buildCampaignImagePrompt(args: {
       "- Do not create blurred, smeared, copied, mirrored, or stretched edge fill. The artwork must naturally fill the page.",
       "- Print-safe live area: keep every important logo, headline, date, address, CTA, bike/rider, and readable text at least 6% away from all four page edges.",
       "- The outer 6% perimeter may contain background texture/color only; no important text, logos, faces, wheels, or key artwork should enter that trim-risk area.",
+      "- Treat the top and bottom 10% of the page as background-only trim-risk zones unless the current reference already has harmless texture there.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
       "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
-      "- If space is tight, simplify copy and reduce type size before moving text or key artwork toward the page edge.",
+      "- Do not place a website, tiny footer, sponsor line, or any readable copy at the bottom edge. Include the dealer website only if it fits fully inside the safe live area; otherwise omit it.",
+      "- If space is tight, simplify copy, omit optional footer/website text, and reduce type size before moving text or key artwork toward the page edge.",
       "- Copy accuracy: use only copy/details from the campaign prompt, dealer name, dealer website, and provided reference assets.",
       "- Do not invent extra slogans, footer lines, disclaimers, legal copy, product claims, event details, phone numbers, or filler text."
     );
@@ -37160,7 +37162,7 @@ function campaignFlyerHeight(): number {
 }
 
 function campaignFlyerSafeInsetPercent(): number {
-  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 0)));
+  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 6)));
 }
 
 function campaignFlyerMaxBytes(): number {
@@ -41256,7 +41258,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           targets: targetAssetTargets,
           dealerProfile,
           flyerLayoutContext,
-          flyerSafeInsetPercent: editFromCurrent && target === "flyer_8_5x11" ? 6 : undefined
+          flyerSafeInsetPercent: target === "flyer_8_5x11" ? campaignFlyerSafeInsetPercent() : undefined
         }),
         perTargetTimeoutMs,
         `normalize target ${target}`
@@ -41332,7 +41334,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
             targets: uniqueTargets,
             dealerProfile,
             flyerLayoutContext,
-            flyerSafeInsetPercent: editFromCurrent ? 6 : undefined
+            flyerSafeInsetPercent: uniqueTargets.includes("flyer_8_5x11") ? campaignFlyerSafeInsetPercent() : undefined
           }),
           Math.max(perTargetTimeoutMs, 120_000),
           "normalize emergency anchor targets"
@@ -41368,7 +41370,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           targets: missingTargets,
           dealerProfile,
           flyerLayoutContext,
-          flyerSafeInsetPercent: editFromCurrent ? 6 : undefined
+          flyerSafeInsetPercent: missingTargets.includes("flyer_8_5x11") ? campaignFlyerSafeInsetPercent() : undefined
         }),
         perTargetTimeoutMs,
         "normalize missing targets from style lock source"
