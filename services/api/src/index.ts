@@ -36844,22 +36844,27 @@ function buildCampaignImagePrompt(args: {
   if (preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1) {
     const flyerW = campaignFlyerWidth();
     const flyerH = campaignFlyerHeight();
+    const trimW = campaignFlyerTrimWidth();
+    const trimH = campaignFlyerTrimHeight();
+    const bleedInches = campaignFlyerBleedInches();
+    const bleedX = campaignFlyerBleedXPx();
+    const bleedY = campaignFlyerBleedYPx();
+    const liveMargin = campaignFlyerLiveMarginPx();
     const ratio = (flyerW / Math.max(1, flyerH)).toFixed(3);
     const hasReferenceImages = normalizeCampaignUrlArray(args.referenceImageUrls ?? []).length > 0;
     outputGuardrails.push(
       "Output framing requirements (critical):",
-      `- Compose as a vertical print flyer at ${flyerW}x${flyerH} (~${ratio}:1), matching 8.5x11 portrait.`,
+      `- Compose as a vertical print flyer file at ${flyerW}x${flyerH} (~${ratio}:1). This includes standard ${bleedInches}" bleed on all sides around an 8.5x11 trim (${trimW}x${trimH}).`,
       "- Create the complete final full-bleed magazine advertisement, including typography, hierarchy, artwork, and final copy as one cohesive design.",
       "- The ad should feel like a polished premium magazine ad: editorial, high-impact, cohesive, dimensional, and professionally typeset. Avoid generic clip-art flyer/template composition.",
       "- Match the typography style to the magazine ad/art direction and keep fonts, colors, shadows, and spacing integrated with the image.",
-      "- Use the full page edge-to-edge with no white border, no boxed artwork, no poster-on-background layout, and no separate template panel.",
+      "- Use the full bleed canvas edge-to-edge with no white border, no matte, no visible inset frame, no boxed artwork, no poster-on-background layout, and no separate template panel.",
       "- Do not create blurred, smeared, copied, mirrored, or stretched edge fill. The artwork must naturally fill the page.",
-      "- Print-safe live area: keep every important logo, headline, date, address, CTA, bike/rider, and readable text at least 6% away from all four page edges.",
-      "- The outer 6% perimeter may contain background texture/color only; no important text, logos, faces, wheels, or key artwork should enter that trim-risk area.",
-      "- Treat the top and bottom 10% of the page as background-only trim-risk zones unless the current reference already has harmless texture there.",
+      `- Bleed requirement: background/artwork/texture must extend all the way to the outer canvas edge. The outer bleed is about ${bleedX}px left/right and ${bleedY}px top/bottom; it is for background continuation only.`,
+      `- Live-area requirement: keep every important logo, headline, date, address, CTA, bike/rider, face, wheel, and readable text at least ${liveMargin}px inside the trim edge, not merely inside the bleed edge.`,
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
       "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
-      "- Do not place a website, tiny footer, sponsor line, or any readable copy at the bottom edge. Include the dealer website only if it fits fully inside the safe live area; otherwise omit it.",
+      "- Do not place a website, tiny footer, sponsor line, or any readable copy in the bleed or directly on the trim edge. Include the dealer website only if it fits fully inside the safe live area; otherwise omit it.",
       "- If space is tight, simplify copy, omit optional footer/website text, and reduce type size before moving text or key artwork toward the page edge.",
       "- Copy accuracy: use only copy/details from the campaign prompt, dealer name, dealer website, and provided reference assets.",
       "- Do not invent extra slogans, footer lines, disclaimers, legal copy, product claims, event details, phone numbers, or filler text."
@@ -37184,16 +37189,41 @@ function campaignInstagramStoryHeight(): number {
   return Math.max(960, Math.min(6144, Number(process.env.CAMPAIGN_INSTAGRAM_STORY_HEIGHT ?? 1920)));
 }
 
-function campaignFlyerWidth(): number {
+function campaignFlyerTrimWidth(): number {
   return Math.max(850, Math.min(6000, Number(process.env.CAMPAIGN_FLYER_8_5X11_WIDTH ?? 2550)));
 }
 
-function campaignFlyerHeight(): number {
+function campaignFlyerTrimHeight(): number {
   return Math.max(1100, Math.min(7000, Number(process.env.CAMPAIGN_FLYER_8_5X11_HEIGHT ?? 3300)));
 }
 
-function campaignFlyerSafeInsetPercent(): number {
-  return Math.max(0, Math.min(10, Number(process.env.CAMPAIGN_FLYER_SAFE_INSET_PERCENT ?? 6)));
+function campaignFlyerBleedInches(): number {
+  return Math.max(0, Math.min(0.5, Number(process.env.CAMPAIGN_FLYER_BLEED_INCHES ?? 0.125)));
+}
+
+function campaignFlyerWidth(): number {
+  const trimWidth = campaignFlyerTrimWidth();
+  const dpi = trimWidth / 8.5;
+  return Math.round((8.5 + campaignFlyerBleedInches() * 2) * dpi);
+}
+
+function campaignFlyerHeight(): number {
+  const trimHeight = campaignFlyerTrimHeight();
+  const dpi = trimHeight / 11;
+  return Math.round((11 + campaignFlyerBleedInches() * 2) * dpi);
+}
+
+function campaignFlyerBleedXPx(): number {
+  return Math.max(0, Math.round((campaignFlyerWidth() - campaignFlyerTrimWidth()) / 2));
+}
+
+function campaignFlyerBleedYPx(): number {
+  return Math.max(0, Math.round((campaignFlyerHeight() - campaignFlyerTrimHeight()) / 2));
+}
+
+function campaignFlyerLiveMarginPx(): number {
+  const dpi = campaignFlyerTrimWidth() / 8.5;
+  return Math.max(0, Math.round(Math.max(0.25, Number(process.env.CAMPAIGN_FLYER_LIVE_MARGIN_INCHES ?? 0.25)) * dpi));
 }
 
 function campaignFlyerMaxBytes(): number {
@@ -37209,10 +37239,6 @@ type CampaignFlyerLayoutContext = {
   description?: string;
   dealerName?: string;
   website?: string;
-};
-
-type CampaignFlyerNormalizeOptions = {
-  safeInsetPercent?: number;
 };
 
 function escapeCampaignFlyerSvgText(value: string): string {
@@ -37756,8 +37782,7 @@ function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number 
 
 async function normalizeCampaignFlyerWithControlledLayout(
   buffer: Buffer,
-  _context?: CampaignFlyerLayoutContext,
-  options?: CampaignFlyerNormalizeOptions
+  _context?: CampaignFlyerLayoutContext
 ): Promise<{
   buffer: Buffer;
   mimeType: "image/jpeg";
@@ -37777,48 +37802,17 @@ async function normalizeCampaignFlyerWithControlledLayout(
     sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0
       ? Math.abs(sourceAspect / targetAspect - 1)
       : 0;
-  const fit = aspectDrift > 0.035 ? "contain" : "cover";
-  const sampledBg = fit === "contain" ? await sampleCampaignFlyerBleedBackgroundRgb(buffer) : null;
-  let composed = await sharp(buffer, { failOn: "none", animated: false })
+  if (aspectDrift > 0.08) {
+    console.warn("[campaign] flyer source aspect differs from print bleed frame; using cover to preserve full bleed");
+  }
+  const composed = await sharp(buffer, { failOn: "none", animated: false })
     .rotate()
     .resize(width, height, {
-      fit,
-      position: "centre",
-      background: sampledBg ? { ...sampledBg, alpha: 1 } : undefined
+      fit: "cover",
+      position: "centre"
     })
     .png()
     .toBuffer();
-
-  const safeInsetPercent = Math.max(
-    0,
-    Math.min(10, Number(options?.safeInsetPercent ?? campaignFlyerSafeInsetPercent() ?? 0))
-  );
-  if (safeInsetPercent > 0) {
-    const insetX = Math.round(width * (safeInsetPercent / 100));
-    const insetY = Math.round(height * (safeInsetPercent / 100));
-    const innerWidth = Math.max(1, width - insetX * 2);
-    const innerHeight = Math.max(1, height - insetY * 2);
-    const background = await sampleCampaignFlyerBleedBackgroundRgb(composed);
-    const inner = await sharp(composed, { failOn: "none", animated: false })
-      .resize(innerWidth, innerHeight, {
-        fit: "contain",
-        position: "centre",
-        background: { ...background, alpha: 1 }
-      })
-      .png()
-      .toBuffer();
-    composed = await sharp({
-      create: {
-        width,
-        height,
-        channels: 4,
-        background: { ...background, alpha: 1 }
-      }
-    })
-      .composite([{ input: inner, left: insetX, top: insetY }])
-      .png()
-      .toBuffer();
-  }
 
   const maxBytes = campaignFlyerMaxBytes();
   let quality = Math.max(65, Math.min(95, Number(process.env.CAMPAIGN_FLYER_QUALITY ?? 92)));
@@ -38266,22 +38260,7 @@ async function normalizeCampaignImageForProfile(
     );
   }
   if (profile === "flyer_8_5x11") {
-    const normalized = await normalizeCampaignImageForExactFrame(
-      buffer,
-      campaignFlyerWidth(),
-      campaignFlyerHeight(),
-      { fit: "contain" }
-    );
-    const insetBuffer = await applyCampaignSafeInsetBackdrop(
-      normalized.buffer,
-      normalized.width,
-      normalized.height,
-      campaignFlyerSafeInsetPercent()
-    ).catch(() => normalized.buffer);
-    return {
-      ...normalized,
-      buffer: insetBuffer
-    };
+    return normalizeCampaignFlyerWithControlledLayout(buffer);
   }
   return normalizeCampaignImageForMms(buffer);
 }
@@ -38368,7 +38347,6 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
   targets: CampaignAssetTarget[];
   dealerProfile?: Awaited<ReturnType<typeof getDealerProfile>>;
   flyerLayoutContext?: CampaignFlyerLayoutContext;
-  flyerSafeInsetPercent?: number;
 }): Promise<CampaignGeneratedAsset[]> {
   const sourceBuffer = await readCampaignImageBufferFromUrl(args.sourceImageUrl);
   if (!sourceBuffer || !sourceBuffer.length) return [];
@@ -38397,9 +38375,7 @@ async function buildCampaignGeneratedAssetsFromSource(args: {
       const sourceForTarget = target === "web_banner" ? workingSourceBuffer : trimmedBuffer;
       const normalized =
         target === "flyer_8_5x11"
-          ? await normalizeCampaignFlyerWithControlledLayout(sourceForTarget, args.flyerLayoutContext, {
-              safeInsetPercent: args.flyerSafeInsetPercent
-            })
+          ? await normalizeCampaignFlyerWithControlledLayout(sourceForTarget, args.flyerLayoutContext)
           : await normalizeCampaignImageForProfile(sourceForTarget, profile, args.dealerProfile);
       const saved = await saveCampaignGeneratedImage(normalized, `campaign_${target}`);
       out.push({
@@ -41189,9 +41165,10 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           ? [
               "Flyer edit print-safety requirement (critical):",
               "- Preserve the current magazine-ad styling, typography, layout language, texture, and art direction.",
-              "- Do not enlarge, shift, or regenerate elements in a way that pushes text, logos, people, bikes, wheels, or key artwork into the trim/bleed perimeter.",
-              "- Keep the outer 6% perimeter on all four sides as background/texture only.",
-              "- If any current element is close to or outside the safe live area, scale and reposition the design inward while keeping the same visual style.",
+              `- Preserve standard ${campaignFlyerBleedInches()}" print bleed on all sides: artwork/background must extend through the bleed to the outer canvas edge.`,
+              "- Do not add a visible matte, border, frame, or inset panel to create bleed.",
+              "- Do not place readable text, logos, faces, wheels, or key artwork in the bleed area or directly on the trim edge.",
+              "- If any current element is too close to the trim/live area, adjust that element inside the existing design while keeping the background full-bleed.",
               "- The edit is not complete unless every readable text line, logo, face, wheel, motorcycle, CTA, and footer line is fully visible inside the safe live area."
             ].join("\n")
           : undefined;
@@ -41339,8 +41316,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           sourceImageUrl: generatedImageUrl,
           targets: targetAssetTargets,
           dealerProfile,
-          flyerLayoutContext,
-          flyerSafeInsetPercent: target === "flyer_8_5x11" ? campaignFlyerSafeInsetPercent() : undefined
+          flyerLayoutContext
         }),
         perTargetTimeoutMs,
         `normalize target ${target}`
@@ -41415,8 +41391,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
             sourceImageUrl: emergencyAnchorUrl,
             targets: uniqueTargets,
             dealerProfile,
-            flyerLayoutContext,
-            flyerSafeInsetPercent: uniqueTargets.includes("flyer_8_5x11") ? campaignFlyerSafeInsetPercent() : undefined
+            flyerLayoutContext
           }),
           Math.max(perTargetTimeoutMs, 120_000),
           "normalize emergency anchor targets"
@@ -41451,8 +41426,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
           sourceImageUrl: styleLockReferenceUrl,
           targets: missingTargets,
           dealerProfile,
-          flyerLayoutContext,
-          flyerSafeInsetPercent: missingTargets.includes("flyer_8_5x11") ? campaignFlyerSafeInsetPercent() : undefined
+          flyerLayoutContext
         }),
         perTargetTimeoutMs,
         "normalize missing targets from style lock source"
