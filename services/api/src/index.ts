@@ -37615,7 +37615,7 @@ async function renderCampaignFlyerDeterministicHeadlineEdit(args: {
     sourceAspect && Number.isFinite(sourceAspect) && sourceAspect > 0
       ? Math.abs(sourceAspect / targetAspect - 1)
       : 0;
-  const sampledBg = aspectDrift > 0.035 ? campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(sourceBuffer)) : null;
+  const sampledBg = aspectDrift > 0.035 ? await sampleCampaignFlyerBleedBackgroundRgb(sourceBuffer) : null;
   const base = await sharp(sourceBuffer, { failOn: "none", animated: false })
     .rotate()
     .resize(width, height, {
@@ -37660,6 +37660,74 @@ async function sampleCampaignFlyerAverageRgb(buffer: Buffer): Promise<{ r: numbe
   return { r: 16, g: 24, b: 39 };
 }
 
+async function sampleCampaignFlyerBleedBackgroundRgb(buffer: Buffer): Promise<{ r: number; g: number; b: number }> {
+  try {
+    const sample = await sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(96, 128, { fit: "fill" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const data = sample.data;
+    const width = Number(sample.info.width ?? 0);
+    const height = Number(sample.info.height ?? 0);
+    const channels = Number(sample.info.channels ?? 3);
+    if (!data?.length || width <= 0 || height <= 0 || channels < 3) {
+      return campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(buffer));
+    }
+    const zoneW = Math.max(8, Math.round(width * 0.18));
+    const zoneH = Math.max(8, Math.round(height * 0.14));
+    const zones = [
+      { left: 0, top: 0, width: zoneW, height: zoneH },
+      { left: width - zoneW, top: 0, width: zoneW, height: zoneH },
+      { left: 0, top: height - zoneH, width: zoneW, height: zoneH },
+      { left: width - zoneW, top: height - zoneH, width: zoneW, height: zoneH }
+    ];
+    const avgZone = (zone: { left: number; top: number; width: number; height: number }) => {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let count = 0;
+      for (let y = Math.max(0, zone.top); y < Math.min(height, zone.top + zone.height); y++) {
+        for (let x = Math.max(0, zone.left); x < Math.min(width, zone.left + zone.width); x++) {
+          const idx = (y * width + x) * channels;
+          r += Number(data[idx] ?? 0);
+          g += Number(data[idx + 1] ?? 0);
+          b += Number(data[idx + 2] ?? 0);
+          count++;
+        }
+      }
+      const safeCount = Math.max(1, count);
+      return {
+        r: Math.round(r / safeCount),
+        g: Math.round(g / safeCount),
+        b: Math.round(b / safeCount)
+      };
+    };
+    const samples = zones.map(avgZone);
+    const luminance = (rgb: { r: number; g: number; b: number }) =>
+      0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    const darkEdgeSamples = samples.filter(rgb => luminance(rgb) < 105);
+    const source = darkEdgeSamples.length >= 2 ? darkEdgeSamples : samples;
+    const avg = source.reduce(
+      (acc, rgb) => ({
+        r: acc.r + rgb.r,
+        g: acc.g + rgb.g,
+        b: acc.b + rgb.b
+      }),
+      { r: 0, g: 0, b: 0 }
+    );
+    const count = Math.max(1, source.length);
+    return {
+      r: Math.max(0, Math.min(255, Math.round(avg.r / count))),
+      g: Math.max(0, Math.min(255, Math.round(avg.g / count))),
+      b: Math.max(0, Math.min(255, Math.round(avg.b / count)))
+    };
+  } catch {
+    return campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(buffer));
+  }
+}
+
 function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number }): { r: number; g: number; b: number } {
   const lum = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
   if (lum > 185) return { r: 16, g: 24, b: 39 };
@@ -37694,7 +37762,7 @@ async function normalizeCampaignFlyerWithControlledLayout(
       ? Math.abs(sourceAspect / targetAspect - 1)
       : 0;
   const fit = aspectDrift > 0.035 ? "contain" : "cover";
-  const sampledBg = fit === "contain" ? campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(buffer)) : null;
+  const sampledBg = fit === "contain" ? await sampleCampaignFlyerBleedBackgroundRgb(buffer) : null;
   let composed = await sharp(buffer, { failOn: "none", animated: false })
     .rotate()
     .resize(width, height, {
@@ -37714,7 +37782,7 @@ async function normalizeCampaignFlyerWithControlledLayout(
     const insetY = Math.round(height * (safeInsetPercent / 100));
     const innerWidth = Math.max(1, width - insetX * 2);
     const innerHeight = Math.max(1, height - insetY * 2);
-    const background = campaignFlyerReadableBackground(await sampleCampaignFlyerAverageRgb(composed));
+    const background = await sampleCampaignFlyerBleedBackgroundRgb(composed);
     const inner = await sharp(composed, { failOn: "none", animated: false })
       .resize(innerWidth, innerHeight, {
         fit: "contain",
@@ -37887,24 +37955,7 @@ async function applyCampaignSafeInsetBackdrop(
   if (innerW >= width || innerH >= height) return buffer;
 
   const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
-  let sampled = { r: 255, g: 255, b: 255 };
-  try {
-    const avg = await rotated
-      .clone()
-      .resize(1, 1, { fit: "fill" })
-      .removeAlpha()
-      .raw()
-      .toBuffer();
-    if (avg.length >= 3) {
-      sampled = {
-        r: Number(avg[0] ?? 255),
-        g: Number(avg[1] ?? 255),
-        b: Number(avg[2] ?? 255)
-      };
-    }
-  } catch {
-    sampled = { r: 255, g: 255, b: 255 };
-  }
+  const sampled = await sampleCampaignFlyerBleedBackgroundRgb(buffer);
   const bg = await rotated
     .clone()
     .resize(width, height, {
