@@ -167,6 +167,9 @@ trap 'record_closed_loop_run "$?"' EXIT
     --conversations "$CONVERSATIONS_DB_PATH" \
     --out-dir "$OUTCOME_QA_OUT_DIR"
 
+  echo "[feedback-loop] step=inventory_watch_snapshot_guard_eval"
+  npm run inventory_watch_snapshot_guard:eval
+
   echo "[feedback-loop] step=vehicle_watch_catalog_eval -> $VEHICLE_WATCH_QA_JSON"
   if npm run harley_watch_model_catalog:eval -- \
     --out "$VEHICLE_WATCH_QA_JSON" \

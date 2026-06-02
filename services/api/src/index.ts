@@ -91,6 +91,15 @@ import {
   indexWarrantyRmaManuals,
   searchWarrantyRmaManualChunks
 } from "./domain/warrantyRmaVectorStore.js";
+import {
+  buildInventoryWatchScanPlan,
+  inventoryWatchItemMatchesLastNotifiedStock,
+  inventorySnapshotKey,
+  loadInventorySnapshotFile,
+  saveInventorySnapshotFile,
+  type InventorySnapshot,
+  type InventorySnapshotLoadResult
+} from "./domain/inventoryWatchSnapshot.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -3273,62 +3282,35 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
   return `${local}+${tag}@${domain}`;
 }
 
-type InventorySnapshot = {
-  savedAt: string;
-  items: Array<{
-    key: string;
-    stockId?: string;
-    vin?: string;
-    year?: string;
-    model?: string;
-    color?: string;
-  }>;
-};
-
 const INVENTORY_SNAPSHOT_PATH = path.join(getDataDir(), "inventory_snapshot.json");
 let inventoryWatchRunning = false;
 
 function inventoryKey(item: any): string | null {
-  const key =
-    (item.stockId ?? item.vin ?? "").trim() ||
-    [item.year ?? "", item.model ?? "", item.color ?? ""].join("|").trim();
-  return key ? key.toLowerCase() : null;
+  return inventorySnapshotKey(item);
+}
+
+async function loadInventorySnapshotResult(): Promise<InventorySnapshotLoadResult> {
+  const result = await loadInventorySnapshotFile(INVENTORY_SNAPSHOT_PATH);
+  if (!result.trusted && result.status !== "missing") {
+    console.warn(
+      `[inventory-watch] snapshot load ${result.status}:`,
+      result.error ?? "snapshot cannot be trusted"
+    );
+  }
+  return result;
 }
 
 async function loadInventorySnapshot(): Promise<InventorySnapshot> {
-  try {
-    const raw = await fs.promises.readFile(INVENTORY_SNAPSHOT_PATH, "utf8");
-    const parsed = JSON.parse(raw) as InventorySnapshot;
-    if (!parsed?.items) return { savedAt: new Date(0).toISOString(), items: [] };
-    return parsed;
-  } catch (e: any) {
-    if (e?.code === "ENOENT") {
-      return { savedAt: new Date(0).toISOString(), items: [] };
-    }
-    console.warn("[inventory-watch] snapshot load failed:", e?.message ?? e);
-    return { savedAt: new Date(0).toISOString(), items: [] };
-  }
+  return (await loadInventorySnapshotResult()).snapshot;
 }
 
-async function saveInventorySnapshot(items: any[]) {
-  const payload: InventorySnapshot = {
-    savedAt: new Date().toISOString(),
-    items: items
-      .map(i => ({
-        key: inventoryKey(i) ?? "",
-        stockId: i.stockId,
-        vin: i.vin,
-        year: i.year,
-        model: i.model,
-        color: i.color
-      }))
-      .filter(i => i.key)
-  };
+async function saveInventorySnapshot(items: any[]): Promise<boolean> {
   try {
-    await fs.promises.mkdir(path.dirname(INVENTORY_SNAPSHOT_PATH), { recursive: true });
-    await fs.promises.writeFile(INVENTORY_SNAPSHOT_PATH, JSON.stringify(payload, null, 2));
+    await saveInventorySnapshotFile(INVENTORY_SNAPSHOT_PATH, items);
+    return true;
   } catch (e: any) {
     console.warn("[inventory-watch] snapshot save failed:", e?.message ?? e);
+    return false;
   }
 }
 
@@ -4039,6 +4021,10 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   return true;
 }
 
+function inventoryWatchAlreadyNotifiedStock(watch: InventoryWatch, item: any): boolean {
+  return inventoryWatchItemMatchesLastNotifiedStock(watch.lastNotifiedStockId, item);
+}
+
 async function processInventoryWatchlist(targetConvId?: string) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
@@ -4056,14 +4042,30 @@ async function processInventoryWatchlist(targetConvId?: string) {
     };
     const cfg = await getSchedulerConfigHot();
     const tz = cfg.timezone || "America/New_York";
-    const snapshot = await loadInventorySnapshot();
-    const prevKeys = new Set(snapshot.items.map(i => i.key));
-    const newItems = items.filter(i => {
-      const key = inventoryKey(i);
-      return key && !prevKeys.has(key);
+    const snapshotResult = await loadInventorySnapshotResult();
+    const scanPlan = buildInventoryWatchScanPlan({
+      snapshotResult,
+      items,
+      bulkNewItemThreshold: Number(process.env.INVENTORY_WATCH_BULK_NEW_ITEM_THRESHOLD ?? 10),
+      bulkNewItemRatio: Number(process.env.INVENTORY_WATCH_BULK_NEW_ITEM_RATIO ?? 0.2)
     });
+    const snapshotSaved = await saveInventorySnapshot(items);
+    if (!snapshotSaved) {
+      console.warn("[inventory-watch] notifications skipped because snapshot save failed.");
+      return;
+    }
+    if (!scanPlan.allowNotifications) {
+      console.warn(
+        `[inventory-watch] notifications skipped: ${scanPlan.reason} ` +
+          `(previous=${scanPlan.previousCount}, current=${scanPlan.currentCount}, new=${scanPlan.newCount}, ` +
+          `ratio=${scanPlan.newRatio.toFixed(3)})`
+      );
+      return;
+    }
+    const newItems = scanPlan.newItems;
+    const candidateItems = newItems.filter(i => isWatchCandidateAvailable(i));
+    if (!candidateItems.length) return;
     const newItemKeys = new Set(newItems.map(i => inventoryKey(i)).filter(Boolean));
-    await saveInventorySnapshot(items);
 
     const nowIso = new Date().toISOString();
     const targetConv = targetConvId ? getConversation(targetConvId) : null;
@@ -4095,9 +4097,10 @@ async function processInventoryWatchlist(targetConvId?: string) {
         }
         // Only notify on newly-arrived inventory so a just-created watch does not
         // immediately fire against units that were already in stock.
-        const candidateItems = newItems.filter(i => isWatchCandidateAvailable(i));
-        if (!candidateItems.length) continue;
-        const match = candidateItems.find(i => inventoryItemMatchesWatch(i, watch));
+        const match = candidateItems.find(i => {
+          if (inventoryWatchAlreadyNotifiedStock(watch, i)) return false;
+          return inventoryItemMatchesWatch(i, watch);
+        });
         if (!match) continue;
         matchedWatch = watch;
         matchedItem = match;

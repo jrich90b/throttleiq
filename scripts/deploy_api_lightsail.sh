@@ -22,13 +22,14 @@ Common options:
   --allow-dirty-remote        Allow deploying over a dirty remote worktree.
   --replace-pm2               Replace the PM2 process so it runs from this repo path.
   --skip-local-checks         Skip local API typecheck before SSH deploy.
+  --backup-retention-count N  Keep only the newest N runtime backups after backup. Default: 12.
   --dry-run                   Check local/remote readiness without changing server.
 
 Environment variable equivalents:
   DEPLOY_HOST, DEPLOY_REPO, DEPLOY_BRANCH, DEPLOY_DATA_DIR,
   DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
   DEPLOY_API_PORT, DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
-  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_DRY_RUN
+  DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_COUNT, DEPLOY_DRY_RUN
 USAGE
 }
 
@@ -89,6 +90,10 @@ while [[ $# -gt 0 ]]; do
       DEPLOY_SKIP_LOCAL_CHECKS=1
       shift
       ;;
+    --backup-retention-count)
+      DEPLOY_BACKUP_RETENTION_COUNT="${2:-}"
+      shift 2
+      ;;
     --dry-run)
       DEPLOY_DRY_RUN=1
       shift
@@ -126,6 +131,7 @@ DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-https://api.leadrider.ai/health}"
 DEPLOY_ALLOW_DIRTY_REMOTE="${DEPLOY_ALLOW_DIRTY_REMOTE:-0}"
 DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
+DEPLOY_BACKUP_RETENTION_COUNT="${DEPLOY_BACKUP_RETENTION_COUNT:-12}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
 require_cmd() {
@@ -158,6 +164,7 @@ if [[ -n "$DEPLOY_API_PORT" ]]; then
 fi
 echo "  health:     $DEPLOY_HEALTH_URL"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
+echo "  backups:    keep newest $DEPLOY_BACKUP_RETENTION_COUNT"
 echo
 
 if [[ "$DEPLOY_SKIP_LOCAL_CHECKS" != "1" ]]; then
@@ -176,6 +183,7 @@ remote_env=(
   "DEPLOY_HEALTH_URL=$(shell_quote "$DEPLOY_HEALTH_URL")"
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
+  "DEPLOY_BACKUP_RETENTION_COUNT=$(shell_quote "$DEPLOY_BACKUP_RETENTION_COUNT")"
   "DEPLOY_DRY_RUN=$(shell_quote "$DEPLOY_DRY_RUN")"
 )
 
@@ -239,6 +247,21 @@ if [[ -d "$DEPLOY_DATA_DIR" ]]; then
   fi
 else
   echo "Runtime data dir does not exist yet: $DEPLOY_DATA_DIR"
+fi
+
+if [[ "$DEPLOY_BACKUP_RETENTION_COUNT" =~ ^[0-9]+$ && "$DEPLOY_BACKUP_RETENTION_COUNT" -gt 0 ]]; then
+  echo "Pruning runtime backups; keeping newest $DEPLOY_BACKUP_RETENTION_COUNT in $backup_root"
+  mapfile -t backups_to_delete < <(
+    find "$backup_root" -maxdepth 1 -type f -name 'data-*.tgz' -printf '%T@ %p\n' \
+      | sort -nr \
+      | tail -n "+$((DEPLOY_BACKUP_RETENTION_COUNT + 1))" \
+      | cut -d' ' -f2-
+  )
+  for old_backup in "${backups_to_delete[@]}"; do
+    [[ -n "$old_backup" ]] || continue
+    rm -f "$old_backup"
+  done
+  echo "Pruned ${#backups_to_delete[@]} old runtime backup(s)."
 fi
 
 echo "Updating code with fast-forward pull..."
