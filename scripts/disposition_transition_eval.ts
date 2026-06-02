@@ -18,6 +18,8 @@ const schedulingText = "Can I come in Monday at 3:45?";
 const locationQuestionText = "I cant not currently and remind me again what address is this at?";
 const affordabilityRideConfidenceText =
   "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.";
+const injuryDeclineText =
+  "Got into a horse driving accident and broke 5 ribs and punctured a lung I'll have to pass at this point";
 
 const parsedAccepted = {
   explicitDisposition: true,
@@ -75,6 +77,17 @@ const cases: Case[] = [
         parsedAccepted: isDispositionParserAccepted(parsedLow),
         hasDecision: true,
         responseControlNotInterested: true
+      })
+  },
+  {
+    id: "injury_decline_parser_accepted_allows_closeout",
+    expected: true,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: { followUp: { mode: "active", reason: "appointment_outcome_follow_up" } },
+        text: injuryDeclineText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
       })
   },
   {

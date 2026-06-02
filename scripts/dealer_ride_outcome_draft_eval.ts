@@ -33,6 +33,13 @@ const checks: Check[] = [
     true
   ),
   check(
+    "conversation_header_dealer_ride_outcome_queues_customer_thank_you_draft",
+    /hasDealerRideOutcomePrompt[\s\S]{0,320}queueDealerRideOutcomeCustomerDraft\s*\(\{[\s\S]{0,260}source: "conversation_header"/.test(
+      source
+    ),
+    true
+  ),
+  check(
     "todo_done_modal_not_ready_is_not_gated_out",
     source.includes('isDealerRideOutcomeTask && normalizedOutcome.secondaryStatus === "needs_follow_up"'),
     false

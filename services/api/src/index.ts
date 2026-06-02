@@ -17829,6 +17829,29 @@ function shouldRouteAsPurchaseDeliveryTiming(
   return isPurchaseDeliveryContextText(recentContext);
 }
 
+function isPurchaseDeliveryScheduleStatusQuestionText(text: string | null | undefined): boolean {
+  const normalized = String(text ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  if (/\b(service appointment|service status|repair status|inspection status|oil change)\b/.test(normalized)) {
+    return false;
+  }
+  const asksStatus =
+    /\b(check(?:ing)?|checking in|status|update|on track|on schedule|according(?: to)? schedule|still good|timing|timeline|eta)\b/.test(
+      normalized
+    ) ||
+    /\beverything\s+(?:going|still|on|ok|okay|good)\b/.test(normalized) ||
+    /\bhow(?:'s| is)\s+(?:everything|it|we)\b/.test(normalized);
+  const scheduleContext =
+    /\b(schedule|timing|timeline|track|eta|ready|parts?|accessor(?:y|ies)|install|pickup|pick up|delivery|remaining|waiting|seat|seats|bars?|handlebars?|corbin|goat[-\s]?light)\b/.test(
+      normalized
+    ) || /\baccording(?: to)? schedule\b/.test(normalized);
+  return asksStatus && scheduleContext;
+}
+
 function hasPurchaseDeliveryLogisticsParserHint(
   conv: any,
   textRaw: string | null | undefined,
@@ -17854,10 +17877,18 @@ function hasPurchaseDeliveryLogisticsParserHint(
       return true;
     }
   }
+  const scheduleStatusCheck = isPurchaseDeliveryScheduleStatusQuestionText(text);
+  if (scheduleStatusCheck) {
+    const recentContext = getRecentConversationTextForDeliveryContext(conv, text, receivedAt);
+    if (activePurchaseDeliveryState || isPurchaseDeliveryContextText(recentContext)) {
+      return true;
+    }
+  }
   if (
     activePurchaseDeliveryState &&
     (hasMedia ||
       isPurchaseDeliveryTimingText(text) ||
+      scheduleStatusCheck ||
       isMediaProofStatusUpdateText(text) ||
       isLogisticsProgressUpdateText(text) ||
       postSaleItemPickup ||
@@ -17922,6 +17953,14 @@ function buildPurchaseDeliveryLogisticsReply(args: {
   }
   if (args.parsed.intent === "docs_status") {
     return buildInboundMediaProofAcknowledgement();
+  }
+  if (
+    args.parsed.intent === "delivery_progress" &&
+    isPurchaseDeliveryScheduleStatusQuestionText(
+      `${String(args.text ?? "")}\n${String(args.contextText ?? "")}`
+    )
+  ) {
+    return "I’ll check where everything stands on the remaining parts and timing and follow up.";
   }
   return buildLogisticsProgressAcknowledgement(args.parsed.timingText || args.text || "");
 }
@@ -20169,7 +20208,7 @@ type CustomerDispositionDecision = {
 function hasCustomerDispositionParserHintText(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
-  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i'?ll pass|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
+  return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
     lower
   ) || hasBoughtElsewhereDispositionSignalText(lower);
 }
@@ -20259,7 +20298,11 @@ function parseCustomerDispositionFallback(text: string): CustomerDispositionDeci
   ) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
-  if (/\b(hold off(?: for now)?|pass(?: for now| man)?|i'?ll pass|i will pass)\b/i.test(lower)) {
+  if (
+    /\b(hold off(?: for now)?|pass(?: for now| man)?|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?)\b/i.test(
+      lower
+    )
+  ) {
     return { reason: "customer_stepping_back", state: "customer_stepping_back" };
   }
   if (hasBoughtElsewhereDispositionSignalText(lower)) {
@@ -20399,12 +20442,22 @@ function buildFriendlyReachOutClose(hasAppreciation: boolean): string {
 function buildCustomerDispositionReply(text: string, conv?: any): string {
   const textLower = String(text ?? "").toLowerCase();
   const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  if (
+    /\b(accident|broke|broken|rib|ribs|punctured|lung|hospital|surgery|injur(?:y|ed)|recovery|recovering)\b/i.test(
+      textLower
+    ) &&
+    /\b(pass|hold off|not (?:able|going)|can(?:not|'t))\b/i.test(textLower)
+  ) {
+    return firstName
+      ? `I’m sorry to hear that, ${firstName}. I’ll hold off on follow-up. Wishing you a smooth recovery.`
+      : "I’m sorry to hear that. I’ll hold off on follow-up. Wishing you a smooth recovery.";
+  }
   if (/\b(can\s+hold\s+off|hold off(?: for now)?)\b/i.test(textLower)) {
     return firstName
       ? `Ok ${firstName}, I’ll hold off. Thanks for the update.`
       : "Ok, I’ll hold off. Thanks for the update.";
   }
-  if (/\b(i'?ll pass|i will pass|pass man|pass for now|all set)\b/i.test(textLower)) {
+  if (/\b(i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|pass man|pass for now|all set)\b/i.test(textLower)) {
     return firstName
       ? `Alright ${firstName}, thanks for the update. You have my number, just get a hold of me when you’re ready.`
       : "Alright, thanks for the update. You have my number, just get a hold of me when you’re ready.";
@@ -32382,6 +32435,19 @@ app.post("/conversations/:id/appointment/outcome", requirePermission("canEditApp
           undefined
       }
     });
+    const hasDealerRideOutcomePrompt =
+      !!String(conv?.dealerRide?.staffNotify?.outcomeToken ?? "").trim() ||
+      !!String(conv?.dealerRide?.staffNotify?.followUpSentAt ?? "").trim();
+    if (hasDealerRideOutcomePrompt) {
+      await queueDealerRideOutcomeCustomerDraft({
+        conv,
+        outcome: appointmentOutcomeStatus,
+        primaryStatus: normalizedOutcome.primaryStatus,
+        secondaryStatus: normalizedOutcome.secondaryStatus,
+        note: appointmentOutcomeNote,
+        source: "conversation_header"
+      });
+    }
     markOutcomeRelatedTodosDone(conv, {
       includeFinance: appointmentOutcomeStatus === "financing_declined" || appointmentOutcomeStatus === "financing_needs_info"
     });
@@ -49024,6 +49090,53 @@ if (authToken && signature) {
   if (conv.mode === "human") {
     if (llmOptOut || isOptOut(event.body)) {
       await applySmsOptOut(conv, event);
+      saveConversation(conv);
+      await flushConversationStore();
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+    const humanModeDispositionText = String(event.body ?? "");
+    const humanModeDispositionShortAck =
+      isShortAckText(humanModeDispositionText) || isEmojiOnlyText(humanModeDispositionText);
+    const humanModeDispositionParserEligible =
+      event.provider === "twilio" &&
+      process.env.LLM_ENABLED === "1" &&
+      process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
+      !!process.env.OPENAI_API_KEY &&
+      !humanModeDispositionShortAck &&
+      hasCustomerDispositionParserHintText(humanModeDispositionText);
+    const humanModeDispositionParse = humanModeDispositionParserEligible
+      ? await safeLlmParse("customer_disposition_parser_human_mode", () =>
+          parseCustomerDispositionWithLLM({
+            text: humanModeDispositionText,
+            history: buildHistory(conv, 8),
+            lead: conv.lead
+          })
+        )
+      : null;
+    const humanModeDispositionDecision = resolveCustomerDispositionDecision(
+      humanModeDispositionText,
+      humanModeDispositionParse
+    );
+    const humanModeParsedDispositionAccepted = isDispositionParserAccepted(humanModeDispositionParse);
+    const humanModeDispositionCloseoutAllowed = canApplyDispositionCloseout({
+      conv,
+      text: humanModeDispositionText,
+      parsedAccepted: humanModeParsedDispositionAccepted,
+      hasDecision: !!humanModeDispositionDecision,
+      responseControlNotInterested: llmNotInterested
+    });
+    if (humanModeDispositionCloseoutAllowed && humanModeDispositionDecision) {
+      applyCustomerDispositionCloseout(conv, humanModeDispositionDecision);
+      discardPendingDrafts(conv, "human_mode_customer_disposition_closeout");
+      delete conv.emailDraft;
+      recordRouteOutcome("live", "human_mode_customer_disposition_closeout", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        decision: humanModeDispositionDecision.reason,
+        parsedDisposition: humanModeDispositionParse?.disposition ?? null,
+        confidence: humanModeDispositionParse?.confidence ?? null
+      });
       saveConversation(conv);
       await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;

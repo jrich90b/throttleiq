@@ -48,9 +48,22 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "friday"
   },
   {
+    id: "active_delivery_schedule_status_check",
+    text: "hey, I'm just checking to see if everything going according schedule",
+    history: [
+      {
+        direction: "out",
+        body: "lol all good. Sry took me a min to get back. Bars just came in and the goat-light. Only thing we are waiting for is the Corbin stuff from the looks of it, but that won’t hold anything up"
+      },
+      { direction: "out", body: "actually the seats showed up today" }
+    ],
+    expectedIntent: "delivery_progress",
+    expectedTimingContains: "schedule"
+  },
+  {
     id: "on_way_arrival",
     text: "On my way doing my best to be there by 530",
-    expectedIntent: "delivery_progress",
+    expectedIntent: "delivery_timing",
     expectedTimingContains: "530"
   },
   {

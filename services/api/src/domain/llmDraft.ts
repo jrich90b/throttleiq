@@ -4628,7 +4628,10 @@ inbound: "Yes, Scott he bought a 2016 with about 10,000 about a week ago in Ohio
 output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.94}`,
     `EXAMPLE P
 inbound: "I ended up buying a 2016 in Ohio. Thank you, I appreciate it."
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`,
+    `EXAMPLE Q
+inbound: "Got into a horse driving accident and broke 5 ribs and punctured a lung I'll have to pass at this point"
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`
   ];
 
   const prompt = [
@@ -4645,6 +4648,7 @@ output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_te
     "",
     "Important:",
     "- If message contains compliments plus a disposition, disposition still applies.",
+    "- If customer says they have to pass at this point because of health, injury, recovery, or life circumstances, treat as stepping_back.",
     "- If customer says price/payment is too high or they can't afford it right now, treat as defer_no_window unless they provide a clear timeframe.",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
@@ -5362,7 +5366,7 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     "Return only JSON matching the schema.",
     "",
     "Classify exactly one intent:",
-    "- delivery_progress: customer gives progress/status about finalizing purchase, loan, bank, check, insurance, title, paperwork, or travel toward pickup/delivery.",
+    "- delivery_progress: customer gives or asks about progress/status on finalizing purchase, loan, bank, check, insurance, title, paperwork, accessory install, remaining delivery work, schedule status, or travel toward pickup/delivery.",
     "- delivery_timing: customer gives an arrival or pickup window for an already active purchase/delivery context.",
     "- docs_status: customer sends/mentions paperwork, insurance card, license, title, PDF, check, or proof documents.",
     "- post_sale_item_pickup: after purchase/delivery, customer mentions someone coming by for leftover/take-off/stock parts or accessories that did not fit during pickup.",
@@ -5372,6 +5376,7 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     "- This parser is for active purchase/delivery logistics, not ordinary appointments.",
     "- delivery_timing requires recent context that the customer is buying/picking up/taking delivery or sending purchase docs.",
     "- If the message combines a happy post-sale note with arranging pickup for stock exhaust/parts/accessories, use post_sale_item_pickup, not inventory availability.",
+    "- In active purchase/delivery context, customer questions like 'is everything on schedule' or 'checking if everything is on track' are delivery_progress, not inventory availability, factory-order timing, or service.",
     "- If the customer says they are coming to inspect/appraise a trade or test ride, intent=none.",
     "- timing_text should contain the arrival/pickup timing phrase if present, else empty string.",
     "- explicit_request is true only when the customer asks a question/action; status updates can be false.",
@@ -5385,7 +5390,9 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     'input: "Here is the insurance card" output: {"intent":"docs_status","explicit_request":false,"timing_text":"","confidence":0.95}',
     'input: "Like I said. I am legit" output: {"intent":"docs_status","explicit_request":false,"timing_text":"","confidence":0.88}',
     'input: "Let me know because I start driving on Friday morning. Please" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"Friday morning","confidence":0.94}',
-    'input: "On my way doing my best to be there by 530" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"by 530","confidence":0.97}',
+    'input: "hey, I\'m just checking to see if everything going according schedule" history: "out: Bars just came in and the goat-light. Only thing we are waiting for is the Corbin stuff. out: actually the seats showed up today" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"schedule status","confidence":0.94}',
+    'input: "just checking if everything is still on track for pickup" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"schedule status","confidence":0.94}',
+    'input: "On my way doing my best to be there by 530" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"by 530","confidence":0.97}',
     'input: "be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"9:00 AM","confidence":0.95}',
     'input: "Early afternoon ish, wife just has to be home to get kids off the bus" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"early afternoon-ish","confidence":0.93}',
     'input: "1-2 o clock ish" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"1-2 o clock-ish","confidence":0.94}',
