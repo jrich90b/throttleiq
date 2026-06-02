@@ -36800,6 +36800,7 @@ function buildCampaignImagePrompt(args: {
   const preferredTarget = preferredCampaignGenerationTarget(args.assetTargets, args.channel);
   const selectedTargetCount = Array.isArray(args.assetTargets) ? args.assetTargets.length : 0;
   const strictPromptDetailLock = selectedTargetCount <= 1 && preferredTarget === "flyer_8_5x11";
+  const flyerTarget = preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1;
   const requiredPromptDetails = extractPromptRequiredDetails({
     prompt: args.prompt,
     description: args.description,
@@ -36841,7 +36842,7 @@ function buildCampaignImagePrompt(args: {
       ]
     : [];
   const outputGuardrails: string[] = [];
-  if (preferredTarget === "flyer_8_5x11" && selectedTargetCount <= 1) {
+  if (flyerTarget) {
     const flyerW = campaignFlyerWidth();
     const flyerH = campaignFlyerHeight();
     const trimW = campaignFlyerTrimWidth();
@@ -36850,6 +36851,13 @@ function buildCampaignImagePrompt(args: {
     const bleedX = campaignFlyerBleedXPx();
     const bleedY = campaignFlyerBleedYPx();
     const liveMargin = campaignFlyerLiveMarginPx();
+    const verticalLiveMargin = campaignFlyerVerticalLiveMarginPx();
+    const liveMarginInches = campaignFlyerLiveMarginInches();
+    const verticalLiveMarginInches = campaignFlyerVerticalLiveMarginInches();
+    const liveLeft = bleedX + liveMargin;
+    const liveRight = flyerW - liveLeft;
+    const liveTop = bleedY + verticalLiveMargin;
+    const liveBottom = flyerH - liveTop;
     const ratio = (flyerW / Math.max(1, flyerH)).toFixed(3);
     const hasReferenceImages = normalizeCampaignUrlArray(args.referenceImageUrls ?? []).length > 0;
     outputGuardrails.push(
@@ -36861,10 +36869,18 @@ function buildCampaignImagePrompt(args: {
       "- Use the full bleed canvas edge-to-edge with no white border, no matte, no visible inset frame, no boxed artwork, no poster-on-background layout, and no separate template panel.",
       "- Do not create blurred, smeared, copied, mirrored, or stretched edge fill. The artwork must naturally fill the page.",
       `- Bleed requirement: background/artwork/texture must extend all the way to the outer canvas edge. The outer bleed is about ${bleedX}px left/right and ${bleedY}px top/bottom; it is for background continuation only.`,
-      `- Live-area requirement: keep every important logo, headline, date, address, CTA, bike/rider, face, wheel, and readable text at least ${liveMargin}px inside the trim edge, not merely inside the bleed edge.`,
+      `- Live-area requirement: keep every important logo, headline, date, address, CTA, bike/rider, face, wheel, and readable text at least ${liveMargin}px (${liveMarginInches}") inside the left/right trim edge and ${verticalLiveMargin}px (${verticalLiveMarginInches}") inside the top/bottom trim edge, not merely inside the bleed edge.`,
+      "- Deliberately leave visible breathing room around the whole advertisement. Do not let headline letters, eagle wings, badges, motorcycle tires, footer text, or website copy approach the trim.",
       "- Top-edge safety: keep dealer logos, eagle marks, headlines, bikes/riders, and all key artwork fully visible with clear headroom above them; do not let them touch, continue beyond, or crop at the top edge.",
       "- Bottom-edge safety: keep footer lines, dates, locations, sponsors, and the final line of body copy fully visible with clear breathing room below them.",
       "- Do not place a website, tiny footer, sponsor line, or any readable copy in the bleed or directly on the trim edge. Include the dealer website only if it fits fully inside the safe live area; otherwise omit it.",
+      "- Default to omitting the dealer website/URL on flyers unless the campaign prompt explicitly asks for it. Never add a URL as a tiny bottom footer just because the dealer profile has a website.",
+      "- Do not place decorative badges, anniversary numerals, icons, or logos in the bottom corners unless they fit completely inside the safe live area.",
+      "Print layout contract (critical):",
+      `- outer_canvas: ${flyerW}x${flyerH}; trim_box starts ${bleedX}px from left/right and ${bleedY}px from top/bottom; live_content_box is x=${liveLeft}..${liveRight}, y=${liveTop}..${liveBottom}.`,
+      "- All readable text, logos, badges, faces, wheels, and important artwork must fit entirely inside live_content_box.",
+      "- Good layout example: headline sits below the top live boundary with visible headroom; body/event copy is centered above the bottom live boundary; background texture/color alone fills the bleed and trim-risk perimeter.",
+      "- Bad layout example: top headline letters touch/cross the canvas edge, bottom website is clipped, badge is half off the corner, footer line sits on the trim, or text is used as edge decoration.",
       "- If space is tight, simplify copy, omit optional footer/website text, and reduce type size before moving text or key artwork toward the page edge.",
       "- Copy accuracy: use only copy/details from the campaign prompt, dealer name, dealer website, and provided reference assets.",
       "- Do not invent extra slogans, footer lines, disclaimers, legal copy, product claims, event details, phone numbers, or filler text."
@@ -36985,7 +37001,13 @@ function buildCampaignImagePrompt(args: {
     "Keep composition clean and mobile-friendly.",
     "",
     `Dealer: ${dealerName}`,
-    `Website: ${website || "(not provided)"}`,
+    `Website: ${
+      flyerTarget
+        ? website
+          ? `${website} (reference only; do not print on flyer unless explicitly requested)`
+          : "(not provided)"
+        : website || "(not provided)"
+    }`,
     `Tags: ${tagLine}`,
     `Campaign: ${String(args.name ?? "").trim() || "(untitled)"}`,
     `Direction: ${primary}`,
@@ -37221,9 +37243,33 @@ function campaignFlyerBleedYPx(): number {
   return Math.max(0, Math.round((campaignFlyerHeight() - campaignFlyerTrimHeight()) / 2));
 }
 
+function campaignFlyerLiveMarginInches(): number {
+  return Math.max(0.25, Math.min(1, Number(process.env.CAMPAIGN_FLYER_LIVE_MARGIN_INCHES ?? 0.5)));
+}
+
+function campaignFlyerVerticalLiveMarginInches(): number {
+  const horizontal = campaignFlyerLiveMarginInches();
+  const configured = Number(process.env.CAMPAIGN_FLYER_VERTICAL_LIVE_MARGIN_INCHES ?? 0.625);
+  return Math.max(horizontal, Math.min(1.25, Number.isFinite(configured) ? configured : 0.625));
+}
+
 function campaignFlyerLiveMarginPx(): number {
   const dpi = campaignFlyerTrimWidth() / 8.5;
-  return Math.max(0, Math.round(Math.max(0.25, Number(process.env.CAMPAIGN_FLYER_LIVE_MARGIN_INCHES ?? 0.25)) * dpi));
+  return Math.max(0, Math.round(campaignFlyerLiveMarginInches() * dpi));
+}
+
+function campaignFlyerVerticalLiveMarginPx(): number {
+  const dpi = campaignFlyerTrimHeight() / 11;
+  return Math.max(0, Math.round(campaignFlyerVerticalLiveMarginInches() * dpi));
+}
+
+function campaignFlyerExportLiveFrameEnabled(): boolean {
+  return String(process.env.CAMPAIGN_FLYER_EXPORT_LIVE_FRAME_ENABLED ?? "1").trim() !== "0";
+}
+
+function campaignFlyerExportBackgroundMode(): "solid" | "cover" {
+  const raw = String(process.env.CAMPAIGN_FLYER_EXPORT_BACKGROUND_MODE ?? "solid").trim().toLowerCase();
+  return raw === "cover" ? "cover" : "solid";
 }
 
 function campaignFlyerMaxBytes(): number {
@@ -37772,6 +37818,7 @@ async function sampleCampaignFlyerBleedBackgroundRgb(buffer: Buffer): Promise<{ 
 
 function campaignFlyerReadableBackground(rgb: { r: number; g: number; b: number }): { r: number; g: number; b: number } {
   const lum = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+  if (lum < 80) return { r: 0, g: 0, b: 0 };
   if (lum > 185) return { r: 16, g: 24, b: 39 };
   return {
     r: Math.max(8, Math.min(90, Math.round(rgb.r * 0.75))),
@@ -37803,16 +37850,65 @@ async function normalizeCampaignFlyerWithControlledLayout(
       ? Math.abs(sourceAspect / targetAspect - 1)
       : 0;
   if (aspectDrift > 0.08) {
-    console.warn("[campaign] flyer source aspect differs from print bleed frame; using cover to preserve full bleed");
+    console.warn("[campaign] flyer source aspect differs from print bleed frame; preserving full source inside flyer live area");
   }
-  const composed = await sharp(buffer, { failOn: "none", animated: false })
-    .rotate()
-    .resize(width, height, {
-      fit: "cover",
-      position: "centre"
-    })
-    .png()
-    .toBuffer();
+  let composed: Buffer;
+  if (campaignFlyerExportLiveFrameEnabled()) {
+    const bleedX = campaignFlyerBleedXPx();
+    const bleedY = campaignFlyerBleedYPx();
+    const marginX = campaignFlyerLiveMarginPx();
+    const marginY = campaignFlyerVerticalLiveMarginPx();
+    const insetX = Math.max(0, bleedX + marginX);
+    const insetY = Math.max(0, bleedY + marginY);
+    const innerWidth = Math.max(1, width - insetX * 2);
+    const innerHeight = Math.max(1, height - insetY * 2);
+    const rotated = sharp(buffer, { failOn: "none", animated: false }).rotate();
+    const background =
+      campaignFlyerExportBackgroundMode() === "cover"
+        ? await rotated
+            .clone()
+            .resize(width, height, {
+              fit: "cover",
+              position: "centre"
+            })
+            .png()
+            .toBuffer()
+        : await (async () => {
+            const sampled = campaignFlyerReadableBackground(await sampleCampaignFlyerBleedBackgroundRgb(buffer));
+            return sharp({
+              create: {
+                width,
+                height,
+                channels: 4,
+                background: { ...sampled, alpha: 1 }
+              }
+            })
+              .png()
+              .toBuffer();
+          })();
+    const foreground = await rotated
+      .clone()
+      .resize(innerWidth, innerHeight, {
+        fit: "contain",
+        position: "centre",
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
+      .png()
+      .toBuffer();
+    composed = await sharp(background, { failOn: "none", animated: false })
+      .composite([{ input: foreground, gravity: "centre" }])
+      .png()
+      .toBuffer();
+  } else {
+    composed = await sharp(buffer, { failOn: "none", animated: false })
+      .rotate()
+      .resize(width, height, {
+        fit: "cover",
+        position: "centre"
+      })
+      .png()
+      .toBuffer();
+  }
 
   const maxBytes = campaignFlyerMaxBytes();
   let quality = Math.max(65, Math.min(95, Number(process.env.CAMPAIGN_FLYER_QUALITY ?? 92)));
@@ -41167,6 +41263,7 @@ app.post("/campaigns/generate", requireManager, async (req, res) => {
               "- Preserve the current magazine-ad styling, typography, layout language, texture, and art direction.",
               `- Preserve standard ${campaignFlyerBleedInches()}" print bleed on all sides: artwork/background must extend through the bleed to the outer canvas edge.`,
               "- Do not add a visible matte, border, frame, or inset panel to create bleed.",
+              `- Keep readable text, logos, faces, wheels, and key artwork at least ${campaignFlyerLiveMarginInches()}" inside the left/right trim edge and ${campaignFlyerVerticalLiveMarginInches()}" inside the top/bottom trim edge.`,
               "- Do not place readable text, logos, faces, wheels, or key artwork in the bleed area or directly on the trim edge.",
               "- If any current element is too close to the trim/live area, adjust that element inside the existing design while keeping the background full-bleed.",
               "- The edit is not complete unless every readable text line, logo, face, wheel, motorcycle, CTA, and footer line is fully visible inside the safe live area."
