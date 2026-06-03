@@ -144,6 +144,18 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "stock"
   },
   {
+    id: "post_sale_key_and_backseat_dropoff",
+    text: "Absolutely! Btw.  I'm hoping you guys still have my garage key on my sporster keyring I left with y'all?\n\nAlso, I'm stopping by after work today dropping off the backseat for sporster.  Thanks",
+    history: [
+      {
+        direction: "out",
+        body: "Hi Eric — this is Stone at American Harley-Davidson. Thanks again for coming to see us for your bike. If you need anything, just let me know."
+      }
+    ],
+    expectedIntent: "post_sale_item_pickup",
+    expectedTimingContains: "after work"
+  },
+  {
     id: "trade_appraisal_not_delivery",
     text: "Tuesday between 9:30 and 10:00 works for bringing my trade in",
     history: [

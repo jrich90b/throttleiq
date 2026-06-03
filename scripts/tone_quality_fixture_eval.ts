@@ -98,6 +98,13 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 70, mustIncludeIssues: ["appointment_status_answer_mismatch"] }
   },
   {
+    id: "post_sale_key_backseat_answered_as_schedule_time",
+    inboundText:
+      "Absolutely! Btw.  I'm hoping you guys still have my garage key on my sporster keyring I left with y'all?\n\nAlso, I'm stopping by after work today dropping off the backseat for sporster.  Thanks",
+    outboundText: "Sounds good — I’ll check that time and follow up.",
+    expect: { maxScore: 65, mustIncludeIssues: ["post_sale_logistics_schedule_mismatch"] }
+  },
+  {
     id: "adf_location_cost_question_missing_location",
     inboundText:
       "WEB LEAD (ADF)\nSource: Room58 - Book test ride\nRef: 11361\nName: Camille Knight\nYear: 2026\nVehicle: Harley-Davidson Breakout\n\nInquiry:\nNot sure where this is located or what s the cost, but I m located in New York, NY. Thank you!",

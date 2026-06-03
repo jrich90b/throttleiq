@@ -17809,11 +17809,11 @@ function isPostSaleItemPickupLogisticsText(text: string | null | undefined): boo
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
   const hasItem =
-    /\b(stock\s+(?:exhaust|pipes?|seat|bars?|handlebars?|parts?|take[-\s]?offs?)|take[-\s]?off\s+(?:exhaust|pipes?|parts?)|factory\s+(?:exhaust|pipes?|parts?)|original\s+(?:exhaust|pipes?|parts?)|exhaust|pipes?)\b/.test(
+    /\b(stock\s+(?:exhaust|pipes?|seat|back\s*seat|backseat|bars?|handlebars?|parts?|take[-\s]?offs?)|take[-\s]?off\s+(?:exhaust|pipes?|parts?|seats?)|factory\s+(?:exhaust|pipes?|parts?|seats?)|original\s+(?:exhaust|pipes?|parts?|seats?)|garage\s+keys?|keys?|key\s*ring|keyring|seat|back\s*seat|backseat|exhaust|pipes?)\b/.test(
       t
     );
   if (!hasItem) return false;
-  return /\b(come by|stop by|swing by|pick(?:ing)? up|pickup|grab|get|fit|couldn'?t fit|could not fit|wouldn'?t fit|would not fit|left|forgot|send someone|someone come)\b/.test(
+  return /\b(come by|stop by|stopping by|swing by|pick(?:ing)? up|pickup|grab|get|drop(?:ping)? off|bring(?:ing)? by|leave|fit|couldn'?t fit|could not fit|wouldn'?t fit|would not fit|left|forgot|still have|send someone|someone come)\b/.test(
     t
   );
 }
@@ -18042,7 +18042,9 @@ function hasPurchaseDeliveryLogisticsParserHint(
   if (!text.trim()) return false;
   const activePurchaseDeliveryState =
     String(getDialogState(conv) ?? "").toLowerCase() === "purchase_delivery" ||
-    String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery";
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery" ||
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "post_sale" ||
+    isSoldOrPostSaleConversation(conv);
   if (hasMedia && recentOutboundRequestedMediaProofContext(conv)) return true;
   const postSaleItemPickup = isPostSaleItemPickupLogisticsText(text);
   if (postSaleItemPickup) {
@@ -18072,7 +18074,7 @@ function hasPurchaseDeliveryLogisticsParserHint(
       isMediaProofStatusUpdateText(text) ||
       isLogisticsProgressUpdateText(text) ||
       postSaleItemPickup ||
-      /\b(loan|bank|check|insurance|title|registration|paperwork|document|license|pick(?:ing)? up|pickup|delivery|on my way|headed over|heading over|driving)\b/i.test(
+      /\b(loan|bank|check|insurance|title|registration|paperwork|document|license|pick(?:ing)? up|pickup|drop(?:ping)? off|bring(?:ing)? by|garage\s+keys?|keys?|key\s*ring|keyring|seat|back\s*seat|backseat|delivery|on my way|headed over|heading over|driving)\b/i.test(
         text
       ))
   ) {
@@ -18090,6 +18092,39 @@ function hasPurchaseDeliveryLogisticsParserHint(
     return isPurchaseDeliveryContextText(recentContext);
   }
   return false;
+}
+
+function buildPostSaleItemLogisticsReply(textRaw: string | null | undefined): string {
+  const text = String(textRaw ?? "").toLowerCase();
+  const keyMention = /\b(garage\s+keys?|keys?|key\s*ring|keyring)\b/.test(text);
+  const seatMention = /\b(seat|back\s*seat|backseat)\b/.test(text);
+  const dropOffMention = /\b(drop(?:ping)? off|bring(?:ing)? by|leave|stopping by|stop by|swing by)\b/.test(text);
+
+  if (keyMention && seatMention && dropOffMention) {
+    return "Thanks — I’ll check on the key from your bike keyring, and it’s fine to drop off the backseat after work today. If anything changes, I’ll let you know.";
+  }
+  if (keyMention) {
+    return "Thanks — I’ll check on the key from your bike keyring and follow up.";
+  }
+  if (seatMention && dropOffMention) {
+    return "Thanks — you can drop off the seat when you stop by. If anything changes, I’ll let you know.";
+  }
+
+  return "No problem — have them stop by when they can and we’ll get it handled.";
+}
+
+function buildPostSaleItemLogisticsTodoDetail(
+  textRaw: string | null | undefined,
+  timingTextRaw: string | null | undefined
+): string {
+  const text = String(textRaw ?? "").toLowerCase();
+  const details: string[] = [];
+  if (/\b(garage\s+keys?|keys?|key\s*ring|keyring)\b/.test(text)) details.push("check garage/keyring key");
+  if (/\b(back\s*seat|backseat|seat)\b/.test(text)) details.push("backseat drop-off");
+  if (/\b(stock\s+(?:exhaust|pipes?|parts?)|take[-\s]?offs?)\b/.test(text)) details.push("stock/take-off parts");
+  const timingText = String(timingTextRaw ?? "").trim();
+  if (timingText) details.push(timingText);
+  return details.length ? details.join("; ") : "post-sale item pickup/drop-off";
 }
 
 function isPurchaseDeliveryLogisticsParserAccepted(
@@ -18123,7 +18158,7 @@ function buildPurchaseDeliveryLogisticsReply(args: {
     const prefix = positiveExperience
       ? "Love hearing that — glad the ride home went great. "
       : "";
-    return `${prefix}No problem on the stock exhaust; just have them stop by when they can and we’ll get it handled.`;
+    return `${prefix}${buildPostSaleItemLogisticsReply(args.text)}`;
   }
   if (args.parsed.intent === "delivery_timing") {
     if (isPostSalePickupArrivalWindowText(args.text)) {
@@ -18176,7 +18211,7 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
       args.conv,
       "note",
       `Customer may send someone to pick up post-sale item: ${
-        args.parsed.timingText || "stock exhaust/parts"
+        buildPostSaleItemLogisticsTodoDetail(args.text, args.parsed.timingText)
       }.`,
       args.providerMessageId ?? undefined
     );
@@ -44389,7 +44424,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       parsed: {
         intent: "post_sale_item_pickup",
         explicitRequest: false,
-        timingText: "stock exhaust pickup",
+        timingText: "post-sale item pickup/drop-off",
         confidence: 0.79
       },
       scope: "regen"
@@ -49462,7 +49497,7 @@ if (authToken && signature) {
           )
         : null;
     if (isPurchaseDeliveryLogisticsParserAccepted(humanModePurchaseDeliveryLogisticsParse)) {
-      applyPurchaseDeliveryLogisticsDecision({
+      const humanModePurchaseDeliveryReply = applyPurchaseDeliveryLogisticsDecision({
         conv,
         text: event.body ?? "",
         providerMessageId: event.providerMessageId,
@@ -49470,10 +49505,50 @@ if (authToken && signature) {
         scope: "live"
       });
       discardPendingDrafts(conv, "purchase_delivery_human_mode");
+      if (
+        humanModePurchaseDeliveryLogisticsParse?.intent === "post_sale_item_pickup" ||
+        humanModePurchaseDeliveryLogisticsParse?.explicitRequest
+      ) {
+        return publishLiveTwilioReply(
+          humanModePurchaseDeliveryReply,
+          { turnSchedulingIntent: false, turnAvailabilityIntent: false, turnFinanceIntent: false },
+          { draftOnly: true }
+        );
+      }
       saveConversation(conv);
       await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
+    }
+    if (
+      event.provider === "twilio" &&
+      !isPurchaseDeliveryLogisticsParserConfidentNone(humanModePurchaseDeliveryLogisticsParse) &&
+      isPostSaleItemPickupLogisticsText(event.body ?? "") &&
+      hasPurchaseDeliveryLogisticsParserHint(
+        conv,
+        event.body ?? "",
+        event.receivedAt,
+        (event.mediaUrls?.length ?? 0) > 0
+      )
+    ) {
+      const humanModePurchaseDeliveryReply = applyPurchaseDeliveryLogisticsDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: event.providerMessageId,
+        parsed: {
+          intent: "post_sale_item_pickup",
+          explicitRequest: /\?/.test(String(event.body ?? "")),
+          timingText: "post-sale item pickup/drop-off",
+          confidence: 0.79
+        },
+        scope: "live"
+      });
+      discardPendingDrafts(conv, "purchase_delivery_human_mode_fallback");
+      return publishLiveTwilioReply(
+        humanModePurchaseDeliveryReply,
+        { turnSchedulingIntent: false, turnAvailabilityIntent: false, turnFinanceIntent: false },
+        { draftOnly: true }
+      );
     }
     const humanModeBookingParserEligible =
       event.provider === "twilio" &&
@@ -50012,7 +50087,7 @@ if (authToken && signature) {
       parsed: {
         intent: "post_sale_item_pickup",
         explicitRequest: false,
-        timingText: "stock exhaust pickup",
+        timingText: "post-sale item pickup/drop-off",
         confidence: 0.79
       },
       scope: "live"

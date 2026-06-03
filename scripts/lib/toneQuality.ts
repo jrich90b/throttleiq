@@ -22,7 +22,8 @@ export type ToneIssueCode =
   | "overcommitted_availability_watch"
   | "redundant_current_bike_stock_count"
   | "appointment_status_answer_mismatch"
-  | "adf_direct_ask_unanswered";
+  | "adf_direct_ask_unanswered"
+  | "post_sale_logistics_schedule_mismatch";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -535,6 +536,28 @@ function hasNewSchedulingAvailabilityLanguage(text: string): boolean {
   );
 }
 
+function isPostSalePropertyDropoffLogisticsText(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  const hasItem = /\b(garage\s+keys?|keys?|key\s*ring|keyring|seat|back\s*seat|backseat|stock\s+(?:exhaust|pipes?|parts?)|take[-\s]?offs?)\b/.test(
+    t
+  );
+  if (!hasItem) return false;
+  return /\b(drop(?:ping)? off|bring(?:ing)? by|stopping by|stop by|swing by|pick(?:ing)? up|pickup|grab|left|forgot|still have)\b/.test(
+    t
+  );
+}
+
+function hasScheduleTimeCheckLanguage(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  return (
+    /\bcheck that time\b/.test(t) ||
+    /\bcheck (?:the|that)?\s*(?:appointment|schedule|slot|availability)\b/.test(t) ||
+    /\bwhat (?:day|time) (?:works|would work|is best)\b/.test(t)
+  );
+}
+
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const rawInboundText = String(input.inboundText ?? "");
   const inboundText = normalizeText(input.inboundText);
@@ -553,6 +576,8 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const redundantCurrentBikeStockCount = hasRedundantCurrentBikeStockCount(inboundText, outboundText);
   const appointmentStatusAnswerMismatch =
     isAppointmentStatusQuestionText(inboundText) && hasNewSchedulingAvailabilityLanguage(outboundText);
+  const postSaleLogisticsScheduleMismatch =
+    isPostSalePropertyDropoffLogisticsText(inboundText) && hasScheduleTimeCheckLanguage(outboundText);
   const adfDirectAskMisses = detectAdfDirectAskMisses(rawInboundText, outboundText);
 
   const issues: ToneIssue[] = [];
@@ -643,6 +668,14 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       code: "appointment_status_answer_mismatch",
       weight: 35,
       detail: "answered an existing appointment-status question as a new scheduling availability request"
+    });
+    score -= 35;
+  }
+  if (postSaleLogisticsScheduleMismatch) {
+    issues.push({
+      code: "post_sale_logistics_schedule_mismatch",
+      weight: 35,
+      detail: "answered post-sale key/item drop-off logistics as an appointment scheduling time check"
     });
     score -= 35;
   }

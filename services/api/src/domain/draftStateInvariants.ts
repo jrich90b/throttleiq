@@ -268,6 +268,28 @@ function looksLikeNewSchedulingAvailabilityDraft(text: string): boolean {
   );
 }
 
+function isPostSalePropertyDropoffLogisticsText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasPostSaleItem = /\b(garage\s+keys?|keys?|key\s*ring|keyring|seat|back\s*seat|backseat|stock\s+(?:exhaust|pipes?|parts?)|take[-\s]?offs?)\b/.test(
+    t
+  );
+  if (!hasPostSaleItem) return false;
+  return /\b(drop(?:ping)? off|bring(?:ing)? by|stopping by|stop by|swing by|pick(?:ing)? up|pickup|grab|left|forgot|still have)\b/.test(
+    t
+  );
+}
+
+function looksLikeScheduleTimeCheckDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bcheck that time\b/.test(t) ||
+    /\bcheck (?:the|that)?\s*(?:appointment|schedule|slot|availability)\b/.test(t) ||
+    /\bwhat (?:day|time) (?:works|would work|is best)\b/.test(t)
+  );
+}
+
 function hasAccessoryCustomizationTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -373,6 +395,14 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "appointment_status_new_schedule_guard"
+    };
+  }
+
+  if (isPostSalePropertyDropoffLogisticsText(inboundText) && looksLikeScheduleTimeCheckDraft(draftText)) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "post_sale_logistics_schedule_guard"
     };
   }
 

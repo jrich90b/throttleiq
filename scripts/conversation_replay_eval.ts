@@ -251,6 +251,22 @@ const cases: Case[] = [
     }
   },
   {
+    id: "post_sale_key_backseat_dropoff_blocks_time_check_draft",
+    expectedAllow: false,
+    expectedReason: "post_sale_logistics_schedule_guard",
+    input: {
+      inboundText:
+        "Absolutely! Btw.  I'm hoping you guys still have my garage key on my sporster keyring I left with y'all?\n\nAlso, I'm stopping by after work today dropping off the backseat for sporster.  Thanks",
+      draftText: "Sounds good — I’ll check that time and follow up.",
+      followUpMode: "active",
+      followUpReason: "post_sale",
+      dialogState: "schedule_request",
+      classificationBucket: "inventory_interest",
+      classificationCta: "sold",
+      turnSchedulingIntent: false
+    }
+  },
+  {
     id: "finance_docs_blocks_schedule_reask",
     expectedAllow: false,
     expectedReason: "finance_priority_schedule_prompt_guard",
