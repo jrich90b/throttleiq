@@ -94,4 +94,24 @@ assert.doesNotMatch(
   "Creating a payment request must draft the link only, not send it."
 );
 
+const ensureComposeFn = pageSource.match(/async function ensureComposeConversation\(\)[\s\S]*?\n  \}/)?.[0] ?? "";
+assert.ok(ensureComposeFn, "Compose SMS payment requests must prepare or reuse a conversation.");
+assert.match(ensureComposeFn, /composeConversation\?\.id/);
+assert.match(ensureComposeFn, /\/api\/conversations\/compose/);
+
+const createComposePaymentFn = pageSource.match(/async function createComposePaymentRequest\(\)[\s\S]*?\n  \}/)?.[0] ?? "";
+assert.ok(createComposePaymentFn, "Compose SMS must expose payment request creation.");
+assert.match(createComposePaymentFn, /const conv = await ensureComposeConversation\(\)/);
+assert.match(createComposePaymentFn, /\/api\/dealer-payments\/requests/);
+assert.match(createComposePaymentFn, /setComposeBody\(json\.suggestedMessage\)/);
+assert.doesNotMatch(
+  createComposePaymentFn,
+  /\/send|sendCompose\(|doSend\(/,
+  "Compose payment requests must draft the link only, not send the SMS."
+);
+
+const sendComposeFn = pageSource.match(/async function sendCompose\(\)[\s\S]*?\n  \}/)?.[0] ?? "";
+assert.ok(sendComposeFn, "sendCompose must exist.");
+assert.match(sendComposeFn, /const conv = await ensureComposeConversation\(\)/);
+
 console.log("dealer_payment_requests_eval passed");

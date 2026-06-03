@@ -3235,10 +3235,17 @@ export default function Home() {
   const [composeSelection, setComposeSelection] = useState<any | null>(null);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSending, setComposeSending] = useState(false);
+  const [composeConversation, setComposeConversation] = useState<ConversationDetail | null>(null);
+  const [composePaymentRequestOpen, setComposePaymentRequestOpen] = useState(false);
+  const [composePaymentRequestAmount, setComposePaymentRequestAmount] = useState("");
+  const [composePaymentRequestDescription, setComposePaymentRequestDescription] = useState("");
+  const [composePaymentRequestBusy, setComposePaymentRequestBusy] = useState(false);
+  const [composePaymentRequestError, setComposePaymentRequestError] = useState<string | null>(null);
   const [composeSmsAttachments, setComposeSmsAttachments] = useState<
     { name: string; type: string; size: number; file: File }[]
   >([]);
   const [composeSmsAttachmentsBusy, setComposeSmsAttachmentsBusy] = useState(false);
+  const composeRecipientLocked = Boolean(composeConversation?.id) || composePaymentRequestBusy;
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
   const [contactEdit, setContactEdit] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -5756,6 +5763,12 @@ export default function Home() {
     setComposeSelection(null);
     setComposeSmsAttachments([]);
     setComposeSmsAttachmentsBusy(false);
+    setComposeConversation(null);
+    setComposePaymentRequestOpen(false);
+    setComposePaymentRequestAmount("");
+    setComposePaymentRequestDescription("");
+    setComposePaymentRequestBusy(false);
+    setComposePaymentRequestError(null);
     setComposeOpen(true);
   }
 
@@ -5777,7 +5790,7 @@ export default function Home() {
   }
 
   function applyComposeSelection(it: any) {
-    if (!it) return;
+    if (!it || composeRecipientLocked) return;
     setComposeSelection(it);
     setComposeVehicle({
       year: it.year ?? "",
@@ -5823,6 +5836,91 @@ export default function Home() {
     setComposeSmsAttachments(prev => prev.filter((_, i) => i !== index));
   }
 
+  function buildComposeConversationPayload() {
+    if (!composePhone.trim()) {
+      throw new Error("Phone is required.");
+    }
+    const payload: any = {
+      phone: composePhone.trim(),
+      firstName: composeFirstName.trim() || undefined,
+      lastName: composeLastName.trim() || undefined,
+      email: composeEmail.trim() || undefined
+    };
+    const vehicle = {
+      year: String(composeVehicle.year ?? "").trim() || undefined,
+      make: String(composeVehicle.make ?? "").trim() || undefined,
+      model: String(composeVehicle.model ?? "").trim() || undefined,
+      trim: String(composeVehicle.trim ?? "").trim() || undefined,
+      color: String(composeVehicle.color ?? "").trim() || undefined,
+      stockId: String(composeVehicle.stockId ?? "").trim() || undefined,
+      vin: String(composeVehicle.vin ?? "").trim() || undefined,
+      condition: String(composeVehicle.condition ?? "").trim() || undefined
+    };
+    if (Object.values(vehicle).some(v => v)) {
+      payload.vehicle = vehicle;
+    }
+    return payload;
+  }
+
+  async function ensureComposeConversation(): Promise<ConversationDetail> {
+    if (composeConversation?.id) return composeConversation;
+    const payload = buildComposeConversationPayload();
+    const resp = await fetch("/api/conversations/compose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.ok === false) {
+      throw new Error(data?.error ?? "Failed to create conversation");
+    }
+    const conv = data?.conversation;
+    if (!conv?.id) {
+      throw new Error("Conversation not returned");
+    }
+    setComposeConversation(conv);
+    return conv;
+  }
+
+  async function createComposePaymentRequest() {
+    if (composePaymentRequestBusy) return;
+    const amount = composePaymentRequestAmount.trim();
+    const description = composePaymentRequestDescription.trim();
+    if (!amount || !description) {
+      setComposePaymentRequestError("Enter an amount and a short description.");
+      return;
+    }
+    setComposePaymentRequestBusy(true);
+    setComposePaymentRequestError(null);
+    setComposeError(null);
+    try {
+      const conv = await ensureComposeConversation();
+      const resp = await fetch("/api/dealer-payments/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: conv.id,
+          amount,
+          description,
+          channel: "sms"
+        })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.suggestedMessage) {
+        throw new Error(json?.error ?? "Could not create payment request");
+      }
+      setComposeBody(json.suggestedMessage);
+      setComposePaymentRequestOpen(false);
+      setComposePaymentRequestAmount("");
+      setComposePaymentRequestDescription("");
+      setSaveToast("Payment link drafted");
+    } catch (err: any) {
+      setComposePaymentRequestError(err?.message ?? "Could not create payment request");
+    } finally {
+      setComposePaymentRequestBusy(false);
+    }
+  }
+
   async function sendCompose() {
     if (!composePhone.trim()) {
       setComposeError("Phone is required.");
@@ -5839,38 +5937,7 @@ export default function Home() {
     setComposeSending(true);
     setComposeError(null);
     try {
-      const payload: any = {
-        phone: composePhone.trim(),
-        firstName: composeFirstName.trim() || undefined,
-        lastName: composeLastName.trim() || undefined,
-        email: composeEmail.trim() || undefined
-      };
-      const vehicle = {
-        year: String(composeVehicle.year ?? "").trim() || undefined,
-        make: String(composeVehicle.make ?? "").trim() || undefined,
-        model: String(composeVehicle.model ?? "").trim() || undefined,
-        trim: String(composeVehicle.trim ?? "").trim() || undefined,
-        color: String(composeVehicle.color ?? "").trim() || undefined,
-        stockId: String(composeVehicle.stockId ?? "").trim() || undefined,
-        vin: String(composeVehicle.vin ?? "").trim() || undefined,
-        condition: String(composeVehicle.condition ?? "").trim() || undefined
-      };
-      if (Object.values(vehicle).some(v => v)) {
-        payload.vehicle = vehicle;
-      }
-      const resp = await fetch("/api/conversations/compose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok || data?.ok === false) {
-        throw new Error(data?.error ?? "Failed to create conversation");
-      }
-      const conv = data?.conversation;
-      if (!conv?.id) {
-        throw new Error("Conversation not returned");
-      }
+      const conv = await ensureComposeConversation();
       const uploadedComposeMedia: { name: string; url: string; mode: "mms" | "link" }[] = [];
       for (const att of composeSmsAttachments) {
         const fd = new FormData();
@@ -22333,7 +22400,13 @@ export default function Home() {
                 placeholder="+15551234567"
                 value={composePhone}
                 onChange={e => setComposePhone(e.target.value)}
+                disabled={composeRecipientLocked || composeSending}
               />
+              {composeConversation?.id ? (
+                <div className="mt-1 text-xs text-gray-500">
+                  Recipient details are locked because this SMS has a prepared payment link.
+                </div>
+              ) : null}
             </div>
             <div className="mt-3">
               <div className="text-xs text-gray-500 mb-1">Message</div>
@@ -22345,6 +22418,82 @@ export default function Home() {
                 placeholder="Type your message…"
               />
             </div>
+            <div className="mt-3">
+              <button
+                type="button"
+                className={`text-xs px-3 py-2 border rounded ${
+                  composePaymentRequestBusy || composeSending ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+                title="Create a secure Stripe payment link and draft it into this SMS for review."
+                onClick={() => {
+                  setComposePaymentRequestOpen(prev => !prev);
+                  setComposePaymentRequestError(null);
+                  if (!composePaymentRequestDescription.trim()) {
+                    setComposePaymentRequestDescription("Customer payment");
+                  }
+                }}
+                disabled={composePaymentRequestBusy || composeSending}
+              >
+                Payment request
+              </button>
+            </div>
+            {composePaymentRequestOpen ? (
+              <div className="mt-3 rounded-lg border bg-white p-3 text-slate-900 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Create payment link</div>
+                    <div className="text-xs text-slate-600">
+                      A secure Stripe link will be drafted into this SMS. Review it before sending.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 hover:text-slate-800"
+                    onClick={() => setComposePaymentRequestOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-[140px_1fr_auto] gap-2">
+                  <label className="space-y-1">
+                    <div className="text-xs text-slate-600">Amount</div>
+                    <input
+                      className="w-full rounded border px-3 py-2 text-sm"
+                      placeholder="250.00"
+                      value={composePaymentRequestAmount}
+                      onChange={e => setComposePaymentRequestAmount(e.target.value)}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-slate-600">Description</div>
+                    <input
+                      className="w-full rounded border px-3 py-2 text-sm"
+                      placeholder="Deposit for 2021 Street Glide"
+                      value={composePaymentRequestDescription}
+                      onChange={e => setComposePaymentRequestDescription(e.target.value)}
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      className="w-full rounded border border-orange-600 bg-orange-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      onClick={createComposePaymentRequest}
+                      disabled={composePaymentRequestBusy || composeSending}
+                    >
+                      {composePaymentRequestBusy ? "Creating..." : "Draft link"}
+                    </button>
+                  </div>
+                </div>
+                {composeConversation?.id ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    This payment request is attached to the prepared conversation.
+                  </div>
+                ) : null}
+                {composePaymentRequestError ? (
+                  <div className="mt-2 text-xs text-red-600">{composePaymentRequestError}</div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-3 flex flex-col gap-2">
               {composeSmsAttachments.length ? (
                 <div className="flex flex-wrap gap-2">
@@ -22412,6 +22561,7 @@ export default function Home() {
                       className="border rounded px-3 py-2 text-sm w-full"
                       value={composeFirstName}
                       onChange={e => setComposeFirstName(e.target.value)}
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div>
@@ -22420,6 +22570,7 @@ export default function Home() {
                       className="border rounded px-3 py-2 text-sm w-full"
                       value={composeLastName}
                       onChange={e => setComposeLastName(e.target.value)}
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div className="col-span-2">
@@ -22428,6 +22579,7 @@ export default function Home() {
                       className="border rounded px-3 py-2 text-sm w-full"
                       value={composeEmail}
                       onChange={e => setComposeEmail(e.target.value)}
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                 </div>
@@ -22442,6 +22594,7 @@ export default function Home() {
                       onChange={e =>
                         setComposeVehicle((v: any) => ({ ...v, year: e.target.value }))
                       }
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div>
@@ -22452,6 +22605,7 @@ export default function Home() {
                       onChange={e =>
                         setComposeVehicle((v: any) => ({ ...v, make: e.target.value }))
                       }
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div>
@@ -22462,6 +22616,7 @@ export default function Home() {
                       onChange={e =>
                         setComposeVehicle((v: any) => ({ ...v, model: e.target.value }))
                       }
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div>
@@ -22472,6 +22627,7 @@ export default function Home() {
                       onChange={e =>
                         setComposeVehicle((v: any) => ({ ...v, trim: e.target.value }))
                       }
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                   <div>
@@ -22482,6 +22638,7 @@ export default function Home() {
                       onChange={e =>
                         setComposeVehicle((v: any) => ({ ...v, color: e.target.value }))
                       }
+                      disabled={composeRecipientLocked || composeSending}
                     />
                   </div>
                 </div>
@@ -22490,6 +22647,7 @@ export default function Home() {
                   <button
                     className="text-xs px-2 py-1 border rounded"
                     onClick={toggleComposeInventory}
+                    disabled={composeRecipientLocked || composeSending}
                   >
                     {composeInventoryOpen ? "Hide inventory" : "Select from inventory"}
                   </button>
@@ -22503,6 +22661,7 @@ export default function Home() {
                       placeholder="Search by model, stock, VIN, color..."
                       value={composeSearch}
                       onChange={e => setComposeSearch(e.target.value)}
+                      disabled={composeRecipientLocked || composeSending}
                     />
                     <div className="mt-2 max-h-56 overflow-auto border rounded">
                       {composeInventoryLoading ? (
@@ -22544,8 +22703,13 @@ export default function Home() {
                                 key={key || label}
                                 className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${
                                   isSelected ? "bg-blue-50" : ""
+                                } ${
+                                  composeRecipientLocked || composeSending
+                                    ? "cursor-not-allowed opacity-60 hover:bg-white"
+                                    : ""
                                 }`}
                                 onClick={() => applyComposeSelection(it)}
+                                disabled={composeRecipientLocked || composeSending}
                                 type="button"
                               >
                                 <div className="text-sm font-medium">
