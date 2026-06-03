@@ -21,7 +21,8 @@ export type ToneIssueCode =
   | "known_fact_conflict"
   | "overcommitted_availability_watch"
   | "redundant_current_bike_stock_count"
-  | "appointment_status_answer_mismatch";
+  | "appointment_status_answer_mismatch"
+  | "adf_direct_ask_unanswered";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -47,6 +48,22 @@ export type ToneEvalResult = {
     roleConsistent: boolean;
     notPushy: boolean;
   };
+};
+
+export type AdfDirectAskKind =
+  | "location"
+  | "pricing"
+  | "availability"
+  | "scheduling"
+  | "trade"
+  | "service"
+  | "parts"
+  | "apparel"
+  | "callback";
+
+export type AdfDirectAskMiss = {
+  kind: AdfDirectAskKind;
+  detail: string;
 };
 
 export function normalizeText(input: unknown): string {
@@ -147,7 +164,7 @@ function hasSchedulingSignal(text: string): boolean {
 
 function hasServiceSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
-  return /\b(service|shop|repair|maintenance|oil change|inspection|warranty work|technician)\b/.test(t);
+  return /\b(service|shop|repair|maintenance|oil change|inspections?|warranty work|technician)\b/.test(t);
 }
 
 function hasPartsSignal(text: string): boolean {
@@ -179,11 +196,158 @@ function hasStatusUpdateSignal(text: string): boolean {
   );
 }
 
+function hasCallbackSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /\b(call me|give me a call|call back|callback|phone call|please call|contact me|reach out|text me|email me)\b/.test(
+    t
+  );
+}
+
 function hasModelHint(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return /\b(street glide|road glide|tri glide|sportster|softail|fat bob|heritage|nightster|low rider|breakout|road king|electra glide|cvo|pan america|freewheeler|fury|switchback)\b/.test(
     t
   );
+}
+
+export function isAdfInboundText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bweb lead\s*\(adf\)/.test(t) ||
+    /\bphone log\s*\(adf\)/.test(t) ||
+    (/^\s*source:\s/m.test(t) &&
+      /^\s*ref:\s/m.test(t) &&
+      /^\s*name:\s/m.test(t) &&
+      /^\s*(?:inquiry|your inquiry|customer comments?|comments?):\s*/im.test(t))
+  );
+}
+
+function extractAdfCustomerText(text: string): string {
+  const raw = String(text ?? "");
+  const marker = raw.match(/(?:^|\n)\s*(?:inquiry|your inquiry|customer comments?|comments?):\s*/i);
+  if (!marker || marker.index == null) return normalizeText(raw);
+  return normalizeText(raw.slice(marker.index + marker[0].length));
+}
+
+function uniqueAskKinds(kinds: AdfDirectAskKind[]): AdfDirectAskKind[] {
+  return Array.from(new Set(kinds));
+}
+
+export function detectAdfDirectAsks(inboundText: string): AdfDirectAskKind[] {
+  if (!isAdfInboundText(inboundText)) return [];
+  const t = extractAdfCustomerText(inboundText).toLowerCase();
+  if (!t) return [];
+
+  const asks: AdfDirectAskKind[] = [];
+  const hasQuestionShape =
+    /[?]/.test(t) ||
+    /\b(?:what|where|when|how|do|does|did|can|could|is|are|will|would|please|not sure)\b/.test(t);
+
+  if (
+    hasQuestionShape &&
+    (/\bwhere\b[\s\S]{0,60}\b(?:located|location|address|are you|is this|is it|this is)\b/.test(t) ||
+      /\b(?:what|where)\b[\s\S]{0,40}\b(?:address|location)\b/.test(t) ||
+      /\b(?:located at|dealership address|your address|directions?)\b/.test(t))
+  ) {
+    asks.push("location");
+  }
+  if (hasPricingSignal(t)) asks.push("pricing");
+  if (hasAvailabilitySignal(t)) asks.push("availability");
+  if (
+    /\b(preferred date|preferred time|test ride|testride|demo ride|demo[-\s]?ride|schedule|appointment|book|come in|stop in|stop by|when can i|can i come|available times?)\b/.test(
+      t
+    )
+  ) {
+    asks.push("scheduling");
+  }
+  if (hasTradeSignal(t)) asks.push("trade");
+  if (hasServiceSignal(t)) asks.push("service");
+  if (hasPartsSignal(t)) asks.push("parts");
+  if (hasApparelSignal(t)) asks.push("apparel");
+  if (hasCallbackSignal(t)) asks.push("callback");
+
+  return uniqueAskKinds(asks);
+}
+
+function hasLocationAnswerSignal(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(?:located at|located in|address is|we(?:'re| are) at|our location|dealership is at|directions?)\b/.test(t) ||
+    /\b\d{2,6}\s+[a-z0-9.'-]+(?:\s+[a-z0-9.'-]+){0,5}\s+(?:ave|avenue|st|street|rd|road|blvd|boulevard|dr|drive|ln|lane|hwy|highway|pkwy|parkway|way|ct|court)\b/.test(
+      t
+    )
+  );
+}
+
+function hasPricingAnswerOrHandoffSignal(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    hasConcretePriceAnswerSignal(text) ||
+    hasFinanceAnswerSignal(text) ||
+    looksLikePricingDeferral(text) ||
+    /\b(?:published price|sale price|asking price|price in the inventory feed|confirm (?:cost|price|pricing)|pricing details|cost details|quote)\b/.test(
+      t
+    )
+  );
+}
+
+function hasAvailabilityAnswerOrHandoffSignal(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    hasAvailabilitySignal(text) ||
+    /\b(?:not seeing|i'?m seeing|we (?:do )?have|we don'?t have|sold|available|availability|in stock|out of stock|confirm availability|check availability)\b/.test(
+      t
+    )
+  );
+}
+
+function hasSchedulingAnswerOrHandoffSignal(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  return (
+    hasSchedulingSignal(text) ||
+    /\b(?:preferred (?:date|time)|test ride|demo ride|appointment|schedule|book|confirm (?:that|the time)|lock that in|available times?)\b/.test(
+      t
+    )
+  );
+}
+
+function outboundAnswersAdfAsk(kind: AdfDirectAskKind, outboundText: string): boolean {
+  const t = normalizeText(outboundText);
+  switch (kind) {
+    case "location":
+      return hasLocationAnswerSignal(t);
+    case "pricing":
+      return hasPricingAnswerOrHandoffSignal(t);
+    case "availability":
+      return hasAvailabilityAnswerOrHandoffSignal(t);
+    case "scheduling":
+      return hasSchedulingAnswerOrHandoffSignal(t);
+    case "trade":
+      return hasTradeSignal(t) || /\b(?:trade value|appraisal|trade-in value|value your trade)\b/i.test(t);
+    case "service":
+      return hasServiceSignal(t) || /\bservice department\b/i.test(t);
+    case "parts":
+      return hasPartsSignal(t) || /\bparts department\b/i.test(t);
+    case "apparel":
+      return hasApparelSignal(t) || /\bapparel department\b/i.test(t);
+    case "callback":
+      return hasCallbackSignal(t) || /\b(?:call|phone|contact|reach out|text|email)\b/i.test(t);
+    default:
+      return false;
+  }
+}
+
+export function detectAdfDirectAskMisses(inboundText: string, outboundText: string): AdfDirectAskMiss[] {
+  const asks = detectAdfDirectAsks(inboundText);
+  if (!asks.length) return [];
+  return asks
+    .filter(kind => !outboundAnswersAdfAsk(kind, outboundText))
+    .map(kind => ({
+      kind,
+      detail: `ADF customer asked about ${kind}, but outbound did not address it`
+    }));
 }
 
 export function detectPrimaryIntent(inboundText: string): ToneIntent {
@@ -372,6 +536,7 @@ function hasNewSchedulingAvailabilityLanguage(text: string): boolean {
 }
 
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
+  const rawInboundText = String(input.inboundText ?? "");
   const inboundText = normalizeText(input.inboundText);
   const outboundText = normalizeText(input.outboundText);
   const intent = detectPrimaryIntent(inboundText);
@@ -388,6 +553,7 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const redundantCurrentBikeStockCount = hasRedundantCurrentBikeStockCount(inboundText, outboundText);
   const appointmentStatusAnswerMismatch =
     isAppointmentStatusQuestionText(inboundText) && hasNewSchedulingAvailabilityLanguage(outboundText);
+  const adfDirectAskMisses = detectAdfDirectAskMisses(rawInboundText, outboundText);
 
   const issues: ToneIssue[] = [];
   let score = 100;
@@ -479,6 +645,16 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       detail: "answered an existing appointment-status question as a new scheduling availability request"
     });
     score -= 35;
+  }
+  if (adfDirectAskMisses.length) {
+    const missedKinds = adfDirectAskMisses.map(m => m.kind).join(", ");
+    const weight = Math.min(50, 30 + Math.max(0, adfDirectAskMisses.length - 1) * 10);
+    issues.push({
+      code: "adf_direct_ask_unanswered",
+      weight,
+      detail: `ADF direct ask not addressed: ${missedKinds}`
+    });
+    score -= weight;
   }
 
   score = Math.max(0, Math.min(100, score));

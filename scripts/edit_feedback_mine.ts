@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
+import { detectAdfDirectAskMisses, isAdfInboundText } from "./lib/toneQuality.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -33,6 +34,7 @@ type EditLabel =
   | "finance_schedule_miss"
   | "department_handoff_miss"
   | "inventory_fact_miss"
+  | "adf_direct_ask_miss"
   | "fact_correction"
   | "tone_or_personalization"
   | "manual_takeover_rewrite"
@@ -189,18 +191,6 @@ function hasSchedulingSignal(text: string): boolean {
   );
 }
 
-function isAdfInboundBlob(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
-  if (!t.trim()) return false;
-  return (
-    /\bweb lead\s*\(adf\)\b/.test(t) ||
-    (/^\s*source:\s/m.test(t) &&
-      /^\s*ref:\s/m.test(t) &&
-      /^\s*name:\s/m.test(t) &&
-      /^\s*inquiry:\s/m.test(t))
-  );
-}
-
 function hasInventoryAskSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -214,7 +204,7 @@ function hasInventoryAskSignal(text: string): boolean {
 function inferDepartment(text: string): "service" | "parts" | "apparel" | null {
   const t = String(text ?? "").toLowerCase();
   if (
-    /\b(service|inspection|oil change|maintenance|repair|service department|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/.test(
+    /\b(service|inspections?|oil change|maintenance|repair|service department|warranty|headlight|tail ?light|turn signal|led|light bulb|bulb|install|replace|swap|upgrade)\b/.test(
       t
     )
   ) {
@@ -272,11 +262,23 @@ function classifyEdit(
   const inboundShortAck = isShortAckText(inbound);
   const inboundFinance = hasFinanceSignal(inbound);
   const inboundInventoryAsk = hasInventoryAskSignal(inbound);
-  const inboundIsAdf = isAdfInboundBlob(inbound);
+  const inboundIsAdf = isAdfInboundText(inbound);
   const finalDepartment = inferDepartment(final);
+  const generatedAdfMisses = inboundIsAdf ? detectAdfDirectAskMisses(inbound, generated) : [];
+  const finalAdfMisses = inboundIsAdf ? detectAdfDirectAskMisses(inbound, final) : [];
 
   if (String(row.provider ?? "").toLowerCase() === "human") {
     return { label: "manual_takeover_rewrite", severity: "low", rationale: "provider_human" };
+  }
+  if (generatedAdfMisses.length > 0 && finalAdfMisses.length < generatedAdfMisses.length) {
+    const correctedKinds = generatedAdfMisses
+      .filter(miss => !finalAdfMisses.some(finalMiss => finalMiss.kind === miss.kind))
+      .map(miss => miss.kind);
+    return {
+      label: "adf_direct_ask_miss",
+      severity: "high",
+      rationale: `adf_direct_ask_corrected:${correctedKinds.join(",") || "unknown"}`
+    };
   }
   if (inboundShortAck && inventoryDraft && !inboundIsAdf) {
     return { label: "short_ack_miss", severity: "high", rationale: "short_ack_with_inventory_prompt" };

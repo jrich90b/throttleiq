@@ -98,6 +98,30 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 70, mustIncludeIssues: ["appointment_status_answer_mismatch"] }
   },
   {
+    id: "adf_location_cost_question_missing_location",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Room58 - Book test ride\nRef: 11361\nName: Camille Knight\nYear: 2026\nVehicle: Harley-Davidson Breakout\n\nInquiry:\nNot sure where this is located or what s the cost, but I m located in New York, NY. Thank you!",
+    outboundText:
+      "Hi Camille — This is Alexandra at American Harley-Davidson. I don’t see a published price in the inventory feed for the 2026 Breakout, so I’ll have the team confirm it and send it over.",
+    expect: { maxScore: 70, mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    id: "adf_service_question_hijacked_by_inventory",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: ROOM 58 LTD\nRef: 20001\nName: Sam Service\nYear: 2018\nVehicle: Harley-Davidson Street Glide\n\nInquiry:\nDo you do NYS inspections on Harleys?",
+    outboundText:
+      "Hi Sam — This is Brooke at American Harley-Davidson. Thanks — I saw you wanted to learn more about the 2018 Street Glide. I’m here to help.",
+    expect: { maxScore: 70, mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    id: "adf_parts_question_hijacked_by_inventory",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Website contact form\nRef: 20002\nName: Pat Parts\n\nInquiry:\nCan you order part number 67800589 for my Road Glide?",
+    outboundText:
+      "Hi Pat — This is Brooke at American Harley-Davidson. Thanks — I saw you wanted to learn more about a Road Glide. I’m here to help.",
+    expect: { maxScore: 70, mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "warranty_question_answered",
     inboundText: "What warranty comes with a new Harley?",
     outboundText:
