@@ -33652,6 +33652,7 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   const conv = getConversation(convId);
   if (conv) {
     let appointmentOutcomeMarkedSold = false;
+    let financeTodoOutcomeApplied = false;
     const todoOutcome = String(req.body?.todoOutcome ?? "").trim();
     const todoOutcomeLabel = String(req.body?.todoOutcomeLabel ?? "").trim();
     const todoOutcomeNote = String(req.body?.todoOutcomeNote ?? "").trim();
@@ -33678,6 +33679,37 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
         createdByUserId: String(user?.id ?? "").trim() || undefined,
         createdByUserName: actorName || undefined
       });
+      const outcomeValue = todoOutcome.trim().toLowerCase();
+      const isFinanceApprovalTodo =
+        String(existingTask?.reason ?? task.reason ?? "").trim().toLowerCase() === "approval" ||
+        isFinanceOutcomeContextForConversation(conv) ||
+        /\b(?:credit|prequal|pre[-\s]?qual|finance|financing|approval|hdfs|coa)\b/i.test(summary);
+      const financeStatus =
+        outcomeValue === "not_approved" ||
+        outcomeValue === "declined" ||
+        outcomeValue === "finance_not_approved" ||
+        outcomeValue === "financing_declined"
+          ? "declined"
+          : outcomeValue === "needs_info" ||
+              outcomeValue === "finance_needs_info" ||
+              outcomeValue === "financing_needs_info"
+            ? "needs_more_info"
+            : outcomeValue === "approved_next_step" ||
+                outcomeValue === "approved" ||
+                outcomeValue === "credit_app_approved"
+              ? "approved"
+              : null;
+      if (isFinanceApprovalTodo && financeStatus) {
+        await applyFinanceOutcomeStatusFromSignal(
+          conv,
+          financeStatus,
+          todoOutcomeNote || undefined,
+          `todo_outcome:${task?.id ?? existingTask?.id ?? conv.id}`,
+          { syncAppointmentOutcome: !!conv.appointment }
+        );
+        financeTodoOutcomeApplied = true;
+        markOutcomeRelatedTodosDone(conv, { includeFinance: true });
+      }
     }
     const appointmentOutcome = String(req.body?.appointmentOutcome ?? "").trim();
     const appointmentPrimaryOutcome = String(req.body?.appointmentPrimaryOutcome ?? "").trim();
@@ -33817,8 +33849,8 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
     }
     const resolution = String(req.body?.resolution ?? "resume").trim();
     const nowIso = new Date().toISOString();
-    if (appointmentOutcomeMarkedSold) {
-      // Sold appointment outcomes have already moved into the post-sale cadence.
+    if (appointmentOutcomeMarkedSold || financeTodoOutcomeApplied) {
+      // Sold and finance outcomes have already moved into their dedicated cadence/state.
     } else if (resolution === "resume") {
       setFollowUpMode(conv, "active", "todo_done");
     } else if (resolution === "dismiss") {

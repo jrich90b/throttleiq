@@ -59,6 +59,14 @@ const checks = [
       countMatches(todoDoneBlock, /applyFinanceOutcomeStatusFromSignal\(/g) >= 2
   ],
   [
+    "approval_todo_not_approved_uses_finance_declined_cadence",
+    todoDoneBlock.includes('outcomeValue === "not_approved"') &&
+      todoDoneBlock.includes('String(existingTask?.reason ?? task.reason ?? "").trim().toLowerCase() === "approval"') &&
+      todoDoneBlock.includes('`todo_outcome:${task?.id ?? existingTask?.id ?? conv.id}`') &&
+      todoDoneBlock.includes("financeTodoOutcomeApplied = true") &&
+      todoDoneBlock.includes("appointmentOutcomeMarkedSold || financeTodoOutcomeApplied")
+  ],
+  [
     "outcome_followup_todo_uses_exact_source_upsert",
     outcomeFollowUpBlock.includes("function upsertOutcomeFollowUpTodo") &&
       outcomeFollowUpBlock.includes('String(todo.sourceMessageId ?? "").trim() === sourceKey') &&
