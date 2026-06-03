@@ -47,6 +47,7 @@
     "adf_policy:eval": "npx tsx scripts/adf_policy_eval.ts",
     "adf:smoke": "npx tsx scripts/adf_smoke_eval.ts",
     "tlp_phone_log:eval": "npx tsx scripts/tlp_phone_log_eval.ts",
+    "tlp_lead_ref_resolution:eval": "npx tsx scripts/tlp_lead_ref_resolution_eval.ts",
     "tlp_browser_use_rescue:eval": "npx tsx scripts/tlp_browser_use_rescue_eval.ts",
     "internal_outbound_guard:eval": "npx tsx scripts/internal_outbound_guard_eval.ts",
     "dealer_ride_initial_draft:eval": "npx tsx scripts/dealer_ride_initial_draft_eval.ts",
@@ -117,7 +118,7 @@
     "edit_feedback:loop": "npm run conversation:audit && npm run edit_feedback:mine",
     "feedback:nightly": "bash scripts/feedback_loop_nightly.sh",
     "feedback:hourly": "bash scripts/feedback_loop_hourly.sh",
-    "ci:eval": "npm run llm_parser_contract:eval && npm run reply_path:audit && npm run harley_watch_model_catalog:eval && npm run inventory_watch_snapshot_guard:eval && npm run campaign_asset_format:eval && npm run adf_parser:eval && npm run adf_policy:eval && npm run adf:smoke && npm run tlp_phone_log:eval && npm run internal_outbound_guard:eval && npm run dealer_ride_initial_draft:eval && npm run dealer_ride_outcome_draft:eval && npm run outcome_state_consistency:eval && npm run outcome_qa:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run initial_adf_todo_cadence:eval && npm run voice_call_followup:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run inventory_fact_answer:eval && npm run inbound_pipeline:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval && npm run followup_task_consistency:eval"
+    "ci:eval": "npm run llm_parser_contract:eval && npm run reply_path:audit && npm run harley_watch_model_catalog:eval && npm run inventory_watch_snapshot_guard:eval && npm run campaign_asset_format:eval && npm run adf_parser:eval && npm run adf_policy:eval && npm run adf:smoke && npm run tlp_phone_log:eval && npm run tlp_lead_ref_resolution:eval && npm run internal_outbound_guard:eval && npm run dealer_ride_initial_draft:eval && npm run dealer_ride_outcome_draft:eval && npm run outcome_state_consistency:eval && npm run outcome_qa:eval && npm run response_control:eval && npm run disposition_transition:eval && npm run regenerate_selection:eval && npm run initial_adf_todo_cadence:eval && npm run voice_call_followup:eval && npm run conversation_replay:eval && npm run route_state:eval && npm run inventory_fact_answer:eval && npm run inbound_pipeline:eval && npm run workflow_regression:eval && npm run orchestrator_regression:eval && npm run finance_language_fuzz:eval && npm run tone_quality:fixture_eval && npm run followup_task_consistency:eval"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
