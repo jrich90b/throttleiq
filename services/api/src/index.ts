@@ -372,6 +372,7 @@ import {
   getInventoryHold,
   setInventoryHold,
   clearInventoryHold,
+  clearInventoryHoldRefs,
   normalizeInventoryHoldKey
 } from "./domain/inventoryHolds.js";
 import {
@@ -4278,19 +4279,33 @@ async function findInventoryItemForClearedHold(args: {
 async function processInventoryHolds() {
   try {
     const holds = await listInventoryHolds();
+    const solds = await listInventorySolds();
     const now = new Date();
     const openQuestions = listOpenQuestions();
+    let cleanedStaleSoldHolds = 0;
     for (const hold of Object.values(holds ?? {})) {
+      const conv =
+        (hold.convId && getConversation(hold.convId)) ||
+        (hold.leadKey && getConversation(hold.leadKey)) ||
+        null;
+      const soldRecordForHold = Object.values(solds ?? {}).some(sold =>
+        inventoryAvailabilityRecordMatches(sold, hold.stockId ?? hold.id, hold.vin)
+      );
+      if (soldRecordForHold || (conv && isSoldOrPostSaleConversation(conv))) {
+        await clearInventoryHoldRefs({ stockId: hold.stockId, vin: hold.vin, key: hold.id });
+        if (conv?.hold && inventoryAvailabilityRecordMatches(conv.hold, hold.stockId ?? hold.id, hold.vin)) {
+          conv.hold = undefined;
+          saveConversation(conv);
+        }
+        cleanedStaleSoldHolds += 1;
+        continue;
+      }
       const createdAt = hold.createdAt || hold.updatedAt;
       if (!createdAt) continue;
       const created = new Date(createdAt);
       if (Number.isNaN(created.getTime())) continue;
       const ageDays = Math.floor((now.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
       if (ageDays < 30) continue;
-      const conv =
-        (hold.convId && getConversation(hold.convId)) ||
-        (hold.leadKey && getConversation(hold.leadKey)) ||
-        null;
       if (!conv) continue;
       const label = hold.label ?? hold.stockId ?? hold.vin ?? "this unit";
       const text = `Unit on hold for ${ageDays} days (${label}). Keep hold or release?`;
@@ -4301,6 +4316,7 @@ async function processInventoryHolds() {
         addInternalQuestion(conv.id, conv.leadKey, text);
       }
     }
+    if (cleanedStaleSoldHolds) await flushConversationStore();
   } catch (e: any) {
     console.warn("[inventory-holds] failed:", e?.message ?? e);
   }
@@ -14215,6 +14231,7 @@ async function applyOutcomeSold(
 ) {
   const soldKey = normalizeInventorySoldKey(unit.stockId, unit.vin);
   if (!soldKey) return "Missing sold unit (stockId or VIN).";
+  const prevHoldKey = conv.hold?.key ?? undefined;
   const cfg = await getSchedulerConfigHot();
   const salespeople = cfg.salespeople ?? [];
   const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
@@ -14246,8 +14263,14 @@ async function applyOutcomeSold(
     updatedAt: nowIso
   };
   await setInventorySold({ stockId: unit.stockId, vin: unit.vin, sold: soldEntry });
-  await clearInventoryHold(unit.stockId, unit.vin);
-  if (conv.hold && (conv.hold.onOrder || !conv.hold.key || conv.hold.key === soldKey)) {
+  await clearInventoryHoldRefs({ stockId: unit.stockId, vin: unit.vin, key: prevHoldKey });
+  if (
+    conv.hold &&
+    (conv.hold.onOrder ||
+      !conv.hold.key ||
+      conv.hold.key === soldKey ||
+      inventoryAvailabilityRecordMatches(conv.hold, unit.stockId ?? prevHoldKey, unit.vin))
+  ) {
     conv.hold = undefined;
   }
   setFollowUpMode(conv, "active", "post_sale");
@@ -32089,6 +32112,7 @@ app.post("/conversations/:id/close", async (req, res) => {
     if (soldInput && !soldKey) {
       return res.status(400).json({ ok: false, error: "Missing sold unit (stockId or VIN)." });
     }
+    const prevHoldKey = conv.hold?.key ?? undefined;
     const salespeople = cfg.salespeople ?? [];
     const sp = soldById ? salespeople.find(s => s.id === soldById) ?? null : null;
     conv.sale = {
@@ -32121,8 +32145,14 @@ app.post("/conversations/:id/close", async (req, res) => {
         updatedAt: nowIso
       };
       await setInventorySold({ stockId: soldStockId, vin: soldVin, sold: soldEntry });
-      await clearInventoryHold(soldStockId, soldVin);
-      if (conv.hold && (conv.hold.onOrder || !conv.hold.key || conv.hold.key === soldKey)) {
+      await clearInventoryHoldRefs({ stockId: soldStockId, vin: soldVin, key: prevHoldKey });
+      if (
+        conv.hold &&
+        (conv.hold.onOrder ||
+          !conv.hold.key ||
+          conv.hold.key === soldKey ||
+          inventoryAvailabilityRecordMatches(conv.hold, soldStockId ?? prevHoldKey, soldVin))
+      ) {
         conv.hold = undefined;
       }
     }

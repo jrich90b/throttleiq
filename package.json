@@ -39,6 +39,7 @@
     "trade_payoff:eval": "LLM_ENABLED=1 LLM_TRADE_PAYOFF_PARSER_ENABLED=1 npx tsx scripts/trade_payoff_eval.ts",
     "harley_watch_model_catalog:eval": "npx tsx scripts/harley_watch_model_catalog_eval.ts",
     "inventory_watch_snapshot_guard:eval": "npx tsx scripts/inventory_watch_snapshot_guard_eval.ts",
+    "inventory_hold_cleanup:eval": "npx tsx scripts/inventory_hold_cleanup_eval.ts",
     "campaign_asset_format:eval": "npx tsx scripts/campaign_asset_format_eval.ts",
     "watch_catalog_eval": "LLM_ENABLED=1 npx tsx scripts/watch_catalog_eval.ts",
     "finance_docs_eval": "LLM_ENABLED=1 npx tsx scripts/finance_docs_eval.ts",
