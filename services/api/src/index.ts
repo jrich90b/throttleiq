@@ -17499,6 +17499,32 @@ function buildDealerLocationReply(conv: any, dealerProfile: any): string {
   return ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
 }
 
+function buildAdfDealerLocationCostReply(conv: any, dealerProfile: any, inboundText: string): string {
+  const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+  const firstName = normalizeDisplayCase(conv?.lead?.firstName);
+  const address = dealerProfile?.address;
+  const line1 = String(address?.line1 ?? "1149 Erie Ave.").trim();
+  const city = String(address?.city ?? "North Tonawanda").trim();
+  const state = String(address?.state ?? "NY").trim();
+  const zip = String(address?.zip ?? "14120").trim();
+  const modelLabel = formatModelLabel(
+    conv?.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+    conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
+  );
+  const asksCost = /\b(cost|price|pricing|how much|payment|payments|monthly|quote|sale price)\b/i.test(
+    inboundText
+  );
+  const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
+  const prefix = `${greeting}This is ${agentName} at ${dealerName}.`;
+  const pricingLine = asksCost
+    ? modelLabel
+      ? ` I can also have the team confirm cost and pricing details on the ${modelLabel}.`
+      : " I can also have the team confirm cost and pricing details."
+    : "";
+  return `${prefix} ${dealerName} is located at ${line1}, ${city}, ${state} ${zip}.${pricingLine}`.trim();
+}
+
 function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string): string {
   if (getDialogState(conv) !== "schedule_offer_sent") return reply;
   if (!isSlotOfferMessage(reply)) return reply;
@@ -46161,7 +46187,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ? conv.inventoryWatches[0]
       : null);
   const regenInboundReplyActionParserEligible =
-    event.provider === "twilio" &&
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
     !!process.env.OPENAI_API_KEY;
@@ -46359,19 +46385,48 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenLocationQuestion =
     regenParserLocationQuestion ||
     (regenInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
-  if (event.provider === "twilio" && channel === "sms" && regenLocationQuestion) {
-    const reply = buildDealerLocationReply(conv, dealerProfile);
+  if (
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
+    channel === "sms" &&
+    regenLocationQuestion
+  ) {
+    const inboundText = String(event.body ?? "");
+    const adfLocationQuestion = event.provider === "sendgrid_adf";
+    const reply = adfLocationQuestion
+      ? buildAdfDealerLocationCostReply(conv, dealerProfile, inboundText)
+      : buildDealerLocationReply(conv, dealerProfile);
+    const asksCost = /\b(cost|price|pricing|how much|payment|payments|monthly|quote|sale price)\b/i.test(
+      inboundText
+    );
+    if (adfLocationQuestion) {
+      setDialogState(conv, asksCost ? "pricing_init" : "inventory_answered");
+      if (asksCost) {
+        const modelLabel = formatModelLabel(
+          conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+          conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+        );
+        addTodo(
+          conv,
+          "pricing",
+          `Confirm sale price${modelLabel ? ` for ${modelLabel}` : ""}. Customer asked: ${inboundText}`,
+          event.providerMessageId
+        );
+        setFollowUpMode(conv, "manual_handoff", "price_confirm");
+        stopFollowUpCadence(conv, "manual_handoff");
+      }
+    }
     recordRouteOutcome("regen", "dealer_location_question", {
       convId: conv.id,
       leadKey: conv.leadKey,
       parserAction: regenInboundReplyActionParse?.action ?? null,
       parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
-      fallback: !regenParserLocationQuestion
+      fallback: !regenParserLocationQuestion,
+      provider: event.provider
     });
     return respondWithSmsRegeneratedDraft(reply, undefined, {
       turnSchedulingIntent: false,
       turnAvailabilityIntent: false,
-      turnFinanceIntent: false
+      turnFinanceIntent: asksCost
     });
   }
   const regenScheduleContextStatusUpdate =
