@@ -80,6 +80,7 @@
     "finance_language_fuzz:eval": "npx tsx scripts/finance_language_fuzz_eval.ts",
     "tone_quality:eval": "npx tsx scripts/tone_quality_eval.ts",
     "tone_quality:fixture_eval": "npx tsx scripts/tone_quality_fixture_eval.ts",
+    "inbound_reply_coverage:intake": "npx tsx scripts/inbound_reply_coverage_intake.ts",
     "web_text_widget:eval": "npx tsx scripts/web_text_widget_eval.ts",
     "web_fallback:eval": "npx tsx scripts/web_fallback_eval.ts",
     "web_fallback_rank:eval": "npx tsx scripts/web_fallback_rank_eval.ts",
