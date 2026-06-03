@@ -154,6 +154,14 @@ import {
   syncStripeBillingForActiveClient,
   type StripeCheckoutKind
 } from "./domain/stripeBilling.js";
+import {
+  createDealerPaymentCheckout,
+  createDealerPaymentConnectLink,
+  getDealerPaymentStripeStatus,
+  listDealerPaymentRequests,
+  parseDealerPaymentAmountCents,
+  refreshDealerPaymentStripeAccount
+} from "./domain/dealerPayments.js";
 import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
 import {
   addEsignPacket,
@@ -31689,6 +31697,8 @@ app.post("/dealer-profile/logo", requireManager, upload.single("file"), async (r
     ? `${publicBase.replace(/\/$/, "")}/uploads/${fileName}`
     : `/uploads/${fileName}`;
   const saved = await saveDealerProfile({ ...profile, logoUrl: url });
+  hotDealerProfileCache.value = saved;
+  hotDealerProfileCache.expiresAt = Date.now() + HOT_CACHE_DEALER_PROFILE_MS;
   res.json({ ok: true, profile: saved, url });
 });
 
@@ -31825,11 +31835,117 @@ app.put("/dealer-profile", requireManager, async (req, res) => {
     warrantyRma: {
       ...(current?.warrantyRma ?? {}),
       ...(incoming?.warrantyRma ?? {})
+    },
+    payments: {
+      ...(current?.payments ?? {}),
+      ...(incoming?.payments ?? {}),
+      stripe: {
+        ...(current?.payments?.stripe ?? {}),
+        ...(incoming?.payments?.stripe ?? {})
+      }
     }
   };
   const saved = await saveDealerProfile(merged);
+  hotDealerProfileCache.value = saved;
+  hotDealerProfileCache.expiresAt = Date.now() + HOT_CACHE_DEALER_PROFILE_MS;
   console.log("[dealer-profile] save done");
   res.json({ ok: true, profile: saved });
+});
+
+app.get("/dealer-payments/status", requireManager, async (_req, res) => {
+  try {
+    const profile = await getDealerProfile();
+    return res.json({ ok: true, stripe: getDealerPaymentStripeStatus(profile) });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err?.message ?? "Could not read Stripe payment status." });
+  }
+});
+
+app.post("/dealer-payments/connect", requireManager, async (req, res) => {
+  try {
+    const result = await createDealerPaymentConnectLink({
+      refreshUrl: typeof req.body?.refreshUrl === "string" ? req.body.refreshUrl : undefined,
+      returnUrl: typeof req.body?.returnUrl === "string" ? req.body.returnUrl : undefined
+    });
+    const profile = await getDealerProfile();
+    hotDealerProfileCache.value = profile;
+    hotDealerProfileCache.expiresAt = Date.now() + HOT_CACHE_DEALER_PROFILE_MS;
+    return res.json({ ok: true, ...result, stripe: getDealerPaymentStripeStatus(profile) });
+  } catch (err: any) {
+    return res.status(400).json({
+      ok: false,
+      error: err?.message ?? "Stripe Connect onboarding could not be started."
+    });
+  }
+});
+
+app.post("/dealer-payments/refresh", requireManager, async (_req, res) => {
+  try {
+    const result = await refreshDealerPaymentStripeAccount();
+    hotDealerProfileCache.value = result.profile;
+    hotDealerProfileCache.expiresAt = Date.now() + HOT_CACHE_DEALER_PROFILE_MS;
+    return res.json({ ok: true, profile: result.profile, stripe: getDealerPaymentStripeStatus(result.profile) });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err?.message ?? "Stripe account status could not be refreshed." });
+  }
+});
+
+app.get("/dealer-payments/requests", async (req, res) => {
+  const conversationId = String(req.query?.conversationId ?? "").trim();
+  if (conversationId) {
+    const conv = getConversation(conversationId);
+    if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found." });
+    const user = (req as any).user ?? null;
+    if (!canUserAccessConversation(user, conv)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+  }
+  const requests = await listDealerPaymentRequests({ conversationId: conversationId || undefined });
+  return res.json({ ok: true, requests });
+});
+
+app.post("/dealer-payments/requests", async (req, res) => {
+  const conversationId = String(req.body?.conversationId ?? "").trim();
+  if (!conversationId) return res.status(400).json({ ok: false, error: "Conversation is required." });
+  const conv = getConversation(conversationId);
+  if (!conv) return res.status(404).json({ ok: false, error: "Conversation not found." });
+  const user = (req as any).user ?? null;
+  if (!canUserAccessConversation(user, conv)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  const amountCents =
+    req.body?.amountCents !== undefined
+      ? parseDealerPaymentAmountCents(Number(req.body.amountCents))
+      : parseDealerPaymentAmountCents(req.body?.amount);
+  const actorUserId = String(user?.id ?? "").trim();
+  const actorUserName = String(user?.name ?? user?.email ?? "").trim();
+  try {
+    const lead = conv.lead ?? {};
+    const result = await createDealerPaymentCheckout({
+      conversationId: conv.id,
+      leadKey: conv.leadKey,
+      leadRef: lead.leadRef,
+      customerName:
+        String(lead.name ?? "").trim() ||
+        [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim(),
+      customerPhone: lead.phone,
+      customerEmail: lead.email,
+      amountCents,
+      currency: req.body?.currency,
+      description: req.body?.description,
+      channel: req.body?.channel,
+      createdByUserId: actorUserId || undefined,
+      createdByUserName: actorUserName || undefined
+    });
+    return res.json({ ok: true, ...result });
+  } catch (err: any) {
+    const profile = await getDealerProfile().catch(() => null);
+    return res.status(400).json({
+      ok: false,
+      error: err?.message ?? "Payment request could not be created.",
+      stripe: getDealerPaymentStripeStatus(profile)
+    });
+  }
 });
 
 app.post("/inventory/status", (req, res) => {

@@ -54,6 +54,18 @@ export type DealerProfile = {
   warrantyRma?: {
     workflow?: "talon_reference" | "non_talon_submission";
   };
+  payments?: {
+    stripe?: {
+      enabled?: boolean;
+      connectedAccountId?: string;
+      accountId?: string;
+      stripeAccountId?: string;
+      chargesEnabled?: boolean;
+      payoutsEnabled?: boolean;
+      detailsSubmitted?: boolean;
+      updatedAt?: string;
+    };
+  };
   taxRate?: number;
 };
 

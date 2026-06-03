@@ -3279,6 +3279,11 @@ export default function Home() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [sendBody, setSendBody] = useState("");
   const [sendBodySource, setSendBodySource] = useState<"draft" | "user" | "system">("system");
+  const [paymentRequestOpen, setPaymentRequestOpen] = useState(false);
+  const [paymentRequestAmount, setPaymentRequestAmount] = useState("");
+  const [paymentRequestDescription, setPaymentRequestDescription] = useState("");
+  const [paymentRequestBusy, setPaymentRequestBusy] = useState(false);
+  const [paymentRequestError, setPaymentRequestError] = useState<string | null>(null);
   const [emailManualMode, setEmailManualMode] = useState(false);
   const [lastDraftId, setLastDraftId] = useState<string | null>(null);
   const [editPromptOpen, setEditPromptOpen] = useState(false);
@@ -3415,8 +3420,12 @@ export default function Home() {
     campaignWebBannerInsetPercent: "",
     campaignWebBannerFit: "auto" as "auto" | "cover" | "contain",
     warrantyRmaWorkflow: "talon_reference" as "talon_reference" | "non_talon_submission",
+    stripePaymentsEnabled: false,
+    stripeConnectedAccountId: "",
     taxRate: "8"
   });
+  const [dealerPaymentStripeStatus, setDealerPaymentStripeStatus] = useState<any>(null);
+  const [dealerPaymentBusy, setDealerPaymentBusy] = useState(false);
   const [selectedReferenceSite, setSelectedReferenceSite] = useState("");
   const [dealerHours, setDealerHours] = useState<Record<string, { open: string | null; close: string | null }>>(
     {}
@@ -6997,6 +7006,14 @@ export default function Home() {
           warrantyRmaWorkflowRaw === "manual_submission"
             ? "non_talon_submission"
             : "talon_reference";
+        const stripePayments = profile?.payments?.stripe ?? {};
+        const stripeConnectedAccountId = String(
+          stripePayments.connectedAccountId ??
+            stripePayments.accountId ??
+            stripePayments.stripeAccountId ??
+            profile?.stripeConnectedAccountId ??
+            ""
+        ).trim();
         const followUpMonths = Array.isArray(followUp.testRideMonths) ? followUp.testRideMonths : [4, 5, 6, 7, 8, 9, 10];
         setDealerProfile(profile);
         setDealerProfileForm({
@@ -7084,6 +7101,8 @@ export default function Home() {
               : "",
           campaignWebBannerFit: campaignWebBannerFit as "auto" | "cover" | "contain",
           warrantyRmaWorkflow: warrantyRmaWorkflow as "talon_reference" | "non_talon_submission",
+          stripePaymentsEnabled: stripePayments.enabled === true || !!stripeConnectedAccountId,
+          stripeConnectedAccountId,
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -7519,6 +7538,10 @@ export default function Home() {
   const canViewAllTasks = isManager || !!authUser?.permissions?.canViewAllTasks;
   const isDepartmentUser =
     authUser?.role === "service" || authUser?.role === "parts" || authUser?.role === "apparel";
+  useEffect(() => {
+    if (!isManager) return;
+    void loadDealerPaymentStatus();
+  }, [isManager]);
   const isConversationSection =
     section === "inbox" ||
     section === "todos" ||
@@ -11720,6 +11743,14 @@ export default function Home() {
               ? "non_talon_submission"
               : "talon_reference"
         },
+        payments: {
+          ...(((dealerProfile as any)?.payments ?? {}) as Record<string, any>),
+          stripe: {
+            ...(((dealerProfile as any)?.payments?.stripe ?? {}) as Record<string, any>),
+            enabled: !!dealerProfileForm.stripePaymentsEnabled,
+            connectedAccountId: dealerProfileForm.stripeConnectedAccountId.trim() || undefined
+          }
+        },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
       const resp = await fetch("/api/dealer-profile", {
@@ -11741,6 +11772,109 @@ export default function Home() {
       setSettingsError(err?.message ?? "Failed to save dealer profile");
     } finally {
       setSettingsSaving(false);
+    }
+  }
+
+  async function loadDealerPaymentStatus() {
+    try {
+      const resp = await fetch("/api/dealer-payments/status", { cache: "no-store" });
+      const json = await resp.json().catch(() => null);
+      if (resp.ok && json?.ok) {
+        setDealerPaymentStripeStatus(json.stripe ?? null);
+      }
+    } catch {
+      // Settings can still load if Stripe payment status is unavailable.
+    }
+  }
+
+  async function startStripePaymentOnboarding() {
+    setDealerPaymentBusy(true);
+    setSettingsError(null);
+    try {
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const returnUrl = origin ? `${origin}/?section=settings&stripe=connected` : undefined;
+      const refreshUrl = origin ? `${origin}/?section=settings&stripe=refresh` : undefined;
+      const resp = await fetch("/api/dealer-payments/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ returnUrl, refreshUrl })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.url) throw new Error(json?.error ?? "Could not start Stripe onboarding");
+      if (json?.stripe) setDealerPaymentStripeStatus(json.stripe);
+      window.location.href = json.url;
+    } catch (err: any) {
+      setSettingsError(err?.message ?? "Could not start Stripe onboarding");
+    } finally {
+      setDealerPaymentBusy(false);
+    }
+  }
+
+  async function refreshStripePaymentStatus() {
+    setDealerPaymentBusy(true);
+    setSettingsError(null);
+    try {
+      const resp = await fetch("/api/dealer-payments/refresh", { method: "POST" });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok) throw new Error(json?.error ?? "Could not refresh Stripe account status");
+      if (json?.profile) {
+        const stripe = json.profile?.payments?.stripe ?? {};
+        setDealerProfile(json.profile);
+        setDealerProfileForm(prev => ({
+          ...prev,
+          stripePaymentsEnabled: stripe.enabled === true || !!stripe.connectedAccountId,
+          stripeConnectedAccountId: String(stripe.connectedAccountId ?? "").trim()
+        }));
+      }
+      setDealerPaymentStripeStatus(json?.stripe ?? null);
+      setSaveToast("Stripe status refreshed");
+    } catch (err: any) {
+      setSettingsError(err?.message ?? "Could not refresh Stripe account status");
+    } finally {
+      setDealerPaymentBusy(false);
+    }
+  }
+
+  async function createConversationPaymentRequest() {
+    if (!selectedConv) return;
+    if (paymentRequestBusy) return;
+    const description = paymentRequestDescription.trim();
+    const amount = paymentRequestAmount.trim();
+    if (!amount || !description) {
+      setPaymentRequestError("Enter an amount and a short description.");
+      return;
+    }
+    setPaymentRequestBusy(true);
+    setPaymentRequestError(null);
+    try {
+      const channel = messageFilter === "email" ? "email" : "sms";
+      const resp = await fetch("/api/dealer-payments/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversationId: selectedConv.id,
+          amount,
+          description,
+          channel
+        })
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.suggestedMessage) {
+        throw new Error(json?.error ?? "Could not create payment request");
+      }
+      if (messageFilter === "email") {
+        setEmailManualMode(true);
+      }
+      setSendBody(json.suggestedMessage);
+      setSendBodySource("user");
+      setPaymentRequestOpen(false);
+      setPaymentRequestAmount("");
+      setPaymentRequestDescription("");
+      setSaveToast("Payment link drafted");
+    } catch (err: any) {
+      setPaymentRequestError(err?.message ?? "Could not create payment request");
+    } finally {
+      setPaymentRequestBusy(false);
     }
   }
 
@@ -17475,6 +17609,82 @@ export default function Home() {
                     American Harley should stay on TALON dealer mode. Use the H-Dnet submission option for dealers that do not run TALON.
                   </div>
                 </div>
+                <div className="border border-slate-300 rounded-lg p-3 bg-white text-slate-900 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">Stripe customer payments</div>
+                      <div className="text-xs text-slate-600">
+                        Lets staff create Stripe-hosted payment links for customer deposits, parts, or balances.
+                      </div>
+                    </div>
+                    <span
+                      className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                        dealerPaymentStripeStatus?.configured
+                          ? "bg-green-100 text-green-800"
+                          : "bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {dealerPaymentStripeStatus?.configured ? "Ready" : "Not ready"}
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={!!dealerProfileForm.stripePaymentsEnabled}
+                      onChange={e =>
+                        setDealerProfileForm({
+                          ...dealerProfileForm,
+                          stripePaymentsEnabled: e.target.checked
+                        })
+                      }
+                    />
+                    Enable customer payment requests for this dealer
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="space-y-1 md:col-span-2">
+                      <div className="text-xs text-gray-600">Connected Stripe account ID</div>
+                      <input
+                        className="border rounded px-3 py-2 text-sm w-full"
+                        placeholder="acct_..."
+                        value={dealerProfileForm.stripeConnectedAccountId}
+                        onChange={e =>
+                          setDealerProfileForm({
+                            ...dealerProfileForm,
+                            stripeConnectedAccountId: e.target.value
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="px-3 py-2 border rounded text-sm bg-orange-600 text-white border-orange-600 disabled:opacity-50"
+                      onClick={startStripePaymentOnboarding}
+                      disabled={dealerPaymentBusy}
+                    >
+                      {dealerProfileForm.stripeConnectedAccountId ? "Resume Stripe setup" : "Connect Stripe"}
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 border rounded text-sm disabled:opacity-50"
+                      onClick={refreshStripePaymentStatus}
+                      disabled={dealerPaymentBusy || !dealerProfileForm.stripeConnectedAccountId}
+                    >
+                      Refresh status
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-slate-600">
+                    <div>Charges: {dealerPaymentStripeStatus?.chargesEnabled ? "enabled" : "not enabled"}</div>
+                    <div>Payouts: {dealerPaymentStripeStatus?.payoutsEnabled ? "enabled" : "not enabled"}</div>
+                    <div>Mode: {dealerPaymentStripeStatus?.mode ?? "unknown"}</div>
+                  </div>
+                  {dealerPaymentStripeStatus?.missing?.length ? (
+                    <div className="text-xs text-amber-700">
+                      Missing: {dealerPaymentStripeStatus.missing.join(", ")}
+                    </div>
+                  ) : null}
+                </div>
                 <div className="border rounded-lg p-3 space-y-3">
                   <div className="text-sm font-semibold">Basic Information</div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -21793,8 +22003,85 @@ export default function Home() {
                     Clear Draft
                   </button>
                 ) : null}
+                {messageFilter !== "calls" ? (
+                  <button
+                    className={`px-4 py-2 border rounded text-xs ${
+                      paymentRequestBusy ||
+                      (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
+                        ? "opacity-50 cursor-not-allowed"
+                        : ""
+                    }`}
+                    title="Create a secure Stripe payment link and put it in the message box for review."
+                    onClick={() => {
+                      setPaymentRequestOpen(prev => !prev);
+                      setPaymentRequestError(null);
+                      if (!paymentRequestDescription.trim()) {
+                        setPaymentRequestDescription("Customer payment");
+                      }
+                    }}
+                    disabled={
+                      paymentRequestBusy ||
+                      (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
+                    }
+                  >
+                    Payment request
+                  </button>
+                ) : null}
               </div>
             </div>
+
+            {paymentRequestOpen && messageFilter !== "calls" ? (
+              <div className="mt-3 rounded-lg border bg-white p-3 text-slate-900 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Create payment link</div>
+                    <div className="text-xs text-slate-600">
+                      A secure Stripe link will be drafted here. Review it before sending.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 hover:text-slate-800"
+                    onClick={() => setPaymentRequestOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-[140px_1fr_auto] gap-2">
+                  <label className="space-y-1">
+                    <div className="text-xs text-slate-600">Amount</div>
+                    <input
+                      className="w-full rounded border px-3 py-2 text-sm"
+                      placeholder="250.00"
+                      value={paymentRequestAmount}
+                      onChange={e => setPaymentRequestAmount(e.target.value)}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-slate-600">Description</div>
+                    <input
+                      className="w-full rounded border px-3 py-2 text-sm"
+                      placeholder="Deposit for 2021 Street Glide"
+                      value={paymentRequestDescription}
+                      onChange={e => setPaymentRequestDescription(e.target.value)}
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      className="w-full rounded border border-orange-600 bg-orange-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      onClick={createConversationPaymentRequest}
+                      disabled={paymentRequestBusy}
+                    >
+                      {paymentRequestBusy ? "Creating..." : "Draft link"}
+                    </button>
+                  </div>
+                </div>
+                {paymentRequestError ? (
+                  <div className="mt-2 text-xs text-red-600">{paymentRequestError}</div>
+                ) : null}
+              </div>
+            ) : null}
 
             {messageFilter === "sms" ? (
               <div className="mt-2 flex flex-col gap-2">

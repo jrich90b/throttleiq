@@ -7,6 +7,7 @@ import {
   updateActiveClient,
   type ActiveClient
 } from "./activeClientStore.js";
+import { handleDealerPaymentStripeEvent } from "./dealerPayments.js";
 
 export type StripeCheckoutKind = "onboarding" | "setup_fee" | "subscription";
 
@@ -364,6 +365,9 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string | u
   const event = webhookSecret
     ? stripe.webhooks.constructEvent(rawBody, signature || "", webhookSecret)
     : JSON.parse(rawBody.toString("utf8")) as Stripe.Event;
+
+  const dealerPaymentResult = await handleDealerPaymentStripeEvent(event);
+  if (dealerPaymentResult) return dealerPaymentResult;
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
