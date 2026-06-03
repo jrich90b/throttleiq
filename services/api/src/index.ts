@@ -4281,8 +4281,28 @@ async function processInventoryHolds() {
     const holds = await listInventoryHolds();
     const solds = await listInventorySolds();
     const now = new Date();
-    const openQuestions = listOpenQuestions();
+    let openQuestions = listOpenQuestions();
     let cleanedStaleSoldHolds = 0;
+    let closedStaleHoldQuestions = 0;
+    const closeUnitHoldQuestionsForConversation = (convId?: string | null) => {
+      const id = String(convId ?? "").trim();
+      if (!id) return;
+      for (const question of openQuestions) {
+        if (question?.status !== "open") continue;
+        if (String(question?.convId ?? "").trim() !== id) continue;
+        if (!/unit on hold/i.test(String(question?.text ?? ""))) continue;
+        markQuestionDone(id, question.id, "sold_cleanup", "closed stale hold alert after sold");
+        closedStaleHoldQuestions += 1;
+      }
+    };
+    for (const question of openQuestions) {
+      if (question?.status !== "open") continue;
+      if (!/unit on hold/i.test(String(question?.text ?? ""))) continue;
+      const conv = question?.convId ? getConversation(question.convId) : null;
+      if (!conv || !isSoldOrPostSaleConversation(conv)) continue;
+      closeUnitHoldQuestionsForConversation(conv.id);
+    }
+    if (closedStaleHoldQuestions) openQuestions = listOpenQuestions();
     for (const hold of Object.values(holds ?? {})) {
       const conv =
         (hold.convId && getConversation(hold.convId)) ||
@@ -4297,6 +4317,7 @@ async function processInventoryHolds() {
           conv.hold = undefined;
           saveConversation(conv);
         }
+        closeUnitHoldQuestionsForConversation(conv?.id ?? hold.convId);
         cleanedStaleSoldHolds += 1;
         continue;
       }
@@ -4316,7 +4337,7 @@ async function processInventoryHolds() {
         addInternalQuestion(conv.id, conv.leadKey, text);
       }
     }
-    if (cleanedStaleSoldHolds) await flushConversationStore();
+    if (cleanedStaleSoldHolds || closedStaleHoldQuestions) await flushConversationStore();
   } catch (e: any) {
     console.warn("[inventory-holds] failed:", e?.message ?? e);
   }
