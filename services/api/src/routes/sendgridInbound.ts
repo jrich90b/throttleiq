@@ -5461,9 +5461,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
-    const dealerRideInitialThankYou = !appointmentOutcomeWins
-      ? await publishDealerRideInitialThankYouDraft()
-      : { ok: false, reason: "appointment_outcome_wins" };
+    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
         conv,
@@ -5547,14 +5545,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_customer_draft",
+      note: "dealer_ride_outcome_pending_no_customer_reply",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou,
       staffSms
     });
   }
   if (isDealerRideEventLead) {
-    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
+    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -5568,7 +5566,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_customer_draft",
+      note: "dealer_ride_outcome_pending_no_customer_reply",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou
     });

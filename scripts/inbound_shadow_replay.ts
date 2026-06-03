@@ -763,8 +763,8 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (!draftText) {
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
-        verdict: "no_response",
-        reasons: ["Dealer Lead App demo-ride ADF should produce a customer thank-you draft"]
+        verdict: "expected_no_response",
+        reasons: ["Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"]
       };
     }
     if (
@@ -814,9 +814,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (draftText.length < 12) reasons.push("very short draft");
   if (
     isDealerLeadAppOutcomeAdf(provider, inbound) &&
-    !/thanks again for coming in|thanks[\s\S]{0,80}test ride/i.test(draftText)
+    draftText
   ) {
-    reasons.push("Dealer Lead App demo-ride draft should thank the customer for coming in");
+    reasons.push("Dealer Lead App outcome/task ADF should wait for recorded outcome before drafting");
   }
   if (/\b(and|or|to|the|when|if|with|for|can|could|would|should|will)$/i.test(draftText)) {
     reasons.push("draft appears truncated");
