@@ -6,6 +6,23 @@ export function isLogisticsProgressUpdateText(text: string): boolean {
       t
     ) ||
     /\b(dmv|registration|register|title|plate|paperwork)\b/.test(t);
+  const hasDeliveryReadyUpdate =
+    /\b(?:bike|motorcycle|unit|ride|it)\b[\s\S]{0,80}\b(?:ready|done|finished|complete|completed)\b/.test(t) ||
+    /\b(?:ready|done|finished|complete|completed)\b[\s\S]{0,80}\b(?:bike|motorcycle|unit|ride|it)\b/.test(t);
+  const hasDeliveryTimingContext =
+    /\b(?:before|by|on|around|after)\b[\s\S]{0,60}\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|juneteenth|june|july|august|september|october|november|december|\d{1,2}(?:st|nd|rd|th)?)\b/.test(
+      t
+    ) ||
+    /\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|juneteenth|june|july|august|september|october|november|december|\d{1,2}(?:st|nd|rd|th)?)\b[\s\S]{0,60}\b(?:ready|done|finished|complete|completed)\b/.test(
+      t
+    );
+  const hasDealerTimeUpdate =
+    /\bplease let (?:him|her|them|the team|sales|service|parts|your guy|your guys) know\b[\s\S]{0,80}\b(?:got time|has time|have time|no rush|not a rush)\b/.test(
+      t
+    ) ||
+    /\b(?:got time|has time|have time|no rush|not a rush)\b[\s\S]{0,80}\bplease let (?:him|her|them|the team|sales|service|parts|your guy|your guys) know\b/.test(
+      t
+    );
   const hasDeferredFollowUp = /\b(let (?:me|you) know|get back to (?:me|you)|reach out|follow up)\b/.test(t);
   const hasTravelDeadline =
     /\b(?:start|star|starting|leave|leaving|head|heading|drive|driving|travel|traveling|travelling|on the road)\b[\s\S]{0,90}\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b/.test(
@@ -24,6 +41,8 @@ export function isLogisticsProgressUpdateText(text: string): boolean {
     /\b(?:soon|shortly|in a few|right now)\b/.test(t);
   return (
     (hasProgress && hasDeferredFollowUp) ||
+    (hasDeliveryReadyUpdate && hasDeliveryTimingContext) ||
+    hasDealerTimeUpdate ||
     (hasDeferredFollowUp && hasTravelDeadline) ||
     (hasArrivalProgress && hasArrivalTime)
   );
@@ -62,6 +81,8 @@ export function isDealerLocationQuestionText(text: string | null | undefined): b
     /\bwhere\s+(?:are|r)\s+(?:you|y'all|you guys)\b/.test(t) ||
     /\bwhere\s+(?:is|'s)\s+(?:the\s+)?(?:dealership|dealer|store|shop|location)\b/.test(t) ||
     /\bwhere\s+(?:are|is|'s)\s+(?:you\s+)?located\b/.test(t) ||
+    /\bwhere\s+(?:is|'s)\s+(?:this|that|the\s+(?:bike|motorcycle|unit|vehicle))\s+located\b/.test(t) ||
+    /\bwhere\s+(?:this|that|the\s+(?:bike|motorcycle|unit|vehicle))\s+(?:is|'s)\s+located\b/.test(t) ||
     /\bwhat\s+(?:is|'s)?\s*(?:your|the|this|that)?\s*(?:store\s+|dealer\s+|dealership\s+)?address\b/.test(t) ||
     /\bwhat\s+address\s+(?:is\s+)?(?:this|that|there|are\s+you\s+at|you\s+at)\b/.test(t) ||
     /\bwhat\s+location\b/.test(t) ||

@@ -9,6 +9,10 @@ import {
   isScheduleContextStatusUpdateText
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
+import {
+  isDealerLocationQuestionText,
+  isLogisticsProgressUpdateText
+} from "../services/api/src/domain/transitionSafety.ts";
 
 type FixClassification = "global" | "mixed";
 
@@ -139,6 +143,16 @@ function evaluateProfile(input: DealerProfileInput) {
     classificationBucket: "in_store",
     classificationCta: "contact_us"
   };
+  const unresolvedOtherInvariantInput = {
+    inboundText: "Do you have anything in my range with some bags on it?",
+    draftText:
+      "I’m not seeing new 2026 Harley-Davidson Other in stock right now. If you'd like, you can stop by and we can go over availability and pricing, or I can text you as soon as one comes in. Are you after a certain color?",
+    followUpMode: "manual_handoff",
+    followUpReason: "credit_app",
+    dialogState: "payments_handoff",
+    classificationBucket: "finance_prequal",
+    classificationCta: "hdfs_coa"
+  };
   const cases: EvalCase[] = [
     {
       id: "explicit_customer_callback_request_routes_before_stale_schedule",
@@ -177,6 +191,20 @@ function evaluateProfile(input: DealerProfileInput) {
         (!address || locationReply.includes(address)),
       expected: true,
       note: "Shared route can be global only if dealer name, agent, and address remain profile-driven."
+    },
+    {
+      id: "adf_location_question_this_is_located_detected",
+      classification: "mixed",
+      actual: isDealerLocationQuestionText("Not sure where this is located or what is the cost."),
+      expected: true,
+      note: "ADF customer phrasing with 'where this is located' must override generic/test-ride source copy."
+    },
+    {
+      id: "customer_address_not_dealer_location_question",
+      classification: "global",
+      actual: isDealerLocationQuestionText("What is my street address on file?"),
+      expected: false,
+      note: "Dealer-location fallback must not capture customer/account address questions."
     },
     {
       id: "schedule_status_update_gets_actionable_reply",
@@ -229,6 +257,48 @@ function evaluateProfile(input: DealerProfileInput) {
       actual: applyDraftStateInvariants({ ...watchInvariantInput, shortAckIntent: false }).allow,
       expected: true,
       note: "Suggest/autopilot publication must preserve parse hints through the final invariant boundary."
+    },
+    {
+      id: "delivery_ready_before_date_progress_detected",
+      classification: "mixed",
+      actual: isLogisticsProgressUpdateText(
+        "I spoke with Hollis. He told me the bike be ready before Juneteenth and I am good with that. Please let him know he got time."
+      ),
+      expected: true,
+      note: "Purchase/delivery readiness updates should not fall into stale small-talk or media prompts."
+    },
+    {
+      id: "unresolved_harley_other_inventory_repaired",
+      classification: "global",
+      actual: applyDraftStateInvariants(unresolvedOtherInvariantInput).draftText,
+      expected: "I’ll have the team check current options in your range with bags and follow up shortly.",
+      note: "Final publication boundary must repair unresolved generic inventory entities before draft/send."
+    },
+    {
+      id: "truncated_in_good_draft_repaired",
+      classification: "global",
+      actual: applyDraftStateInvariants({
+        inboundText: "is he the best man for the job?",
+        draftText: "Yeah, Hollis knows his stuff — you’ll be in good",
+        followUpMode: "active",
+        followUpReason: "manual_resume",
+        dialogState: "small_talk"
+      }).reason,
+      expected: "truncated_draft_repaired",
+      note: "Final publication boundary must catch common incomplete LLM small-talk endings."
+    },
+    {
+      id: "truncated_and_moves_draft_repaired",
+      classification: "global",
+      actual: applyDraftStateInvariants({
+        inboundText: "is he the best man for the job?",
+        draftText: "Yep, Hollis is solid — knows his stuff and moves",
+        followUpMode: "active",
+        followUpReason: "manual_resume",
+        dialogState: "small_talk"
+      }).reason,
+      expected: "truncated_draft_repaired",
+      note: "Final publication boundary must catch incomplete conjunction plus verb endings."
     }
   ];
 

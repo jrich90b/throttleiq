@@ -4,6 +4,7 @@ type Case = {
   id: string;
   expectedAllow: boolean;
   expectedReason?: string;
+  expectedDraftContains?: string;
   input: {
     inboundText: string;
     draftText: string;
@@ -352,6 +353,50 @@ const cases: Case[] = [
       classificationBucket: "general_inquiry",
       classificationCta: "unknown"
     }
+  },
+  {
+    id: "wayne_other_inventory_fallback_repaired",
+    expectedAllow: true,
+    expectedReason: "unresolved_inventory_entity_repaired",
+    expectedDraftContains: "current options in your range with bags",
+    input: {
+      inboundText: "Ok well im trying to stay in the mid 30s range with bags",
+      draftText:
+        "I'm not seeing a new 2026 Harley-Davidson Other in stock right now. I can check similar options or keep an eye out.",
+      followUpMode: "manual_handoff",
+      followUpReason: "finance_budget",
+      dialogState: "pricing_init",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    }
+  },
+  {
+    id: "truncated_in_good_smalltalk_repaired",
+    expectedAllow: true,
+    expectedReason: "truncated_draft_repaired",
+    expectedDraftContains: "check on that",
+    input: {
+      inboundText: "is he the best man for the job?",
+      draftText: "Yeah, Hollis knows his stuff — you’ll be in good",
+      followUpMode: "active",
+      followUpReason: "manual_resume",
+      dialogState: "small_talk"
+    }
+  },
+  {
+    id: "truncated_and_moves_smalltalk_repaired",
+    expectedAllow: true,
+    expectedReason: "truncated_draft_repaired",
+    expectedDraftContains: "check on that",
+    input: {
+      inboundText: "is he the best man for the job?",
+      draftText: "Yep, Hollis is solid — knows his stuff and moves",
+      followUpMode: "active",
+      followUpReason: "manual_resume",
+      dialogState: "small_talk"
+    }
   }
 ];
 
@@ -359,10 +404,14 @@ let passed = 0;
 for (const c of cases) {
   const actual = applyDraftStateInvariants(c.input);
   const reasonMatches =
-    c.expectedAllow ||
     !c.expectedReason ||
     String(actual.reason ?? "") === String(c.expectedReason ?? "");
-  const ok = actual.allow === c.expectedAllow && reasonMatches;
+  const draftMatches =
+    !c.expectedDraftContains ||
+    String(actual.draftText ?? "")
+      .toLowerCase()
+      .includes(String(c.expectedDraftContains).toLowerCase());
+  const ok = actual.allow === c.expectedAllow && reasonMatches && draftMatches;
   if (ok) passed += 1;
   console.log(
     `${ok ? "PASS" : "FAIL"} ${c.id} expectedAllow=${c.expectedAllow} actualAllow=${actual.allow} expectedReason=${c.expectedReason ?? "-"} actualReason=${actual.reason ?? "-"}`

@@ -63,6 +63,7 @@ import {
   parseBookingIntentWithLLM,
   parseConversationStateWithLLM,
   parseCompositeSalesInquiryWithLLM,
+  parseInboundReplyActionWithLLM,
   parseJourneyIntentWithLLM,
   parseInventoryStatusWithLLM,
   parseVehicleInfoRequestWithLLM,
@@ -106,6 +107,7 @@ import {
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
 import {
+  isDealerLocationQuestionText,
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
@@ -1690,6 +1692,53 @@ function buildInitialTestRidePreferredDateReply(conv: any): string | null {
     return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
   }
   return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
+}
+
+function buildInitialAdfDealerLocationReply(args: {
+  conv: any;
+  dealerProfile: any;
+  inquiryText?: string | null;
+}): string {
+  const dealerName = args.dealerProfile?.dealerName ?? "American Harley-Davidson";
+  const address = args.dealerProfile?.address ?? {};
+  const line1 = String(address.line1 ?? "").trim() || "1149 Erie Ave.";
+  const city = String(address.city ?? "").trim() || "North Tonawanda";
+  const state = String(address.state ?? "").trim() || "NY";
+  const zip = String(address.zip ?? "").trim() || "14120";
+  const modelLabel = formatModelLabel(
+    args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
+    args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
+  );
+  const asksCost = /\b(cost|price|pricing|how much|payment|payments|monthly|quote)\b/i.test(
+    args.inquiryText ?? ""
+  );
+  const pricingLine = asksCost
+    ? modelLabel
+      ? ` I can also have the team confirm cost and pricing details on the ${modelLabel}.`
+      : " I can also have the team confirm cost and pricing details."
+    : "";
+  return `${dealerName} is located at ${line1}, ${city}, ${state} ${zip}.${pricingLine}`.trim();
+}
+
+function isAdfInboundReplyActionAccepted(parsed: any, action: string): boolean {
+  if (!parsed || parsed.action !== action || parsed.explicitAction !== true) return false;
+  const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+    ? parsed.confidence
+    : 0;
+  const min = Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
+  return confidence >= min;
+}
+
+function canUseAdfInboundReplyActionFallback(args: {
+  parserEligible: boolean;
+  parsed: any;
+}): boolean {
+  if (!args.parserEligible) return true;
+  if (!args.parsed) return true;
+  const confidence = typeof args.parsed.confidence === "number" && Number.isFinite(args.parsed.confidence)
+    ? args.parsed.confidence
+    : 0;
+  return confidence < Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
 }
 
 function formatPreferredTimeForReply(value: string | null | undefined): string {
@@ -4443,6 +4492,10 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return null;
     }
   };
+  const adfInboundReplyActionParserEligible =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
   const [
     llmDialogAct,
     llmIntent,
@@ -4452,6 +4505,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmConversationState,
     llmResponseControl,
     llmRoutingDecision,
+    llmInboundReplyAction,
     llmFaqTopic,
     llmWalkInOutcome,
     llmCompositeSalesInquiry,
@@ -4528,6 +4582,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         }
       })
     ),
+    adfInboundReplyActionParserEligible
+      ? safeParser("inbound_reply_action", () =>
+          parseInboundReplyActionWithLLM({
+            text: effectiveInquiry,
+            history: adfHistory,
+            lead: activeAdfLeadProfile,
+            followUp: conv.followUp ?? null,
+            dialogState: conv.dialogState?.name ?? null,
+            classification: {
+              bucket: conv.classification?.bucket ?? null,
+              cta: conv.classification?.cta ?? null
+            },
+            hasActiveInventoryWatch:
+              !!conv.inventoryWatch ||
+              (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length > 0)
+          })
+        )
+      : Promise.resolve(null),
     safeParser("faq_topic", () =>
       parseDealershipFaqTopicWithLLM({
         text: effectiveInquiry,
@@ -4589,6 +4661,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !!llmJourneyIntent &&
     llmJourneyIntent.explicitRequest === true &&
     journeyIntentConfidence >= journeyIntentConfidenceMin;
+  const adfParserLocationQuestion = isAdfInboundReplyActionAccepted(
+    llmInboundReplyAction,
+    "dealer_location_question"
+  );
+  const adfInboundReplyActionFallbackAllowed = canUseAdfInboundReplyActionFallback({
+    parserEligible: adfInboundReplyActionParserEligible,
+    parsed: llmInboundReplyAction
+  });
+  const initialAdfLocationQuestion =
+    isInitialAdf &&
+    (adfParserLocationQuestion ||
+      (adfInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(effectiveInquiry)));
   const saleTradeIntentFromParser =
     journeyIntentAccepted && llmJourneyIntent?.journeyIntent === "sale_trade";
   const serviceSupportIntentFromParser =
@@ -8196,6 +8280,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (handledInternationalShippingInquiry) {
     draft = buildInternationalShippingUnavailableReply(dealerProfile);
     suppressAvailabilityAppend = true;
+  }
+  if (initialAdfLocationQuestion && !handledInternationalShippingInquiry) {
+    draft = buildInitialAdfDealerLocationReply({
+      conv,
+      dealerProfile,
+      inquiryText: effectiveInquiry
+    });
+    suppressAvailabilityAppend = true;
+    setDialogState(/\b(cost|price|pricing|how much|payment|payments|monthly|quote)\b/i.test(effectiveInquiry)
+      ? "pricing_init"
+      : "inventory_answered");
+    if (/\b(cost|price|pricing|how much|payment|payments|monthly|quote)\b/i.test(effectiveInquiry)) {
+      addTodo(
+        conv,
+        "pricing",
+        `Confirm pricing/cost details. Customer asked: ${effectiveInquiry}`,
+        event.providerMessageId
+      );
+      setFollowUpMode(conv, "manual_handoff", "price_confirm");
+      stopFollowUpCadence(conv, "manual_handoff");
+    }
   }
 
   draft = await applyInitialAdfPrefix(draft);

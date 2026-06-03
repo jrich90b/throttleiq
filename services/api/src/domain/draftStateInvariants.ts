@@ -44,6 +44,12 @@ function looksLikeTruncatedDraft(text: string): boolean {
   if (/\b(?:about\s+the|about|the|a|an|and|or|but|because|with|for|to|from|of|on|in|at|if|when|while|that|this|your|my|our|his|her|their|before|after|over|under|between|into|by|as)\s*$/i.test(normalized)) {
     return true;
   }
+  if (/\b(?:you(?:'|’)?ll|you will|you(?:'|’)?re|you are)?\s*(?:be\s+)?in\s+good\s*$/i.test(normalized)) {
+    return true;
+  }
+  if (/\band\s+(?:moves?|works?|takes?|does?|handles?|will|can|should)\s*$/i.test(normalized)) {
+    return true;
+  }
   if (/[,:;—-]\s*$/.test(normalized)) return true;
   return false;
 }
@@ -72,6 +78,24 @@ function truncatedDraftFallback(input: Partial<DraftStateInvariantInput>, draftT
     return "I’ll have the right person check that and follow up shortly.";
   }
   return "I’ll check on that and follow up shortly.";
+}
+
+function looksLikeUnresolvedOtherInventoryDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const unresolvedOther =
+    /\bharley[-\s]?davidson\s+other\b/.test(t) ||
+    /\bnew\s+20\d{2}\s+harley[-\s]?davidson\s+other\b/.test(t);
+  if (!unresolvedOther) return false;
+  return /\b(not seeing|don['’]?t see|not finding|in stock|available|availability|have)\b/.test(t);
+}
+
+function unresolvedOtherInventoryFallback(input: Partial<DraftStateInvariantInput>): string {
+  const inboundText = String(input.inboundText ?? "").toLowerCase();
+  if (/\b(budget|range|under|below|around|about|max|maximum|bags|bagger|saddlebags?)\b/.test(inboundText)) {
+    return "I’ll have the team check current options in your range with bags and follow up shortly.";
+  }
+  return "I’ll have the team check current options that fit what you’re asking for and follow up shortly.";
 }
 
 export function repairLikelyTruncatedDraftText(
@@ -262,6 +286,13 @@ export function applyDraftStateInvariants(
       allow: true,
       draftText: truncationRepair.draftText,
       reason: "truncated_draft_repaired"
+    };
+  }
+  if (looksLikeUnresolvedOtherInventoryDraft(draftText)) {
+    return {
+      allow: true,
+      draftText: unresolvedOtherInventoryFallback(input),
+      reason: "unresolved_inventory_entity_repaired"
     };
   }
   // Parser-first: do not activate invariant routing guards from regex fallbacks.

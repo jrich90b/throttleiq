@@ -124,5 +124,33 @@
       "explicit_action": true,
       "should_reply": true
     }
+  },
+  {
+    "id": "location_and_cost_question_outranks_test_ride_source",
+    "text": "Not sure where this is located or what s the cost, but I m located in New York, NY. Thank you!",
+    "history": [
+      { "direction": "out", "body": "Thanks for booking a test ride on the Breakout." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "test_ride_init",
+    "expected": {
+      "action": "dealer_location_question",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "watch_acknowledgement_hit_me_up_after_out_of_stock_offer",
+    "text": "Thats what Im looking for. Definitely hit me up if one comes in or another store has one",
+    "history": [
+      { "direction": "out", "body": "I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "dialogState": "inventory_watch_prompted",
+    "expected": {
+      "action": "inventory_watch_acknowledgement",
+      "explicit_action": true,
+      "should_reply": true
+    }
   }
 ]

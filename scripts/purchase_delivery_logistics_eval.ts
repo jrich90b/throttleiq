@@ -61,6 +61,19 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "schedule"
   },
   {
+    id: "delivery_ready_before_juneteenth_update",
+    text: "I just spoke with Hollis. I asked him would the bike be ready before Juneteenth. He said that's the plan and I said I'm definitely good with that. Please let him know he got time.",
+    history: [
+      {
+        direction: "out",
+        body: "Bars just came in and the goat-light. Only thing we are waiting for is the Corbin stuff from the looks of it, but that won’t hold anything up"
+      },
+      { direction: "out", body: "actually the seats showed up today" }
+    ],
+    expectedIntent: "delivery_progress",
+    expectedTimingContains: "juneteenth"
+  },
+  {
     id: "on_way_arrival",
     text: "On my way doing my best to be there by 530",
     expectedIntent: "delivery_timing",

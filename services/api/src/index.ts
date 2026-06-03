@@ -9456,7 +9456,7 @@ function isHealthUpdateWithoutScheduleAsk(text: string | null | undefined): bool
   const t = String(text ?? "").toLowerCase().trim();
   if (!t) return false;
   const healthContext =
-    /\b(hip replaced|knee replaced|replacement surgery|surgery|surgical|hospital|recovering|recovery|doctor|medical)\b/.test(
+    /\b(hip replaced|knee replaced|replacement surgery|surgery|surgical|hospital|recovering|recovery|doctor|medical|covid|flu|sick|really sick|ill|not feeling well|under the weather)\b/.test(
       t
     );
   if (!healthContext) return false;
@@ -20263,6 +20263,14 @@ type CustomerDispositionDecision = {
 function hasCustomerDispositionParserHintText(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
+  if (
+    isWatchConfirmationIntentText(lower) ||
+    hasInventoryWatchConfirmationText(lower) ||
+    isHealthUpdateWithoutScheduleAsk(lower) ||
+    isLogisticsProgressUpdateText(lower)
+  ) {
+    return false;
+  }
   return /\b(sell (it|my bike|my motorcycle|my ride)|on my own|myself|keep (it|my bike|my motorcycle|my ride)|all set(?: on| with)?(?: the)?(?: bike search|search|shopping|looking)?|hold off|pass for now|i(?:'|’)?ll pass|i(?:'|’)?ll have to pass|i will pass|i will have to pass|have to pass(?: at this point| for now)?|not interested|not looking|no thanks|no thank you|already bought|already purchased|bought elsewhere|purchased elsewhere|found one|got one|not ready|wait on deciding|hold off deciding|get back to you|reach out when|looking again|maybe later|maybe\s+(?:next|this)\s+(?:spring|summer|fall|autumn|winter|season|year|month)|can(?:not|'t)\s+do it now|can(?:not|'t)\s+afford|too (expensive|high)|out of (my )?budget|can't do that right now|not in the budget)\b/i.test(
     lower
   ) || hasBoughtElsewhereDispositionSignalText(lower);
@@ -20370,6 +20378,14 @@ function resolveCustomerDispositionDecision(
   text: string,
   parsed: CustomerDispositionParse | null
 ): CustomerDispositionDecision | null {
+  if (
+    isWatchConfirmationIntentText(text) ||
+    hasInventoryWatchConfirmationText(text) ||
+    isHealthUpdateWithoutScheduleAsk(text) ||
+    isLogisticsProgressUpdateText(text)
+  ) {
+    return null;
+  }
   const parsedAccepted = isDispositionParserAccepted(parsed);
   const acceptedParsed = parsedAccepted ? parsed : null;
   if (acceptedParsed) {
@@ -20792,7 +20808,15 @@ function isComplimentOnlyText(text: string): boolean {
   const t = String(text ?? "").toLowerCase().trim();
   if (!t) return false;
   if (isNonComplimentLikePhraseText(t)) return false;
+  if (isLogisticsProgressUpdateText(t) || isHealthUpdateWithoutScheduleAsk(t)) return false;
   if (isShortAckText(t)) return false;
+  if (
+    /\b(ready|timeline|schedule|according schedule|according to schedule|juneteenth|bike be ready|please let him know|got time|spoke with|parts|seat|corbin|handlebars|delivery|paperwork)\b/.test(
+      t
+    )
+  ) {
+    return false;
+  }
   const compliment =
     /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean|gorgeous)\b/.test(t) ||
     /\b(looks?\s+(great|awesome|amazing|sweet|clean|sick|good)|sweet looking)\b/.test(t) ||
@@ -23683,7 +23707,7 @@ function isWatchConfirmationIntentText(text: string): boolean {
   if (!t.trim()) return false;
   if (isDemoDayEventQuestionText(t)) return false;
   const intent =
-    /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|text me|call me|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
+    /\b(let me know|lmk|keep me posted|keep an eye out|watch for|notify me|text me|call me|hit me up|shoot me(?: a)? (?:text|message|one)|shot me(?: a)? (?:text|message|one)|send(?:ing)? (?:it|one|them)?\s*my way|send(?:ing)? (?:it|one|them)?\s*over)\b/.test(
       t
     );
   const trigger =
@@ -23699,7 +23723,8 @@ function isOutboundInventoryWatchOfferText(text: string): boolean {
     /\b(?:i(?:'|’)?ll|i will|we(?:'|’)?ll|we will)\s+(?:let you know|keep you posted|notify you|text you|reach out)\b/.test(
       t
     ) ||
-    /\b(?:let you know|keep you posted|notify you|text you)\b/.test(t);
+    /\b(?:let you know|keep you posted|notify you|text you)\b/.test(t) ||
+    /\b(?:i|we)\s+can\s+keep\s+an\s+eye\s+out\b/.test(t);
   const arrival =
     /\b(?:when|once|as soon as|if)\b[\s\S]{0,100}\b(?:arrives?|comes? in|lands?|receiv(?:e|ing)|get(?:ting)?(?: another| one)?|in stock|available)\b/.test(
       t
@@ -23759,6 +23784,60 @@ async function buildInventoryWatchFromConfirmedOutboundOffer(
   if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
   else if (watch.year) watch.exactness = "year_model";
   return watch;
+}
+
+async function buildInventoryWatchFromAcknowledgementIntent(args: {
+  conv: Conversation;
+  inboundText: string;
+  lastOutboundText?: string | null;
+}): Promise<InventoryWatch | null> {
+  const sourceText = `${String(args.lastOutboundText ?? "")}\n${String(args.inboundText ?? "")}`;
+  const sourceLower = sourceText.toLowerCase();
+  const leadVehicle = args.conv.lead?.vehicle ?? {};
+  const model = await resolveWatchModelFromText(
+    sourceLower,
+    leadVehicle.model ?? leadVehicle.description ?? null
+  );
+  if (!model) return null;
+  const leadYearNum = Number(leadVehicle.year ?? "");
+  const leadYear = Number.isFinite(leadYearNum) ? leadYearNum : undefined;
+  const year = extractYearSingle(sourceLower) ?? leadYear;
+  const color = sanitizeColorPhrase(extractColorToken(sourceLower) ?? leadVehicle.color ?? undefined);
+  const trim = formatWatchTrimLabel(extractFinishToken(sourceLower));
+  const condition =
+    normalizeWatchCondition(sourceLower) ??
+    normalizeWatchCondition(leadVehicle.condition) ??
+    inferWatchCondition(model, year, args.conv);
+  const budgetSeed = resolveWatchBudgetPreferenceForConversation(args.conv, args.inboundText);
+  const watch: InventoryWatch = {
+    model,
+    year,
+    color,
+    trim,
+    make: String(leadVehicle.make ?? "").trim() || "Harley-Davidson",
+    condition,
+    minPrice: budgetSeed.minPrice,
+    maxPrice: budgetSeed.maxPrice,
+    monthlyBudget: budgetSeed.monthlyBudget,
+    termMonths: budgetSeed.termMonths,
+    downPayment: budgetSeed.downPayment,
+    exactness: "model_only",
+    status: "active",
+    createdAt: new Date().toISOString(),
+    note: "confirmed_inventory_watch_acknowledgement"
+  };
+  if (watch.year && (watch.color || watch.trim)) watch.exactness = "exact";
+  else if (watch.year) watch.exactness = "year_model";
+  return watch;
+}
+
+function applyInventoryWatchConfirmation(conv: Conversation, watch: InventoryWatch) {
+  conv.inventoryWatch = watch;
+  conv.inventoryWatches = [watch];
+  conv.inventoryWatchPending = undefined;
+  setDialogState(conv, "inventory_watch_active");
+  setFollowUpMode(conv, "holding_inventory", "inventory_watch");
+  stopFollowUpCadence(conv, "inventory_watch");
 }
 
 async function resolveWatchModelFromText(
@@ -46327,29 +46406,62 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenInventoryWatchAcknowledgementCandidate =
     event.provider === "twilio" &&
     channel === "sms" &&
-    !!regenActiveInventoryWatchForAction &&
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
-    regenParserInventoryWatchAcknowledgement;
+    (regenParserInventoryWatchAcknowledgement ||
+      (regenInboundReplyActionFallbackAllowed &&
+        (hasInventoryWatchConfirmationText(event.body ?? "") ||
+          isWatchConfirmationIntentText(String(event.body ?? "")) ||
+          isOutboundInventoryWatchOfferConfirmation(
+            String(event.body ?? ""),
+            regenLastOutboundForActionText
+          ))));
   if (regenInventoryWatchAcknowledgementCandidate) {
-    const rawReply = buildInventoryWatchConfirmation(regenActiveInventoryWatchForAction);
-    const reply =
-      normalizeOutboundText(rawReply) === normalizeOutboundText(regenLastOutboundForActionText)
-        ? "Will do — I’ll keep watching for it and text you when there’s a match."
-        : rawReply;
-    recordRouteOutcome("regen", "inventory_watch_acknowledgement", {
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      parserAction: regenInboundReplyActionParse?.action ?? null,
-      parserConfidence: regenInboundReplyActionParse?.confidence ?? null
-    });
-    return respondWithSmsRegeneratedDraft(reply, undefined, {
-      turnAvailabilityIntent: false,
-      turnFinanceIntent: false,
-      turnSchedulingIntent: false,
-      shortAckIntent: false
-    });
+    let watchForAck = regenActiveInventoryWatchForAction;
+    if (!watchForAck) {
+      watchForAck = await buildInventoryWatchFromAcknowledgementIntent({
+        conv,
+        inboundText: String(event.body ?? ""),
+        lastOutboundText: regenLastOutboundForActionText
+      });
+      if (
+        watchForAck &&
+        (isOutboundInventoryWatchOfferText(regenLastOutboundForActionText) ||
+          getDialogState(conv) === "inventory_watch_prompted")
+      ) {
+        applyInventoryWatchConfirmation(conv, watchForAck);
+      } else {
+        watchForAck = null;
+      }
+    }
+    if (!watchForAck) {
+      recordRouteOutcome("regen", "inventory_watch_acknowledgement_unresolved", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserAction: regenInboundReplyActionParse?.action ?? null,
+        parserConfidence: regenInboundReplyActionParse?.confidence ?? null
+      });
+    } else {
+      const rawReply = buildInventoryWatchConfirmation(watchForAck);
+      const reply =
+        normalizeOutboundText(rawReply) === normalizeOutboundText(regenLastOutboundForActionText)
+          ? "Will do — I’ll keep watching for it and text you when there’s a match."
+          : rawReply;
+      recordRouteOutcome("regen", "inventory_watch_acknowledgement", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserAction: regenInboundReplyActionParse?.action ?? null,
+        parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+        hadActiveWatch: !!regenActiveInventoryWatchForAction
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false,
+        turnSchedulingIntent: false,
+        shortAckIntent: false
+      });
+    }
   }
   if (regenRoutingParserDecision.accepted && regenRoutingParserDecision.fallbackAction === "no_response") {
     const regenNoResponseInboundText = String(event.body ?? "");
@@ -46391,6 +46503,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       hasRecentPricingPromptContext(conv) &&
       isFinanceFollowUpPromptText(regenLastOutboundText) &&
       isFinanceFollowUpAffirmationText(regenNoResponseInboundText);
+    const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
+    const regenHealthUpdateWithoutScheduleAsk = isHealthUpdateWithoutScheduleAsk(event.body ?? "");
+    if (regenHealthUpdateWithoutScheduleAsk) {
+      await applyHealthRecoveryFollowUpDelay(conv);
+      setDialogState(conv, "followup_paused");
+      const reply = buildHealthUpdateReply(event.body ?? "");
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false,
+        turnSchedulingIntent: false
+      });
+    }
     const regenWatchAcknowledgementFallbackCandidate =
       event.provider === "twilio" &&
       channel === "sms" &&
@@ -46402,6 +46529,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         (regenInboundReplyActionFallbackAllowed &&
           hasInventoryWatchConfirmationText(regenNoResponseInboundText)));
     if (regenWatchAcknowledgementFallbackCandidate) {
+      applyInventoryWatchConfirmation(conv, regenActiveInventoryWatchForAction);
       const rawReply = buildInventoryWatchConfirmation(regenActiveInventoryWatchForAction);
       const reply =
         normalizeOutboundText(rawReply) === normalizeOutboundText(regenLastOutboundText)
@@ -46431,13 +46559,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       chatterMin: 0.55
     });
     const regenNoResponseSmallTalkQuestion = allowNoResponseSmallTalkAck({
-      smallTalk: regenNoResponseSmallTalkSignal.smallTalk,
+      smallTalk: regenNoResponseSmallTalkSignal.smallTalk && !regenLogisticsProgressUpdate,
       financeSignal: regenExplicitFinanceSignal || regenFinanceFollowUpAffirmativeAck,
       availabilitySignal: regenExplicitAvailabilitySignal,
       schedulingSignal: regenExplicitSchedulingSignal,
       callbackSignal: regenExplicitCallbackSignal
     });
-    const regenLogisticsProgressUpdate = isLogisticsProgressUpdateText(event.body ?? "");
     const regenStoredPaymentContext = getStoredPaymentBudgetContext(conv);
     const regenNoResponseDecision = evaluateNoResponseFallback({
       primaryIntent: regenRoutingParserDecision.intentOverride ?? "general",
@@ -47230,6 +47357,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             isComplimentOnlyText(event.body))) &&
         !hasCustomerDispositionParserHintText(event.body) &&
         !isShortAckText(event.body) &&
+        !isLogisticsProgressUpdateText(event.body ?? "") &&
+        !isHealthUpdateWithoutScheduleAsk(event.body ?? "") &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       financeSignal: regenParserPricingIntent,
       availabilitySignal: regenParserAvailabilityIntent,
@@ -49303,12 +49432,7 @@ if (authToken && signature) {
         humanModeText
       );
       if (confirmedWatch) {
-        conv.inventoryWatch = confirmedWatch;
-        conv.inventoryWatches = [confirmedWatch];
-        conv.inventoryWatchPending = undefined;
-        setDialogState(conv, "inventory_watch_active");
-        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        stopFollowUpCadence(conv, "inventory_watch");
+        applyInventoryWatchConfirmation(conv, confirmedWatch);
         recordRouteOutcome("live", "human_mode_staff_watch_offer_confirmed", {
           convId: conv.id,
           leadKey: conv.leadKey,
@@ -49642,12 +49766,7 @@ if (authToken && signature) {
             if (!pref.watch.condition && leadVehicle.condition) {
               pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
             }
-            conv.inventoryWatch = pref.watch;
-            conv.inventoryWatches = [pref.watch];
-            conv.inventoryWatchPending = undefined;
-            setDialogState(conv, "inventory_watch_active");
-            setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-            stopFollowUpCadence(conv, "inventory_watch");
+            applyInventoryWatchConfirmation(conv, pref.watch);
             recordRouteOutcome("live", "human_mode_inventory_watch_set", {
               convId: conv.id,
               leadKey: conv.leadKey,
@@ -50293,6 +50412,8 @@ if (authToken && signature) {
             isComplimentOnlyText(event.body))) &&
         !hasCustomerDispositionParserHintText(event.body) &&
         !isShortAckText(event.body) &&
+        !isLogisticsProgressUpdateText(event.body ?? "") &&
+        !isHealthUpdateWithoutScheduleAsk(event.body ?? "") &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
       schedulingSignal: complimentHasSchedulingSignal
     })
@@ -51690,12 +51811,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        conv.inventoryWatch = pref.watch;
-        conv.inventoryWatches = [pref.watch];
-        conv.inventoryWatchPending = undefined;
-        setDialogState(conv, "inventory_watch_active");
-        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        stopFollowUpCadence(conv, "inventory_watch");
+        applyInventoryWatchConfirmation(conv, pref.watch);
         watchHandledEarly = true;
         if (!earlyWatchAsSideEffectOnly) {
           const reply = buildInventoryWatchConfirmation(pref.watch);
@@ -53156,6 +53272,7 @@ if (authToken && signature) {
     !callbackPrimaryIntent &&
     !shortAck &&
     !isLogisticsProgressUpdateText(event.body ?? "") &&
+    !isHealthUpdateWithoutScheduleAsk(event.body ?? "") &&
     !hasExplicitSchedulingLanguageThisTurn &&
     !hasExplicitCallbackLanguageThisTurn &&
     !reducedConversationState.departmentIntent &&
@@ -54418,12 +54535,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        conv.inventoryWatch = pref.watch;
-        conv.inventoryWatches = [pref.watch];
-        conv.inventoryWatchPending = undefined;
-        setDialogState(conv, "inventory_watch_active");
-        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        stopFollowUpCadence(conv, "inventory_watch");
+        applyInventoryWatchConfirmation(conv, pref.watch);
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
           return publishLiveTwilioReply(reply);
@@ -55176,12 +55288,7 @@ if (authToken && signature) {
         if (!pref.watch.condition && leadVehicle.condition) {
           pref.watch.condition = normalizeWatchCondition(leadVehicle.condition);
         }
-        conv.inventoryWatch = pref.watch;
-        conv.inventoryWatches = [pref.watch];
-        conv.inventoryWatchPending = undefined;
-        setDialogState(conv, "inventory_watch_active");
-        setFollowUpMode(conv, "holding_inventory", "inventory_watch");
-        stopFollowUpCadence(conv, "inventory_watch");
+        applyInventoryWatchConfirmation(conv, pref.watch);
         const reply = buildInventoryWatchConfirmation(pref.watch);
         if (!watchAsSideEffectOnly) {
           return publishLiveTwilioReply(reply);

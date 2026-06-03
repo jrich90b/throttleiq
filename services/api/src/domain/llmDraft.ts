@@ -5377,6 +5377,7 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     "- delivery_timing requires recent context that the customer is buying/picking up/taking delivery or sending purchase docs.",
     "- If the message combines a happy post-sale note with arranging pickup for stock exhaust/parts/accessories, use post_sale_item_pickup, not inventory availability.",
     "- In active purchase/delivery context, customer questions like 'is everything on schedule' or 'checking if everything is on track' are delivery_progress, not inventory availability, factory-order timing, or service.",
+    "- In active purchase/delivery context, updates about whether the bike will be ready by a date or telling staff there is no rush are delivery_progress, even when the customer also says they are good with the plan.",
     "- If the customer says they are coming to inspect/appraise a trade or test ride, intent=none.",
     "- timing_text should contain the arrival/pickup timing phrase if present, else empty string.",
     "- explicit_request is true only when the customer asks a question/action; status updates can be false.",
@@ -5391,6 +5392,7 @@ export async function parsePurchaseDeliveryLogisticsWithLLM(args: {
     'input: "Like I said. I am legit" output: {"intent":"docs_status","explicit_request":false,"timing_text":"","confidence":0.88}',
     'input: "Let me know because I start driving on Friday morning. Please" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"Friday morning","confidence":0.94}',
     'input: "hey, I\'m just checking to see if everything going according schedule" history: "out: Bars just came in and the goat-light. Only thing we are waiting for is the Corbin stuff. out: actually the seats showed up today" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"schedule status","confidence":0.94}',
+    'input: "I just spoke with Hollis. I asked him would the bike be ready before Juneteenth. He said that is the plan and I said I am definitely good with that. Please let him know he got time." history: "out: Bars just came in and the goat-light. Only thing we are waiting for is the Corbin stuff. out: actually the seats showed up today" output: {"intent":"delivery_progress","explicit_request":false,"timing_text":"before Juneteenth","confidence":0.94}',
     'input: "just checking if everything is still on track for pickup" output: {"intent":"delivery_progress","explicit_request":true,"timing_text":"schedule status","confidence":0.94}',
     'input: "On my way doing my best to be there by 530" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"by 530","confidence":0.97}',
     'input: "be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"intent":"delivery_timing","explicit_request":false,"timing_text":"9:00 AM","confidence":0.95}',
@@ -6012,7 +6014,15 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
     `EXAMPLE J
 inbound: "Let me know if any sales jobs open up."
 history: "out: Let me know if you want pricing on the Street Glide."
-output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This is not an inventory-watch acknowledgement for the active vehicle workflow.","confidence":0.9}`
+output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_text":"","reason":"This is not an inventory-watch acknowledgement for the active vehicle workflow.","confidence":0.9}`,
+    `EXAMPLE K
+inbound: "Not sure where this is located or what s the cost, but I m located in New York, NY. Thank you!"
+history: "out: Thanks for booking a test ride on the Breakout."
+output: {"action":"dealer_location_question","explicit_action":true,"should_reply":true,"normalized_text":"customer asks where the dealership or bike is located and also asks cost","reason":"The latest turn asks where this is located; location/address handling outranks source-forced test-ride scheduling while pricing can be handled as a follow-up.","confidence":0.97}`,
+    `EXAMPLE L
+inbound: "Thats what Im looking for. Definitely hit me up if one comes in or another store has one"
+history: "out: I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in."
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to text them if one comes in","reason":"The customer explicitly accepts the out-of-stock watch offer and asks to be notified when a match comes in.","confidence":0.97}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6027,10 +6037,11 @@ output: {"action":"none","explicit_action":true,"should_reply":true,"normalized_
     "",
     "Priority rules:",
     "- Latest explicit ask wins. A dealership address/location question outranks reminder, schedule, or watch context.",
+    "- If the same turn asks where this/that/the bike is located plus pricing or cost, choose dealer_location_question and leave pricing as follow-up context.",
     "- Do not classify email/contact-address questions as dealer_location_question.",
     "- Do not classify 'returning your call' as explicit_callback_request unless the customer asks for another call.",
     "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
-    "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; otherwise choose none.",
+    "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; phrases like 'hit me up if one comes in' count as explicit watch acknowledgement.",
     "- The parser selects the action only. It never authors the final customer reply.",
     "- confidence is 0..1.",
     "",
