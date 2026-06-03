@@ -1,5 +1,48 @@
 [
   {
+    "id": "appointment_status_today_question_1",
+    "text": "Hey is my appointment today Dalton Magill ?",
+    "appointment": {
+      "status": "confirmed",
+      "bookedEventId": "appt_123",
+      "whenIso": "2026-06-03T15:30:00.000Z",
+      "bookedSalespersonName": "Dalton Magill"
+    },
+    "history": [
+      {
+        "direction": "out",
+        "body": "Perfect — you’re all set for Today, 11:30 AM with Dalton Magill. See you then."
+      }
+    ],
+    "expected": {
+      "action": "appointment_status_question",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "today"
+    }
+  },
+  {
+    "id": "appointment_still_on_question_1",
+    "text": "Are we still on for today?",
+    "appointment": {
+      "status": "confirmed",
+      "bookedEventId": "appt_456",
+      "whenIso": "2026-06-03T18:00:00.000Z"
+    },
+    "history": [
+      {
+        "direction": "out",
+        "body": "You’re booked for today at 2:00 PM."
+      }
+    ],
+    "expected": {
+      "action": "appointment_status_question",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "today"
+    }
+  },
+  {
     "id": "short_ack_confirms_offered_slot_1",
     "text": "Sounds perfect",
     "history": [

@@ -241,6 +241,33 @@ function hasSchedulingTurnSignal(text: string): boolean {
   );
 }
 
+function isAppointmentStatusQuestionText(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  const hasQuestion = /[?]/.test(t) || /\b(is|are|am|do|does|what|when|who)\b/.test(t);
+  if (!hasQuestion) return false;
+  return (
+    /\b(?:my|our)\s+(?:appointment|appt)\b/.test(t) ||
+    /\b(?:is|are|am)\s+(?:my|our|we|i)\b[\s\S]{0,40}\b(?:appointment|appt|still\s+(?:on|set|good)|confirmed)\b/.test(
+      t
+    ) ||
+    /\b(?:are\s+we|am\s+i)\s+still\s+(?:on|set|good)\b/.test(t) ||
+    /\bwhat\s+time\b[\s\S]{0,40}\b(?:appointment|appt)\b/.test(t) ||
+    /\bwho\s+(?:am\s+i|are\s+we|is\s+it)\s+(?:with|seeing)\b/.test(t)
+  );
+}
+
+function looksLikeNewSchedulingAvailabilityDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\bcheck available times\b/.test(t) ||
+    /\bwhat (?:day|time) (?:works|would work|is best)\b/.test(t) ||
+    /\bdo any of these times work\b/.test(t) ||
+    /\bavailable times? for\b/.test(t)
+  );
+}
+
 function hasAccessoryCustomizationTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -340,6 +367,14 @@ export function applyDraftStateInvariants(
         : isShortAckText(inboundText);
   const financePriority = financeSignal || financeContextSignal;
   const accessoryCustomizationSignal = hasAccessoryCustomizationTurnSignal(inboundText);
+
+  if (isAppointmentStatusQuestionText(inboundText) && looksLikeNewSchedulingAvailabilityDraft(draftText)) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "appointment_status_new_schedule_guard"
+    };
+  }
 
   if (shortAckSignal && inventoryPrompt) {
     return {

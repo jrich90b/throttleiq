@@ -92,6 +92,12 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 85, mustIncludeIssues: ["redundant_current_bike_stock_count"] }
   },
   {
+    id: "appointment_status_answered_as_new_schedule",
+    inboundText: "Hey is my appointment today Dalton Magill ?",
+    outboundText: "Sounds good — I’ll check available times for today and follow up.",
+    expect: { maxScore: 70, mustIncludeIssues: ["appointment_status_answer_mismatch"] }
+  },
+  {
     id: "warranty_question_answered",
     inboundText: "What warranty comes with a new Harley?",
     outboundText:

@@ -6,6 +6,7 @@ type Example = {
   id: string;
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
+  appointment?: any;
   expected: {
     action: string;
     should_reply: boolean;
@@ -48,6 +49,7 @@ for (const ex of examples) {
   const result = await parseCustomerAckActionWithLLM({
     text: ex.text,
     history: ex.history,
+    appointment: ex.appointment,
     lastSuggestedSlots: [
       { startLocal: "Fri, May 8, 11:00 AM" },
       { startLocal: "Sat, May 9, 2:00 PM" }

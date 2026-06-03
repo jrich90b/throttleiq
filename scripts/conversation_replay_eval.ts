@@ -236,6 +236,21 @@ const cases: Case[] = [
     }
   },
   {
+    id: "appointment_status_blocks_new_available_times_draft",
+    expectedAllow: false,
+    expectedReason: "appointment_status_new_schedule_guard",
+    input: {
+      inboundText: "Hey is my appointment today Dalton Magill ?",
+      draftText: "Sounds good — I’ll check available times for today and follow up.",
+      followUpMode: "active",
+      followUpReason: "manual_appointment",
+      dialogState: "schedule_request",
+      classificationBucket: "general_inquiry",
+      classificationCta: "appointment",
+      turnSchedulingIntent: false
+    }
+  },
+  {
     id: "finance_docs_blocks_schedule_reask",
     expectedAllow: false,
     expectedReason: "finance_priority_schedule_prompt_guard",

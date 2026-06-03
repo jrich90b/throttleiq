@@ -20,7 +20,8 @@ export type ToneIssueCode =
   | "template_bloat"
   | "known_fact_conflict"
   | "overcommitted_availability_watch"
-  | "redundant_current_bike_stock_count";
+  | "redundant_current_bike_stock_count"
+  | "appointment_status_answer_mismatch";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -343,6 +344,33 @@ function hasRedundantCurrentBikeStockCount(inboundText: string, outboundText: st
   );
 }
 
+function isAppointmentStatusQuestionText(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  const hasQuestion = /[?]/.test(t) || /\b(is|are|am|do|does|what|when|who)\b/.test(t);
+  if (!hasQuestion) return false;
+  return (
+    /\b(?:my|our)\s+(?:appointment|appt)\b/.test(t) ||
+    /\b(?:is|are|am)\s+(?:my|our|we|i)\b[\s\S]{0,40}\b(?:appointment|appt|still\s+(?:on|set|good)|confirmed)\b/.test(
+      t
+    ) ||
+    /\b(?:are\s+we|am\s+i)\s+still\s+(?:on|set|good)\b/.test(t) ||
+    /\bwhat\s+time\b[\s\S]{0,40}\b(?:appointment|appt)\b/.test(t) ||
+    /\bwho\s+(?:am\s+i|are\s+we|is\s+it)\s+(?:with|seeing)\b/.test(t)
+  );
+}
+
+function hasNewSchedulingAvailabilityLanguage(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  return (
+    /\bcheck available times\b/.test(t) ||
+    /\bwhat (?:day|time) (?:works|would work|is best)\b/.test(t) ||
+    /\bdo any of these times work\b/.test(t) ||
+    /\bavailable times? for\b/.test(t)
+  );
+}
+
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const inboundText = normalizeText(input.inboundText);
   const outboundText = normalizeText(input.outboundText);
@@ -358,6 +386,8 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const knownFactConflict = hasKnownFactConflict(inboundText, outboundText);
   const overcommittedAvailabilityWatch = hasOvercommittedAvailabilityWatch(inboundText, outboundText);
   const redundantCurrentBikeStockCount = hasRedundantCurrentBikeStockCount(inboundText, outboundText);
+  const appointmentStatusAnswerMismatch =
+    isAppointmentStatusQuestionText(inboundText) && hasNewSchedulingAvailabilityLanguage(outboundText);
 
   const issues: ToneIssue[] = [];
   let score = 100;
@@ -441,6 +471,14 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       detail: "restated the current bike as a stock count instead of answering detail/photo request"
     });
     score -= 20;
+  }
+  if (appointmentStatusAnswerMismatch) {
+    issues.push({
+      code: "appointment_status_answer_mismatch",
+      weight: 35,
+      detail: "answered an existing appointment-status question as a new scheduling availability request"
+    });
+    score -= 35;
   }
 
   score = Math.max(0, Math.min(100, score));

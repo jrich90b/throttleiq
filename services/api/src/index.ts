@@ -6944,6 +6944,105 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll check that and follow up with confirmation.";
 }
 
+function formatLocalTimeOnly(iso: string, timeZone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(d);
+}
+
+function isSameLocalCalendarDay(a: Date, b: Date, timeZone: string): boolean {
+  const aParts = getLocalDateParts(a, timeZone);
+  const bParts = getLocalDateParts(b, timeZone);
+  return aParts.year === bParts.year && aParts.month === bParts.month && aParts.day === bParts.day;
+}
+
+function appointmentStatusStaffName(conv: any, cfg?: { salespeople?: Array<{ id?: string; name?: string }> }): string {
+  const appt = conv?.appointment ?? {};
+  const raw =
+    String(appt.bookedSalespersonName ?? "").trim() ||
+    String(appt.matchedSlot?.salespersonName ?? "").trim() ||
+    String(
+      cfg?.salespeople?.find(sp => sp.id && sp.id === appt.bookedSalespersonId)?.name ?? ""
+    ).trim() ||
+    String(conv?.leadOwner?.name ?? "").trim();
+  if (!raw || /^(our team|sales team|team)$/i.test(raw)) return "";
+  return raw;
+}
+
+function addAppointmentStatusReviewTodo(conv: any, text: string | null | undefined, providerMessageId?: string | null) {
+  const convId = String(conv?.id ?? "").trim();
+  const exists =
+    !!convId &&
+    listOpenTodos().some(todo => {
+      if (todo.convId !== convId || String(todo.status ?? "open") !== "open") return false;
+      return /confirm appointment status/i.test(String(todo.summary ?? ""));
+    });
+  if (exists) return;
+  const inbound = String(text ?? "").trim();
+  addTodo(
+    conv,
+    "other",
+    `Confirm appointment status${inbound ? `: ${inbound}` : "."}`,
+    providerMessageId ?? undefined,
+    conv?.leadOwner
+  );
+}
+
+async function buildAppointmentStatusQuestionReply(args: {
+  conv: any;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+}): Promise<string> {
+  const conv = args.conv;
+  const inboundText = String(args.text ?? "");
+  const appt = conv?.appointment ?? {};
+  const cfg = await getSchedulerConfigHot().catch(() => null);
+  const timeZone = cfg?.timezone || "America/New_York";
+  const bookedEventId = String(appt.bookedEventId ?? "").trim();
+  const whenIso = String(appt.whenIso ?? "").trim();
+  const whenText = whenIso
+    ? formatSlotLocal(whenIso, timeZone)
+    : String(appt.whenText ?? appt.whenLocal ?? "").trim();
+  const staffName = appointmentStatusStaffName(conv, cfg ?? undefined);
+  const staffSuffix = staffName ? ` with ${staffName}` : "";
+  const asksToday = /\btoday\b/i.test(inboundText);
+
+  if (bookedEventId && whenIso) {
+    const start = new Date(whenIso);
+    const sameToday = !Number.isNaN(start.getTime()) && isSameLocalCalendarDay(start, new Date(), timeZone);
+    if (asksToday) {
+      if (sameToday) {
+        const timeOnly = formatLocalTimeOnly(whenIso, timeZone);
+        const when = timeOnly ? `today at ${timeOnly}` : whenText || "today";
+        setDialogState(conv, "schedule_booked");
+        return `Yes — I’m showing your appointment for ${when}${staffSuffix}.`;
+      }
+      setDialogState(conv, "schedule_booked");
+      return `I’m showing your appointment for ${whenText}${staffSuffix}, not today.`;
+    }
+    setDialogState(conv, "schedule_booked");
+    return `I’m showing your appointment for ${whenText}${staffSuffix}.`;
+  }
+
+  addAppointmentStatusReviewTodo(conv, inboundText, args.providerMessageId);
+  setFollowUpMode(conv, "manual_handoff", "appointment_status_confirm");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+
+  if (whenText) {
+    return `I’m seeing an appointment note for ${whenText}${staffSuffix}, but I’ll have the team confirm it.`;
+  }
+  if (bookedEventId) {
+    return "I see a confirmed appointment on this thread, but I don’t have the time in this view. I’ll have the team confirm it.";
+  }
+  return "I’ll have the team confirm your appointment status and follow up shortly.";
+}
+
 function buildImmediateArrivalRequestReply(_conv?: any): string {
   return "Let me confirm we can take you now before you head over. I’ll follow up shortly.";
 }
@@ -44347,7 +44446,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         (inbound as any)?.at ?? event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(is my appointment|my appointment|appt|appointment today|still on|still good|still set|are we still|am i still|confirmed|what time is my appointment|who (?:am i|is it) (?:with|seeing)|on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const regenCustomerAckActionParse = regenCustomerAckActionParserHint
@@ -44632,6 +44731,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
       return respondRegenerateSkipped("customer_will_provide_time");
+    }
+    if (action === "appointment_status_question") {
+      const reply = await buildAppointmentStatusQuestionReply({
+        conv,
+        text: event.body,
+        providerMessageId: (inbound as any)?.providerMessageId ?? event.providerMessageId
+      });
+      recordRouteOutcome("regen", "customer_ack_appointment_status_question", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenCustomerAckActionParse?.confidence ?? null,
+        hasBookedEvent: !!String(conv.appointment?.bookedEventId ?? "").trim()
+      });
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnSchedulingIntent: false,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
     }
     if (action === "immediate_arrival_request") {
       addTodo(
@@ -49006,7 +49123,7 @@ if (authToken && signature) {
         event.receivedAt,
         (event.mediaUrls?.length ?? 0) > 0
       ) ||
-      /\b(on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
+      /\b(is my appointment|my appointment|appt|appointment today|still on|still good|still set|are we still|am i still|confirmed|what time is my appointment|who (?:am i|is it) (?:with|seeing)|on my way|leav(?:e|ing)|driv(?:e|ing)|be there|come now|come in now|come right now|head over now|stop by now|swing by now|around|between|o.?clock|morning|afternoon|evening|what time works|let me know what time|let (?:you|u) know(?: soon)?|give (?:you|u) (?:a )?time ?frame|find a ride|do some figuring|sounds perfect|sounds good|that works|works for me|ok|okay|perfect|talk soon)\b/i.test(
         String(event.body ?? "")
       ));
   const customerAckActionParse = customerAckActionParserHint
@@ -49113,6 +49230,7 @@ if (authToken && signature) {
     inboundReplyActionParse?.action === "explicit_callback_request" ||
     inboundReplyActionParse?.action === "schedule_context_status_update" ||
     inboundReplyActionParse?.action === "inventory_watch_acknowledgement" ||
+    customerAckActionParse?.action === "appointment_status_question" ||
     customerAckActionParse?.action === "immediate_arrival_request";
   const customerAckNoResponse =
     customerAckActionAccepted &&
@@ -52862,6 +52980,7 @@ if (authToken && signature) {
     !pricingOrPaymentsIntent &&
     (customerAckActionParse?.action === "accept_tentative_appointment" ||
       customerAckActionParse?.action === "ask_for_available_times" ||
+      customerAckActionParse?.action === "appointment_status_question" ||
       customerAckActionParse?.action === "provide_arrival_window" ||
       customerAckActionParse?.action === "immediate_arrival_request" ||
       customerAckActionParse?.action === "purchase_delivery_update")
@@ -52888,6 +53007,20 @@ if (authToken && signature) {
         confidence: customerAckActionParse?.confidence ?? null
       });
       return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
+    }
+    if (action === "appointment_status_question") {
+      const reply = await buildAppointmentStatusQuestionReply({
+        conv,
+        text: event.body,
+        providerMessageId: event.providerMessageId
+      });
+      recordRouteOutcome("live", "customer_ack_appointment_status_question", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null,
+        hasBookedEvent: !!String(conv.appointment?.bookedEventId ?? "").trim()
+      });
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: false });
     }
     if (
       action === "accept_tentative_appointment" ||
