@@ -11110,6 +11110,40 @@ function getDealerRideOutcomeModelLabel(conv: any, unit?: OutcomeUnitInput | nul
   );
 }
 
+function extractDealerRideOutcomeInstallItems(note?: string | null): string[] {
+  const text = String(note ?? "").trim();
+  if (!text) return [];
+  if (
+    !/\b(order(?:ed|ing)?|on[-\s]?order|parts?\s+(?:are\s+)?ordered|install(?:ed|ing)?|put\s+on|waiting\s+on|arriv(?:e|ed|ing))\b/i.test(
+      text
+    )
+  ) {
+    return [];
+  }
+
+  const items: string[] = [];
+  const add = (item: string) => {
+    if (!items.includes(item)) items.push(item);
+  };
+
+  if (/\bmufflers?\b/i.test(text)) add("mufflers");
+  if (/\bengine\s+gua?rds?\b/i.test(text)) add("engine guard");
+  if (/\bexhaust\b/i.test(text) && !items.includes("mufflers")) add("exhaust");
+  if (/\bpipes?\b/i.test(text) && !items.includes("mufflers") && !items.includes("exhaust")) add("pipes");
+  return items;
+}
+
+function buildDealerRideOutcomePartsInstallUpdate(note?: string | null): string {
+  const items = extractDealerRideOutcomeInstallItems(note);
+  if (!items.length) return "";
+  const text = String(note ?? "");
+  const partsLabel = joinNatural(items);
+  if (/\b(installed|put\s+on|finished|done|ready)\b/i.test(text)) {
+    return `The ${partsLabel} ${items.length === 1 ? "is" : "are"} installed. I’ll let you know as soon as the bike is ready.`;
+  }
+  return `We ordered the ${partsLabel}. I’ll let you know when ${items.length === 1 ? "it’s" : "they’re"} installed.`;
+}
+
 function buildDealerRideOutcomeCustomerDraft(args: {
   conv: any;
   unit?: OutcomeUnitInput | null;
@@ -11135,7 +11169,10 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;
   }
   if (args.secondaryStatus === "hold" || args.outcome === "hold") {
-    return `${intro} I have the ${modelLabel} noted while we work through the next steps. I’ll keep you posted.`;
+    const partsUpdate = buildDealerRideOutcomePartsInstallUpdate(args.note);
+    return `${intro} I have the ${modelLabel} on hold for you while we work through the remaining details. ${
+      partsUpdate || "I’ll keep you updated."
+    }`;
   }
   if (args.secondaryStatus === "no_change" || args.outcome === "no_change") {
     return "";

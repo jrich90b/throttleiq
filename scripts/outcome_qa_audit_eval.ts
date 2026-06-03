@@ -111,6 +111,38 @@ const store = {
       ]
     },
     {
+      id: "conv_dealer_noted",
+      leadKey: "+17160000005",
+      mode: "suggest",
+      leadOwner: { name: "Stone Giuga" },
+      lead: {
+        leadRef: "DR3",
+        firstName: "Alex",
+        lastName: "Weeks",
+        phone: "7160000005"
+      },
+      dealerRide: {
+        staffNotify: {
+          outcome: {
+            status: "hold",
+            primaryStatus: "showed",
+            secondaryStatus: "hold",
+            note: "Heritage Classic is on hold",
+            updatedAt: isoMinutesAgo(45)
+          }
+        }
+      },
+      messages: [
+        {
+          id: "msg_dealer_noted",
+          direction: "out",
+          provider: "draft_ai",
+          at: isoMinutesAgo(44),
+          body: "Hi Alex - This is Stone at American Harley-Davidson. Thanks again for coming in for the test ride on the Heritage Classic. I have the Heritage Classic noted while we work through the next steps. I’ll keep you posted."
+        }
+      ]
+    },
+    {
       id: "conv_appt_missing",
       leadKey: "+17160000004",
       mode: "suggest",
@@ -143,9 +175,10 @@ const report = buildOutcomeQaReport(store, {
   sinceHours: 24
 });
 
-assertCheck("outcome_count", report.summary.outcomeCount, 4);
+assertCheck("outcome_count", report.summary.outcomeCount, 5);
 assertCheck("missing_dealer_ride_thank_you_detected", hasIssue(report, "missing_dealer_ride_customer_thank_you"), true);
 assertCheck("assumed_next_steps_detected", hasIssue(report, "assumed_agreed_next_steps"), true);
+assertCheck("vague_noted_language_detected", hasIssue(report, "dealer_ride_vague_noted_language"), true);
 assertCheck("wrong_salesperson_identity_detected", hasIssue(report, "wrong_salesperson_identity"), true);
 assertCheck("finance_needs_info_state_detected", hasIssue(report, "finance_needs_info_missing_manual_handoff"), true);
 assertCheck("finance_unsafe_claim_detected", hasIssue(report, "finance_outcome_unsafe_specific_claim"), true);

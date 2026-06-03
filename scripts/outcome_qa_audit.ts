@@ -476,6 +476,27 @@ function buildFindings(cases: OutcomeCase[]): OutcomeFinding[] {
       }
     }
 
+    if (
+      row.family === "dealer_ride" &&
+      outboundText &&
+      /\bi have (?:the|that)?\s*[a-z0-9][a-z0-9\s-]{0,80}\s+noted\b/i.test(outboundText)
+    ) {
+      push(
+        row,
+        "dealer_ride_vague_noted_language",
+        "P3",
+        "Outcome draft used vague noted-language",
+        "Dealer ride outcome drafts should say the real status/action, not vague internal wording like having the bike noted.",
+        {
+          type: "guard_eval",
+          parserTarget: parserTargetFor(row.family),
+          confidenceTarget: 0.82,
+          action: "Keep dealer-ride hold/follow-up copy status-specific and add examples when production feedback flags vague wording."
+        },
+        { customerFacingText: outboundText }
+      );
+    }
+
     const expectedOwnerFirst = firstName(row.ownerName);
     const actualIdentity = outboundText ? firstIdentityName(outboundText) : null;
     if (

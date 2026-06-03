@@ -16,6 +16,15 @@ const source = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.
 const staffSmsQueueIndex = source.indexOf('source: "staff_outcome_sms"');
 const staffSmsQueuedConfirmationIndex = source.indexOf("Saved FOLLOW UP outcome and queued a customer thank-you draft.");
 const todoModalBlock = /source: "todo_done_modal"/.exec(source)?.index ?? -1;
+const regenerateDealerRideOutcomeStart = source.indexOf("if (regenDealerRideEventLead) {");
+const regenerateDealerRideOutcomeEnd =
+  regenerateDealerRideOutcomeStart >= 0
+    ? source.indexOf("const history = buildHistory", regenerateDealerRideOutcomeStart)
+    : -1;
+const regenerateDealerRideOutcomeBlock =
+  regenerateDealerRideOutcomeStart >= 0 && regenerateDealerRideOutcomeEnd > regenerateDealerRideOutcomeStart
+    ? source.slice(regenerateDealerRideOutcomeStart, regenerateDealerRideOutcomeEnd)
+    : "";
 
 const checks: Check[] = [
   check(
@@ -53,6 +62,30 @@ const checks: Check[] = [
     "dealer_ride_outcome_follow_up_does_not_assume_agreed_next_steps",
     source.includes("next steps we talked about"),
     false
+  ),
+  check(
+    "dealer_ride_hold_draft_avoids_vague_noted_language",
+    /I have the \$\{modelLabel\} noted while we work through the next steps/.test(source),
+    false
+  ),
+  check(
+    "dealer_ride_hold_draft_states_hold_status_and_update",
+    /I have the \$\{modelLabel\} on hold for you while we work through the remaining details\.[\s\S]{0,120}keep you updated/.test(source),
+    true
+  ),
+  check(
+    "dealer_ride_hold_draft_uses_outcome_note_parts_install_update",
+    source.includes("buildDealerRideOutcomePartsInstallUpdate(args.note)") &&
+      source.includes("We ordered the ${partsLabel}. I’ll let you know when") &&
+      /engine\\s\+gua\?rds\?/.test(source),
+    true
+  ),
+  check(
+    "regenerate_dealer_ride_outcome_uses_same_builder_with_note",
+    /buildDealerRideOutcomeCustomerDraft\s*\(\{[\s\S]{0,260}note: dealerRideOutcome\.note/.test(
+      regenerateDealerRideOutcomeBlock
+    ),
+    true
   ),
   check(
     "draft_queue_happens_before_staff_sms_confirmation_text",
