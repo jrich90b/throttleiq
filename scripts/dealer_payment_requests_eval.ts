@@ -133,6 +133,16 @@ assert.match(
   /addTodo\(\s*conv,\s*"payments"/,
   "Dealer payment notifications must be visible as payment tasks."
 );
+assert.match(
+  apiSource,
+  /allowSoldLead:\s*true/,
+  "Dealer payment notifications must still show for sold or closed conversations."
+);
+assert.match(
+  apiSource,
+  /for \(const request of synced\.requests\)/,
+  "Dealer payment request listing must notify paid requests even if they were synced earlier."
+);
 
 const pageSource = await fs.readFile(path.resolve("apps/web/src/app/page.tsx"), "utf8");
 const createPaymentFn = pageSource.match(/async function createConversationPaymentRequest\(\)[\s\S]*?\n  \}/)?.[0] ?? "";

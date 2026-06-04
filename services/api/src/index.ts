@@ -939,7 +939,8 @@ async function notifyDealerPaymentIfPaid(requestId: unknown) {
     request.stripeCheckoutSessionId || request.id,
     conv.leadOwner,
     undefined,
-    "todo"
+    "todo",
+    { allowSoldLead: true }
   );
   if (task) {
     await updateDealerPaymentRequest(request.id, { notifiedAt: new Date().toISOString() });
@@ -31996,7 +31997,7 @@ app.get("/dealer-payments/requests", async (req, res) => {
     }
   }
   const synced = await syncDealerPaymentRequestsWithStripe({ conversationId: conversationId || undefined });
-  for (const request of synced.updated) {
+  for (const request of synced.requests) {
     if (request.status === "paid") {
       await notifyDealerPaymentIfPaid(request.id);
     }
