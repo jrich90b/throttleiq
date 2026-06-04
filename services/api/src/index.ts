@@ -925,6 +925,7 @@ async function notifyDealerPaymentIfPaid(requestId: unknown) {
   const conv = getConversation(request.conversationId || request.leadKey || "");
   if (!conv) return;
   const providerMessageId = request.stripeCheckoutSessionId || request.id;
+  retireLegacyDealerPaymentReceiptTodos(conv.id, providerMessageId, request.id);
   const existingPaymentEvent = (conv.messages ?? []).some(
     message => message.provider === "payment_event" && message.providerMessageId === providerMessageId
   );
@@ -956,6 +957,21 @@ async function notifyDealerPaymentIfPaid(requestId: unknown) {
   conv.updatedAt = now;
   saveConversation(conv);
   await updateDealerPaymentRequest(request.id, { notifiedAt: now });
+}
+
+function retireLegacyDealerPaymentReceiptTodos(convId: string, providerMessageId: string, requestId: string) {
+  for (const todo of listOpenTodos()) {
+    if (todo.convId !== convId) continue;
+    const sourceMessageId = String(todo.sourceMessageId ?? "").trim();
+    const summary = String(todo.summary ?? "").trim();
+    const isSamePayment =
+      sourceMessageId === providerMessageId ||
+      sourceMessageId === requestId ||
+      /^Payment received:/i.test(summary);
+    if (isSamePayment) {
+      markTodoDone(todo.convId, todo.id);
+    }
+  }
 }
 
 app.get("/debug/route-outcomes", (req, res) => {
