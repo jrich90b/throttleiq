@@ -848,6 +848,7 @@ function getMessageProviderDisplayLabel(
 ): string {
   const provider = String(message.provider ?? "").trim();
   const actorName = String(message.actorUserName ?? "").trim();
+  if (provider === "payment_event") return "Payment";
   if (message.direction === "out") {
     if (provider === "draft_ai") return "AI";
     if (provider === "twilio" || provider === "human" || provider === "sendgrid") return actorName || "AI";
@@ -8536,6 +8537,17 @@ export default function Home() {
     }
     return { full, byId, indexById };
   }, [selectedConv]);
+  const latestPaymentEvent = useMemo(() => {
+    const paymentMessages = (selectedConv?.messages ?? []).filter(m => m.provider === "payment_event");
+    if (!paymentMessages.length) return null;
+    return paymentMessages.reduce((latest, message) => {
+      const latestTime = new Date(latest.at).getTime();
+      const messageTime = new Date(message.at).getTime();
+      if (Number.isNaN(latestTime)) return message;
+      if (Number.isNaN(messageTime)) return latest;
+      return messageTime > latestTime ? message : latest;
+    }, paymentMessages[0]);
+  }, [selectedConv]);
   const emailDraft = useMemo(() => {
     return (selectedConv as any)?.emailDraft ?? null;
   }, [selectedConv]);
@@ -8560,7 +8572,8 @@ export default function Home() {
           provider === "web_widget" ||
           provider === "human" ||
           provider === "draft_ai" ||
-          provider === "sendgrid_adf";
+          provider === "sendgrid_adf" ||
+          provider === "payment_event";
         if (messageFilter === "email") return isEmail;
         if (messageFilter === "calls") return isCall && provider !== "voice_summary";
         return isSms;
@@ -19891,6 +19904,14 @@ export default function Home() {
                       Owner: {selectedConv.leadOwner?.name || selectedConv.leadOwner?.id}
                     </span>
                   ) : null}
+                  {latestPaymentEvent ? (
+                    <span
+                      className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300"
+                      title={latestPaymentEvent.body}
+                    >
+                      Payment received
+                    </span>
+                  ) : null}
                 </div>
                 {(selectedConv.lead?.name ||
                   [selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ")) ? (
@@ -21737,6 +21758,7 @@ export default function Home() {
                   const isDraftMessage = m.direction === "out" && m.provider === "draft_ai";
                   const isPending = pendingDraft?.id === m.id;
                   const providerLabel = getMessageProviderDisplayLabel(m);
+                  const isPaymentEvent = m.provider === "payment_event";
                   const isSummary = m.provider === "voice_summary";
                   if (isSummary) return null;
                   const summaryText = (() => {
@@ -21761,6 +21783,7 @@ export default function Home() {
                         : m.body;
                   const hasVisibleBody = String(messageBody ?? "").trim().length > 0;
                   const canRateMessage =
+                    !isPaymentEvent &&
                     hasVisibleBody &&
                     m.direction === "out" &&
                     (m.provider === "draft_ai" ||
@@ -21771,6 +21794,22 @@ export default function Home() {
                   const feedbackBusy = !!messageFeedbackBusy[m.id];
                   const ratedUp = feedback?.rating === "up";
                   const ratedDown = feedback?.rating === "down";
+                  if (isPaymentEvent) {
+                    return (
+                      <div key={m.id} className="text-sm">
+                        <div className="mx-auto max-w-[92%] rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-950 shadow-sm">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                            {providerLabel} • {new Date(m.at).toLocaleString()}
+                          </div>
+                          {hasVisibleBody ? (
+                            <div className="mt-1 whitespace-pre-wrap break-words text-sm font-medium">
+                              {renderMessageBody(messageBody)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={m.id} className={`text-sm ${m.direction === "in" || isSummary ? "" : "text-right"}`}>
                       <div className="text-xs text-gray-500">

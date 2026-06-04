@@ -126,17 +126,27 @@ assert.match(
 assert.match(
   apiSource,
   /Payment received:/,
-  "Dealer payment notifications must be labeled clearly in the task inbox."
+  "Dealer payment notifications must be labeled clearly in the conversation timeline."
 );
 assert.match(
   apiSource,
-  /addTodo\(\s*conv,\s*"payments"/,
-  "Dealer payment notifications must be visible as payment tasks."
+  /provider:\s*"payment_event"/,
+  "Paid dealer payment requests must write a payment event into the conversation timeline."
 );
 assert.match(
   apiSource,
-  /allowSoldLead:\s*true/,
-  "Dealer payment notifications must still show for sold or closed conversations."
+  /message => message\.provider === "payment_event" && message\.providerMessageId === providerMessageId/,
+  "Dealer payment timeline events must be deduped by Stripe/request id."
+);
+assert.doesNotMatch(
+  apiSource,
+  /addTodo\([\s\S]{0,500}Payment received:/,
+  "Paid dealer payment receipts must not create generic task inbox todos."
+);
+assert.doesNotMatch(
+  apiSource,
+  /Verify the deal\/account balance/,
+  "Paid dealer payment receipts must not create outcome-style task copy."
 );
 assert.match(
   apiSource,

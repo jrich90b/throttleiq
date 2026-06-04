@@ -921,9 +921,19 @@ async function notifyDealerPaymentIfPaid(requestId: unknown) {
   const id = String(requestId ?? "").trim();
   if (!id) return;
   const request = await getDealerPaymentRequest(id);
-  if (!request || request.status !== "paid" || request.notifiedAt) return;
+  if (!request || request.status !== "paid") return;
   const conv = getConversation(request.conversationId || request.leadKey || "");
   if (!conv) return;
+  const providerMessageId = request.stripeCheckoutSessionId || request.id;
+  const existingPaymentEvent = (conv.messages ?? []).some(
+    message => message.provider === "payment_event" && message.providerMessageId === providerMessageId
+  );
+  if (existingPaymentEvent) {
+    if (!request.notifiedAt) {
+      await updateDealerPaymentRequest(request.id, { notifiedAt: new Date().toISOString() });
+    }
+    return;
+  }
   const amount = formatDealerPaymentAmount(request);
   const parts = [
     `Payment received: ${amount}`,
@@ -931,20 +941,21 @@ async function notifyDealerPaymentIfPaid(requestId: unknown) {
     request.customerName ? `from ${request.customerName}` : "",
     request.customerPhone ? `(${request.customerPhone})` : ""
   ].filter(Boolean);
-  const summary = `${parts.join(" ")}. Verify the deal/account balance and continue the next step.`;
-  const task = addTodo(
-    conv,
-    "payments",
-    summary,
-    request.stripeCheckoutSessionId || request.id,
-    conv.leadOwner,
-    undefined,
-    "todo",
-    { allowSoldLead: true }
-  );
-  if (task) {
-    await updateDealerPaymentRequest(request.id, { notifiedAt: new Date().toISOString() });
-  }
+  const now = new Date().toISOString();
+  conv.messages = conv.messages ?? [];
+  conv.messages.push({
+    id: `payment_${crypto.randomUUID()}`,
+    direction: "out",
+    from: "stripe",
+    to: conv.leadKey || request.customerPhone || "",
+    body: `${parts.join(" ")}.`,
+    at: request.paidAt || now,
+    provider: "payment_event",
+    providerMessageId
+  });
+  conv.updatedAt = now;
+  saveConversation(conv);
+  await updateDealerPaymentRequest(request.id, { notifiedAt: now });
 }
 
 app.get("/debug/route-outcomes", (req, res) => {

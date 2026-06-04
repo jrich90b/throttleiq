@@ -39,6 +39,7 @@ function getMessageProviderDisplayLabel(
 ): string {
   const provider = String(message.provider ?? "").trim();
   const actorName = String(message.actorUserName ?? "").trim();
+  if (provider === "payment_event") return "Payment";
   if (message.direction === "out") {
     if (provider === "draft_ai") return "AI";
     if (provider === "twilio" || provider === "human" || provider === "sendgrid") return actorName || "AI";
@@ -210,14 +211,19 @@ export default function ConversationPage() {
       <div className="mt-6 border rounded-lg p-4 space-y-3">
         {conv.messages.filter(m => m.draftStatus !== "stale").map(m => {
           const isPending = pendingDraft?.id === m.id;
+          const isPaymentEvent = m.provider === "payment_event";
 
           return (
-            <div key={m.id} className={`text-sm ${m.direction === "in" ? "" : "text-right"}`}>
+            <div key={m.id} className={`text-sm ${m.direction === "in" || isPaymentEvent ? "" : "text-right"}`}>
               <div className="text-xs text-gray-500">
-                {m.direction.toUpperCase()} • {getMessageProviderDisplayLabel(m)} • {new Date(m.at).toLocaleString()}
+                {isPaymentEvent ? "PAYMENT" : m.direction.toUpperCase()} • {getMessageProviderDisplayLabel(m)} • {new Date(m.at).toLocaleString()}
                 {isPending ? " • DRAFT (not sent)" : ""}
               </div>
-              <div className="inline-block mt-1 px-3 py-2 rounded border max-w-[85%] whitespace-pre-wrap">
+              <div
+                className={`inline-block mt-1 px-3 py-2 rounded border max-w-[85%] whitespace-pre-wrap ${
+                  isPaymentEvent ? "bg-emerald-50 text-emerald-950 border-emerald-200" : ""
+                }`}
+              >
                 {m.body}
               </div>
             </div>

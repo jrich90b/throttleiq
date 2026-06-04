@@ -25,6 +25,7 @@ export type MessageProvider =
   | "draft_ai"
   | "human"
   | "web_widget"
+  | "payment_event"
   | "voice_call"
   | "voice_transcript"
   | "voice_summary";
