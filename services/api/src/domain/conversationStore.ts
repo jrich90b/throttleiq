@@ -1290,9 +1290,15 @@ async function ensureDirForFile(filePath: string) {
 async function loadFromDisk() {
   try {
     const raw = await fs.readFile(DB_PATH, "utf8");
-    const parsed = JSON.parse(raw) as { conversations?: Conversation[]; todos?: TodoTask[]; questions?: InternalQuestion[] };
+    const parsed = JSON.parse(raw) as {
+      conversations?: Conversation[] | Record<string, Conversation>;
+      todos?: TodoTask[] | Record<string, TodoTask>;
+      questions?: InternalQuestion[] | Record<string, InternalQuestion>;
+    };
 
-    const list = parsed?.conversations ?? [];
+    const list = Array.isArray(parsed?.conversations)
+      ? parsed.conversations
+      : Object.values(parsed?.conversations ?? {});
     conversations.clear();
     leadKeyIndex.clear();
     let scrubbedInternalOutboundCount = 0;
@@ -1317,8 +1323,9 @@ async function loadFromDisk() {
       indexConversationByLeadKey(c);
     }
     todos.length = 0;
-    if (parsed?.todos?.length) {
-      for (const task of parsed.todos) {
+    const todoList = Array.isArray(parsed?.todos) ? parsed.todos : Object.values(parsed?.todos ?? {});
+    if (todoList.length) {
+      for (const task of todoList) {
       const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
       const explicitClass = String(task.taskClass ?? "").trim().toLowerCase();
       const knownExplicitClass =
@@ -1341,7 +1348,8 @@ async function loadFromDisk() {
       }
     }
     questions.length = 0;
-    if (parsed?.questions?.length) questions.push(...parsed.questions);
+    const questionList = Array.isArray(parsed?.questions) ? parsed.questions : Object.values(parsed?.questions ?? {});
+    if (questionList.length) questions.push(...questionList);
 
     console.log(`📦 Loaded ${conversations.size} conversations from ${DB_PATH}`);
     if (scrubbedInternalOutboundCount > 0) {
