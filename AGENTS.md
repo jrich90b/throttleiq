@@ -372,15 +372,32 @@ When changing responses:
   - `docs/JD_Power_Trade_Budget_Implementation.md`
 - When resumed, implement parser-first + state machine from that doc (no regex-only flow).
 
-## Data Path Safety (Do Not Wipe Dealer Profile)
+## Dealer Runtime Safety (Do Not Cross Dealer Data)
 - **Source of truth for instance data is runtime storage**, not repo data files.
-- API env on Lightsail should use:
-  - `DATA_DIR=/home/ubuntu/throttleiq-runtime/data`
-  - `DEALER_PROFILE_PATH=/home/ubuntu/throttleiq-runtime/data/dealer_profile.json`
-- Never treat `services/api/data/dealer_profile.json` as persistent production state. It can be changed by `git pull`.
-- Do not run destructive edits against dealer profile paths unless explicitly requested.
-- Before troubleshooting missing profile fields, verify active env from PM2:
-  - `PID=$(pm2 pid throttleiq-api); tr '\0' '\n' < /proc/$PID/environ | grep -E '^(DATA_DIR|DEALER_PROFILE_PATH)='`
+- Every production dealer must use an isolated runtime directory and deploy profile:
+  - Code checkout: `/home/ubuntu/leadrider-api/{dealerSlug}`
+  - Runtime data: `/home/ubuntu/leadrider-runtime/{dealerSlug}/data`
+  - API env: `/home/ubuntu/leadrider-runtime/{dealerSlug}/api.env`
+  - Dealer profile: `/home/ubuntu/leadrider-runtime/{dealerSlug}/data/dealer_profile.json`
+- American Harley currently uses:
+  - `DEPLOY_REPO=/home/ubuntu/leadrider-api/americanharley`
+  - `DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data`
+  - `DEALER_PROFILE_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/dealer_profile.json`
+  - `DEPLOY_ENV_FILE=/home/ubuntu/leadrider-runtime/americanharley/api.env`
+- Do **not** deploy a production dealer against the legacy generic path:
+  - `/home/ubuntu/throttleiq-runtime/data`
+- Future dealer deploy profiles must include:
+  - `DEPLOY_EXPECTED_DATA_DIR`
+  - `DEPLOY_MIN_CONVERSATIONS` once the dealer has live data
+  - `DEPLOY_REQUIRED_CONVERSATION_TEXT` as a dealer-specific canary once live
+  - dealer-specific `DEPLOY_HEALTH_URL`
+  - a unique `DEPLOY_PM2_PROCESS` when multiple dealer APIs run on the same host
+- Never treat `services/api/data/dealer_profile.json` or any `services/api/data/*` file as persistent production state. These can be changed by `git pull`.
+- Do not run destructive edits against runtime dealer data paths unless explicitly requested.
+- Before troubleshooting missing leads/profile fields, verify active env and process cwd from PM2:
+  - `pm2 describe throttleiq-api | grep -E 'exec cwd|script args|status' -C 1`
+  - `PID=$(pm2 pid throttleiq-api); tr '\0' '\n' < /proc/$PID/environ | grep -E '^(DATA_DIR|DEALER_PROFILE_PATH|PUBLIC_BASE_URL)='`
+- If a production conversation store unexpectedly drops below the dealer's normal count, stop the API before reconciling data. Do not let a tiny/empty in-memory store overwrite the runtime store.
 
 ## Intent Parser Eval (Local)
 - Run eval:
@@ -392,20 +409,20 @@ When changing responses:
 
 ## Feedback Loop Commands (Edited Messages -> Fixtures)
 - Mine changed outbound edits into labels + replay fixtures (instance/runtime data):
-  - `cd ~/throttleiq`
-  - `CHANGED_MESSAGES_PATH=/home/ubuntu/throttleiq-runtime/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/throttleiq-runtime/reports/edit_feedback npm run edit_feedback:mine`
+  - `cd /home/ubuntu/leadrider-api/americanharley`
+  - `DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data CHANGED_MESSAGES_PATH=/home/ubuntu/leadrider-runtime/americanharley/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback npm run edit_feedback:mine`
 - Run audit + mining loop together:
-  - `cd ~/throttleiq`
-  - `CHANGED_MESSAGES_PATH=/home/ubuntu/throttleiq-runtime/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/throttleiq-runtime/reports/edit_feedback npm run edit_feedback:loop`
+  - `cd /home/ubuntu/leadrider-api/americanharley`
+  - `DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data CHANGED_MESSAGES_PATH=/home/ubuntu/leadrider-runtime/americanharley/reports/changed_messages_all.json CONVERSATIONS_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json EDIT_FEEDBACK_OUT_DIR=/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback npm run edit_feedback:loop`
 - Output files:
-  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_feedback_labeled.json`
-  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_replay_fixtures.json`
-  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_replay_fixture_results.json`
-  - `/home/ubuntu/throttleiq-runtime/reports/edit_feedback/edit_feedback_summary.json`
+  - `/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback/edit_feedback_labeled.json`
+  - `/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback/edit_replay_fixtures.json`
+  - `/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback/edit_replay_fixture_results.json`
+  - `/home/ubuntu/leadrider-runtime/americanharley/reports/edit_feedback/edit_feedback_summary.json`
 
 ## Nightly Automation (Near Hands-Off)
 - One-command nightly loop:
-  - `cd ~/throttleiq`
+  - `cd /home/ubuntu/leadrider-api/americanharley`
   - `npm run feedback:nightly`
 - The nightly loop runs:
   1) `export:changed_messages` (auto-builds `changed_messages_all.json` from conversations)
@@ -417,11 +434,11 @@ When changing responses:
 
 - Route audit persistence (API runtime):
   - `ROUTE_AUDIT_PERSIST=1` (default on)
-  - `ROUTE_AUDIT_DIR=/home/ubuntu/throttleiq-runtime/reports/route_audit` (or your runtime report path)
+  - `ROUTE_AUDIT_DIR=/home/ubuntu/leadrider-runtime/americanharley/reports/route_audit` (or your dealer runtime report path)
 
 - Run watchdog manually:
-  - `cd ~/throttleiq`
-  - `DATA_DIR=/home/ubuntu/throttleiq-runtime/data CONVERSATIONS_DB_PATH=/home/ubuntu/throttleiq-runtime/data/conversations.json ROUTE_AUDIT_DIR=/home/ubuntu/throttleiq-runtime/reports/route_audit npm run route_watchdog:run -- --since-min 180 --stuck-older-sec 120 --limit 100`
+  - `cd /home/ubuntu/leadrider-api/americanharley`
+  - `DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json ROUTE_AUDIT_DIR=/home/ubuntu/leadrider-runtime/americanharley/reports/route_audit npm run route_watchdog:run -- --since-min 180 --stuck-older-sec 120 --limit 100`
 
 - Debug API endpoints for persisted route audits (survive API restart):
   - `/debug/route-outcomes/persisted?sinceMin=180&limit=200`
@@ -432,7 +449,7 @@ When changing responses:
   - `SENDGRID_API_KEY`
   - `FEEDBACK_REPORT_EMAIL_TO` (recipient)
   - `FEEDBACK_REPORT_EMAIL_FROM` (sender; falls back to `NOTIFICATION_FROM_EMAIL`)
-  - Nightly loader: `scripts/feedback_loop_nightly.sh` now auto-loads `FEEDBACK_LOOP_ENV_PATH` (default `/home/ubuntu/throttleiq-runtime/.feedback_loop.env`) before deciding whether to send report email.
+  - Nightly loader: `scripts/feedback_loop_nightly.sh` now auto-loads `FEEDBACK_LOOP_ENV_PATH` before deciding whether to send report email. For American Harley use `/home/ubuntu/leadrider-runtime/americanharley/.feedback_loop.env`.
   - Optional: `FEEDBACK_REPORT_ATTACH_FULL=1` (attach full labeled + fixture payloads)
   - Optional: `FEEDBACK_REPORT_ATTACH_ZIP=1` (attach a single `.zip` bundle of report artifacts)
   - Optional: `FEEDBACK_REPORT_ZIP_ONLY=1` (send only the zip attachment, skip individual JSON attachments)
@@ -441,11 +458,11 @@ When changing responses:
 - Cron setup (daily at 8:15 AM ET):
   - `crontab -e`
   - Add line:
-    - `15 8 * * * cd /home/ubuntu/throttleiq && DATA_DIR=/home/ubuntu/throttleiq-runtime/data REPORT_ROOT=/home/ubuntu/throttleiq-runtime/reports FEEDBACK_REPORT_EMAIL_TO=joeh@americanharley-davidson.com FEEDBACK_REPORT_EMAIL_FROM=sales@americanharley-davidson.com npm run feedback:nightly >> /home/ubuntu/throttleiq-runtime/reports/feedback_loop_cron.log 2>&1`
+    - `15 8 * * * cd /home/ubuntu/leadrider-api/americanharley && DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports FEEDBACK_LOOP_ENV_PATH=/home/ubuntu/leadrider-runtime/americanharley/.feedback_loop.env FEEDBACK_REPORT_EMAIL_TO=joeh@americanharley-davidson.com FEEDBACK_REPORT_EMAIL_FROM=sales@americanharley-davidson.com npm run feedback:nightly >> /home/ubuntu/leadrider-runtime/americanharley/reports/feedback_loop_cron.log 2>&1`
 
 ## Fast Learning (Hourly Safe Loop)
 - Use the hourly loop for faster tone/example learning while keeping routing/state deterministic:
-  - `cd ~/throttleiq`
+  - `cd /home/ubuntu/leadrider-api/americanharley`
   - `npm run feedback:hourly`
 - Hourly loop (`scripts/feedback_loop_hourly.sh`) runs:
   1) `language_corpus:mine` (recent-window mining)
@@ -463,7 +480,7 @@ When changing responses:
 - Cron setup (hourly, top of hour):
   - `crontab -e`
   - Add line:
-    - `0 * * * * cd /home/ubuntu/throttleiq && DATA_DIR=/home/ubuntu/throttleiq-runtime/data REPORT_ROOT=/home/ubuntu/throttleiq-runtime/reports FAST_LOOP_SINCE_HOURS=2 npm run feedback:hourly >> /home/ubuntu/throttleiq-runtime/reports/feedback_loop_hourly_cron.log 2>&1`
+    - `0 * * * * cd /home/ubuntu/leadrider-api/americanharley && DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports FEEDBACK_LOOP_ENV_PATH=/home/ubuntu/leadrider-runtime/americanharley/.feedback_loop.env FAST_LOOP_SINCE_HOURS=2 npm run feedback:hourly >> /home/ubuntu/leadrider-runtime/americanharley/reports/feedback_loop_hourly_cron.log 2>&1`
 
 ## After Any Code Change (Always Include These)
 - Local (push):
@@ -474,12 +491,12 @@ When changing responses:
     - `git add "apps/web/src/app/api/conversations/[id]/watch/route.ts"`
   - `git commit -m "..." `
   - `git push`
-- Instance (pull/build/restart API):
-  - `cd ~/throttleiq`
-  - `git pull`
-  - `cd services/api`
-  - `NODE_OPTIONS="--max-old-space-size=4096" npm run build`
-  - `pm2 restart throttleiq-api --update-env`
+- Instance (deploy/restart API):
+  - Use the deploy script, not a manual `git pull` + PM2 restart. The deploy script enforces the dealer runtime path, backs up runtime data, and checks conversation-store sanity before and after restart.
+  - American Harley:
+    - `npm run deploy:api`
+  - Future dealers:
+    - `bash scripts/deploy_api_lightsail.sh --profile infra/deploy/{dealerSlug}.api.env`
 - If web app changed:
   - `cd ~/throttleiq/apps/web`
   - `npm run build`
