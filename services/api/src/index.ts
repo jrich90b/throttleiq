@@ -100,6 +100,7 @@ import {
   type InventorySnapshot,
   type InventorySnapshotLoadResult
 } from "./domain/inventoryWatchSnapshot.js";
+import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
   addAutomationRun,
@@ -4212,6 +4213,13 @@ async function processInventoryWatchlist(targetConvId?: string) {
       const listingUrl =
         listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
       const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
+      if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, reply)) {
+        matchedWatch.lastNotifiedAt = nowIso;
+        matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+        conv.updatedAt = nowIso;
+        saveConversation(conv);
+        continue;
+      }
       const imageUrl =
         Array.isArray(matchedItem.images) && matchedItem.images.length
           ? matchedItem.images[0]
@@ -4304,6 +4312,13 @@ async function notifyInventoryWatchersForAvailableItem(
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();
     const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
     const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
+    if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, reply)) {
+      matchedWatch.lastNotifiedAt = nowIsoValue;
+      matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+      conv.updatedAt = nowIsoValue;
+      saveConversation(conv);
+      continue;
+    }
     const imageUrl =
       Array.isArray(matchedItem.images) && matchedItem.images.length
         ? matchedItem.images[0]
