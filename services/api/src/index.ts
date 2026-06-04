@@ -159,9 +159,11 @@ import {
   createDealerPaymentConnectLink,
   getDealerPaymentRequest,
   getDealerPaymentStripeStatus,
-  listDealerPaymentRequests,
   parseDealerPaymentAmountCents,
-  refreshDealerPaymentStripeAccount
+  refreshDealerPaymentStripeAccount,
+  syncDealerPaymentRequestsWithStripe,
+  updateDealerPaymentRequest,
+  formatDealerPaymentAmount
 } from "./domain/dealerPayments.js";
 import { fetchHtmlSmart } from "./domain/zenrowsFetch.js";
 import {
@@ -905,6 +907,7 @@ app.post(
     try {
       const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? "");
       const result = await handleStripeWebhook(rawBody, req.header("stripe-signature") ?? undefined);
+      await notifyDealerPaymentIfPaid((result as any)?.dealerPaymentRequestId);
       return res.json({ ok: true, ...result });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Stripe webhook failed.";
@@ -913,6 +916,35 @@ app.post(
     }
   }
 );
+
+async function notifyDealerPaymentIfPaid(requestId: unknown) {
+  const id = String(requestId ?? "").trim();
+  if (!id) return;
+  const request = await getDealerPaymentRequest(id);
+  if (!request || request.status !== "paid" || request.notifiedAt) return;
+  const conv = getConversation(request.conversationId || request.leadKey || "");
+  if (!conv) return;
+  const amount = formatDealerPaymentAmount(request);
+  const parts = [
+    `Payment received: ${amount}`,
+    request.description ? `for ${request.description}` : "",
+    request.customerName ? `from ${request.customerName}` : "",
+    request.customerPhone ? `(${request.customerPhone})` : ""
+  ].filter(Boolean);
+  const summary = `${parts.join(" ")}. Verify the deal/account balance and continue the next step.`;
+  const task = addTodo(
+    conv,
+    "payments",
+    summary,
+    request.stripeCheckoutSessionId || request.id,
+    conv.leadOwner,
+    undefined,
+    "todo"
+  );
+  if (task) {
+    await updateDealerPaymentRequest(request.id, { notifiedAt: new Date().toISOString() });
+  }
+}
 
 app.get("/debug/route-outcomes", (req, res) => {
   const counters = [...routeOutcomeCounters.entries()]
@@ -31963,7 +31995,13 @@ app.get("/dealer-payments/requests", async (req, res) => {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
   }
-  const requests = await listDealerPaymentRequests({ conversationId: conversationId || undefined });
+  const synced = await syncDealerPaymentRequestsWithStripe({ conversationId: conversationId || undefined });
+  for (const request of synced.updated) {
+    if (request.status === "paid") {
+      await notifyDealerPaymentIfPaid(request.id);
+    }
+  }
+  const requests = synced.requests.filter(request => !conversationId || request.conversationId === conversationId);
   return res.json({ ok: true, requests });
 });
 

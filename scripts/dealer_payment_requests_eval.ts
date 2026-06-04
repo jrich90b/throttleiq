@@ -109,10 +109,30 @@ assert.match(
   /dealerPaymentPublicUrl/,
   "Payment messages must use a short public redirect URL so phones linkify the full payment link."
 );
+assert.match(
+  domainSource,
+  /syncDealerPaymentRequestsWithStripe/,
+  "Open dealer payment requests must sync paid Checkout status from Stripe as a webhook fallback."
+);
 
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(apiSource, /app\.get\("\/public\/pay\/:id"/);
 assert.match(apiSource, /checkout\.stripe\.com/);
+assert.match(
+  apiSource,
+  /notifyDealerPaymentIfPaid/,
+  "Paid dealer payment requests must create a dealer-visible notification."
+);
+assert.match(
+  apiSource,
+  /Payment received:/,
+  "Dealer payment notifications must be labeled clearly in the task inbox."
+);
+assert.match(
+  apiSource,
+  /addTodo\(\s*conv,\s*"payments"/,
+  "Dealer payment notifications must be visible as payment tasks."
+);
 
 const pageSource = await fs.readFile(path.resolve("apps/web/src/app/page.tsx"), "utf8");
 const createPaymentFn = pageSource.match(/async function createConversationPaymentRequest\(\)[\s\S]*?\n  \}/)?.[0] ?? "";

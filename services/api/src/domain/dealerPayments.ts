@@ -31,6 +31,7 @@ export type DealerPaymentRequest = {
   createdByUserId?: string;
   createdByUserName?: string;
   paidAt?: string;
+  notifiedAt?: string;
   expiresAt?: string;
   error?: string;
 };
@@ -266,6 +267,10 @@ export async function getDealerPaymentRequest(id: string): Promise<DealerPayment
   return store.requests.find(row => row.id === requestId) ?? null;
 }
 
+export function formatDealerPaymentAmount(request: Pick<DealerPaymentRequest, "amountCents" | "currency">) {
+  return formatMoney(request.amountCents, request.currency);
+}
+
 async function upsertDealerPaymentRequest(request: DealerPaymentRequest) {
   const store = await readStore();
   const idx = store.requests.findIndex(row => row.id === request.id);
@@ -483,6 +488,60 @@ export async function createDealerPaymentCheckout(input: DealerPaymentCheckoutIn
     request: finalRequest,
     checkoutUrl: session.url,
     suggestedMessage: buildDealerPaymentSuggestedMessage(finalRequest)
+  };
+}
+
+export async function syncDealerPaymentRequestsWithStripe(filters?: {
+  conversationId?: string;
+}): Promise<{ requests: DealerPaymentRequest[]; updated: DealerPaymentRequest[] }> {
+  const requests = await listDealerPaymentRequests(filters);
+  const updated: DealerPaymentRequest[] = [];
+  const openRequests = requests.filter(
+    request => request.status === "open" && request.stripeCheckoutSessionId && request.stripeAccountId
+  );
+  if (!openRequests.length) return { requests, updated };
+  let stripe: Stripe;
+  try {
+    stripe = stripeClient();
+  } catch {
+    return { requests, updated };
+  }
+  const byId = new Map(requests.map(request => [request.id, request]));
+  for (const request of openRequests) {
+    try {
+      const session = await stripe.checkout.sessions.retrieve(
+        request.stripeCheckoutSessionId!,
+        {},
+        { stripeAccount: request.stripeAccountId }
+      );
+      const paymentIntentId =
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : session.payment_intent?.id;
+      const paid = session.payment_status === "paid" || session.status === "complete";
+      const expired = session.status === "expired";
+      if (!paid && !expired) continue;
+      const synced = await updateDealerPaymentRequest(request.id, {
+        status: paid ? "paid" : "expired",
+        stripeCheckoutSessionId: session.id,
+        stripePaymentIntentId: paymentIntentId,
+        paidAt: paid ? request.paidAt || new Date().toISOString() : undefined,
+        expiresAt:
+          typeof session.expires_at === "number"
+            ? new Date(session.expires_at * 1000).toISOString()
+            : request.expiresAt
+      });
+      if (synced) {
+        byId.set(synced.id, synced);
+        updated.push(synced);
+      }
+    } catch (err) {
+      // Keep listing payment requests even if Stripe has a transient retrieval issue.
+    }
+  }
+  return {
+    requests: Array.from(byId.values()).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+    updated
   };
 }
 
