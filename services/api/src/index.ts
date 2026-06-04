@@ -17451,6 +17451,21 @@ function isCadenceNearDuplicateText(a: string, b: string): boolean {
   return false;
 }
 
+function isInventoryUnavailableCadenceText(text: string): boolean {
+  const normalized = normalizeOutboundText(text);
+  if (!normalized) return false;
+  const unavailable =
+    /\b(bike|unit|that|specific)\b.{0,80}\b(has sold|sold|no longer available|on hold|hold right now)\b/.test(
+      normalized
+    ) ||
+    /\b(has sold|no longer available|on hold|hold right now)\b/.test(normalized);
+  const nextStep =
+    /\b(check inventory|choose another bike|similar options|keep an eye|opens back up|available again)\b/.test(
+      normalized
+    );
+  return unavailable && nextStep;
+}
+
 function isRecentDuplicateOutbound(
   conv: any,
   to: string,
@@ -17461,6 +17476,7 @@ function isRecentDuplicateOutbound(
     mediaUrls?: string[];
     nowMs?: number;
     excludeMessageId?: string | null;
+    nearDuplicate?: boolean;
   }
 ): boolean {
   const bodyNorm = normalizeOutboundText(body);
@@ -17475,6 +17491,8 @@ function isRecentDuplicateOutbound(
   const nowMs = Number(opts?.nowMs ?? Date.now());
   const candidateMedia = normalizeOutboundMediaForDedup(opts?.mediaUrls);
   const excludeMessageId = String(opts?.excludeMessageId ?? "").trim();
+  const allowNearDuplicate =
+    opts?.nearDuplicate === true && isInventoryUnavailableCadenceText(bodyNorm);
 
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const m = messages[i];
@@ -17484,7 +17502,13 @@ function isRecentDuplicateOutbound(
     const provider = String(m?.provider ?? "").trim();
     if (providers && !providers.has(provider)) continue;
     if (normalizeOutboundTarget(String(m?.to ?? "")) !== toNorm) continue;
-    if (normalizeOutboundText(String(m?.body ?? "")) !== bodyNorm) continue;
+    const messageBodyNorm = normalizeOutboundText(String(m?.body ?? ""));
+    const exactDuplicate = messageBodyNorm === bodyNorm;
+    const nearDuplicate =
+      allowNearDuplicate &&
+      isInventoryUnavailableCadenceText(messageBodyNorm) &&
+      isCadenceNearDuplicateText(messageBodyNorm, bodyNorm);
+    if (!exactDuplicate && !nearDuplicate) continue;
     if (candidateMedia) {
       const msgMedia = normalizeOutboundMediaForDedup(
         Array.isArray(m?.mediaUrls) ? (m.mediaUrls as string[]) : undefined
@@ -25005,7 +25029,22 @@ function hasRecordedAppointmentOutcome(conv: any): boolean {
   );
 }
 
+let followUpsRunning = false;
+
 async function processDueFollowUps() {
+  if (followUpsRunning) {
+    console.log("[followup] skipped overlapping run");
+    return;
+  }
+  followUpsRunning = true;
+  try {
+    await processDueFollowUpsUnlocked();
+  } finally {
+    followUpsRunning = false;
+  }
+}
+
+async function processDueFollowUpsUnlocked() {
   const cfg = await getSchedulerConfigHot();
   if (cfg.enabled === false) return;
   const dealerProfile = await getDealerProfileHot();
@@ -26127,7 +26166,8 @@ async function processDueFollowUps() {
         isRecentDuplicateOutbound(conv, draftTo, draftMessage, {
           providers: ["draft_ai"],
           windowMs: 2 * 60 * 1000,
-          mediaUrls
+          mediaUrls,
+          nearDuplicate: true
         })
       ) {
         console.log("[followup] duplicate draft suppressed", { convId: conv.id, to: draftTo });
@@ -26146,7 +26186,8 @@ async function processDueFollowUps() {
           isRecentDuplicateOutbound(conv, emailTo!, fallbackMessage, {
             providers: ["human", "sendgrid", "draft_ai"],
             windowMs: 2 * 60 * 1000,
-            mediaUrls
+            mediaUrls,
+            nearDuplicate: true
           })
         ) {
           console.log("[followup] duplicate email fallback suppressed", { convId: conv.id, to: emailTo });
@@ -26163,7 +26204,8 @@ async function processDueFollowUps() {
           isRecentDuplicateOutbound(conv, emailTo!, body, {
             providers: ["sendgrid", "human"],
             windowMs: 2 * 60 * 1000,
-            mediaUrls
+            mediaUrls,
+            nearDuplicate: true
           })
         ) {
           console.log("[followup] duplicate email suppressed", { convId: conv.id, to: emailTo });
@@ -26205,7 +26247,8 @@ async function processDueFollowUps() {
         isRecentDuplicateOutbound(conv, to, smsMessage, {
           providers: isPostSale ? ["human", "twilio"] : ["human", "twilio", "draft_ai"],
           windowMs: 2 * 60 * 1000,
-          mediaUrls
+          mediaUrls,
+          nearDuplicate: true
         })
       ) {
         console.log("[followup] duplicate sms fallback suppressed", { convId: conv.id, to });
@@ -26228,7 +26271,8 @@ async function processDueFollowUps() {
         isRecentDuplicateOutbound(conv, to, smsMessage, {
           providers: ["twilio", "human"],
           windowMs: 2 * 60 * 1000,
-          mediaUrls
+          mediaUrls,
+          nearDuplicate: true
         })
       ) {
         console.log("[followup] duplicate sms suppressed", { convId: conv.id, to });
