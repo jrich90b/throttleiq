@@ -859,15 +859,19 @@ export type Conversation = {
 const conversations = new Map<string, Conversation>();
 const leadKeyIndex = new Map<string, string[]>();
 
-function indexConversationByLeadKey(conv: Conversation): void {
+function indexConversationInLeadKeyIndex(index: Map<string, string[]>, conv: Conversation): void {
   const leadKey = normalizeLeadKey(conv.leadKey || "");
   if (!leadKey) return;
   conv.leadKey = leadKey;
-  const existing = leadKeyIndex.get(leadKey) ?? [];
+  const existing = index.get(leadKey) ?? [];
   if (!existing.includes(conv.id)) {
     existing.push(conv.id);
-    leadKeyIndex.set(leadKey, existing);
+    index.set(leadKey, existing);
   }
+}
+
+function indexConversationByLeadKey(conv: Conversation): void {
+  indexConversationInLeadKeyIndex(leadKeyIndex, conv);
 }
 
 function removeConversationFromLeadIndex(conv: Conversation): void {
@@ -883,16 +887,20 @@ function removeConversationFromLeadIndex(conv: Conversation): void {
   }
 }
 
-function buildConversationId(baseLeadKey: string): string {
+function buildConversationIdForStore(store: Map<string, Conversation>, baseLeadKey: string): string {
   const base = normalizeLeadKey(baseLeadKey) || `lead_${Date.now()}`;
-  if (!conversations.has(base)) return base;
+  if (!store.has(base)) return base;
   let attempt = 2;
   let candidate = `${base}::${attempt}`;
-  while (conversations.has(candidate)) {
+  while (store.has(candidate)) {
     attempt += 1;
     candidate = `${base}::${attempt}`;
   }
   return candidate;
+}
+
+function buildConversationId(baseLeadKey: string): string {
+  return buildConversationIdForStore(conversations, baseLeadKey);
 }
 
 // Normalize lead keys at the store level to prevent split threads across channels/phone formats.
@@ -1287,6 +1295,43 @@ async function ensureDirForFile(filePath: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+function objectValuesIfRecord<T>(value: T[] | Record<string, T> | undefined): T[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+
+function conversationStoreEntryCountFromParsed(parsed: any): number {
+  return objectValuesIfRecord<Conversation>(parsed?.conversations).length;
+}
+
+async function readConversationStoreEntryCount(filePath: string): Promise<number | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    return conversationStoreEntryCountFromParsed(JSON.parse(raw));
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return 0;
+    console.warn("⚠️ Failed to inspect existing conversations store:", err?.message ?? err);
+    return null;
+  }
+}
+
+export function shouldBlockConversationStoreShrink(
+  currentCount: number,
+  nextCount: number,
+  opts?: { minGuardCount?: number; maxShrinkRatio?: number }
+): boolean {
+  if (!Number.isFinite(currentCount) || !Number.isFinite(nextCount)) return false;
+  if (nextCount >= currentCount) return false;
+  const minGuardCount = Number(opts?.minGuardCount ?? 50);
+  if (currentCount < minGuardCount) return false;
+  const maxShrinkRatio = Number(opts?.maxShrinkRatio ?? 0.5);
+  if (!Number.isFinite(maxShrinkRatio) || maxShrinkRatio <= 0 || maxShrinkRatio >= 1) {
+    return nextCount === 0;
+  }
+  return nextCount < Math.floor(currentCount * maxShrinkRatio);
+}
+
 async function loadFromDisk() {
   try {
     const raw = await fs.readFile(DB_PATH, "utf8");
@@ -1296,11 +1341,11 @@ async function loadFromDisk() {
       questions?: InternalQuestion[] | Record<string, InternalQuestion>;
     };
 
-    const list = Array.isArray(parsed?.conversations)
-      ? parsed.conversations
-      : Object.values(parsed?.conversations ?? {});
-    conversations.clear();
-    leadKeyIndex.clear();
+    const list = objectValuesIfRecord<Conversation>(parsed?.conversations);
+    const loadedConversations = new Map<string, Conversation>();
+    const loadedLeadKeyIndex = new Map<string, string[]>();
+    const loadedTodos: TodoTask[] = [];
+    const loadedQuestions = objectValuesIfRecord<InternalQuestion>(parsed?.questions);
     let scrubbedInternalOutboundCount = 0;
     for (const c of list) {
       // Defensive normalization: prevent one malformed row from taking down
@@ -1317,13 +1362,14 @@ async function loadFromDisk() {
       if (!leadKey) continue;
       c.leadKey = leadKey;
       const preferredId = String(c?.id ?? "").trim() || leadKey;
-      const id = conversations.has(preferredId) ? buildConversationId(leadKey) : preferredId;
+      const id = loadedConversations.has(preferredId)
+        ? buildConversationIdForStore(loadedConversations, leadKey)
+        : preferredId;
       c.id = id;
-      conversations.set(id, c);
-      indexConversationByLeadKey(c);
+      loadedConversations.set(id, c);
+      indexConversationInLeadKeyIndex(loadedLeadKeyIndex, c);
     }
-    todos.length = 0;
-    const todoList = Array.isArray(parsed?.todos) ? parsed.todos : Object.values(parsed?.todos ?? {});
+    const todoList = objectValuesIfRecord<TodoTask>(parsed?.todos);
     if (todoList.length) {
       for (const task of todoList) {
       const inferredClass = inferTodoTaskClass(task.reason, task.summary, task);
@@ -1344,12 +1390,17 @@ async function loadFromDisk() {
           // in the correct sections.
           task.taskClass = inferredClass;
         }
-        todos.push(task);
+        loadedTodos.push(task);
       }
     }
+    conversations.clear();
+    for (const [id, conv] of loadedConversations.entries()) conversations.set(id, conv);
+    leadKeyIndex.clear();
+    for (const [leadKey, ids] of loadedLeadKeyIndex.entries()) leadKeyIndex.set(leadKey, ids);
+    todos.length = 0;
+    todos.push(...loadedTodos);
     questions.length = 0;
-    const questionList = Array.isArray(parsed?.questions) ? parsed.questions : Object.values(parsed?.questions ?? {});
-    if (questionList.length) questions.push(...questionList);
+    if (loadedQuestions.length) questions.push(...loadedQuestions);
 
     console.log(`📦 Loaded ${conversations.size} conversations from ${DB_PATH}`);
     if (scrubbedInternalOutboundCount > 0) {
@@ -1388,6 +1439,30 @@ async function saveToDisk() {
       todos,
       questions
     };
+
+    const currentCount = await readConversationStoreEntryCount(DB_PATH);
+    const nextCount = payload.conversations.length;
+    const allowShrink = process.env.CONVERSATION_STORE_ALLOW_DANGEROUS_SHRINK === "1";
+    if (currentCount == null && !allowShrink) {
+      console.warn(
+        "⚠️ Refusing to save conversations store because the existing store could not be inspected. " +
+          "Set CONVERSATION_STORE_ALLOW_DANGEROUS_SHRINK=1 only for a manual recovery."
+      );
+      return;
+    }
+    if (
+      !allowShrink &&
+      currentCount != null &&
+      shouldBlockConversationStoreShrink(currentCount, nextCount, {
+        minGuardCount: Number(process.env.CONVERSATION_STORE_SHRINK_GUARD_MIN_COUNT ?? 50),
+        maxShrinkRatio: Number(process.env.CONVERSATION_STORE_SHRINK_GUARD_MAX_RATIO ?? 0.5)
+      })
+    ) {
+      console.warn(
+        `[conversationStore] refusing dangerous shrink save: current=${currentCount}, next=${nextCount}, path=${DB_PATH}`
+      );
+      return;
+    }
 
     const json = JSON.stringify(payload, null, 2);
 

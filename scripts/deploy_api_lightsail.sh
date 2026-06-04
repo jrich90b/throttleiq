@@ -31,6 +31,7 @@ Environment variable equivalents:
   DEPLOY_REPO_URL, DEPLOY_ENV_FILE, DEPLOY_PM2_PROCESS, DEPLOY_HEALTH_URL,
   DEPLOY_API_PORT, DEPLOY_ALLOW_DIRTY_REMOTE, DEPLOY_REPLACE_PM2,
   DEPLOY_SKIP_LOCAL_CHECKS, DEPLOY_BACKUP_RETENTION_COUNT, DEPLOY_HEALTH_ATTEMPTS,
+  DEPLOY_EXPECTED_DATA_DIR, DEPLOY_MIN_CONVERSATIONS, DEPLOY_REQUIRED_CONVERSATION_TEXT,
   DEPLOY_DRY_RUN
 USAGE
 }
@@ -139,6 +140,9 @@ DEPLOY_REPLACE_PM2="${DEPLOY_REPLACE_PM2:-0}"
 DEPLOY_SKIP_LOCAL_CHECKS="${DEPLOY_SKIP_LOCAL_CHECKS:-0}"
 DEPLOY_BACKUP_RETENTION_COUNT="${DEPLOY_BACKUP_RETENTION_COUNT:-12}"
 DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-15}"
+DEPLOY_EXPECTED_DATA_DIR="${DEPLOY_EXPECTED_DATA_DIR:-}"
+DEPLOY_MIN_CONVERSATIONS="${DEPLOY_MIN_CONVERSATIONS:-}"
+DEPLOY_REQUIRED_CONVERSATION_TEXT="${DEPLOY_REQUIRED_CONVERSATION_TEXT:-}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
 require_cmd() {
@@ -173,6 +177,12 @@ echo "  health:     $DEPLOY_HEALTH_URL"
 echo "  attempts:   $DEPLOY_HEALTH_ATTEMPTS"
 echo "  replace pm2:$DEPLOY_REPLACE_PM2"
 echo "  backups:    keep newest $DEPLOY_BACKUP_RETENTION_COUNT"
+if [[ -n "$DEPLOY_EXPECTED_DATA_DIR" ]]; then
+  echo "  expect dir: $DEPLOY_EXPECTED_DATA_DIR"
+fi
+if [[ -n "$DEPLOY_MIN_CONVERSATIONS" ]]; then
+  echo "  min convs:  $DEPLOY_MIN_CONVERSATIONS"
+fi
 echo
 
 if [[ "$DEPLOY_SKIP_LOCAL_CHECKS" != "1" ]]; then
@@ -193,6 +203,9 @@ remote_env=(
   "DEPLOY_ALLOW_DIRTY_REMOTE=$(shell_quote "$DEPLOY_ALLOW_DIRTY_REMOTE")"
   "DEPLOY_REPLACE_PM2=$(shell_quote "$DEPLOY_REPLACE_PM2")"
   "DEPLOY_BACKUP_RETENTION_COUNT=$(shell_quote "$DEPLOY_BACKUP_RETENTION_COUNT")"
+  "DEPLOY_EXPECTED_DATA_DIR=$(shell_quote "$DEPLOY_EXPECTED_DATA_DIR")"
+  "DEPLOY_MIN_CONVERSATIONS=$(shell_quote "$DEPLOY_MIN_CONVERSATIONS")"
+  "DEPLOY_REQUIRED_CONVERSATION_TEXT=$(shell_quote "$DEPLOY_REQUIRED_CONVERSATION_TEXT")"
   "DEPLOY_DRY_RUN=$(shell_quote "$DEPLOY_DRY_RUN")"
 )
 
@@ -236,6 +249,91 @@ echo "Remote target commit:  $(git rev-parse --short "origin/$DEPLOY_BRANCH")"
 if [[ "$DEPLOY_DRY_RUN" == "1" ]]; then
   echo "Dry run complete. No server changes made."
   exit 0
+fi
+
+if [[ -n "$DEPLOY_EXPECTED_DATA_DIR" && "$DEPLOY_DATA_DIR" != "$DEPLOY_EXPECTED_DATA_DIR" ]]; then
+  echo "Deploy data dir mismatch." >&2
+  echo "  expected: $DEPLOY_EXPECTED_DATA_DIR" >&2
+  echo "  actual:   $DEPLOY_DATA_DIR" >&2
+  exit 24
+fi
+
+conversation_count() {
+  local store_path="$1"
+  node - "$store_path" <<'NODE'
+const fs = require("fs");
+const file = process.argv[2];
+try {
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  const conversations = Array.isArray(parsed?.conversations)
+    ? parsed.conversations
+    : Object.values(parsed?.conversations || {});
+  console.log(conversations.length);
+} catch (error) {
+  console.error(error?.message || error);
+  process.exit(1);
+}
+NODE
+}
+
+conversation_contains_text() {
+  local store_path="$1"
+  local needle="$2"
+  node - "$store_path" "$needle" <<'NODE'
+const fs = require("fs");
+const file = process.argv[2];
+const needle = String(process.argv[3] || "").toLowerCase();
+try {
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  const conversations = Array.isArray(parsed?.conversations)
+    ? parsed.conversations
+    : Object.values(parsed?.conversations || {});
+  const found = conversations.some(conv => JSON.stringify(conv).toLowerCase().includes(needle));
+  process.exit(found ? 0 : 1);
+} catch (error) {
+  console.error(error?.message || error);
+  process.exit(1);
+}
+NODE
+}
+
+run_conversation_store_sanity() {
+  local label="$1"
+  local store_path="$DEPLOY_DATA_DIR/conversations.json"
+  if [[ ! -f "$store_path" ]]; then
+    if [[ -n "$DEPLOY_MIN_CONVERSATIONS" || -n "$DEPLOY_REQUIRED_CONVERSATION_TEXT" ]]; then
+      echo "Conversation sanity failed ($label): missing $store_path" >&2
+      return 1
+    fi
+    return 0
+  fi
+  local count
+  if ! count="$(conversation_count "$store_path")"; then
+    echo "Conversation sanity failed ($label): could not read $store_path" >&2
+    return 1
+  fi
+  echo "Conversation sanity ($label): $count conversations in $store_path"
+  if [[ -n "$DEPLOY_MIN_CONVERSATIONS" ]]; then
+    if [[ ! "$DEPLOY_MIN_CONVERSATIONS" =~ ^[0-9]+$ ]]; then
+      echo "Invalid DEPLOY_MIN_CONVERSATIONS: $DEPLOY_MIN_CONVERSATIONS" >&2
+      return 1
+    fi
+    if [[ "$count" -lt "$DEPLOY_MIN_CONVERSATIONS" ]]; then
+      echo "Conversation sanity failed ($label): count $count is below $DEPLOY_MIN_CONVERSATIONS" >&2
+      return 1
+    fi
+  fi
+  if [[ -n "$DEPLOY_REQUIRED_CONVERSATION_TEXT" ]]; then
+    if ! conversation_contains_text "$store_path" "$DEPLOY_REQUIRED_CONVERSATION_TEXT"; then
+      echo "Conversation sanity failed ($label): required text not found: $DEPLOY_REQUIRED_CONVERSATION_TEXT" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
+if ! run_conversation_store_sanity "pre-deploy"; then
+  exit 24
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -335,6 +433,12 @@ for ((attempt = 1; attempt <= DEPLOY_HEALTH_ATTEMPTS; attempt += 1)); do
   if curl -fsS "$DEPLOY_HEALTH_URL" >/tmp/leadrider-api-health.json; then
     cat /tmp/leadrider-api-health.json
     echo
+    if ! run_conversation_store_sanity "post-restart"; then
+      echo "Post-restart data sanity failed. Stopping API to prevent writes against a bad store." >&2
+      pm2 stop "$DEPLOY_PM2_PROCESS" || true
+      pm2 logs "$DEPLOY_PM2_PROCESS" --lines 80 --nostream --no-color || true
+      exit 24
+    fi
     echo "Deploy complete."
     exit 0
   fi
