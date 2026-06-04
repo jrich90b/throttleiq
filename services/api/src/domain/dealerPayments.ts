@@ -137,6 +137,17 @@ function commandBaseUrl() {
   ).replace(/\/+$/, "");
 }
 
+function publicApiBaseUrl() {
+  return clean(
+    process.env.PUBLIC_BASE_URL ||
+      process.env.PUBLIC_API_BASE_URL ||
+      process.env.LEADRIDER_API_BASE_URL ||
+      process.env.API_BASE_URL ||
+      "https://api.leadrider.ai",
+    500
+  ).replace(/\/+$/, "");
+}
+
 function successUrl(requestId: string) {
   const configured = clean(process.env.STRIPE_DEALER_PAYMENT_SUCCESS_URL, 500);
   if (configured) return configured;
@@ -213,6 +224,13 @@ export async function listDealerPaymentRequests(filters?: {
     .filter(req => !filters?.conversationId || req.conversationId === filters.conversationId)
     .filter(req => !filters?.status || req.status === filters.status)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+export async function getDealerPaymentRequest(id: string): Promise<DealerPaymentRequest | null> {
+  const requestId = clean(id, 160);
+  if (!requestId) return null;
+  const store = await readStore();
+  return store.requests.find(row => row.id === requestId) ?? null;
 }
 
 async function upsertDealerPaymentRequest(request: DealerPaymentRequest) {
@@ -428,9 +446,15 @@ export async function createDealerPaymentCheckout(input: DealerPaymentCheckoutIn
   };
 }
 
+export function dealerPaymentPublicUrl(request: DealerPaymentRequest) {
+  const requestId = clean(request.id, 160);
+  if (!requestId) return "";
+  return `${publicApiBaseUrl()}/public/pay/${encodeURIComponent(requestId)}`;
+}
+
 export function buildDealerPaymentSuggestedMessage(request: DealerPaymentRequest) {
   const amount = formatMoney(request.amountCents, request.currency);
-  const url = clean(request.stripeCheckoutUrl, 1000);
+  const url = dealerPaymentPublicUrl(request) || clean(request.stripeCheckoutUrl, 4000);
   const description = clean(request.description, 180);
   const prefix =
     request.channel === "email"

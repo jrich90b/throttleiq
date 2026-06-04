@@ -6,6 +6,7 @@ import path from "node:path";
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dealer-payments-eval-"));
 const storePath = path.join(tempDir, "dealer_payment_requests.json");
 process.env.DEALER_PAYMENT_REQUESTS_PATH = storePath;
+process.env.PUBLIC_BASE_URL = "https://api.americanharley.leadrider.ai";
 
 const {
   buildDealerPaymentSuggestedMessage,
@@ -31,8 +32,8 @@ await fs.writeFile(
           status: "open",
           stripeAccountId: "acct_eval",
           stripeMode: "test",
-          stripeCheckoutSessionId: "cs_eval_1",
-          stripeCheckoutUrl: "https://checkout.stripe.com/c/pay/cs_eval_1",
+          stripeCheckoutSessionId: "cs_eval_1".padEnd(150, "x"),
+          stripeCheckoutUrl: `https://checkout.stripe.com/c/pay/${"cs_eval_1".padEnd(950, "x")}#fidkdWxOYHwnPyd1blpxYHZxWjA0`,
           createdAt: "2026-06-03T12:00:00.000Z",
           updatedAt: "2026-06-03T12:00:00.000Z"
         }
@@ -67,7 +68,12 @@ assert.ok(updatedStore.requests[0].paidAt);
 const suggested = buildDealerPaymentSuggestedMessage(updatedStore.requests[0]);
 assert.match(suggested, /secure payment link/i);
 assert.match(suggested, /Deposit for 2021 Street Glide/);
-assert.match(suggested, /https:\/\/checkout\.stripe\.com/);
+assert.match(suggested, /https:\/\/api\.americanharley\.leadrider\.ai\/public\/pay\/req_eval_1/);
+assert.doesNotMatch(
+  suggested,
+  /https:\/\/checkout\.stripe\.com/,
+  "Customer-facing SMS drafts must use a short LeadRider payment link, not the raw long Stripe Checkout URL."
+);
 
 const domainSource = await fs.readFile(
   path.resolve("services/api/src/domain/dealerPayments.ts"),
@@ -83,6 +89,15 @@ assert.match(
   /dealerPaymentRequestId/,
   "Checkout and webhook metadata must include the dealer payment request id."
 );
+assert.match(
+  domainSource,
+  /dealerPaymentPublicUrl/,
+  "Payment messages must use a short public redirect URL so phones linkify the full payment link."
+);
+
+const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
+assert.match(apiSource, /app\.get\("\/public\/pay\/:id"/);
+assert.match(apiSource, /checkout\.stripe\.com/);
 
 const pageSource = await fs.readFile(path.resolve("apps/web/src/app/page.tsx"), "utf8");
 const createPaymentFn = pageSource.match(/async function createConversationPaymentRequest\(\)[\s\S]*?\n  \}/)?.[0] ?? "";

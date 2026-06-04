@@ -157,6 +157,7 @@ import {
 import {
   createDealerPaymentCheckout,
   createDealerPaymentConnectLink,
+  getDealerPaymentRequest,
   getDealerPaymentStripeStatus,
   listDealerPaymentRequests,
   parseDealerPaymentAmountCents,
@@ -2484,6 +2485,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/public/command-booking") ||
     pathname.startsWith("/public/appointment") ||
     pathname.startsWith("/public/marketing") ||
+    pathname.startsWith("/public/pay") ||
     pathname.startsWith("/public/inventory") ||
     pathname.startsWith("/public/mdf") ||
     pathname.startsWith("/public/widget") ||
@@ -4658,6 +4660,30 @@ app.post("/public/marketing/unsubscribe", async (req, res) => {
   }
   await addSuppression(emailRaw, "marketing_email_unsubscribe", "email_link");
   return res.redirect(302, `/public/marketing/unsubscribe?email=${encodeURIComponent(emailRaw)}`);
+});
+
+app.get("/public/pay/:id", async (req, res) => {
+  const requestId = String(req.params?.id ?? "").trim();
+  const paymentRequest = await getDealerPaymentRequest(requestId);
+  const checkoutUrl = String(paymentRequest?.stripeCheckoutUrl ?? "").trim();
+  if (!paymentRequest || !checkoutUrl) {
+    return res
+      .status(404)
+      .type("html")
+      .send(
+        '<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Payment link unavailable</title></head><body style="margin:0;background:#05070b;color:#f8fafc;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:680px;margin:48px auto;padding:24px;border:1px solid #263143;border-radius:12px;background:#0b1220;"><h1 style="margin:0 0 12px;font-size:24px;line-height:30px;">Payment link unavailable</h1><p style="margin:0;color:#d1d5db;font-size:15px;line-height:22px;">This payment link could not be found. Please contact the dealership for a new secure payment link.</p></main></body></html>'
+      );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(checkoutUrl);
+  } catch {
+    return res.status(400).type("text").send("Payment link is invalid.");
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "checkout.stripe.com") {
+    return res.status(400).type("text").send("Payment link is invalid.");
+  }
+  return res.redirect(302, checkoutUrl);
 });
 
 app.put("/inventory", async (req, res) => {
