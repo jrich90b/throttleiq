@@ -44,6 +44,9 @@ export type DealerPaymentStripeStatus = {
   chargesEnabled?: boolean;
   payoutsEnabled?: boolean;
   detailsSubmitted?: boolean;
+  cardPaymentsStatus?: string;
+  transfersStatus?: string;
+  capabilitiesReady?: boolean;
   missing: string[];
 };
 
@@ -70,6 +73,11 @@ const STORE_PATH = process.env.DEALER_PAYMENT_REQUESTS_PATH || dataPath("dealer_
 
 let cachedStripe: Stripe | null = null;
 let cachedSecretKey = "";
+
+const DEALER_PAYMENT_CAPABILITIES = {
+  card_payments: { requested: true },
+  transfers: { requested: true }
+} as const;
 
 function clean(value: unknown, max = 1000) {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
@@ -125,6 +133,31 @@ function profileStripePatch(profile: DealerProfile, patch: Record<string, unknow
       }
     }
   } as DealerProfile;
+}
+
+function accountCapabilityStatus(account: Stripe.Account, key: "card_payments" | "transfers") {
+  return clean((account.capabilities as Record<string, unknown> | undefined)?.[key], 80) || "unrequested";
+}
+
+function accountStripePatch(account: Stripe.Account) {
+  const cardPaymentsStatus = accountCapabilityStatus(account, "card_payments");
+  const transfersStatus = accountCapabilityStatus(account, "transfers");
+  const capabilitiesReady = cardPaymentsStatus === "active" && transfersStatus === "active";
+  return {
+    connectedAccountId: account.id,
+    chargesEnabled: account.charges_enabled === true,
+    payoutsEnabled: account.payouts_enabled === true,
+    detailsSubmitted: account.details_submitted === true,
+    cardPaymentsStatus,
+    transfersStatus,
+    capabilitiesReady
+  };
+}
+
+async function retrieveDealerPaymentAccount(stripe: Stripe, accountId: string) {
+  return await stripe.accounts.update(accountId, {
+    capabilities: DEALER_PAYMENT_CAPABILITIES
+  });
 }
 
 function commandBaseUrl() {
@@ -265,12 +298,17 @@ export function getDealerPaymentStripeStatus(profile?: DealerProfile | null): De
   const liveModeAllowed = String(process.env.STRIPE_ALLOW_LIVE_MODE ?? "").trim() === "1";
   const connectedAccountId = connectedAccountIdFromProfile(profile);
   const stripeProfile = (profile as any)?.payments?.stripe ?? {};
+  const cardPaymentsStatus = clean(stripeProfile.cardPaymentsStatus, 80) || undefined;
+  const transfersStatus = clean(stripeProfile.transfersStatus, 80) || undefined;
+  const capabilitiesReady = cardPaymentsStatus === "active" && transfersStatus === "active";
   const missing: string[] = [];
   if (!key) missing.push("STRIPE_SECRET_KEY");
   if (mode === "live" && !liveModeAllowed) missing.push("STRIPE_ALLOW_LIVE_MODE=1");
   if (!connectedAccountId) missing.push("dealer payments Stripe connected account");
+  if (connectedAccountId && cardPaymentsStatus !== "active") missing.push("card_payments capability active");
+  if (connectedAccountId && transfersStatus !== "active") missing.push("transfers capability active");
   return {
-    configured: !!key && !!connectedAccountId && (mode !== "live" || liveModeAllowed),
+    configured: !!key && !!connectedAccountId && capabilitiesReady && (mode !== "live" || liveModeAllowed),
     mode,
     webhookConfigured: !!clean(process.env.STRIPE_WEBHOOK_SECRET, 300),
     liveModeAllowed,
@@ -278,6 +316,9 @@ export function getDealerPaymentStripeStatus(profile?: DealerProfile | null): De
     chargesEnabled: stripeProfile.chargesEnabled === true,
     payoutsEnabled: stripeProfile.payoutsEnabled === true,
     detailsSubmitted: stripeProfile.detailsSubmitted === true,
+    cardPaymentsStatus,
+    transfersStatus,
+    capabilitiesReady,
     missing
   };
 }
@@ -297,6 +338,7 @@ export async function createDealerPaymentConnectLink(input: {
       country: "US",
       email: clean(profile.replyToEmail || profile.fromEmail, 320) || undefined,
       business_type: "company",
+      capabilities: DEALER_PAYMENT_CAPABILITIES,
       business_profile: {
         name: clean(profile.dealerName, 120) || undefined,
         url: clean(profile.website, 500) || undefined
@@ -310,22 +352,16 @@ export async function createDealerPaymentConnectLink(input: {
     await saveDealerProfile(
       profileStripePatch(profile, {
         enabled: true,
-        connectedAccountId: accountId,
-        chargesEnabled: account.charges_enabled === true,
-        payoutsEnabled: account.payouts_enabled === true,
-        detailsSubmitted: account.details_submitted === true
+        ...accountStripePatch(account)
       })
     );
   }
 
-  const account = await stripe.accounts.retrieve(accountId);
+  const account = await retrieveDealerPaymentAccount(stripe, accountId);
   await saveDealerProfile(
     profileStripePatch((await getDealerProfile()) ?? profile, {
       enabled: true,
-      connectedAccountId: account.id,
-      chargesEnabled: account.charges_enabled === true,
-      payoutsEnabled: account.payouts_enabled === true,
-      detailsSubmitted: account.details_submitted === true
+      ...accountStripePatch(account)
     })
   );
   const base = commandBaseUrl();
@@ -340,7 +376,9 @@ export async function createDealerPaymentConnectLink(input: {
     accountId: account.id,
     chargesEnabled: account.charges_enabled === true,
     payoutsEnabled: account.payouts_enabled === true,
-    detailsSubmitted: account.details_submitted === true
+    detailsSubmitted: account.details_submitted === true,
+    cardPaymentsStatus: accountCapabilityStatus(account, "card_payments"),
+    transfersStatus: accountCapabilityStatus(account, "transfers")
   };
 }
 
@@ -348,22 +386,24 @@ export async function refreshDealerPaymentStripeAccount() {
   const profile = (await getDealerProfile()) ?? {};
   const accountId = connectedAccountIdFromProfile(profile);
   if (!accountId) return { profile, account: null };
-  const account = await stripeClient().accounts.retrieve(accountId);
+  const account = await retrieveDealerPaymentAccount(stripeClient(), accountId);
   const saved = await saveDealerProfile(
     profileStripePatch(profile, {
       enabled: true,
-      connectedAccountId: account.id,
-      chargesEnabled: account.charges_enabled === true,
-      payoutsEnabled: account.payouts_enabled === true,
-      detailsSubmitted: account.details_submitted === true
+      ...accountStripePatch(account)
     })
   );
   return { profile: saved, account };
 }
 
 export async function createDealerPaymentCheckout(input: DealerPaymentCheckoutInput) {
-  const profile = (await getDealerProfile()) ?? {};
-  const status = getDealerPaymentStripeStatus(profile);
+  let profile = (await getDealerProfile()) ?? {};
+  let status = getDealerPaymentStripeStatus(profile);
+  if (status.connectedAccountId) {
+    const refreshed = await refreshDealerPaymentStripeAccount();
+    profile = refreshed.profile;
+    status = getDealerPaymentStripeStatus(profile);
+  }
   if (!status.configured || !status.connectedAccountId) {
     throw new Error(`Dealer Stripe payments are not ready: ${status.missing.join(", ") || "unknown setup issue"}.`);
   }

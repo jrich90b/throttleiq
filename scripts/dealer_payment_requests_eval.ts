@@ -86,6 +86,21 @@ assert.match(
 );
 assert.match(
   domainSource,
+  /card_payments:\s*\{\s*requested:\s*true\s*\}/,
+  "Dealer Stripe Connect setup must request the card_payments capability."
+);
+assert.match(
+  domainSource,
+  /transfers:\s*\{\s*requested:\s*true\s*\}/,
+  "Dealer Stripe Connect setup must request the transfers capability."
+);
+assert.match(
+  domainSource,
+  /card_payments capability active/,
+  "Dealer payment readiness must require active card_payments capability."
+);
+assert.match(
+  domainSource,
   /dealerPaymentRequestId/,
   "Checkout and webhook metadata must include the dealer payment request id."
 );

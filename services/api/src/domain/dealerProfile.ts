@@ -63,6 +63,9 @@ export type DealerProfile = {
       chargesEnabled?: boolean;
       payoutsEnabled?: boolean;
       detailsSubmitted?: boolean;
+      cardPaymentsStatus?: string;
+      transfersStatus?: string;
+      capabilitiesReady?: boolean;
       updatedAt?: string;
     };
   };

@@ -17730,7 +17730,11 @@ export default function Home() {
                       onClick={startStripePaymentOnboarding}
                       disabled={dealerPaymentBusy}
                     >
-                      {dealerProfileForm.stripeConnectedAccountId ? "Resume Stripe setup" : "Connect Stripe"}
+                      {dealerPaymentStripeStatus?.configured
+                        ? "Manage Stripe account"
+                        : dealerProfileForm.stripeConnectedAccountId
+                          ? "Continue Stripe setup"
+                          : "Connect Stripe"}
                     </button>
                     <button
                       type="button"
@@ -17741,9 +17745,11 @@ export default function Home() {
                       Refresh status
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-slate-600">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs text-slate-600">
                     <div>Charges: {dealerPaymentStripeStatus?.chargesEnabled ? "enabled" : "not enabled"}</div>
                     <div>Payouts: {dealerPaymentStripeStatus?.payoutsEnabled ? "enabled" : "not enabled"}</div>
+                    <div>Card payments: {dealerPaymentStripeStatus?.cardPaymentsStatus ?? "unknown"}</div>
+                    <div>Transfers: {dealerPaymentStripeStatus?.transfersStatus ?? "unknown"}</div>
                     <div>Mode: {dealerPaymentStripeStatus?.mode ?? "unknown"}</div>
                   </div>
                   {dealerPaymentStripeStatus?.missing?.length ? (
