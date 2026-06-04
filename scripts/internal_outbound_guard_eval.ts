@@ -56,7 +56,16 @@ const checks: Check[] = [
     listOpenTodos().some(todo => /Context note applied actions/i.test(todo.summary)),
     false
   ),
-  check("normal_human_outbound_allowed", messages.some(m => m.body === "Normal staff message to customer."), true)
+  check(
+    "normal_human_outbound_allowed",
+    messages.some(m => m.body.startsWith("Normal staff message to customer.")),
+    true
+  ),
+  check(
+    "normal_human_outbound_opt_out_footer",
+    messages.some(m => m.body === "Normal staff message to customer. Reply STOP to opt out."),
+    true
+  )
 ];
 
 let passed = 0;

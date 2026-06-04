@@ -39,6 +39,79 @@ export type DraftInvariantHints = Pick<
   | "shortAckIntent"
 >;
 
+export const INITIAL_SMS_OPTOUT_FOOTER = "Reply STOP to opt out.";
+
+const INITIAL_SMS_OPTOUT_PROVIDERS = new Set<string>(["draft_ai", "human", "twilio"]);
+const INITIAL_SMS_OPTOUT_SENT_PROVIDERS = new Set<string>(["twilio"]);
+
+function isEmailAddressLike(value: unknown): boolean {
+  return String(value ?? "").includes("@");
+}
+
+function isPhoneAddressLike(value: unknown): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw || isEmailAddressLike(raw)) return false;
+  const digits = raw.replace(/\D/g, "");
+  return raw.startsWith("+") || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"));
+}
+
+export function hasSmsOptOutLanguage(text: unknown): boolean {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return /\breply\s+(?:stop|unsubscribe)\b|\btext\s+stop\b|\bstop\s+to\s+(?:opt\s*out|unsubscribe)\b|\bopt[-\s]?out\b|\bunsubscribe\b/i.test(
+    normalized
+  );
+}
+
+export function hasPriorCustomerFacingSmsOutbound(
+  conv: Conversation,
+  opts?: { excludeMessageId?: string | null }
+): boolean {
+  const excludeMessageId = String(opts?.excludeMessageId ?? "").trim();
+  return (conv.messages ?? []).some(message => {
+    if (excludeMessageId && message.id === excludeMessageId) return false;
+    if (message.direction !== "out") return false;
+    const provider = String(message.provider ?? "").trim().toLowerCase();
+    if (!INITIAL_SMS_OPTOUT_SENT_PROVIDERS.has(provider)) return false;
+    if (isEmailAddressLike(message.from) || isEmailAddressLike(message.to)) return false;
+    return isPhoneAddressLike(message.to) || isPhoneAddressLike(message.from);
+  });
+}
+
+export function shouldAppendInitialSmsOptOutFooter(
+  conv: Conversation,
+  opts?: {
+    provider?: MessageProvider | string | null;
+    from?: string | null;
+    to?: string | null;
+    excludeMessageId?: string | null;
+  }
+): boolean {
+  const provider = String(opts?.provider ?? "").trim().toLowerCase();
+  if (!INITIAL_SMS_OPTOUT_PROVIDERS.has(provider)) return false;
+  if (isEmailAddressLike(opts?.from) || isEmailAddressLike(opts?.to)) return false;
+  const target = String(opts?.to ?? "").trim() || String(conv.lead?.phone ?? conv.leadKey ?? "").trim();
+  if (!isPhoneAddressLike(target)) return false;
+  return !hasPriorCustomerFacingSmsOutbound(conv, { excludeMessageId: opts?.excludeMessageId ?? null });
+}
+
+export function ensureInitialSmsOptOutFooter(
+  conv: Conversation,
+  body: string,
+  opts?: {
+    provider?: MessageProvider | string | null;
+    from?: string | null;
+    to?: string | null;
+    excludeMessageId?: string | null;
+    force?: boolean;
+  }
+): string {
+  const formatted = formatSmsLayout(body);
+  if (!formatted || hasSmsOptOutLanguage(formatted)) return formatted;
+  if (!opts?.force && !shouldAppendInitialSmsOptOutFooter(conv, opts)) return formatted;
+  return formatSmsLayout(`${formatted} ${INITIAL_SMS_OPTOUT_FOOTER}`);
+}
+
 export type VoiceContext = {
   summary: string;
   updatedAt: string;
@@ -1629,6 +1702,7 @@ export function appendOutbound(
   }
   if (!isEmailThread) {
     tonedBody = formatSmsLayout(tonedBody);
+    tonedBody = ensureInitialSmsOptOutFooter(conv, tonedBody, { provider, from, to });
   }
   // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
   if (
@@ -1885,7 +1959,16 @@ export function finalizeDraftAsSent(
 
   const original = msg.body;
   const stateSignalBody = normalizeSalesToneBase(finalBody);
-  const tonedFinalBody = applyDeterministicToneOverrides(stateSignalBody);
+  let tonedFinalBody = applyDeterministicToneOverrides(stateSignalBody);
+  const isEmailThread = String(msg.from ?? "").includes("@") || String(msg.to ?? "").includes("@");
+  if (!isEmailThread) {
+    tonedFinalBody = ensureInitialSmsOptOutFooter(conv, tonedFinalBody, {
+      provider,
+      from: msg.from,
+      to: msg.to,
+      excludeMessageId: msg.id
+    });
+  }
   if (original.trim() !== tonedFinalBody.trim()) {
     msg.originalDraftBody = original;
   }

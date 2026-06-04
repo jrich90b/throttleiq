@@ -521,6 +521,7 @@ import {
   appendInbound,
   isDuplicateInboundEvent,
   appendOutbound,
+  ensureInitialSmsOptOutFooter,
   listConversations,
   getConversation,
   getLatestPendingDraft,
@@ -3323,7 +3324,7 @@ function publishCustomerReplyDraft(args: {
     const to =
       String(args.to ?? "").trim() ||
       String(args.conv.leadKey ?? "").trim();
-    appendOutbound(
+    const message = appendOutbound(
       args.conv,
       from,
       to,
@@ -3334,7 +3335,7 @@ function publishCustomerReplyDraft(args: {
       undefined,
       args.invariantHints
     );
-    draft = invariant.draftText;
+    draft = message?.body ?? invariant.draftText;
   }
 
   saveConversation(args.conv);
@@ -26108,6 +26109,11 @@ async function processDueFollowUps() {
     const from = process.env.TWILIO_FROM_NUMBER;
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
+    const smsMessage = ensureInitialSmsOptOutFooter(conv, message, {
+      provider: from ? "twilio" : "human",
+      from: from ?? "salesperson",
+      to
+    });
 
     const maybeAddCallTodoForFollowUp = () => {
       if (isPostSale) return;
@@ -26116,7 +26122,7 @@ async function processDueFollowUps() {
 
     if (!forceAutoSendPostSaleCadence && (systemMode === "suggest" || enforceSalesReviewForCadence)) {
       const draftTo = useEmail ? emailTo! : to;
-      const draftMessage = useEmail && emailMessage ? emailMessage : message;
+      const draftMessage = useEmail && emailMessage ? emailMessage : smsMessage;
       if (
         isRecentDuplicateOutbound(conv, draftTo, draftMessage, {
           providers: ["draft_ai"],
@@ -26196,7 +26202,7 @@ async function processDueFollowUps() {
 
     if (!from || !accountSid || !authToken || !to.startsWith("+")) {
       if (
-        isRecentDuplicateOutbound(conv, to, message, {
+        isRecentDuplicateOutbound(conv, to, smsMessage, {
           providers: isPostSale ? ["human", "twilio"] : ["human", "twilio", "draft_ai"],
           windowMs: 2 * 60 * 1000,
           mediaUrls
@@ -26205,9 +26211,9 @@ async function processDueFollowUps() {
         console.log("[followup] duplicate sms fallback suppressed", { convId: conv.id, to });
         continue;
       }
-      appendOutbound(conv, "salesperson", to, message, "human", undefined, mediaUrls);
+      appendOutbound(conv, "salesperson", to, smsMessage, "human", undefined, mediaUrls);
       if (isPostSale) {
-        const retired = retireSupersededPostSaleCloseoutDrafts(conv, message);
+        const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
           console.log("[followup] retired superseded post-sale drafts", { convId: conv.id, retired });
         }
@@ -26219,7 +26225,7 @@ async function processDueFollowUps() {
 
     try {
       if (
-        isRecentDuplicateOutbound(conv, to, message, {
+        isRecentDuplicateOutbound(conv, to, smsMessage, {
           providers: ["twilio", "human"],
           windowMs: 2 * 60 * 1000,
           mediaUrls
@@ -26232,12 +26238,12 @@ async function processDueFollowUps() {
       const msg = await client.messages.create({
         from,
         to,
-        body: message,
+        body: smsMessage,
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       });
-      appendOutbound(conv, from, to, message, "twilio", msg.sid, mediaUrls);
+      appendOutbound(conv, from, to, smsMessage, "twilio", msg.sid, mediaUrls);
       if (isPostSale) {
-        const retired = retireSupersededPostSaleCloseoutDrafts(conv, message);
+        const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
           console.log("[followup] retired superseded post-sale drafts", { convId: conv.id, retired });
         }
@@ -26274,6 +26280,11 @@ async function processAppointmentConfirmations() {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
     const toNumber = normalizePhone(conv.leadKey);
+    const smsMessage = ensureInitialSmsOptOutFooter(conv, message, {
+      provider: from ? "twilio" : "human",
+      from: from ?? "salesperson",
+      to: toNumber
+    });
     const triggerMeta = {
       trigger: "auto_24h_confirmation_sms",
       triggeredAt: new Date().toISOString(),
@@ -26291,7 +26302,7 @@ async function processAppointmentConfirmations() {
 
     if (systemMode === "suggest") {
       if (
-        isRecentDuplicateOutbound(conv, toNumber, message, {
+        isRecentDuplicateOutbound(conv, toNumber, smsMessage, {
           providers: ["draft_ai", "twilio", "human"],
           windowMs: 10 * 60 * 1000
         })
@@ -26308,11 +26319,11 @@ async function processAppointmentConfirmations() {
         status: "pending",
         ...triggerMeta
       };
-      appendOutbound(conv, from ?? "salesperson", toNumber, message, "draft_ai");
+      appendOutbound(conv, from ?? "salesperson", toNumber, smsMessage, "draft_ai");
     } else if (from && accountSid && authToken && toNumber.startsWith("+")) {
       try {
         if (
-          isRecentDuplicateOutbound(conv, toNumber, message, {
+          isRecentDuplicateOutbound(conv, toNumber, smsMessage, {
             providers: ["twilio", "human", "draft_ai"],
             windowMs: 10 * 60 * 1000
           })
@@ -26325,20 +26336,20 @@ async function processAppointmentConfirmations() {
           continue;
         }
         const client = twilio(accountSid, authToken);
-        const msg = await client.messages.create({ from, to: toNumber, body: message });
+        const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
         appt.confirmation = {
           sentAt: new Date().toISOString(),
           status: "pending",
           ...triggerMeta
         };
-        appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
+        appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
       } catch (e: any) {
         console.log("[appt-confirm] send failed:", e?.message ?? e);
         continue;
       }
     } else {
       if (
-        isRecentDuplicateOutbound(conv, toNumber, message, {
+        isRecentDuplicateOutbound(conv, toNumber, smsMessage, {
           providers: ["human", "twilio", "draft_ai"],
           windowMs: 10 * 60 * 1000
         })
@@ -26355,7 +26366,7 @@ async function processAppointmentConfirmations() {
         status: "pending",
         ...triggerMeta
       };
-      appendOutbound(conv, "salesperson", toNumber, message, "human");
+      appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
     }
   }
 }
@@ -33168,8 +33179,13 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
       const authToken = process.env.TWILIO_AUTH_TOKEN;
       const from = process.env.TWILIO_FROM_NUMBER;
       const toNumber = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
+      const smsMessage = ensureInitialSmsOptOutFooter(conv, message, {
+        provider: from ? "twilio" : "human",
+        from: from ?? "salesperson",
+        to: toNumber
+      });
       if (
-        isRecentDuplicateOutbound(conv, toNumber, message, {
+        isRecentDuplicateOutbound(conv, toNumber, smsMessage, {
           providers: ["twilio", "human", "draft_ai"],
           windowMs: 10 * 60 * 1000
         })
@@ -33186,16 +33202,16 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
         return { sent: false, reason: "suppressed" };
       }
       if (!accountSid || !authToken || !from) {
-        appendOutbound(conv, "salesperson", toNumber, message, "human");
+        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
         return { sent: false, reason: "twilio_not_configured" };
       }
       try {
         const client = twilio(accountSid, authToken);
-        const msg = await client.messages.create({ from, to: toNumber, body: message });
-        appendOutbound(conv, from, toNumber, message, "twilio", msg.sid);
+        const msg = await client.messages.create({ from, to: toNumber, body: smsMessage });
+        appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
         return { sent: true, sid: msg.sid };
       } catch (e: any) {
-        appendOutbound(conv, "salesperson", toNumber, message, "human");
+        appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
         return { sent: false, reason: "send_failed" };
       }
     };
@@ -43038,7 +43054,7 @@ app.post("/conversations/:id/send", async (req, res) => {
 
   const user = (req as any).user ?? null;
   const body = String(req.body?.body ?? "").trim();
-  const smsBody = formatSmsLayout(body);
+  let smsBody = formatSmsLayout(body);
   const emailBody = formatEmailBodyForConversation(body, conv);
 
   const draftId = req.body?.draftId ? String(req.body.draftId) : undefined;
@@ -43931,7 +43947,6 @@ app.post("/conversations/:id/send", async (req, res) => {
   const wantsEmail =
     !!emailTo &&
     (requestedEmailChannel || (!requestedSmsChannel && implicitEmailPreferred));
-  const outboundBodyForLog = wantsEmail ? emailBody : smsBody;
   if (requestedEmailChannel && !emailTo) {
     return res.status(400).json({
       ok: false,
@@ -43956,6 +43971,15 @@ app.post("/conversations/:id/send", async (req, res) => {
         : digits.length > 10
           ? `+${digits}`
           : rawTo;
+  if (!wantsEmail) {
+    smsBody = ensureInitialSmsOptOutFooter(conv, smsBody, {
+      provider: "twilio",
+      from: process.env.TWILIO_FROM_NUMBER ?? "salesperson",
+      to,
+      excludeMessageId: draftId ?? null
+    });
+  }
+  const outboundBodyForLog = wantsEmail ? emailBody : smsBody;
   const isManualDuplicateOutbound = (
     toTarget: string,
     text: string,
@@ -48899,11 +48923,15 @@ async function deliverAsyncTwilioMessagesFromTwiML(args: {
   }
   const client = twilio(accountSid, authToken);
   const sids: string[] = [];
+  const conv = findConversationsByLeadKey(to)[0] ?? getConversation(to);
   for (const message of messages) {
+    const body = conv
+      ? ensureInitialSmsOptOutFooter(conv, message.body, { provider: "twilio", from, to })
+      : message.body;
     const out = await client.messages.create({
       from,
       to,
-      body: message.body,
+      body,
       ...(message.mediaUrls.length ? { mediaUrl: message.mediaUrls } : {})
     });
     if (out.sid) sids.push(out.sid);
@@ -49230,7 +49258,7 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
     }
 
-    const publishedText = invariant.draftText;
+    let publishedText = invariant.draftText;
     const outboundFrom = event.to;
     const outboundTo = event.from;
     const mediaUrls = Array.isArray(options?.mediaUrls) && options.mediaUrls.length
@@ -49253,6 +49281,11 @@ if (authToken && signature) {
       return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
     }
 
+    publishedText = ensureInitialSmsOptOutFooter(conv, publishedText, {
+      provider: "twilio",
+      from: outboundFrom,
+      to: outboundTo
+    });
     appendOutbound(
       conv,
       outboundFrom,
