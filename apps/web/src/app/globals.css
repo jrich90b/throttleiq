@@ -4813,6 +4813,138 @@ input[type="reset"],
   -webkit-text-fill-color: #101522 !important;
 }
 
+.lr-app-theme .lr-message-composer {
+  align-items: stretch;
+}
+
+.lr-app-theme .lr-message-composer-input {
+  background: rgba(255, 255, 255, 0.035) !important;
+  border-color: rgba(148, 163, 184, 0.28) !important;
+  color: #e7edf8 !important;
+  -webkit-text-fill-color: #e7edf8 !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.lr-app-theme .lr-message-composer-input::placeholder {
+  color: #8ea0bb !important;
+  -webkit-text-fill-color: #8ea0bb !important;
+  opacity: 1 !important;
+}
+
+.lr-app-theme .lr-message-composer-actions {
+  width: min(11rem, 28vw);
+}
+
+.lr-app-theme .lr-message-action-btn {
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.55rem !important;
+  border-width: 1px !important;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #e7edf8 !important;
+  -webkit-text-fill-color: #e7edf8 !important;
+  background: linear-gradient(180deg, rgba(31, 45, 70, 0.98), rgba(14, 22, 36, 0.98)) !important;
+  border-color: rgba(148, 163, 184, 0.4) !important;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.2);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.lr-app-theme .lr-message-action-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(42, 59, 91, 0.98), rgba(18, 30, 50, 0.98)) !important;
+  border-color: rgba(251, 127, 4, 0.58) !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+}
+
+.lr-app-theme .lr-message-action-btn:focus-visible {
+  outline: 2px solid rgba(251, 127, 4, 0.78);
+  outline-offset: 2px;
+}
+
+.lr-app-theme .lr-message-action-btn:disabled,
+.lr-app-theme .lr-message-action-btn.opacity-50 {
+  opacity: 1 !important;
+  cursor: not-allowed;
+  background: rgba(15, 23, 42, 0.72) !important;
+  border-color: rgba(71, 85, 105, 0.68) !important;
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  box-shadow: none;
+  transform: none;
+}
+
+.lr-app-theme .lr-message-action-btn--send:not(:disabled) {
+  min-height: 3.15rem;
+  background: linear-gradient(180deg, #ff932f, #fb7f04) !important;
+  border-color: #fb7f04 !important;
+  color: #101522 !important;
+  -webkit-text-fill-color: #101522 !important;
+  box-shadow: 0 12px 26px rgba(251, 127, 4, 0.28);
+}
+
+.lr-app-theme .lr-message-action-btn--send:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffac4f, #fb8a11) !important;
+  border-color: #ffac4f !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a !important;
+}
+
+.lr-app-theme .lr-message-action-btn--regenerate:not(:disabled) {
+  background: linear-gradient(180deg, #2563eb, #1d4ed8) !important;
+  border-color: #60a5fa !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.26);
+}
+
+.lr-app-theme .lr-message-action-btn--regenerate:hover:not(:disabled) {
+  background: linear-gradient(180deg, #3b82f6, #2563eb) !important;
+  border-color: #93c5fd !important;
+}
+
+.lr-app-theme .lr-message-action-btn--payment:not(:disabled) {
+  background: linear-gradient(180deg, #059669, #047857) !important;
+  border-color: #34d399 !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  box-shadow: 0 10px 22px rgba(5, 150, 105, 0.24);
+}
+
+.lr-app-theme .lr-message-action-btn--payment:hover:not(:disabled) {
+  background: linear-gradient(180deg, #10b981, #059669) !important;
+  border-color: #6ee7b7 !important;
+}
+
+.lr-app-theme .lr-message-action-btn--compact {
+  min-height: 2.25rem;
+}
+
+@media (max-width: 760px) {
+  .lr-app-theme .lr-message-composer {
+    flex-direction: column;
+  }
+
+  .lr-app-theme .lr-message-composer-actions {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  }
+
+  .lr-app-theme .lr-message-action-btn {
+    min-height: 2.6rem;
+  }
+}
+
 .lr-app-theme .lr-inventory-workspace,
 .lr-app-theme .lr-settings-workspace,
 .lr-app-theme .lr-mdf-workspace {

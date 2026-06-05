@@ -22008,7 +22008,7 @@ export default function Home() {
               ) : null}
             </div>
 
-            <div className="mt-6 flex gap-2 items-start">
+            <div className="mt-6 flex gap-2 items-start lr-message-composer">
               <textarea
                 ref={sendBoxRef}
                 value={displaySendBody}
@@ -22023,7 +22023,7 @@ export default function Home() {
                   el.style.height = `${el.scrollHeight}px`;
                 }}
                 rows={1}
-                className={`flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border ${
+                className={`lr-message-composer-input flex-1 border rounded px-3 py-3.5 min-h-[60px] resize-none leading-7 overflow-hidden box-border ${
                   messageFilter === "calls" ? "bg-gray-50 text-gray-500" : ""
                 }`}
                 placeholder={
@@ -22037,9 +22037,9 @@ export default function Home() {
                 }
                 disabled={messageFilter === "calls"}
               />
-              <div className="flex flex-col gap-2">
+              <div className="lr-message-composer-actions flex flex-col gap-2">
                 <button
-                  className={`px-4 py-2 border rounded ${
+                  className={`lr-message-action-btn lr-message-action-btn--send px-4 py-2 border rounded ${
                     messageFilter === "calls" ||
                     composeSending ||
                     (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
@@ -22070,7 +22070,7 @@ export default function Home() {
                 {messageFilter === "email" ? (
                   emailManualMode ? (
                     <button
-                      className="px-4 py-2 border rounded text-xs"
+                      className="lr-message-action-btn lr-message-action-btn--secondary px-4 py-2 border rounded text-xs"
                       onClick={() => {
                         setEmailManualMode(false);
                         if (emailDraft) {
@@ -22083,7 +22083,7 @@ export default function Home() {
                     </button>
                   ) : (
                     <button
-                      className="px-4 py-2 border rounded text-xs"
+                      className="lr-message-action-btn lr-message-action-btn--secondary px-4 py-2 border rounded text-xs"
                       onClick={() => {
                         setEmailManualMode(true);
                         setSendBody("");
@@ -22096,7 +22096,7 @@ export default function Home() {
                 ) : null}
                 {messageFilter !== "calls" ? (
                   <button
-                    className={`px-4 py-2 border rounded text-xs ${
+                    className={`lr-message-action-btn lr-message-action-btn--regenerate px-4 py-2 border rounded text-xs ${
                       regenBusy || mode !== "suggest" || selectedConv.mode === "human"
                         ? "opacity-50 cursor-not-allowed"
                         : ""
@@ -22116,7 +22116,7 @@ export default function Home() {
                 ) : null}
                 {hasClearableDraft ? (
                   <button
-                    className={`px-4 py-2 border rounded text-xs ${clearDraftBusy ? "opacity-50 cursor-not-allowed" : ""}`}
+                    className={`lr-message-action-btn lr-message-action-btn--secondary px-4 py-2 border rounded text-xs ${clearDraftBusy ? "opacity-50 cursor-not-allowed" : ""}`}
                     onClick={clearDraft}
                     disabled={clearDraftBusy}
                   >
@@ -22125,7 +22125,7 @@ export default function Home() {
                 ) : null}
                 {messageFilter !== "calls" ? (
                   <button
-                    className={`px-4 py-2 border rounded text-xs ${
+                    className={`lr-message-action-btn lr-message-action-btn--payment px-4 py-2 border rounded text-xs ${
                       paymentRequestBusy ||
                       (messageFilter === "sms" && selectedConv.contactPreference === "call_only")
                         ? "opacity-50 cursor-not-allowed"
@@ -22474,7 +22474,7 @@ export default function Home() {
             <div className="mt-3">
               <button
                 type="button"
-                className={`text-xs px-3 py-2 border rounded ${
+                className={`lr-message-action-btn lr-message-action-btn--payment lr-message-action-btn--compact text-xs px-3 py-2 border rounded ${
                   composePaymentRequestBusy || composeSending ? "opacity-50 cursor-not-allowed" : ""
                 }`}
                 title="Create a secure Stripe payment link and draft it into this SMS for review."
