@@ -485,7 +485,7 @@ import {
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
   isUnlistedInventoryQuestionText,
-  isDealerLeadAppPostDemoRideAdfText,
+  isDealerLeadAppConfirmedDemoRideAdfText,
   extractDealerLeadAppDemoBikeLabel,
   buildInventoryOnlineCompletenessReply,
   isDirectInventoryAvailabilityQuestionText,
@@ -11164,6 +11164,23 @@ function buildDealerLeadAppPostRideReply(args: {
   return `${intro} If any questions come up or you want to go over options, just text me anytime.`;
 }
 
+function getDealerLeadAppConversationText(conv: any): string {
+  return [
+    conv?.lead?.source,
+    conv?.latestLead?.source,
+    conv?.lead?.comment,
+    conv?.latestLead?.comment,
+    ...(Array.isArray(conv?.messages) ? conv.messages.map((m: any) => m?.body) : [])
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function isDealerLeadAppConversationWithoutConfirmedDemoRide(conv: any): boolean {
+  const text = getDealerLeadAppConversationText(conv);
+  return /\bdealer lead app\b/i.test(text) && !isDealerLeadAppConfirmedDemoRideAdfText(text);
+}
+
 function normalizeOutcomeCustomerModelLabel(raw: string): string {
   const source = String(raw ?? "").trim();
   if (!source) return "";
@@ -11313,6 +11330,19 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
   }
   if (args.secondaryStatus === "no_change" || args.outcome === "no_change") {
     return { queued: false, reason: "no_change" };
+  }
+  if (isDealerLeadAppConversationWithoutConfirmedDemoRide(conv)) {
+    addTodo(
+      conv,
+      "other",
+      "Review Dealer Lead App follow-up before sending. DLA payload does not confirm a demo ride.",
+      undefined,
+      undefined,
+      { dueAt: new Date().toISOString() },
+      "todo",
+      { allowSoldLead: true }
+    );
+    return { queued: false, reason: "dealer_ride_no_confirmed_demo" };
   }
   const profile = await getDealerProfileHot();
   const draft = buildDealerRideOutcomeCustomerDraft({
@@ -45917,9 +45947,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenRawProvider === "sendgrid_adf" ||
     /web lead\s*\(adf\)|source:\s*[^\\n]+/i.test(String(event.body ?? ""));
   const regenDealerRideEventLead =
-    regenLooksLikeAdf &&
-    (/source:\s*dealer lead app/i.test(String(event.body ?? "")) ||
-      isDealerLeadAppPostDemoRideAdfText(event.body));
+    regenLooksLikeAdf && isDealerLeadAppConfirmedDemoRideAdfText(event.body);
   const regenNoPurchaseNow =
     /purchase timeframe:\s*i am not interested in purchasing at this time/.test(regenInboundLower) ||
     /do you expect to make a motorcycle purchase in the near future\?\s*no/.test(regenInboundLower) ||
@@ -50422,6 +50450,11 @@ if (authToken && signature) {
   }
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
+    if (llmOptOut || isOptOut(event.body)) {
+      await applySmsOptOut(conv, event);
+      const reply = "Understood - I'll stop texting.";
+      return publishLiveTwilioReply(reply);
+    }
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
   }

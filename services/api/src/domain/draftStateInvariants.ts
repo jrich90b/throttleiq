@@ -157,6 +157,30 @@ function looksLikePricingPromptDraft(text: string): boolean {
   );
 }
 
+function looksLikeInventoryHoldPromiseDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    /\b(?:i|we)(?:'|’)?ll\s+keep\b[\s\S]{0,100}\bheld\b/.test(t) ||
+    /\b(?:i|we)\s+will\s+keep\b[\s\S]{0,100}\bheld\b/.test(t) ||
+    /\bheld\s+for\s+you\b/.test(t) ||
+    /\b(?:hold|holding)\b[\s\S]{0,100}\bfor\s+you\b/.test(t)
+  );
+}
+
+function hasInventoryHoldContext(input: DraftStateInvariantInput): boolean {
+  const values = [
+    input.followUpMode,
+    input.followUpReason,
+    input.dialogState,
+    input.classificationBucket,
+    input.classificationCta
+  ]
+    .map(value => String(value ?? "").toLowerCase())
+    .join(" ");
+  return /\b(?:holding_inventory|inventory_hold|on_hold|hold_pending|held_unit|unit_hold)\b/.test(values);
+}
+
 function hasAvailabilityTurnSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -210,7 +234,7 @@ function hasFinanceContext(input: DraftStateInvariantInput): boolean {
   return (
     dialogState.startsWith("pricing_") ||
     dialogState.startsWith("payments_") ||
-    /(^|:|\b)(pricing|payments?|finance|financing|credit|approval)\b/.test(followUpReason) ||
+    /(^|:|\b)(pricing|payments?|finance|financing|credit|credit_app|approval)\b/.test(followUpReason) ||
     /(^|:|\b)(ask_payment|payments?|finance|financing|credit|approval)\b/.test(cta)
   );
 }
@@ -218,8 +242,13 @@ function hasFinanceContext(input: DraftStateInvariantInput): boolean {
 function hasExplicitFinanceActionSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /\b(credit app|credit application|finance app|financing application|apply for (?:credit|financing)|fill out (?:a )?(?:credit|finance|financing) app)\b/.test(
-    t
+  return (
+    /\b(credit app|credit application|finance app|financing application|apply for (?:credit|financing)|fill out (?:a )?(?:credit|finance|financing) app)\b/.test(
+      t
+    ) ||
+    /\b(harley credit|credit address|finance paperwork|financing paperwork|sign(?:ing|ed)? (?:the )?papers?)\b/.test(
+      t
+    )
   );
 }
 
@@ -306,6 +335,40 @@ function hasAccessoryCustomizationTurnSignal(text: string): boolean {
     ) ||
     /\bnot\s+a\s+fan\b[\s\S]{0,80}\b(ones|these|those|stock|current)\b/i.test(t)
   );
+}
+
+function hasFinanceProgressUpdateSignal(text: string): boolean {
+  const t = String(text ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  const financeContext =
+    /\b(harley credit|credit address|finance|financing|credit union|paperwork|papers?|approval|approved|signing|signed)\b/.test(
+      t
+    );
+  const progressContext =
+    /\b(update|finally|sign(?:ing|ed)? (?:the )?papers?|they (?:were|are) giving me|hopefully|should be good|waiting on|called them|they say|done today)\b/.test(
+      t
+    );
+  return financeContext && progressContext;
+}
+
+function looksLikeFinanceProgressDriftDraft(text: string): boolean {
+  const t = String(text ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return (
+    looksLikeSchedulingPromptDraft(t) ||
+    /\bclosed today\b[\s\S]{0,120}\bfollow up tomorrow\b/.test(t) ||
+    /\bset that up\b/.test(t) ||
+    /\bwant me to hold\b/.test(t) ||
+    /\bhold the\b/.test(t) ||
+    /\btagged and ready\b/.test(t) ||
+    /\bgood to stop in\b/.test(t) ||
+    /\bmove forward\b/.test(t) ||
+    /\bnext steps\b/.test(t)
+  );
+}
+
+function financeProgressUpdateFallback(): string {
+  return "Got it — I’ll have the finance team review it and follow up.";
 }
 
 function isDepartmentHandoff(input: DraftStateInvariantInput): boolean {
@@ -403,6 +466,26 @@ export function applyDraftStateInvariants(
       allow: false,
       draftText: "",
       reason: "post_sale_logistics_schedule_guard"
+    };
+  }
+
+  if (
+    hasFinanceContext(input) &&
+    hasFinanceProgressUpdateSignal(inboundText) &&
+    looksLikeFinanceProgressDriftDraft(draftText)
+  ) {
+    return {
+      allow: true,
+      draftText: financeProgressUpdateFallback(),
+      reason: "finance_progress_update_repaired"
+    };
+  }
+
+  if (looksLikeInventoryHoldPromiseDraft(draftText) && !hasInventoryHoldContext(input)) {
+    return {
+      allow: false,
+      draftText: "",
+      reason: "unsupported_inventory_hold_promise_guard"
     };
   }
 

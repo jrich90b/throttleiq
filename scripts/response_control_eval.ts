@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
@@ -46,6 +48,10 @@ const noResponseIntent = {
   confidence: 0.93
 };
 
+const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
+const suppressedBranchStart = apiIndex.indexOf("if (isSuppressed(event.from))");
+const suppressedBranch = suppressedBranchStart >= 0 ? apiIndex.slice(suppressedBranchStart, suppressedBranchStart + 450) : "";
+
 const cases: Case[] = [
   {
     id: "accepts_strong_opt_out_parse",
@@ -86,6 +92,14 @@ const cases: Case[] = [
     id: "no_response_intent_is_authoritative_without_explicit_request",
     expected: true,
     run: () => isResponseControlNoResponseAccepted(noResponseIntent)
+  },
+  {
+    id: "suppressed_stop_request_still_publishes_opt_out_confirmation",
+    expected: true,
+    run: () =>
+      suppressedBranch.includes("llmOptOut || isOptOut(event.body)") &&
+      suppressedBranch.indexOf("publishLiveTwilioReply(reply)") > suppressedBranch.indexOf("applySmsOptOut") &&
+      suppressedBranch.indexOf("publishLiveTwilioReply(reply)") < suppressedBranch.indexOf("<Response></Response>")
   }
 ];
 

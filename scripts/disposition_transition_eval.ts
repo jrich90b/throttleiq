@@ -20,6 +20,8 @@ const affordabilityRideConfidenceText =
   "I'm trying to figure out if I can afford it as well as ride. I have rode a motorcycle in over 10yrs.";
 const injuryDeclineText =
   "Got into a horse driving accident and broke 5 ribs and punctured a lung I'll have to pass at this point";
+const peterStaleFinanceCloseoutText =
+  "Hey man sorry forgot to get you saved in my contacts but for right now I think I'm going to pass. Still keeping my eye out for a bike under or around 5k.";
 
 const parsedAccepted = {
   explicitDisposition: true,
@@ -86,6 +88,21 @@ const cases: Case[] = [
       canApplyDispositionCloseout({
         conv: { followUp: { mode: "active", reason: "appointment_outcome_follow_up" } },
         text: injuryDeclineText,
+        parsedAccepted: isDispositionParserAccepted(parsedAccepted),
+        hasDecision: true
+      })
+  },
+  {
+    id: "peter_stale_finance_parser_accepted_allows_stepping_back_closeout",
+    expected: true,
+    run: () =>
+      canApplyDispositionCloseout({
+        conv: {
+          followUp: { mode: "active", reason: "finance_follow_up" },
+          classification: { bucket: "finance_prequal", cta: "hdfs_coa" },
+          dialogState: { name: "walk_in_active" }
+        },
+        text: peterStaleFinanceCloseoutText,
         parsedAccepted: isDispositionParserAccepted(parsedAccepted),
         hasDecision: true
       })

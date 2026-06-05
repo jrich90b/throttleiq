@@ -687,6 +687,42 @@ export function isDealerLeadAppPostDemoRideAdfText(textRaw: string | null | unde
   );
 }
 
+function extractDealerLeadAppDemoBikesRawValue(textRaw: string | null | undefined): string {
+  const text = String(textRaw ?? "");
+  if (!text) return "";
+  const match = text.match(
+    /\bdemo bikes ridden\s*:\s*([\s\S]*?)(?:\bemail opt-?in\s*:|\bphone opt-?in\s*:|\btext opt-?in\s*:|\bclient_id\s*:|$)/i
+  );
+  return String(match?.[1] ?? "").trim();
+}
+
+export function isDealerLeadAppNoDemoRideAdfText(textRaw: string | null | undefined): boolean {
+  const rawValue = extractDealerLeadAppDemoBikesRawValue(textRaw);
+  if (!rawValue) return false;
+  const normalized = rawValue
+    .replace(/[.\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return false;
+  return /^(?:none|none recorded|no|n\/a|na|not applicable|not recorded)$/i.test(normalized);
+}
+
+export function isDealerLeadAppConfirmedDemoRideAdfText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  if (!text) return false;
+  if (isDealerLeadAppNoDemoRideAdfText(text)) return false;
+  if (/\bevent name:\s*dealer test ride\b/i.test(text)) return true;
+  if (/\blead app\s*-\s*type:\s*y\b/i.test(text)) return true;
+  return !!extractDealerLeadAppDemoBikesRawValue(text);
+}
+
+export function isDealerLeadAppWithoutConfirmedDemoRideAdfText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "");
+  if (!/\bdealer lead app\b/i.test(text)) return false;
+  return !isDealerLeadAppConfirmedDemoRideAdfText(text);
+}
+
 function titleCaseDealerLeadAppToken(raw: string): string {
   const normalized = String(raw ?? "")
     .replace(/[_-]+/g, " ")
@@ -702,10 +738,8 @@ function titleCaseDealerLeadAppToken(raw: string): string {
 }
 
 export function extractDealerLeadAppDemoBikeLabel(textRaw: string | null | undefined): string | null {
-  const text = String(textRaw ?? "");
-  if (!text) return null;
-  const match = text.match(/\bdemo bikes ridden\s*:\s*([\s\S]*?)(?:\bemail opt-?in\s*:|\bphone opt-?in\s*:|\btext opt-?in\s*:|\bclient_id\s*:|$)/i);
-  const rawValue = String(match?.[1] ?? "").trim();
+  if (isDealerLeadAppNoDemoRideAdfText(textRaw)) return null;
+  const rawValue = extractDealerLeadAppDemoBikesRawValue(textRaw);
   if (!rawValue) return null;
   const parts = rawValue
     .split(/[,\n\r]+/)

@@ -35,7 +35,11 @@ import {
   isBlockedCadencePersonalizationLineText,
   isCloseoutSignoffNoResponseText,
   isDealershipLocationQuestionText,
+  isDealerLeadAppConfirmedDemoRideAdfText,
+  isDealerLeadAppNoDemoRideAdfText,
   isDealerLeadAppPostDemoRideAdfText,
+  isDealerLeadAppWithoutConfirmedDemoRideAdfText,
+  extractDealerLeadAppDemoBikeLabel,
   isDemoDayEventQuestionText,
   isDirectInventoryAvailabilityQuestionText,
   isExternalDealerApprovalTransferQuestionText,
@@ -842,6 +846,41 @@ const cases: Case[] = [
       "Lead App - Type: Y\nSalesPerson: GIOVANNI BOCCABELLA\nWhich model of motorcycle are you interested in?\n2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED Email Opt-In:Yes"
     ),
     expected: true
+  },
+  {
+    id: "dealer_lead_app_confirmed_demo_detected",
+    actual: isDealerLeadAppConfirmedDemoRideAdfText(
+      "Lead App - Type: Y\nSalesPerson: GIOVANNI BOCCABELLA\nWhich model of motorcycle are you interested in?\n2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED Email Opt-In:Yes"
+    ),
+    expected: true
+  },
+  {
+    id: "dealer_lead_app_passenger_no_demo_not_confirmed",
+    actual: isDealerLeadAppConfirmedDemoRideAdfText(
+      "Source: Dealer Lead App - Passenger\nLead App - Type: N\nDemo Bikes Ridden: None recorded. Email Opt-In:Yes"
+    ),
+    expected: false
+  },
+  {
+    id: "dealer_lead_app_passenger_no_demo_detected_as_unconfirmed_source",
+    actual: isDealerLeadAppWithoutConfirmedDemoRideAdfText(
+      "Source: Dealer Lead App - Passenger\nLead App - Type: N\nDemo Bikes Ridden: None recorded. Email Opt-In:Yes"
+    ),
+    expected: true
+  },
+  {
+    id: "dealer_lead_app_none_recorded_no_demo_detected",
+    actual: isDealerLeadAppNoDemoRideAdfText(
+      "Source: Dealer Lead App - Passenger\nLead App - Type: N\nDemo Bikes Ridden: None recorded. Email Opt-In:Yes"
+    ),
+    expected: true
+  },
+  {
+    id: "dealer_lead_app_none_recorded_not_vehicle_label",
+    actual: extractDealerLeadAppDemoBikeLabel(
+      "Source: Dealer Lead App - Passenger\nLead App - Type: N\nDemo Bikes Ridden: None recorded. Email Opt-In:Yes"
+    ),
+    expected: null
   },
   {
     id: "normal_inventory_watch_request_not_demo_day_question",

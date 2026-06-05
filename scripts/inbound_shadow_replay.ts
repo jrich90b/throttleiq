@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
 type Provider = "twilio" | "sendgrid_adf";
 type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
@@ -711,7 +712,7 @@ function isExpectedNoCustomerReply(inbound: string): boolean {
 
 function isDealerLeadAppOutcomeAdf(provider: Provider, inbound: string): boolean {
   if (provider !== "sendgrid_adf") return false;
-  return /\b(?:dealer lead app|demo bikes ridden|marketing questions:)\b/i.test(inbound);
+  return isDealerLeadAppConfirmedDemoRideAdfText(inbound);
 }
 
 function isWrongNumberInbound(inbound: string): boolean {
@@ -811,6 +812,11 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
     /\b(i don'?t want to guess|i'?ll have (the )?(team|manager|finance)|confirm .*follow up|verify .*follow up)\b/i.test(
       draftText
     );
+  const safeFinanceProgressHandoff =
+    /\bfinance team\b[\s\S]{0,120}\b(?:review|confirm)\b[\s\S]{0,120}\b(?:follow up|text you shortly)\b/i.test(
+      draftText
+    ) ||
+    /\blien\/payoff details\b[\s\S]{0,160}\bfinance team\b[\s\S]{0,120}\btext you shortly\b/i.test(draftText);
   if (draftText.length < 12) reasons.push("very short draft");
   if (
     isDealerLeadAppOutcomeAdf(provider, inbound) &&
@@ -828,6 +834,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
     reasons.push("rider-course pricing/availability needs configured answer");
   }
   if (
+    !safeFinanceProgressHandoff &&
     !riderCourseInquiry &&
     /\b(apr|interest|finance|financing|payment|monthly|credit|approved|approval|co-?sign|price|out the door|otd)\b/i.test(
       inboundLower
@@ -859,7 +866,10 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   ) {
     reasons.push("accepted immediate arrival without confirming staff availability");
   }
-  if (/\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)) {
+  if (
+    !safeFinanceProgressHandoff &&
+    /\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)
+  ) {
     reasons.push("scheduling-sensitive inbound");
   }
   if (/\b(open|closed|hours?)\b/i.test(inboundLower) && /\bwould\s+\d{1,2}(:\d{2})?\s*(am|pm)?\s+work\b/i.test(inboundLower) && /\bhave that time noted\b/i.test(draftLower)) {

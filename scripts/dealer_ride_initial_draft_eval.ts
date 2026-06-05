@@ -20,10 +20,19 @@ const noPurchaseBlock = noPurchaseStart >= 0 ? apiRoute.slice(noPurchaseStart, n
 const generalDealerRideStart = apiRoute.indexOf("if (isDealerRideEventLead)", Math.max(noPurchaseStart + 1, 0));
 const generalDealerRideBlock =
   generalDealerRideStart >= 0 ? apiRoute.slice(generalDealerRideStart, generalDealerRideStart + 1200) : "";
+const liveDealerRideLeadStart = apiRoute.indexOf("const dealerLeadAppConfirmedDemoRide");
+const liveDealerRideLeadBlock =
+  liveDealerRideLeadStart >= 0 ? apiRoute.slice(liveDealerRideLeadStart, liveDealerRideLeadStart + 900) : "";
+const noDemoOverrideBlock = apiRoute.includes("dealerLeadAppWithoutConfirmedDemoRide")
+  ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 1200)
+  : "";
+const regenDealerRideLeadStart = apiIndex.indexOf("const regenDealerRideEventLead");
+const regenDealerRideLeadBlock =
+  regenDealerRideLeadStart >= 0 ? apiIndex.slice(regenDealerRideLeadStart, regenDealerRideLeadStart + 400) : "";
 const regenPendingStart = apiIndex.indexOf("if (!dealerRideOutcome?.status)");
 const regenPendingBlock = regenPendingStart >= 0 ? apiIndex.slice(regenPendingStart, regenPendingStart + 1200) : "";
 
-const initialRouteBlock = /const publishDealerRideInitialThankYouDraft = async \(\) => \{[\s\S]{0,900}buildDealerLeadAppPostRideReply[\s\S]{0,260}publishEarlyAdfSmsDraft\(draft\);/.test(apiRoute);
+const initialRouteBlock = /const publishDealerRideInitialThankYouDraft = async \(\) => \{[\s\S]{0,1800}buildDealerLeadAppPostRideReply[\s\S]{0,260}publishEarlyAdfSmsDraft\(draft\);/.test(apiRoute);
 const noPurchasePublishesDraft =
   noPurchaseBlock.includes("publishDealerRideInitialThankYouDraft()") &&
   noPurchaseBlock.includes("dealer_ride_outcome_pending_customer_draft");
@@ -53,6 +62,31 @@ const regenBuilderPrefersLeadOwner =
 
 const checks: Check[] = [
   check("initial_adf_has_guarded_customer_thank_you_helper", initialRouteBlock, true),
+  check(
+    "initial_publish_blocks_unconfirmed_dla_demo",
+    apiRoute.includes('reason: "dealer_ride_no_confirmed_demo"') &&
+      apiRoute.includes("isDealerLeadAppConfirmedDemoRideAdfText(dealerLeadAppText)"),
+    true
+  ),
+  check(
+    "live_dla_route_requires_confirmed_demo_not_source_only",
+    liveDealerRideLeadBlock.includes("isDealerLeadAppConfirmedDemoRideAdfText(dealerRideEventText)") &&
+      !liveDealerRideLeadBlock.includes('leadSourceLower.includes("dealer lead app")'),
+    true
+  ),
+  check(
+    "live_dla_no_demo_overrides_test_ride_classification",
+    noDemoOverrideBlock.includes("isDealerLeadAppWithoutConfirmedDemoRideAdfText") &&
+      noDemoOverrideBlock.includes('inferredBucket = "general_inquiry"') &&
+      noDemoOverrideBlock.includes('inferredCta = "contact_us"'),
+    true
+  ),
+  check(
+    "regen_dla_route_requires_confirmed_demo_not_source_only",
+    regenDealerRideLeadBlock.includes("isDealerLeadAppConfirmedDemoRideAdfText(event.body)") &&
+      !regenDealerRideLeadBlock.includes("/source:\\s*dealer lead app"),
+    true
+  ),
   check("no_purchase_dla_initial_path_does_not_publish_customer_draft", noPurchasePublishesDraft, false),
   check("no_purchase_dla_initial_path_waits_for_outcome", noPurchaseWaitsForOutcome, true),
   check("general_dla_initial_path_does_not_publish_customer_draft", generalDealerRidePublishesDraft, false),

@@ -136,6 +136,8 @@ import {
   isHiringManagerInquiryText,
   isInventoryOnlineCompletenessQuestionText,
   isTakeOffMilwaukeeEightEngineRequestText,
+  isDealerLeadAppConfirmedDemoRideAdfText,
+  isDealerLeadAppWithoutConfirmedDemoRideAdfText,
   isDealerLeadAppPostDemoRideAdfText,
   extractDealerLeadAppDemoBikeLabel,
   isDemoDayEventQuestionText,
@@ -4808,6 +4810,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     isJumpStartExperienceText(lead.comment ?? null) ||
     isJumpStartExperienceText(lead.inquiry ?? null) ||
     isJumpStartExperienceText(leadSource ?? null);
+  const dealerLeadAppStructuredText = [
+    leadSource,
+    effectiveInquiry,
+    inquiryText,
+    lead.comment,
+    lead.inquiry,
+    event.body
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const dealerLeadAppWithoutConfirmedDemoRide =
+    event.provider === "sendgrid_adf" &&
+    isDealerLeadAppWithoutConfirmedDemoRideAdfText(dealerLeadAppStructuredText);
   const hasStockIntent =
     !!lead.stockId || !!lead.vin || inquiryText.includes("available") || availabilityIntentFromParser;
   const parserBucketCta: { bucket: LeadBucket; cta: LeadCTA } | null =
@@ -4899,6 +4914,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (forcedTestRide && !jumpStartExperienceLead) {
     inferredBucket = "test_ride";
     inferredCta = "schedule_test_ride";
+  }
+  if (
+    dealerLeadAppWithoutConfirmedDemoRide &&
+    (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride")
+  ) {
+    inferredBucket = "general_inquiry";
+    inferredCta = "contact_us";
   }
   const forcedTradeIn =
     leadSourceLower.includes("trade accelerator") ||
@@ -5324,6 +5346,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (appointmentOutcomeWinsDealerRideOutcome(conv)) {
       return { ok: false, reason: "appointment_outcome_wins" };
     }
+    const dealerLeadAppText = [
+      leadSource,
+      effectiveInquiry,
+      event.body,
+      (conv?.lead as any)?.comment,
+      (conv?.latestLead as any)?.comment,
+      ...(Array.isArray(conv?.messages) ? conv.messages.map((m: any) => m?.body) : [])
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (!isDealerLeadAppConfirmedDemoRideAdfText(dealerLeadAppText)) {
+      return { ok: false, reason: "dealer_ride_no_confirmed_demo" };
+    }
     if (hasDealerRideInitialThankYouDraft()) {
       return { ok: true, skipped: true, reason: "dealer_ride_initial_thank_you_exists" };
     }
@@ -5365,16 +5400,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   const timeframeLower = String(lead.purchaseTimeframe ?? "").toLowerCase();
   const rawAdfBody = String(event.body ?? "");
+  const dealerRideEventText = [effectiveInquiry, rawAdfBody].filter(Boolean).join("\n");
+  const dealerLeadAppConfirmedDemoRide = isDealerLeadAppConfirmedDemoRideAdfText(dealerRideEventText);
   const isDealerRideEventFromParser =
     marketingEventIntentFromParser &&
-    (isDealerLeadAppPostDemoRideAdfText(effectiveInquiry) ||
-      isDealerLeadAppPostDemoRideAdfText(rawAdfBody));
+    dealerLeadAppConfirmedDemoRide;
   const isDealerRideEventLead =
     event.provider === "sendgrid_adf" &&
-    (leadSourceLower.includes("dealer lead app") ||
-      isDealerLeadAppPostDemoRideAdfText(effectiveInquiry) ||
-      isDealerLeadAppPostDemoRideAdfText(rawAdfBody) ||
-      isDealerRideEventFromParser);
+    (dealerLeadAppConfirmedDemoRide || isDealerRideEventFromParser);
   if (isDealerRideEventLead) {
     const appt = conv.appointment;
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
@@ -6509,7 +6542,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const hasDepositSignal = walkInState === "deposit_left";
     const hasSoldSignal = walkInState === "sold_delivered";
     const hasCreditCosignerSignal = walkInState === "cosigner_required";
-    const hasCompletedTestRideSignal = walkInState === "test_ride_completed";
+    const hasCompletedTestRideSignal =
+      !dealerLeadAppWithoutConfirmedDemoRide && walkInState === "test_ride_completed";
     const hasDecisionPendingSignal = walkInState === "decision_pending";
     const hasOutsideFinancingPendingSignal = walkInState === "outside_financing_pending";
     const hasDownPaymentPendingSignal = walkInState === "down_payment_pending";

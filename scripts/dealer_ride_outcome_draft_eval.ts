@@ -59,6 +59,12 @@ const checks: Check[] = [
     true
   ),
   check(
+    "dealer_ride_outcome_queue_blocks_unconfirmed_dla_demo",
+    source.includes("isDealerLeadAppConversationWithoutConfirmedDemoRide(conv)") &&
+      source.includes('reason: "dealer_ride_no_confirmed_demo"'),
+    true
+  ),
+  check(
     "dealer_ride_outcome_follow_up_does_not_assume_agreed_next_steps",
     source.includes("next steps we talked about"),
     false

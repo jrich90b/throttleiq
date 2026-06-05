@@ -83,6 +83,89 @@ const cases: Case[] = [
     }
   },
   {
+    id: "finance_progress_update_blocks_unsupported_hold_promise",
+    expectedAllow: false,
+    expectedReason: "unsupported_inventory_hold_promise_guard",
+    input: {
+      inboundText: "I called them yesterday and they say it should be done today",
+      draftText: "Sounds good — I’ll keep the 21 SGS held for you and text if anything changes.",
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "pricing_handoff",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment",
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    }
+  },
+  {
+    id: "finance_progress_update_repairs_schedule_prompt",
+    expectedAllow: true,
+    expectedReason: "finance_progress_update_repaired",
+    expectedDraftContains: "finance team review it",
+    input: {
+      inboundText:
+        "Just wanted to give you an update. We are FINALLY signing the papers today. They were giving me a hard time about the Harley credit address. Hopefully within a week I should be good.",
+      draftText: "Happy to set that up. What day and time work best for you?",
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "none",
+      classificationBucket: "finance_prequal",
+      classificationCta: "hdfs_coa"
+    }
+  },
+  {
+    id: "finance_progress_update_repairs_closed_day_next_steps_drift",
+    expectedAllow: true,
+    expectedReason: "finance_progress_update_repaired",
+    expectedDraftContains: "finance team review it",
+    input: {
+      inboundText:
+        "Just wanted to give you an update. We are FINALLY signing the papers today. They were giving me a hard time about the Harley credit address. Hopefully within a week I should be good.",
+      draftText:
+        "Got it. That’s great news — congrats on signing the papers. I’m closed today, but I’ll have someone follow up tomorrow to help with the next steps.",
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "none",
+      classificationBucket: "finance_prequal",
+      classificationCta: "hdfs_coa"
+    }
+  },
+  {
+    id: "finance_progress_update_repairs_tagged_ready_stop_in_drift",
+    expectedAllow: true,
+    expectedReason: "finance_progress_update_repaired",
+    expectedDraftContains: "finance team review it",
+    input: {
+      inboundText:
+        "Just wanted to give you an update. We are FINALLY signing the papers today. They were giving me a hard time about the Harley credit address. Hopefully within a week I should be good.",
+      draftText:
+        "Thanks for the update. That’s great news—congrats on getting the papers signed. I’ll keep the 21 SGS tagged and ready for you. No rush—I’m here when you’re good to stop in.",
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "none",
+      classificationBucket: "finance_prequal",
+      classificationCta: "hdfs_coa"
+    }
+  },
+  {
+    id: "finance_progress_update_repairs_hold_offer_drift",
+    expectedAllow: true,
+    expectedReason: "finance_progress_update_repaired",
+    expectedDraftContains: "finance team review it",
+    input: {
+      inboundText:
+        "Just wanted to give you an update. We are FINALLY signing the papers today. They were giving me a hard time about the Harley credit address. Hopefully within a week I should be good.",
+      draftText:
+        "Thanks for the update. That’s great news—congrats on signing the papers. I’m here when you’re ready; just text or call if you want me to hold the 21 SGS or look for another option.",
+      followUpMode: "manual_handoff",
+      followUpReason: "credit_app",
+      dialogState: "none",
+      classificationBucket: "finance_prequal",
+      classificationCta: "hdfs_coa"
+    }
+  },
+  {
     id: "pricing_down_payment_followup_is_allowed",
     expectedAllow: true,
     input: {
