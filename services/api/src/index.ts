@@ -50,6 +50,7 @@ import {
   isManualOutboundCreditAppNeedsMoreInfoText,
   shouldHoldManualFinanceDocsForRecentVoiceContact
 } from "./domain/manualCadenceContext.js";
+import { isTradeSellCadenceContext } from "./domain/cadenceInventoryGuard.js";
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import {
   addAgentTask,
@@ -9437,6 +9438,22 @@ async function buildCadenceHeldInventoryOverride(args: {
   if (!conv) return null;
   const cadenceKind = String(conv?.followUpCadence?.kind ?? "").trim().toLowerCase();
   if (cadenceKind === "long_term" || cadenceKind === "post_sale") return null;
+  if (isTradeSellCadenceContext(conv)) {
+    recordDecisionTrace({
+      scope: "regen",
+      stage: "cadence.held_inventory_override_skipped_trade_context",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        bucket: conv?.classification?.bucket ?? null,
+        cta: conv?.classification?.cta ?? null,
+        source: conv?.lead?.source ?? conv?.leadSource ?? null,
+        followUpReason: conv?.followUp?.reason ?? null,
+        cadenceContext: conv?.followUpCadence?.contextTag ?? null
+      }
+    });
+    return null;
+  }
   const parserContext = await getParserCadenceInventoryTargetContext({
     conv,
     lastDraft: args.lastDraft
