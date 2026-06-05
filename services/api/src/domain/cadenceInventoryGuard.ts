@@ -47,3 +47,25 @@ export function isTradeSellCadenceContext(conv: any): boolean {
   }
   return sourceMentionsTradeSell(source);
 }
+
+export function inventoryItemMatchesRequestedYear(
+  item: { year?: string | number | null; label?: string | null } | null | undefined,
+  requestedYear: string | number | null | undefined
+): boolean {
+  const requested = String(requestedYear ?? "").match(/\b(?:19|20)\d{2}\b/)?.[0] ?? "";
+  if (!requested) return true;
+  const itemYear =
+    String(item?.year ?? "").match(/\b(?:19|20)\d{2}\b/)?.[0] ??
+    String(item?.label ?? "").match(/\b(?:19|20)\d{2}\b/)?.[0] ??
+    "";
+  return itemYear === requested;
+}
+
+export function filterCadenceUnavailableItemsByRequestedYear<T extends { year?: string | number | null; label?: string | null }>(
+  items: T[],
+  requestedYear: string | number | null | undefined,
+  opts: { yearSearchBroadened: boolean }
+): T[] {
+  if (!opts.yearSearchBroadened) return items;
+  return items.filter(item => inventoryItemMatchesRequestedYear(item, requestedYear));
+}

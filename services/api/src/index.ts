@@ -50,7 +50,10 @@ import {
   isManualOutboundCreditAppNeedsMoreInfoText,
   shouldHoldManualFinanceDocsForRecentVoiceContact
 } from "./domain/manualCadenceContext.js";
-import { isTradeSellCadenceContext } from "./domain/cadenceInventoryGuard.js";
+import {
+  filterCadenceUnavailableItemsByRequestedYear,
+  isTradeSellCadenceContext
+} from "./domain/cadenceInventoryGuard.js";
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import {
   addAgentTask,
@@ -9530,7 +9533,9 @@ async function buildCadenceHeldInventoryOverride(args: {
   if (!context.model || isUnknownCadenceModel(context.model)) return null;
 
   let matches = await findInventoryMatches({ year: context.year, model: context.model });
+  let yearSearchBroadened = false;
   if (!matches.length && context.year) {
+    yearSearchBroadened = true;
     matches = await findInventoryMatches({ year: null, model: context.model });
   }
   if (context.color) {
@@ -9555,8 +9560,16 @@ async function buildCadenceHeldInventoryOverride(args: {
   if (!matches.length && !status.sold.length) {
     status.sold = soldInventoryItemsFromStore(solds, candidate);
   }
-  status.held = filterStatusItemsByContextColor(status.held, context.color);
-  status.sold = filterStatusItemsByContextColor(status.sold, context.color);
+  status.held = filterCadenceUnavailableItemsByRequestedYear(
+    filterStatusItemsByContextColor(status.held, context.color),
+    context.year,
+    { yearSearchBroadened }
+  );
+  status.sold = filterCadenceUnavailableItemsByRequestedYear(
+    filterStatusItemsByContextColor(status.sold, context.color),
+    context.year,
+    { yearSearchBroadened }
+  );
   status.available = filterStatusItemsByContextColor(status.available, context.color);
   const specificTarget = !!(context.color || context.year);
   const heldItem = status.held[0];
@@ -9578,6 +9591,7 @@ async function buildCadenceHeldInventoryOverride(args: {
       held: status.held.length,
       sold: status.sold.length,
       specificTarget,
+      yearSearchBroadened,
       shouldOverrideHeld,
       shouldOverrideSold,
       heldLabel: heldItem ? buildInventoryUnitLabel(heldItem, context.model) : null,
