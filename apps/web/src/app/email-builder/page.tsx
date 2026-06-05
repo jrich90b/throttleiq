@@ -654,11 +654,11 @@ export default function EmailBuilderPage() {
   }
 
   if (authLoading) {
-    return <main className="min-h-screen bg-[#060b13] text-gray-100 p-8">Loading Email Builder...</main>;
+    return <main className="lr-email-builder-shell min-h-screen bg-[#060b13] text-gray-100 p-8">Loading Email Builder...</main>;
   }
   if (!authUser) {
     return (
-      <main className="min-h-screen bg-[#060b13] text-gray-100 p-8">
+      <main className="lr-email-builder-shell min-h-screen bg-[#060b13] text-gray-100 p-8">
         <div className="max-w-xl border border-white/15 rounded-lg p-5 bg-black/25">
           <h1 className="text-xl font-semibold">Email Builder</h1>
           <p className="text-sm text-gray-300 mt-2">{authError || "Sign in required."}</p>
@@ -674,7 +674,7 @@ export default function EmailBuilderPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#060b13] text-gray-100">
+    <main className="lr-email-builder-shell min-h-screen bg-[#060b13] text-gray-100">
       <div className="max-w-[1400px] mx-auto px-4 md:px-6 py-5 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

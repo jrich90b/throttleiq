@@ -1327,7 +1327,9 @@ function getTodoSectionTheme(section: TodoInboxSection) {
 
 function getInboxDealFilterButtonClass(active: boolean) {
   return `px-2.5 py-1 text-xs rounded border ${
-    active ? "bg-[var(--accent)] text-white border-[var(--accent)]" : "bg-white hover:bg-[var(--surface-2)]"
+    active
+      ? "bg-[var(--accent)] text-[#101522] border-[var(--accent)] font-semibold"
+      : "bg-white/[0.04] text-[#e7edf8] hover:bg-[var(--surface-2)]"
   }`;
 }
 
@@ -14446,7 +14448,7 @@ export default function Home() {
         ) : null}
 
         {section === "settings" && authUser?.role === "manager" ? (
-          <div className="mt-3 border rounded-lg divide-y">
+          <div className="mt-3 border rounded-lg divide-y lr-settings-nav-panel">
             <div className="px-4 py-3 flex items-center justify-between bg-gray-50">
               <div className="text-sm font-semibold text-gray-700">Settings</div>
               <button
@@ -15534,7 +15536,7 @@ export default function Home() {
             </div>
           </div>
         ) : section === "mdf" ? (
-          <div className="max-w-6xl mx-auto space-y-5">
+          <div className="max-w-6xl mx-auto space-y-5 lr-mdf-workspace">
 	            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
 	              <div>
 	                <h2 className="text-2xl font-semibold">MDF Assistant</h2>
@@ -17238,7 +17240,7 @@ export default function Home() {
             ) : null}
           </div>
         ) : section === "inventory" ? (
-          <div className="space-y-4">
+          <div className="space-y-4 lr-inventory-workspace">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Inventory</div>
               <button
@@ -17307,7 +17309,7 @@ export default function Home() {
                     const isSold = !!it.sold;
                     const statusLabel = isSold ? "Sold" : isHeld ? "On hold" : "Available";
                     return (
-                      <div key={key || it.url || Math.random()} className="border rounded-lg p-3 space-y-2">
+                      <div key={key || it.url || Math.random()} className="border rounded-lg p-3 space-y-2 lr-inventory-card">
                         {it.images?.[0] ? (
                           <img
                             src={it.images[0]}
@@ -17492,7 +17494,7 @@ export default function Home() {
             )}
           </div>
         ) : section === "settings" ? (
-          <div className="max-w-3xl space-y-6">
+          <div className="max-w-3xl space-y-6 lr-settings-workspace">
             {settingsError ? (
               <div className="text-sm text-red-600">{settingsError}</div>
             ) : null}
@@ -21424,7 +21426,7 @@ export default function Home() {
             {soldModalOpen ? (
               <div className="fixed inset-0 z-50 bg-black/40 overflow-y-auto">
                 <div className="min-h-full flex items-start sm:items-center justify-center p-2 sm:p-4">
-                <div className="lr-app-modal w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
+                <div className="lr-app-modal lr-light-modal w-full max-w-2xl max-h-[94vh] overflow-y-auto rounded-lg bg-white text-slate-900 shadow-lg border border-slate-300 p-3 sm:p-4">
                   <div className="text-sm font-semibold text-slate-900">Mark unit sold</div>
                   <div className="text-xs text-slate-700 mt-1">
                     {soldModalConv?.lead?.name ||

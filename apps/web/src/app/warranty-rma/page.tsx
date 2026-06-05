@@ -797,7 +797,7 @@ export default function WarrantyRmaPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f4f6f8] text-slate-950">
+    <main className="lr-warranty-shell min-h-screen bg-[#f4f6f8] text-slate-950">
       <header className="border-b border-slate-200 bg-white px-4 py-4 shadow-sm">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
