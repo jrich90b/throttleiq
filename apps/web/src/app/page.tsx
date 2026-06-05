@@ -17359,21 +17359,27 @@ export default function Home() {
                         ) : null}
                         <div className="grid grid-cols-3 gap-2">
                           <button
-                            className={`px-2 py-1 border rounded text-xs ${isHeld ? "bg-amber-50 border-amber-300 text-amber-900" : ""}`}
+                            className={`lr-inventory-status-btn px-2 py-1 border rounded text-xs ${
+                              isHeld ? "lr-inventory-status-btn--hold-active" : ""
+                            }`}
                             onClick={() => updateInventoryAvailability(it, "hold")}
                             disabled={!key || inventoryStatusSaving === `${key}:hold`}
                           >
                             {inventoryStatusSaving === `${key}:hold` ? "Saving..." : "Hold"}
                           </button>
                           <button
-                            className={`px-2 py-1 border rounded text-xs ${isSold ? "bg-red-50 border-red-300 text-red-800" : ""}`}
+                            className={`lr-inventory-status-btn px-2 py-1 border rounded text-xs ${
+                              isSold ? "lr-inventory-status-btn--sold-active" : ""
+                            }`}
                             onClick={() => updateInventoryAvailability(it, "sold")}
                             disabled={!key || inventoryStatusSaving === `${key}:sold`}
                           >
                             {inventoryStatusSaving === `${key}:sold` ? "Saving..." : "Sold"}
                           </button>
                           <button
-                            className="px-2 py-1 border rounded text-xs"
+                            className={`lr-inventory-status-btn px-2 py-1 border rounded text-xs ${
+                              !isHeld && !isSold ? "lr-inventory-status-btn--available-active" : ""
+                            }`}
                             onClick={() => updateInventoryAvailability(it, "available")}
                             disabled={!key || inventoryStatusSaving === `${key}:available` || (!isHeld && !isSold)}
                           >

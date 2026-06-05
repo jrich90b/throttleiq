@@ -4878,6 +4878,57 @@ input[type="reset"],
   grid-template-columns: repeat(auto-fit, minmax(5.8rem, 1fr)) !important;
 }
 
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn {
+  min-height: 2.15rem;
+  background: rgba(255, 255, 255, 0.045) !important;
+  border-color: rgba(148, 163, 184, 0.34) !important;
+  color: #e7edf8 !important;
+  -webkit-text-fill-color: #e7edf8 !important;
+  font-weight: 650;
+}
+
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(251, 127, 4, 0.5) !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+}
+
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn:disabled {
+  opacity: 1 !important;
+  background: rgba(15, 23, 42, 0.74) !important;
+  border-color: rgba(71, 85, 105, 0.65) !important;
+  color: #aebbd2 !important;
+  -webkit-text-fill-color: #aebbd2 !important;
+}
+
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--available-active,
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--available-active:disabled {
+  background: #047857 !important;
+  border-color: #10b981 !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.28), 0 10px 24px rgba(4, 120, 87, 0.28);
+}
+
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--hold-active,
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--hold-active:disabled {
+  background: #f59e0b !important;
+  border-color: #fbbf24 !important;
+  color: #101522 !important;
+  -webkit-text-fill-color: #101522 !important;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.32), 0 10px 24px rgba(245, 158, 11, 0.25);
+}
+
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--sold-active,
+.lr-app-theme .lr-inventory-card .grid.grid-cols-3 button.lr-inventory-status-btn--sold-active:disabled {
+  background: #b91c1c !important;
+  border-color: #ef4444 !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3), 0 10px 24px rgba(185, 28, 28, 0.25);
+}
+
 .lr-app-theme .lr-inventory-card a {
   color: #93c5fd !important;
 }
