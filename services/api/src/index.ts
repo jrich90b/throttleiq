@@ -50,6 +50,7 @@ import {
   isManualOutboundCreditAppNeedsMoreInfoText,
   shouldHoldManualFinanceDocsForRecentVoiceContact
 } from "./domain/manualCadenceContext.js";
+import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import {
   addAgentTask,
   listAgentTasks,
@@ -43533,6 +43534,21 @@ app.post("/conversations/:id/send", async (req, res) => {
     });
 
     if (activateManualFinanceNeedsInfoCadence(text, opts)) {
+      return;
+    }
+    if (
+      activateManualQuoteDeliveredFollowUp(conv, text, {
+        channel: opts?.channel ?? null,
+        hasMedia: Array.isArray(mediaUrls) && mediaUrls.length > 0,
+        timezone: schedulerTimezone
+      })
+    ) {
+      skipManualCadenceAdvanceOnce = true;
+      recordRouteOutcome("manual", "manual_outbound_quote_delivered_followup", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        channel: opts?.channel ?? null
+      });
       return;
     }
 

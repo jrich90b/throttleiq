@@ -125,6 +125,39 @@ export function isManualOutboundCreditAppNeedsMoreInfoText(
   return subjectNeedsInfo || infoNeeded;
 }
 
+export function isManualOutboundQuoteDeliveredText(
+  text: string | null | undefined,
+  opts?: { hasMedia?: boolean }
+): boolean {
+  const value = normalizeManualContextText(text);
+  if (!value) return false;
+
+  const futurePricingWork =
+    /\b(?:i|we)\s+(?:will|'ll|am going to|are going to|can)\s+(?:get|work|put|get you|put together|confirm|check|send)\b.{0,90}\b(?:price|pricing|quote|numbers?|payment|estimate)\b/.test(
+      value
+    ) ||
+    /\b(?:need|needs|needed)\s+(?:to\s+)?(?:confirm|check|work up|put together|get)\b.{0,90}\b(?:price|pricing|quote|numbers?|payment|estimate)\b/.test(
+      value
+    );
+  const actualDeliveryCue =
+    /\b(?:here'?s|here is|attached|sent over|sending over|i have it priced|we have it priced|priced at|quote on|numbers on|payment estimate|you(?:'d| would) (?:probably )?(?:be )?looking|payment would be|out[- ]the[- ]door|otd)\b/.test(
+      value
+    );
+  const moneyOrPaymentCue =
+    /\$\s*\d{2,}|\b\d{2,4}\s*(?:\/\s*mo|per month|monthly|mo\b)|\b\d{1,3}\s*k\s+down\b/.test(
+      value
+    );
+  const pricingTerm =
+    /\b(?:price|priced|pricing|quote|numbers?|payment|monthly|term|down|tax(?:es)?|dmv|registration|freight|dealer prep|out[- ]the[- ]door|otd|apr|mo)\b/.test(
+      value
+    );
+
+  if (actualDeliveryCue && (pricingTerm || opts?.hasMedia)) return true;
+  if (moneyOrPaymentCue && pricingTerm && !futurePricingWork) return true;
+
+  return false;
+}
+
 export function isSparseManualConversationContext(conv: any): boolean {
   const leadSource = String(conv?.lead?.source ?? conv?.leadSource ?? "").trim();
   const bucket = String(conv?.classification?.bucket ?? "").trim();
