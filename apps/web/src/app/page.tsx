@@ -31,6 +31,127 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtorLike | null {
   );
 }
 
+const WEB_PROXY_UPLOAD_TARGET_BYTES = 3.4 * 1024 * 1024;
+const WEB_PROXY_LARGE_UPLOAD_BYTES = 4.2 * 1024 * 1024;
+const IMAGE_UPLOAD_EXT_RE = /\.(avif|gif|heic|heif|jpe?g|png|webp)$/i;
+const VIDEO_UPLOAD_EXT_RE = /\.(3g2|3gp|m4v|mov|mp4|webm)$/i;
+
+function isImageUploadFile(file: File) {
+  return String(file.type ?? "").startsWith("image/") || IMAGE_UPLOAD_EXT_RE.test(file.name);
+}
+
+function isVideoUploadFile(file: File) {
+  return String(file.type ?? "").startsWith("video/") || VIDEO_UPLOAD_EXT_RE.test(file.name);
+}
+
+function uploadTooLargeMessage(file: File) {
+  return `"${file.name}" is too large for browser upload. Try a smaller image, or crop/compress it first.`;
+}
+
+function replaceFileExtension(name: string, ext: string) {
+  const clean = String(name || "upload").trim() || "upload";
+  return clean.includes(".") ? clean.replace(/\.[^.]+$/, ext) : `${clean}${ext}`;
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob | null>(resolve => {
+    canvas.toBlob(blob => resolve(blob), type, quality);
+  });
+}
+
+async function decodeImageFile(file: File): Promise<{
+  width: number;
+  height: number;
+  draw: (ctx: CanvasRenderingContext2D, width: number, height: number) => void;
+  close: () => void;
+} | null> {
+  if (typeof window === "undefined") return null;
+  if ("createImageBitmap" in window) {
+    try {
+      const bitmapOptions: ImageBitmapOptions = { imageOrientation: "from-image" };
+      const bitmap = await createImageBitmap(file, bitmapOptions);
+      return {
+        width: bitmap.width,
+        height: bitmap.height,
+        draw: (ctx, width, height) => ctx.drawImage(bitmap, 0, 0, width, height),
+        close: () => bitmap.close()
+      };
+    } catch {
+      // Fall back to Image decoding below.
+    }
+  }
+
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("image decode failed"));
+      img.src = url;
+    });
+    return {
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
+      draw: (ctx, width, height) => ctx.drawImage(image, 0, 0, width, height),
+      close: () => URL.revokeObjectURL(url)
+    };
+  } catch {
+    URL.revokeObjectURL(url);
+    return null;
+  }
+}
+
+async function prepareImageForBrowserUpload(file: File): Promise<File> {
+  if (!isImageUploadFile(file)) return file;
+  if (/\.gif$/i.test(file.name) || String(file.type ?? "").toLowerCase() === "image/gif") return file;
+  const shouldForceJpeg = /\.(heic|heif)$/i.test(file.name) || /^image\/hei[cf]$/i.test(String(file.type ?? ""));
+  if (file.size <= WEB_PROXY_UPLOAD_TARGET_BYTES && !shouldForceJpeg) return file;
+
+  const decoded = await decodeImageFile(file);
+  if (!decoded?.width || !decoded?.height) return file;
+
+  try {
+    const canvas = document.createElement("canvas");
+    const attempts = [
+      { maxDim: 2400, quality: 0.84 },
+      { maxDim: 2000, quality: 0.8 },
+      { maxDim: 1600, quality: 0.76 },
+      { maxDim: 1280, quality: 0.72 },
+      { maxDim: 1024, quality: 0.68 }
+    ];
+
+    for (const attempt of attempts) {
+      const ratio = Math.min(1, attempt.maxDim / decoded.width, attempt.maxDim / decoded.height);
+      canvas.width = Math.max(1, Math.round(decoded.width * ratio));
+      canvas.height = Math.max(1, Math.round(decoded.height * ratio));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) break;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      decoded.draw(ctx, canvas.width, canvas.height);
+      const blob = await canvasToBlob(canvas, "image/jpeg", attempt.quality);
+      if (!blob) continue;
+      if (blob.size <= WEB_PROXY_UPLOAD_TARGET_BYTES || blob.size < file.size) {
+        return new File([blob], replaceFileExtension(file.name, ".jpg"), {
+          type: "image/jpeg",
+          lastModified: file.lastModified
+        });
+      }
+    }
+  } finally {
+    decoded.close();
+  }
+
+  return file;
+}
+
+function uploadErrorMessage(file: File, fallback: string) {
+  const raw = String(fallback ?? "").trim();
+  if (/FUNCTION_PAYLOAD_TOO_LARGE|Request Entity Too Large|413/i.test(raw) || (!raw && file.size > WEB_PROXY_LARGE_UPLOAD_BYTES)) {
+    return uploadTooLargeMessage(file);
+  }
+  return raw || `Failed to upload "${file.name}".`;
+}
+
 type SideNavIconName =
   | "inbox"
   | "todos"
@@ -3826,15 +3947,25 @@ export default function Home() {
     else if (opts?.channel) params.set("channel", opts.channel);
     const requestEndpoint = params.toString() ? `${endpoint}?${params.toString()}` : endpoint;
     for (const file of Array.from(files)) {
+      const uploadFile = await prepareImageForBrowserUpload(file);
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", uploadFile, uploadFile.name);
       const resp = await fetch(requestEndpoint, {
         method: "POST",
         body: fd
       });
-      const payload = await resp.json().catch(() => null);
+      const raw = await resp.text();
+      const payload = raw
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })()
+        : null;
       if (!resp.ok || !payload?.url) {
-        window.alert(payload?.error ?? `Failed to upload "${file.name}".`);
+        window.alert(uploadErrorMessage(file, payload?.error ?? raw));
         continue;
       }
       urlsToAppend.push(String(payload.url));
@@ -3848,7 +3979,7 @@ export default function Home() {
     setCampaignError(null);
     try {
       for (const file of Array.from(files)) {
-        if (!String(file.type ?? "").startsWith("image/")) {
+        if (!isImageUploadFile(file)) {
           window.alert(`"${file.name}" must be an image file.`);
           return;
         }
@@ -3875,7 +4006,7 @@ export default function Home() {
     setCampaignError(null);
     try {
       for (const file of Array.from(files)) {
-        if (!String(file.type ?? "").startsWith("image/")) {
+        if (!isImageUploadFile(file)) {
           window.alert(`"${file.name}" must be an image file.`);
           return;
         }
@@ -5818,15 +5949,16 @@ export default function Home() {
         window.alert(`"${file.name}" is too large (max 100MB).`);
         continue;
       }
-      if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+      if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
         window.alert(`"${file.name}" must be an image or video file.`);
         continue;
       }
+      const uploadFile = await prepareImageForBrowserUpload(file);
       next.push({
         name: file.name,
-        type: file.type || "application/octet-stream",
-        size: file.size,
-        file
+        type: uploadFile.type || file.type || "application/octet-stream",
+        size: uploadFile.size,
+        file: uploadFile
       });
     }
     if (next.length) {
@@ -5944,14 +6076,23 @@ export default function Home() {
       const uploadedComposeMedia: { name: string; url: string; mode: "mms" | "link" }[] = [];
       for (const att of composeSmsAttachments) {
         const fd = new FormData();
-        fd.append("file", att.file);
+        fd.append("file", att.file, att.file.name);
         const mediaResp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/media`, {
           method: "POST",
           body: fd
         });
-        const mediaPayload = await mediaResp.json().catch(() => null);
+        const mediaRaw = await mediaResp.text();
+        const mediaPayload = mediaRaw
+          ? (() => {
+              try {
+                return JSON.parse(mediaRaw);
+              } catch {
+                return null;
+              }
+            })()
+          : null;
         if (!mediaResp.ok || !mediaPayload?.url) {
-          throw new Error(mediaPayload?.error ?? `Failed to upload "${att.name}".`);
+          throw new Error(uploadErrorMessage(att.file, mediaPayload?.error ?? mediaRaw));
         }
         const mode =
           (typeof mediaPayload.mmsEligible === "boolean"
@@ -10122,8 +10263,9 @@ export default function Home() {
     file: File,
     timeoutMs = 45000
   ): Promise<any> {
+    const uploadFile = await prepareImageForBrowserUpload(file);
     const fd = new FormData();
-    fd.append("file", file);
+    fd.append("file", uploadFile, uploadFile.name);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -10132,9 +10274,18 @@ export default function Home() {
         body: fd,
         signal: controller.signal
       });
-      const payload = await resp.json().catch(() => null);
+      const raw = await resp.text();
+      const payload = raw
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return null;
+            }
+          })()
+        : null;
       if (!resp.ok || !payload?.url) {
-        throw new Error(payload?.error ?? `Failed to upload "${file.name}".`);
+        throw new Error(uploadErrorMessage(file, payload?.error ?? raw));
       }
       return payload;
     } catch (err: any) {
@@ -10164,7 +10315,7 @@ export default function Home() {
           window.alert(`"${file.name}" is too large (max 100MB).`);
           continue;
         }
-        if (!(file.type.startsWith("image/") || file.type.startsWith("video/"))) {
+        if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
           window.alert(`"${file.name}" must be an image or video file.`);
           continue;
         }
