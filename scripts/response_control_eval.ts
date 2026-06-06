@@ -51,6 +51,12 @@ const noResponseIntent = {
 const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 const suppressedBranchStart = apiIndex.indexOf("if (isSuppressed(event.from))");
 const suppressedBranch = suppressedBranchStart >= 0 ? apiIndex.slice(suppressedBranchStart, suppressedBranchStart + 450) : "";
+const leadIdentifiersStart = apiIndex.indexOf("function getLeadIdentifiers");
+const leadIdentifiersEnd = apiIndex.indexOf("function getRelatedConversations", leadIdentifiersStart);
+const leadIdentifiersBranch =
+  leadIdentifiersStart >= 0 && leadIdentifiersEnd > leadIdentifiersStart
+    ? apiIndex.slice(leadIdentifiersStart, leadIdentifiersEnd)
+    : "";
 
 const cases: Case[] = [
   {
@@ -100,6 +106,15 @@ const cases: Case[] = [
       suppressedBranch.includes("llmOptOut || isOptOut(event.body)") &&
       suppressedBranch.indexOf("publishLiveTwilioReply(reply)") > suppressedBranch.indexOf("applySmsOptOut") &&
       suppressedBranch.indexOf("publishLiveTwilioReply(reply)") < suppressedBranch.indexOf("<Response></Response>")
+  },
+  {
+    id: "sms_stop_suppression_uses_twilio_from_when_lead_phone_blank",
+    expected: true,
+    run: () =>
+      leadIdentifiersBranch.includes("firstNonBlank(") &&
+      leadIdentifiersBranch.includes("conv?.lead?.phone") &&
+      leadIdentifiersBranch.includes("eventFrom && !eventFrom.includes(\"@\") ? eventFrom : \"\"") &&
+      !/const\s+leadPhoneRaw\s*=\s*conv\?\.lead\?\.phone\s*\?\?/.test(leadIdentifiersBranch)
   }
 ];
 
