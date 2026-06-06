@@ -730,6 +730,14 @@ function hasInventoryWatchContext(conv?: Conversation | null): boolean {
   );
 }
 
+function hasPendingIncomingInventoryContext(conv?: Conversation | null): boolean {
+  return !!(
+    (conv as any)?.pendingIncomingInventory ||
+    String((conv as any)?.followUp?.reason ?? "").toLowerCase().includes("pending_incoming_inventory") ||
+    String((conv as any)?.dialogState?.name ?? "").toLowerCase().includes("pending_incoming_inventory")
+  );
+}
+
 function isInventoryWatchAckNoReply(inbound: string, conv?: Conversation | null): boolean {
   if (!hasInventoryWatchContext(conv)) return false;
   const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
@@ -761,6 +769,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const draftText = String(draft ?? "").trim();
   const draftLower = draftText.toLowerCase();
   const immediateArrivalInbound = isImmediateArrivalInbound(inbound);
+  const pendingIncomingInventoryContext = hasPendingIncomingInventoryContext(conv);
   if (!draftText) {
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
@@ -868,6 +877,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   }
   if (
     !safeFinanceProgressHandoff &&
+    !pendingIncomingInventoryContext &&
     /\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)
   ) {
     reasons.push("scheduling-sensitive inbound");
