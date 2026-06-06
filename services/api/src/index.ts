@@ -13033,6 +13033,51 @@ function resolveManualSmsDestination(conv: Conversation): string {
   return "";
 }
 
+async function sendTwilioOutboundSmsOrMms(args: {
+  client: any;
+  from: string;
+  to: string;
+  body: string;
+  mediaUrls?: string[];
+  timeoutMs: number;
+}): Promise<{ sid: string; sids: string[] }> {
+  const mediaUrls = (args.mediaUrls ?? []).filter(url => String(url ?? "").trim().length > 0);
+  if (mediaUrls.length === 0) {
+    const msg = (await withTimeout(
+      args.client.messages.create({
+        from: args.from,
+        to: args.to,
+        body: args.body
+      }),
+      args.timeoutMs,
+      "twilio send"
+    )) as { sid: string };
+    return { sid: msg.sid, sids: [msg.sid] };
+  }
+
+  // Twilio MMS has a 5 MB total-media limit per request. Split multiple
+  // attachments so normal phone photo uploads do not fail as one large MMS.
+  const chunks = mediaUrls.length > 1 ? mediaUrls.map(url => [url]) : [mediaUrls];
+  const sids: string[] = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const payload: any = {
+      from: args.from,
+      to: args.to,
+      mediaUrl: chunks[i]
+    };
+    if (i === 0 && args.body.trim().length > 0) {
+      payload.body = args.body;
+    }
+    const msg = (await withTimeout(
+      args.client.messages.create(payload),
+      args.timeoutMs,
+      i === 0 ? "twilio send" : "twilio mms media send"
+    )) as { sid: string };
+    sids.push(msg.sid);
+  }
+  return { sid: sids[0], sids };
+}
+
 function inferExtensionFromMedia(contentType: string | null, sourceUrl: string): string {
   const ct = String(contentType ?? "").toLowerCase();
   if (ct.includes("jpeg")) return "jpg";
@@ -44401,16 +44446,14 @@ app.post("/conversations/:id/send", async (req, res) => {
       });
     }
     const client = twilio(accountSid, authToken);
-    const msg = await withTimeout(
-      client.messages.create({
-        from,
-        to,
-        body: smsBody,
-        ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
-      }),
-      outboundSendTimeoutMs,
-      "twilio send"
-    );
+    const msg = await sendTwilioOutboundSmsOrMms({
+      client,
+      from,
+      to,
+      body: smsBody,
+      mediaUrls,
+      timeoutMs: outboundSendTimeoutMs
+    });
 
     // Log as truly sent via Twilio (store SID)
     const hadOutbound = conv.messages.some(m => m.direction === "out");
@@ -44426,6 +44469,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       ok: true,
       sent: true,
       sid: msg.sid,
+      sids: msg.sids,
       conversation: conv
     });
   } catch (err: any) {

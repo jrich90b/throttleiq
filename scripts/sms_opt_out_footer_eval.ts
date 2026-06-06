@@ -102,6 +102,16 @@ assert.match(
   /const to = resolveManualSmsDestination\(conv\);/,
   "manual SMS send must use the resolved destination helper"
 );
+assert.match(
+  apiSource,
+  /async function sendTwilioOutboundSmsOrMms[\s\S]*?mediaUrls\.length > 1 \? mediaUrls\.map\(url => \[url\]\) : \[mediaUrls\]/,
+  "manual MMS sends must split multiple attachments into separate Twilio requests"
+);
+assert.match(
+  apiSource,
+  /const msg = await sendTwilioOutboundSmsOrMms\({[\s\S]*?mediaUrls,[\s\S]*?timeoutMs: outboundSendTimeoutMs[\s\S]*?}\);/,
+  "manual SMS route must use the split-capable Twilio send helper"
+);
 const invalidManualSmsBranch = apiSource.match(/if \(!to\.startsWith\("\+"\)\) \{[\s\S]*?error: "lead has no valid phone number for SMS send"[\s\S]*?\n  \}/)?.[0] ?? "";
 assert.ok(invalidManualSmsBranch, "manual SMS invalid-phone branch should return a clear missing-phone error");
 assert.doesNotMatch(
