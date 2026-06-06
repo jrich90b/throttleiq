@@ -94,6 +94,23 @@ assert.match(
 );
 assert.match(
   apiSource,
+  /function resolveManualSmsDestination\(conv: Conversation\): string \{[\s\S]*?conv\.lead\?\.phone[\s\S]*?conv\.leadKey[\s\S]*?conv\.id/,
+  "manual SMS destination must prefer the saved lead/contact phone before falling back to conversation keys"
+);
+assert.match(
+  apiSource,
+  /const to = resolveManualSmsDestination\(conv\);/,
+  "manual SMS send must use the resolved destination helper"
+);
+const invalidManualSmsBranch = apiSource.match(/if \(!to\.startsWith\("\+"\)\) \{[\s\S]*?error: "lead has no valid phone number for SMS send"[\s\S]*?\n  \}/)?.[0] ?? "";
+assert.ok(invalidManualSmsBranch, "manual SMS invalid-phone branch should return a clear missing-phone error");
+assert.doesNotMatch(
+  invalidManualSmsBranch,
+  /appendOutbound|finalizeDraftAsSent|reconcileManualSmsSendState/,
+  "manual SMS invalid-phone branch must not store a failed send as a normal outbound message"
+);
+assert.match(
+  apiSource,
   /const smsMessage = ensureInitialSmsOptOutFooter\(conv, message,[\s\S]*?body: smsMessage/,
   "scheduled SMS sends must send the prepared opt-out copy"
 );

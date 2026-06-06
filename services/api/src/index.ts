@@ -12991,6 +12991,19 @@ function normalizePhone(raw: string): string {
   return trimmed;
 }
 
+function normalizeSmsPhone(raw: unknown): string {
+  const normalized = normalizePhone(String(raw ?? "").trim());
+  return normalized.startsWith("+") ? normalized : "";
+}
+
+function resolveManualSmsDestination(conv: Conversation): string {
+  for (const candidate of [conv.lead?.phone, conv.leadKey, conv.id]) {
+    const phone = normalizeSmsPhone(candidate);
+    if (phone) return phone;
+  }
+  return "";
+}
+
 function inferExtensionFromMedia(contentType: string | null, sourceUrl: string): string {
   const ct = String(contentType ?? "").toLowerCase();
   if (ct.includes("jpeg")) return "jpg";
@@ -44072,8 +44085,9 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
   };
 
-  // Normalize destination number from conversation leadKey
+  // Prefer the saved lead/contact phone, then fall back to phone-like conversation ids.
   const rawTo = String(conv.leadKey ?? "").trim();
+  const to = resolveManualSmsDestination(conv);
   const emailTo = conv.lead?.email ?? (rawTo.includes("@") ? rawTo : null);
   const hasSmsDraftContext = !!draftId && !!draft;
   const requestedEmailChannel = channel === "email";
@@ -44110,16 +44124,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       conversation: conv
     });
   }
-  const digits = rawTo.replace(/\D/g, "");
-  const to =
-    rawTo.startsWith("+")
-      ? rawTo
-      : digits.length === 10
-        ? `+1${digits}`
-        : digits.length > 10
-          ? `+${digits}`
-          : rawTo;
-  if (!wantsEmail) {
+  if (!wantsEmail && to.startsWith("+")) {
     smsBody = ensureInitialSmsOptOutFooter(conv, smsBody, {
       provider: "twilio",
       from: process.env.TWILIO_FROM_NUMBER ?? "salesperson",
@@ -44320,26 +44325,11 @@ app.post("/conversations/:id/send", async (req, res) => {
   }
 
   if (!to.startsWith("+")) {
-    // Not a phone number; still log as human note so it isn't lost
-    if (isManualDuplicateOutbound(conv.leadKey, smsBody, ["human", "draft_ai", "twilio"])) {
-      return res.status(400).json({
-        ok: false,
-        error: "leadKey is not a valid phone number for SMS send",
-        duplicateSuppressed: true,
-        conversation: conv
-      });
-    }
-    const hadOutbound = conv.messages.some(m => m.direction === "out");
-    const fin = finalizeDraftAsSent(conv, draftId, smsBody, "human", undefined, actorForOutbound(smsBody));
-    if (!fin.usedDraft) {
-      appendOutbound(conv, "salesperson", conv.leadKey, smsBody, "human", undefined, mediaUrls, actorForOutbound(smsBody));
-    }
-    await reconcileManualSmsSendState({ hadOutbound, delivered: false });
-    queueTuningLog(null);
-    queueTlpLog();
     return res.status(400).json({
       ok: false,
-      error: "leadKey is not a valid phone number for SMS send",
+      sent: false,
+      error: "lead has no valid phone number for SMS send",
+      details: "Add a phone number to the contact or lead, then retry the SMS.",
       conversation: conv
     });
   }
