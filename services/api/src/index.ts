@@ -5954,12 +5954,41 @@ type ThirdPartyFinanceFacilitationDecision = {
   asksThirdPartyPurchaseFacilitation: boolean;
 };
 
+function hasRiderToRiderFinanceCue(text: string | null | undefined): boolean {
+  return /\b(rider\s*(?:to|2)\s*rider|r2r)\b/i.test(String(text ?? ""));
+}
+
+function hasThirdPartyPurchaseFacilitationCue(text: string | null | undefined): boolean {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return false;
+  return /\b(private\s*(?:seller|party|sale)|marketplace|facebook\s+marketplace|craigslist|third[-\s]?party|broker|facilitat(?:e|ing|ion)|handle\s+(?:the\s+)?paperwork|process\s+(?:the\s+)?paperwork|another\s+dealer|other\s+dealer|outside\s+dealer|dealer\s+trade|bike\s+i\s+found|used\s+bike\s+i\s+found|bike\s+from\s+(?:a\s+)?(?:private|another|other|outside))\b/i.test(
+    raw
+  );
+}
+
+function hasRecentInboundThirdPartyFinanceCue(
+  history?: { direction?: string; body?: string | null }[] | null
+): boolean {
+  return (history ?? [])
+    .filter(h => h?.direction === "in")
+    .some(h => hasRiderToRiderFinanceCue(h?.body) || hasThirdPartyPurchaseFacilitationCue(h?.body));
+}
+
 function resolveThirdPartyFinanceFacilitationDecision(
-  parsed: PricingPaymentsIntentParse | null
+  parsed: PricingPaymentsIntentParse | null,
+  text?: string | null,
+  history?: { direction?: string; body?: string | null }[] | null
 ): ThirdPartyFinanceFacilitationDecision | null {
   if (!isPricingPaymentsIntentParserAccepted(parsed) || parsed?.intent !== "payments") return null;
-  const asksRiderToRiderFinancing = !!parsed.asksRiderToRiderFinancing;
-  const asksThirdPartyPurchaseFacilitation = !!parsed.asksThirdPartyPurchaseFacilitation;
+  const currentHasRiderToRiderCue = hasRiderToRiderFinanceCue(text);
+  const currentHasThirdPartyCue = hasThirdPartyPurchaseFacilitationCue(text);
+  const recentHasThirdPartyFinanceCue = hasRecentInboundThirdPartyFinanceCue(history);
+  const asksRiderToRiderFinancing =
+    !!parsed.asksRiderToRiderFinancing &&
+    (currentHasRiderToRiderCue || recentHasThirdPartyFinanceCue);
+  const asksThirdPartyPurchaseFacilitation =
+    !!parsed.asksThirdPartyPurchaseFacilitation &&
+    (currentHasThirdPartyCue || recentHasThirdPartyFinanceCue);
   if (!asksRiderToRiderFinancing && !asksThirdPartyPurchaseFacilitation) return null;
   return {
     source: "parser",
@@ -45434,10 +45463,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   if (event.provider === "twilio") {
+    const regenHistory = buildHistory(conv, 12);
     const pricingPaymentsParse = await safeLlmParse("regen_pricing_payments_parser", () =>
       parsePricingPaymentsIntentWithLLM({
         text: event.body ?? "",
-        history: buildHistory(conv, 12),
+        history: regenHistory,
         lead: conv.lead
       })
     );
@@ -45446,7 +45476,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       pricingPaymentsParse
     );
     const thirdPartyFinanceFacilitationDecision =
-      resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse);
+      resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse, event.body ?? "", regenHistory);
     if (thirdPartyFinanceFacilitationDecision) {
       const dealerProfile = await getDealerProfileHot();
       const reply = applyThirdPartyFinanceFacilitationDecision({
@@ -52872,7 +52902,7 @@ if (authToken && signature) {
     pricingPaymentsParse
   );
   const thirdPartyFinanceFacilitationDecision =
-    resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse);
+    resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse, event.body ?? "", recentHistory);
   if (event.provider === "twilio" && thirdPartyFinanceFacilitationDecision) {
     const dealerProfile = await getDealerProfileHot();
     const reply = applyThirdPartyFinanceFacilitationDecision({

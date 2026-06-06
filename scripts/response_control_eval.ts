@@ -57,6 +57,12 @@ const leadIdentifiersBranch =
   leadIdentifiersStart >= 0 && leadIdentifiersEnd > leadIdentifiersStart
     ? apiIndex.slice(leadIdentifiersStart, leadIdentifiersEnd)
     : "";
+const thirdPartyDecisionStart = apiIndex.indexOf("function resolveThirdPartyFinanceFacilitationDecision");
+const thirdPartyDecisionEnd = apiIndex.indexOf("function buildThirdPartyFinanceFacilitationReply", thirdPartyDecisionStart);
+const thirdPartyDecisionBranch =
+  thirdPartyDecisionStart >= 0 && thirdPartyDecisionEnd > thirdPartyDecisionStart
+    ? apiIndex.slice(thirdPartyDecisionStart, thirdPartyDecisionEnd)
+    : "";
 
 const cases: Case[] = [
   {
@@ -115,6 +121,18 @@ const cases: Case[] = [
       leadIdentifiersBranch.includes("conv?.lead?.phone") &&
       leadIdentifiersBranch.includes("eventFrom && !eventFrom.includes(\"@\") ? eventFrom : \"\"") &&
       !/const\s+leadPhoneRaw\s*=\s*conv\?\.lead\?\.phone\s*\?\?/.test(leadIdentifiersBranch)
+  },
+  {
+    id: "third_party_policy_requires_explicit_third_party_or_r2r_cue",
+    expected: true,
+    run: () =>
+      thirdPartyDecisionBranch.includes("hasRiderToRiderFinanceCue(text)") &&
+      thirdPartyDecisionBranch.includes("hasThirdPartyPurchaseFacilitationCue(text)") &&
+      thirdPartyDecisionBranch.includes("hasRecentInboundThirdPartyFinanceCue(history)") &&
+      thirdPartyDecisionBranch.includes("!!parsed.asksThirdPartyPurchaseFacilitation &&") &&
+      thirdPartyDecisionBranch.includes("(currentHasThirdPartyCue || recentHasThirdPartyFinanceCue)") &&
+      apiIndex.includes("resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse, event.body ?? \"\", recentHistory)") &&
+      apiIndex.includes("resolveThirdPartyFinanceFacilitationDecision(pricingPaymentsParse, event.body ?? \"\", regenHistory)")
   }
 ];
 

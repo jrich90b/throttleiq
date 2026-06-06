@@ -5655,6 +5655,12 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false
     `EXAMPLE O3
 inbound: "Can your store handle the paperwork if I buy a bike from a private seller?"
 output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":true,"confidence":0.96}`,
+    `EXAMPLE O4
+inbound: "I'm interested the road glide or cvo an was wondering how that would work with payments an everything because I'd like to trade my bike in"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.97}`,
+    `EXAMPLE O5
+inbound: "Can I trade my bike in on a Road Glide?"
+output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.96}`,
     `EXAMPLE P
 inbound: "Did G run the numbers yet?"
 output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false,"asks_down_payment":false,"asks_apr_or_term":false,"asks_external_approval_transfer":false,"asks_rider_to_rider_financing":false,"asks_third_party_purchase_facilitation":false,"confidence":0.92}`
@@ -5673,6 +5679,7 @@ output: {"intent":"payments","explicit_request":true,"asks_monthly_target":false
     "- If user asks whether a financing approval from another Harley-Davidson dealer/store transfers or is good at this store, choose payments and asks_external_approval_transfer=true.",
     "- If user asks about Rider-to-Rider / rider 2 rider / R2R financing, choose payments and asks_rider_to_rider_financing=true.",
     "- If user asks whether the dealership can broker, facilitate, trade for, or handle paperwork/financing on a private-seller or other-dealer used bike, choose payments and asks_third_party_purchase_facilitation=true.",
+    "- Normal trade-in language like 'trade my bike in' on dealership inventory is payments/trade context, not third-party purchase facilitation.",
     "- Do not let phrases like 'after hours' turn a concrete finance/private-seller question into an hours question.",
     "- In payment context, a customer-provided down-payment number is an explicit payments turn.",
     "- A statement that the customer is already approved through their own bank/credit union is not a pricing/payments request by itself.",

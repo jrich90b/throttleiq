@@ -282,6 +282,35 @@
     }
   },
   {
+    "id": "payments_trade_in_not_third_party_bishop_deleon",
+    "text": "I'm interested the road glide or cvo an was wondering how that would work with payments an everything because I'd like to trade my bike in",
+    "lead": {
+      "source": "H-D Meta Promo Offer",
+      "vehicle": {
+        "year": "2026",
+        "make": "Harley-Davidson",
+        "condition": "new",
+        "description": "Harley-Davidson Other"
+      }
+    },
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_rider_to_rider_financing": false,
+      "asks_third_party_purchase_facilitation": false
+    }
+  },
+  {
+    "id": "payments_simple_trade_in_not_third_party",
+    "text": "Can I trade my bike in on a Road Glide?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_rider_to_rider_financing": false,
+      "asks_third_party_purchase_facilitation": false
+    }
+  },
+  {
     "id": "payments_r2r_only_question",
     "text": "Do you guys do R2R financing?",
     "expected": {
