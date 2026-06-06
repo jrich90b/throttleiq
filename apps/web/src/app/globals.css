@@ -4814,10 +4814,13 @@ input[type="reset"],
 }
 
 .lr-app-theme .lr-message-composer {
-  align-items: stretch;
+  align-items: flex-start;
 }
 
 .lr-app-theme .lr-message-composer-input {
+  min-height: 3.35rem !important;
+  max-height: 9rem;
+  overflow-y: auto !important;
   background: rgba(255, 255, 255, 0.035) !important;
   border-color: rgba(148, 163, 184, 0.28) !important;
   color: #e7edf8 !important;
