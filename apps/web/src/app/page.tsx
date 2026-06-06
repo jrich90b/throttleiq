@@ -20521,12 +20521,12 @@ export default function Home() {
             </div>
             {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
             {selectedConv.manualContext?.status === "needed" && selectedConv.status !== "closed" ? (
-              <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm">
-                <div className="font-medium text-amber-950">What is this follow-up about?</div>
-                <div className="mt-1 text-xs text-amber-800">
+              <div className="mt-3 rounded-lg border px-3 py-3 text-sm lr-cadence-context-panel">
+                <div className="font-medium lr-cadence-context-title">What is this follow-up about?</div>
+                <div className="mt-1 text-xs lr-cadence-context-helper">
                   Choose a context so the follow-up cadence stays accurate.
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lr-cadence-context-grid">
                   {[
                     { key: "seller_intake", label: "Seller intake" },
                     { key: "buyer_interest", label: "Buyer interest" },
@@ -20540,7 +20540,7 @@ export default function Home() {
                     <button
                       key={option.key}
                       type="button"
-                      className="rounded border border-amber-300 bg-white px-2 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-60"
+                      className="rounded border px-2 py-2 text-xs font-semibold disabled:opacity-60 lr-cadence-context-choice"
                       disabled={!!manualContextSaving}
                       onClick={() => void submitManualContextChoice(option.key)}
                     >
@@ -20549,7 +20549,7 @@ export default function Home() {
                   ))}
                 </div>
                 {manualContextError ? (
-                  <div className="mt-2 text-xs text-red-700">{manualContextError}</div>
+                  <div className="mt-2 text-xs lr-cadence-context-error">{manualContextError}</div>
                 ) : null}
               </div>
             ) : null}
