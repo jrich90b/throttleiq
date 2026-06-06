@@ -1719,6 +1719,7 @@ export type InboundReplyAction =
   | "explicit_callback_request"
   | "schedule_context_status_update"
   | "inventory_watch_acknowledgement"
+  | "pending_incoming_inventory_acknowledgement"
   | "none";
 
 export type InboundReplyActionParse = {
@@ -2693,6 +2694,7 @@ const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "explicit_callback_request",
         "schedule_context_status_update",
         "inventory_watch_acknowledgement",
+        "pending_incoming_inventory_acknowledgement",
         "none"
       ]
     },
@@ -5967,6 +5969,7 @@ export async function parseInboundReplyActionWithLLM(args: {
   dialogState?: string | null;
   classification?: { bucket?: string | null; cta?: string | null } | null;
   hasActiveInventoryWatch?: boolean;
+  hasPendingIncomingInventory?: boolean;
 }): Promise<InboundReplyActionParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -6038,7 +6041,15 @@ output: {"action":"dealer_location_question","explicit_action":true,"should_repl
     `EXAMPLE L
 inbound: "Thats what Im looking for. Definitely hit me up if one comes in or another store has one"
 history: "out: I’m not seeing a 2022 Low Rider El Diablo in stock right now. I can check similar options, or I can keep an eye out and text you if one comes in."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to text them if one comes in","reason":"The customer explicitly accepts the out-of-stock watch offer and asks to be notified when a match comes in.","confidence":0.97}`
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks us to text them if one comes in","reason":"The customer explicitly accepts the out-of-stock watch offer and asks to be notified when a match comes in.","confidence":0.97}`,
+    `EXAMPLE M
+inbound: "Yes, let me know when it's available. Thank you"
+history: "out: Here are pictures of the 2016 Freewheeler we are taking in on trade."
+output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified when the known incoming trade is available","reason":"The customer is not asking us to watch open inventory; they are confirming notification for a specific known trade that is not here yet.","confidence":0.97}`,
+    `EXAMPLE N
+inbound: "Ok keep me posted once the trade gets here"
+history: "out: This one is not in yet, but we should have it after the trade comes in."
+output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for an update once the incoming trade arrives","reason":"The turn is tied to a known pending trade arrival, not a generic inventory watch.","confidence":0.96}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6049,6 +6060,7 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
     "- explicit_callback_request: customer explicitly asks someone to call them or says they are available/free to talk by phone now.",
     "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask.",
     "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
+    "- pending_incoming_inventory_acknowledgement: customer confirms they want to be notified about a specific known incoming trade/pending unit that is not at the store yet.",
     "- none: no matching high-priority action; leave the turn to the normal router.",
     "",
     "Priority rules:",
@@ -6058,6 +6070,7 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
     "- Do not classify 'returning your call' as explicit_callback_request unless the customer asks for another call.",
     "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
     "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; phrases like 'hit me up if one comes in' count as explicit watch acknowledgement.",
+    "- Choose pending_incoming_inventory_acknowledgement before inventory_watch_acknowledgement when the context is a known trade/pending unit coming in.",
     "- The parser selects the action only. It never authors the final customer reply.",
     "- confidence is 0..1.",
     "",
@@ -6074,7 +6087,8 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
       dialogState: args.dialogState ?? null,
       bucket: args.classification?.bucket ?? null,
       cta: args.classification?.cta ?? null,
-      hasActiveInventoryWatch: !!args.hasActiveInventoryWatch
+      hasActiveInventoryWatch: !!args.hasActiveInventoryWatch,
+      hasPendingIncomingInventory: !!args.hasPendingIncomingInventory
     })}`,
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -6103,7 +6117,8 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
     actionRaw === "dealer_location_question" ||
     actionRaw === "explicit_callback_request" ||
     actionRaw === "schedule_context_status_update" ||
-    actionRaw === "inventory_watch_acknowledgement"
+    actionRaw === "inventory_watch_acknowledgement" ||
+    actionRaw === "pending_incoming_inventory_acknowledgement"
   ) {
     action = actionRaw;
   }

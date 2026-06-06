@@ -152,5 +152,35 @@
       "explicit_action": true,
       "should_reply": true
     }
+  },
+  {
+    "id": "pending_incoming_trade_acknowledgement",
+    "text": "Yes, let me know when it's available. Thank you",
+    "history": [
+      { "direction": "out", "body": "Here are pictures of the 2016 Freewheeler we are taking in on trade." }
+    ],
+    "hasActiveInventoryWatch": false,
+    "hasPendingIncomingInventory": true,
+    "dialogState": "pending_incoming_inventory",
+    "expected": {
+      "action": "pending_incoming_inventory_acknowledgement",
+      "explicit_action": true,
+      "should_reply": true
+    }
+  },
+  {
+    "id": "pending_incoming_trade_outranks_generic_watch",
+    "text": "Ok keep me posted once the trade gets here",
+    "history": [
+      { "direction": "out", "body": "This Freewheeler is not here yet; we are taking it in on trade." }
+    ],
+    "hasActiveInventoryWatch": true,
+    "hasPendingIncomingInventory": true,
+    "dialogState": "pending_incoming_inventory",
+    "expected": {
+      "action": "pending_incoming_inventory_acknowledgement",
+      "explicit_action": true,
+      "should_reply": true
+    }
   }
 ]

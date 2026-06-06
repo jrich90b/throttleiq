@@ -595,6 +595,14 @@ import {
   type InventoryWatchPending,
   type DialogStateName
 } from "./domain/conversationStore.js";
+import {
+  buildPendingIncomingInventoryCustomerAck,
+  buildPendingIncomingInventoryFromConversation,
+  buildPendingIncomingInventoryTaskSummary,
+  hasPendingIncomingInventoryContext,
+  hasPendingIncomingInventorySignal,
+  shouldHandlePendingIncomingInventoryTurn
+} from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
@@ -24338,6 +24346,59 @@ function applyInventoryWatchConfirmation(conv: Conversation, watch: InventoryWat
   stopFollowUpCadence(conv, "inventory_watch");
 }
 
+function customerNameForPendingIncomingInventory(conv: Conversation): string {
+  return (
+    String((conv.lead as any)?.name ?? "").trim() ||
+    [String((conv.lead as any)?.firstName ?? "").trim(), String((conv.lead as any)?.lastName ?? "").trim()]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    String((conv as any)?.contact?.name ?? "").trim() ||
+    String((conv as any)?.name ?? "").trim() ||
+    "customer"
+  );
+}
+
+function applyPendingIncomingInventoryState(
+  conv: Conversation,
+  opts?: {
+    sourceText?: string | null;
+    sourceMessageId?: string | null;
+    source?: "adf" | "manual" | "customer" | "system";
+    acknowledged?: boolean;
+  }
+): boolean {
+  const nowIsoValue = new Date().toISOString();
+  const pending = buildPendingIncomingInventoryFromConversation({
+    conv,
+    sourceText: opts?.sourceText,
+    sourceMessageId: opts?.sourceMessageId,
+    source: opts?.source,
+    nowIso: nowIsoValue
+  });
+  if (!pending) return false;
+  if (opts?.acknowledged) pending.acknowledgedAt = nowIsoValue;
+  conv.pendingIncomingInventory = pending;
+  conv.inventoryWatchPending = undefined;
+  setDialogState(conv, "pending_incoming_inventory");
+  setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
+  stopFollowUpCadence(conv, "pending_incoming_inventory");
+  stopRelatedCadences(conv, "pending_incoming_inventory", { setMode: "manual_handoff" });
+  addTodo(
+    conv,
+    "call",
+    buildPendingIncomingInventoryTaskSummary({
+      pending,
+      customerName: customerNameForPendingIncomingInventory(conv)
+    }),
+    opts?.sourceMessageId ?? undefined,
+    conv.leadOwner,
+    undefined,
+    "followup"
+  );
+  return true;
+}
+
 async function resolveWatchModelFromText(
   textLower: string,
   fallbackModel?: string | null
@@ -26898,6 +26959,24 @@ async function maybeStartCadence(
   if (conv.status === "closed") return;
   if (conv.classification?.bucket === "service" || conv.classification?.cta === "service_request") return;
   if (conv.followUp?.mode === "manual_handoff" || conv.followUp?.mode === "paused_indefinite") return;
+  if (hasPendingIncomingInventoryContext(conv)) return;
+  const pendingIncomingSeedText = [
+    (conv.lead as any)?.summary,
+    conv.lead?.vehicle?.description,
+    conv.lead?.vehicle?.model,
+    opts?.manualOutboundText,
+    ...(conv.messages ?? []).slice(0, 3).map((m: any) => m.body)
+  ]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  if (hasPendingIncomingInventorySignal(pendingIncomingSeedText)) {
+    applyPendingIncomingInventoryState(conv, {
+      sourceText: pendingIncomingSeedText,
+      source: "adf"
+    });
+    return;
+  }
   const cfg = await getSchedulerConfigHot();
   const now = sentAtIso || new Date().toISOString();
   const manualCadenceContext = opts?.manualOutboundText
@@ -46766,6 +46845,20 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
       ? conv.inventoryWatches[0]
       : null);
+  const regenPendingIncomingActionSeedText = [
+    conv.pendingIncomingInventory?.note,
+    (conv.lead as any)?.summary,
+    conv.lead?.vehicle?.description,
+    conv.lead?.vehicle?.model,
+    ...(conv.messages ?? []).slice(-4).map(m => m.body),
+    event.body
+  ]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const regenPendingIncomingActionContext =
+    hasPendingIncomingInventoryContext(conv) ||
+    hasPendingIncomingInventorySignal(regenPendingIncomingActionSeedText);
   const regenInboundReplyActionParserEligible =
     (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
     process.env.LLM_ENABLED === "1" &&
@@ -46780,7 +46873,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           followUp: conv.followUp ?? null,
           dialogState: getDialogState(conv),
           classification: conv.classification ?? null,
-          hasActiveInventoryWatch: !!regenActiveInventoryWatchForAction
+          hasActiveInventoryWatch: !!regenActiveInventoryWatchForAction,
+          hasPendingIncomingInventory: regenPendingIncomingActionContext
         })
       )
     : null;
@@ -46806,6 +46900,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
     regenInboundReplyActionParse,
     "inventory_watch_acknowledgement"
+  );
+  const regenParserPendingIncomingInventoryAcknowledgement = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "pending_incoming_inventory_acknowledgement"
   );
   const regenRoutePolicyMode = getRoutePolicyMode();
   const regenTestRideEligibilityReply =
@@ -46962,6 +47060,41 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     })
     .slice(-1)[0];
   const regenLastOutboundForActionText = String(regenLastOutboundForAction?.body ?? "");
+  const regenPendingIncomingAcknowledgement =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !regenParserPricingIntent &&
+    !regenParserSchedulingIntent &&
+    !regenParserCallbackIntent &&
+    (regenParserPendingIncomingInventoryAcknowledgement ||
+      (regenInboundReplyActionFallbackAllowed &&
+        shouldHandlePendingIncomingInventoryTurn({
+          conv,
+          inboundText: event.body ?? "",
+          lastOutboundText: regenLastOutboundForActionText
+        })));
+  if (regenPendingIncomingAcknowledgement) {
+    applyPendingIncomingInventoryState(conv, {
+      sourceText: `${regenLastOutboundForActionText}\n${String(event.body ?? "")}`,
+      sourceMessageId: event.providerMessageId,
+      source: "customer",
+      acknowledged: true
+    });
+    const reply = buildPendingIncomingInventoryCustomerAck(conv.pendingIncomingInventory);
+    recordRouteOutcome("regen", "pending_incoming_inventory_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      fallback: !regenParserPendingIncomingInventoryAcknowledgement
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false,
+      shortAckIntent: false
+    });
+  }
   const regenLocationQuestion =
     regenParserLocationQuestion ||
     (regenInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
@@ -47044,6 +47177,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
+    !regenPendingIncomingActionContext &&
+    !regenParserPendingIncomingInventoryAcknowledgement &&
     (regenParserInventoryWatchAcknowledgement ||
       (regenInboundReplyActionFallbackAllowed &&
         (hasInventoryWatchConfirmationText(event.body ?? "") ||
@@ -49617,6 +49752,19 @@ if (authToken && signature) {
     (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
       ? conv.inventoryWatches[0]
       : null);
+  const pendingIncomingSeedText = [
+    conv.pendingIncomingInventory?.note,
+    (conv.lead as any)?.summary,
+    conv.lead?.vehicle?.description,
+    conv.lead?.vehicle?.model,
+    ...(conv.messages ?? []).slice(-4).map(m => m.body),
+    event.body
+  ]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const pendingIncomingContext =
+    hasPendingIncomingInventoryContext(conv) || hasPendingIncomingInventorySignal(pendingIncomingSeedText);
   const inboundReplyActionParserEligible =
     event.provider === "twilio" &&
     process.env.LLM_ENABLED === "1" &&
@@ -49631,7 +49779,8 @@ if (authToken && signature) {
           followUp: conv.followUp ?? null,
           dialogState: getDialogState(conv),
           classification: conv.classification ?? null,
-          hasActiveInventoryWatch: !!activeInventoryWatchForAction
+          hasActiveInventoryWatch: !!activeInventoryWatchForAction,
+          hasPendingIncomingInventory: pendingIncomingContext
         })
       )
     : null;
@@ -49657,6 +49806,10 @@ if (authToken && signature) {
   const inboundParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
     inboundReplyActionParse,
     "inventory_watch_acknowledgement"
+  );
+  const inboundParserPendingIncomingInventoryAcknowledgement = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "pending_incoming_inventory_acknowledgement"
   );
   const appointmentCancelOrRescheduleHint =
     event.provider === "twilio" &&
@@ -49702,6 +49855,7 @@ if (authToken && signature) {
     inboundReplyActionParse?.action === "explicit_callback_request" ||
     inboundReplyActionParse?.action === "schedule_context_status_update" ||
     inboundReplyActionParse?.action === "inventory_watch_acknowledgement" ||
+    inboundReplyActionParse?.action === "pending_incoming_inventory_acknowledgement" ||
     customerAckActionParse?.action === "appointment_status_question" ||
     customerAckActionParse?.action === "immediate_arrival_request";
   const customerAckNoResponse =
@@ -49766,6 +49920,44 @@ if (authToken && signature) {
     }
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  const pendingIncomingLastOutboundText = String(
+    [...(conv.messages ?? [])]
+      .filter(m => m.direction === "out" && m.body)
+      .slice(-1)[0]?.body ?? ""
+  );
+  const pendingIncomingAcknowledgement =
+    event.provider === "twilio" &&
+    !inboundParserLocationQuestion &&
+    !inboundParserExplicitCallbackRequest &&
+    !inboundParserScheduleStatusUpdate &&
+    (inboundParserPendingIncomingInventoryAcknowledgement ||
+      (inboundReplyActionFallbackAllowed &&
+        shouldHandlePendingIncomingInventoryTurn({
+          conv,
+          inboundText: event.body ?? "",
+          lastOutboundText: pendingIncomingLastOutboundText
+        })));
+  if (pendingIncomingAcknowledgement) {
+    applyPendingIncomingInventoryState(conv, {
+      sourceText: `${pendingIncomingLastOutboundText}\n${String(event.body ?? "")}`,
+      sourceMessageId: event.providerMessageId,
+      source: "customer",
+      acknowledged: true
+    });
+    const reply = buildPendingIncomingInventoryCustomerAck(conv.pendingIncomingInventory);
+    recordRouteOutcome("live", "pending_incoming_inventory_acknowledgement", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      fallback: !inboundParserPendingIncomingInventoryAcknowledgement
+    });
+    return publishLiveTwilioReply(
+      reply,
+      { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false },
+      { draftOnly: conv.mode === "human" }
+    );
   }
   if (appointmentCancelOrRescheduleAccepted && conv.mode !== "human") {
     const cfg = await getSchedulerConfigHot();

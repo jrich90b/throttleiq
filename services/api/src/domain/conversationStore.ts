@@ -411,6 +411,7 @@ export type DialogStateName =
   | "inventory_watch_prompted"
   | "inventory_watch_active"
   | "inventory_watch_matched"
+  | "pending_incoming_inventory"
   | "inventory_answered"
   | "compare_request"
   | "compare_answered"
@@ -545,6 +546,21 @@ export type InventoryWatchPending = {
   termMonths?: number;
   downPayment?: number;
   askedAt: string;
+};
+
+export type PendingIncomingInventory = {
+  model?: string;
+  year?: number;
+  make?: string;
+  condition?: string;
+  label?: string;
+  note?: string;
+  source?: "adf" | "manual" | "customer" | "system";
+  sourceMessageId?: string;
+  status: "pending" | "arrived" | "cancelled";
+  createdAt: string;
+  updatedAt: string;
+  acknowledgedAt?: string;
 };
 
 export type FinanceDocsState = {
@@ -717,6 +733,7 @@ export type Conversation = {
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
+  pendingIncomingInventory?: PendingIncomingInventory;
   inventoryContext?: {
     model?: string;
     year?: string;

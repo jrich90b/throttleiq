@@ -8,6 +8,7 @@ type Action =
   | "explicit_callback_request"
   | "schedule_context_status_update"
   | "inventory_watch_acknowledgement"
+  | "pending_incoming_inventory_acknowledgement"
   | "none";
 
 type Example = {
@@ -15,6 +16,7 @@ type Example = {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
   hasActiveInventoryWatch?: boolean;
+  hasPendingIncomingInventory?: boolean;
   dialogState?: string | null;
   expected: {
     action: Action;
@@ -53,7 +55,8 @@ for (const ex of examples) {
     text: ex.text,
     history: ex.history,
     dialogState: ex.dialogState,
-    hasActiveInventoryWatch: !!ex.hasActiveInventoryWatch
+    hasActiveInventoryWatch: !!ex.hasActiveInventoryWatch,
+    hasPendingIncomingInventory: !!ex.hasPendingIncomingInventory
   });
 
   if (!result) {
