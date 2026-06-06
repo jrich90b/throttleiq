@@ -4131,8 +4131,16 @@ input[type="reset"],
   background: linear-gradient(180deg, rgba(17, 28, 44, 0.78), rgba(12, 20, 33, 0.76));
 }
 
+.lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-shell {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-btn {
+  flex: 1 1 auto;
   min-height: 86px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-filter-card {
@@ -4158,8 +4166,13 @@ input[type="reset"],
     system-ui,
     sans-serif;
   color: #f2f6ff !important;
+  display: block;
   font-weight: 640;
   letter-spacing: 0.014em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lr-campaign-theme .lr-campaign-content .lr-campaign-btn-primary {
@@ -4174,8 +4187,66 @@ input[type="reset"],
 
 .lr-campaign-theme .lr-campaign-list .lr-campaign-list-row-meta {
   color: #dce7fb !important;
+  display: block;
   font-weight: 540;
   letter-spacing: 0.01em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-btn {
+  align-items: center;
+  align-self: stretch;
+  background:
+    linear-gradient(180deg, rgba(127, 29, 29, 0.22), rgba(69, 10, 10, 0.14)),
+    rgba(15, 23, 42, 0.5);
+  border-left: 1px solid rgba(248, 113, 113, 0.26);
+  color: #fecaca;
+  display: flex;
+  flex: 0 0 3rem;
+  justify-content: center;
+  min-height: 86px;
+  min-width: 3rem;
+  outline: none;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    color 0.16s ease;
+  width: 3rem;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-btn:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(185, 28, 28, 0.32), rgba(127, 29, 29, 0.2)),
+    rgba(30, 41, 59, 0.64) !important;
+  border-left-color: rgba(248, 113, 113, 0.58);
+  color: #fff1f2;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-btn:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 0 0 3px rgba(248, 113, 113, 0.24);
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-btn:disabled {
+  color: #fca5a5;
+  cursor: not-allowed;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-icon {
+  height: 1.05rem;
+  width: 1.05rem;
+  stroke-width: 2;
+}
+
+.lr-campaign-theme .lr-campaign-list .lr-campaign-delete-loading {
+  color: #fee2e2;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .lr-campaign-theme .lr-campaign-panel,

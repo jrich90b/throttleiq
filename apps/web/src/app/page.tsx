@@ -13507,10 +13507,12 @@ export default function Home() {
                   return (
                     <div
                       key={item.id}
-                      className={`flex items-stretch ${selected ? "bg-[var(--surface-2)] lr-campaign-list-row-selected" : "lr-campaign-list-row"}`}
+                      className={`flex items-stretch lr-campaign-list-row-shell ${
+                        selected ? "bg-[var(--surface-2)] lr-campaign-list-row-selected" : "lr-campaign-list-row"
+                      }`}
                     >
                       <button
-                        className="flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)] lr-campaign-list-row-btn"
+                        className="min-w-0 flex-1 w-full text-left p-3 hover:bg-[var(--surface-2)] lr-campaign-list-row-btn"
                         onClick={() => {
                           setCampaignSelectedId(item.id);
                           applyCampaignToForm(item);
@@ -13533,8 +13535,10 @@ export default function Home() {
                         ) : null}
                       </button>
                       <button
-                        className="w-10 h-10 text-xs border-l text-red-600 hover:text-red-700 hover:bg-red-50 disabled:opacity-60"
+                        type="button"
+                        className="shrink-0 text-xs disabled:opacity-60 lr-campaign-delete-btn"
                         title="Delete campaign"
+                        aria-label={`Delete campaign ${item.name || "Untitled campaign"}`}
                         disabled={
                           campaignDeletingId === item.id ||
                           campaignSaving ||
@@ -13545,7 +13549,28 @@ export default function Home() {
                           void deleteCampaignById(item.id);
                         }}
                       >
-                        {campaignDeletingId === item.id ? "…" : "🗑️"}
+                        {campaignDeletingId === item.id ? (
+                          <span className="lr-campaign-delete-loading" aria-hidden="true">
+                            ...
+                          </span>
+                        ) : (
+                          <svg
+                            className="lr-campaign-delete-icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path d="M3 6h18" />
+                            <path d="M8 6V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2v2" />
+                            <path d="M19 6l-1 14c-.1 1.1-1 2-2.1 2H8.1C7 22 6.1 21.1 6 20L5 6" />
+                            <path d="M10 11v6" />
+                            <path d="M14 11v6" />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   );
