@@ -40,6 +40,10 @@ function isImageUploadFile(file: File) {
   return String(file.type ?? "").startsWith("image/") || IMAGE_UPLOAD_EXT_RE.test(file.name);
 }
 
+function isImageAttachment(name: string, type: string) {
+  return String(type ?? "").startsWith("image/") || IMAGE_UPLOAD_EXT_RE.test(name);
+}
+
 function isVideoUploadFile(file: File) {
   return String(file.type ?? "").startsWith("video/") || VIDEO_UPLOAD_EXT_RE.test(file.name);
 }
@@ -150,6 +154,109 @@ function uploadErrorMessage(file: File, fallback: string) {
     return uploadTooLargeMessage(file);
   }
   return raw || `Failed to upload "${file.name}".`;
+}
+
+type SmsAttachmentDraftStatus = "processing" | "uploading" | "ready" | "error";
+
+type SmsAttachmentDraft = {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  status: SmsAttachmentDraftStatus;
+  file?: File;
+  url?: string;
+  mode?: "mms" | "link";
+  previewUrl?: string;
+  error?: string;
+};
+
+function createAttachmentId(file: File) {
+  return `media_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.name.replace(/[^a-z0-9]/gi, "_").slice(0, 24)}`;
+}
+
+function createAttachmentPreviewUrl(file: File) {
+  if (typeof URL === "undefined") return undefined;
+  if (!isImageUploadFile(file)) return undefined;
+  try {
+    return URL.createObjectURL(file);
+  } catch {
+    return undefined;
+  }
+}
+
+function revokeAttachmentPreview(att: Pick<SmsAttachmentDraft, "previewUrl">) {
+  if (typeof URL === "undefined") return;
+  if (att.previewUrl?.startsWith("blob:")) {
+    URL.revokeObjectURL(att.previewUrl);
+  }
+}
+
+function MediaAttachmentPreviewList({
+  attachments,
+  onRemove,
+  removeDisabled = false
+}: {
+  attachments: SmsAttachmentDraft[];
+  onRemove: (index: number) => void;
+  removeDisabled?: boolean;
+}) {
+  if (!attachments.length) return null;
+
+  return (
+    <div className="lr-media-attachment-list">
+      {attachments.map((att, idx) => {
+        const isBusy = att.status === "processing" || att.status === "uploading";
+        const statusLabel =
+          att.status === "processing"
+            ? "Preparing"
+            : att.status === "uploading"
+              ? "Uploading"
+              : att.status === "error"
+                ? "Failed"
+                : att.mode === "link"
+                  ? "Link"
+                  : "Ready";
+        const isImage = Boolean(att.previewUrl) && isImageAttachment(att.name, att.type);
+        return (
+          <div
+            key={att.id}
+            className={`lr-media-attachment-card ${att.status === "error" ? "lr-media-attachment-card--error" : ""}`}
+            title={att.error || att.name}
+          >
+            <div className="lr-media-attachment-thumb">
+              {isImage && att.previewUrl ? (
+                <img src={att.previewUrl} alt={att.name} className="lr-media-attachment-image" />
+              ) : (
+                <div className="lr-media-attachment-file">
+                  <span className="lr-media-attachment-file-icon" aria-hidden="true" />
+                  <span>{String(att.type ?? "").startsWith("video/") ? "Video" : "Media"}</span>
+                </div>
+              )}
+              {isBusy ? (
+                <div className="lr-media-upload-overlay" aria-label={`${statusLabel} ${att.name}`}>
+                  <span className="lr-media-upload-spinner" aria-hidden="true" />
+                </div>
+              ) : null}
+            </div>
+            <div className="lr-media-attachment-meta">
+              <span className="lr-media-attachment-name">{att.name}</span>
+              <span className="lr-media-attachment-status">{statusLabel}</span>
+            </div>
+            <button
+              type="button"
+              className="lr-media-attachment-remove"
+              onClick={() => onRemove(idx)}
+              disabled={removeDisabled}
+              aria-label={`Remove ${att.name}`}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 type SideNavIconName =
@@ -3365,9 +3472,7 @@ export default function Home() {
   const [composePaymentRequestDescription, setComposePaymentRequestDescription] = useState("");
   const [composePaymentRequestBusy, setComposePaymentRequestBusy] = useState(false);
   const [composePaymentRequestError, setComposePaymentRequestError] = useState<string | null>(null);
-  const [composeSmsAttachments, setComposeSmsAttachments] = useState<
-    { name: string; type: string; size: number; file: File }[]
-  >([]);
+  const [composeSmsAttachments, setComposeSmsAttachments] = useState<SmsAttachmentDraft[]>([]);
   const [composeSmsAttachmentsBusy, setComposeSmsAttachmentsBusy] = useState(false);
   const composeRecipientLocked = Boolean(composeConversation?.id) || composePaymentRequestBusy;
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
@@ -3422,9 +3527,7 @@ export default function Home() {
   const [pendingSend, setPendingSend] = useState<
     { body: string; draftId?: string; mediaUrls?: string[]; channel: "sms" | "email" } | null
   >(null);
-  const [smsAttachments, setSmsAttachments] = useState<
-    { name: string; type: string; size: number; url: string; mode: "mms" | "link" }[]
-  >([]);
+  const [smsAttachments, setSmsAttachments] = useState<SmsAttachmentDraft[]>([]);
   const [smsAttachmentsBusy, setSmsAttachmentsBusy] = useState(false);
   const [emailAttachments, setEmailAttachments] = useState<
     { name: string; type: string; size: number; content: string }[]
@@ -3443,6 +3546,20 @@ export default function Home() {
   const [reminderInlineText, setReminderInlineText] = useState("");
   const [reminderInlineTarget, setReminderInlineTarget] = useState<string>("lead_owner");
   const [reminderInlineDueAt, setReminderInlineDueAt] = useState("");
+
+  function clearSmsAttachmentDrafts() {
+    setSmsAttachments(prev => {
+      prev.forEach(revokeAttachmentPreview);
+      return [];
+    });
+  }
+
+  function clearComposeSmsAttachmentDrafts() {
+    setComposeSmsAttachments(prev => {
+      prev.forEach(revokeAttachmentPreview);
+      return [];
+    });
+  }
   const [reminderInlineLeadMinutes, setReminderInlineLeadMinutes] = useState("30");
   const [reminderInlineSaving, setReminderInlineSaving] = useState(false);
   const [contactInlineOpenId, setContactInlineOpenId] = useState<string | null>(null);
@@ -5895,7 +6012,7 @@ export default function Home() {
     setComposeInventoryOpen(false);
     setComposeSearch("");
     setComposeSelection(null);
-    setComposeSmsAttachments([]);
+    clearComposeSmsAttachmentDrafts();
     setComposeSmsAttachmentsBusy(false);
     setComposeConversation(null);
     setComposePaymentRequestOpen(false);
@@ -5941,34 +6058,71 @@ export default function Home() {
   async function handleComposeSmsAttachments(files: FileList | null) {
     if (!files || files.length === 0) return;
     setComposeSmsAttachmentsBusy(true);
-    const selected = Array.from(files);
-    const maxPerFile = 100 * 1024 * 1024;
-    const next: { name: string; type: string; size: number; file: File }[] = [];
-    for (const file of selected) {
-      if (file.size > maxPerFile) {
-        window.alert(`"${file.name}" is too large (max 100MB).`);
-        continue;
+    try {
+      const selected = Array.from(files);
+      const maxPerFile = 100 * 1024 * 1024;
+      for (const file of selected) {
+        if (file.size > maxPerFile) {
+          window.alert(`"${file.name}" is too large (max 100MB).`);
+          continue;
+        }
+        if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
+          window.alert(`"${file.name}" must be an image or video file.`);
+          continue;
+        }
+
+        const id = createAttachmentId(file);
+        const previewUrl = createAttachmentPreviewUrl(file);
+        setComposeSmsAttachments(prev => [
+          ...prev,
+          {
+            id,
+            name: file.name,
+            type: file.type || "application/octet-stream",
+            size: file.size,
+            status: "processing",
+            previewUrl
+          }
+        ]);
+
+        try {
+          const uploadFile = await prepareImageForBrowserUpload(file);
+          setComposeSmsAttachments(prev =>
+            prev.map(att =>
+              att.id === id
+                ? {
+                    ...att,
+                    name: uploadFile.name || file.name,
+                    type: uploadFile.type || file.type || "application/octet-stream",
+                    size: uploadFile.size,
+                    file: uploadFile,
+                    status: "ready",
+                    error: undefined
+                  }
+                : att
+            )
+          );
+        } catch (err: any) {
+          setComposeSmsAttachments(prev =>
+            prev.map(att =>
+              att.id === id
+                ? { ...att, status: "error", error: err?.message ?? "Could not prepare media." }
+                : att
+            )
+          );
+        }
       }
-      if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
-        window.alert(`"${file.name}" must be an image or video file.`);
-        continue;
-      }
-      const uploadFile = await prepareImageForBrowserUpload(file);
-      next.push({
-        name: file.name,
-        type: uploadFile.type || file.type || "application/octet-stream",
-        size: uploadFile.size,
-        file: uploadFile
-      });
+    } finally {
+      setComposeSmsAttachmentsBusy(false);
     }
-    if (next.length) {
-      setComposeSmsAttachments(prev => [...prev, ...next]);
-    }
-    setComposeSmsAttachmentsBusy(false);
   }
 
   function removeComposeSmsAttachment(index: number) {
-    setComposeSmsAttachments(prev => prev.filter((_, i) => i !== index));
+    setComposeSmsAttachments(prev => {
+      const removed = prev[index];
+      if (removed) revokeAttachmentPreview(removed);
+      return prev.filter((_, i) => i !== index);
+    });
   }
 
   function buildComposeConversationPayload() {
@@ -6057,16 +6211,21 @@ export default function Home() {
   }
 
   async function sendCompose() {
+    const readyComposeAttachments = composeSmsAttachments.filter(att => att.status === "ready" && att.file);
     if (!composePhone.trim()) {
       setComposeError("Phone is required.");
       return;
     }
-    if (!composeBody.trim() && composeSmsAttachments.length === 0) {
+    if (!composeBody.trim() && readyComposeAttachments.length === 0) {
       setComposeError("Message or media is required.");
       return;
     }
-    if (composeSmsAttachmentsBusy) {
+    if (composeSmsAttachmentsBusy || composeSmsAttachments.some(att => att.status === "processing" || att.status === "uploading")) {
       setComposeError("Media is still uploading. Please wait a moment.");
+      return;
+    }
+    if (composeSmsAttachments.some(att => att.status === "error")) {
+      setComposeError("Remove failed media or try uploading it again before sending.");
       return;
     }
     setComposeSending(true);
@@ -6074,7 +6233,8 @@ export default function Home() {
     try {
       const conv = await ensureComposeConversation();
       const uploadedComposeMedia: { name: string; url: string; mode: "mms" | "link" }[] = [];
-      for (const att of composeSmsAttachments) {
+      for (const att of readyComposeAttachments) {
+        if (!att.file) continue;
         const fd = new FormData();
         fd.append("file", att.file, att.file.name);
         const mediaResp = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/media`, {
@@ -6130,7 +6290,7 @@ export default function Home() {
       if (!sendResp.ok || sendData?.ok === false) {
         throw new Error(sendData?.error ?? "Failed to send SMS");
       }
-      setComposeSmsAttachments([]);
+      clearComposeSmsAttachmentDrafts();
       setComposeOpen(false);
       openConversation(conv.id);
       setSelectedConv(sendData?.conversation ?? conv);
@@ -9805,9 +9965,9 @@ export default function Home() {
     }
 
     if (messageFilter !== "sms") {
-      if (smsAttachments.length) setSmsAttachments([]);
+      if (smsAttachments.length) clearSmsAttachmentDrafts();
     } else if (selectedConv?.id) {
-      if (smsAttachments.length) setSmsAttachments([]);
+      if (smsAttachments.length) clearSmsAttachmentDrafts();
     }
   }, [messageFilter, selectedConv?.id]);
 
@@ -10048,7 +10208,7 @@ export default function Home() {
         );
       } else if (sendChannel === "sms") {
         const mediaCount = payload.mediaUrls?.length ?? 0;
-        setSmsAttachments([]);
+        clearSmsAttachmentDrafts();
         setSmsAttachmentsBusy(false);
         if (mediaCount > 0) {
           setSaveToast(`SMS sent with ${mediaCount} attachment${mediaCount === 1 ? "" : "s"}.`);
@@ -10141,6 +10301,10 @@ export default function Home() {
       window.alert("Media is still uploading. Please wait a moment.");
       return;
     }
+    if (sendChannel === "sms" && smsAttachments.some(att => att.status === "error")) {
+      window.alert("Remove failed media or try uploading it again before sending.");
+      return;
+    }
     const useEmailDraft = sendChannel === "email" && !!emailDraft && !emailManualMode;
     const effectiveDraft = sendChannel === "email" ? null : pendingDraft;
     const bodySource =
@@ -10156,12 +10320,14 @@ export default function Home() {
         body = injectBookingUrl(body, bookingUrl);
       }
     }
+    const readySmsAttachments =
+      sendChannel === "sms" ? smsAttachments.filter(att => att.status === "ready" && att.url) : [];
     const smsMmsMediaUrls =
       sendChannel === "sms"
-        ? smsAttachments.filter(att => att.mode === "mms").map(att => att.url)
+        ? readySmsAttachments.filter(att => att.mode === "mms").map(att => String(att.url))
         : [];
     const smsLinkAttachments =
-      sendChannel === "sms" ? smsAttachments.filter(att => att.mode === "link") : [];
+      sendChannel === "sms" ? readySmsAttachments.filter(att => att.mode === "link") : [];
     const smsLinkSuffix =
       sendChannel === "sms" && smsLinkAttachments.length
         ? `\n\n${smsLinkAttachments
@@ -10320,15 +10486,34 @@ export default function Home() {
           continue;
         }
 
+        const id = createAttachmentId(file);
+        const previewUrl = createAttachmentPreviewUrl(file);
+        setSmsAttachments(prev => [
+          ...prev,
+          {
+            id,
+            name: file.name,
+            type: file.type || "application/octet-stream",
+            size: file.size,
+            status: "uploading",
+            previewUrl
+          }
+        ]);
+
         let payload: any = null;
         try {
           payload = await uploadConversationMediaFile(selectedConv.id, file);
         } catch (err: any) {
-          window.alert(err?.message ?? `Failed to upload "${file.name}".`);
+          const message = err?.message ?? `Failed to upload "${file.name}".`;
+          setSmsAttachments(prev =>
+            prev.map(att => (att.id === id ? { ...att, status: "error", error: message } : att))
+          );
+          window.alert(message);
           continue;
         }
 
         const nextAttachment = {
+          id,
           name: String(payload.name ?? file.name),
           type: String((payload.type ?? file.type) || "application/octet-stream"),
           size: Number(payload.size ?? file.size ?? 0),
@@ -10338,9 +10523,11 @@ export default function Home() {
               ? payload.mmsEligible
               : file.size <= 5 * 1024 * 1024)
               ? ("mms" as const)
-              : ("link" as const)
+              : ("link" as const),
+          status: "ready" as const,
+          previewUrl
         };
-        setSmsAttachments(prev => [...prev, nextAttachment]);
+        setSmsAttachments(prev => prev.map(att => (att.id === id ? nextAttachment : att)));
       }
     } finally {
       setSmsAttachmentsBusy(false);
@@ -10348,7 +10535,11 @@ export default function Home() {
   }
 
   function removeSmsAttachment(index: number) {
-    setSmsAttachments(prev => prev.filter((_, i) => i !== index));
+    setSmsAttachments(prev => {
+      const removed = prev[index];
+      if (removed) revokeAttachmentPreview(removed);
+      return prev.filter((_, i) => i !== index);
+    });
   }
 
   async function regenerateDraft() {
@@ -22381,32 +22572,8 @@ export default function Home() {
 
             {messageFilter === "sms" ? (
               <div className="mt-2 flex flex-col gap-2">
-                {smsAttachments.length ? (
-                  <div className="flex flex-wrap gap-2">
-                    {smsAttachments.map((att, idx) => (
-                      <div
-                        key={`${att.url}-${idx}`}
-                        className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
-                      >
-                        <span className="truncate max-w-[220px]">
-                          {att.name}
-                          {att.mode === "link" ? " (link)" : ""}
-                        </span>
-                        <button
-                          type="button"
-                          className="text-gray-500 hover:text-gray-800"
-                          onClick={() => removeSmsAttachment(idx)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                {smsAttachmentsBusy ? (
-                  <div className="text-xs text-gray-500">Uploading media…</div>
-                ) : null}
-                {smsAttachments.some(att => att.mode === "link") ? (
+                <MediaAttachmentPreviewList attachments={smsAttachments} onRemove={removeSmsAttachment} />
+                {smsAttachments.some(att => att.status === "ready" && att.mode === "link") ? (
                   <div className="text-xs text-gray-500">
                     Large files will be sent as links automatically.
                   </div>
@@ -22724,31 +22891,11 @@ export default function Home() {
               </div>
             ) : null}
             <div className="mt-3 flex flex-col gap-2">
-              {composeSmsAttachments.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {composeSmsAttachments.map((att, idx) => (
-                    <div
-                      key={`${att.name}-${att.size}-${idx}`}
-                      className="flex items-center gap-2 border rounded px-2 py-1 text-xs"
-                    >
-                      <span className="truncate max-w-[220px]">
-                        {att.name}
-                      </span>
-                      <button
-                        type="button"
-                        className="text-gray-500 hover:text-gray-800"
-                        onClick={() => removeComposeSmsAttachment(idx)}
-                        disabled={composeSending}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {composeSmsAttachmentsBusy ? (
-                <div className="text-xs text-gray-500">Processing media…</div>
-              ) : null}
+              <MediaAttachmentPreviewList
+                attachments={composeSmsAttachments}
+                onRemove={removeComposeSmsAttachment}
+                removeDisabled={composeSending}
+              />
               {composeSmsAttachments.length ? (
                 <div className="text-xs text-gray-500">
                   Images are auto-optimized for MMS when possible. If still too large, they will be sent as links.
