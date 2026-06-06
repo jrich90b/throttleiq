@@ -136,6 +136,13 @@ export function buildPendingIncomingInventoryCustomerAck(
   return `Ok, will do. I'll keep this tied to the ${label} trade and let you know as soon as it's here and ready to look at.`;
 }
 
+export function buildPendingIncomingInventoryInitialAdfReply(
+  pending: PendingIncomingInventory | null | undefined
+): string {
+  const label = formatPendingIncomingInventoryLabel(pending) || "bike";
+  return `Thanks — I have you down for the ${label} we’re taking in on trade. We’ll let you know as soon as it’s here and ready to look at.`;
+}
+
 export function buildPendingIncomingInventoryTaskSummary(args: {
   pending: PendingIncomingInventory | null | undefined;
   customerName?: string | null;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   buildPendingIncomingInventoryCustomerAck,
   buildPendingIncomingInventoryFromConversation,
+  buildPendingIncomingInventoryInitialAdfReply,
   buildPendingIncomingInventoryTaskSummary,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
@@ -72,6 +73,11 @@ assert.equal(
 const ack = buildPendingIncomingInventoryCustomerAck(pending);
 assert.match(ack, /2016 Freewheeler/);
 assert.doesNotMatch(ack, /not seeing|in stock right now|similar options/i);
+
+const initialAdfReply = buildPendingIncomingInventoryInitialAdfReply(pending);
+assert.match(initialAdfReply, /2016 Freewheeler/);
+assert.match(initialAdfReply, /taking in on trade/i);
+assert.doesNotMatch(initialAdfReply, /not seeing|in stock right now|similar options|browse/i);
 
 const task = buildPendingIncomingInventoryTaskSummary({
   pending,

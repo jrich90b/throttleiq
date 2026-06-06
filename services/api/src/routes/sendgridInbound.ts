@@ -119,6 +119,12 @@ import {
   buildInitialInventoryEmailSegment,
   buildInitialUnavailableInventorySmsReply
 } from "../domain/initialAdfEmailDraft.js";
+import {
+  buildPendingIncomingInventoryFromConversation,
+  buildPendingIncomingInventoryInitialAdfReply,
+  buildPendingIncomingInventoryTaskSummary,
+  hasPendingIncomingInventorySignal
+} from "../domain/pendingIncomingInventory.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -5757,6 +5763,72 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     return { ok: true, draft: invariant.draftText };
   };
   const queueInitialDraftForPreferredContact = publishAdfDraftForPreferredContact;
+  const initialAdfPendingIncomingSourceText = [
+    effectiveInquiry,
+    lead.inquiry,
+    (lead as any)?.comment,
+    inquiryRaw,
+    event.body
+  ]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const initialAdfPendingIncomingSignal =
+    isInitialAdf && hasPendingIncomingInventorySignal(initialAdfPendingIncomingSourceText);
+  if (initialAdfPendingIncomingSignal) {
+    const nowIsoValue = new Date().toISOString();
+    const pending = buildPendingIncomingInventoryFromConversation({
+      conv,
+      sourceText: initialAdfPendingIncomingSourceText,
+      sourceMessageId: event.providerMessageId,
+      source: "adf",
+      nowIso: nowIsoValue
+    });
+    if (pending) {
+      conv.pendingIncomingInventory = pending;
+      conv.inventoryWatchPending = undefined;
+      conv.dialogState = { name: "pending_incoming_inventory", updatedAt: nowIsoValue } as any;
+      setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
+      stopFollowUpCadence(conv, "pending_incoming_inventory");
+      const customerName =
+        [String(conv.lead?.firstName ?? "").trim(), String(conv.lead?.lastName ?? "").trim()]
+          .filter(Boolean)
+          .join(" ")
+          .trim() ||
+        String((conv.lead as any)?.name ?? "").trim() ||
+        String(conv.leadKey ?? "").trim() ||
+        "customer";
+      addTodo(
+        conv,
+        "call",
+        buildPendingIncomingInventoryTaskSummary({ pending, customerName }),
+        event.providerMessageId,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      let ack = buildPendingIncomingInventoryInitialAdfReply(pending);
+      ack = await applyInitialAdfPrefix(ack);
+      queueInitialDraftForPreferredContact(ack, initialMediaUrls);
+      publishAdfEmailDraft(ack);
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead,
+        leadSource,
+        bucket: inferredBucket,
+        cta: inferredCta,
+        channel,
+        intent: "PENDING_INCOMING_INVENTORY",
+        stage: "ENGAGED",
+        draft: ack,
+        pendingIncomingInventory: true
+      });
+    }
+  }
   const sendAdfEmailReply = async (args: {
     text: string;
     to: string;
