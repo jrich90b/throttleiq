@@ -421,6 +421,7 @@ import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
 import {
   buildNoResponseFallbackReply,
+  buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   evaluateNoResponseFallback,
   nextActionFromState,
@@ -58605,6 +58606,23 @@ if (authToken && signature) {
   if (!result.shouldRespond) {
     if (hasActionableTurnContext) {
       const fallbackReply = buildNoResponseFallbackReply(noResponseContextDecision);
+      const fallbackTodoReason = hasActionableCallbackContext
+        ? "call"
+        : hasActionableFinanceContext
+          ? "payments"
+          : "other";
+      const fallbackTodoSummary = buildNoResponseFallbackTodoSummary(noResponseContextDecision);
+      addTodo(
+        conv,
+        fallbackTodoReason,
+        fallbackTodoSummary,
+        event.providerMessageId,
+        undefined,
+        undefined,
+        hasActionableCallbackContext ? undefined : "followup"
+      );
+      setFollowUpMode(conv, "manual_handoff", "orchestrator_no_response_fallback");
+      stopFollowUpCadence(conv, "manual_handoff");
       logRouteOutcome("orchestrator_no_response_overridden", {
         intent: result.intent ?? "unknown",
         turnPrimaryIntent: routeExecutionIntent,

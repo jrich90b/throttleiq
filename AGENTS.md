@@ -30,6 +30,7 @@ Parser-first candidates called out from production misses:
 - Allowed fallbacks: suppress/no-response, create a todo/manual handoff, ask a narrow clarification, or use an approved known template.
 - Deterministic extractors may provide context hints, but the orchestrator/publisher owns customer-facing reply selection.
 - Any new deterministic fallback that can publish SMS/email must add eval coverage proving it is an approved template or safe handoff.
+- Parser-accepted `no_response` overrides must not use deterministic sales-discovery prompts (for example asking for term, year/color/trim, or appointment time). If the orchestrator cannot confidently answer an actionable turn, send a safe handoff ack and create a staff follow-up task.
 
 ## ADF Inquiry Priority
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.

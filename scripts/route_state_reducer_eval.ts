@@ -1,5 +1,6 @@
 import {
   buildNoResponseFallbackReply,
+  buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   evaluateNoResponseFallback,
   nextActionFromState,
@@ -638,7 +639,7 @@ const noResponseReplyCases: NoResponseReplyCase[] = [
       hasActionableCallbackContext: false,
       hasActionableTurnContext: true
     },
-    expectedReply: "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?"
+    expectedReply: "I’ll have someone check the payment options and follow up shortly."
   },
   {
     id: "reply_prefers_availability",
@@ -649,7 +650,18 @@ const noResponseReplyCases: NoResponseReplyCase[] = [
       hasActionableCallbackContext: false,
       hasActionableTurnContext: true
     },
-    expectedReply: "Happy to check inventory right now. Are you looking for a specific year, color, or trim?"
+    expectedReply: "I’ll check availability and follow up shortly."
+  },
+  {
+    id: "reply_scheduling_is_safe_handoff",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: true,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedReply: "I’ll check the schedule and follow up shortly."
   },
   {
     id: "reply_prefers_callback",
@@ -660,7 +672,7 @@ const noResponseReplyCases: NoResponseReplyCase[] = [
       hasActionableCallbackContext: true,
       hasActionableTurnContext: true
     },
-    expectedReply: "Got it — I can have someone call you. What day and time work best?"
+    expectedReply: "Got it — I’ll have someone follow up with you shortly."
   }
 ];
 
@@ -680,6 +692,80 @@ if (noResponseReplyPassed !== noResponseReplyCases.length) {
 }
 
 console.log(`\nAll ${noResponseReplyCases.length} no-response-reply checks passed.`);
+
+type NoResponseTodoSummaryCase = {
+  id: string;
+  input: NoResponseReplyCase["input"];
+  expectedSummary: string;
+};
+
+const noResponseTodoSummaryCases: NoResponseTodoSummaryCase[] = [
+  {
+    id: "todo_summary_finance",
+    input: {
+      hasActionableFinanceContext: true,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedSummary:
+      "Follow up on payment or finance question. The reply pipeline did not produce a confident customer-facing answer."
+  },
+  {
+    id: "todo_summary_availability",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: true,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedSummary:
+      "Follow up on inventory availability question. The reply pipeline did not produce a confident customer-facing answer."
+  },
+  {
+    id: "todo_summary_scheduling",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: true,
+      hasActionableCallbackContext: false,
+      hasActionableTurnContext: true
+    },
+    expectedSummary:
+      "Follow up on scheduling request. The reply pipeline did not produce a confident customer-facing answer."
+  },
+  {
+    id: "todo_summary_callback",
+    input: {
+      hasActionableFinanceContext: false,
+      hasActionableAvailabilityContext: false,
+      hasActionableSchedulingContext: false,
+      hasActionableCallbackContext: true,
+      hasActionableTurnContext: true
+    },
+    expectedSummary:
+      "Customer needs a callback or staff follow-up. The reply pipeline did not produce a confident customer-facing answer."
+  }
+];
+
+let noResponseTodoSummaryPassed = 0;
+for (const c of noResponseTodoSummaryCases) {
+  const actual = buildNoResponseFallbackTodoSummary(c.input);
+  const ok = actual === c.expectedSummary;
+  if (ok) noResponseTodoSummaryPassed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} expected=${JSON.stringify(c.expectedSummary)} actual=${JSON.stringify(actual)}`);
+}
+
+if (noResponseTodoSummaryPassed !== noResponseTodoSummaryCases.length) {
+  console.error(
+    `\n${noResponseTodoSummaryCases.length - noResponseTodoSummaryPassed} failures out of ${noResponseTodoSummaryCases.length} no-response-todo-summary cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${noResponseTodoSummaryCases.length} no-response-todo-summary checks passed.`);
 
 type StaleCase = {
   id: string;

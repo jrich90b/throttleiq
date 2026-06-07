@@ -432,18 +432,34 @@ export function resolveNoResponsePolicyDecision(
 
 export function buildNoResponseFallbackReply(actionable: RouteActionableContextDecision): string {
   if (actionable.hasActionableFinanceContext) {
-    return "Happy to help with payments. What term do you want me to run: 60, 72, or 84 months?";
+    return "I’ll have someone check the payment options and follow up shortly.";
   }
   if (actionable.hasActionableAvailabilityContext) {
-    return "Happy to check inventory right now. Are you looking for a specific year, color, or trim?";
+    return "I’ll check availability and follow up shortly.";
   }
   if (actionable.hasActionableSchedulingContext) {
-    return "Happy to set that up. What day and time work best for you?";
+    return "I’ll check the schedule and follow up shortly.";
   }
   if (actionable.hasActionableCallbackContext) {
-    return "Got it — I can have someone call you. What day and time work best?";
+    return "Got it — I’ll have someone follow up with you shortly.";
   }
-  return "Happy to help — are you asking about availability, payments, or setting a time to come in?";
+  return "I’ll check that and follow up shortly.";
+}
+
+export function buildNoResponseFallbackTodoSummary(actionable: RouteActionableContextDecision): string {
+  if (actionable.hasActionableFinanceContext) {
+    return "Follow up on payment or finance question. The reply pipeline did not produce a confident customer-facing answer.";
+  }
+  if (actionable.hasActionableAvailabilityContext) {
+    return "Follow up on inventory availability question. The reply pipeline did not produce a confident customer-facing answer.";
+  }
+  if (actionable.hasActionableSchedulingContext) {
+    return "Follow up on scheduling request. The reply pipeline did not produce a confident customer-facing answer.";
+  }
+  if (actionable.hasActionableCallbackContext) {
+    return "Customer needs a callback or staff follow-up. The reply pipeline did not produce a confident customer-facing answer.";
+  }
+  return "Follow up with customer. The reply pipeline did not produce a confident customer-facing answer.";
 }
 
 function normalizeLower(value: string | null | undefined): string {

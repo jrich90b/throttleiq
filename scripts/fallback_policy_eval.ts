@@ -35,8 +35,10 @@ type Check = {
 };
 
 const indexSource = read("services/api/src/index.ts");
+const routeStateReducerSource = read("services/api/src/domain/routeStateReducer.ts");
 const agentsSource = read("AGENTS.md");
 const fallbackBody = extractFunction(indexSource, "buildOrchestratorFailureFallback");
+const noResponseFallbackBody = extractFunction(routeStateReducerSource, "buildNoResponseFallbackReply");
 
 const forbiddenFallbackTokens = [
   "cashReadySignal",
@@ -53,13 +55,21 @@ const forbiddenFallbackTokens = [
   "in stock",
   "payment|payments"
 ];
+const forbiddenNoResponseReplyTokens = [
+  "What term",
+  "60, 72, or 84 months",
+  "specific year, color, or trim",
+  "What day and time work best",
+  "setting a time to come in"
+];
 
 const checks: Check[] = [
   {
     name: "AGENTS.md records no semantic regex fallback policy",
     pass:
       agentsSource.includes("Do not generate semantic customer-facing answers from regex fallback") &&
-      agentsSource.includes("orchestrator failure")
+      agentsSource.includes("orchestrator failure") &&
+      agentsSource.includes("Parser-accepted `no_response` overrides")
   },
   {
     name: "orchestrator failure fallback requires handoff",
@@ -76,6 +86,17 @@ const checks: Check[] = [
   {
     name: "safe orchestrator catch still routes through fallback boundary",
     pass: indexSource.includes("return buildOrchestratorFailureFallback(event, ctx);")
+  },
+  {
+    name: "no-response deterministic fallback avoids sales-discovery prompts",
+    pass: !forbiddenNoResponseReplyTokens.some((token) => noResponseFallbackBody.includes(token)),
+    detail: forbiddenNoResponseReplyTokens.filter((token) => noResponseFallbackBody.includes(token)).join(", ")
+  },
+  {
+    name: "live no-response override creates staff follow-up",
+    pass:
+      indexSource.includes("buildNoResponseFallbackTodoSummary(noResponseContextDecision)") &&
+      indexSource.includes('setFollowUpMode(conv, "manual_handoff", "orchestrator_no_response_fallback")')
   }
 ];
 
