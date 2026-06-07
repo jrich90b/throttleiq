@@ -234,6 +234,7 @@ import {
   parseResponseControlWithLLM,
   parsePurchaseDeliveryLogisticsWithLLM,
   parseSalespersonMentionWithLLM,
+  parseWebTextWidgetSalesLeadWithLLM,
   parseJourneyIntentWithLLM,
   parseConversationStateWithLLM,
   parseFinanceOutcomeFromCallWithLLM,
@@ -268,6 +269,7 @@ import type {
   SemanticSlotParse,
   UnifiedSemanticSlotParse,
   TradePayoffParse,
+  WebTextWidgetSalesLeadParse,
   VehicleFactQuestionParse,
   VehicleInfoRequestParse,
   DealershipFaqTopicParse,
@@ -4665,6 +4667,67 @@ function applyWebTextWidgetSalesDialogState(
   }
 }
 
+function webTextWidgetSalesParserAccepted(parsed: WebTextWidgetSalesLeadParse | null): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_WEB_TEXT_WIDGET_SALES_CONFIDENCE_MIN ?? 0.74);
+  if (confidence < min) return false;
+  const hasRequested = !!String(parsed.requestedVehicle?.model ?? "").trim();
+  const hasTrade = !!String(parsed.tradeVehicle?.model ?? "").trim();
+  const hasSellOption = parsed.sellOption !== "none";
+  return parsed.explicitRequest || hasRequested || hasTrade || hasSellOption;
+}
+
+function webTextWidgetParsedVehicleToContext(
+  vehicle?: WebTextWidgetSalesLeadParse["requestedVehicle"]
+): WebTextWidgetSalesVehicleContext["requestedVehicle"] | undefined {
+  const year = String(vehicle?.year ?? "").trim();
+  const model = String(vehicle?.model ?? "").replace(/\s+/g, " ").trim();
+  const color = String(vehicle?.color ?? "").replace(/\s+/g, " ").trim();
+  const condition = vehicle?.condition === "new" || vehicle?.condition === "used" ? vehicle.condition : undefined;
+  if (!year && !model && !color && !condition) return undefined;
+  return {
+    ...(year ? { year } : {}),
+    ...(model ? { model } : {}),
+    ...(color ? { color } : {}),
+    ...(condition ? { condition } : {})
+  };
+}
+
+function webTextWidgetParserResultToContext(
+  parsed: WebTextWidgetSalesLeadParse | null
+): WebTextWidgetSalesVehicleContext | null {
+  if (!webTextWidgetSalesParserAccepted(parsed)) return null;
+  const requestedVehicle = webTextWidgetParsedVehicleToContext(parsed?.requestedVehicle);
+  const tradeVehicle = webTextWidgetParsedVehicleToContext(parsed?.tradeVehicle);
+  const sellOption = parsed?.sellOption && parsed.sellOption !== "none" ? parsed.sellOption : undefined;
+  if (!requestedVehicle && !tradeVehicle && !sellOption) return null;
+  return {
+    ...(requestedVehicle ? { requestedVehicle } : {}),
+    ...(tradeVehicle ? { tradeVehicle } : {}),
+    ...(sellOption ? { sellOption } : {})
+  };
+}
+
+async function resolveWebTextWidgetSalesVehicleContext(
+  message: string,
+  conv: any,
+  scope: "live" | "regen"
+): Promise<WebTextWidgetSalesVehicleContext | null> {
+  const parsed =
+    process.env.LLM_WEB_TEXT_WIDGET_SALES_PARSER_ENABLED === "0"
+      ? null
+      : await safeLlmParse(`${scope}_web_text_widget_sales_parser`, () =>
+          parseWebTextWidgetSalesLeadWithLLM({
+            text: message,
+            history: buildHistory(conv, 8),
+            lead: conv?.lead ?? null
+          })
+        );
+  const parsedContext = webTextWidgetParserResultToContext(parsed);
+  return parsedContext ?? extractWebTextWidgetSalesVehicleContext(message);
+}
+
 function webTextWidgetEmbedScript(): string {
   return `(function(){
   if (window.__throttleIqTextWidgetLoaded) return;
@@ -4774,7 +4837,7 @@ app.post("/public/widget/text-us", async (req, res) => {
       receivedAt: now
     };
     const salesVehicleContext =
-      department === "sales" ? extractWebTextWidgetSalesVehicleContext(message) : null;
+      department === "sales" ? await resolveWebTextWidgetSalesVehicleContext(message, conv, "live") : null;
     applyWebTextWidgetSalesVehicleContext(conv, salesVehicleContext);
     appendInbound(conv, event);
     if (department === "sales") {
@@ -45059,7 +45122,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
   const regenWebTextWidgetSalesContext =
-    event.provider === "web_widget" ? extractWebTextWidgetSalesVehicleContext(event.body ?? "") : null;
+    event.provider === "web_widget"
+      ? await resolveWebTextWidgetSalesVehicleContext(event.body ?? "", conv, "regen")
+      : null;
   const regenWebTextWidgetBuyTradeDraft = buildWebTextWidgetSalesBuyTradeDraft({
     firstName: conv.lead?.firstName,
     context: regenWebTextWidgetSalesContext

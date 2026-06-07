@@ -1777,6 +1777,28 @@ export type CompositeSalesInquiryParse = {
   confidence?: number;
 };
 
+export type WebTextWidgetSalesVehicleParse = {
+  year?: string | null;
+  model?: string | null;
+  color?: string | null;
+  condition?: "new" | "used" | "unknown";
+};
+
+export type WebTextWidgetSalesLeadParse = {
+  intent:
+    | "buy_inventory"
+    | "buy_inventory_with_trade"
+    | "sell_or_trade"
+    | "finance_or_payment"
+    | "general_sales"
+    | "none";
+  requestedVehicle?: WebTextWidgetSalesVehicleParse | null;
+  tradeVehicle?: WebTextWidgetSalesVehicleParse | null;
+  sellOption: "cash" | "trade" | "either" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type EmpathySupportReplyParse = {
   reply: string;
   confidence?: number;
@@ -2441,6 +2463,57 @@ const COMPOSITE_SALES_INQUIRY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     has_financing_concern: { type: "boolean" },
     has_general_chatter: { type: "boolean" },
     confidence: { type: "number" }
+  }
+};
+
+const WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "intent",
+    "requested_vehicle",
+    "trade_vehicle",
+    "sell_option",
+    "explicit_request",
+    "confidence"
+  ],
+  properties: {
+    intent: {
+      type: "string",
+      enum: [
+        "buy_inventory",
+        "buy_inventory_with_trade",
+        "sell_or_trade",
+        "finance_or_payment",
+        "general_sales",
+        "none"
+      ]
+    },
+    requested_vehicle: {
+      type: "object",
+      additionalProperties: false,
+      required: ["year", "model", "color", "condition"],
+      properties: {
+        year: { type: "string" },
+        model: { type: "string" },
+        color: { type: "string" },
+        condition: { type: "string", enum: ["new", "used", "unknown"] }
+      }
+    },
+    trade_vehicle: {
+      type: "object",
+      additionalProperties: false,
+      required: ["year", "model", "color", "condition"],
+      properties: {
+        year: { type: "string" },
+        model: { type: "string" },
+        color: { type: "string" },
+        condition: { type: "string", enum: ["new", "used", "unknown"] }
+      }
+    },
+    sell_option: { type: "string", enum: ["cash", "trade", "either", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number", minimum: 0, maximum: 1 }
   }
 };
 
@@ -4555,6 +4628,144 @@ output: {"explicit_request":false,"asks_out_the_door_price":false,"asks_accessor
     hasFitOrWeightConcern: !!parsed.has_fit_or_weight_concern,
     hasFinancingConcern: !!parsed.has_financing_concern,
     hasGeneralChatter: !!parsed.has_general_chatter,
+    confidence
+  };
+}
+
+function normalizeWidgetVehicleParse(raw: any): WebTextWidgetSalesVehicleParse | null {
+  if (!raw || typeof raw !== "object") return null;
+  const year = String(raw.year ?? "").trim();
+  const model = String(raw.model ?? "").replace(/\s+/g, " ").trim();
+  const color = String(raw.color ?? "").replace(/\s+/g, " ").trim();
+  const conditionRaw = String(raw.condition ?? "").trim().toLowerCase();
+  const condition: WebTextWidgetSalesVehicleParse["condition"] =
+    conditionRaw === "new" || conditionRaw === "used" ? conditionRaw : "unknown";
+  if (!year && !model && !color && condition === "unknown") return null;
+  return {
+    year: year || null,
+    model: model || null,
+    color: color || null,
+    condition
+  };
+}
+
+export async function parseWebTextWidgetSalesLeadWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<WebTextWidgetSalesLeadParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WEB_TEXT_WIDGET_SALES_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WEB_TEXT_WIDGET_SALES_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WEB_TEXT_WIDGET_SALES_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WEB_TEXT_WIDGET_SALES_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A
+inbound: "I want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black. I can supply pics and vin number.I will buy it with cash if we are unable to make a deal with the road king. Thanks!"
+output: {"intent":"buy_inventory_with_trade","requested_vehicle":{"year":"2000","model":"Wide Glide","color":"","condition":"used"},"trade_vehicle":{"year":"2025","model":"Road King Special","color":"Black on Black","condition":"new"},"sell_option":"either","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE B
+inbound: "Interested in the black 2018 Street Bob. I have a 2014 Sportster to trade."
+output: {"intent":"buy_inventory_with_trade","requested_vehicle":{"year":"2018","model":"Street Bob","color":"black","condition":"used"},"trade_vehicle":{"year":"2014","model":"Sportster","color":"","condition":"used"},"sell_option":"trade","explicit_request":true,"confidence":0.95}`,
+    `EXAMPLE C
+inbound: "Looking at that 2024 Road Glide. Cash buyer if it is still available."
+output: {"intent":"buy_inventory","requested_vehicle":{"year":"2024","model":"Road Glide","color":"","condition":"used"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"cash","explicit_request":true,"confidence":0.94}`,
+    `EXAMPLE D
+inbound: "I want to sell my 2020 Fat Boy."
+output: {"intent":"sell_or_trade","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"2020","model":"Fat Boy","color":"","condition":"used"},"sell_option":"trade","explicit_request":true,"confidence":0.94}`,
+    `EXAMPLE E
+inbound: "Do you have financing on used bikes?"
+output: {"intent":"finance_or_payment","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":true,"confidence":0.93}`,
+    `EXAMPLE F
+inbound: "Thanks, I will stop by later."
+output: {"intent":"general_sales","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":false,"confidence":0.88}`
+  ];
+  const prompt = [
+    "You are a semantic parser for sales messages submitted through a dealership website text widget.",
+    "Return only JSON matching the schema.",
+    "",
+    "Goal: extract factual sales context from free-form customer language.",
+    "Definitions:",
+    "- requested_vehicle: the bike the customer wants to buy, inspect, price, or ask availability for.",
+    "- trade_vehicle: the bike the customer owns, wants appraised, wants to trade, or may use in the deal.",
+    "- sell_option: cash if they mention cash purchase, trade if they mention trade/deal with their bike, either if they mention both, none otherwise.",
+    "",
+    "Rules:",
+    "- Never merge the requested vehicle with the trade vehicle.",
+    "- If one sentence says 'I want to buy X' and another says 'I have Y', X is requested_vehicle and Y is trade_vehicle.",
+    "- Do not search inventory and do not infer stock status.",
+    "- Use empty strings and condition unknown for missing vehicle fields.",
+    "- Condition may be inferred from model year only when obvious: older than current model year is usually used; 'brand new' means new.",
+    "- confidence is 0..1.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null,
+      tradeModel: lead?.tradeVehicle?.model ?? lead?.tradeVehicle?.description ?? null,
+      tradeYear: lead?.tradeVehicle?.year ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "web_text_widget_sales_lead_parser",
+      schema: WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 320,
+      debugTag: "llm-web-text-widget-sales-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intentRaw = String(parsed.intent ?? "").trim();
+  const intent: WebTextWidgetSalesLeadParse["intent"] =
+    intentRaw === "buy_inventory" ||
+    intentRaw === "buy_inventory_with_trade" ||
+    intentRaw === "sell_or_trade" ||
+    intentRaw === "finance_or_payment" ||
+    intentRaw === "general_sales"
+      ? intentRaw
+      : "none";
+  const sellOptionRaw = String(parsed.sell_option ?? "").trim();
+  const sellOption: WebTextWidgetSalesLeadParse["sellOption"] =
+    sellOptionRaw === "cash" ||
+    sellOptionRaw === "trade" ||
+    sellOptionRaw === "either"
+      ? sellOptionRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return {
+    intent,
+    requestedVehicle: normalizeWidgetVehicleParse(parsed.requested_vehicle),
+    tradeVehicle: normalizeWidgetVehicleParse(parsed.trade_vehicle),
+    sellOption,
+    explicitRequest: !!parsed.explicit_request,
     confidence
   };
 }

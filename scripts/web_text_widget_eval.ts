@@ -102,8 +102,12 @@ const cases: Case[] = [
 ];
 
 const apiSource = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+const llmDraftSource = readFileSync(new URL("../services/api/src/domain/llmDraft.ts", import.meta.url), "utf8");
 const widgetRouteStart = apiSource.indexOf('app.post("/public/widget/text-us"');
 const widgetRoute = widgetRouteStart >= 0 ? apiSource.slice(widgetRouteStart, widgetRouteStart + 14000) : "";
+const salesContextResolverStart = apiSource.indexOf("async function resolveWebTextWidgetSalesVehicleContext");
+const salesContextResolver =
+  salesContextResolverStart >= 0 ? apiSource.slice(salesContextResolverStart, salesContextResolverStart + 1400) : "";
 cases.push(
   {
     id: "sales_widget_uses_orchestrator",
@@ -132,6 +136,15 @@ cases.push(
     expected: true
   },
   {
+    id: "sales_widget_uses_semantic_parser_before_fallback_extractor",
+    actual:
+      apiSource.includes("parseWebTextWidgetSalesLeadWithLLM") &&
+      apiSource.includes("resolveWebTextWidgetSalesVehicleContext") &&
+      salesContextResolver.indexOf("webTextWidgetParserResultToContext(parsed)") <
+        salesContextResolver.indexOf("extractWebTextWidgetSalesVehicleContext(message)"),
+    expected: true
+  },
+  {
     id: "sales_widget_applies_buy_trade_guarded_draft",
     actual:
       widgetRoute.includes("buildWebTextWidgetSalesBuyTradeDraft") &&
@@ -156,6 +169,15 @@ cases.push(
     actual:
       regenerateRoute.includes("regenWebTextWidgetBuyTradeDraft") &&
       regenerateRoute.includes("web_text_widget_sales_buy_trade_draft_created"),
+    expected: true
+  },
+  {
+    id: "llm_widget_sales_parser_schema_distinguishes_requested_and_trade",
+    actual:
+      llmDraftSource.includes("WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA") &&
+      llmDraftSource.includes("requested_vehicle") &&
+      llmDraftSource.includes("trade_vehicle") &&
+      llmDraftSource.includes("Never merge the requested vehicle with the trade vehicle."),
     expected: true
   }
 );
