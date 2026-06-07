@@ -8,7 +8,7 @@ This project uses a **hybrid** approach with a **parser-first requirement for ne
 ## Parser-First Rule (New States)
 When adding a new customer state/disposition, do **not** start with standalone regex routing.
 
-Treat parser-first as the default for any new customer workflow/state, especially when the phrasing can vary in production. The user should not have to remind the agent to do this. Deterministic text checks may be used only as safety gates, exact compliance controls, or fallback after the parser is disabled/low-confidence.
+Treat parser-first as the default for any new customer workflow/state, especially when the phrasing can vary in production. The user should not have to remind the agent to do this. Deterministic text checks may be used only as safety gates, exact compliance controls, named structured/template stages, or non-customer-facing fallback. After parser low-confidence, disabled LLM, or orchestrator failure, fallback must be one of: suppress/no-response, create a todo/manual handoff, ask a narrow clarification, or use a named approved template. Do not generate semantic customer-facing answers from regex fallback.
 
 Required order:
 1) Add a typed parser schema in `services/api/src/domain/llmDraft.ts`.
@@ -17,13 +17,19 @@ Required order:
 4) Apply that helper in **both**:
    - live inbound (`/webhooks/twilio`)
    - regenerate (`/conversations/:id/regenerate`)
-5) Keep regex only as fallback when parser is disabled/low-confidence.
+5) Keep regex only as fallback for extraction, safety, or handoff when parser is disabled/low-confidence; regex fallback must not create open-ended customer-facing answers.
 6) Add eval fixtures for new state phrases before deployment.
 7) Keep parser few-shot examples updated for newly observed production misses (live inbound and regenerate parity cases).
 
 Parser-first candidates called out from production misses:
 - Hiring / careers / employment inquiries (for example “Who is the hiring manager?”, “Are you hiring?”, “Where do I send a resume?”, “I applied online, who handles that?”) should be routed through a typed parser + shared handler, not regex-only.
 - Accessory / customization / demo-status requests (for example handlebars, heated grips/seat, stereo/speakers, pipes/exhaust) should remain parser-first with deterministic fallback only.
+
+## Fallback Policy
+- Low-confidence parser, disabled LLM, or orchestrator failure must not fall back to regex-written semantic customer-facing answers.
+- Allowed fallbacks: suppress/no-response, create a todo/manual handoff, ask a narrow clarification, or use an approved known template.
+- Deterministic extractors may provide context hints, but the orchestrator/publisher owns customer-facing reply selection.
+- Any new deterministic fallback that can publish SMS/email must add eval coverage proving it is an approved template or safe handoff.
 
 ## ADF Inquiry Priority
 - For initial ADF response drafting, specific customer inquiry intent must win over generic “learn more” phrasing.
@@ -229,7 +235,7 @@ Key hard rules:
 
 **Handoff gating in `services/api/src/domain/orchestrator.ts`:**
 - Manager/approval/callback/pricing‑after‑attempts now flow through LLM **only** with the handoff guardrail.
-- When LLM is disabled, deterministic replies are used.
+- When LLM/orchestrator is disabled or fails, use safe handoff/no-response/approved templates, not semantic deterministic answers.
 
 ## NLU Confidence + Clarification (Policy)
 We gate LLM intent/booking parsing by confidence and ask a clarification when low confidence:
