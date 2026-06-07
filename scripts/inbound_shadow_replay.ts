@@ -826,6 +826,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
       draftText
     ) ||
     /\blien\/payoff details\b[\s\S]{0,160}\bfinance team\b[\s\S]{0,120}\btext you shortly\b/i.test(draftText);
+  const safeServiceStatusHandoff =
+    /\bcheck\b[\s\S]{0,80}\bservice\b[\s\S]{0,120}\b(?:status|follow up)\b/i.test(draftText) ||
+    /\bservice\b[\s\S]{0,80}\bstatus\b[\s\S]{0,120}\bfollow up\b/i.test(draftText);
   if (draftText.length < 12) reasons.push("very short draft");
   if (
     isDealerLeadAppOutcomeAdf(provider, inbound) &&
@@ -877,6 +880,7 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   }
   if (
     !safeFinanceProgressHandoff &&
+    !safeServiceStatusHandoff &&
     !pendingIncomingInventoryContext &&
     /\b(appointment|schedule|available|availability|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}(:\d{2})?\s*(am|pm))\b/i.test(inboundLower)
   ) {

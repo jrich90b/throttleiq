@@ -18550,6 +18550,18 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
   parsed: PurchaseDeliveryLogisticsParse;
   scope: "live" | "regen";
 }): string {
+  if (
+    args.parsed.intent === "delivery_progress" &&
+    classifyPurchaseDeliveryOperationalRequestText(args.text)
+  ) {
+    const operationalReply = applyPurchaseDeliveryOperationalDecision({
+      conv: args.conv,
+      text: args.text,
+      providerMessageId: args.providerMessageId,
+      scope: args.scope
+    });
+    if (operationalReply) return operationalReply;
+  }
   const reply = buildPurchaseDeliveryLogisticsReply({
     text: args.text,
     contextText: getRecentConversationTextForDeliveryContext(args.conv, args.text),
@@ -18619,7 +18631,7 @@ function buildPurchaseDeliveryOperationalTaskSummary(kind: string, text: string 
   return `Confirm selected accessory/options for active purchase/delivery.${suffix}`;
 }
 
-function applyPurchaseDeliveryOperationalFallbackDecision(args: {
+function applyPurchaseDeliveryOperationalDecision(args: {
   conv: Conversation;
   text: string | null | undefined;
   providerMessageId?: string | null;
@@ -18648,7 +18660,7 @@ function applyPurchaseDeliveryOperationalFallbackDecision(args: {
   setFollowUpMode(args.conv, "manual_handoff", "purchase_delivery");
   stopFollowUpCadence(args.conv, "purchase_delivery");
   stopRelatedCadences(args.conv, "purchase_delivery", { setMode: "manual_handoff" });
-  recordRouteOutcome(args.scope, "purchase_delivery_operational_fallback", {
+  recordRouteOutcome(args.scope, "purchase_delivery_operational", {
     convId: args.conv.id,
     leadKey: args.conv.leadKey,
     kind,
@@ -45034,7 +45046,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (event.mediaUrls?.length ?? 0) > 0
     )
   ) {
-    const reply = applyPurchaseDeliveryOperationalFallbackDecision({
+    const reply = applyPurchaseDeliveryOperationalDecision({
       conv,
       text: event.body ?? "",
       providerMessageId: (inbound as any)?.providerMessageId,
@@ -50267,7 +50279,7 @@ if (authToken && signature) {
         (event.mediaUrls?.length ?? 0) > 0
       )
     ) {
-      const humanModePurchaseDeliveryReply = applyPurchaseDeliveryOperationalFallbackDecision({
+      const humanModePurchaseDeliveryReply = applyPurchaseDeliveryOperationalDecision({
         conv,
         text: event.body ?? "",
         providerMessageId: event.providerMessageId,
@@ -50842,7 +50854,7 @@ if (authToken && signature) {
       (event.mediaUrls?.length ?? 0) > 0
     )
   ) {
-    const reply = applyPurchaseDeliveryOperationalFallbackDecision({
+    const reply = applyPurchaseDeliveryOperationalDecision({
       conv,
       text: event.body ?? "",
       providerMessageId: event.providerMessageId,
