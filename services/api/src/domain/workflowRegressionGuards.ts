@@ -98,11 +98,84 @@ export function isServiceStatusUpdateQuestionText(textRaw: string | null | undef
   const serviceSignal = /\b(service|servicing|service department|servicing department|logged in|checked in|repair|inspection|work order|notice)\b/.test(
     text
   );
-  return asksUpdate && serviceSignal;
+  const repairWorkQuestion =
+    /\b(?:are|r|will|did|can|could|would)\s+(?:you|u|your|ur|you guys|u guys|service|the shop|they|techs?)\b[\s\S]{0,80}\b(?:replace|replacing|repair|fix|install|installed|look(?:ing)? at|work(?:ing)? on|diagnos(?:e|ing))\b/.test(
+      text
+    ) ||
+    /\b(?:when|what day|which day)\b[\s\S]{0,60}\b(?:replace|replacing|repair|fix|install|work(?:ing)? on|diagnos(?:e|ing))\b/.test(
+      text
+    );
+  const repairPartSignal = /\b(?:ignition\s+switch|switch|starter|battery|brakes?|tires?|clutch|throttle|fork|seal|leak|engine|transmission|primary|belt|sensor|code|check engine|key fob|fob|security)\b/.test(
+    text
+  );
+  return (asksUpdate && serviceSignal) || (repairWorkQuestion && repairPartSignal);
 }
 
 export function buildServiceStatusUpdateHandoffReply(): string {
   return "Got it — I’ll check with service on the status and follow up.";
+}
+
+export type PurchaseDeliveryOperationalRequestKind =
+  | "vin_request"
+  | "lift_info_request"
+  | "trade_status_request"
+  | "callback_request"
+  | "accessory_selection";
+
+export function classifyPurchaseDeliveryOperationalRequestText(
+  textRaw: string | null | undefined
+): PurchaseDeliveryOperationalRequestKind | null {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return null;
+  if (/\b(?:vin|vin\s*#|vehicle identification number)\b/.test(text)) return "vin_request";
+  if (/\blift(?:\s+(?:info|information|details))?\b/.test(text)) return "lift_info_request";
+  if (
+    /\b(?:did|do|have|has|is|was|can)\b[\s\S]{0,50}\btrade\b[\s\S]{0,60}\b(?:done|complete|completed|finished|through|all set|approved|worked out|work out|go through|go thru)\b/.test(
+      text
+    ) ||
+    /\btrade\s+(?:done|complete|completed|finished|through|all set|approved)\b/.test(text)
+  ) {
+    return "trade_status_request";
+  }
+  if (/\b(?:call me|give me a call|can you call|could you call|please call|ring me)\b/.test(text)) {
+    return "callback_request";
+  }
+  if (
+    /\b(?:that'?s the ones?|those are the ones?|that one|those ones|that'?s it|that is it)\b[\s\S]{0,80}\b(?:chrome|black|tip|tips|mufflers?|pipes?|exhaust|tabs?|tab performance|khrome|vance|hines|2\s*into\s*1|two\s+into\s+one)\b/.test(
+      text
+    )
+  ) {
+    return "accessory_selection";
+  }
+  return null;
+}
+
+export function isPurchaseDeliveryOperationalRequestText(textRaw: string | null | undefined): boolean {
+  return classifyPurchaseDeliveryOperationalRequestText(textRaw) !== null;
+}
+
+export function buildPurchaseDeliveryOperationalRequestReply(
+  kind: PurchaseDeliveryOperationalRequestKind,
+  args: { vin?: string | null } = {}
+): string {
+  if (kind === "vin_request") {
+    const vin = String(args.vin ?? "").trim();
+    return vin ? `The VIN is ${vin}.` : "I’ll get the VIN for you and send it over.";
+  }
+  if (kind === "lift_info_request") {
+    return "I’ll get the lift info for you and send it over.";
+  }
+  if (kind === "trade_status_request") {
+    return "I’ll check whether the trade is complete and follow up.";
+  }
+  if (kind === "callback_request") {
+    return "Got it — I’ll give you a call.";
+  }
+  return "Got it — I’ll note that choice and follow up with the next step.";
 }
 
 export function extractRequestedVehicleFactFieldsFromText(textRaw: string | null | undefined): string[] {

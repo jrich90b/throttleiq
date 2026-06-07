@@ -74,6 +74,50 @@ const fixtures: Fixture[] = [
     expectedTimingContains: "juneteenth"
   },
   {
+    id: "vin_request_active_purchase_delivery",
+    text: "Need the Vin #",
+    history: [
+      { direction: "in", body: "Need the Vin #, Ill get the insurance going" },
+      { direction: "out", body: "Lou, here is that quote with today’s date. Just waiting for the parts guys to get a few options for me" }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
+    id: "lift_info_request_active_purchase_delivery",
+    text: "And need the lift info too",
+    history: [
+      { direction: "in", body: "Need the Vin #" },
+      { direction: "out", body: "I’ll get the VIN for you and send it over." }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
+    id: "dealer_trade_status_request_active_purchase_delivery",
+    text: "Did you get the trade done",
+    history: [
+      { direction: "in", body: "doing a dealer trade on a 2026 FLHC in Vivid Black" },
+      { direction: "out", body: "I’ll get rolling on everything and follow up." }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
+    id: "accessory_selection_active_purchase_delivery",
+    text: "That's the ones, chrome, black K tip",
+    history: [
+      { direction: "out", body: "Ok this is the Khrome Werks muffler. For the 2026 Heritage it doesn’t have the black tips" },
+      { direction: "out", body: "https://www.tabperformance.com/hd-cruiser-2-1/" }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
+    id: "call_request_active_purchase_delivery",
+    text: "Call me Joe",
+    history: [
+      { direction: "out", body: "I’ll follow back up when I get back with the warranty and exhaust details." }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
     id: "on_way_arrival",
     text: "On my way doing my best to be there by 530",
     expectedIntent: "delivery_timing",

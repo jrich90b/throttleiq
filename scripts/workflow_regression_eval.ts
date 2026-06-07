@@ -10,6 +10,8 @@ import {
   buildFollowUpReminderOnlyReply,
   buildMultiVehicleFactFollowupReply,
   buildServiceStatusUpdateHandoffReply,
+  buildPurchaseDeliveryOperationalRequestReply,
+  classifyPurchaseDeliveryOperationalRequestText,
   extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
@@ -65,6 +67,7 @@ import {
   isMediaProofStatusUpdateText,
   isNonComplimentLikePhraseText,
   isPurchaseDeliveryContextText,
+  isPurchaseDeliveryOperationalRequestText,
   isPurchaseDeliveryTimingText,
   isRegenerateSchedulingLanguageText,
   isScheduleContextStatusUpdateText,
@@ -301,9 +304,39 @@ const cases: Case[] = [
     expected: true
   },
   {
+    id: "service_repair_work_question_detected_without_stale_appointment",
+    actual: isServiceStatusUpdateQuestionText("Are you guys going to replace the ignition switch Monday"),
+    expected: true
+  },
+  {
+    id: "business_hours_question_not_service_repair_status",
+    actual: isServiceStatusUpdateQuestionText("Are you guys open Monday?"),
+    expected: false
+  },
+  {
     id: "service_status_update_reply_is_handoff_not_compliment",
     actual: buildServiceStatusUpdateHandoffReply(),
     expected: "Got it — I’ll check with service on the status and follow up."
+  },
+  {
+    id: "purchase_delivery_vin_request_detected",
+    actual: classifyPurchaseDeliveryOperationalRequestText("Need the Vin #"),
+    expected: "vin_request"
+  },
+  {
+    id: "purchase_delivery_lift_info_detected",
+    actual: isPurchaseDeliveryOperationalRequestText("And need the lift info too"),
+    expected: true
+  },
+  {
+    id: "purchase_delivery_accessory_choice_detected",
+    actual: classifyPurchaseDeliveryOperationalRequestText("That's the ones, chrome, black K tip"),
+    expected: "accessory_selection"
+  },
+  {
+    id: "purchase_delivery_known_vin_reply_uses_fact",
+    actual: buildPurchaseDeliveryOperationalRequestReply("vin_request", { vin: "1HD1TESTVIN1234567" }),
+    expected: "The VIN is 1HD1TESTVIN1234567."
   },
   {
     id: "multi_vehicle_fact_fields_detect_miles_year_price",

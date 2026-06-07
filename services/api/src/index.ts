@@ -456,7 +456,9 @@ import {
   buildFactoryOrderTimingHandoffReply,
   buildFollowUpReminderOnlyReply,
   buildMultiVehicleFactFollowupReply,
+  buildPurchaseDeliveryOperationalRequestReply,
   buildServiceStatusUpdateHandoffReply,
+  classifyPurchaseDeliveryOperationalRequestText,
   extractRequestedVehicleFactFieldsFromText,
   extractReminderFollowUpLabel,
   formatServiceScheduleTimeLabel,
@@ -501,6 +503,7 @@ import {
   isNonComplimentLikePhraseText,
   isIncidentalTravelTimingContextNoteText,
   isPurchaseDeliveryContextText,
+  isPurchaseDeliveryOperationalRequestText,
   isPurchaseDeliveryTimingText,
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
@@ -18412,11 +18415,25 @@ function hasPurchaseDeliveryLogisticsParserHint(
       return true;
     }
   }
+  const operationalRequest = isPurchaseDeliveryOperationalRequestText(text);
+  if (operationalRequest) {
+    const recentContext = getRecentConversationTextForDeliveryContext(conv, text, receivedAt);
+    if (
+      activePurchaseDeliveryState ||
+      isPurchaseDeliveryContextText(recentContext) ||
+      /\b(dealer trade|quote with today|vin\s*#?|insurance going|mufflers?|pipes?|exhaust|parts guys?|lift info|delivery|take delivery|pickup|pick up)\b/i.test(
+        recentContext
+      )
+    ) {
+      return true;
+    }
+  }
   if (
     activePurchaseDeliveryState &&
     (hasMedia ||
       isPurchaseDeliveryTimingText(text) ||
       scheduleStatusCheck ||
+      operationalRequest ||
       isMediaProofStatusUpdateText(text) ||
       isLogisticsProgressUpdateText(text) ||
       postSaleItemPickup ||
@@ -18572,6 +18589,69 @@ function applyPurchaseDeliveryLogisticsDecision(args: {
     intent: args.parsed.intent,
     timingText: args.parsed.timingText ?? null,
     confidence: args.parsed.confidence ?? null
+  });
+  return reply;
+}
+
+function getKnownPurchaseDeliveryVin(conv: Conversation): string | null {
+  const candidates = [
+    conv.hold?.vin,
+    conv.sale?.vin,
+    conv.lead?.vehicle?.vin,
+    conv.latestLead?.vehicle?.vin,
+    conv.originalLead?.vehicle?.vin
+  ];
+  for (const candidate of candidates) {
+    const vin = String(candidate ?? "").trim();
+    if (vin) return vin;
+  }
+  return null;
+}
+
+function buildPurchaseDeliveryOperationalTaskSummary(kind: string, text: string | null | undefined): string {
+  const inbound = String(text ?? "").trim();
+  const suffix = inbound ? ` Customer said: ${inbound}` : "";
+  if (kind === "vin_request") return `Send VIN for active purchase/delivery.${suffix}`;
+  if (kind === "lift_info_request") return `Send lift info for active purchase/delivery.${suffix}`;
+  if (kind === "trade_status_request") return `Check dealer trade status for active purchase/delivery.${suffix}`;
+  if (kind === "callback_request") return `Call customer about active purchase/delivery.${suffix}`;
+  return `Confirm selected accessory/options for active purchase/delivery.${suffix}`;
+}
+
+function applyPurchaseDeliveryOperationalFallbackDecision(args: {
+  conv: Conversation;
+  text: string | null | undefined;
+  providerMessageId?: string | null;
+  scope: "live" | "regen";
+}): string | null {
+  const kind = classifyPurchaseDeliveryOperationalRequestText(args.text);
+  if (!kind) return null;
+  const vin = getKnownPurchaseDeliveryVin(args.conv);
+  const reply = buildPurchaseDeliveryOperationalRequestReply(kind, { vin });
+  const summary = buildPurchaseDeliveryOperationalTaskSummary(kind, args.text);
+  if (kind === "callback_request") {
+    addCallTodoIfMissing(args.conv, summary);
+  } else if (!(kind === "vin_request" && vin)) {
+    addTodo(
+      args.conv,
+      "note",
+      summary,
+      args.providerMessageId ?? undefined,
+      undefined,
+      undefined,
+      undefined,
+      { allowSoldLead: true }
+    );
+  }
+  setDialogState(args.conv, "purchase_delivery");
+  setFollowUpMode(args.conv, "manual_handoff", "purchase_delivery");
+  stopFollowUpCadence(args.conv, "purchase_delivery");
+  stopRelatedCadences(args.conv, "purchase_delivery", { setMode: "manual_handoff" });
+  recordRouteOutcome(args.scope, "purchase_delivery_operational_fallback", {
+    convId: args.conv.id,
+    leadKey: args.conv.leadKey,
+    kind,
+    hasKnownVin: !!vin
   });
   return reply;
 }
@@ -44945,6 +45025,32 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     event.provider === "twilio" &&
     channel === "sms" &&
     !isPurchaseDeliveryLogisticsParserConfidentNone(regenPurchaseDeliveryLogisticsParse) &&
+    isPurchaseDeliveryOperationalRequestText(event.body ?? "") &&
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.at ?? event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
+  ) {
+    const reply = applyPurchaseDeliveryOperationalFallbackDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: (inbound as any)?.providerMessageId,
+      scope: "regen"
+    });
+    if (reply) {
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnFinanceIntent: false,
+        turnAvailabilityIntent: false,
+        turnSchedulingIntent: false
+      });
+    }
+  }
+  if (
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !isPurchaseDeliveryLogisticsParserConfidentNone(regenPurchaseDeliveryLogisticsParse) &&
     isPostSaleItemPickupLogisticsText(event.body ?? "") &&
     hasPurchaseDeliveryLogisticsParserHint(
       conv,
@@ -50152,6 +50258,32 @@ if (authToken && signature) {
     if (
       event.provider === "twilio" &&
       !isPurchaseDeliveryLogisticsParserConfidentNone(humanModePurchaseDeliveryLogisticsParse) &&
+      isPurchaseDeliveryOperationalRequestText(event.body ?? "") &&
+      hasPurchaseDeliveryLogisticsParserHint(
+        conv,
+        event.body ?? "",
+        event.receivedAt,
+        (event.mediaUrls?.length ?? 0) > 0
+      )
+    ) {
+      const humanModePurchaseDeliveryReply = applyPurchaseDeliveryOperationalFallbackDecision({
+        conv,
+        text: event.body ?? "",
+        providerMessageId: event.providerMessageId,
+        scope: "live"
+      });
+      if (humanModePurchaseDeliveryReply) {
+        discardPendingDrafts(conv, "purchase_delivery_operational_human_mode_fallback");
+        return publishLiveTwilioReply(
+          humanModePurchaseDeliveryReply,
+          { turnSchedulingIntent: false, turnAvailabilityIntent: false, turnFinanceIntent: false },
+          { draftOnly: true }
+        );
+      }
+    }
+    if (
+      event.provider === "twilio" &&
+      !isPurchaseDeliveryLogisticsParserConfidentNone(humanModePurchaseDeliveryLogisticsParse) &&
       isPostSaleItemPickupLogisticsText(event.body ?? "") &&
       hasPurchaseDeliveryLogisticsParserHint(
         conv,
@@ -50697,6 +50829,25 @@ if (authToken && signature) {
       scope: "live"
     });
     return publishLiveTwilioReply(reply);
+  }
+  if (
+    event.provider === "twilio" &&
+    !isPurchaseDeliveryLogisticsParserConfidentNone(liveEarlyPurchaseDeliveryLogisticsParse) &&
+    isPurchaseDeliveryOperationalRequestText(event.body ?? "") &&
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    )
+  ) {
+    const reply = applyPurchaseDeliveryOperationalFallbackDecision({
+      conv,
+      text: event.body ?? "",
+      providerMessageId: event.providerMessageId,
+      scope: "live"
+    });
+    if (reply) return publishLiveTwilioReply(reply);
   }
   if (
     event.provider === "twilio" &&
