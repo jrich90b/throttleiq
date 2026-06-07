@@ -4689,7 +4689,13 @@ inbound: "Do you have financing on used bikes?"
 output: {"intent":"finance_or_payment","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":true,"confidence":0.93}`,
     `EXAMPLE F
 inbound: "Thanks, I will stop by later."
-output: {"intent":"general_sales","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":false,"confidence":0.88}`
+output: {"intent":"general_sales","requested_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":false,"confidence":0.88}`,
+    `EXAMPLE G
+inbound: "I am interested in the used 2016 Freewheeler you are taking in on trade."
+output: {"intent":"buy_inventory","requested_vehicle":{"year":"2016","model":"Freewheeler","color":"","condition":"used"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":true,"confidence":0.94}`,
+    `EXAMPLE H
+inbound: "Can I schedule a test ride on the 2020 Low Rider S?"
+output: {"intent":"buy_inventory","requested_vehicle":{"year":"2020","model":"Low Rider S","color":"","condition":"used"},"trade_vehicle":{"year":"","model":"","color":"","condition":"unknown"},"sell_option":"none","explicit_request":true,"confidence":0.92}`
   ];
   const prompt = [
     "You are a semantic parser for sales messages submitted through a dealership website text widget.",

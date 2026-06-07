@@ -84,6 +84,7 @@ function titleCaseVehicleModel(raw: string): string {
   const clean = String(raw ?? "")
     .replace(/\bharley(?:-|\s+)?davidson\b/gi, "")
     .replace(/\bh-?d\b/gi, "")
+    .replace(/\b(?:to\s+trade|for\s+trade|trade\s+in|taking\s+in\s+on\s+trade|(?:you|we)\s+are\s+taking\s+in\s+on\s+trade)\b[\s\S]*$/i, "")
     .replace(/\bthat\b[\s\S]*$/i, "")
     .replace(/\bi\s+(?:can|will|would|have|am|was)\b[\s\S]*$/i, "")
     .replace(/\b(?:with|if|for|thanks?|thank you)\b[\s\S]*$/i, "")
@@ -114,7 +115,9 @@ function conditionFromText(raw: string, year?: string): "new" | "used" | undefin
 function colorFromSalesWidgetText(text: string): string | undefined {
   const lower = String(text ?? "").toLowerCase();
   if (/\bblack\s+on\s+black\b/.test(lower)) return "Black on Black";
-  const colorMatch = lower.match(/\b(?:its|it's|color(?: is)?|in)\s+([a-z]+(?:\s+on\s+[a-z]+)?)\b/);
+  const colorMatch = lower.match(
+    /\b(?:its|it's|color(?: is)?|in)\s+((?:vivid\s+black|black|blue|red|white|gray|grey|silver|green|orange|yellow|purple|brown)(?:\s+on\s+(?:black|blue|red|white|gray|grey|silver|green|orange|yellow|purple|brown))?)\b/
+  );
   const color = titleCaseVehicleModel(colorMatch?.[1] ?? "");
   return color || undefined;
 }
@@ -139,10 +142,10 @@ export function extractWebTextWidgetSalesVehicleContext(message: string): WebTex
   if (!text) return null;
 
   const requestedMatch = text.match(
-    /\b(?:want(?:ed)?\s+to\s+buy|looking\s+(?:to\s+buy|at|for)|interested\s+in|buy)\s+(?:the|a|an)?\s*((?:19|20)\d{2})?\s*([a-z0-9][a-z0-9\s-]{2,80}?)(?=(?:\s*[.!?])|\s+i\s+(?:have|can|will|would)\b|$)/i
+    /\b(?:want(?:ed)?\s+to\s+buy|looking\s+(?:to\s+buy|at|for)|interested\s+in|buy)\s+(?:the|a|an|that)?\s*(?:brand\s+new|new|used|pre[-\s]?owned)?\s*(?:(?:vivid\s+black|black|blue|red|white|gray|grey|silver|green|orange|yellow|purple|brown)\s+)?((?:19|20)\d{2})?\s*([a-z0-9][a-z0-9\s-]{2,80}?)(?=(?:\s*[.!?])|\s+i\s+(?:have|can|will|would)\b|$)/i
   );
   const tradeMatch = text.match(
-    /\b(?:i\s+have|i'?ve\s+got|my|trade(?:\s+in)?)\s+(?:a|an|the)?\s*(?:brand\s+new|new|used|pre[-\s]?owned)?\s*((?:19|20)\d{2})\s+([a-z0-9][a-z0-9\s-]{2,80}?)(?=\s+that\b|\s+i\s+(?:can|will|would)\b|[.!?]|$)/i
+    /\b(?:i\s+have|i'?ve\s+got|my|trade(?:\s+in)?)\s+(?:a|an|the)?\s*(?:brand\s+new|new|used|pre[-\s]?owned)?\s*(?:(?:vivid\s+black|black|blue|red|white|gray|grey|silver|green|orange|yellow|purple|brown)\s+)?((?:19|20)\d{2})\s+([a-z0-9][a-z0-9\s-]{2,80}?)(?=\s+that\b|\s+i\s+(?:can|will|would)\b|[.!?]|$)/i
   );
 
   const requestedVehicle = parseVehicleFromMatch(requestedMatch, text);
@@ -152,7 +155,9 @@ export function extractWebTextWidgetSalesVehicleContext(message: string): WebTex
     if (color) tradeVehicle.color = color;
   }
   const cash = /\bcash\b/i.test(text);
-  const trade = /\btrade\b|\bmake a deal\b/i.test(text);
+  const dealerIncomingTrade = /\b(?:taking|take|coming|came|took)\s+in\s+on\s+trade\b/i.test(text);
+  const trade =
+    !dealerIncomingTrade && /\btrade\b|\bmake a deal\b|\bsell\s+(?:my|the|our)\b|\bapprais/i.test(text);
   const sellOption = cash && trade ? "either" : cash ? "cash" : trade ? "trade" : undefined;
   if (!requestedVehicle && !tradeVehicle && !sellOption) return null;
   return {

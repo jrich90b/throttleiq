@@ -5,6 +5,7 @@ import {
   extractWebTextWidgetCustomerMessage,
   extractWebTextWidgetSalesVehicleContext,
   normalizeWebTextWidgetDepartment,
+  type WebTextWidgetSalesVehicleContext,
   webTextWidgetClassification,
   webTextWidgetTodoReason
 } from "../services/api/src/domain/webTextWidget.ts";
@@ -13,6 +14,14 @@ type Case = {
   id: string;
   actual: unknown;
   expected: unknown;
+};
+
+type WidgetLanguageFixture = {
+  id: string;
+  message: string;
+  expectedContext: WebTextWidgetSalesVehicleContext | null;
+  expectedDraft?: string | null;
+  draftMustExclude?: string[];
 };
 
 const cases: Case[] = [
@@ -101,6 +110,101 @@ const cases: Case[] = [
   }
 ];
 
+const widgetLanguageFixtures: WidgetLanguageFixture[] = [
+  {
+    id: "widget_language_buy_trade_simple",
+    message: "I want to buy a 2018 Street Bob. I have a 2014 Sportster to trade.",
+    expectedContext: {
+      requestedVehicle: { year: "2018", model: "Street Bob", condition: "used" },
+      tradeVehicle: { year: "2014", model: "Sportster", condition: "used" },
+      sellOption: "trade"
+    },
+    expectedDraft:
+      "Hi Test - thanks for reaching out. I can help with the 2018 Street Bob and take a look at your 2014 Sportster trade. Send over the VIN and photos when you can, and I'll have the team confirm the bike details and trade options.",
+    draftMustExclude: ["not seeing", "Sportster To Trade"]
+  },
+  {
+    id: "widget_language_color_before_year",
+    message: "Interested in the black 2018 Street Bob. I have a 2014 Sportster to trade.",
+    expectedContext: {
+      requestedVehicle: { year: "2018", model: "Street Bob", condition: "used" },
+      tradeVehicle: { year: "2014", model: "Sportster", condition: "used" },
+      sellOption: "trade"
+    },
+    expectedDraft:
+      "Hi Test - thanks for reaching out. I can help with the 2018 Street Bob and take a look at your 2014 Sportster trade. Send over the VIN and photos when you can, and I'll have the team confirm the bike details and trade options."
+  },
+  {
+    id: "widget_language_cash_only_inventory",
+    message: "Looking to buy a 2024 Road Glide. Cash buyer if it is still available.",
+    expectedContext: {
+      requestedVehicle: { year: "2024", model: "Road Glide", condition: "used" },
+      sellOption: "cash"
+    },
+    expectedDraft: null
+  },
+  {
+    id: "widget_language_customer_sell_only",
+    message: "I want to sell my 2020 Fat Boy.",
+    expectedContext: {
+      tradeVehicle: { year: "2020", model: "Fat Boy", condition: "used" },
+      sellOption: "trade"
+    },
+    expectedDraft: null
+  },
+  {
+    id: "widget_language_pending_incoming_trade_is_requested_inventory",
+    message: "I am interested in the used 2016 Freewheeler you are taking in on trade.",
+    expectedContext: {
+      requestedVehicle: { year: "2016", model: "Freewheeler", condition: "used" }
+    },
+    expectedDraft: null
+  },
+  {
+    id: "widget_language_finance_only_context_left_to_orchestrator",
+    message: "Do you have financing on used bikes?",
+    expectedContext: null,
+    expectedDraft: null
+  },
+  {
+    id: "widget_language_test_ride_context_left_to_parser_or_orchestrator",
+    message: "Can I schedule a test ride on the 2020 Low Rider S?",
+    expectedContext: null,
+    expectedDraft: null
+  }
+];
+
+for (const fixture of widgetLanguageFixtures) {
+  const context = extractWebTextWidgetSalesVehicleContext(fixture.message);
+  cases.push({
+    id: `${fixture.id}_fallback_context`,
+    actual: context,
+    expected: fixture.expectedContext
+  });
+  if ("expectedDraft" in fixture) {
+    const draft = buildWebTextWidgetSalesBuyTradeDraft({
+      firstName: "Test",
+      context
+    });
+    cases.push({
+      id: `${fixture.id}_guarded_buy_trade_draft`,
+      actual: draft,
+      expected: fixture.expectedDraft
+    });
+  }
+  for (const forbidden of fixture.draftMustExclude ?? []) {
+    const draft = buildWebTextWidgetSalesBuyTradeDraft({
+      firstName: "Test",
+      context
+    });
+    cases.push({
+      id: `${fixture.id}_draft_excludes_${forbidden.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`,
+      actual: String(draft ?? "").toLowerCase().includes(forbidden.toLowerCase()),
+      expected: false
+    });
+  }
+}
+
 const apiSource = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
 const llmDraftSource = readFileSync(new URL("../services/api/src/domain/llmDraft.ts", import.meta.url), "utf8");
 const widgetRouteStart = apiSource.indexOf('app.post("/public/widget/text-us"');
@@ -178,6 +282,19 @@ cases.push(
       llmDraftSource.includes("requested_vehicle") &&
       llmDraftSource.includes("trade_vehicle") &&
       llmDraftSource.includes("Never merge the requested vehicle with the trade vehicle."),
+    expected: true
+  },
+  {
+    id: "llm_widget_sales_parser_examples_cover_widget_language_families",
+    actual:
+      llmDraftSource.includes("I want to buy the 2000 wide glide") &&
+      llmDraftSource.includes("I have a brand new 2025 road king special") &&
+      llmDraftSource.includes("Interested in the black 2018 Street Bob") &&
+      llmDraftSource.includes("Looking at that 2024 Road Glide") &&
+      llmDraftSource.includes("I want to sell my 2020 Fat Boy") &&
+      llmDraftSource.includes("Do you have financing on used bikes?") &&
+      llmDraftSource.includes("I am interested in the used 2016 Freewheeler you are taking in on trade") &&
+      llmDraftSource.includes("Can I schedule a test ride on the 2020 Low Rider S"),
     expected: true
   }
 );
