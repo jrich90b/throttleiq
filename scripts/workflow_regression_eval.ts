@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import {
   allowComplimentOnlyReply,
   allowNoResponseSmallTalkAck,
@@ -332,6 +334,22 @@ const cases: Case[] = [
     id: "purchase_delivery_accessory_choice_detected",
     actual: classifyPurchaseDeliveryOperationalRequestText("That's the ones, chrome, black K tip"),
     expected: "accessory_selection"
+  },
+  {
+    id: "purchase_delivery_operational_blocks_early_no_response",
+    actual: (() => {
+      const source = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+      const guardStart = source.indexOf("const purchaseDeliveryOperationalNoResponseBlocker");
+      const noResponseStart = source.indexOf("const earlyNoResponseParserBlocker");
+      const noResponseEnd = source.indexOf("const customerAckNoResponse", noResponseStart);
+      return (
+        guardStart > 0 &&
+        noResponseStart > guardStart &&
+        noResponseEnd > noResponseStart &&
+        source.slice(noResponseStart, noResponseEnd).includes("purchaseDeliveryOperationalNoResponseBlocker")
+      );
+    })(),
+    expected: true
   },
   {
     id: "purchase_delivery_weight_request_detected",

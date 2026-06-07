@@ -49963,6 +49963,15 @@ if (authToken && signature) {
     !customerAckActionAccepted &&
     isImmediateArrivalRequestText(event.body) &&
     hasSchedulingQuestionContext(conv);
+  const purchaseDeliveryOperationalNoResponseBlocker =
+    event.provider === "twilio" &&
+    isPurchaseDeliveryOperationalRequestText(event.body ?? "") &&
+    hasPurchaseDeliveryLogisticsParserHint(
+      conv,
+      event.body ?? "",
+      event.receivedAt,
+      (event.mediaUrls?.length ?? 0) > 0
+    );
   const earlyNoResponseParserBlocker =
     hasCustomerDispositionParserHintText(event.body ?? "") ||
     hasFirstTimeRiderGuidanceParserHint(event.body ?? "") ||
@@ -49976,7 +49985,8 @@ if (authToken && signature) {
     inboundReplyActionParse?.action === "inventory_watch_acknowledgement" ||
     inboundReplyActionParse?.action === "pending_incoming_inventory_acknowledgement" ||
     customerAckActionParse?.action === "appointment_status_question" ||
-    customerAckActionParse?.action === "immediate_arrival_request";
+    customerAckActionParse?.action === "immediate_arrival_request" ||
+    purchaseDeliveryOperationalNoResponseBlocker;
   const customerAckNoResponse =
     customerAckActionAccepted &&
     (customerAckActionParse?.action === "no_response_needed" ||
