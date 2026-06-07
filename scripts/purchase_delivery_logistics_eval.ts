@@ -92,6 +92,15 @@ const fixtures: Fixture[] = [
     expectedIntent: "delivery_progress"
   },
   {
+    id: "vehicle_weight_request_active_purchase_delivery",
+    text: "Hey Joe , how many lbs is the bike",
+    history: [
+      { direction: "out", body: "Lou, here is that quote with today’s date." },
+      { direction: "out", body: "let me know what you think about the wheels and muffler" }
+    ],
+    expectedIntent: "delivery_progress"
+  },
+  {
     id: "dealer_trade_status_request_active_purchase_delivery",
     text: "Did you get the trade done",
     history: [

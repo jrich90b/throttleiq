@@ -334,6 +334,16 @@ const cases: Case[] = [
     expected: "accessory_selection"
   },
   {
+    id: "purchase_delivery_weight_request_detected",
+    actual: classifyPurchaseDeliveryOperationalRequestText("Hey Joe, how many lbs is the bike"),
+    expected: "vehicle_weight_request"
+  },
+  {
+    id: "purchase_delivery_weight_request_safe_reply",
+    actual: buildPurchaseDeliveryOperationalRequestReply("vehicle_weight_request"),
+    expected: "I’ll confirm the weight on the bike and send it over."
+  },
+  {
     id: "purchase_delivery_known_vin_reply_uses_fact",
     actual: buildPurchaseDeliveryOperationalRequestReply("vin_request", { vin: "1HD1TESTVIN1234567" }),
     expected: "The VIN is 1HD1TESTVIN1234567."

@@ -18615,6 +18615,7 @@ function buildPurchaseDeliveryOperationalTaskSummary(kind: string, text: string 
   if (kind === "lift_info_request") return `Send lift info for active purchase/delivery.${suffix}`;
   if (kind === "trade_status_request") return `Check dealer trade status for active purchase/delivery.${suffix}`;
   if (kind === "callback_request") return `Call customer about active purchase/delivery.${suffix}`;
+  if (kind === "vehicle_weight_request") return `Confirm vehicle weight for active purchase/delivery.${suffix}`;
   return `Confirm selected accessory/options for active purchase/delivery.${suffix}`;
 }
 

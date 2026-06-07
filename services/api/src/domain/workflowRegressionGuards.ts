@@ -120,6 +120,7 @@ export type PurchaseDeliveryOperationalRequestKind =
   | "lift_info_request"
   | "trade_status_request"
   | "callback_request"
+  | "vehicle_weight_request"
   | "accessory_selection";
 
 export function classifyPurchaseDeliveryOperationalRequestText(
@@ -133,6 +134,13 @@ export function classifyPurchaseDeliveryOperationalRequestText(
   if (!text) return null;
   if (/\b(?:vin|vin\s*#|vehicle identification number)\b/.test(text)) return "vin_request";
   if (/\blift(?:\s+(?:info|information|details))?\b/.test(text)) return "lift_info_request";
+  if (
+    /\b(?:how many|what(?:'s| is))\b[\s\S]{0,50}\b(?:lbs?|pounds?)\b/.test(text) ||
+    /\b(?:weight|weighs?|weigh)\b[\s\S]{0,60}\b(?:bike|motorcycle|unit|it|this)\b/.test(text) ||
+    /\b(?:bike|motorcycle|unit|it|this)\b[\s\S]{0,60}\b(?:weight|weighs?|weigh|lbs?|pounds?)\b/.test(text)
+  ) {
+    return "vehicle_weight_request";
+  }
   if (
     /\b(?:did|do|have|has|is|was|can)\b[\s\S]{0,50}\btrade\b[\s\S]{0,60}\b(?:done|complete|completed|finished|through|all set|approved|worked out|work out|go through|go thru)\b/.test(
       text
@@ -174,6 +182,9 @@ export function buildPurchaseDeliveryOperationalRequestReply(
   }
   if (kind === "callback_request") {
     return "Got it — I’ll give you a call.";
+  }
+  if (kind === "vehicle_weight_request") {
+    return "I’ll confirm the weight on the bike and send it over.";
   }
   return "Got it — I’ll note that choice and follow up with the next step.";
 }
