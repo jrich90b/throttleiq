@@ -301,8 +301,12 @@ import {
   shouldDeclineInternationalShipping
 } from "./domain/internationalShippingPolicy.js";
 import {
+  buildWebTextWidgetSalesBuyTradeDraft,
   buildWebTextWidgetInboundBody,
+  extractWebTextWidgetCustomerMessage,
+  extractWebTextWidgetSalesVehicleContext,
   normalizeWebTextWidgetDepartment,
+  type WebTextWidgetSalesVehicleContext,
   webTextWidgetClassification,
   webTextWidgetDepartmentLabel,
   webTextWidgetTodoReason
@@ -4591,6 +4595,76 @@ function isWebTextWidgetRateLimited(key: string): boolean {
   return false;
 }
 
+function applyWebTextWidgetSalesVehicleContext(
+  conv: any,
+  context: WebTextWidgetSalesVehicleContext | null
+) {
+  if (!conv || !context) return;
+  conv.lead = conv.lead ?? {};
+  if (context.requestedVehicle) {
+    const requested = context.requestedVehicle;
+    conv.lead.vehicle = {
+      ...(conv.lead.vehicle ?? {}),
+      ...(requested.year ? { year: requested.year } : {}),
+      ...(requested.model
+        ? {
+            model: requested.model,
+            description: requested.model
+          }
+        : {}),
+      ...(requested.color ? { color: requested.color } : {}),
+      ...(requested.condition ? { condition: requested.condition } : {})
+    };
+  }
+  if (context.tradeVehicle) {
+    const trade = context.tradeVehicle;
+    conv.lead.tradeVehicle = {
+      ...(conv.lead.tradeVehicle ?? {}),
+      ...(trade.year ? { year: trade.year } : {}),
+      ...(trade.model
+        ? {
+            model: trade.model,
+            description: trade.model
+          }
+        : {}),
+      ...(trade.color ? { color: trade.color } : {}),
+      ...(trade.condition ? { condition: trade.condition } : {})
+    };
+  }
+  if (context.sellOption) {
+    conv.lead.sellOption = context.sellOption;
+    conv.lead.sellOptionUpdatedAt = new Date().toISOString();
+  }
+}
+
+function applyWebTextWidgetSalesDialogState(
+  conv: any,
+  context: WebTextWidgetSalesVehicleContext | null,
+  fallbackIntent?: string | null
+) {
+  if (context?.sellOption === "either") {
+    setDialogState(conv, "trade_either");
+    return;
+  }
+  if (context?.sellOption === "cash") {
+    setDialogState(conv, "trade_cash");
+    return;
+  }
+  if (context?.tradeVehicle) {
+    setDialogState(conv, "trade_trade");
+    return;
+  }
+  if (context?.requestedVehicle) {
+    setDialogState(conv, "inventory_init");
+    return;
+  }
+  if (fallbackIntent === "PRICING" || fallbackIntent === "FINANCING") {
+    setDialogState(conv, "pricing_init");
+  } else if (fallbackIntent === "AVAILABILITY" || fallbackIntent === "TRADE_IN") {
+    setDialogState(conv, "inventory_init");
+  }
+}
+
 function webTextWidgetEmbedScript(): string {
   return `(function(){
   if (window.__throttleIqTextWidgetLoaded) return;
@@ -4699,6 +4773,9 @@ app.post("/public/widget/text-us", async (req, res) => {
       providerMessageId: `web_widget_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       receivedAt: now
     };
+    const salesVehicleContext =
+      department === "sales" ? extractWebTextWidgetSalesVehicleContext(message) : null;
+    applyWebTextWidgetSalesVehicleContext(conv, salesVehicleContext);
     appendInbound(conv, event);
     if (department === "sales") {
       const dealerProfile = await getDealerProfileHot();
@@ -4733,19 +4810,21 @@ app.post("/public/widget/text-us", async (req, res) => {
       addTodo(conv, salesTaskReason, salesTaskSummary, event.providerMessageId, undefined, undefined, "followup");
       setFollowUpMode(conv, "manual_handoff", "web_text_widget_sales");
       stopFollowUpCadence(conv, "manual_handoff");
-      if (result.intent === "PRICING" || result.intent === "FINANCING") {
-        setDialogState(conv, "pricing_init");
-      } else if (result.intent === "AVAILABILITY" || result.intent === "TRADE_IN") {
-        setDialogState(conv, "inventory_init");
-      }
+      applyWebTextWidgetSalesDialogState(conv, salesVehicleContext, result.intent);
       if (result.pricingAttempted) incrementPricingAttempt(conv);
       if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
-      if (result.smallTalk) setDialogState(conv, "small_talk");
+      if (!salesVehicleContext && result.smallTalk) setDialogState(conv, "small_talk");
       if (result.memorySummary) {
         setMemorySummary(conv, result.memorySummary, conv.messages.length);
       }
-      const draftText = String(result.handoff?.required ? result.handoff.ack : result.draft ?? "").trim();
-      if (result.shouldRespond && draftText) {
+      const buyTradeDraft = buildWebTextWidgetSalesBuyTradeDraft({
+        firstName,
+        context: salesVehicleContext
+      });
+      const draftText = String(
+        buyTradeDraft || (result.handoff?.required ? result.handoff.ack : result.draft ?? "")
+      ).trim();
+      if ((result.shouldRespond || buyTradeDraft) && draftText) {
         const evaluateWidgetSalesDraftInvariant = (
           text: string,
           invariantHints?: CustomerReplyDraftInvariantHints
@@ -4768,16 +4847,25 @@ app.post("/public/widget/text-us", async (req, res) => {
           from: "salesperson",
           to: phone,
           invariantHints: {
-            turnFinanceIntent: result.intent === "PRICING" || result.intent === "FINANCING",
-            turnAvailabilityIntent: result.intent === "AVAILABILITY",
+            turnFinanceIntent:
+              result.intent === "PRICING" ||
+              result.intent === "FINANCING" ||
+              !!salesVehicleContext?.tradeVehicle ||
+              !!salesVehicleContext?.sellOption,
+            turnAvailabilityIntent: result.intent === "AVAILABILITY" || !!salesVehicleContext?.requestedVehicle,
             turnSchedulingIntent: result.intent === "TEST_RIDE"
           },
           discardPendingDraftsBeforePublish: true,
           routeScope: "live",
-          routeOutcome: "web_text_widget_sales_draft_created",
+          routeOutcome: buyTradeDraft
+            ? "web_text_widget_sales_buy_trade_draft_created"
+            : "web_text_widget_sales_draft_created",
           routeDetail: {
             intent: result.intent,
-            handoffRequired: !!result.handoff?.required
+            handoffRequired: !!result.handoff?.required,
+            requestedVehicle: salesVehicleContext?.requestedVehicle ?? null,
+            tradeVehicle: salesVehicleContext?.tradeVehicle ?? null,
+            sellOption: salesVehicleContext?.sellOption ?? null
           }
         });
       } else {
@@ -44819,7 +44907,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     inboundProvider === "twilio" ||
     inboundProvider === "sendgrid" ||
     inboundProvider === "sendgrid_adf" ||
-    inboundProvider === "voice_transcript"
+    inboundProvider === "voice_transcript" ||
+    inboundProvider === "web_widget"
       ? inboundProvider
       : channel === "email"
         ? "sendgrid"
@@ -44827,8 +44916,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const schedulerCfg = await getSchedulerConfigHot();
   const regenTz = schedulerCfg.timezone || "America/New_York";
   const inboundBodyRaw = String(inbound.body ?? "");
+  const inboundBodyForEvent =
+    inboundProvider === "web_widget"
+      ? extractWebTextWidgetCustomerMessage(inboundBodyRaw) || inboundBodyRaw
+      : inboundBodyRaw;
   const inboundBodyRebased = rebaseRegenerateRelativeDayText(
-    inboundBodyRaw,
+    inboundBodyForEvent,
     inbound.at ?? null,
     regenTz
   );
@@ -44965,6 +45058,52 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
+  const regenWebTextWidgetSalesContext =
+    event.provider === "web_widget" ? extractWebTextWidgetSalesVehicleContext(event.body ?? "") : null;
+  const regenWebTextWidgetBuyTradeDraft = buildWebTextWidgetSalesBuyTradeDraft({
+    firstName: conv.lead?.firstName,
+    context: regenWebTextWidgetSalesContext
+  });
+  if (regenWebTextWidgetBuyTradeDraft) {
+    applyWebTextWidgetSalesVehicleContext(conv, regenWebTextWidgetSalesContext);
+    setConversationClassification(conv, webTextWidgetClassification("sales") as any);
+    setConversationSoftTag(conv, "web_text_widget_department", {
+      value: "sales",
+      source: "web_text_widget_regen",
+      confidence: 1,
+      meta: {
+        label: webTextWidgetDepartmentLabel("sales"),
+        sourceMessageId: event.providerMessageId ?? null
+      }
+    });
+    addTodo(
+      conv,
+      "other",
+      `Sales website text lead: ${event.body ?? ""}`,
+      event.providerMessageId,
+      undefined,
+      undefined,
+      "followup"
+    );
+    setFollowUpMode(conv, "manual_handoff", "web_text_widget_sales");
+    stopFollowUpCadence(conv, "manual_handoff");
+    applyWebTextWidgetSalesDialogState(conv, regenWebTextWidgetSalesContext, "TRADE_IN");
+    recordRouteOutcome("regen", "web_text_widget_sales_buy_trade_draft_created", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      requestedVehicle: regenWebTextWidgetSalesContext?.requestedVehicle ?? null,
+      tradeVehicle: regenWebTextWidgetSalesContext?.tradeVehicle ?? null,
+      sellOption: regenWebTextWidgetSalesContext?.sellOption ?? null
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(regenWebTextWidgetBuyTradeDraft);
+    }
+    return respondWithSmsRegeneratedDraft(regenWebTextWidgetBuyTradeDraft, undefined, {
+      turnAvailabilityIntent: true,
+      turnFinanceIntent: true,
+      turnSchedulingIntent: false
+    });
+  }
   const regenShortAck = isShortAckText(event.body) || isEmojiOnlyText(event.body);
   const regenMarketplaceSellMyBikeLead =
     event.provider === "sendgrid_adf" &&

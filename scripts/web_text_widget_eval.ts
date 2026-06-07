@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import {
+  buildWebTextWidgetSalesBuyTradeDraft,
   buildWebTextWidgetInboundBody,
+  extractWebTextWidgetCustomerMessage,
+  extractWebTextWidgetSalesVehicleContext,
   normalizeWebTextWidgetDepartment,
   webTextWidgetClassification,
   webTextWidgetTodoReason
@@ -53,6 +56,48 @@ const cases: Case[] = [
       pageTitle: "Gear"
     }).includes("Department: Motor Clothes\nName: Jane Rider"),
     expected: true
+  },
+  {
+    id: "sales_widget_extracts_customer_message_from_metadata_body",
+    actual: extractWebTextWidgetCustomerMessage(
+      buildWebTextWidgetInboundBody({
+        department: "sales",
+        name: "Howard R ackerman",
+        message:
+          "I want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black.",
+        pageUrl: "https://example.test/used",
+        pageTitle: "Used inventory"
+      })
+    ),
+    expected:
+      "I want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black."
+  },
+  {
+    id: "sales_widget_keeps_requested_vehicle_and_trade_vehicle_distinct",
+    actual: extractWebTextWidgetSalesVehicleContext(
+      "I want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black. I can supply pics and vin number.I will buy it with cash if we are unable to make a deal with the road king. Thanks!"
+    ),
+    expected: {
+      requestedVehicle: { year: "2000", model: "Wide Glide", condition: "used" },
+      tradeVehicle: {
+        year: "2025",
+        model: "Road King Special",
+        condition: "new",
+        color: "Black on Black"
+      },
+      sellOption: "either"
+    }
+  },
+  {
+    id: "sales_widget_buy_trade_draft_names_requested_bike_not_inventory_miss",
+    actual: buildWebTextWidgetSalesBuyTradeDraft({
+      firstName: "Howard",
+      context: extractWebTextWidgetSalesVehicleContext(
+        "I want to buy the 2000 wide glide.I have a brand new 2025 road king special that I just bought.Its black on black. I can supply pics and vin number.I will buy it with cash if we are unable to make a deal with the road king. Thanks!"
+      )
+    }),
+    expected:
+      "Hi Howard - thanks for reaching out. I can help with the 2000 Wide Glide and take a look at your 2025 Road King Special trade. Send over the VIN and photos when you can, and I'll have the team confirm the bike details and trade options."
   }
 ];
 
@@ -84,6 +129,33 @@ cases.push(
   {
     id: "sales_widget_orchestrates_customer_message_not_metadata_block",
     actual: widgetRoute.includes("body: message"),
+    expected: true
+  },
+  {
+    id: "sales_widget_applies_buy_trade_guarded_draft",
+    actual:
+      widgetRoute.includes("buildWebTextWidgetSalesBuyTradeDraft") &&
+      widgetRoute.includes("web_text_widget_sales_buy_trade_draft_created"),
+    expected: true
+  }
+);
+
+const regenerateRouteStart = apiSource.indexOf('app.post("/conversations/:id/regenerate"');
+const regenerateRoute =
+  regenerateRouteStart >= 0 ? apiSource.slice(regenerateRouteStart, regenerateRouteStart + 16000) : "";
+cases.push(
+  {
+    id: "regenerate_preserves_web_widget_provider",
+    actual:
+      regenerateRoute.includes('inboundProvider === "web_widget"') &&
+      regenerateRoute.includes("? extractWebTextWidgetCustomerMessage(inboundBodyRaw)"),
+    expected: true
+  },
+  {
+    id: "regenerate_applies_buy_trade_widget_draft",
+    actual:
+      regenerateRoute.includes("regenWebTextWidgetBuyTradeDraft") &&
+      regenerateRoute.includes("web_text_widget_sales_buy_trade_draft_created"),
     expected: true
   }
 );
