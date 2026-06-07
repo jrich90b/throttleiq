@@ -4700,6 +4700,95 @@ app.post("/public/widget/text-us", async (req, res) => {
       receivedAt: now
     };
     appendInbound(conv, event);
+    if (department === "sales") {
+      const dealerProfile = await getDealerProfileHot();
+      const widgetTurn: InboundMessageEvent = {
+        ...event,
+        body: message
+      };
+      const result = await safeOrchestrateInbound("web_text_widget_sales", widgetTurn, buildHistory(conv, 20), {
+        appointment: conv.appointment,
+        followUp: conv.followUp,
+        leadSource: conv.lead?.source ?? null,
+        bucket: conv.classification?.bucket ?? null,
+        cta: conv.classification?.cta ?? null,
+        primaryIntentHint: "general",
+        lead: conv.lead ?? null,
+        pricingAttempts: getPricingAttempts(conv),
+        allowSchedulingOffer: false,
+        memorySummary: conv.memorySummary?.text ?? null,
+        memorySummaryShouldUpdate: shouldUpdateMemorySummary(conv),
+        inventoryWatch: conv.inventoryWatch ?? null,
+        inventoryWatches: conv.inventoryWatches ?? null,
+        financeDocs: conv.financeDocs ?? null,
+        tradePayoff: conv.tradePayoff ?? null,
+        hold: conv.hold ?? null,
+        sale: conv.sale ?? null,
+        pickup: conv.pickup ?? null,
+        dealerProfile,
+        agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra")
+      });
+      const salesTaskReason = result.handoff?.required ? result.handoff.reason : "other";
+      const salesTaskSummary = `Sales website text lead: ${message}`;
+      addTodo(conv, salesTaskReason, salesTaskSummary, event.providerMessageId, undefined, undefined, "followup");
+      setFollowUpMode(conv, "manual_handoff", "web_text_widget_sales");
+      stopFollowUpCadence(conv, "manual_handoff");
+      if (result.intent === "PRICING" || result.intent === "FINANCING") {
+        setDialogState(conv, "pricing_init");
+      } else if (result.intent === "AVAILABILITY" || result.intent === "TRADE_IN") {
+        setDialogState(conv, "inventory_init");
+      }
+      if (result.pricingAttempted) incrementPricingAttempt(conv);
+      if (result.paymentsAnswered) setDialogState(conv, "payments_answered");
+      if (result.smallTalk) setDialogState(conv, "small_talk");
+      if (result.memorySummary) {
+        setMemorySummary(conv, result.memorySummary, conv.messages.length);
+      }
+      const draftText = String(result.handoff?.required ? result.handoff.ack : result.draft ?? "").trim();
+      if (result.shouldRespond && draftText) {
+        const evaluateWidgetSalesDraftInvariant = (
+          text: string,
+          invariantHints?: CustomerReplyDraftInvariantHints
+        ) =>
+          applyDraftStateInvariants({
+            inboundText: message,
+            draftText: text,
+            followUpMode: conv.followUp?.mode ?? null,
+            followUpReason: conv.followUp?.reason ?? null,
+            dialogState: getDialogState(conv),
+            classificationBucket: conv.classification?.bucket ?? null,
+            classificationCta: conv.classification?.cta ?? null,
+            ...(invariantHints ?? {})
+          });
+        publishCustomerReplyDraft({
+          conv,
+          channel: "sms",
+          text: draftText,
+          evaluateInvariant: evaluateWidgetSalesDraftInvariant,
+          from: "salesperson",
+          to: phone,
+          invariantHints: {
+            turnFinanceIntent: result.intent === "PRICING" || result.intent === "FINANCING",
+            turnAvailabilityIntent: result.intent === "AVAILABILITY",
+            turnSchedulingIntent: result.intent === "TEST_RIDE"
+          },
+          discardPendingDraftsBeforePublish: true,
+          routeScope: "live",
+          routeOutcome: "web_text_widget_sales_draft_created",
+          routeDetail: {
+            intent: result.intent,
+            handoffRequired: !!result.handoff?.required
+          }
+        });
+      } else {
+        recordRouteOutcome("live", "web_text_widget_sales_no_draft", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          intent: result.intent,
+          shouldRespond: result.shouldRespond
+        });
+      }
+    }
     const todoReason = webTextWidgetTodoReason(department);
     if (todoReason) {
       addTodo(conv, todoReason, `${webTextWidgetDepartmentLabel(department)} website text: ${message}`, event.providerMessageId);

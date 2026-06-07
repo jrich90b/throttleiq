@@ -1,8 +1,8 @@
 export type WebTextWidgetDepartment = "sales" | "service" | "parts" | "apparel";
 
 export type WebTextWidgetClassification = {
-  bucket: "general_inquiry" | "service" | "parts" | "apparel";
-  cta: "contact_us" | "service_request" | "parts_request" | "apparel_request";
+  bucket: "inventory_interest" | "service" | "parts" | "apparel";
+  cta: "check_availability" | "service_request" | "parts_request" | "apparel_request";
 };
 
 export function normalizeWebTextWidgetDepartment(raw?: string | null): WebTextWidgetDepartment | null {
@@ -29,7 +29,7 @@ export function webTextWidgetClassification(
   if (department === "service") return { bucket: "service", cta: "service_request" };
   if (department === "parts") return { bucket: "parts", cta: "parts_request" };
   if (department === "apparel") return { bucket: "apparel", cta: "apparel_request" };
-  return { bucket: "general_inquiry", cta: "contact_us" };
+  return { bucket: "inventory_interest", cta: "check_availability" };
 }
 
 export function webTextWidgetTodoReason(
