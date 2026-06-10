@@ -223,6 +223,22 @@ trap 'record_closed_loop_run "$?"' EXIT
     echo "[feedback-loop] vehicle_watch_catalog_eval=fail"
   fi
 
+  # Postgres store-swap shadow gate (docs/postgres_store_swap.md): while
+  # dual_write is enabled, diff the JSON file store against Postgres daily.
+  # A mismatch logs pg_parity=fail but does not abort the loop.
+  if [[ -n "${DATABASE_URL:-}" && "${DATA_BACKEND:-file}" != "file" ]]; then
+    PG_PARITY_JSON="$REPORT_ROOT/pg_parity/pg_parity_report.json"
+    PG_PARITY_LOG="$LOG_DIR/pg_parity_$TS.log"
+    echo "[feedback-loop] step=pg_parity -> $PG_PARITY_JSON"
+    if npm run pg:parity -- --out "$PG_PARITY_JSON" | tee "$PG_PARITY_LOG"; then
+      echo "[feedback-loop] pg_parity=pass"
+    else
+      echo "[feedback-loop] pg_parity=fail"
+    fi
+  else
+    echo "[feedback-loop] step=pg_parity skipped (DATA_BACKEND/DATABASE_URL not set)"
+  fi
+
   TONE_BACKUP_PATH="$BACKUP_DIR/deterministic_tone_rules.before.json"
   MANUAL_BACKUP_PATH="$BACKUP_DIR/manual_reply_examples.before.json"
   had_tone_backup=0
