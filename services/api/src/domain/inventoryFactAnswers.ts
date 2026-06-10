@@ -53,6 +53,16 @@ function formatMoney(value: unknown): string | null {
   }).format(numeric);
 }
 
+function formatUnitReference(unitLabel: string | null | undefined): string {
+  const label = normalizeText(unitLabel) || "bike";
+  if (/^(that|this|your)\b/i.test(label)) return label;
+  return `the ${label}`;
+}
+
+function buildPendingPriceConfirmationReply(unitLabel: string | null | undefined): string {
+  return `I’ll have the team confirm the current price on ${formatUnitReference(unitLabel)} and send it over.`;
+}
+
 function scoreVehicleForLookup(vehicle: any): number {
   if (!vehicle) return 0;
   let score = 0;
@@ -268,7 +278,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     }
     return {
       handled: true,
-      reply: `I don’t see a published price in the inventory feed for the ${unitLabel}, so I’ll have the team confirm it and send it over.`,
+      reply: buildPendingPriceConfirmationReply(unitLabel),
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Confirm sale price for ${unitLabel}. Customer asked: ${args.text}`,
@@ -296,7 +306,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     const priceClause = priceText ? ` The listed price I see is ${priceText} before tax and fees.` : "";
     const missingPriceClause =
       !priceText && asksPriceInFinanceQuestion
-        ? " I don’t see a published price in the inventory feed, so I’ll have the team confirm the price and final eligibility."
+        ? ` ${buildPendingPriceConfirmationReply(unitLabel)} I’ll also have them confirm final eligibility.`
         : " I’ll still have the team confirm final finance eligibility before quoting exact terms.";
     return {
       handled: true,
@@ -318,7 +328,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
     const promoText = describePromoNote(financePromo);
     return {
       handled: true,
-      reply: `Yes — the ${unitLabel} has a current ${promoText}, but I don’t see a published price in the inventory feed to verify the under-${formatMoney(priceCap)} part. I’ll have the team confirm the price and final eligibility.`,
+      reply: `Yes — the ${unitLabel} has a current ${promoText}. I’ll have the team confirm the current price and final eligibility before quoting the under-${formatMoney(priceCap)} part.`,
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
@@ -380,7 +390,7 @@ export async function buildInventoryBackedVehicleFactAnswer(args: {
   if (priceCap && !priceText) {
     return {
       handled: true,
-      reply: `The ${unitLabel} matches the basic new 2024/2025 inventory criteria for ${aprText} APR, but I don’t see a published price in the inventory feed to verify the under-${formatMoney(priceCap)} part. I’ll have the team confirm both.`,
+      reply: `The ${unitLabel} matches the basic new 2024/2025 inventory criteria for ${aprText} APR. I’ll have the team confirm the current price before quoting the under-${formatMoney(priceCap)} part.`,
       needsTodo: true,
       todoReason: "pricing",
       todoSummary: `Turn over price and finance program eligibility for ${unitLabel}. Customer asked: ${args.text}`,
@@ -464,7 +474,7 @@ export function mergeRecentPriceQuestionIntoFinanceAnswer(args: {
   const unitLabel = args.answer.unitLabel ?? "bike";
   const priceSentence = args.answer.priceText
     ? `The listed price I see on the ${unitLabel} is ${args.answer.priceText} before tax and fees.`
-    : `I don’t see a published price in the inventory feed for the ${unitLabel}, so I’ll have the team confirm the price and send it over.`;
+    : buildPendingPriceConfirmationReply(unitLabel);
   const financeReply = normalizeText(args.answer.reply);
   const reply = [priceSentence, financeReply].filter(Boolean).join(" ");
   const summaryPrefix = args.answer.missingPrice

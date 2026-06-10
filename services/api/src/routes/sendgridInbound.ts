@@ -3346,6 +3346,30 @@ function scopeConversationToAdfLead(conv: any, lead: any): any {
   return { ...conv, lead, latestLead: lead };
 }
 
+function syncInventoryContextToActiveAdfLead(conv: any, lead: any): void {
+  const vehicle = lead?.vehicle ?? {};
+  const model =
+    normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null) ??
+    normalizeDisplayCase(vehicle.model ?? vehicle.description ?? "");
+  const nextContext: Record<string, string> = {
+    updatedAt: new Date().toISOString()
+  };
+  const stockId = String(vehicle.stockId ?? "").trim();
+  const vin = String(vehicle.vin ?? "").trim();
+  const year = String(vehicle.year ?? "").trim();
+  const color = String(vehicle.color ?? "").trim();
+  const condition = String(vehicle.condition ?? "").trim();
+  if (stockId) nextContext.stockId = stockId;
+  if (vin) nextContext.vin = vin;
+  if (year) nextContext.year = year;
+  if (model) nextContext.model = model;
+  if (color) nextContext.color = color;
+  if (condition) nextContext.condition = condition;
+  if (Object.keys(nextContext).length > 1) {
+    conv.inventoryContext = nextContext;
+  }
+}
+
 function isInitialAdfInventoryStatusParserAccepted(parsed: InventoryStatusParse | null): boolean {
   if (!parsed || !parsed.explicitRequest || parsed.intent === "none") return false;
   const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
@@ -4379,6 +4403,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   lead.inquiry = effectiveInquiry;
   adfLeadProfile.inquiry = effectiveInquiry || undefined;
   const activeAdfLeadProfile = adfLeadProfile;
+  syncInventoryContextToActiveAdfLead(conv, activeAdfLeadProfile);
   const inquiryText = String(effectiveInquiry).toLowerCase();
   const inboundBody =
     [

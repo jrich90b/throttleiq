@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
 
-type Provider = "twilio" | "sendgrid_adf";
+type Provider = "twilio" | "sendgrid_adf" | "web_widget";
 type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
 type ReplayMode = "human" | "suggest" | "autopilot";
 
@@ -97,12 +97,12 @@ type ReplayCaseResult = Candidate & {
 
 function usage(): never {
   console.error(`Usage:
-  npm run inbound_shadow:replay -- --data-dir <DATA_DIR> [--provider all|twilio|adf] [--limit 20]
+  npm run inbound_shadow:replay -- --data-dir <DATA_DIR> [--provider all|twilio|adf|widget] [--limit 20]
 
 Options:
   --data-dir <path>       Source API data directory. Required.
   --env-file <path>       Optional API env file to load for the temporary process.
-  --provider <name>       all, twilio, or adf. Default: all.
+  --provider <name>       all, twilio, adf, or widget. Default: all.
   --limit <n>             Max replay cases. Default: 20.
   --since-days <n>        Only consider inbound messages newer than this. Default: 14.
   --out-dir <path>        Report directory. Default: reports/inbound-shadow.
@@ -142,6 +142,7 @@ function parseArgs(argv: string[]): ReplayArgs {
     else if (arg === "--provider") {
       const raw = next().toLowerCase();
       if (raw === "adf") out.provider = "sendgrid_adf";
+      else if (raw === "widget" || raw === "web_widget" || raw === "web_text_widget") out.provider = "web_widget";
       else if (raw === "twilio" || raw === "sendgrid_adf" || raw === "all") out.provider = raw as any;
       else usage();
     } else if (arg === "--limit") out.limit = Math.max(1, Number.parseInt(next(), 10) || 20);
@@ -227,6 +228,9 @@ function normalizeProvider(raw?: string | null): Provider | null {
   const provider = String(raw ?? "").trim().toLowerCase();
   if (provider === "twilio") return "twilio";
   if (provider === "sendgrid_adf") return "sendgrid_adf";
+  if (provider === "web_widget" || provider === "web_text_widget" || provider === "website_text_widget") {
+    return "web_widget";
+  }
   return null;
 }
 
@@ -256,6 +260,25 @@ function extractInquiry(body: string): string {
   const match = body.match(/(?:^|\n)Inquiry:\s*\n?([\s\S]*)$/i);
   const text = (match?.[1] ?? body).trim();
   return text.replace(/\n(?:View lead|Lead)$/i, "").trim();
+}
+
+function extractWebTextWidgetMessage(body: string): string {
+  const match = String(body ?? "").match(/(?:^|\n)Message:\s*\n?([\s\S]*)$/i);
+  return (match?.[1] ?? body).trim();
+}
+
+function webTextWidgetReplayPayload(candidate: Candidate): Record<string, any> {
+  const body = String(candidate.body ?? "");
+  return {
+    department: extractField(body, "Department") || "Sales",
+    name: extractField(body, "Name") || candidate.customerName || "Shadow Customer",
+    phone: normalizePhone(candidate.from),
+    message: extractWebTextWidgetMessage(body),
+    pageUrl: extractField(body, "URL"),
+    pageTitle: extractField(body, "Page"),
+    consent: true,
+    consentDisclosure: "Shadow replay consent placeholder"
+  };
 }
 
 function stripControlChars(text: string): string {
@@ -358,14 +381,20 @@ function selectCandidates(snapshot: any, args: ReplayArgs): Candidate[] {
       if (!provider) continue;
       if (args.provider !== "all" && provider !== args.provider) continue;
       const body = String(message.body ?? "").trim();
-      if (!isValidInboundBody(body)) continue;
+      const validityBody = provider === "web_widget" ? extractWebTextWidgetMessage(body) : body;
+      if (!isValidInboundBody(validityBody)) continue;
       const atMs = Date.parse(String(message.at ?? ""));
       if (Number.isFinite(atMs) && atMs < cutoffMs) continue;
       const from =
-        provider === "twilio"
+        provider === "twilio" || provider === "web_widget"
           ? normalizePhone(message.from) || normalizePhone(conv.lead?.phone) || normalizePhone(conv.leadKey)
           : String(message.from ?? conv.lead?.email ?? conv.lead?.phone ?? conv.leadKey ?? "").trim();
-      const to = provider === "twilio" ? normalizePhone(message.to) || args.twilioTo : String(message.to ?? "dealership");
+      const to =
+        provider === "twilio"
+          ? normalizePhone(message.to) || args.twilioTo
+          : provider === "web_widget"
+            ? "web_text_widget"
+            : String(message.to ?? "dealership");
       if (!from || !body) continue;
       candidates.push({
         id: `${provider}_${conv.id}_${message.id ?? index}`.replace(/[^a-zA-Z0-9_.:-]/g, "_"),
@@ -382,9 +411,27 @@ function selectCandidates(snapshot: any, args: ReplayArgs): Candidate[] {
       });
     }
   }
-  return candidates
-    .sort((a, b) => Date.parse(b.messageAt ?? "") - Date.parse(a.messageAt ?? ""))
-    .slice(0, args.limit);
+  const sorted = candidates.sort((a, b) => Date.parse(b.messageAt ?? "") - Date.parse(a.messageAt ?? ""));
+  if (args.provider !== "all") return sorted.slice(0, args.limit);
+
+  const byProvider = new Map<Provider, Candidate[]>();
+  for (const candidate of sorted) {
+    const rows = byProvider.get(candidate.provider) ?? [];
+    rows.push(candidate);
+    byProvider.set(candidate.provider, rows);
+  }
+  const balanced: Candidate[] = [];
+  const providerOrder: Provider[] = ["web_widget", "twilio", "sendgrid_adf"];
+  while (balanced.length < args.limit) {
+    const before = balanced.length;
+    for (const provider of providerOrder) {
+      const next = byProvider.get(provider)?.shift();
+      if (next) balanced.push(next);
+      if (balanced.length >= args.limit) break;
+    }
+    if (balanced.length === before) break;
+  }
+  return balanced;
 }
 
 async function loadEnvFile(envFile?: string): Promise<Record<string, string>> {
@@ -676,6 +723,30 @@ async function submitAdf(port: number, candidate: Candidate, adfXml: string): Pr
   };
 }
 
+async function submitWebTextWidget(port: number, candidate: Candidate): Promise<{
+  responseStatus: number;
+  responseBodySnippet: string;
+  draft: string | null;
+}> {
+  const res = await fetch(`http://127.0.0.1:${port}/public/widget/text-us`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(webTextWidgetReplayPayload(candidate))
+  });
+  const text = await res.text();
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
+  return {
+    responseStatus: res.status,
+    responseBodySnippet: text.slice(0, 500),
+    draft: typeof parsed?.draft === "string" ? parsed.draft : null
+  };
+}
+
 async function readConversation(dataDir: string, conversationId: string): Promise<Conversation | null> {
   const snapshot = await readJson<any>(path.join(dataDir, "conversations.json"));
   const conversations: Conversation[] = Array.isArray(snapshot.conversations) ? snapshot.conversations : [];
@@ -691,6 +762,16 @@ function latestOutboundAfter(conv: Conversation | null, beforeCount: number): Co
 function isExpectedNoCustomerReply(inbound: string): boolean {
   const text = inbound.replace(/\s+/g, " ").trim().toLowerCase();
   if (!text) return false;
+  if (
+    /\bsource:\s*traffic log pro\b/i.test(inbound) &&
+    /\(step\s+\d+\)/i.test(inbound) &&
+    /\b(dealer trade|deposit|sold|finalizing|closing|delivered|doing a deal)\b/i.test(inbound) &&
+    !/\?|\b(call me|text me|send|let me know|lmk|watch(?:ing)? for|looking for|need|want|can you|could you|would you)\b/i.test(
+      inbound
+    )
+  ) {
+    return true;
+  }
   if (/\b(reschedule|re-?schedule|can't make|cant make|cannot make|won't make|wont make|not going to be able to make|unable to make|need to cancel|have to cancel)\b/i.test(text)) {
     return false;
   }
@@ -903,7 +984,9 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
 
 function dataSourcesFor(candidate: Candidate, conv: Conversation | null): string[] {
   const out = new Set<string>();
-  out.add(candidate.provider === "twilio" ? "Twilio webhook replay" : "SendGrid ADF route replay");
+  if (candidate.provider === "twilio") out.add("Twilio webhook replay");
+  else if (candidate.provider === "sendgrid_adf") out.add("SendGrid ADF route replay");
+  else if (candidate.provider === "web_widget") out.add("Web Text Widget route replay");
   if (conv?.lead) out.add("conversation lead profile");
   if (conv?.latestLead) out.add("latest ADF lead profile");
   if (conv?.inventoryWatch || conv?.inventoryWatches) out.add("inventory watch state");
@@ -956,7 +1039,7 @@ async function replayOne(
       twilioDeliveredMessageCount = draft ? 1 : 0;
       responseStatus = job.responseStatus ?? responseStatus;
       responseBodySnippet = String(job.responseBodySnippet ?? responseBodySnippet ?? "");
-    } else {
+    } else if (candidate.provider === "sendgrid_adf") {
       const adfXml = caseData.adfXml;
       if (!adfXml) throw new Error("ADF XML could not be generated");
       const postResult = await submitAdf(port, candidate, adfXml);
@@ -969,6 +1052,13 @@ async function replayOne(
         classificationBucket: postResult.bucket ?? null,
         classificationCta: postResult.cta ?? null
       };
+    } else if (candidate.provider === "web_widget") {
+      const postResult = await submitWebTextWidget(port, candidate);
+      responseStatus = postResult.responseStatus;
+      responseBodySnippet = postResult.responseBodySnippet;
+      draft = postResult.draft;
+    } else {
+      throw new Error(`unsupported provider: ${(candidate as any).provider}`);
     }
 
     await sleep(250);

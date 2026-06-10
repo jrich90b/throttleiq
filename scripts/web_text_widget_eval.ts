@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   buildWebTextWidgetSalesBuyTradeDraft,
   buildWebTextWidgetInboundBody,
@@ -204,6 +205,49 @@ for (const fixture of widgetLanguageFixtures) {
     });
   }
 }
+
+const shadowReplaySource = readFileSync(
+  path.join(process.cwd(), "scripts/inbound_shadow_replay.ts"),
+  "utf8"
+);
+cases.push(
+  {
+    id: "shadow_replay_accepts_widget_provider",
+    actual:
+      shadowReplaySource.includes('type Provider = "twilio" | "sendgrid_adf" | "web_widget"') &&
+      shadowReplaySource.includes("submitWebTextWidget") &&
+      shadowReplaySource.includes("/public/widget/text-us"),
+    expected: true
+  },
+  {
+    id: "shadow_replay_all_provider_balances_widget_cases",
+    actual:
+      shadowReplaySource.includes('const providerOrder: Provider[] = ["web_widget", "twilio", "sendgrid_adf"]') &&
+      shadowReplaySource.includes('if (args.provider !== "all") return sorted.slice(0, args.limit);'),
+    expected: true
+  },
+  {
+    id: "nightly_runs_widget_eval_and_shadow_replay",
+    actual: (() => {
+      const nightly = readFileSync(path.join(process.cwd(), "scripts/feedback_loop_nightly.sh"), "utf8");
+      return (
+        nightly.includes("step=web_text_widget_eval") &&
+        nightly.includes("npm run web_text_widget:eval") &&
+        nightly.includes("step=inbound_shadow_replay") &&
+        nightly.includes("npm run inbound_shadow:replay")
+      );
+    })(),
+    expected: true
+  },
+  {
+    id: "ci_eval_runs_widget_eval",
+    actual: (() => {
+      const pkg = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+      return String(pkg?.scripts?.["ci:eval"] ?? "").includes("npm run web_text_widget:eval");
+    })(),
+    expected: true
+  }
+);
 
 const apiSource = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
 const llmDraftSource = readFileSync(new URL("../services/api/src/domain/llmDraft.ts", import.meta.url), "utf8");

@@ -9515,6 +9515,66 @@ function buildInventoryUnitLabel(item: Partial<InventoryFeedItem>, fallbackModel
   return color ? `${base} in ${color}` : base;
 }
 
+function isInventoryUnitClarificationQuestion(text: string | null | undefined): boolean {
+  const normalized = String(text ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  return (
+    /\b(?:which|what)\s+(?:bike|one|unit)\b/.test(normalized) ||
+    /\bwhich\s+is\s+this\b/.test(normalized) ||
+    /\bwhat\s+is\s+this\b/.test(normalized)
+  ) && /\b(?:asked about a couple|asked about a few|asked about multiple|asked about more than one|a couple)\b/.test(normalized);
+}
+
+async function buildInventoryUnitClarificationReply(conv: any): Promise<string | null> {
+  const stockId = String((conv.inventoryContext as any)?.stockId ?? conv.lead?.vehicle?.stockId ?? "").trim();
+  const vin = String((conv.inventoryContext as any)?.vin ?? conv.lead?.vehicle?.vin ?? "").trim();
+  const year = String((conv.inventoryContext as any)?.year ?? conv.lead?.vehicle?.year ?? "").trim();
+  const model = String(
+    (conv.inventoryContext as any)?.model ??
+      conv.lead?.vehicle?.model ??
+      conv.lead?.vehicle?.description ??
+      ""
+  ).trim();
+  const color = String((conv.inventoryContext as any)?.color ?? conv.lead?.vehicle?.color ?? "").trim();
+  const baseLabel = formatModelLabel(year || null, model || null) || "that bike";
+  const exact = stockId || vin || model
+    ? await findInventoryPrice({
+        stockId: stockId || null,
+        vin: vin || null,
+        year: year || null,
+        model: model || null
+      })
+    : null;
+  const url =
+    /^https?:\/\//i.test(String(exact?.item?.url ?? ""))
+      ? String(exact?.item?.url)
+      : stockId
+        ? await resolveInventoryUrlByStock(stockId)
+        : null;
+  const colorSuffix = color ? ` in ${normalizeDisplayCase(color)}` : "";
+  const stockSuffix = stockId ? ` (Stock ${stockId})` : "";
+  const identifiedLabel =
+    exact?.item
+      ? buildInventoryUnitLabel(
+          {
+            year: exact.item.year ?? year,
+            model: exact.item.model ?? model,
+            color: exact.item.color ?? color
+          },
+          model || null
+        )
+      : `${baseLabel}${colorSuffix}`.trim();
+  if (!identifiedLabel || identifiedLabel === "that bike") return null;
+  const details = `${identifiedLabel}${stockSuffix}`;
+  if (url) {
+    return `It’s the ${details} — ${url}. If you want the other one too, I can send that over.`;
+  }
+  return `It’s the ${details}. If you want the other one too, I can send that over.`;
+}
+
 function buildUnavailableStoreUnitLabel(
   item: any,
   fallbackModel?: string | null,
@@ -54472,6 +54532,23 @@ if (authToken && signature) {
       hasUsedUrl: !!inventoryBrowse.usedUrl
     });
     return publishLiveTwilioReply(inventoryBrowse.reply);
+  }
+  const inventoryUnitClarificationReply =
+    event.provider === "twilio" &&
+    String(conv.mode ?? "").toLowerCase() !== "human" &&
+    isInventoryUnitClarificationQuestion(event.body ?? "") &&
+    (conv.classification?.bucket === "inventory_interest" ||
+      String(conv.followUp?.reason ?? "").toLowerCase() === "adf_vehicle_fact_pricing")
+      ? await buildInventoryUnitClarificationReply(conv)
+      : null;
+  if (inventoryUnitClarificationReply) {
+    setDialogState(conv, "inventory_init");
+    logRouteOutcome("inventory_unit_clarification_reply", {
+      classificationBucket: conv.classification?.bucket ?? null,
+      followUpReason: conv.followUp?.reason ?? null,
+      stockId: (conv.inventoryContext as any)?.stockId ?? conv.lead?.vehicle?.stockId ?? null
+    });
+    return publishLiveTwilioReply(inventoryUnitClarificationReply, { turnAvailabilityIntent: true });
   }
   const scheduleContextStatusUpdate =
     event.provider === "twilio" &&

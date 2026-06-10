@@ -16,6 +16,7 @@ LANGUAGE_CORPUS_OUT_DIR="${LANGUAGE_CORPUS_OUT_DIR:-$REPORT_ROOT/language_corpus
 VOICE_FEEDBACK_OUT_DIR="${VOICE_FEEDBACK_OUT_DIR:-$REPORT_ROOT/voice_feedback}"
 OUTCOME_QA_OUT_DIR="${OUTCOME_QA_OUT_DIR:-$REPORT_ROOT/outcome_qa}"
 VEHICLE_WATCH_QA_OUT_DIR="${VEHICLE_WATCH_QA_OUT_DIR:-$REPORT_ROOT/vehicle_watch_qa}"
+INBOUND_SHADOW_OUT_DIR="${INBOUND_SHADOW_OUT_DIR:-$REPORT_ROOT/inbound_shadow}"
 DETERMINISTIC_TONE_RULES_PATH="${DETERMINISTIC_TONE_RULES_PATH:-$DATA_DIR/deterministic_tone_rules.json}"
 MANUAL_REPLY_EXAMPLES_PATH="${MANUAL_REPLY_EXAMPLES_PATH:-$DATA_DIR/manual_reply_examples.json}"
 TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
@@ -23,6 +24,12 @@ AGENT_MANAGER_OUT_DIR="${AGENT_MANAGER_OUT_DIR:-$REPORT_ROOT/agent_manager}"
 LOG_DIR="${LOG_DIR:-$REPORT_ROOT/feedback_loop_logs}"
 FEEDBACK_LOOP_ENV_PATH="${FEEDBACK_LOOP_ENV_PATH:-/home/ubuntu/throttleiq-runtime/.feedback_loop.env}"
 NIGHTLY_ROLLBACK_ON_EVAL_FAIL="${NIGHTLY_ROLLBACK_ON_EVAL_FAIL:-1}"
+NIGHTLY_SHADOW_REPLAY_ENABLED="${NIGHTLY_SHADOW_REPLAY_ENABLED:-1}"
+NIGHTLY_SHADOW_REPLAY_PROVIDER="${NIGHTLY_SHADOW_REPLAY_PROVIDER:-all}"
+NIGHTLY_SHADOW_REPLAY_LIMIT="${NIGHTLY_SHADOW_REPLAY_LIMIT:-12}"
+NIGHTLY_SHADOW_REPLAY_SINCE_DAYS="${NIGHTLY_SHADOW_REPLAY_SINCE_DAYS:-1}"
+NIGHTLY_SHADOW_REPLAY_MODE_MATRIX="${NIGHTLY_SHADOW_REPLAY_MODE_MATRIX:-1}"
+NIGHTLY_SHADOW_REPLAY_ENV_FILE="${NIGHTLY_SHADOW_REPLAY_ENV_FILE:-}"
 
 if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   # Load dealer/runtime-specific feedback loop env (recipient, sender, optional attachment flags).
@@ -32,7 +39,7 @@ if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   set +a
 fi
 
-mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$OUTCOME_QA_OUT_DIR" "$VEHICLE_WATCH_QA_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
+mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$OUTCOME_QA_OUT_DIR" "$VEHICLE_WATCH_QA_OUT_DIR" "$INBOUND_SHADOW_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -46,8 +53,10 @@ ROUTE_STATE_LOG="$LOG_DIR/route_state_$TS.log"
 VEHICLE_WATCH_QA_JSON="$VEHICLE_WATCH_QA_OUT_DIR/vehicle_watch_catalog_report.json"
 VEHICLE_WATCH_QA_MD="$VEHICLE_WATCH_QA_OUT_DIR/vehicle_watch_catalog_report.md"
 VEHICLE_WATCH_QA_LOG="$LOG_DIR/vehicle_watch_catalog_$TS.log"
+INBOUND_SHADOW_RUN_OUT_DIR="$INBOUND_SHADOW_OUT_DIR/$TS"
+INBOUND_SHADOW_LOG="$LOG_DIR/inbound_shadow_$TS.log"
 BACKUP_DIR="$LOG_DIR/feedback_loop_nightly_backups_$TS"
-mkdir -p "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR" "$INBOUND_SHADOW_RUN_OUT_DIR"
 
 backup_runtime_file() {
   local src="$1"
@@ -129,23 +138,30 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] VOICE_FEEDBACK_OUT_DIR=$VOICE_FEEDBACK_OUT_DIR"
   echo "[feedback-loop] OUTCOME_QA_OUT_DIR=$OUTCOME_QA_OUT_DIR"
   echo "[feedback-loop] VEHICLE_WATCH_QA_OUT_DIR=$VEHICLE_WATCH_QA_OUT_DIR"
+  echo "[feedback-loop] INBOUND_SHADOW_OUT_DIR=$INBOUND_SHADOW_OUT_DIR"
   echo "[feedback-loop] DETERMINISTIC_TONE_RULES_PATH=$DETERMINISTIC_TONE_RULES_PATH"
   echo "[feedback-loop] MANUAL_REPLY_EXAMPLES_PATH=$MANUAL_REPLY_EXAMPLES_PATH"
   echo "[feedback-loop] TONE_QUALITY_OUT_DIR=$TONE_QUALITY_OUT_DIR"
   echo "[feedback-loop] AGENT_MANAGER_OUT_DIR=$AGENT_MANAGER_OUT_DIR"
   echo "[feedback-loop] FEEDBACK_LOOP_ENV_PATH=$FEEDBACK_LOOP_ENV_PATH"
   echo "[feedback-loop] NIGHTLY_ROLLBACK_ON_EVAL_FAIL=$NIGHTLY_ROLLBACK_ON_EVAL_FAIL"
+  echo "[feedback-loop] NIGHTLY_SHADOW_REPLAY_ENABLED=$NIGHTLY_SHADOW_REPLAY_ENABLED"
+  echo "[feedback-loop] NIGHTLY_SHADOW_REPLAY_PROVIDER=$NIGHTLY_SHADOW_REPLAY_PROVIDER"
+  echo "[feedback-loop] NIGHTLY_SHADOW_REPLAY_LIMIT=$NIGHTLY_SHADOW_REPLAY_LIMIT"
+  echo "[feedback-loop] NIGHTLY_SHADOW_REPLAY_SINCE_DAYS=$NIGHTLY_SHADOW_REPLAY_SINCE_DAYS"
+  echo "[feedback-loop] NIGHTLY_SHADOW_REPLAY_MODE_MATRIX=$NIGHTLY_SHADOW_REPLAY_MODE_MATRIX"
   echo "[feedback-loop] FEEDBACK_REPORT_EMAIL_TO=${FEEDBACK_REPORT_EMAIL_TO:-}"
 
   # Some scripts still read CONVERSATIONS_PATH (legacy) instead of CONVERSATIONS_DB_PATH.
   CONVERSATIONS_PATH="${CONVERSATIONS_PATH:-$CONVERSATIONS_DB_PATH}"
-  export DATA_DIR CONVERSATIONS_DB_PATH CONVERSATIONS_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR VOICE_FEEDBACK_OUT_DIR OUTCOME_QA_OUT_DIR VEHICLE_WATCH_QA_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH TONE_QUALITY_OUT_DIR AGENT_MANAGER_OUT_DIR FOLLOWUP_TASK_AUDIT_JSON
+  export DATA_DIR CONVERSATIONS_DB_PATH CONVERSATIONS_PATH ROUTE_AUDIT_DIR CHANGED_MESSAGES_PATH CHANGED_MESSAGES_SINCE_HOURS AUDIT_SINCE_HOURS EDIT_FEEDBACK_OUT_DIR LANGUAGE_CORPUS_OUT_DIR VOICE_FEEDBACK_OUT_DIR OUTCOME_QA_OUT_DIR VEHICLE_WATCH_QA_OUT_DIR INBOUND_SHADOW_OUT_DIR DETERMINISTIC_TONE_RULES_PATH MANUAL_REPLY_EXAMPLES_PATH TONE_QUALITY_OUT_DIR AGENT_MANAGER_OUT_DIR FOLLOWUP_TASK_AUDIT_JSON
 
   echo "[feedback-loop] step=export_changed_messages"
   npm run export:changed_messages
 
   echo "[feedback-loop] step=conversation_audit -> $AUDIT_JSON"
-  npm run conversation:audit > "$AUDIT_JSON"
+  # Use npm's silent mode so the JSON file stays valid JSON (no npm preamble lines).
+  npm run -s conversation:audit > "$AUDIT_JSON"
 
   echo "[feedback-loop] step=followup_task_consistency_audit -> $FOLLOWUP_TASK_AUDIT_JSON"
   npm run followup_task_consistency:audit -- \
@@ -169,6 +185,34 @@ trap 'record_closed_loop_run "$?"' EXIT
 
   echo "[feedback-loop] step=inventory_watch_snapshot_guard_eval"
   npm run inventory_watch_snapshot_guard:eval
+
+  echo "[feedback-loop] step=web_text_widget_eval"
+  npm run web_text_widget:eval
+
+  if [[ "$NIGHTLY_SHADOW_REPLAY_ENABLED" == "1" ]]; then
+    echo "[feedback-loop] step=inbound_shadow_replay -> $INBOUND_SHADOW_RUN_OUT_DIR"
+    shadow_args=(
+      --
+      --data-dir "$DATA_DIR"
+      --provider "$NIGHTLY_SHADOW_REPLAY_PROVIDER"
+      --limit "$NIGHTLY_SHADOW_REPLAY_LIMIT"
+      --since-days "$NIGHTLY_SHADOW_REPLAY_SINCE_DAYS"
+      --out-dir "$INBOUND_SHADOW_RUN_OUT_DIR"
+    )
+    if [[ "$NIGHTLY_SHADOW_REPLAY_MODE_MATRIX" == "1" ]]; then
+      shadow_args+=(--mode-matrix)
+    fi
+    if [[ -n "$NIGHTLY_SHADOW_REPLAY_ENV_FILE" ]]; then
+      shadow_args+=(--env-file "$NIGHTLY_SHADOW_REPLAY_ENV_FILE")
+    fi
+    if npm run inbound_shadow:replay "${shadow_args[@]}" | tee "$INBOUND_SHADOW_LOG"; then
+      echo "[feedback-loop] inbound_shadow_replay=pass"
+    else
+      echo "[feedback-loop] inbound_shadow_replay=fail"
+    fi
+  else
+    echo "[feedback-loop] step=inbound_shadow_replay skipped"
+  fi
 
   echo "[feedback-loop] step=vehicle_watch_catalog_eval -> $VEHICLE_WATCH_QA_JSON"
   if npm run harley_watch_model_catalog:eval -- \
@@ -244,6 +288,7 @@ trap 'record_closed_loop_run "$?"' EXIT
       FEEDBACK_REPORT_FOLLOWUP_TASK_AUDIT_PATH="$FOLLOWUP_TASK_AUDIT_JSON" \
       FEEDBACK_REPORT_OUTCOME_QA_PATH="$OUTCOME_QA_OUT_DIR/outcome_qa_report.json" \
       FEEDBACK_REPORT_VEHICLE_WATCH_QA_PATH="$VEHICLE_WATCH_QA_JSON" \
+      FEEDBACK_REPORT_INBOUND_SHADOW_DIR="$INBOUND_SHADOW_RUN_OUT_DIR" \
       FEEDBACK_REPORT_MINE_LOG_PATH="$MINE_LOG" \
       npm run edit_feedback:email; then
       echo "[feedback-loop] email_report=sent"

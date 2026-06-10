@@ -20,6 +20,16 @@ function fileBase64(filePath: string): string | null {
   return fs.readFileSync(filePath).toString("base64");
 }
 
+function latestMatchingFile(dir: string, pattern: RegExp): string | null {
+  if (!fs.existsSync(dir)) return null;
+  const files = fs
+    .readdirSync(dir)
+    .filter(file => pattern.test(file))
+    .sort()
+    .reverse();
+  return files.length ? path.join(dir, files[0]!) : null;
+}
+
 function buildZip(zipPath: string, files: string[]): string | null {
   const existing = Array.from(
     new Set(files.map(f => String(f || "").trim()).filter(Boolean).filter(f => fs.existsSync(f)))
@@ -119,6 +129,17 @@ async function run() {
     String(process.env.FEEDBACK_REPORT_VEHICLE_WATCH_QA_PATH ?? "").trim() ||
     path.join(vehicleWatchQaOutDir, "vehicle_watch_catalog_report.json");
   const vehicleWatchQaMdPath = path.join(path.dirname(vehicleWatchQaJsonPath), "vehicle_watch_catalog_report.md");
+  const inboundShadowOutDir =
+    process.env.FEEDBACK_REPORT_INBOUND_SHADOW_DIR ||
+    process.env.INBOUND_SHADOW_OUT_DIR ||
+    path.resolve(path.dirname(outDir), "inbound_shadow");
+  const inboundShadowJsonPath =
+    String(process.env.FEEDBACK_REPORT_INBOUND_SHADOW_PATH ?? "").trim() ||
+    latestMatchingFile(inboundShadowOutDir, /^inbound-shadow-.*\.json$/) ||
+    "";
+  const inboundShadowMdPath = inboundShadowJsonPath
+    ? inboundShadowJsonPath.replace(/\.json$/i, ".md")
+    : "";
   const agentManagerOutDir =
     process.env.AGENT_MANAGER_OUT_DIR ||
     path.resolve(path.dirname(outDir), "agent_manager");
@@ -137,6 +158,7 @@ async function run() {
   const voiceSummary = readJson(voiceSummaryPath);
   const outcomeQaSummary = readJson(outcomeQaJsonPath);
   const vehicleWatchQaSummary = readJson(vehicleWatchQaJsonPath);
+  const inboundShadowSummary = inboundShadowJsonPath ? readJson(inboundShadowJsonPath) : null;
   const agentManagerSummary = readJson(agentManagerJsonPath);
   const followupTaskAudit = followupTaskAuditPath ? readJson(followupTaskAuditPath) : null;
 
@@ -239,6 +261,31 @@ async function run() {
         : "none"
     }`,
     "",
+    `Inbound shadow replay: ${
+      inboundShadowSummary
+        ? `provider=${inboundShadowSummary.provider ?? "unknown"} cases=${num(
+            inboundShadowSummary?.summary?.total
+          )} safe=${num(inboundShadowSummary?.summary?.candidateSafe)} review=${num(
+            inboundShadowSummary?.summary?.review
+          )} expected_no_response=${num(inboundShadowSummary?.summary?.expectedNoResponse)} no_response=${num(
+            inboundShadowSummary?.summary?.noResponse
+          )} errors=${num(inboundShadowSummary?.summary?.error)}`
+        : "not available"
+    }`,
+    `Inbound shadow widget turns: ${
+      inboundShadowSummary
+        ? `cases=${Array.isArray(inboundShadowSummary.cases) ? inboundShadowSummary.cases.filter((row: AnyObj) => row.provider === "web_widget").length : 0} review_or_miss=${
+            Array.isArray(inboundShadowSummary.cases)
+              ? inboundShadowSummary.cases.filter(
+                  (row: AnyObj) =>
+                    row.provider === "web_widget" &&
+                    ["review", "no_response", "error"].includes(String(row.verdict ?? ""))
+                ).length
+              : 0
+          }`
+        : "not available"
+    }`,
+    "",
     `Agent manager: ${
       agentManagerSummary
         ? `status=${agentManagerSummary.status ?? "unknown"} tasks=${Array.isArray(agentManagerSummary.tasks) ? agentManagerSummary.tasks.length : 0}`
@@ -293,6 +340,8 @@ async function run() {
     maybeAttach(outcomeQaMdPath, "outcome_qa_report.md", "text/markdown");
     maybeAttach(vehicleWatchQaJsonPath, "vehicle_watch_catalog_report.json");
     maybeAttach(vehicleWatchQaMdPath, "vehicle_watch_catalog_report.md", "text/markdown");
+    if (inboundShadowJsonPath) maybeAttach(inboundShadowJsonPath, path.basename(inboundShadowJsonPath));
+    if (inboundShadowMdPath) maybeAttach(inboundShadowMdPath, path.basename(inboundShadowMdPath), "text/markdown");
     maybeAttach(agentManagerJsonPath, "agent_manager_report.json");
     maybeAttach(agentManagerMdPath, "agent_manager_report.md", "text/markdown");
     if (followupTaskAuditPath) maybeAttach(followupTaskAuditPath, path.basename(followupTaskAuditPath));
@@ -319,6 +368,8 @@ async function run() {
       outcomeQaMdPath,
       vehicleWatchQaJsonPath,
       vehicleWatchQaMdPath,
+      ...(inboundShadowJsonPath ? [inboundShadowJsonPath] : []),
+      ...(inboundShadowMdPath ? [inboundShadowMdPath] : []),
       agentManagerJsonPath,
       agentManagerMdPath,
       ...(followupTaskAuditPath ? [followupTaskAuditPath] : []),

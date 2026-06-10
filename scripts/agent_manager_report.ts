@@ -99,6 +99,54 @@ function topCounts(rows: any[], key: string, limit = 5): Array<{ value: string; 
     .slice(0, limit);
 }
 
+function latestConversationActivityIso(conversationAudit: AnyObj | null): string | null {
+  const flagged = Array.isArray(conversationAudit?.flagged) ? conversationAudit.flagged : [];
+  let latestMs = NaN;
+  for (const row of flagged) {
+    const candidateMs = Date.parse(String(row?.updatedAt ?? row?.lastInboundAt ?? row?.lastOutboundAt ?? ""));
+    if (Number.isFinite(candidateMs) && (!Number.isFinite(latestMs) || candidateMs > latestMs)) {
+      latestMs = candidateMs;
+    }
+  }
+
+  const summaryLatestMs = Date.parse(
+    String(
+      conversationAudit?.summary?.latestActivityAt ??
+        conversationAudit?.summary?.latestConversationUpdatedAt ??
+        ""
+    )
+  );
+  if (Number.isFinite(summaryLatestMs) && (!Number.isFinite(latestMs) || summaryLatestMs > latestMs)) {
+    latestMs = summaryLatestMs;
+  }
+
+  return Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : null;
+}
+
+function latestConversationStoreActivityIso(conversationsPath: string): string | null {
+  const raw = readJson(conversationsPath);
+  const conversations = Array.isArray(raw)
+    ? raw
+    : Array.isArray(raw?.conversations)
+      ? raw.conversations
+      : [];
+  let latestMs = NaN;
+  for (const conv of conversations) {
+    const convUpdatedMs = Date.parse(String(conv?.updatedAt ?? ""));
+    if (Number.isFinite(convUpdatedMs) && (!Number.isFinite(latestMs) || convUpdatedMs > latestMs)) {
+      latestMs = convUpdatedMs;
+    }
+    const messages = Array.isArray(conv?.messages) ? conv.messages : [];
+    for (const msg of messages) {
+      const msgMs = Date.parse(String(msg?.at ?? ""));
+      if (Number.isFinite(msgMs) && (!Number.isFinite(latestMs) || msgMs > latestMs)) {
+        latestMs = msgMs;
+      }
+    }
+  }
+  return Number.isFinite(latestMs) ? new Date(latestMs).toISOString() : null;
+}
+
 function markdownReport(report: AnyObj, tasks: TaskCandidate[]): string {
   const lines = [
     `# Agent Manager Report`,
@@ -187,6 +235,7 @@ function main() {
     latestMatchingFile(feedbackLogDir, name => /^route_watchdog_.*\.json$/i.test(name)) ||
     path.join(parsed.reportRoot, "route_watchdog.json");
   const routeWatchdog = routeWatchdogPath ? readJson(routeWatchdogPath) : null;
+  const opsAnomaliesExists = fs.existsSync(opsAnomaliesPath);
 
   const tasks: TaskCandidate[] = [];
   const stuckCount = num(routeWatchdog?.stuckTurns?.count);
@@ -245,6 +294,13 @@ function main() {
   const followupTaskIssueCounts = Array.isArray(followupTaskAudit?.summary?.issueCounts)
     ? followupTaskAudit.summary.issueCounts
     : [];
+  const latestConversationActivityAt =
+    latestConversationStoreActivityIso(String(conversationAudit?.summary?.filePath ?? "")) ||
+    latestConversationActivityIso(conversationAudit);
+  const latestConversationActivityMs = Date.parse(String(latestConversationActivityAt ?? ""));
+  const sourceDataAgeHours = Number.isFinite(latestConversationActivityMs)
+    ? (Date.now() - latestConversationActivityMs) / (60 * 60 * 1000)
+    : null;
   const openOpsAnomalies = Array.isArray(opsAnomaliesRaw)
     ? opsAnomaliesRaw.filter((row: any) => String(row?.status ?? "open") === "open")
     : [];
@@ -352,6 +408,38 @@ function main() {
           context: row?.context,
           linearIssueId: row?.external?.incidentResult?.linearIssueId
         }))
+      }
+    });
+  }
+
+  if (!opsAnomaliesExists) {
+    pushTask(tasks, {
+      id: "ops-anomalies-source-missing",
+      priority: "P2",
+      area: "ops",
+      title: "Restore staff anomaly input coverage",
+      signal: `ops anomalies source file is missing at ${opsAnomaliesPath}`,
+      recommendedAction:
+        "Confirm OPS_ANOMALIES_PATH or DATA_DIR for this run, or restore the file so staff-reported failures are visible in daily reviews.",
+      evidence: {
+        opsAnomaliesPath
+      }
+    });
+  }
+
+  if (sourceDataAgeHours != null && sourceDataAgeHours > 24 * 14) {
+    pushTask(tasks, {
+      id: "stale-feedback-source-data",
+      priority: "P2",
+      area: "ops",
+      title: "Refresh stale feedback-loop source data",
+      signal: `latest conversation activity is ${Math.floor(sourceDataAgeHours / 24)} day(s) old`,
+      recommendedAction:
+        "Reload or point the review at the current runtime conversation store before trusting zero-count daily metrics.",
+      evidence: {
+        latestConversationActivityAt,
+        sourceDataAgeHours,
+        conversationsPath: conversationAudit?.summary?.filePath ?? null
       }
     });
   }
@@ -481,9 +569,11 @@ function main() {
       voiceDir,
       outcomeQaDir,
       opsAnomaliesPath,
+      opsAnomaliesExists,
       conversationAuditPath,
       followupTaskAuditPath,
-      routeWatchdogPath
+      routeWatchdogPath,
+      latestConversationActivityAt
     },
     outcomeQaParserRecommendations: {
       byType: outcomeQaReport?.summary?.parserRecommendationsByType ?? [],
@@ -507,6 +597,9 @@ function main() {
       outcomeQaFindings: outcomeQaFindingCount,
       outcomeQaParserSeedCandidates: outcomeQaParserSeedCount,
       outcomeQaP1Findings: outcomeQaP1Count,
+      sourceDataAgeHours,
+      latestConversationActivityAt,
+      opsAnomaliesSourceExists: opsAnomaliesExists,
       openOpsAnomalies: openOpsAnomalies.length,
       recentOpsAnomalies: recentOpsAnomalies.length,
       opsAnomalyTypeCounts
