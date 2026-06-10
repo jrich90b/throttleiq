@@ -380,6 +380,9 @@ When changing responses:
 - When resumed, implement parser-first + state machine from that doc (no regex-only flow).
 - Postgres conversation-store swap (durable document store behind the existing in-memory Map) is designed in:
   - `docs/postgres_store_swap.md`
+- Worker/queue extraction (pg-boss dispatcher for background ticks) is designed in:
+  - `docs/worker_queue_extraction.md`
+- Worker rule: services/worker is a dispatcher only — it must never import or mutate the conversation store; execution stays in the API via `/internal/worker/tick`.
 - Implementation rules from that design: keep mutate-in-place call sites unchanged, `DATA_BACKEND` defaults to `file` so evals/local dev never need a database, dual-write shadow week before flipping reads, and `dealer_id` on every row.
 
 ## Dealer Runtime Safety (Do Not Cross Dealer Data)

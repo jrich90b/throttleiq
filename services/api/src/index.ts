@@ -614,6 +614,7 @@ import {
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
+import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
   addSuppression,
@@ -2486,6 +2487,7 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/support-mail/poll") ||
     pathname.startsWith("/personal-mail/poll") ||
     pathname.startsWith("/mdf/portal-runner") ||
+    pathname.startsWith("/internal/worker") ||
     pathname.startsWith("/warranty-rma/portal-runner") ||
     pathname.startsWith("/provider-browser-runner") ||
     pathname.startsWith("/debug/inbound") ||
@@ -4370,30 +4372,83 @@ function runBackgroundTask(label: string, task: () => Promise<unknown> | unknown
     });
 }
 
-setInterval(() => {
-  runBackgroundTask("follow-ups", processDueFollowUps);
-  runBackgroundTask("appt-confirm", processAppointmentConfirmations);
-  runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
-  runBackgroundTask("appt-questions", processAppointmentQuestions);
-}, 60_000);
+// Worker dispatch (docs/worker_queue_extraction.md): task name -> in-process
+// function. The worker schedules durable pg-boss jobs and POSTs these names
+// to /internal/worker/tick; execution stays in this process so the
+// single-writer invariant on the conversation store holds.
+const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unknown> = {
+  "follow-ups": () => processDueFollowUps(),
+  "appt-confirm": () => processAppointmentConfirmations(),
+  "staff-appt-notify": () => processStaffAppointmentNotifications(),
+  "appt-questions": () => processAppointmentQuestions(),
+  "inventory-watch": () => processInventoryWatchlist(),
+  "inventory-holds": () => processInventoryHolds()
+};
 
-setTimeout(() => {
-  void processInventoryWatchlist();
-  void processInventoryHolds();
-}, (() => {
-  const raw = Number(process.env.INVENTORY_WATCH_BOOT_DELAY_MS ?? 60_000);
-  if (!Number.isFinite(raw)) return 60_000;
-  return Math.max(10_000, Math.floor(raw));
-})());
+function canUseWorkerInternal(req: any) {
+  const configured = String(
+    process.env.WORKER_INTERNAL_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? ""
+  ).trim();
+  const provided = String(
+    req.header("x-worker-token") || req.header("authorization")?.replace(/^Bearer\s+/i, "") || ""
+  ).trim();
+  return !!configured && !!provided && configured === provided;
+}
 
-setInterval(() => {
-  void processInventoryWatchlist();
-  void processInventoryHolds();
-}, (() => {
-  const raw = Number(process.env.INVENTORY_WATCH_POLL_MS ?? 5 * 60 * 1000);
-  if (!Number.isFinite(raw)) return 5 * 60 * 1000;
-  return Math.max(60_000, Math.floor(raw));
-})());
+app.post("/internal/worker/tick", async (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
+  const requested = Array.isArray(req.body?.tasks) ? req.body.tasks.map(String) : [];
+  if (!requested.length) {
+    return res.status(400).json({ ok: false, error: "tasks[] required" });
+  }
+  const unknown = requested.filter((t: string) => !isWorkerTickTask(t));
+  if (unknown.length) {
+    return res.status(400).json({ ok: false, error: `unknown tasks: ${unknown.join(",")}` });
+  }
+  const results: Array<{ task: string; ok: boolean; ms: number; error?: string }> = [];
+  for (const task of requested as WorkerTickTask[]) {
+    const startedAt = Date.now();
+    try {
+      await WORKER_TICK_DISPATCH[task]();
+      results.push({ task, ok: true, ms: Date.now() - startedAt });
+    } catch (err: any) {
+      results.push({ task, ok: false, ms: Date.now() - startedAt, error: err?.message ?? String(err) });
+    }
+  }
+  const ok = results.every(r => r.ok);
+  return res.status(ok ? 200 : 500).json({ ok, source: req.body?.source ?? null, results });
+});
+
+if (isWorkerDrivenTicks()) {
+  console.log("⏱️ WORKER_DRIVEN_TICKS=1: in-process background ticks disabled (worker dispatch active)");
+} else {
+  setInterval(() => {
+    runBackgroundTask("follow-ups", processDueFollowUps);
+    runBackgroundTask("appt-confirm", processAppointmentConfirmations);
+    runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
+    runBackgroundTask("appt-questions", processAppointmentQuestions);
+  }, 60_000);
+
+  setTimeout(() => {
+    void processInventoryWatchlist();
+    void processInventoryHolds();
+  }, (() => {
+    const raw = Number(process.env.INVENTORY_WATCH_BOOT_DELAY_MS ?? 60_000);
+    if (!Number.isFinite(raw)) return 60_000;
+    return Math.max(10_000, Math.floor(raw));
+  })());
+
+  setInterval(() => {
+    void processInventoryWatchlist();
+    void processInventoryHolds();
+  }, (() => {
+    const raw = Number(process.env.INVENTORY_WATCH_POLL_MS ?? 5 * 60 * 1000);
+    if (!Number.isFinite(raw)) return 5 * 60 * 1000;
+    return Math.max(60_000, Math.floor(raw));
+  })());
+}
 
 app.get("/health", (_req, res) => {
   res.json({
