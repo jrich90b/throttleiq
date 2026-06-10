@@ -92,7 +92,7 @@ import {
 import { getDealerProfile } from "../domain/dealerProfile.js";
 import { getDealerWeatherStatus } from "../domain/weather.js";
 import { getInventoryNote } from "../domain/inventoryNotes.js";
-import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches } from "../domain/inventoryFeed.js";
+import { getInventoryFeed, hasInventoryForModelYear, findInventoryMatches, findInventoryPrice } from "../domain/inventoryFeed.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -1702,11 +1702,13 @@ function buildInitialTestRidePreferredDateReply(conv: any): string | null {
   return `Thanks — I saw you’re interested in a test ride${modelClause}. I have ${preferredDateLabel} noted. What time works best for you?`;
 }
 
-function buildInitialAdfDealerLocationReply(args: {
+async function buildInitialAdfDealerLocationReply(args: {
   conv: any;
+  lead?: any;
   dealerProfile: any;
   inquiryText?: string | null;
-}): string {
+}): Promise<string> {
+  const scopedConv = scopeConversationToAdfLead(args.conv, args.lead);
   const dealerName = args.dealerProfile?.dealerName ?? "American Harley-Davidson";
   const address = args.dealerProfile?.address ?? {};
   const line1 = String(address.line1 ?? "").trim() || "1149 Erie Ave.";
@@ -1714,17 +1716,41 @@ function buildInitialAdfDealerLocationReply(args: {
   const state = String(address.state ?? "").trim() || "NY";
   const zip = String(address.zip ?? "").trim() || "14120";
   const modelLabel = formatModelLabel(
-    args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
-    args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
+    scopedConv?.lead?.vehicle?.year ?? scopedConv?.lead?.year ?? null,
+    scopedConv?.lead?.vehicle?.model ?? scopedConv?.lead?.vehicle?.description ?? null
   );
   const asksCost = /\b(cost|price|pricing|how much|payment|payments|monthly|quote)\b/i.test(
     args.inquiryText ?? ""
   );
-  const pricingLine = asksCost
-    ? modelLabel
-      ? ` I can also have the team confirm cost and pricing details on the ${modelLabel}.`
-      : " I can also have the team confirm cost and pricing details."
-    : "";
+  let pricingLine = "";
+  if (asksCost) {
+    const stockId = String(scopedConv?.lead?.vehicle?.stockId ?? "").trim() || null;
+    const vin = String(scopedConv?.lead?.vehicle?.vin ?? "").trim() || null;
+    const year = scopedConv?.lead?.vehicle?.year ?? null;
+    const model =
+      scopedConv?.lead?.vehicle?.model ??
+      scopedConv?.lead?.vehicle?.description ??
+      null;
+    const inventoryPrice = await findInventoryPrice({ stockId, vin, year, model });
+    const listPrice = Number(inventoryPrice?.price ?? NaN);
+    const formattedPrice =
+      Number.isFinite(listPrice) && listPrice > 0
+        ? new Intl.NumberFormat("en-US", {
+            style: "currency",
+            currency: "USD",
+            maximumFractionDigits: 0
+          }).format(listPrice)
+        : null;
+    if (formattedPrice) {
+      pricingLine = modelLabel
+        ? ` The current listed price on the ${modelLabel} is ${formattedPrice} before tax, DMV, and any final deal structure.`
+        : ` The current listed price is ${formattedPrice} before tax, DMV, and any final deal structure.`;
+    } else {
+      pricingLine = modelLabel
+        ? ` I can also have the team confirm the current price on the ${modelLabel}.`
+        : " I can also have the team confirm the current price.";
+    }
+  }
   return `${dealerName} is located at ${line1}, ${city}, ${state} ${zip}.${pricingLine}`.trim();
 }
 
@@ -3049,10 +3075,12 @@ function adfVehicleInfoFocusLabel(decision: AdfVehicleInfoDecision): string {
 
 function buildInitialAdfVehicleInfoReply(args: {
   conv: any;
+  lead?: any;
   decision: AdfVehicleInfoDecision;
   text: string;
 }): { reply: string; needsTodo: boolean; todoReason: string; todoSummary: string; dialogState: string } {
-  const vehicle = args.conv?.lead?.vehicle ?? {};
+  const scopedConv = scopeConversationToAdfLead(args.conv, args.lead);
+  const vehicle = scopedConv?.lead?.vehicle ?? {};
   const year = String(vehicle.year ?? "").trim();
   const model = normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null);
   const bikeLabel = formatModelLabel(year || null, model ?? null) ?? (model ? normalizeDisplayCase(model) : "the bike");
@@ -5302,17 +5330,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
-    const firstName = normalizeDisplayCase(conv.lead?.firstName);
+    const prefixLeadProfile = activeAdfLeadProfile ?? conv.lead;
+    const firstName = normalizeDisplayCase(prefixLeadProfile?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
     const prefixLower = prefix.toLowerCase();
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
-    const leadSourceLower = String(conv.lead?.source ?? "").toLowerCase();
+    const leadSourceLower = String(prefixLeadProfile?.source ?? "").toLowerCase();
     const isMetaLead = /meta/.test(leadSourceLower);
     const modelLabel = formatModelLabel(
-      conv?.lead?.vehicle?.year ?? null,
-      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null
+      prefixLeadProfile?.vehicle?.year ?? null,
+      prefixLeadProfile?.vehicle?.model ?? prefixLeadProfile?.vehicle?.description ?? null
     );
     body = body.replace(/^hi\s+[^—]+—\s*/i, "");
     body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
@@ -5938,12 +5967,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     }
   }
   const followUpAdfVehicleInfoDecision =
-    event.provider === "sendgrid_adf" && !isInitialAdf
+    event.provider === "sendgrid_adf" &&
+    !isInitialAdf &&
+    !(
+      (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
+      /\b(test ride|demo ride|try out|try it out|ride)\b/i.test(effectiveInquiry)
+    )
       ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
       : null;
   if (followUpAdfVehicleInfoDecision) {
     const vehicleInfoReply = buildInitialAdfVehicleInfoReply({
       conv,
+      lead: activeAdfLeadProfile,
       decision: followUpAdfVehicleInfoDecision,
       text: effectiveInquiry
     });
@@ -7014,6 +7049,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       (includeDefaultWalkInThanks ? "Thanks for stopping in, it was nice chatting with you. " : "") +
       tail +
       (addendum ? ` ${addendum}` : "");
+    const trafficLogOperationalDealProgressNote =
+      !!trafficLogProStep &&
+      hasDealProgressSignal &&
+      !hasWatchIntent &&
+      !walkInReminderRequest &&
+      !/\?/.test(walkInCleanedComment) &&
+      !/\b(call me|text me|send|let me know|lmk|watch(?:ing)? for|looking for|need|want|can you|could you|would you)\b/i.test(
+        walkInCleanedComment
+      );
 
     if (!suppressWalkInAutoAck) {
       queueInitialDraftForPreferredContact(ack, initialMediaUrls);
@@ -7055,7 +7099,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      draft: ack
+      draft: suppressWalkInAutoAck || trafficLogOperationalDealProgressNote ? null : ack
     });
   }
 
@@ -8084,12 +8128,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     && !initialAdfUnavailableInventoryWatch
     ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
     : null;
+  const suppressInitialAdfVehicleInfoForTestRideIntent =
+    isInitialAdf &&
+    (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
+    /\b(test ride|demo ride|try out|try it out|ride)\b/i.test(effectiveInquiry);
   const initialAdfVehicleInfoDecision =
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
     !initialCompositeSalesInquiryDecision &&
     !initialAdfUnavailableInventoryWatch &&
-    !initialAdfVehicleFactDecision
+    !initialAdfVehicleFactDecision &&
+    !suppressInitialAdfVehicleInfoForTestRideIntent
       ? resolveAdfVehicleInfoDecision(llmVehicleInfo)
       : null;
   const skipInitialAdfVehicleFactForTrade =
@@ -8128,6 +8177,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (initialAdfVehicleInfoDecision) {
     const vehicleInfoReply = buildInitialAdfVehicleInfoReply({
       conv,
+      lead: activeAdfLeadProfile,
       decision: initialAdfVehicleInfoDecision,
       text: effectiveInquiry
     });
@@ -8317,6 +8367,37 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       draft = `Hi ${name} — thanks for your interest in a test ride. ${rest}`.trim();
     }
   }
+  const shouldForceExplicitInitialTestRideDraft =
+    isInitialAdf &&
+    (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
+    /\b(test ride|demo ride|try out|try it out|ride)\b/i.test(inquiryText) &&
+    typeof draft === "string" &&
+    /thanks\s+—\s+i got your question on the .*i(?:'|’)ll pull the .*follow up shortly\./i.test(draft);
+  if (shouldForceExplicitInitialTestRideDraft) {
+    const modelLabel = formatModelLabel(
+      activeAdfLeadProfile?.vehicle?.year ?? null,
+      activeAdfLeadProfile?.vehicle?.model ?? activeAdfLeadProfile?.vehicle?.description ?? null
+    );
+    const modelClause = modelLabel ? ` on the ${modelLabel}` : "";
+    if (initialAvailability === "on_hold") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "That unit is currently on hold, so I don’t want to book you on a bike that may not be available. If it frees up, I can line it up, or I can help pick another in-stock bike.";
+      suppressAvailabilityAppend = true;
+    } else if (initialAvailability === "sold") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "That unit is no longer available, but I can help pick a similar in-stock bike to ride.";
+      suppressAvailabilityAppend = true;
+    } else if (initialAvailability === "not_found") {
+      draft =
+        `Thanks — I saw you’re interested in a test ride${modelClause}. ` +
+        "I’m not seeing that exact bike available right now, but I can help pick an in-stock bike to ride.";
+      suppressAvailabilityAppend = true;
+    } else {
+      draft = `Yes — the ${modelLabel ?? "bike"} is available. What day and time works best to stop in and take a look?`;
+    }
+  }
   if (
     isInitialAdf &&
     !initialAdfRiderCourseDecision &&
@@ -8411,8 +8492,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     suppressAvailabilityAppend = true;
   }
   if (initialAdfLocationQuestion && !handledInternationalShippingInquiry) {
-    draft = buildInitialAdfDealerLocationReply({
+    draft = await buildInitialAdfDealerLocationReply({
       conv,
+      lead: activeAdfLeadProfile,
       dealerProfile,
       inquiryText: effectiveInquiry
     });

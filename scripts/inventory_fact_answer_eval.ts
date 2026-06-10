@@ -83,7 +83,7 @@ async function main() {
   assert.equal(combined.handled, true);
   assert.match(combined.reply ?? "", /Financing Special/i);
   assert.match(combined.reply ?? "", /2\.99%/);
-  assert.match(combined.reply ?? "", /published price/i);
+  assert.match(combined.reply ?? "", /confirm the current price/i);
   assert.match(combined.todoSummary ?? "", /Confirm price and final finance eligibility/i);
 
   const capped = await buildInventoryBackedVehicleFactAnswer({
@@ -102,7 +102,7 @@ async function main() {
   });
   assert.equal(priceOnly.handled, true);
   assert.doesNotMatch(priceOnly.reply ?? "", /2\.99%|Financing Special/i);
-  assert.match(priceOnly.reply ?? "", /published price/i);
+  assert.match(priceOnly.reply ?? "", /confirm the current price/i);
 
   const staleLatestLeadConv = {
     latestLead: {

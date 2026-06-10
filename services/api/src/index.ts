@@ -23273,6 +23273,69 @@ function isPaymentNumbersStatusQuestionText(text: string | null | undefined): bo
   return asksStatus && asksAboutNumbers;
 }
 
+function manualQuoteDetailSignalCount(text: string | null | undefined): number {
+  const raw = String(text ?? "");
+  const lower = raw.toLowerCase();
+  if (!lower.trim()) return 0;
+  const signals = [
+    /\bno\s+trade\b|\bwithout\s+a\s+trade\b|\btrade(?:-|\s)?in\b|\bi\s+(?:have|got|own)\s+a\b/i.test(raw),
+    /\b[a-z][a-z .'-]{2,40}\s+county\b/i.test(raw),
+    /\b(?:credit\s+score|score|fico)\b/i.test(raw) && /\b(?:over|under|around|about|near|is|at)?\s*\d{3}\b/i.test(raw),
+    /\b(?:\d{1,3}(?:,\d{3})+|\d{1,2})\s*(?:k|grand)?\s*(?:-|to|through|thru)\s*(?:\d{1,3}(?:,\d{3})+|\d{1,2})\s*(?:k|grand)?\s*(?:down|down payment|cash down|deposit)\b/i.test(raw) ||
+      /\b(?:\d{1,3}(?:,\d{3})+|\d{1,2})\s*(?:k|grand)?\s*(?:down|down payment|cash down|deposit)\b/i.test(raw),
+    /\b(?:zip|zipcode|postal|county|state|city)\b/i.test(raw) && /\b\d{5}\b/.test(raw)
+  ];
+  return signals.filter(Boolean).length;
+}
+
+function hasManualQuoteDetailContext(conv: any, lastOutboundText: string | null | undefined): boolean {
+  const followUpReason = String(conv?.followUp?.reason ?? "").toLowerCase();
+  const dialogState = String(getDialogState(conv) ?? "").toLowerCase();
+  const lastOutbound = String(lastOutboundText ?? "").toLowerCase();
+  return (
+    followUpReason === "manual_quote_delivered" ||
+    followUpReason === "price_confirm" ||
+    dialogState === "pricing_init" ||
+    dialogState === "pricing_handoff" ||
+    /\b(county|down|down payment|credit score|fico|trade|zip|out[-\s]?the[-\s]?door|quote|numbers?)\b/.test(
+      lastOutbound
+    )
+  );
+}
+
+function shouldHandleManualQuoteDetailsReceived(args: {
+  conv: any;
+  inboundText: string | null | undefined;
+  lastOutboundText: string | null | undefined;
+}): boolean {
+  const text = String(args.inboundText ?? "").trim();
+  if (!text || /\?/.test(text)) return false;
+  if (!hasManualQuoteDetailContext(args.conv, args.lastOutboundText)) return false;
+  return manualQuoteDetailSignalCount(text) >= 2;
+}
+
+function buildManualQuoteDetailsReceivedReply(): string {
+  return "Thanks — those quote details help. I’ll have the team use them and follow up with the numbers.";
+}
+
+function applyManualQuoteDetailsReceivedState(
+  conv: any,
+  inboundText: string | null | undefined,
+  providerMessageId?: string | null
+): void {
+  addTodo(
+    conv,
+    "pricing",
+    `Use customer quote details and follow up with numbers. Customer said: ${String(inboundText ?? "").trim()}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "manual_quote_details_received");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "manual_quote_details_received", { setMode: "manual_handoff" });
+  markPricingEscalated(conv);
+}
+
 function buildPaymentNumbersStatusReply(conv: Conversation, user: any | null, text?: string): string {
   const customerName = normalizeDisplayCase(conv.lead?.firstName);
   const prefix = customerName ? `Got it, ${customerName} — ` : "Got it — ";
@@ -48701,6 +48764,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundText = String(lastOutboundBeforeInbound?.body ?? "");
+    if (
+      shouldHandleManualQuoteDetailsReceived({
+        conv,
+        inboundText: event.body,
+        lastOutboundText
+      })
+    ) {
+      applyManualQuoteDetailsReceivedState(conv, event.body, event.providerMessageId);
+      recordRouteOutcome("regen", "manual_quote_details_received", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return respondWithSmsRegeneratedDraft(
+        buildManualQuoteDetailsReceivedReply(),
+        undefined,
+        {
+          turnFinanceIntent: true,
+          financeContextIntent: true,
+          turnAvailabilityIntent: false,
+          turnSchedulingIntent: false
+        }
+      );
+    }
     const askedDownRecently =
       /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down)\b/i.test(
         lastOutboundText
@@ -50457,8 +50543,7 @@ if (authToken && signature) {
       process.env.LLM_ENABLED === "1" &&
       process.env.LLM_CUSTOMER_DISPOSITION_PARSER_ENABLED !== "0" &&
       !!process.env.OPENAI_API_KEY &&
-      !humanModeDispositionShortAck &&
-      hasCustomerDispositionParserHintText(humanModeDispositionText);
+      !humanModeDispositionShortAck;
     const humanModeDispositionParse = humanModeDispositionParserEligible
       ? await safeLlmParse("customer_disposition_parser_human_mode", () =>
           parseCustomerDispositionWithLLM({
@@ -52783,6 +52868,26 @@ if (authToken && signature) {
       ? routingParserDecisionPrecheck.intentOverride
       : null;
   const parserPrecheckBlocksDeterministicShortcut = !!routingParserIntentOverridePrecheck;
+  if (
+    event.provider === "twilio" &&
+    String(conv.mode ?? "") !== "human" &&
+    shouldHandleManualQuoteDetailsReceived({
+      conv,
+      inboundText,
+      lastOutboundText
+    })
+  ) {
+    applyManualQuoteDetailsReceivedState(conv, inboundText, event.providerMessageId);
+    recordRouteOutcome("live", "manual_quote_details_received_precheck", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserIntentOverride: routingParserIntentOverridePrecheck
+    });
+    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
+  }
   const lastOutboundAskedTradeQualifier =
     /\bdo you have a trade\b/i.test(lastOutboundText) ||
     /\bany trade\b/i.test(lastOutboundText);
@@ -55073,6 +55178,29 @@ if (authToken && signature) {
       (askedFinanceFollowUpRecently && followUpAck)
     );
   })();
+  if (
+    event.provider === "twilio" &&
+    routeExecPricing &&
+    !explicitAvailabilitySignalThisTurn &&
+    !schedulingSignals.hasDayTime &&
+    !schedulingSignals.hasDayOnlyRequest &&
+    !schedulingSignals.hasDayOnlyAvailability &&
+    !explicitScheduleSignal &&
+    shouldHandleManualQuoteDetailsReceived({
+      conv,
+      inboundText: event.body,
+      lastOutboundText
+    })
+  ) {
+    applyManualQuoteDetailsReceivedState(conv, event.body, event.providerMessageId);
+    logRouteOutcome("manual_quote_details_received", {
+      turnPrimaryIntent: routeExecutionIntent
+    });
+    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+      turnFinanceIntent: true,
+      financeContextIntent: true
+    });
+  }
   if (
     event.provider === "twilio" &&
     routeExecPricing &&
