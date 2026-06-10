@@ -209,11 +209,12 @@ for everything else.
      middleware rewrites (Next.js `basePath` is build-time; do not use it).
    - Subdomain mode remains supported (American Harley) — provisioning takes
      `routingMode` from the dealer record either way.
-2. **Non-Harley OEMs: possible within ~6 months, nothing concrete.** Rule of
-   thumb going forward: new features are written brand-neutral (no new
-   hardcoded Harley vocabulary outside the catalog/profile layers); the
-   existing Harley-specific knowledge is NOT reworked yet. Revisit the
-   moment a non-Harley prospect becomes real.
+2. **Non-Harley OEMs: not soon.** The first 5–6 dealers are intentionally
+   Harley-only; multi-line dealers come after that. Cheap hygiene stays in
+   effect (new features avoid hardcoding fresh Harley vocabulary outside the
+   catalog/profile layers), but the brand-swappable rework of existing
+   knowledge is explicitly deferred — sequence it after M1/M2 are proven on
+   the Harley cohort and before the first multi-line dealer signs.
 3. **Dealer #2 hosting: same instance as American Harley** (capacity plan
    above: ~6–10 dealers per 4 GB box). Final call re-confirmed at signing
    based on the dealer's size; two-box provisioning stays supported via
