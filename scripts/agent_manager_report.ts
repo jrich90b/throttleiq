@@ -558,9 +558,14 @@ function main() {
 
   tasks.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || a.area.localeCompare(b.area));
 
+  const highestTaskPriority = tasks[0]?.priority ?? null;
   const report = {
     generatedAt: new Date().toISOString(),
-    status: tasks.some(t => t.priority === "P0" || t.priority === "P1") ? "attention" : "ok",
+    // Treat P2+ items as attention-worthy so stale/missing feedback inputs do not look fully healthy.
+    status:
+      highestTaskPriority === "P0" || highestTaskPriority === "P1" || highestTaskPriority === "P2"
+        ? "attention"
+        : "ok",
     source: {
       reportRoot: parsed.reportRoot,
       editDir,
