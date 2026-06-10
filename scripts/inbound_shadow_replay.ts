@@ -582,6 +582,10 @@ async function startApi(args: {
     ...args.envFileVars,
     NODE_ENV: "shadow",
     PORT: String(args.port),
+    // Shadow runs must stay hermetic: never let inherited/loop env point the
+    // conversation store at production Postgres (docs/postgres_store_swap.md).
+    DATA_BACKEND: "file",
+    DATABASE_URL: "",
     DATA_DIR: args.dataDir,
     SETTINGS_DB_PATH: path.join(args.dataDir, "settings.json"),
     TWILIO_INBOUND_JOBS_PATH: args.jobsPath,
