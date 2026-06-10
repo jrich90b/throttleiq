@@ -5,6 +5,16 @@ import { maybeMarkEngagedFromInbound } from "./engagement.js";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
 import {
+  getDataBackend,
+  getDealerId,
+  isFileSnapshotEnabled,
+  isPostgresDegraded,
+  loadConversationStoreFromPostgres,
+  notePostgresFailure,
+  persistConversationStoreToPostgres,
+  type ConversationUpsertRow
+} from "./storePersistence.js";
+import {
   applyDeterministicToneOverrides,
   formatEmailLayout,
   formatSmsLayout,
@@ -1349,16 +1359,19 @@ export function shouldBlockConversationStoreShrink(
   return nextCount < Math.floor(currentCount * maxShrinkRatio);
 }
 
-async function loadFromDisk() {
-  try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
-    const parsed = JSON.parse(raw) as {
-      conversations?: Conversation[] | Record<string, Conversation>;
-      todos?: TodoTask[] | Record<string, TodoTask>;
-      questions?: InternalQuestion[] | Record<string, InternalQuestion>;
-    };
+type ParsedConversationStore = {
+  conversations?: Conversation[] | Record<string, Conversation>;
+  todos?: TodoTask[] | Record<string, TodoTask>;
+  questions?: InternalQuestion[] | Record<string, InternalQuestion>;
+};
 
-    const list = objectValuesIfRecord<Conversation>(parsed?.conversations);
+// Shared hydration for file and Postgres loads so normalization (malformed-row
+// coercion, legacy todo classes, lead-key indexing) cannot drift between
+// backends. See docs/postgres_store_swap.md.
+function hydrateParsedStore(parsed: ParsedConversationStore): {
+  scrubbedInternalOutboundCount: number;
+} {
+  const list = objectValuesIfRecord<Conversation>(parsed?.conversations);
     const loadedConversations = new Map<string, Conversation>();
     const loadedLeadKeyIndex = new Map<string, string[]>();
     const loadedTodos: TodoTask[] = [];
@@ -1419,6 +1432,15 @@ async function loadFromDisk() {
     questions.length = 0;
     if (loadedQuestions.length) questions.push(...loadedQuestions);
 
+    return { scrubbedInternalOutboundCount };
+}
+
+async function loadFromDisk() {
+  try {
+    const raw = await fs.readFile(DB_PATH, "utf8");
+    const parsed = JSON.parse(raw) as ParsedConversationStore;
+    const { scrubbedInternalOutboundCount } = hydrateParsedStore(parsed);
+
     console.log(`📦 Loaded ${conversations.size} conversations from ${DB_PATH}`);
     if (scrubbedInternalOutboundCount > 0) {
       console.warn(
@@ -1438,8 +1460,53 @@ async function loadFromDisk() {
   }
 }
 
-export async function reloadConversationStore() {
+async function loadFromPostgres(): Promise<boolean> {
+  try {
+    const parsed = await loadConversationStoreFromPostgres();
+    const { scrubbedInternalOutboundCount } = hydrateParsedStore(parsed);
+    console.log(
+      `📦 Loaded ${conversations.size} conversations from Postgres (dealer=${getDealerId()})`
+    );
+    if (scrubbedInternalOutboundCount > 0) {
+      console.warn(
+        `[conversationStore] removed ${scrubbedInternalOutboundCount} internal action-log outbound message(s)`
+      );
+      scheduleSave();
+    }
+    return true;
+  } catch (err: any) {
+    notePostgresFailure();
+    console.error(
+      "⚠️ Failed to load conversations store from Postgres; falling back to file snapshot:",
+      err?.message ?? err
+    );
+    return false;
+  }
+}
+
+async function loadStoreOnStartup() {
+  if (getDataBackend() === "postgres") {
+    const ok = await loadFromPostgres();
+    if (ok) return;
+    // Postgres unreachable at boot: hydrate from the file snapshot rather than
+    // starting empty. Degraded mode forces file snapshots back on, so the
+    // snapshot stays as fresh as the last healthy flush.
+  }
   await loadFromDisk();
+}
+
+let storeReadyPromise: Promise<void> | null = null;
+
+// Hydration is async and clear-and-replaces the in-memory maps; persisting or
+// mutating before it settles can lose rows. Flush paths await this, and early
+// programmatic writers (scripts/evals) should too.
+export function whenConversationStoreReady(): Promise<void> {
+  return storeReadyPromise ?? Promise.resolve();
+}
+
+export async function reloadConversationStore() {
+  storeReadyPromise = loadStoreOnStartup();
+  await storeReadyPromise;
 }
 
 async function saveToDisk() {
@@ -1494,9 +1561,110 @@ async function saveToDisk() {
   }
 }
 
+/**
+ * Postgres dirty tracking (docs/postgres_store_swap.md):
+ * - saveConversation()/upsert/create/delete report exact row changes.
+ * - Every other scheduleSave() call site marks a full upsert; correctness
+ *   never depends on a call site having been tagged.
+ * - The captured sets are restored on a failed flush so retries lose nothing.
+ */
+const dirtyConversationIds = new Set<string>();
+const removedConversationIds = new Set<string>();
+let fullPgUpsertNeeded = true;
+let isPgPersisting = false;
+let pgRetryQueued = false;
+let pgRetryTimer: NodeJS.Timeout | null = null;
+
+function schedulePgRetry() {
+  if (pgRetryTimer) return;
+  pgRetryTimer = setTimeout(() => {
+    pgRetryTimer = null;
+    void persistStore();
+  }, Number(process.env.PG_RETRY_MS ?? 5000));
+  pgRetryTimer.unref?.();
+}
+
+async function persistToPostgresSafe(): Promise<boolean> {
+  if (isPgPersisting) {
+    pgRetryQueued = true;
+    return true;
+  }
+  isPgPersisting = true;
+  // Capture-and-reset so mutations that land mid-flush are kept for the next one.
+  const full = fullPgUpsertNeeded;
+  fullPgUpsertNeeded = false;
+  const dirtyIds = Array.from(dirtyConversationIds);
+  dirtyConversationIds.clear();
+  const removedIds = Array.from(removedConversationIds);
+  removedConversationIds.clear();
+  const sourceRows: Conversation[] = full
+    ? Array.from(conversations.values())
+    : (dirtyIds.map(id => conversations.get(id)).filter(Boolean) as Conversation[]);
+  try {
+    const rows: ConversationUpsertRow[] = sourceRows.map(conv => ({
+      id: conv.id,
+      leadKey: conv.leadKey ?? "",
+      payloadJson: JSON.stringify(conv)
+    }));
+    await persistConversationStoreToPostgres({
+      rows,
+      removedIds,
+      todosJson: JSON.stringify(todos),
+      questionsJson: JSON.stringify(questions)
+    });
+    return true;
+  } catch (err: any) {
+    notePostgresFailure();
+    if (full) fullPgUpsertNeeded = true;
+    for (const id of dirtyIds) dirtyConversationIds.add(id);
+    for (const id of removedIds) removedConversationIds.add(id);
+    console.warn("⚠️ Postgres conversation-store persist failed; will retry:", err?.message ?? err);
+    schedulePgRetry();
+    return false;
+  } finally {
+    isPgPersisting = false;
+    if (pgRetryQueued) {
+      pgRetryQueued = false;
+      schedulePgRetry();
+    }
+  }
+}
+
+async function persistStore(): Promise<void> {
+  // Never persist mid-hydration: a flush racing the startup load could write
+  // a half-cleared store (the pg path has no shrink guard).
+  await whenConversationStoreReady();
+  const backend = getDataBackend();
+  if (backend === "file") {
+    await saveToDisk();
+    return;
+  }
+  if (backend === "dual_write") {
+    // File stays the source of truth; Postgres is best-effort shadow so
+    // webhook flush latency is unchanged.
+    await saveToDisk();
+    void persistToPostgresSafe();
+    return;
+  }
+  // backend === "postgres"
+  const ok = await persistToPostgresSafe();
+  if (!ok || isFileSnapshotEnabled() || isPostgresDegraded()) {
+    await saveToDisk();
+  }
+}
+
+if (getDataBackend() !== "file") {
+  const sweepMinutes = Math.max(1, Number(process.env.STORE_FULL_SWEEP_MINUTES ?? 30));
+  const sweepTimer = setInterval(() => {
+    fullPgUpsertNeeded = true;
+    scheduleSave();
+  }, sweepMinutes * 60_000);
+  sweepTimer.unref?.();
+}
+
 // Flush pending conversation changes to disk (used before early-return paths).
 export async function flushConversationStore(): Promise<void> {
-  await saveToDisk();
+  await persistStore();
 }
 
 export function getConversationStorePath(): string {
@@ -1517,19 +1685,25 @@ export function saveConversation(conv: Conversation): void {
   }
   conversations.set(conv.id, conv);
   indexConversationByLeadKey(conv);
-  scheduleSave();
+  scheduleSave({ trackedConversationId: conv.id });
 }
 
-function scheduleSave() {
+function scheduleSave(opts?: { trackedConversationId?: string }) {
+  if (opts?.trackedConversationId) {
+    dirtyConversationIds.add(opts.trackedConversationId);
+  } else {
+    // Untracked mutation: the next Postgres flush upserts everything.
+    fullPgUpsertNeeded = true;
+  }
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    void saveToDisk();
+    void persistStore();
   }, 250);
 }
 
 // Load immediately on module import
-void loadFromDisk();
+storeReadyPromise = loadStoreOnStartup();
 
 export function upsertConversationByLeadKey(
   leadKey: string,
@@ -1551,7 +1725,7 @@ export function upsertConversationByLeadKey(
 
   conversations.set(created.id, created);
   indexConversationByLeadKey(created);
-  scheduleSave();
+  scheduleSave({ trackedConversationId: created.id });
   return created;
 }
 
@@ -1571,7 +1745,7 @@ export function createConversationForLeadKey(
   };
   conversations.set(created.id, created);
   indexConversationByLeadKey(created);
-  scheduleSave();
+  scheduleSave({ trackedConversationId: created.id });
   return created;
 }
 
@@ -4670,6 +4844,8 @@ export function deleteConversation(convId: string): boolean {
       questions.splice(i, 1);
     }
   }
+  dirtyConversationIds.delete(conv.id);
+  removedConversationIds.add(conv.id);
   scheduleSave();
   return true;
 }

@@ -1,7 +1,11 @@
 # Postgres Store Swap (Durable Document Store Behind the In-Memory Map)
 
-Status: design approved, not yet implemented.
-Owner: Joe. Drafted 2026-06-09.
+Status: implemented behind `DATA_BACKEND` (default `file`); not yet enabled in
+production — next step is provisioning managed Postgres and running the
+rollout below. The `postgres` and `dual_write` paths are validated by
+`npm run store_persistence:eval` against a real PostgreSQL instance when
+`DATABASE_URL_TEST` is set (file mode runs in `ci:eval` unconditionally).
+Owner: Joe. Drafted 2026-06-09; implemented 2026-06-10.
 
 ## Goal
 
@@ -110,9 +114,11 @@ Keep `scheduleSave()` and the 250 ms debounce. Changes inside the store only:
      collection documents, in one transaction.
    - `postgres`: Postgres transaction first; `saveToDisk()` only if
      `FILE_SNAPSHOT=1`.
-3. **Safety sweep.** Every `STORE_FULL_SWEEP_MINUTES` (default 30) and on
-   `flushConversationStore()`, upsert **all** rows regardless of dirty flags.
-   This bounds any dirty-tracking bug to a 30-minute repair window.
+3. **Safety sweep.** Every `STORE_FULL_SWEEP_MINUTES` (default 30) — and
+   whenever a mutation came from an untracked `scheduleSave()` call site —
+   the next flush upserts **all** rows regardless of dirty flags. Correctness
+   never depends on a call site having been tagged; tagging is purely a
+   write-volume optimization on the hot paths.
 4. **Failure semantics.** Postgres errors never block webhook handling:
    - `dual_write`: log + Sentry breadcrumb; file already saved; dirty set is
      retained so the next flush retries.
