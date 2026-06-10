@@ -1,8 +1,11 @@
 # Worker + Queue Extraction (Dispatcher Phase)
 
-Status: implemented 2026-06-10 behind `WORKER_DRIVEN_TICKS` (default off — the
-API keeps its in-process intervals until enablement). Not yet enabled in
-production.
+Status: shadow-running in production since 2026-06-10 (worker dispatches
+redundant ticks; `WORKER_DRIVEN_TICKS` still unset so the API keeps its
+in-process intervals). Final flip planned alongside the store read-flip.
+Note: the American Harley worker started on schema `pgboss`; the per-dealer
+schema default moves it to `pgboss_americanharley` at its next restart —
+drop the abandoned `pgboss` schema afterward.
 Owner: Joe.
 
 ## Goal
@@ -60,6 +63,7 @@ gates), and the conversation-store sweep (internal to the store).
 | `WORKER_API_BASE_URL` | worker | Default `http://127.0.0.1:3001` |
 | `PG_SSL=1` | worker | TLS without CA verification (same as the store swap) |
 | `WORKER_TZ` | worker | Cron timezone, default `America/New_York` |
+| `PGBOSS_SCHEMA` | worker | Defaults to `pgboss_<dealer>` (per-dealer isolation — queue names are global per schema; see `docs/multi_tenant_platform.md`). Explicit value wins |
 
 ## Enablement Runbook (per dealer)
 

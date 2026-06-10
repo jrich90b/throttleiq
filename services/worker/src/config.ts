@@ -43,3 +43,25 @@ export function getWorkerInternalToken(): string {
     process.env.WORKER_INTERNAL_TOKEN ?? process.env.AUTOMATION_RUN_WRITE_TOKEN ?? ""
   ).trim();
 }
+
+export function getWorkerDealerId(): string {
+  return (
+    (process.env.DEALER_ID ?? process.env.DEALER_SLUG ?? "").trim() || "americanharley"
+  );
+}
+
+/**
+ * pg-boss queue names are global within a schema, so two dealers' workers
+ * sharing one schema would overwrite each other's cron schedules
+ * (docs/multi_tenant_platform.md). Default to a per-dealer schema; an
+ * explicit PGBOSS_SCHEMA still wins.
+ */
+export function getWorkerPgBossSchema(): string {
+  const explicit = String(process.env.PGBOSS_SCHEMA ?? "").trim();
+  if (explicit) return explicit;
+  const slug = getWorkerDealerId()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "dealer";
+  return `pgboss_${slug}`.slice(0, 50);
+}

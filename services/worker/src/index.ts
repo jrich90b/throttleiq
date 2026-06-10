@@ -1,6 +1,11 @@
 import "dotenv/config";
 import { PgBoss, type Job } from "pg-boss";
-import { WORKER_SCHEDULES, getWorkerApiBaseUrl, getWorkerInternalToken } from "./config.js";
+import {
+  WORKER_SCHEDULES,
+  getWorkerApiBaseUrl,
+  getWorkerInternalToken,
+  getWorkerPgBossSchema
+} from "./config.js";
 import { dispatchTick } from "./tick.js";
 
 /**
@@ -35,10 +40,11 @@ async function main() {
   }
   const timezone = (process.env.WORKER_TZ ?? "America/New_York").trim();
 
+  const schema = getWorkerPgBossSchema();
   const boss = new PgBoss({
     connectionString,
     ssl: resolveSsl(),
-    schema: process.env.PGBOSS_SCHEMA ?? "pgboss",
+    schema,
     max: Number(process.env.WORKER_PG_POOL_MAX ?? 3)
   });
   boss.on("error", (err: unknown) =>
@@ -46,7 +52,7 @@ async function main() {
   );
 
   await boss.start();
-  console.log(`[worker] started api=${getWorkerApiBaseUrl()} tz=${timezone}`);
+  console.log(`[worker] started api=${getWorkerApiBaseUrl()} tz=${timezone} schema=${schema}`);
 
   for (const schedule of WORKER_SCHEDULES) {
     await boss.createQueue(schedule.queue, {

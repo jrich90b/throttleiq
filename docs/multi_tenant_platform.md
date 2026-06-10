@@ -177,9 +177,9 @@ pair running. Remaining deltas, each independently safe:
 
 | Step | Size | Risk | Unblocks |
 | --- | --- | --- | --- |
-| pg-boss schema-per-dealer | hours | low | dealer #2 worker |
+| pg-boss schema-per-dealer | done 2026-06-10 | low | dealer #2 worker |
 | nginx conf formalization + AH PM2 rename | hours | low (deploy window) | shared ingress |
-| `dealer:provision` (dry-run first) | days | low — generates, gated applies | dealer #2 in minutes |
+| `dealer:provision` (dry-run first) | dry-run done 2026-06-10 (`npm run dealer:provision -- --slug <slug>`); gated applies later | low | dealer #2 in minutes |
 | platform/dealer env layering | hours | low | secret rotation, M2 |
 | shared web app (host-derived API base) | days | medium — touches `page.tsx` | one Vercel project |
 | per-dealer cron generation | hours | low | feedback loops at N dealers |
