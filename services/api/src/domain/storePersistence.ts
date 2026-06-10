@@ -211,3 +211,147 @@ export async function closeStorePersistence(): Promise<void> {
   schemaReady = false;
   if (p) await p.end();
 }
+
+/**
+ * Phase 2: generic single-document JSON stores (docs/postgres_store_swap.md).
+ *
+ * Each small store file maps to one row in store_documents
+ * (dealer_id, store, 'all'). Store modules call readJsonStoreText /
+ * writeJsonStoreText instead of fs directly; backend dispatch matches the
+ * conversation store: file (default, fs only), dual_write (fs + best-effort
+ * Postgres mirror), postgres (Postgres first, file fallback/snapshot).
+ */
+
+/** Store-document name -> default DATA_DIR filename. Used by pg:import/export/parity. */
+export const STORE_DOCUMENT_FILES: ReadonlyArray<{ store: string; filename: string }> = [
+  { store: "contacts", filename: "contacts.json" },
+  { store: "contact_lists", filename: "contact_lists.json" },
+  { store: "campaigns", filename: "campaigns.json" },
+  { store: "users", filename: "users.json" },
+  { store: "sessions", filename: "sessions.json" },
+  { store: "password_resets", filename: "password_resets.json" },
+  { store: "settings", filename: "settings.json" },
+  { store: "suppressions", filename: "suppressions.json" },
+  { store: "agent_tasks", filename: "agent_tasks.json" },
+  { store: "dealer_setups", filename: "dealer_setups.json" },
+  { store: "active_clients", filename: "active_clients.json" },
+  { store: "mdf_claims", filename: "mdf_claims.json" }
+];
+
+async function readFileTextOrNull(filePath: string): Promise<string | null> {
+  const { promises: fs } = await import("node:fs");
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+async function writeFileTextAtomic(filePath: string, text: string): Promise<void> {
+  const { promises: fs } = await import("node:fs");
+  const path = await import("node:path");
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, text, "utf8");
+  await fs.rename(tmp, filePath);
+}
+
+export async function readStoreDocumentText(store: string): Promise<string | null> {
+  await ensureStoreSchema();
+  const db = await getPool();
+  const res = await db.query(
+    "SELECT payload FROM store_documents WHERE dealer_id = $1 AND store = $2 AND id = 'all'",
+    [getDealerId(), store]
+  );
+  if (!res.rows.length) return null;
+  notePostgresSuccess();
+  return JSON.stringify(res.rows[0].payload);
+}
+
+export async function writeStoreDocumentText(store: string, payloadJson: string): Promise<void> {
+  await ensureStoreSchema();
+  const db = await getPool();
+  await db.query(
+    `INSERT INTO store_documents (dealer_id, store, id, payload, updated_at)
+     VALUES ($1, $2, 'all', $3::jsonb, now())
+     ON CONFLICT (dealer_id, store, id)
+     DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()`,
+    [getDealerId(), store, payloadJson]
+  );
+  notePostgresSuccess();
+}
+
+/**
+ * Read a JSON store: returns the raw JSON text or null when the store has no
+ * data yet (missing file / missing row). Callers keep their existing
+ * parse + default-on-missing logic.
+ */
+export async function readJsonStoreText(args: {
+  store: string;
+  filePath: string;
+}): Promise<string | null> {
+  if (getDataBackend() !== "postgres") {
+    return readFileTextOrNull(args.filePath);
+  }
+  try {
+    const fromPg = await readStoreDocumentText(args.store);
+    if (fromPg != null) return fromPg;
+    // No row yet (store not seeded): fall back to the file so first deploys
+    // after enabling postgres mode never lose existing data.
+    return await readFileTextOrNull(args.filePath);
+  } catch (err: any) {
+    notePostgresFailure();
+    console.warn(
+      `⚠️ Postgres read failed for store '${args.store}'; falling back to file:`,
+      err?.message ?? err
+    );
+    return readFileTextOrNull(args.filePath);
+  }
+}
+
+/**
+ * Write a JSON store document. The text must be valid JSON.
+ * file: atomic file write. dual_write: file write + best-effort Postgres
+ * mirror. postgres: Postgres write + file snapshot when FILE_SNAPSHOT=1,
+ * degraded, or the Postgres write failed.
+ */
+export async function writeJsonStoreText(args: {
+  store: string;
+  filePath: string;
+  text: string;
+}): Promise<void> {
+  const backend = getDataBackend();
+  if (backend === "file") {
+    await writeFileTextAtomic(args.filePath, args.text);
+    return;
+  }
+  if (backend === "dual_write") {
+    await writeFileTextAtomic(args.filePath, args.text);
+    try {
+      await writeStoreDocumentText(args.store, args.text);
+    } catch (err: any) {
+      notePostgresFailure();
+      console.warn(
+        `⚠️ Postgres mirror write failed for store '${args.store}' (file saved):`,
+        err?.message ?? err
+      );
+    }
+    return;
+  }
+  // backend === "postgres"
+  let pgOk = true;
+  try {
+    await writeStoreDocumentText(args.store, args.text);
+  } catch (err: any) {
+    pgOk = false;
+    notePostgresFailure();
+    console.warn(
+      `⚠️ Postgres write failed for store '${args.store}'; writing file fallback:`,
+      err?.message ?? err
+    );
+  }
+  if (!pgOk || isFileSnapshotEnabled() || isPostgresDegraded()) {
+    await writeFileTextAtomic(args.filePath, args.text);
+  }
+}

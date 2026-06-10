@@ -1,7 +1,6 @@
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
 import { randomUUID, pbkdf2Sync, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type UserRole = "manager" | "salesperson" | "service" | "parts" | "apparel";
 
@@ -87,9 +86,16 @@ const PASSWORD_RESETS_PATH = dataPath("password_resets.json");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 const PASSWORD_RESET_TTL_MS = 1000 * 60 * 60;
 
+function storeNameForPath(filePath: string): string {
+  if (filePath === SESSIONS_PATH) return "sessions";
+  if (filePath === PASSWORD_RESETS_PATH) return "password_resets";
+  return "users";
+}
+
 async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   try {
-    const raw = await fs.readFile(filePath, "utf8");
+    const raw = await readJsonStoreText({ store: storeNameForPath(filePath), filePath });
+    if (raw == null) return fallback;
     return JSON.parse(raw) as T;
   } catch {
     return fallback;
@@ -97,8 +103,11 @@ async function readJson<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 async function writeJson(filePath: string, data: any): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+  await writeJsonStoreText({
+    store: storeNameForPath(filePath),
+    filePath,
+    text: JSON.stringify(data, null, 2)
+  });
 }
 
 export async function listUsers(): Promise<UserRecord[]> {

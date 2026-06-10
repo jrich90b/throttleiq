@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type ContactEntry = {
   id: string;
@@ -78,15 +79,16 @@ async function ensureDirForFile(filePath: string) {
 }
 
 async function saveToDisk() {
-  await ensureDirForFile(DB_PATH);
   const payload = {
     version: 1,
     savedAt: nowIso(),
     contacts: Array.from(contacts.values())
   };
-  const tmp = `${DB_PATH}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tmp, DB_PATH);
+  await writeJsonStoreText({
+    store: "contacts",
+    filePath: DB_PATH,
+    text: JSON.stringify(payload, null, 2)
+  });
 }
 
 function scheduleSave() {
@@ -99,18 +101,18 @@ function scheduleSave() {
 
 async function loadFromDisk() {
   try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
+    const raw = await readJsonStoreText({ store: "contacts", filePath: DB_PATH });
+    if (raw == null) {
+      await saveToDisk();
+      return;
+    }
     const parsed = JSON.parse(raw) as { contacts?: ContactEntry[] };
     contacts.clear();
     for (const c of parsed?.contacts ?? []) {
       if (c?.id) contacts.set(c.id, c);
     }
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await ensureDirForFile(DB_PATH);
-      await saveToDisk();
-      return;
-    }
+  } catch {
+    // keep in-memory state on unexpected errors
   }
 }
 

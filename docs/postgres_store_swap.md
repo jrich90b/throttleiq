@@ -1,8 +1,11 @@
 # Postgres Store Swap (Durable Document Store Behind the In-Memory Map)
 
-Status: implemented behind `DATA_BACKEND` (default `file`); not yet enabled in
-production — next step is provisioning managed Postgres and running the
-rollout below. The `postgres` and `dual_write` paths are validated by
+Status: **live in production dual-write shadow since 2026-06-10** (Lightsail
+managed PostgreSQL 18.4 `leadrider-db`, us-east-1a; database `leadrider`;
+seeded via `pg:import`, daily `pg:parity` gate in the nightly loop). Phase 2
+(generic document stores, below) implemented 2026-06-10 behind the same
+default-`file` flag. Read-flip to `DATA_BACKEND=postgres` pending a clean
+parity week. The `postgres` and `dual_write` paths are validated by
 `npm run store_persistence:eval` against a real PostgreSQL instance when
 `DATABASE_URL_TEST` is set (file mode runs in `ci:eval` unconditionally).
 Owner: Joe. Drafted 2026-06-09; implemented 2026-06-10.
@@ -180,15 +183,32 @@ so rollback is an env flip, not a data migration. After step 6, rollback is
   delete propagation, malformed-row hydration parity. Wired into `ci:eval`
   in file mode so the suite never requires a database.
 
-## Phase 2 (Later, Same Pattern)
+## Phase 2 (Implemented: Generic Document Stores)
 
-Migrate remaining `dataPath()` stores one at a time into `store_documents`
-(contacts, contact lists, campaigns, users, sessions, settings, suppressions,
-agent tasks, dealer setups, active clients, MDF claims). Caches and
-script-promoted artifacts (`inventory_snapshot.json`, tone rules, manual reply
-examples) stay as files until the feedback-loop scripts are made
-tenant-aware. `dealer_profile.json` migrates only alongside the multi-tenant
-config work.
+The remaining single-document JSON stores route through
+`readJsonStoreText` / `writeJsonStoreText` in `storePersistence.ts`, each
+mapping to one `store_documents` row (`dealer_id`, store, `'all'`). Backend
+dispatch matches Phase 1: `file` is fs-only, `dual_write` mirrors every write
+to Postgres best-effort, `postgres` reads/writes Postgres with file
+fallback/snapshot. The store/filename mapping lives in
+`STORE_DOCUMENT_FILES` and drives `pg:import`, `pg:export`, and `pg:parity`
+(which now diffs every document too).
+
+Migrated stores: contacts, contact_lists, campaigns, users, sessions,
+password_resets, settings, suppressions, agent_tasks, dealer_setups,
+active_clients, mdf_claims.
+
+**Enablement note:** the production instance already runs
+`DATA_BACKEND=dual_write`, so these stores begin mirroring on the first
+deploy that includes Phase 2. Run `pg:import` once right after that deploy —
+otherwise the daily parity report flags `missing_in_pg` for any store that
+has not been written since the deploy.
+
+Still file-only on purpose: caches and script-promoted artifacts
+(`inventory_snapshot.json`, tone rules, manual reply examples, models/MSRP
+catalogs, google tokens, scheduler config) until the feedback-loop scripts
+are made tenant-aware; `dealer_profile.json` migrates only alongside the
+multi-tenant config work.
 
 ## Concurrency Note
 

@@ -1,6 +1,5 @@
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type ActiveClientStatus = "active" | "implementation" | "paused" | "canceled";
 export type ActiveClientPaymentMethod = "ach" | "card" | "check" | "wire" | "stripe" | "other";
@@ -295,8 +294,8 @@ async function ensureLoaded() {
   if (loaded) return;
   loaded = true;
   try {
-    const raw = await fs.readFile(STORE_PATH, "utf8");
-    const parsed = JSON.parse(raw);
+    const raw = await readJsonStoreText({ store: "active_clients", filePath: STORE_PATH });
+    const parsed = raw == null ? [] : JSON.parse(raw);
     rows = Array.isArray(parsed) ? parsed.filter(isActiveClient) : [];
   } catch {
     rows = [];
@@ -312,6 +311,9 @@ function scheduleSave() {
 }
 
 async function saveNow() {
-  await fs.mkdir(path.dirname(STORE_PATH), { recursive: true });
-  await fs.writeFile(STORE_PATH, `${JSON.stringify(rows, null, 2)}\n`);
+  await writeJsonStoreText({
+    store: "active_clients",
+    filePath: STORE_PATH,
+    text: `${JSON.stringify(rows, null, 2)}\n`
+  });
 }

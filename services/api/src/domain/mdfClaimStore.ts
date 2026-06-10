@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 import type { MdfClaimPacket } from "./mdfAssistant.js";
 
 export type MdfClaimStatus = "draft" | "needs_info" | "ready_for_portal" | "portal_draft" | "submitted" | "completed";
@@ -61,9 +61,11 @@ async function saveToDisk() {
     savedAt: nowIso(),
     claims: Array.from(claims.values())
   };
-  const tmp = `${DB_PATH}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tmp, DB_PATH);
+  await writeJsonStoreText({
+    store: "mdf_claims",
+    filePath: DB_PATH,
+    text: JSON.stringify(payload, null, 2)
+  });
 }
 
 function scheduleSave() {
@@ -76,7 +78,11 @@ function scheduleSave() {
 
 async function loadFromDisk() {
   try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
+    const raw = await readJsonStoreText({ store: "mdf_claims", filePath: DB_PATH });
+    if (raw == null) {
+      await saveToDisk();
+      return;
+    }
     const parsed = JSON.parse(raw) as { claims?: MdfClaimEntry[] };
     claims.clear();
     for (const row of parsed.claims ?? []) {
@@ -90,10 +96,8 @@ async function loadFromDisk() {
         updatedAt: String(row.updatedAt ?? "").trim() || nowIso()
       });
     }
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await saveToDisk();
-    }
+  } catch {
+    // keep in-memory state on unexpected errors
   }
 }
 

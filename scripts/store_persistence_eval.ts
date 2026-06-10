@@ -131,6 +131,29 @@ async function main(): Promise<void> {
     LLM_ENABLED: "0"
   });
 
+  // Phase 2 document-store helpers: file-mode round trip (no DB needed).
+  {
+    const { readJsonStoreText, writeJsonStoreText } = await import(
+      "../services/api/src/domain/storePersistence.ts"
+    );
+    const docDir = await fs.mkdtemp(path.join(os.tmpdir(), "store-persistence-doc-"));
+    const docPath = path.join(docDir, "settings.json");
+    delete process.env.DATA_BACKEND;
+    assert.equal(
+      await readJsonStoreText({ store: "settings", filePath: docPath }),
+      null,
+      "missing doc store must read as null"
+    );
+    const docText = JSON.stringify({ version: 1, mode: "autopilot" }, null, 2);
+    await writeJsonStoreText({ store: "settings", filePath: docPath, text: docText });
+    assert.equal(
+      await readJsonStoreText({ store: "settings", filePath: docPath }),
+      docText,
+      "file-mode doc store must round-trip exact text"
+    );
+    console.log("document store file round trip ok");
+  }
+
   // Optional Postgres round trip (skipped without DATABASE_URL_TEST)
   const testDbUrl = String(process.env.DATABASE_URL_TEST ?? "").trim();
   if (testDbUrl) {
@@ -166,6 +189,40 @@ async function main(): Promise<void> {
     const dualPgReadDir = await fs.mkdtemp(path.join(os.tmpdir(), "store-persistence-dual-pg-read-"));
     runPhase("read", { ...dualEnv, DATA_BACKEND: "postgres", DATA_DIR: dualPgReadDir });
     console.log(`dual_write round trip ok (dealer=${dualDealer})`);
+
+    // Phase 2 document-store helpers against real Postgres.
+    {
+      const sp = await import("../services/api/src/domain/storePersistence.ts");
+      const envBefore = {
+        DATA_BACKEND: process.env.DATA_BACKEND,
+        DATABASE_URL: process.env.DATABASE_URL,
+        DEALER_ID: process.env.DEALER_ID
+      };
+      const docDealer = `store_persistence_eval_docs_${Date.now()}`;
+      process.env.DATABASE_URL = testDbUrl;
+      process.env.DEALER_ID = docDealer;
+      const docDir = await fs.mkdtemp(path.join(os.tmpdir(), "store-persistence-doc-pg-"));
+      const docPath = path.join(docDir, "settings.json");
+      const docText = JSON.stringify({ version: 1, mode: "autopilot" });
+
+      process.env.DATA_BACKEND = "dual_write";
+      await sp.writeJsonStoreText({ store: "settings", filePath: docPath, text: docText });
+      const fileCopy = await fs.readFile(docPath, "utf8");
+      assert.equal(fileCopy, docText, "dual_write must write the file copy");
+
+      process.env.DATA_BACKEND = "postgres";
+      await fs.rm(docPath); // pg must satisfy the read on its own
+      const fromPg = await sp.readJsonStoreText({ store: "settings", filePath: docPath });
+      assert.ok(fromPg, "postgres-mode doc read must come from the database");
+      assert.deepEqual(JSON.parse(String(fromPg)), JSON.parse(docText));
+
+      for (const [k, v] of Object.entries(envBefore)) {
+        if (v == null) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await sp.closeStorePersistence();
+      console.log(`document store postgres round trip ok (dealer=${docDealer})`);
+    }
   } else {
     console.log("postgres round trip skipped (DATABASE_URL_TEST not set)");
   }

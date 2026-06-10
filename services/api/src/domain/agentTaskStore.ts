@@ -1,6 +1,5 @@
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type AgentTaskProvider = "codex" | "claude";
 export type AgentTaskKind =
@@ -111,8 +110,8 @@ async function ensureLoaded() {
   if (loaded) return;
   loaded = true;
   try {
-    const raw = await fs.readFile(STORE_PATH, "utf8");
-    const parsed = JSON.parse(raw);
+    const raw = await readJsonStoreText({ store: "agent_tasks", filePath: STORE_PATH });
+    const parsed = raw == null ? [] : JSON.parse(raw);
     rows = Array.isArray(parsed) ? parsed.filter(isAgentTask) : [];
   } catch {
     rows = [];
@@ -128,6 +127,9 @@ function scheduleSave() {
 }
 
 async function saveNow() {
-  await fs.mkdir(path.dirname(STORE_PATH), { recursive: true });
-  await fs.writeFile(STORE_PATH, `${JSON.stringify(rows, null, 2)}\n`);
+  await writeJsonStoreText({
+    store: "agent_tasks",
+    filePath: STORE_PATH,
+    text: `${JSON.stringify(rows, null, 2)}\n`
+  });
 }

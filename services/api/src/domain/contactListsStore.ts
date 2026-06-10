@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type ContactListFilter = {
   condition?: string;
@@ -41,9 +41,11 @@ async function saveToDisk() {
     savedAt: nowIso(),
     lists: Array.from(lists.values())
   };
-  const tmp = `${DB_PATH}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tmp, DB_PATH);
+  await writeJsonStoreText({
+    store: "contact_lists",
+    filePath: DB_PATH,
+    text: JSON.stringify(payload, null, 2)
+  });
 }
 
 function scheduleSave() {
@@ -56,7 +58,11 @@ function scheduleSave() {
 
 async function loadFromDisk() {
   try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
+    const raw = await readJsonStoreText({ store: "contact_lists", filePath: DB_PATH });
+    if (raw == null) {
+      await saveToDisk();
+      return;
+    }
     const parsed = JSON.parse(raw) as { lists?: ContactListEntry[] };
     lists.clear();
     for (const row of parsed?.lists ?? []) {
@@ -66,10 +72,8 @@ async function loadFromDisk() {
         contactIds: Array.isArray(row.contactIds) ? row.contactIds.filter(Boolean) : []
       });
     }
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await saveToDisk();
-    }
+  } catch {
+    // keep in-memory state on unexpected errors
   }
 }
 

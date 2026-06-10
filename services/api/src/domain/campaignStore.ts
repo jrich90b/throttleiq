@@ -1,5 +1,5 @@
-import { promises as fs } from "node:fs";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type CampaignChannel = "sms" | "email" | "both";
 export type CampaignStatus = "draft" | "generated";
@@ -110,9 +110,11 @@ async function saveToDisk() {
     savedAt: nowIso(),
     campaigns: Array.from(campaigns.values())
   };
-  const tmp = `${DB_PATH}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tmp, DB_PATH);
+  await writeJsonStoreText({
+    store: "campaigns",
+    filePath: DB_PATH,
+    text: JSON.stringify(payload, null, 2)
+  });
 }
 
 function scheduleSave() {
@@ -219,7 +221,11 @@ function normalizeBuildMode(raw: unknown): CampaignBuildMode {
 
 async function loadFromDisk() {
   try {
-    const raw = await fs.readFile(DB_PATH, "utf8");
+    const raw = await readJsonStoreText({ store: "campaigns", filePath: DB_PATH });
+    if (raw == null) {
+      await saveToDisk();
+      return;
+    }
     const parsed = JSON.parse(raw) as { campaigns?: CampaignEntry[] };
     campaigns.clear();
     for (const row of parsed?.campaigns ?? []) {
@@ -243,10 +249,8 @@ async function loadFromDisk() {
       }
       campaigns.set(row.id, normalized);
     }
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await saveToDisk();
-    }
+  } catch {
+    // keep in-memory state on unexpected errors
   }
 }
 

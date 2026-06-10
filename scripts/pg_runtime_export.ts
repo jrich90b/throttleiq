@@ -26,12 +26,15 @@ async function main() {
     process.exit(1);
   }
 
-  const { loadConversationStoreFromPostgres, closeStorePersistence, getDealerId } = await import(
-    "../services/api/src/domain/storePersistence.ts"
-  );
+  const {
+    loadConversationStoreFromPostgres,
+    readStoreDocumentText,
+    STORE_DOCUMENT_FILES,
+    closeStorePersistence,
+    getDealerId
+  } = await import("../services/api/src/domain/storePersistence.ts");
 
   const store = await loadConversationStoreFromPostgres();
-  await closeStorePersistence();
 
   const payload = {
     version: 1,
@@ -42,8 +45,21 @@ async function main() {
   };
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
+
+  // Phase 2 documents: export each store document next to the main file as
+  // <filename>.from_pg.json so a restore is an explicit rename.
+  const exportedDocs: string[] = [];
+  for (const { store: docStore, filename } of STORE_DOCUMENT_FILES) {
+    const text = await readStoreDocumentText(docStore);
+    if (text == null) continue;
+    const docOut = path.join(path.dirname(outPath), `${filename.replace(/\.json$/, "")}.from_pg.json`);
+    await fs.writeFile(docOut, text, "utf8");
+    exportedDocs.push(docStore);
+  }
+  await closeStorePersistence();
+
   console.log(
-    `pg:export ok dealer=${getDealerId()} out=${outPath} conversations=${store.conversations.length} todos=${store.todos.length} questions=${store.questions.length}`
+    `pg:export ok dealer=${getDealerId()} out=${outPath} conversations=${store.conversations.length} todos=${store.todos.length} questions=${store.questions.length} docs=[${exportedDocs.join(",")}]`
   );
 }
 

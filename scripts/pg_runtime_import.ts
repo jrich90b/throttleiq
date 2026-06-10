@@ -21,6 +21,8 @@ async function main() {
   const {
     ensureStoreSchema,
     persistConversationStoreToPostgres,
+    writeStoreDocumentText,
+    STORE_DOCUMENT_FILES,
     closeStorePersistence,
     getDealerId
   } = await import("../services/api/src/domain/storePersistence.ts");
@@ -50,10 +52,27 @@ async function main() {
     todosJson: JSON.stringify(todos),
     questionsJson: JSON.stringify(questions)
   });
+
+  // Phase 2: seed the generic single-document stores that exist on disk.
+  const dataDir = path.dirname(filePath);
+  const seededDocs: string[] = [];
+  for (const { store, filename } of STORE_DOCUMENT_FILES) {
+    const docPath = path.join(dataDir, filename);
+    let text: string;
+    try {
+      text = await fs.readFile(docPath, "utf8");
+    } catch (err: any) {
+      if (err?.code === "ENOENT") continue;
+      throw err;
+    }
+    JSON.parse(text); // refuse to seed invalid JSON
+    await writeStoreDocumentText(store, text);
+    seededDocs.push(store);
+  }
   await closeStorePersistence();
 
   console.log(
-    `pg:import ok dealer=${getDealerId()} file=${filePath} conversations=${rows.length} todos=${todos.length} questions=${questions.length}`
+    `pg:import ok dealer=${getDealerId()} file=${filePath} conversations=${rows.length} todos=${todos.length} questions=${questions.length} docs=[${seededDocs.join(",")}]`
   );
 }
 

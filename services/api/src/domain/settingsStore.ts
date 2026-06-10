@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
+import { readJsonStoreText, writeJsonStoreText } from "./storePersistence.js";
 
 export type SystemMode = "suggest" | "autopilot";
 
@@ -18,30 +19,31 @@ async function ensureDirForFile(filePath: string) {
 
 async function loadFromDisk() {
   try {
-    const raw = await fs.readFile(SETTINGS_PATH, "utf8");
+    const raw = await readJsonStoreText({ store: "settings", filePath: SETTINGS_PATH });
+    if (raw == null) {
+      await ensureDirForFile(SETTINGS_PATH);
+      await saveToDisk(); // create default store
+      console.log(`⚙️ Created settings at ${SETTINGS_PATH} (mode=${mode})`);
+      return;
+    }
     const parsed = JSON.parse(raw) as { mode?: SystemMode };
     if (parsed?.mode === "suggest" || parsed?.mode === "autopilot") {
       mode = parsed.mode;
     }
     console.log(`⚙️ Loaded settings from ${SETTINGS_PATH} (mode=${mode})`);
   } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      await ensureDirForFile(SETTINGS_PATH);
-      await saveToDisk(); // create default file
-      console.log(`⚙️ Created settings at ${SETTINGS_PATH} (mode=${mode})`);
-      return;
-    }
     console.warn("⚠️ Failed to load settings:", err?.message ?? err);
   }
 }
 
 async function saveToDisk() {
   try {
-    await ensureDirForFile(SETTINGS_PATH);
     const payload = { version: 1, savedAt: new Date().toISOString(), mode };
-    const tmp = `${SETTINGS_PATH}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), "utf8");
-    await fs.rename(tmp, SETTINGS_PATH);
+    await writeJsonStoreText({
+      store: "settings",
+      filePath: SETTINGS_PATH,
+      text: JSON.stringify(payload, null, 2)
+    });
   } catch (err: any) {
     console.warn("⚠️ Failed to save settings:", err?.message ?? err);
   }
