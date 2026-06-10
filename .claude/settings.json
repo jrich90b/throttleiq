@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run ci:eval)",
+      "Bash(npm run inventory_fact_answer:eval)",
+      "Bash(npm run pending_incoming_inventory:eval)",
+      "Bash(npm run web_text_widget:eval)",
+      "Bash(npm run inbound_reply_qa_regression:eval)",
+      "Bash(git -C /Users/joehartrich/throttleiq status *)",
+      "Bash(git -C /Users/joehartrich/throttleiq log *)",
+      "Bash(git -C /Users/joehartrich/throttleiq diff *)",
+      "Bash(git -C /Users/joehartrich/throttleiq show *)",
+      "Bash(git -C /Users/joehartrich/throttleiq grep *)"
+    ]
+  }
+}

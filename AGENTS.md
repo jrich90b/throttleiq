@@ -378,6 +378,9 @@ When changing responses:
 - JD Power trade-budget workflow scope is documented in:
   - `docs/JD_Power_Trade_Budget_Implementation.md`
 - When resumed, implement parser-first + state machine from that doc (no regex-only flow).
+- Postgres conversation-store swap (durable document store behind the existing in-memory Map) is designed in:
+  - `docs/postgres_store_swap.md`
+- Implementation rules from that design: keep mutate-in-place call sites unchanged, `DATA_BACKEND` defaults to `file` so evals/local dev never need a database, dual-write shadow week before flipping reads, and `dealer_id` on every row.
 
 ## Dealer Runtime Safety (Do Not Cross Dealer Data)
 - **Source of truth for instance data is runtime storage**, not repo data files.
