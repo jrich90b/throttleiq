@@ -1,6 +1,8 @@
 # Multi-Tenant Platform Design (Dealer #2 = a Row, Not a Server)
 
-Status: design draft 2026-06-10, for review — no implementation started.
+Status: design accepted 2026-06-10 (decisions recorded below). First
+implementation slice landed same day: per-dealer pg-boss schema default and
+the `dealer:provision` dry-run (see Implementation Order table).
 Owner: Joe.
 Depends on: `docs/postgres_store_swap.md` (live in dual-write shadow),
 `docs/worker_queue_extraction.md` (shadow-running), Dealer Setup workflow
