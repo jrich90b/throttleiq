@@ -382,6 +382,9 @@ When changing responses:
   - `docs/postgres_store_swap.md`
 - Worker/queue extraction (pg-boss dispatcher for background ticks) is designed in:
   - `docs/worker_queue_extraction.md`
+- Multi-tenant platform (shared ingress, one-command dealer provisioning, criteria-gated shared process) is designed in:
+  - `docs/multi_tenant_platform.md`
+- Multi-tenant rule: before any second dealer's worker starts, set `PGBOSS_SCHEMA=pgboss_<slug>` per dealer (pg-boss queue names are global per schema and would collide).
 - Worker rule: services/worker is a dispatcher only — it must never import or mutate the conversation store; execution stays in the API via `/internal/worker/tick`.
 - Implementation rules from that design: keep mutate-in-place call sites unchanged, `DATA_BACKEND` defaults to `file` so evals/local dev never need a database, dual-write shadow week before flipping reads, and `dealer_id` on every row.
 
