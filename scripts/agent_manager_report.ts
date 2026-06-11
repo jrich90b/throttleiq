@@ -295,6 +295,15 @@ function main() {
   const auditIssueCounts = Array.isArray(conversationAudit?.summary?.issueCounts)
     ? conversationAudit.summary.issueCounts
     : [];
+  const pendingDraftCount = auditIssueCounts
+    .filter((row: any) => String(row?.issue ?? "") === "pending_draft")
+    .reduce((sum: number, row: any) => sum + num(row?.count), 0);
+  const pendingDraftOlderCount = auditIssueCounts
+    .filter((row: any) => String(row?.issue ?? "") === "pending_draft_older_than_30m")
+    .reduce((sum: number, row: any) => sum + num(row?.count), 0);
+  const pendingDraftManualHandoffCount = auditIssueCounts
+    .filter((row: any) => String(row?.issue ?? "") === "pending_draft_while_manual_handoff")
+    .reduce((sum: number, row: any) => sum + num(row?.count), 0);
   const orphanFollowUpCount = auditIssueCounts
     .filter((row: any) => /^orphan_followup_/i.test(String(row?.issue ?? "")))
     .reduce((sum: number, row: any) => sum + num(row?.count), 0);
@@ -338,6 +347,35 @@ function main() {
       evidence: {
         routeWatchdogPath,
         sample: Array.isArray(routeWatchdog?.stuckTurns?.rows) ? routeWatchdog.stuckTurns.rows.slice(0, 5) : []
+      }
+    });
+  }
+
+  if (pendingDraftOlderCount > 0) {
+    pushTask(tasks, {
+      id: "stale-pending-drafts",
+      priority:
+        pendingDraftManualHandoffCount > 0 || pendingDraftOlderCount >= 5
+          ? "P1"
+          : "P2",
+      area: "ops",
+      title: "Review stale pending drafts",
+      signal: `${pendingDraftOlderCount} pending draft(s) are older than 30 minutes`,
+      recommendedAction:
+        "Inspect the flagged conversations and close or publish only the drafts that still belong. If these pile up from one path, add a cleanup or ownership guard at the draft-creation stage.",
+      evidence: {
+        conversationAuditPath,
+        issueCounts: auditIssueCounts.filter((row: any) =>
+          /^pending_draft(?:_older_than_30m|_while_manual_handoff)?$/i.test(String(row?.issue ?? ""))
+        ),
+        sample: Array.isArray(conversationAudit?.flagged)
+          ? conversationAudit.flagged
+              .filter((row: any) =>
+                Array.isArray(row?.issues) &&
+                row.issues.some((issue: string) => /^pending_draft(?:_older_than_30m|_while_manual_handoff)?$/i.test(String(issue)))
+              )
+              .slice(0, 10)
+          : []
       }
     });
   }
@@ -615,6 +653,9 @@ function main() {
     metrics: {
       stuckTurns: stuckCount,
       orphanFollowUpSignals: orphanFollowUpCount,
+      pendingDraftSignals: pendingDraftCount,
+      pendingDraftOlderThan30m: pendingDraftOlderCount,
+      pendingDraftWhileManualHandoff: pendingDraftManualHandoffCount,
       followupTaskConsistencyFlags: followupTaskFlagged,
       followupTaskIssueCounts,
       noResponseRouteOutcomes: noResponseCount,
