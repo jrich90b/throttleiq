@@ -7883,6 +7883,109 @@ export async function parseInventoryEntitiesWithLLM(args: {
   };
 }
 
+export type VehicleImageDescription = {
+  isMotorcycle: boolean;
+  make: string;
+  modelFamily: string;
+  color: string;
+  distinctiveFeatures: string;
+  confidence: number;
+};
+
+/**
+ * Vision parse for customer-shared bike photos (voice charter phase 2).
+ * Identifies the model FAMILY, never exact year/trim — the reply layer is
+ * confidence-gated and says "looks like", because a wrong model ID to a
+ * Harley rider is worse than no ID.
+ */
+export async function describeVehicleImageWithLLM(args: {
+  imageBase64: string;
+  mimeType?: string;
+  contextText?: string;
+}): Promise<VehicleImageDescription | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  if (process.env.LLM_VEHICLE_IMAGE_VISION_ENABLED === "0") return null;
+  const model =
+    process.env.OPENAI_VEHICLE_IMAGE_VISION_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const imageBase64 = String(args.imageBase64 ?? "").trim();
+  if (!imageBase64) return null;
+  const mime = args.mimeType || "image/jpeg";
+  const schema: { [key: string]: unknown } = {
+    type: "object",
+    additionalProperties: false,
+    required: ["is_motorcycle", "make", "model_family", "color", "distinctive_features", "confidence"],
+    properties: {
+      is_motorcycle: { type: "boolean" },
+      make: { type: "string" },
+      model_family: { type: "string" },
+      color: { type: "string" },
+      distinctive_features: { type: "string" },
+      confidence: { type: "number" }
+    }
+  };
+  const prompt = [
+    "Identify the motorcycle in the photo for a Harley-Davidson dealership. Return only JSON matching the schema.",
+    "",
+    "Guidelines:",
+    "- model_family is the family name only (e.g. \"Ultra Limited\", \"Street Glide\", \"Road Glide\", \"Fat Boy\", \"Heritage Classic\", \"Sportster\", \"Nightster\", \"Low Rider ST\", \"Breakout\", \"Tri Glide\"). Never include a year.",
+    "- color is the visible paint description (e.g. \"red over black two-tone\").",
+    "- distinctive_features: short comma list (e.g. \"Tour-Pak, ape hangers, passenger backrest\").",
+    "- confidence reflects the model_family identification only, 0 to 1. If you cannot tell the family, use a low confidence and an empty model_family.",
+    "- is_motorcycle=false for paperwork, screenshots of documents, people, or anything that is not a motorcycle photo.",
+    "",
+    'EXAMPLE output for a photo of a red-and-black full-dress tourer with a top case: {"is_motorcycle":true,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85}',
+    args.contextText ? `Customer message context: ${String(args.contextText).slice(0, 200)}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+  try {
+    const resp = await client.responses.parse({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            { type: "input_image", image_url: `data:${mime};base64,${imageBase64}`, detail: "auto" }
+          ]
+        }
+      ] as any,
+      max_output_tokens: 160,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "vehicle_image_description",
+          schema,
+          strict: true
+        }
+      }
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: "vehicle_image_description",
+      requestKind: "responses.parse",
+      model,
+      metadata: { debugTag: "vehicle-image-vision" }
+    });
+    const parsed = (resp as any)?.output_parsed ?? safeParseJson(resp.output_text?.trim() ?? "");
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      isMotorcycle: !!parsed.is_motorcycle,
+      make: String(parsed.make ?? "").trim(),
+      modelFamily: String(parsed.model_family ?? "").trim(),
+      color: String(parsed.color ?? "").trim(),
+      distinctiveFeatures: String(parsed.distinctive_features ?? "").trim(),
+      confidence: Number(parsed.confidence ?? 0)
+    };
+  } catch (error) {
+    console.warn("[vehicle-image-vision] describe failed", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
 export async function parseInventoryStatusWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

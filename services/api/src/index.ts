@@ -17,6 +17,7 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
+  buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareContext
@@ -7901,18 +7902,23 @@ async function maybeHandleInventoryStatusParserRoute(args: {
     ) {
       setDialogState(args.conv, "inventory_init");
       setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      const photoShare = await buildPhotoShareReplyWithVision({
+        conv: args.conv,
+        firstName: normalizeDisplayCase(args.conv.lead?.firstName),
+        anchorAtIso: null,
+        dataDir: getDataDir(),
+        contextText: args.text ?? ""
+      });
       addTodo(
         args.conv,
         "note",
-        buildCustomerPhotoShareTodoSummary(args.conv.lead?.firstName ?? args.conv.lead?.name),
+        photoShare.todoSummary,
         args.providerMessageId ?? undefined,
         undefined,
         undefined,
         "followup"
       );
-      const reply = buildCustomerVehiclePhotoShareReply({
-        firstName: normalizeDisplayCase(args.conv.lead?.firstName)
-      });
+      const reply = photoShare.reply;
       recordRouteOutcome(args.scope, "customer_shared_vehicle_photo", {
         convId: args.conv.id,
         leadKey: args.conv.leadKey,
@@ -47854,19 +47860,16 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenCustomerPhotoShare) {
     setDialogState(conv, "inventory_init");
     setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
-    addTodo(
+    const photoShare = await buildPhotoShareReplyWithVision({
       conv,
-      "note",
-      buildCustomerPhotoShareTodoSummary(conv.lead?.firstName ?? conv.lead?.name),
-      event.providerMessageId,
-      undefined,
-      undefined,
-      "followup"
-    );
-    const reply = buildCustomerVehiclePhotoShareReply({
       firstName: normalizeDisplayCase(conv.lead?.firstName),
-      mentionedModel: findMentionedModel(event.body ?? "")
+      mentionedModel: findMentionedModel(event.body ?? ""),
+      anchorAtIso: event.receivedAt,
+      dataDir: getDataDir(),
+      contextText: event.body ?? ""
     });
+    addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    const reply = photoShare.reply;
     recordRouteOutcome("regen", "customer_shared_vehicle_photo", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -50843,19 +50846,16 @@ if (authToken && signature) {
   if (customerPhotoShareAccepted) {
     setDialogState(conv, "inventory_init");
     setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
-    addTodo(
+    const photoShare = await buildPhotoShareReplyWithVision({
       conv,
-      "note",
-      buildCustomerPhotoShareTodoSummary(conv.lead?.firstName ?? conv.lead?.name),
-      event.providerMessageId,
-      undefined,
-      undefined,
-      "followup"
-    );
-    const reply = buildCustomerVehiclePhotoShareReply({
       firstName: normalizeDisplayCase(conv.lead?.firstName),
-      mentionedModel: findMentionedModel(event.body ?? "")
+      mentionedModel: findMentionedModel(event.body ?? ""),
+      anchorAtIso: event.receivedAt,
+      dataDir: getDataDir(),
+      contextText: event.body ?? ""
     });
+    addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    const reply = photoShare.reply;
     recordRouteOutcome("live", "customer_shared_vehicle_photo", {
       convId: conv.id,
       leadKey: conv.leadKey,

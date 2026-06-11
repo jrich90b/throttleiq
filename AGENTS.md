@@ -1434,3 +1434,9 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 ## Media-Only Send Draft Guard (2026-06-11)
 - Production data-loss bug: sending photos from the dashboard with a prefilled draft consumed the draft via `finalizeDraftAsSent(conv, draftId, "", ...)` — the typed reply was wiped into `originalDraftBody` and, because `usedDraft` short-circuited the fallback `appendOutbound`, the media reference was dropped from the record (customer got a caption-less MMS; the drafted answer never went anywhere). Incidents: Bailey +16077384120 2026-06-10, Mustafa +17164368801 2026-05-11.
 - Guard in `conversationStore.finalizeDraftAsSent`: an empty final body never consumes a draft — the caller falls through to `appendOutbound` (media message recorded with its `mediaUrls`) and the draft stays pending for the actual text send. Gate: `npm run manual_send_draft_guard:eval`.
+
+## Photo Vision Identification (2026-06-11, phase 2)
+- `describeVehicleImageWithLLM` (llmDraft): vision parse of customer-shared bike photos via the stored MMS file (DATA_DIR/uploads mapping, base64, strict schema: is_motorcycle/make/model_family/color/distinctive_features/confidence). Identifies model FAMILY only, never year/trim.
+- `buildPhotoShareReplyWithVision` (customerPhotoShare) is the single reply builder at all three photo-share convergence points: nearest-inbound-image resolution (30-minute trust window around the anchor turn), vision describe, family match against the live inventory feed, reply with up to 2 real units (year/color/price when listed). Confidence-gated (`VEHICLE_IMAGE_VISION_CONFIDENCE_MIN`, default 0.7) — on any miss it falls back to the match-commit reply and the staff todo. Never guess a model to a rider.
+- Staff todo is vision-enriched ("Vision says it looks like X (NN%) — confirm from the image").
+- Kill switch: `LLM_VEHICLE_IMAGE_VISION_ENABLED=0`. Vision runs only inside photo-share routing (rare turns), one call per turn.
