@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { InboxSection } from "./components/InboxSection";
+import PipelineBoard from "./pipeline/PipelineBoard";
 import { TaskInboxSection } from "./components/TaskInboxSection";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
@@ -3044,6 +3045,7 @@ export default function Home() {
   const [view, setView] = useState<"inbox" | "campaigns" | "archive">("inbox");
   const [section, setSection] = useState<
     | "inbox"
+    | "pipeline"
     | "todos"
     | "questions"
     | "suppressions"
@@ -7170,6 +7172,7 @@ export default function Home() {
       params.has("section") || params.has("convId") || params.has("leadKey") || params.has("action");
     const allowedSections = new Set([
       "inbox",
+      "pipeline",
       "todos",
       "questions",
       "suppressions",
@@ -7952,6 +7955,8 @@ export default function Home() {
                 ? "MDF Assistant"
               : section === "kpi"
                 ? "KPI Overview"
+              : section === "pipeline"
+                ? "Pipeline"
               : section === "calendar"
                 ? "Calendar"
                 : section === "settings"
@@ -8059,6 +8064,7 @@ export default function Home() {
   function goToSection(
     next:
       | "inbox"
+      | "pipeline"
       | "todos"
       | "questions"
       | "suppressions"
@@ -8081,7 +8087,8 @@ export default function Home() {
       target === "suppressions" ||
       target === "campaigns" ||
       target === "mdf" ||
-      target === "kpi"
+      target === "kpi" ||
+      target === "pipeline"
     ) {
       setMobilePanel("detail");
     } else {
@@ -13320,9 +13327,13 @@ export default function Home() {
           </button>
         ) : null}
         {!isDepartmentUser ? (
-          <a className={sideNavButtonClass(false)} title="Pipeline" href="/pipeline">
+          <button
+            className={sideNavButtonClass(section === "pipeline")}
+            title="Pipeline"
+            onClick={() => goToSection("pipeline")}
+          >
             <SideNavIcon name="pipeline" />
-          </a>
+          </button>
         ) : null}
         {!isDepartmentUser ? (
           <button
@@ -13817,6 +13828,15 @@ export default function Home() {
               <div className="mt-2">The assistant can prepare a draft, but final MDF submission should stay human-approved.</div>
             </div>
           </div>
+        ) : section === "pipeline" ? (
+          <PipelineBoard
+            embedded
+            onOpenConversation={convId => {
+              setSection("inbox");
+              setSelectedId(convId);
+              setMobilePanel("detail");
+            }}
+          />
         ) : section === "kpi" ? (
           <div className="mt-4 space-y-3">
             <div className="text-xs text-gray-600">Date range</div>
@@ -16455,6 +16475,15 @@ export default function Home() {
               </section>
             </div>
           </div>
+        ) : section === "pipeline" ? (
+          <PipelineBoard
+            embedded
+            onOpenConversation={convId => {
+              setSection("inbox");
+              setSelectedId(convId);
+              setMobilePanel("detail");
+            }}
+          />
         ) : section === "kpi" ? (
           <div className="space-y-5">
             <div className="flex items-center justify-between">
