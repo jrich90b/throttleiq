@@ -13829,14 +13829,7 @@ export default function Home() {
             </div>
           </div>
         ) : section === "pipeline" ? (
-          <PipelineBoard
-            embedded
-            onOpenConversation={convId => {
-              setSection("inbox");
-              setSelectedId(convId);
-              setMobilePanel("detail");
-            }}
-          />
+          <div className="mt-4 text-xs text-gray-500">Pipeline opens in the main panel.</div>
         ) : section === "kpi" ? (
           <div className="mt-4 space-y-3">
             <div className="text-xs text-gray-600">Date range</div>
