@@ -43998,8 +43998,14 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
   const mime = String(req.file.mimetype ?? "").toLowerCase();
   const isImage = mime.startsWith("image/");
   const isVideo = mime.startsWith("video/");
-  if (!isImage && !isVideo) {
-    return res.status(400).json({ ok: false, error: "only image/video files are allowed" });
+  const isPdf = mime === "application/pdf";
+  if (!isImage && !isVideo && !isPdf) {
+    return res.status(400).json({ ok: false, error: "only image, video, or PDF files are allowed" });
+  }
+  // Twilio MMS delivers PDFs (quotes, spec sheets, OTD breakdowns) but the
+  // total message media budget is ~5MB - oversized PDFs would fail at send.
+  if (isPdf && Number(req.file.size ?? 0) > 4.5 * 1024 * 1024) {
+    return res.status(400).json({ ok: false, error: "PDF too large for text delivery (max 4.5MB)" });
   }
   const maxBytes = 100 * 1024 * 1024;
   if (Number(req.file.size ?? 0) > maxBytes) {
@@ -44035,8 +44041,10 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
               ? ".mp4"
               : outputMime === "video/quicktime"
                 ? ".mov"
-                : "";
-  const ext = extFromMime || extFromOriginal || (isVideo ? ".mp4" : ".jpg");
+                : outputMime === "application/pdf"
+                  ? ".pdf"
+                  : "";
+  const ext = extFromMime || extFromOriginal || (isVideo ? ".mp4" : isPdf ? ".pdf" : ".jpg");
   const safeConv = String(conv.id ?? "conv").replace(/[^a-z0-9_-]/gi, "_").slice(0, 48) || "conv";
   const fileName = `${safeConv}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
   const dir = path.resolve(getDataDir(), "uploads", "messages");
@@ -44051,9 +44059,10 @@ app.post("/conversations/:id/media", upload.single("file"), async (req, res) => 
   const sizeBytes = Number(outputBuffer.length ?? 0);
   const mmsEligible =
     sizeBytes > 0 &&
-    sizeBytes <= mmsEligibleMaxBytes &&
-    ((isImage && mmsDirectImageMimeSupported(outputMime)) ||
-      (isVideo && mmsDirectVideoMimeSupported(outputMime)));
+    ((sizeBytes <= mmsEligibleMaxBytes &&
+      ((isImage && mmsDirectImageMimeSupported(outputMime)) ||
+        (isVideo && mmsDirectVideoMimeSupported(outputMime)))) ||
+      (isPdf && sizeBytes <= 4.5 * 1024 * 1024));
 
   return res.json({
     ok: true,

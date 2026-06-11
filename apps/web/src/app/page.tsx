@@ -6066,8 +6066,14 @@ export default function Home() {
           window.alert(`"${file.name}" is too large (max 100MB).`);
           continue;
         }
-        if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
-          window.alert(`"${file.name}" must be an image or video file.`);
+        const isPdfUploadFile =
+          file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+        if (!(isImageUploadFile(file) || isVideoUploadFile(file) || isPdfUploadFile)) {
+          window.alert(`"${file.name}" must be an image, video, or PDF file.`);
+          continue;
+        }
+        if (isPdfUploadFile && file.size > 4.5 * 1024 * 1024) {
+          window.alert(`"${file.name}" is too large for text delivery (max 4.5MB for PDFs).`);
           continue;
         }
 
@@ -10481,8 +10487,14 @@ export default function Home() {
           window.alert(`"${file.name}" is too large (max 100MB).`);
           continue;
         }
-        if (!(isImageUploadFile(file) || isVideoUploadFile(file))) {
-          window.alert(`"${file.name}" must be an image or video file.`);
+        const isPdfUploadFile =
+          file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+        if (!(isImageUploadFile(file) || isVideoUploadFile(file) || isPdfUploadFile)) {
+          window.alert(`"${file.name}" must be an image, video, or PDF file.`);
+          continue;
+        }
+        if (isPdfUploadFile && file.size > 4.5 * 1024 * 1024) {
+          window.alert(`"${file.name}" is too large for text delivery (max 4.5MB for PDFs).`);
           continue;
         }
 
@@ -22589,7 +22601,7 @@ export default function Home() {
                     <input
                       type="file"
                       multiple
-                      accept="image/*,video/*"
+                      accept="image/*,video/*,application/pdf"
                       className="hidden"
                       onChange={e => handleSmsAttachments(e.target.files)}
                     />
@@ -22915,7 +22927,7 @@ export default function Home() {
                   <input
                     type="file"
                     multiple
-                    accept="image/*,video/*"
+                    accept="image/*,video/*,application/pdf"
                     className="hidden"
                     disabled={composeSending}
                     onChange={e => {
