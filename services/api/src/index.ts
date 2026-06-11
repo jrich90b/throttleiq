@@ -16724,6 +16724,20 @@ function resolveConversationAgentName(conv: any, fallbackName?: string): string 
     const first = lockedNameRaw.split(/\s+/).filter(Boolean)[0] ?? "";
     return normalizeAgentName(first || lockedNameRaw, fallback);
   }
+  // Historic backfill: threads where staff already took over before the
+  // manualSender lock existed (2026-06-11) resolve to the FIRST staff sender
+  // who texted as themselves - same semantics the send-time lock applies.
+  for (const m of conv?.messages ?? []) {
+    if (m?.direction !== "out") continue;
+    const prov = String(m?.provider ?? "");
+    if (prov !== "twilio" && prov !== "sendgrid" && prov !== "human") continue;
+    const actor = String(m?.actorUserName ?? "").trim();
+    if (!actor || /^(our team|sales team|team)$/i.test(actor)) continue;
+    if (/\bthis is alexandra\b/i.test(String(m?.body ?? ""))) continue;
+    if (matchesLeadIdentity(actor)) continue;
+    const first = actor.split(/\s+/).filter(Boolean)[0] ?? "";
+    return normalizeAgentName(first || actor, fallback);
+  }
   const manualTakeover =
     String(conv?.manualSender?.source ?? "").trim().toLowerCase() === "manual_takeover";
   const walkInLead = Boolean(conv?.lead?.walkIn);
@@ -33656,6 +33670,35 @@ app.post("/conversations/:id/reopen", (req, res) => {
   }
   if (conv.followUp?.reason === "post_sale") {
     conv.followUp = undefined;
+  }
+  // Reopening a disposition-archived deal must also undo the closeout residue
+  // (Dave Batka 2026-06-11: reopen alone left followUp paused_indefinite /
+  // customer_sell_on_own and the cadence stopped - a zombie reopen).
+  const dispositionReasons = new Set([
+    "customer_sell_on_own",
+    "customer_keep_current_bike",
+    "customer_stepping_back"
+  ]);
+  if (dispositionReasons.has(String(conv.followUp?.reason ?? ""))) {
+    conv.followUp = undefined;
+  }
+  if (dispositionReasons.has(String(getDialogState(conv) ?? ""))) {
+    setDialogState(conv, "small_talk");
+  }
+  if (
+    conv.followUpCadence &&
+    conv.followUpCadence.status !== "active" &&
+    dispositionReasons.has(String(conv.followUpCadence.stopReason ?? ""))
+  ) {
+    conv.followUpCadence = {
+      ...conv.followUpCadence,
+      status: "active",
+      stopReason: undefined,
+      pausedUntil: undefined,
+      pauseReason: undefined,
+      anchorAt: new Date().toISOString(),
+      nextDueAt: computeFollowUpDueAt(new Date().toISOString(), FOLLOW_UP_DAY_OFFSETS[0], "America/New_York")
+    };
   }
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
