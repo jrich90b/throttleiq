@@ -18363,12 +18363,41 @@ function hasScheduleOfferContext(lastOutboundText: string, dialogState: DialogSt
   );
 }
 
+const SCHEDULE_MONTH_LABELS: Record<string, string> = {
+  jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
+  jul: "July", aug: "August", sep: "September", sept: "September", oct: "October",
+  nov: "November", dec: "December"
+};
+
 function extractScheduleDayLabelFromContext(...texts: string[]): string {
-  const joined = texts.join(" ").toLowerCase();
-  const match = joined.match(
-    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/
-  );
-  const raw = match?.[1] ?? "";
+  // Earlier texts win: a date in the customer's latest turn must beat a
+  // weekday mentioned in our older outbound (Dominik 2026-06-11: "the June
+  // 20th event so it'll be that day" lost to a generic day re-ask).
+  for (const text of texts) {
+    const t = String(text ?? "").toLowerCase();
+    if (!t.trim()) continue;
+    const monthDate = t.match(
+      /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(st|nd|rd|th)?\b/
+    );
+    if (monthDate) {
+      const monthKey = monthDate[1].slice(0, 4) === "sept" ? "sept" : monthDate[1].slice(0, 3);
+      const month = SCHEDULE_MONTH_LABELS[monthKey] ?? monthDate[1];
+      return `${month} ${monthDate[2]}${monthDate[3] ?? ""}`;
+    }
+    const slashDate = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(?:\d{2}|\d{4}))?\b/);
+    if (slashDate) return `${slashDate[1]}/${slashDate[2]}`;
+    const weekday = t.match(
+      /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/
+    );
+    if (weekday) {
+      const label = scheduleWeekdayLabel(weekday[1]);
+      if (label) return label;
+    }
+  }
+  return "";
+}
+
+function scheduleWeekdayLabel(raw: string): string {
   const labels: Record<string, string> = {
     today: "today",
     tomorrow: "tomorrow",
@@ -18393,11 +18422,37 @@ function extractScheduleDayLabelFromContext(...texts: string[]): string {
   return labels[raw] ?? "";
 }
 
-function buildScheduleContextStatusUpdateReply(inboundText: string, lastOutboundText: string): string {
-  const dayLabel = extractScheduleDayLabelFromContext(inboundText, lastOutboundText);
+const SCHEDULE_EVENT_COMMIT_RE = /\b(event|demo days?|open house|bike night|signed up)\b/i;
+const SCHEDULE_DAY_COMMIT_RE =
+  /\b(it'?ll be|that day|that date|i'?ll (?:be|come|stop|swing)|works for me|that works|see you)\b/i;
+
+function buildScheduleContextStatusUpdateReply(
+  inboundText: string,
+  lastOutboundText: string
+): { reply: string; dayLabel: string; dayCommitted: boolean; eventCommitted: boolean } {
+  const inboundDay = extractScheduleDayLabelFromContext(inboundText);
+  const dayLabel = inboundDay || extractScheduleDayLabelFromContext(lastOutboundText);
+  const eventCommitted = !!inboundDay && SCHEDULE_EVENT_COMMIT_RE.test(inboundText);
+  const dayCommitted = eventCommitted || (!!inboundDay && SCHEDULE_DAY_COMMIT_RE.test(inboundText));
+  if (eventCommitted) {
+    return {
+      reply: `Perfect, you're set for ${inboundDay}! Come find us when you get here and we'll get you taken care of. If you want a set time that day, just text me one.`,
+      dayLabel: inboundDay,
+      dayCommitted,
+      eventCommitted
+    };
+  }
+  if (dayCommitted) {
+    return {
+      reply: `Perfect, ${inboundDay} it is. What time works best?`,
+      dayLabel: inboundDay,
+      dayCommitted,
+      eventCommitted
+    };
+  }
   const timeQuestion = dayLabel ? `what time ${dayLabel} works best?` : "what day and time works best?";
   const prefix = /\b(?:sorry|my bad)\b/i.test(inboundText) ? "No worries" : "Sounds good";
-  return `${prefix} — ${timeQuestion}`;
+  return { reply: `${prefix}, ${timeQuestion}`, dayLabel, dayCommitted, eventCommitted };
 }
 
 function buildDealerLocationReply(conv: any, dealerProfile: any): string {
@@ -48033,11 +48088,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     (regenParserScheduleStatusUpdate ||
       (regenInboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
   if (regenScheduleContextStatusUpdate) {
-    const reply = buildScheduleContextStatusUpdateReply(
+    const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       regenLastOutboundForActionText
     );
+    const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");
+    if (statusUpdate.dayCommitted) {
+      addTodo(
+        conv,
+        "note",
+        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${statusUpdate.dayLabel}${
+          statusUpdate.eventCommitted ? " for the event" : ""
+        } - soft appointment, confirm and prep.`,
+        event.providerMessageId,
+        undefined,
+        undefined,
+        "followup"
+      );
+    }
     recordRouteOutcome("regen", "schedule_context_status_update_ack", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -55196,11 +55265,25 @@ if (authToken && signature) {
     (inboundParserScheduleStatusUpdate ||
       (inboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
   if (scheduleContextStatusUpdate) {
-    const reply = buildScheduleContextStatusUpdateReply(
+    const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       lastOutboundText
     );
+    const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");
+    if (statusUpdate.dayCommitted) {
+      addTodo(
+        conv,
+        "note",
+        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${statusUpdate.dayLabel}${
+          statusUpdate.eventCommitted ? " for the event" : ""
+        } - soft appointment, confirm and prep.`,
+        event.providerMessageId,
+        undefined,
+        undefined,
+        "followup"
+      );
+    }
     logRouteOutcome("schedule_context_status_update_ack", {
       turnPrimaryIntent: routeExecutionIntent,
       parserAction: inboundReplyActionParse?.action ?? null,

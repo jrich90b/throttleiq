@@ -1452,3 +1452,9 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 - `hasActiveDealCloseoutBlockers` in `transitionSafety.ts`: disposition closeouts are vetoed — regardless of parser confidence — when the conversation has an open credit/approval todo, a credit-application ADF within 14 days, or a finance-pending appointment outcome within 30 days. All three closeout gates pass `openTodos`.
 - Disposition parser rule + EXAMPLE R: handling parts/accessories/pipes/installs/service themselves is NOT a disposition (return none — the deal is active, the customer is reducing work scope).
 - Gate: `npm run disposition_close_guard:eval`. Staff remediation for this class: Reopen in the dashboard.
+
+## Schedule Day Capture + Soft Appointments (2026-06-11)
+- Production fixture: Dominik Roehre +17162007915 — "I signed up online for the June 20th event so it'll be that day" was answered with "What day and time works best?" The day extractor only knew weekday words; calendar dates were invisible.
+- `extractScheduleDayLabelFromContext` now recognizes month-name dates ("June 20th"), numeric dates ("6/20"), and weekdays — scanning the customer's latest turn BEFORE older outbound context so their date always wins.
+- `buildScheduleContextStatusUpdateReply` returns commitment metadata: event-day commitments ("signed up for the … event") get a confirmation ("Perfect, you're set for June 20th! Come find us…"), day commitments get "Perfect, {day} it is. What time works best?", and only truly day-less turns get the generic ask. Both live and regen paths create a **soft-appointment staff todo** ("plans to come in {day} — soft appointment, confirm and prep") when a day is committed.
+- Gate: `npm run schedule_day_capture:eval` (Dominik's literal turn pinned).
