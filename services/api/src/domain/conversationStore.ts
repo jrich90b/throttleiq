@@ -695,7 +695,7 @@ export type Conversation = {
     userId?: string;
     userName?: string;
     activatedAt: string;
-    source?: "manual_takeover";
+    source?: "manual_takeover" | "manual_send";
   };
   lead?: LeadProfile;
   originalLead?: LeadProfile;
@@ -1973,6 +1973,7 @@ export function appendOutbound(
   }
   if (salesToneProvider) {
     tonedBody = applyDeterministicToneOverrides(tonedBody);
+    tonedBody = limitEmDashStyle(tonedBody);
   }
   if (!isEmailThread) {
     tonedBody = formatSmsLayout(tonedBody);
@@ -2014,11 +2015,46 @@ export function appendOutbound(
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
     trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
     trackTradePayoffFromOutbound(conv, stateSignalBody);
+    lockPersonaToStaffSender(conv, actor, tonedBody);
   }
   consumeAgentContextIfNeeded(conv, "outbound_sent");
   conv.updatedAt = nowIso();
   scheduleSave();
   return message;
+}
+
+// Voice charter: staff texts use ~0 em-dashes; LLM drafts averaged 0.6/message.
+// Keep at most the first em-dash and soften the rest into commas/periods.
+export function limitEmDashStyle(text: string): string {
+  const raw = String(text ?? "");
+  const first = raw.search(/\s*—\s*/);
+  if (first < 0) return raw;
+  const head = raw.slice(0, first + raw.slice(first).match(/^\s*—\s*/)![0].length);
+  const tail = raw
+    .slice(head.length)
+    .replace(/\s*—\s*/g, ", ")
+    .replace(/,\s*([.!?])/g, "$1");
+  return head + tail;
+}
+
+// Voice charter: once a staff member sends as themselves, the thread's voice is
+// theirs — later AI drafts must not silently reintroduce the store persona.
+// Sending an unedited persona-signed draft does not count as a takeover.
+export function lockPersonaToStaffSender(
+  conv: Conversation,
+  actor: { userId?: string | null; userName?: string | null } | undefined,
+  sentBody: string
+) {
+  const userName = String(actor?.userName ?? "").trim();
+  if (!userName) return;
+  if (conv.manualSender?.userName || conv.manualSender?.userId) return;
+  if (/\bthis is alexandra\b/i.test(String(sentBody ?? ""))) return;
+  conv.manualSender = {
+    userId: String(actor?.userId ?? "").trim() || undefined,
+    userName,
+    activatedAt: nowIso(),
+    source: "manual_send"
+  };
 }
 
 export function setAgentContext(
@@ -2279,6 +2315,7 @@ export function finalizeDraftAsSent(
   if (provider === "twilio" || provider === "human" || provider === "sendgrid") {
     trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
     trackTradePayoffFromOutbound(conv, stateSignalBody);
+    lockPersonaToStaffSender(conv, actor, tonedFinalBody);
   }
 
   conv.updatedAt = new Date().toISOString();

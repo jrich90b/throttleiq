@@ -1399,3 +1399,12 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 - Latent bug fixed by the gate: two `FOLLOW_UP_VARIANTS_WITH_SLOTS` templates never matched `draftHasSchedulingPrompt`, so sending them skipped `registerScheduleInviteSent`. They now carry stop-by/which-works-best wording.
 - `the the` doubled-article fix: test-ride availability checkbacks strip a leading "the" from `formatModelLabelForFollowUp(...)` before interpolating into "the ${modelLabel}".
 - Banned phrases also removed from deterministic reply builders and the llmDraft inventory prompt ("quick walkaround" → "walkaround video"); single em-dash one-liners ("Sounds good — ...") are charter-compliant (max 1) and were left alone.
+
+## Persona Continuity Lock (2026-06-11)
+- Voice charter rule, enforced in `conversationStore.ts`: when a staff member sends a customer-facing outbound as themselves (actor-tagged, via `appendOutbound` or `finalizeDraftAsSent`), `conv.manualSender` is set with `source: "manual_send"` — `resolveConversationAgentName(...)` then resolves all later AI drafts to that staff member's first name, so Alexandra never silently reappears after a staff takeover (95 production threads had silent persona switches).
+- Sending an **unedited Alexandra-signed draft** does not lock the persona (the customer just read Alexandra; the thread voice has not changed). An existing `manualSender` is never overwritten by a later sender.
+- Eval: `npm run persona_continuity:eval` (behavior-level through the store, plus source pins on the agent-name lock branch).
+
+## Outbound Em-Dash Diet (2026-06-11)
+- `limitEmDashStyle(...)` in `conversationStore.ts` runs in the deterministic-tone stage of `appendOutbound` (after `stateSignalBody` capture, so the state safety lock holds): the first em-dash survives, the rest become commas. Staff corpus has ~6 em-dashes across 388 texts; LLM drafts averaged 0.6/message.
+- The main draft prompt (`llmDraft.ts` VOICE/STYLE) now carries the charter rules directly: max one em-dash, banned-phrase list, short dealership name after first intro, concrete offers over generic help.
