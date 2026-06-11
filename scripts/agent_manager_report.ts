@@ -207,6 +207,7 @@ function main() {
   const toneDir = process.env.TONE_QUALITY_OUT_DIR || path.join(parsed.reportRoot, "tone_quality");
   const voiceDir = process.env.VOICE_FEEDBACK_OUT_DIR || path.join(parsed.reportRoot, "voice_feedback");
   const outcomeQaDir = process.env.OUTCOME_QA_OUT_DIR || path.join(parsed.reportRoot, "outcome_qa");
+  const voiceCharterDir = process.env.VOICE_CHARTER_OUT_DIR || path.join(parsed.reportRoot, "voice_charter");
   const feedbackLogDir = path.join(parsed.reportRoot, "feedback_loop_logs");
   const opsAnomaliesPath =
     process.env.OPS_ANOMALIES_PATH ||
@@ -219,6 +220,7 @@ function main() {
   const toneSummary = readJson(path.join(toneDir, "tone_quality_summary.json"));
   const voiceSummary = readJson(path.join(voiceDir, "voice_feedback_summary.json"));
   const outcomeQaReport = readJson(path.join(outcomeQaDir, "outcome_qa_report.json"));
+  const voiceCharterSummary = readJson(path.join(voiceCharterDir, "voice_charter_summary.json"));
   const opsAnomaliesRaw = readJson(opsAnomaliesPath);
   const conversationAuditPath =
     latestMatchingFile(feedbackLogDir, name => /^conversation_audit_.*\.json$/i.test(name)) ||
@@ -265,6 +267,12 @@ function main() {
     0,
     num(voiceSummary?.totalVoiceTranscripts) - num(voiceSummary?.withCustomerFacingOutbound)
   );
+  const voiceCharterViolations = num(voiceCharterSummary?.summary?.violationCount);
+  const voiceCharterOutbound = num(voiceCharterSummary?.summary?.outboundCount);
+  const voiceCharterRate = voiceCharterSummary?.summary?.violationRate ?? null;
+  const voiceCharterTopChecks = Array.isArray(voiceCharterSummary?.summary?.byCheck)
+    ? voiceCharterSummary.summary.byCheck.slice(0, 6)
+    : [];
   const outcomeQaFindingCount = num(outcomeQaReport?.summary?.findingCount);
   const outcomeQaParserSeedCount = num(outcomeQaReport?.summary?.parserSeedCandidateCount);
   const outcomeQaParserRecommendationSamples = Array.isArray(outcomeQaReport?.parserSeedCandidates)
@@ -465,6 +473,25 @@ function main() {
     });
   }
 
+  if (voiceCharterViolations > 0) {
+    pushTask(tasks, {
+      id: "voice-charter-violations",
+      priority:
+        voiceCharterViolations >= 20 || (typeof voiceCharterRate === "number" && voiceCharterRate >= 25)
+          ? "P1"
+          : "P2",
+      area: "tone",
+      title: "Review outbound messages violating the voice charter",
+      signal: `${voiceCharterViolations} violation(s) across ${voiceCharterOutbound} outbound message(s)`,
+      recommendedAction:
+        "Fix the template/prompt source for each repeated check per the AGENTS.md Agent Voice Charter; promote deterministic overrides or fixtures for repeat offenders instead of editing single messages.",
+      evidence: {
+        voiceCharterDir,
+        byCheck: voiceCharterTopChecks
+      }
+    });
+  }
+
   if (noResponseCount > 0) {
     pushTask(tasks, {
       id: "routing-no-response-outcomes",
@@ -573,6 +600,7 @@ function main() {
       toneDir,
       voiceDir,
       outcomeQaDir,
+      voiceCharterDir,
       opsAnomaliesPath,
       opsAnomaliesExists,
       conversationAuditPath,
@@ -599,6 +627,10 @@ function main() {
       promotedDeterministicRules: promotedRules,
       promotedManualExamples,
       voiceTranscriptsWithoutCustomerOutbound: voiceWithoutOutbound,
+      voiceCharterViolations,
+      voiceCharterViolationRate: voiceCharterRate,
+      voiceCharterOutboundChecked: voiceCharterOutbound,
+      voiceCharterTopChecks,
       outcomeQaFindings: outcomeQaFindingCount,
       outcomeQaParserSeedCandidates: outcomeQaParserSeedCount,
       outcomeQaP1Findings: outcomeQaP1Count,

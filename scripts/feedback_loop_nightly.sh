@@ -274,6 +274,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=tone_quality_eval"
   TONE_QUALITY_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run tone_quality:eval
 
+  echo "[feedback-loop] step=voice_charter_audit"
+  VOICE_CHARTER_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run voice_charter:audit || true
+
   WATCHDOG_SINCE_MIN=$((AUDIT_SINCE_HOURS * 60))
   echo "[feedback-loop] step=route_watchdog -> $WATCHDOG_JSON"
   npm run route_watchdog:run -- \
