@@ -6273,7 +6273,11 @@ output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action"
     `EXAMPLE N
 inbound: "Ok keep me posted once the trade gets here"
 history: "out: This one is not in yet, but we should have it after the trade comes in."
-output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for an update once the incoming trade arrives","reason":"The turn is tied to a known pending trade arrival, not a generic inventory watch.","confidence":0.96}`
+output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks for an update once the incoming trade arrives","reason":"The turn is tied to a known pending trade arrival, not a generic inventory watch.","confidence":0.96}`,
+    `EXAMPLE O
+inbound: "Interested in the 2023 120th Anniversary Road Glide Special. Wants us to call him when we get it through service (Step 2)"
+history: "out: Thanks for stopping in today."
+output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants a callback once the bike is through service","reason":"The latest turn contains an explicit callback/status request, so callback routing owns the turn instead of a generic walk-in recap.","confidence":0.97}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6292,6 +6296,7 @@ output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action"
     "- If the same turn asks where this/that/the bike is located plus pricing or cost, choose dealer_location_question and leave pricing as follow-up context.",
     "- Do not classify email/contact-address questions as dealer_location_question.",
     "- Do not classify 'returning your call' as explicit_callback_request unless the customer asks for another call.",
+    "- Third-person CRM/ADF note phrasing like 'wants us to call him when it gets through service' still counts as explicit_callback_request.",
     "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
     "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; phrases like 'hit me up if one comes in' count as explicit watch acknowledgement.",
     "- Choose pending_incoming_inventory_acknowledgement before inventory_watch_acknowledgement when the context is a known trade/pending unit coming in.",

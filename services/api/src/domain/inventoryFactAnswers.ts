@@ -77,6 +77,7 @@ function scoreVehicleForLookup(vehicle: any): number {
 
 function pickBestVehicleForLookup(conv: any): any {
   const candidates = [
+    conv?.inventoryContext,
     conv?.latestLead?.vehicle,
     conv?.lead?.vehicle,
     conv?.originalLead?.vehicle
@@ -88,7 +89,30 @@ function pickBestVehicleForLookup(conv: any): any {
 
 function scopeConversationToLead(conv: any, lead: any): any {
   if (!lead) return conv;
-  return { ...conv, lead, latestLead: lead };
+  const vehicle = lead?.vehicle ?? null;
+  const nextInventoryContext =
+    vehicle && scoreVehicleForLookup(vehicle) > 0
+      ? {
+          ...(String(vehicle.stockId ?? vehicle.stock ?? "").trim()
+            ? { stockId: String(vehicle.stockId ?? vehicle.stock).trim() }
+            : {}),
+          ...(String(vehicle.vin ?? "").trim() ? { vin: String(vehicle.vin).trim() } : {}),
+          ...(String(vehicle.year ?? "").trim() ? { year: String(vehicle.year).trim() } : {}),
+          ...(normalizeModelForMatch(vehicle.model ?? vehicle.description)
+            ? { model: normalizeModelForMatch(vehicle.model ?? vehicle.description) }
+            : {}),
+          ...(String(vehicle.color ?? "").trim() ? { color: String(vehicle.color).trim() } : {}),
+          ...(normalizeCondition(vehicle.condition)
+            ? { condition: normalizeCondition(vehicle.condition) }
+            : {})
+        }
+      : conv?.inventoryContext;
+  return {
+    ...conv,
+    lead,
+    latestLead: lead,
+    ...(nextInventoryContext ? { inventoryContext: nextInventoryContext } : {})
+  };
 }
 
 function formatUnitLabel(conv: any, item?: InventoryFeedItem | null, sourceVehicle?: any): string {

@@ -134,5 +134,38 @@ assert.ok(
     apiIndex.includes("inventory_unit_clarification_reply"),
   "Twilio inventory clarification turns should route through a shared clarification reply path for suggest/autopilot parity"
 );
+assert.ok(
+  adfRoute.includes("if (followUpAdfVehicleFactDecision && !creditLeadContextBlocksVehicleInfo)") &&
+    adfRoute.includes("const walkInCallbackContextText = [walkInCleanedComment, effectiveInquiry, event.body]") &&
+    adfRoute.includes("const trafficLogWalkInCallbackContainmentText = ["),
+  "ADF follow-up vehicle-fact replies should stay behind finance context, and walk-in callback detection should inspect combined inquiry text with an early containment guard"
+);
+assert.ok(
+  adfRoute.includes("traffic_log_pro_walkin_callback_request") &&
+    adfRoute.includes("walkInParserExplicitCallbackRequest") &&
+    adfRoute.includes("hasWalkInCallbackStatusRequestText") &&
+    adfRoute.includes("we\\s+get\\s+(?:it|the bike|the unit)") &&
+    adfRoute.includes('note: "walk_in_callback_requested"'),
+  "Walk-in ADF callback/status notes should route through parser-owned callback handling instead of the generic recap draft"
+);
+assert.ok(
+  apiIndex.includes('regenParserExplicitCallbackRequest') &&
+    apiIndex.includes("const regenWalkInCallbackText = [") &&
+    apiIndex.includes('hasWalkInCallbackStatusRequestText') &&
+    apiIndex.includes("we\\s+get\\s+(?:it|the bike|the unit)") &&
+    apiIndex.includes('walk_in_callback_requested') &&
+    apiIndex.includes('event.provider === "sendgrid_adf"'),
+  "Regenerate should preserve no-draft callback handling for walk-in ADF callback/status notes"
+);
+assert.ok(
+  adfRoute.includes("creditLeadContextBlocksVehicleInfo") &&
+    adfRoute.includes("!creditLeadContextBlocksVehicleInfo"),
+  "ADF vehicle-info fallback should stay behind active finance/credit-app context"
+);
+assert.ok(
+  apiIndex.includes("const latestInboundCreditContext =") &&
+    apiIndex.includes("if (mentionedUser && !latestInboundCreditContext)"),
+  "Credit-app regenerate flow should block salesperson-mention fact replies when finance handoff state is active"
+);
 
 console.log("PASS inbound reply QA regression checks");

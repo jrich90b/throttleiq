@@ -304,6 +304,7 @@ import {
 } from "./domain/internationalShippingPolicy.js";
 import {
   buildWebTextWidgetSalesBuyTradeDraft,
+  buildWebTextWidgetRequestedVehicleDraft,
   buildWebTextWidgetInboundBody,
   extractWebTextWidgetCustomerMessage,
   extractWebTextWidgetSalesVehicleContext,
@@ -4566,7 +4567,7 @@ function applyWebTextWidgetSalesVehicleContext(
   if (context.requestedVehicle) {
     const requested = context.requestedVehicle;
     conv.lead.vehicle = {
-      ...(conv.lead.vehicle ?? {}),
+      ...(conv.lead.vehicle?.make ? { make: conv.lead.vehicle.make } : {}),
       ...(requested.year ? { year: requested.year } : {}),
       ...(requested.model
         ? {
@@ -4576,6 +4577,13 @@ function applyWebTextWidgetSalesVehicleContext(
         : {}),
       ...(requested.color ? { color: requested.color } : {}),
       ...(requested.condition ? { condition: requested.condition } : {})
+    };
+    conv.inventoryContext = {
+      ...(requested.year ? { year: requested.year } : {}),
+      ...(requested.model ? { model: requested.model } : {}),
+      ...(requested.color ? { color: requested.color } : {}),
+      ...(requested.condition ? { condition: requested.condition } : {}),
+      updatedAt: new Date().toISOString()
     };
   }
   if (context.tradeVehicle) {
@@ -4596,6 +4604,10 @@ function applyWebTextWidgetSalesVehicleContext(
   if (context.sellOption) {
     conv.lead.sellOption = context.sellOption;
     conv.lead.sellOptionUpdatedAt = new Date().toISOString();
+  } else if (context.requestedVehicle && !context.tradeVehicle) {
+    delete conv.lead.sellOption;
+    delete conv.lead.sellOptionUpdatedAt;
+    delete conv.lead.tradeVehicle;
   }
 }
 
@@ -4685,7 +4697,38 @@ async function resolveWebTextWidgetSalesVehicleContext(
           })
         );
   const parsedContext = webTextWidgetParserResultToContext(parsed);
-  return parsedContext ?? extractWebTextWidgetSalesVehicleContext(message);
+  const extractedContext = extractWebTextWidgetSalesVehicleContext(message);
+  if (!parsedContext) return extractedContext;
+  if (!extractedContext) return parsedContext;
+  const customerText = extractWebTextWidgetCustomerMessage(message);
+  const hasExplicitTradeSignal =
+    !!extractedContext.tradeVehicle ||
+    !!extractedContext.sellOption ||
+    /\btrade\b|\bsell\s+(?:my|the|our)\b|\bcash\b|\bmake a deal\b|\bapprais/i.test(customerText);
+  const mergedContext: WebTextWidgetSalesVehicleContext = {
+    ...(extractedContext.requestedVehicle
+      ? { requestedVehicle: extractedContext.requestedVehicle }
+      : parsedContext.requestedVehicle
+        ? { requestedVehicle: parsedContext.requestedVehicle }
+        : {}),
+    ...(hasExplicitTradeSignal
+      ? extractedContext.tradeVehicle
+        ? { tradeVehicle: extractedContext.tradeVehicle }
+        : parsedContext.tradeVehicle
+          ? { tradeVehicle: parsedContext.tradeVehicle }
+          : {}
+      : {}),
+    ...(hasExplicitTradeSignal
+      ? extractedContext.sellOption
+        ? { sellOption: extractedContext.sellOption }
+        : parsedContext.sellOption
+          ? { sellOption: parsedContext.sellOption }
+          : {}
+      : extractedContext.sellOption
+        ? { sellOption: extractedContext.sellOption }
+        : {})
+  };
+  return Object.keys(mergedContext).length ? mergedContext : null;
 }
 
 function webTextWidgetEmbedScript(): string {
@@ -4796,11 +4839,10 @@ app.post("/public/widget/text-us", async (req, res) => {
       providerMessageId: `web_widget_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       receivedAt: now
     };
-    const salesVehicleContext =
-      department === "sales" ? await resolveWebTextWidgetSalesVehicleContext(message, conv, "live") : null;
-    applyWebTextWidgetSalesVehicleContext(conv, salesVehicleContext);
     appendInbound(conv, event);
     if (department === "sales") {
+      const salesVehicleContext = await resolveWebTextWidgetSalesVehicleContext(event.body ?? "", conv, "live");
+      applyWebTextWidgetSalesVehicleContext(conv, salesVehicleContext);
       const dealerProfile = await getDealerProfileHot();
       const widgetTurn: InboundMessageEvent = {
         ...event,
@@ -4844,10 +4886,17 @@ app.post("/public/widget/text-us", async (req, res) => {
         firstName,
         context: salesVehicleContext
       });
+      const requestedVehicleDraft = buildWebTextWidgetRequestedVehicleDraft({
+        firstName,
+        message: event.body ?? "",
+        context: salesVehicleContext
+      });
       const draftText = String(
-        buyTradeDraft || (result.handoff?.required ? result.handoff.ack : result.draft ?? "")
+        buyTradeDraft ||
+          requestedVehicleDraft ||
+          (result.handoff?.required ? result.handoff.ack : result.draft ?? "")
       ).trim();
-      if ((result.shouldRespond || buyTradeDraft) && draftText) {
+      if ((result.shouldRespond || buyTradeDraft || requestedVehicleDraft) && draftText) {
         const evaluateWidgetSalesDraftInvariant = (
           text: string,
           invariantHints?: CustomerReplyDraftInvariantHints
@@ -7122,6 +7171,39 @@ function isAcceptedInboundReplyAction(
   action: Exclude<InboundReplyActionParse["action"], "none">
 ): boolean {
   return isInboundReplyActionParserAccepted(parsed) && parsed?.action === action;
+}
+
+function buildWalkInCallbackTodoSummary(noteText: string, modelLabel?: string | null): string {
+  const normalizedNote = String(noteText ?? "").replace(/\s+/g, " ").trim();
+  const unitLabel = String(modelLabel ?? "").trim();
+  const throughService =
+    /\b(through service|out of service|gets? (?:through|out of) service|get it through service|ready after service)\b/i.test(
+      normalizedNote
+    );
+  if (throughService && unitLabel) {
+    return `Call requested when ${unitLabel} gets through service.`;
+  }
+  if (throughService) {
+    return "Call requested when the unit gets through service.";
+  }
+  if (normalizedNote) {
+    return `Call requested. Follow-up: ${normalizedNote.slice(0, 180)}${normalizedNote.length > 180 ? "..." : ""}`;
+  }
+  return "Call requested.";
+}
+
+function hasWalkInCallbackStatusRequestText(text?: string | null): boolean {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return false;
+  const callbackCue =
+    /\b(wants?\s+(?:us|you|someone|sales|the team)\s+to\s+call|call\s+(?:him|her|them|customer)|reach\s+out|follow\s+up)\b/.test(
+      normalized
+    );
+  const whenReadyCue =
+    /\b(when\s+(?:we\s+get\s+(?:it|the bike|the unit)|we|it|the bike|the unit)\s+(?:get|gets|is)?\s*(?:through\s+service|out of service|ready)|through service)\b/.test(
+      normalized
+    );
+  return callbackCue && whenReadyCue;
 }
 
 function canUseInboundReplyActionFallback(args: {
@@ -36859,6 +36941,61 @@ function extractInquiryFromAdf(body?: string): string | undefined {
   return body.slice(idx + "inquiry:".length).trim() || undefined;
 }
 
+function scopeConversationToAdfBodyLead(conv: any, body?: string | null, receivedAt?: string | null): any {
+  const text = String(body ?? "");
+  if (!/web lead\s*\(adf\)/i.test(text)) return conv;
+  const stockId = (text.match(/^\s*Stock:\s*(.+)$/im)?.[1] ?? "").trim();
+  const vin = (text.match(/^\s*VIN:\s*(.+)$/im)?.[1] ?? "").trim();
+  const year = (text.match(/^\s*Year:\s*(.+)$/im)?.[1] ?? "").trim();
+  const vehicleLine = (text.match(/^\s*Vehicle:\s*(.+)$/im)?.[1] ?? "").trim();
+  const model = normalizeDisplayCase(vehicleLine);
+  if (!stockId && !vin && !year && !model) return conv;
+  const cutoffMs = Number.isFinite(new Date(String(receivedAt ?? "")).getTime())
+    ? new Date(String(receivedAt ?? "")).getTime()
+    : null;
+  const nextVehicle = {
+    ...(conv?.lead?.vehicle?.make ? { make: conv.lead.vehicle.make } : {}),
+    ...(stockId ? { stockId } : {}),
+    ...(vin ? { vin } : {}),
+    ...(year ? { year } : {}),
+    ...(model ? { model, description: model } : {})
+  };
+  return {
+    ...conv,
+    ...(cutoffMs != null
+      ? {
+          messages: Array.isArray(conv?.messages)
+            ? conv.messages.filter((message: any) => {
+                const atMs = new Date(String(message?.at ?? "")).getTime();
+                return !Number.isFinite(atMs) || atMs <= cutoffMs;
+              })
+            : conv?.messages
+        }
+      : {}),
+    lead: {
+      ...(conv?.lead ?? {}),
+      vehicle: {
+        ...(conv?.lead?.vehicle ?? {}),
+        ...nextVehicle
+      }
+    },
+    latestLead: {
+      ...(conv?.latestLead ?? {}),
+      vehicle: {
+        ...(conv?.latestLead?.vehicle ?? {}),
+        ...nextVehicle
+      }
+    },
+    inventoryContext: {
+      ...(conv?.inventoryContext ?? {}),
+      ...(stockId ? { stockId } : {}),
+      ...(vin ? { vin } : {}),
+      ...(year ? { year } : {}),
+      ...(model ? { model } : {})
+    }
+  };
+}
+
 function normalizeContactText(value?: string | null): string {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -45212,7 +45349,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     firstName: conv.lead?.firstName,
     context: regenWebTextWidgetSalesContext
   });
-  if (regenWebTextWidgetBuyTradeDraft) {
+  const regenWebTextWidgetRequestedVehicleDraft = buildWebTextWidgetRequestedVehicleDraft({
+    firstName: conv.lead?.firstName,
+    message: event.body ?? "",
+    context: regenWebTextWidgetSalesContext
+  });
+  const regenWebTextWidgetSalesDraft =
+    regenWebTextWidgetBuyTradeDraft || regenWebTextWidgetRequestedVehicleDraft;
+  if (regenWebTextWidgetSalesDraft) {
     applyWebTextWidgetSalesVehicleContext(conv, regenWebTextWidgetSalesContext);
     setConversationClassification(conv, webTextWidgetClassification("sales") as any);
     setConversationSoftTag(conv, "web_text_widget_department", {
@@ -45235,7 +45379,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     );
     setFollowUpMode(conv, "manual_handoff", "web_text_widget_sales");
     stopFollowUpCadence(conv, "manual_handoff");
-    applyWebTextWidgetSalesDialogState(conv, regenWebTextWidgetSalesContext, "TRADE_IN");
+    applyWebTextWidgetSalesDialogState(
+      conv,
+      regenWebTextWidgetSalesContext,
+      regenWebTextWidgetBuyTradeDraft ? "TRADE_IN" : "ASK_PRICING"
+    );
     recordRouteOutcome("regen", "web_text_widget_sales_buy_trade_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey,
@@ -45244,9 +45392,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       sellOption: regenWebTextWidgetSalesContext?.sellOption ?? null
     });
     if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(regenWebTextWidgetBuyTradeDraft);
+      return respondWithEmailRegeneratedDraft(regenWebTextWidgetSalesDraft);
     }
-    return respondWithSmsRegeneratedDraft(regenWebTextWidgetBuyTradeDraft, undefined, {
+    return respondWithSmsRegeneratedDraft(regenWebTextWidgetSalesDraft, undefined, {
       turnAvailabilityIntent: true,
       turnFinanceIntent: true,
       turnSchedulingIntent: false
@@ -46428,6 +46576,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   }
   if (event.provider === "sendgrid_adf" && hasVehicleFactQuestionParserHint(event.body ?? "")) {
+    const scopedAdfConv = scopeConversationToAdfBodyLead(conv, event.body ?? "", event.receivedAt);
     const adfVehicleFactParse =
       process.env.LLM_ENABLED === "1" &&
       process.env.LLM_VEHICLE_FACT_PARSER_ENABLED !== "0" &&
@@ -46435,8 +46584,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         ? await safeLlmParse("regen_adf_vehicle_fact_question_parser", () =>
             parseVehicleFactQuestionWithLLM({
               text: event.body ?? "",
-              history: buildHistory(conv, 12),
-              lead: conv.lead
+              history: buildHistory(scopedAdfConv, 12),
+              lead: scopedAdfConv.lead
             })
           )
         : null;
@@ -46452,10 +46601,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         : null);
     if (adfVehicleFactDecision) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
-      const firstName = normalizeDisplayCase(conv.lead?.firstName);
-      const year = extractVehicleYearFromContext(conv);
-      const model = extractVehicleModelFromContext(conv);
+      const agentName = resolveConversationAgentName(scopedAdfConv, dealerProfile?.agentName ?? "Alexandra");
+      const firstName = normalizeDisplayCase(scopedAdfConv.lead?.firstName);
+      const year = extractVehicleYearFromContext(scopedAdfConv);
+      const model = extractVehicleModelFromContext(scopedAdfConv);
       const bikeLabel = [year, model && model !== "that bike" ? model : ""]
         .filter(Boolean)
         .join(" ")
@@ -46464,7 +46613,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const withPrefix = (body: string) =>
         `${greeting}This is ${agentName} at ${dealerName}. ${body}`.trim();
       const factReply = await applyVehicleFactQuestionDecision({
-        conv,
+        conv: scopedAdfConv,
         text: event.body ?? "",
         providerMessageId: event.providerMessageId,
         receivedAt: event.receivedAt,
@@ -47666,6 +47815,45 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: false
     });
   }
+  const regenWalkInCallbackText = [
+    String(conv.lead?.walkInComment ?? ""),
+    String(conv.lead?.inquiry ?? ""),
+    String(event.body ?? "")
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const regenWalkInCallbackLead =
+    inferWalkIn(conv) || inferDisplayWalkIn(conv) || String(conv.dialogState?.name ?? "") === "walk_in_active";
+  if (
+    event.provider === "sendgrid_adf" &&
+    regenWalkInCallbackLead &&
+    (regenParserExplicitCallbackRequest || hasWalkInCallbackStatusRequestText(regenWalkInCallbackText))
+  ) {
+    const walkInCallbackModelLabel = formatModelLabel(
+      conv.lead?.vehicle?.year ? String(conv.lead.vehicle.year) : null,
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null
+    );
+    setConversationClassification(conv, {
+      bucket: "callback_request",
+      cta: "callback",
+      channel: "task",
+      ruleName: "traffic_log_pro_walkin_callback_request"
+    } as any);
+    setDialogState(conv, "callback_requested");
+    addTodo(
+      conv,
+      "call",
+      buildWalkInCallbackTodoSummary(regenWalkInCallbackText, walkInCallbackModelLabel),
+      event.providerMessageId,
+      conv.leadOwner
+    );
+    setFollowUpMode(conv, "manual_handoff", "callback_requested");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "callback_requested", { setMode: "manual_handoff" });
+    return respondRegenerateSkipped("walk_in_callback_requested");
+  }
   const regenInventoryWatchAcknowledgementCandidate =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -48277,7 +48465,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (!mentionedUser && inboundReferencesOtherPerson(event.body ?? "")) {
     mentionedUser = findUserFromRecentOutbound(conv, usersForMentions);
   }
-  if (mentionedUser) {
+  const latestInboundCreditContext =
+    latestInboundIsCreditAdf ||
+    conv.classification?.bucket === "finance_prequal" ||
+    conv.classification?.cta === "hdfs_coa" ||
+    conv.classification?.cta === "prequalify" ||
+    getDialogState(conv) === "payments_handoff" ||
+    /\bcredit_app|prequal/.test(String(conv.followUp?.reason ?? ""));
+  if (mentionedUser && !latestInboundCreditContext) {
     const firstName =
       getCustomerFacingMentionName(mentionedUser, event.body ?? "");
     if (isPaymentNumbersStatusQuestionText(event.body ?? "")) {

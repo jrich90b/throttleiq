@@ -8,7 +8,24 @@ import type { WarrantyRmaManualDocument } from "./warrantyRmaStore.js";
 import type { WarrantyRmaSubmission } from "./warrantyRmaAssistant.js";
 
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (buffer: Buffer) => Promise<{ text?: string }>;
+type PdfParseFn = (buffer: Buffer) => Promise<{ text?: string }>;
+let cachedPdfParse: PdfParseFn | null | undefined;
+
+function getPdfParse(): PdfParseFn {
+  if (cachedPdfParse !== undefined) {
+    if (!cachedPdfParse) {
+      throw new Error("pdf-parse is not installed; PDF warranty/RMA manual extraction is unavailable in this environment.");
+    }
+    return cachedPdfParse;
+  }
+  try {
+    cachedPdfParse = require("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
+  } catch {
+    cachedPdfParse = null;
+    throw new Error("pdf-parse is not installed; PDF warranty/RMA manual extraction is unavailable in this environment.");
+  }
+  return cachedPdfParse;
+}
 
 const VECTOR_MANIFEST_PATH = process.env.WARRANTY_RMA_VECTOR_MANIFEST_PATH
   ? String(process.env.WARRANTY_RMA_VECTOR_MANIFEST_PATH)
@@ -208,7 +225,7 @@ export async function extractWarrantyRmaManualText(manual: WarrantyRmaManualDocu
     .join("\n");
 
   if (String(manual.mimeType ?? "").toLowerCase() === "application/pdf" || /\.pdf$/i.test(manual.fileName)) {
-    const parsed = await pdfParse(buffer);
+    const parsed = await getPdfParse()(buffer);
     return normalizeText([header, parsed.text ?? ""].filter(Boolean).join("\n\n"));
   }
   if (textFileLike(manual)) {

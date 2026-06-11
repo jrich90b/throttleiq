@@ -80,6 +80,12 @@ export function extractWebTextWidgetCustomerMessage(body: string): string {
   return String(match?.[1] ?? text).trim();
 }
 
+function extractWebTextWidgetPageTitle(body: string): string {
+  const text = String(body ?? "").trim();
+  const match = text.match(/(?:^|\n)Page:\s*([^\n]+)$/i);
+  return String(match?.[1] ?? "").trim();
+}
+
 function titleCaseVehicleModel(raw: string): string {
   const clean = String(raw ?? "")
     .replace(/\bharley(?:-|\s+)?davidson\b/gi, "")
@@ -134,11 +140,33 @@ function parseVehicleFromMatch(match: RegExpMatchArray | null, sourceText: strin
   };
 }
 
+function extractVehicleFromWidgetPageTitle(pageTitle: string): WebTextWidgetVehicle | undefined {
+  const title = String(pageTitle ?? "").trim();
+  if (!title) return undefined;
+  const productTitle = title.split("|")[0]?.trim() ?? title;
+  const match = productTitle.match(
+    /\b((?:19|20)\d{2})\s+Harley(?:-|\s+)?Davidson[®™]?\s+(.+?)(?:\s+(Vivid Black|Black on Black|Black|Blue|Red|White|Gray|Grey|Silver|Green|Orange|Yellow|Purple|Brown))?\s*$/i
+  );
+  if (!match) return undefined;
+  const year = String(match[1] ?? "").trim();
+  const model = titleCaseVehicleModel(String(match[2] ?? ""));
+  const color = titleCaseVehicleModel(String(match[3] ?? ""));
+  if (!model) return undefined;
+  return {
+    ...(year ? { year } : {}),
+    model,
+    ...(color ? { color } : {}),
+    condition: conditionFromText(productTitle, year)
+  };
+}
+
 export function extractWebTextWidgetSalesVehicleContext(message: string): WebTextWidgetSalesVehicleContext | null {
-  const text = extractWebTextWidgetCustomerMessage(message)
+  const fullBody = String(message ?? "");
+  const text = extractWebTextWidgetCustomerMessage(fullBody)
     .replace(/([a-z0-9])\.([A-Z])/g, "$1. $2")
     .replace(/\s+/g, " ")
     .trim();
+  const pageTitle = extractWebTextWidgetPageTitle(fullBody);
   if (!text) return null;
 
   const requestedMatch = text.match(
@@ -148,7 +176,7 @@ export function extractWebTextWidgetSalesVehicleContext(message: string): WebTex
     /\b(?:i\s+have|i'?ve\s+got|my|trade(?:\s+in)?)\s+(?:a|an|the)?\s*(?:brand\s+new|new|used|pre[-\s]?owned)?\s*(?:(?:vivid\s+black|black|blue|red|white|gray|grey|silver|green|orange|yellow|purple|brown)\s+)?((?:19|20)\d{2})\s+([a-z0-9][a-z0-9\s-]{2,80}?)(?=\s+that\b|\s+i\s+(?:can|will|would)\b|[.!?]|$)/i
   );
 
-  const requestedVehicle = parseVehicleFromMatch(requestedMatch, text);
+  const requestedVehicle = parseVehicleFromMatch(requestedMatch, text) ?? extractVehicleFromWidgetPageTitle(pageTitle);
   const tradeVehicle = parseVehicleFromMatch(tradeMatch, text);
   if (tradeVehicle) {
     const color = colorFromSalesWidgetText(text);
@@ -185,4 +213,34 @@ export function buildWebTextWidgetSalesBuyTradeDraft(args: {
     `I can help with the ${requested} and take a look at your ${trade} trade. ` +
     "Send over the VIN and photos when you can, and I'll have the team confirm the bike details and trade options."
   );
+}
+
+function widgetMessageHasPriceOrAvailabilityIntent(message: string): {
+  price: boolean;
+  availability: boolean;
+} {
+  const text = extractWebTextWidgetCustomerMessage(message).toLowerCase();
+  return {
+    price: /\b(price|pricing|cost|how much|quote)\b/.test(text),
+    availability: /\b(available|availability|still available|still there|in stock)\b/.test(text)
+  };
+}
+
+export function buildWebTextWidgetRequestedVehicleDraft(args: {
+  firstName?: string | null;
+  message: string;
+  context: WebTextWidgetSalesVehicleContext | null;
+}): string | null {
+  const requested = formatWidgetVehicle(args.context?.requestedVehicle);
+  if (!requested || args.context?.tradeVehicle) return null;
+  const firstName = String(args.firstName ?? "").trim() || "there";
+  const intent = widgetMessageHasPriceOrAvailabilityIntent(args.message);
+  if (!intent.price && !intent.availability) return null;
+  if (intent.price && intent.availability) {
+    return `Hi ${firstName} - thanks for reaching out. I'll have the team confirm the current price and availability on the ${requested} and send it over.`;
+  }
+  if (intent.availability) {
+    return `Hi ${firstName} - thanks for reaching out. I'll have the team confirm availability on the ${requested} and send it over.`;
+  }
+  return `Hi ${firstName} - thanks for reaching out. I'll have the team confirm the current price on the ${requested} and send it over.`;
 }

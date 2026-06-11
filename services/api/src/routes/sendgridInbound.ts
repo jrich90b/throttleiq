@@ -2324,6 +2324,49 @@ function walkInTailHasOwnAcknowledgement(text?: string | null): boolean {
   return /^(thanks?|thank you|appreciate|great to|great working|good to|nice to|awesome|perfect)\b/i.test(source);
 }
 
+function isAcceptedAdfInboundReplyAction(
+  parsed: { action?: string | null; confidence?: number | null } | null | undefined,
+  action: string
+): boolean {
+  if (!parsed) return false;
+  const confidence = typeof parsed.confidence === "number" ? parsed.confidence : 0;
+  const min = Number(process.env.LLM_INBOUND_REPLY_ACTION_CONFIDENCE_MIN ?? 0.74);
+  return String(parsed.action ?? "").toLowerCase() === String(action).toLowerCase() && confidence >= min;
+}
+
+function buildWalkInCallbackTodoSummary(noteText: string, modelLabel?: string | null): string {
+  const normalizedNote = String(noteText ?? "").replace(/\s+/g, " ").trim();
+  const unitLabel = String(modelLabel ?? "").trim();
+  const throughService =
+    /\b(through service|out of service|gets? (?:through|out of) service|get it through service|ready after service)\b/i.test(
+      normalizedNote
+    );
+  if (throughService && unitLabel) {
+    return `Call requested when ${unitLabel} gets through service.`;
+  }
+  if (throughService) {
+    return "Call requested when the unit gets through service.";
+  }
+  if (normalizedNote) {
+    return `Call requested. Follow-up: ${normalizedNote.slice(0, 180)}${normalizedNote.length > 180 ? "..." : ""}`;
+  }
+  return "Call requested.";
+}
+
+function hasWalkInCallbackStatusRequestText(text?: string | null): boolean {
+  const normalized = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) return false;
+  const callbackCue =
+    /\b(wants?\s+(?:us|you|someone|sales|the team)\s+to\s+call|call\s+(?:him|her|them|customer)|reach\s+out|follow\s+up)\b/.test(
+      normalized
+    );
+  const whenReadyCue =
+    /\b(when\s+(?:we\s+get\s+(?:it|the bike|the unit)|we|it|the bike|the unit)\s+(?:get|gets|is)?\s*(?:through\s+service|out of service|ready)|through service)\b/.test(
+      normalized
+    );
+  return callbackCue && whenReadyCue;
+}
+
 function extractWatchDirectiveModelHint(text?: string | null): string | undefined {
   const segment = extractWatchDirectiveSegment(text);
   if (!segment) return undefined;
@@ -3379,6 +3422,28 @@ function syncInventoryContextToActiveAdfLead(conv: any, lead: any): void {
   const model =
     normalizeVehicleModel(vehicle.model ?? vehicle.description ?? "", vehicle.make ?? null) ??
     normalizeDisplayCase(vehicle.model ?? vehicle.description ?? "");
+  conv.lead = conv.lead ?? {};
+  conv.lead.vehicle = {
+    ...(vehicle.make ? { make: vehicle.make } : {}),
+    ...(String(vehicle.stockId ?? "").trim() ? { stockId: String(vehicle.stockId).trim() } : {}),
+    ...(String(vehicle.vin ?? "").trim() ? { vin: String(vehicle.vin).trim() } : {}),
+    ...(String(vehicle.year ?? "").trim() ? { year: String(vehicle.year).trim() } : {}),
+    ...(model
+      ? {
+          model,
+          description: model
+        }
+      : {}),
+    ...(String(vehicle.color ?? "").trim() ? { color: String(vehicle.color).trim() } : {}),
+    ...(String(vehicle.condition ?? "").trim() ? { condition: String(vehicle.condition).trim() } : {})
+  };
+  if (lead?.tradeVehicle) {
+    conv.lead.tradeVehicle = { ...lead.tradeVehicle };
+  } else {
+    delete conv.lead.tradeVehicle;
+    delete conv.lead.sellOption;
+    delete conv.lead.sellOptionUpdatedAt;
+  }
   const nextContext: Record<string, string> = {
     updatedAt: new Date().toISOString()
   };
@@ -4825,6 +4890,61 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     llmIntent.explicitRequest === true &&
     Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
   const callbackTimeFromParser = String(llmIntent?.callback?.timeText ?? "").trim();
+  const trafficLogWalkInCallbackContainmentText = [
+    effectiveInquiry,
+    lead.comment,
+    lead.inquiry,
+    event.body
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const trafficLogWalkInCallbackContainment =
+    isTrafficLogWalkInLead &&
+    !adfFinanceContextSignal &&
+    (isAcceptedAdfInboundReplyAction(llmInboundReplyAction as any, "explicit_callback_request") ||
+      hasWalkInCallbackStatusRequestText(trafficLogWalkInCallbackContainmentText));
+  if (trafficLogWalkInCallbackContainment) {
+    const walkInCallbackModelLabel = normalizeVehicleModel(
+      String(
+        activeAdfLeadProfile?.vehicle?.model ??
+          activeAdfLeadProfile?.vehicle?.description ??
+          lead.vehicleDescription ??
+          ""
+      ),
+      activeAdfLeadProfile?.vehicle?.make ?? null
+    );
+    setConversationClassification(conv, {
+      bucket: "callback_request",
+      cta: "callback",
+      channel: "task",
+      ruleName: "traffic_log_pro_walkin_callback_request"
+    });
+    conv.dialogState = { name: "callback_requested", updatedAt: new Date().toISOString() } as any;
+    addTodo(
+      conv,
+      "call",
+      buildWalkInCallbackTodoSummary(trafficLogWalkInCallbackContainmentText, walkInCallbackModelLabel),
+      event.providerMessageId,
+      conv.leadOwner
+    );
+    setFollowUpMode(conv, "manual_handoff", "callback_requested");
+    stopFollowUpCadence(conv, "manual_handoff");
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: "callback_request",
+      cta: "callback",
+      channel: "task",
+      note: "walk_in_callback_requested"
+    });
+  }
   const serviceIntentFromParser =
     !!llmDialogAct &&
     llmDialogAct.topic === "service" &&
@@ -5922,7 +6042,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     event.provider === "sendgrid_adf" && !isInitialAdf
       ? resolveAdfVehicleFactDecision(effectiveInquiry, llmVehicleFact)
       : null;
-  if (followUpAdfVehicleFactDecision) {
+  const creditLeadContextBlocksVehicleInfo =
+    adfFinanceContextSignal ||
+    conv.classification?.bucket === "finance_prequal" ||
+    conv.classification?.cta === "hdfs_coa" ||
+    conv.classification?.cta === "prequalify" ||
+    String(conv.dialogState?.name ?? "") === "payments_handoff" ||
+    /\bcredit_app|prequal/.test(String(conv.followUp?.reason ?? ""));
+  if (followUpAdfVehicleFactDecision && !creditLeadContextBlocksVehicleInfo) {
     const vehicleFactReply = await buildInitialAdfVehicleFactReply({
       conv,
       lead: activeAdfLeadProfile,
@@ -5969,6 +6096,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const followUpAdfVehicleInfoDecision =
     event.provider === "sendgrid_adf" &&
     !isInitialAdf &&
+    !creditLeadContextBlocksVehicleInfo &&
     !(
       (inferredBucket === "test_ride" || inferredCta === "schedule_test_ride") &&
       /\b(test ride|demo ride|try out|try it out|ride)\b/i.test(effectiveInquiry)
@@ -6568,11 +6696,54 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       walkInModelHint ||
       parserModel ||
       normalizeVehicleModel(String(modelRaw ?? ""), conv.lead?.vehicle?.make ?? null);
+    const walkInCallbackContextText = [walkInCleanedComment, effectiveInquiry, event.body]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const walkInCallbackNoteText = walkInCleanedComment || effectiveInquiry || String(event.body ?? "");
+    const walkInParserExplicitCallbackRequest = isAcceptedAdfInboundReplyAction(
+      llmInboundReplyAction as any,
+      "explicit_callback_request"
+    );
+    const walkInCallbackStatusRequest =
+      walkInParserExplicitCallbackRequest || hasWalkInCallbackStatusRequestText(walkInCallbackContextText);
     const hasWatchIntentFromParser =
       !!llmIntent &&
       llmIntent.intent === "availability" &&
       llmIntent.explicitRequest === true &&
       Number(llmIntent.confidence ?? 0) >= intentConfidenceMin;
+    if (walkInCallbackStatusRequest) {
+      setConversationClassification(conv, {
+        bucket: "callback_request",
+        cta: "callback",
+        channel: "task",
+        ruleName: "traffic_log_pro_walkin_callback_request"
+      });
+      conv.dialogState = { name: "callback_requested", updatedAt: new Date().toISOString() } as any;
+      addTodo(
+        conv,
+        "call",
+        buildWalkInCallbackTodoSummary(walkInCallbackNoteText, modelLabel),
+        event.providerMessageId,
+        conv.leadOwner
+      );
+      setFollowUpMode(conv, "manual_handoff", "callback_requested");
+      stopFollowUpCadence(conv, "manual_handoff");
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).json({
+        ok: true,
+        parsed: true,
+        leadKey,
+        lead,
+        leadSource,
+        bucket: "callback_request",
+        cta: "callback",
+        channel: "task",
+        note: "walk_in_callback_requested"
+      });
+    }
     const hasWatchIntentFromText =
       hasWatchIntentPhrase(commentLower) || !!watchDirectiveSegment;
     const hasWatchIntent = hasWatchIntentFromParser || hasWatchIntentFromText;
