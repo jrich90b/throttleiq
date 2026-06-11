@@ -6157,3 +6157,94 @@ input[type="reset"],
 .lr-pipeline-card-touch--warm { color: #fbbf24; }
 .lr-pipeline-card-touch--cold { color: #f87171; }
 .lr-pipeline-card-touch--none { color: var(--lr-app-muted-soft, #aebbd2); }
+
+/* pipeline thread preview (left pane) */
+.lr-pipeline-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(100vh - 220px);
+}
+.lr-pipeline-thread-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--lr-app-border, rgba(255, 255, 255, 0.12));
+}
+.lr-pipeline-thread-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--lr-app-text, #e7edf8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lr-pipeline-thread-owner {
+  font-size: 0.72rem;
+  color: var(--lr-app-muted-soft, #aebbd2);
+}
+.lr-pipeline-thread-open {
+  flex-shrink: 0;
+  background: rgba(251, 127, 4, 0.14);
+  border: 1px solid rgba(251, 127, 4, 0.5);
+  color: #fb9d3d;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.lr-pipeline-thread-msgs {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.7rem 0.1rem 1rem;
+}
+.lr-pipeline-bubble {
+  max-width: 88%;
+  border-radius: 0.7rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.lr-pipeline-bubble--in {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--lr-app-text, #e7edf8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.lr-pipeline-bubble--out {
+  align-self: flex-end;
+  background: rgba(251, 127, 4, 0.16);
+  color: var(--lr-app-text, #e7edf8);
+  border: 1px solid rgba(251, 127, 4, 0.3);
+}
+.lr-pipeline-bubble--draft {
+  opacity: 0.75;
+  border-style: dashed;
+}
+.lr-pipeline-bubble--call {
+  background: rgba(96, 165, 250, 0.12);
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  align-self: stretch;
+  max-width: 100%;
+  font-style: italic;
+}
+.lr-pipeline-bubble-tag {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--lr-app-muted-soft, #aebbd2);
+  margin-right: 0.4rem;
+}
+.lr-pipeline-bubble-body { white-space: pre-wrap; word-break: break-word; }
+.lr-pipeline-bubble-at {
+  margin-top: 0.25rem;
+  font-size: 0.62rem;
+  color: var(--lr-app-muted-soft, #aebbd2);
+  opacity: 0.8;
+}

@@ -13831,7 +13831,76 @@ export default function Home() {
             </div>
           </div>
         ) : section === "pipeline" ? (
-          <div className="mt-4 text-xs text-gray-500">Pipeline opens in the main panel.</div>
+          selectedConv ? (
+            <div className="mt-3 lr-pipeline-thread">
+              <div className="lr-pipeline-thread-head">
+                <div className="min-w-0">
+                  <div className="lr-pipeline-thread-name">
+                    {[selectedConv.lead?.firstName, selectedConv.lead?.lastName].filter(Boolean).join(" ") ||
+                      selectedConv.id}
+                  </div>
+                  {selectedConv.leadOwner?.name ? (
+                    <div className="lr-pipeline-thread-owner">{selectedConv.leadOwner.name}</div>
+                  ) : null}
+                </div>
+                <button
+                  className="lr-pipeline-thread-open"
+                  onClick={() => {
+                    goToSection("inbox");
+                    setMobilePanel("detail");
+                  }}
+                >
+                  Open in Inbox
+                </button>
+              </div>
+              <div className="lr-pipeline-thread-msgs">
+                {(selectedConv.messages ?? [])
+                  .filter(
+                    m =>
+                      (m.direction === "in" || m.direction === "out") &&
+                      m.provider !== "voice_transcript" &&
+                      (String(m.body ?? "").trim() || (m.mediaUrls?.length ?? 0) > 0)
+                  )
+                  .slice(-40)
+                  .map((m, i) => {
+                    const isIn = m.direction === "in";
+                    const isDraft = m.provider === "draft_ai";
+                    const isCall = m.provider === "voice_summary" || m.provider === "voice_call";
+                    return (
+                      <div
+                        key={m.id ?? i}
+                        className={`lr-pipeline-bubble ${
+                          isIn ? "lr-pipeline-bubble--in" : "lr-pipeline-bubble--out"
+                        } ${isDraft ? "lr-pipeline-bubble--draft" : ""} ${isCall ? "lr-pipeline-bubble--call" : ""}`}
+                      >
+                        {isDraft ? <span className="lr-pipeline-bubble-tag">DRAFT</span> : null}
+                        {isCall ? <span className="lr-pipeline-bubble-tag">CALL</span> : null}
+                        {(m.mediaUrls?.length ?? 0) > 0 ? (
+                          <span className="lr-pipeline-bubble-tag">📎 {m.mediaUrls!.length}</span>
+                        ) : null}
+                        <div className="lr-pipeline-bubble-body">
+                          {String(m.body ?? "").trim() || "(attachment)"}
+                        </div>
+                        <div className="lr-pipeline-bubble-at">
+                          {m.at
+                            ? new Date(m.at).toLocaleString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit"
+                              })
+                            : ""}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 text-xs text-gray-500">
+              Click a lead on the board to preview the conversation here.
+            </div>
+          )
         ) : section === "kpi" ? (
           <div className="mt-4 space-y-3">
             <div className="text-xs text-gray-600">Date range</div>
@@ -16474,9 +16543,8 @@ export default function Home() {
           <PipelineBoard
             embedded
             onOpenConversation={convId => {
-              setSection("inbox");
               setSelectedId(convId);
-              setMobilePanel("detail");
+              setMobilePanel("list");
             }}
           />
         ) : section === "kpi" ? (
