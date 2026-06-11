@@ -4860,7 +4860,10 @@ inbound: "I ended up buying a 2016 in Ohio. Thank you, I appreciate it."
 output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.95}`,
     `EXAMPLE Q
 inbound: "Got into a horse driving accident and broke 5 ribs and punctured a lung I'll have to pass at this point"
-output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`
+output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`,
+    `EXAMPLE R
+inbound: "I am going to take care of the pipes myself"
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.95}`
   ];
 
   const prompt = [
@@ -4868,7 +4871,7 @@ output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_te
     "Return only JSON that matches the provided schema.",
     "",
     "Disposition rules:",
-    "- sell_on_own: customer says they will sell their bike on their own / themselves.",
+    "- sell_on_own: customer says they will sell their bike on their own / themselves. ONLY about selling their own bike - handling parts, accessories, pipes, installs, or service themselves is NOT a disposition (return none; the deal is still active, the customer is just reducing work scope).",
     "- keep_current_bike: customer says they are going to keep their current bike.",
     "- stepping_back: customer indicates they are passing or holding off now without specific sell/keep wording.",
     "- defer_no_window: customer defers with no concrete timeframe (e.g., 'not ready', 'maybe later').",

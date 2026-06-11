@@ -48822,7 +48822,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     parsedAccepted: regenParsedDispositionAccepted,
     hasDecision: !!regenDispositionDecision,
     responseControlNotInterested:
-      regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested"
+      regenResponseControlAccepted && regenResponseControlParse?.intent === "not_interested",
+    openTodos: listOpenTodos()
   });
   const regenTerminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,
@@ -51033,7 +51034,8 @@ if (authToken && signature) {
       text: humanModeDispositionText,
       parsedAccepted: humanModeParsedDispositionAccepted,
       hasDecision: !!humanModeDispositionDecision,
-      responseControlNotInterested: llmNotInterested
+      responseControlNotInterested: llmNotInterested,
+      openTodos: listOpenTodos()
     });
     if (humanModeDispositionCloseoutAllowed && humanModeDispositionDecision) {
       applyCustomerDispositionCloseout(conv, humanModeDispositionDecision);
@@ -52039,7 +52041,8 @@ if (authToken && signature) {
     text: semanticInboundText,
     parsedAccepted: parsedDispositionAccepted,
     hasDecision: !!dispositionDecision,
-    responseControlNotInterested: llmNotInterested
+    responseControlNotInterested: llmNotInterested,
+    openTodos: listOpenTodos()
   });
   const terminalRouteDecision = resolveInboundTerminalRoute({
     provider: event.provider,

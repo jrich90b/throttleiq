@@ -56,7 +56,56 @@ export function hasPostSaleOrOwnershipContext(conv: any): boolean {
   );
 }
 
-export function shouldSuppressDispositionCloseout(conv: any, text: string): boolean {
+const CREDIT_APP_ADF_RE = /\bApp ID:\s*\d|\bHDFS COA\b/i;
+const ACTIVE_DEAL_ADF_WINDOW_DAYS = 14;
+
+/**
+ * Active-deal closeout blocker: a conversation with live financing signals must
+ * never be auto-archived by a disposition parse, no matter how confident.
+ * Production incident 2026-06-11: Dave Batka +17169982451 - credit application
+ * submitted 3 hours earlier, open credit-approval task, "Showed / finance needs
+ * more info" outcome - closed as customer_sell_on_own (0.9) nine seconds after
+ * texting "I am going to take care of the pipes myself".
+ */
+export function hasActiveDealCloseoutBlockers(
+  conv: any,
+  opts: { openTodos?: Array<{ convId?: string; reason?: string; summary?: string }> ; nowMs?: number } = {}
+): boolean {
+  const nowMs = opts.nowMs ?? Date.now();
+  const todos = Array.isArray(opts.openTodos) ? opts.openTodos : [];
+  const convId = String(conv?.id ?? "");
+  const hasCreditTodo = todos.some(
+    t =>
+      String(t?.convId ?? "") === convId &&
+      (String(t?.reason ?? "") === "approval" || /\bcredit\b/i.test(String(t?.summary ?? "")))
+  );
+  if (hasCreditTodo) return true;
+  const windowMs = ACTIVE_DEAL_ADF_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const hasRecentCreditAdf = (conv?.messages ?? []).some((m: any) => {
+    if (m?.direction !== "in" || m?.provider !== "sendgrid_adf") return false;
+    if (!CREDIT_APP_ADF_RE.test(String(m?.body ?? ""))) return false;
+    const atMs = Date.parse(String(m?.at ?? ""));
+    return Number.isFinite(atMs) && nowMs - atMs <= windowMs;
+  });
+  if (hasRecentCreditAdf) return true;
+  const outcomeNote = String(conv?.appointment?.staffNotify?.outcome?.note ?? "");
+  const outcomeAtMs = Date.parse(String(conv?.appointment?.staffNotify?.outcome?.updatedAt ?? ""));
+  if (
+    /\bfinance|credit\b/i.test(outcomeNote) &&
+    Number.isFinite(outcomeAtMs) &&
+    nowMs - outcomeAtMs <= 30 * 24 * 60 * 60 * 1000
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldSuppressDispositionCloseout(
+  conv: any,
+  text: string,
+  opts: { openTodos?: Array<{ convId?: string; reason?: string; summary?: string }> } = {}
+): boolean {
+  if (hasActiveDealCloseoutBlockers(conv, opts)) return true;
   if (isLogisticsProgressUpdateText(text)) return true;
   if (isStructuredFinanceInfoText(text)) return true;
   if (isAffordabilityRideConfidenceObjectionText(text)) return true;
@@ -224,10 +273,11 @@ export function canApplyDispositionCloseout(args: {
   parsedAccepted: boolean;
   hasDecision: boolean;
   responseControlNotInterested?: boolean;
+  openTodos?: Array<{ convId?: string; reason?: string; summary?: string }>;
 }): boolean {
   const { conv, text, parsedAccepted, hasDecision, responseControlNotInterested } = args;
   if (!hasDecision) return false;
-  if (shouldSuppressDispositionCloseout(conv, text)) return false;
+  if (shouldSuppressDispositionCloseout(conv, text, { openTodos: args.openTodos })) return false;
   if (parsedAccepted) return true;
   // Parser-first closeout: allow fallback only when the dedicated response-control parser
   // independently classified the turn as not interested.
