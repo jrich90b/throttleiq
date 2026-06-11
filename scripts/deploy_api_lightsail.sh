@@ -143,6 +143,12 @@ DEPLOY_HEALTH_ATTEMPTS="${DEPLOY_HEALTH_ATTEMPTS:-15}"
 DEPLOY_EXPECTED_DATA_DIR="${DEPLOY_EXPECTED_DATA_DIR:-}"
 DEPLOY_MIN_CONVERSATIONS="${DEPLOY_MIN_CONVERSATIONS:-}"
 DEPLOY_REQUIRED_CONVERSATION_TEXT="${DEPLOY_REQUIRED_CONVERSATION_TEXT:-}"
+# Build mode: "local" builds dist on the operator machine and rsyncs the
+# artifact (the 2GB Lightsail box swap-thrashed into a 14-minute outage
+# building tsc in place on 2026-06-11). "remote" builds on the server with a
+# capped, niced heap - only for first-time provisioning or bigger hosts.
+DEPLOY_BUILD_MODE="${DEPLOY_BUILD_MODE:-local}"
+DEPLOY_REMOTE_BUILD_HEAP_MB="${DEPLOY_REMOTE_BUILD_HEAP_MB:-1408}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
 require_cmd() {
@@ -185,7 +191,28 @@ if [[ -n "$DEPLOY_MIN_CONVERSATIONS" ]]; then
 fi
 echo
 
-if [[ "$DEPLOY_SKIP_LOCAL_CHECKS" != "1" ]]; then
+if [[ "$DEPLOY_BUILD_MODE" == "local" ]]; then
+  echo "Building API locally (artifact deploy)..."
+  npm --workspace @throttleiq/api run build
+  if [[ ! -f "$repo_root/services/api/dist/index.js" ]]; then
+    echo "Local build produced no dist/index.js" >&2
+    exit 25
+  fi
+  if [[ "$DEPLOY_DRY_RUN" != "1" ]]; then
+    git fetch origin "$DEPLOY_BRANCH"
+    local_head="$(git rev-parse HEAD)"
+    origin_head="$(git rev-parse "origin/$DEPLOY_BRANCH")"
+    if [[ "$local_head" != "$origin_head" ]]; then
+      echo "Local HEAD ($local_head) != origin/$DEPLOY_BRANCH ($origin_head)." >&2
+      echo "Artifact deploys ship the LOCAL build for the remote checkout - push/pull first." >&2
+      exit 26
+    fi
+    if [[ -n "$(git status --porcelain services/api packages 2>/dev/null)" ]]; then
+      echo "Local services/api or packages tree is dirty; artifact would not match origin/$DEPLOY_BRANCH." >&2
+      exit 27
+    fi
+  fi
+elif [[ "$DEPLOY_SKIP_LOCAL_CHECKS" != "1" ]]; then
   echo "Running local API typecheck..."
   npm --workspace @throttleiq/api run build -- --noEmit
 fi
@@ -207,7 +234,18 @@ remote_env=(
   "DEPLOY_MIN_CONVERSATIONS=$(shell_quote "$DEPLOY_MIN_CONVERSATIONS")"
   "DEPLOY_REQUIRED_CONVERSATION_TEXT=$(shell_quote "$DEPLOY_REQUIRED_CONVERSATION_TEXT")"
   "DEPLOY_DRY_RUN=$(shell_quote "$DEPLOY_DRY_RUN")"
+  "DEPLOY_BUILD_MODE=$(shell_quote "$DEPLOY_BUILD_MODE")"
+  "DEPLOY_REMOTE_BUILD_HEAP_MB=$(shell_quote "$DEPLOY_REMOTE_BUILD_HEAP_MB")"
 )
+
+if [[ "$DEPLOY_BUILD_MODE" == "local" && "$DEPLOY_DRY_RUN" != "1" ]]; then
+  echo "Uploading dist artifact..."
+  if ! rsync -az --delete "$repo_root/services/api/dist/" "$DEPLOY_HOST:$DEPLOY_REPO/services/api/dist/"; then
+    echo "Artifact upload failed. For first-time provisioning (no remote repo yet)," >&2
+    echo "run once with DEPLOY_BUILD_MODE=remote on a host with enough memory." >&2
+    exit 28
+  fi
+fi
 
 ssh "$DEPLOY_HOST" "${remote_env[*]} bash -s" <<'REMOTE'
 set -euo pipefail
@@ -377,8 +415,16 @@ git pull --ff-only origin "$DEPLOY_BRANCH"
 echo "Installing dependencies..."
 npm ci
 
-echo "Building API..."
-npm --workspace @throttleiq/api run build
+if [[ "$DEPLOY_BUILD_MODE" == "local" ]]; then
+  echo "Artifact mode: using uploaded dist (skipping on-box build)."
+  if [[ ! -f "$DEPLOY_REPO/services/api/dist/index.js" ]]; then
+    echo "Uploaded dist/index.js missing - aborting before restart." >&2
+    exit 29
+  fi
+else
+  echo "Building API on the server (heap ${DEPLOY_REMOTE_BUILD_HEAP_MB}MB, niced)..."
+  (cd "$DEPLOY_REPO/services/api" && nice -n 15 node --max-old-space-size="$DEPLOY_REMOTE_BUILD_HEAP_MB" ../../node_modules/typescript/bin/tsc -p tsconfig.json)
+fi
 
 if [[ ! -f "$DEPLOY_ENV_FILE" ]]; then
   echo "Remote env file missing: $DEPLOY_ENV_FILE" >&2

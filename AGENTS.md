@@ -1425,3 +1425,8 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 - Context gate: bare images in `purchase_delivery`/`finance_docs`/`credit_app`/`service_request` dialog states are paperwork, not bike matches (`isSalesPhotoShareContext`).
 - Phase 2 (open): vision describe step for inbound MMS so drafts can identify the pictured model directly.
 - Gate: `npm run customer_photo_share:eval` (detector behavior, charter-clean reply, live/regen parity pins, parser fixture pin).
+
+## Deploys Build Locally Now (2026-06-11 outage post-mortem)
+- Incident: deploy #8's on-box `tsc` build (4GB heap on the 1.9GB-RAM Lightsail instance, 2GB swap) swap-thrashed the box into a ~14-minute full outage (SSH + public API dead; Vercel fired a "5xx errors from failing external API calls" alert). The build died mid-emit leaving a PARTIAL dist; PM2 was untouched so last-good code resumed after reboot. Twilio/SendGrid webhook retries absorbed the inbound gap.
+- `deploy_api_lightsail.sh` now defaults to `DEPLOY_BUILD_MODE=local`: build dist on the operator machine, verify local HEAD == origin/branch and a clean services/api+packages tree, rsync the artifact, and skip the on-box build entirely. `DEPLOY_BUILD_MODE=remote` remains for first-time provisioning on adequately sized hosts and now runs niced with a capped heap (`DEPLOY_REMOTE_BUILD_HEAP_MB`, default 1408 — note: this codebase's tsc needs >1408MB, so remote mode on 2GB boxes will fail fast instead of thrashing).
+- Sizing lesson for dealer onboarding: a 2GB instance runs the stack fine but can NEVER build it. Artifact deploys are the standard.
