@@ -8932,7 +8932,7 @@ AVAILABLE INVENTORY BEHAVIOR (tone + close):
 - If inventoryStatus is AVAILABLE:
   - Wording: Say "<stockId> is available right now." Do NOT say "stock <id>" unless the customer's message used the word "stock".
   - Include the URL if available.
-  - Offer a quick walkaround video (optional) for inventory inquiries.
+  - Offer a walkaround video (optional) for inventory inquiries.
   - Appointment ask is conditional:
     - Only include two appointment time options if:
       (followUp.mode is "active") AND (appointment.status is not "confirmed")

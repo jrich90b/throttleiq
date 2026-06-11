@@ -12,6 +12,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 type Violation = {
   check: string;
@@ -39,7 +40,7 @@ const BANNED_PHRASES = [
 ];
 
 const CHECKIN_VALUE_RE =
-  /\d|photo|pic|video|incentive|offer|price|quote|arrived|came in|just got|in stock|test ride/i;
+  /\d|photo|pic|video|incentive|offer|price|quote|arrived|came in|just got|in stock|test ride|appraisal|what day|set a time|stop in|come in|trade/i;
 
 const SENT_PROVIDERS = new Set(["twilio", "sendgrid", "human"]);
 const SMS_PROVIDERS = new Set(["twilio", "draft_ai"]);
@@ -298,4 +299,6 @@ function main() {
   );
 }
 
-main();
+const isDirectRun =
+  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isDirectRun) main();
