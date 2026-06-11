@@ -1408,3 +1408,8 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 ## Outbound Em-Dash Diet (2026-06-11)
 - `limitEmDashStyle(...)` in `conversationStore.ts` runs in the deterministic-tone stage of `appendOutbound` (after `stateSignalBody` capture, so the state safety lock holds): the first em-dash survives, the rest become commas. Staff corpus has ~6 em-dashes across 388 texts; LLM drafts averaged 0.6/message.
 - The main draft prompt (`llmDraft.ts` VOICE/STYLE) now carries the charter rules directly: max one em-dash, banned-phrase list, short dealership name after first intro, concrete offers over generic help.
+
+## Release Gate (dealer rollout readiness, 2026-06-11)
+- `npm run release_gate:report` (nightly, after agent manager) snapshots each day's quality metrics into `release_gate/daily_scorecard.jsonl` and evaluates against rollout thresholds: tone responded pass rate ≥85, missing responses ≤1, charter violation rate ≤5%, template-sourced charter violations = 0, repeat sends = 0, persona reintroductions = 0, fresh stuck actionable turns = 0 (active/modeless follow-up with inbound in window), outcome QA P1 = 0. Thresholds tunable via RELEASE_GATE_* envs.
+- Verdict is READY at 7 consecutive clean days (`RELEASE_GATE_STREAK_DAYS`). `release_gate_report.md` is the rollout decision artifact for onboarding dealer #2.
+- Same-date reruns upsert (replace) that day's row; history is append-only otherwise. Gate: `npm run release_gate:eval` in ci:eval.
