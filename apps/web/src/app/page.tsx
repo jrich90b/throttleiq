@@ -7981,6 +7981,8 @@ export default function Home() {
                 ? "Claims, recaps, and pre-approvals"
               : section === "kpi"
                 ? "Manager analytics"
+              : section === "pipeline"
+                ? "Open-lead funnel"
               : section === "calendar"
                 ? "Google Calendar view"
                 : section === "settings"
