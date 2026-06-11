@@ -7883,6 +7883,113 @@ export async function parseInventoryEntitiesWithLLM(args: {
   };
 }
 
+const VOICE_DURABLE_FACTS_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "quoted_unit",
+    "quoted_price",
+    "otd_price",
+    "budget_max",
+    "wants_preowned",
+    "preferences",
+    "blockers",
+    "confidence"
+  ],
+  properties: {
+    quoted_unit: { type: "string" },
+    quoted_price: { type: "number" },
+    otd_price: { type: "number" },
+    budget_max: { type: "number" },
+    wants_preowned: { type: "boolean" },
+    preferences: { type: "array", items: { type: "string" } },
+    blockers: { type: "array", items: { type: "string" } },
+    confidence: { type: "number" }
+  }
+};
+
+export type VoiceDurableFactsParse = {
+  quotedUnit: string;
+  quotedPrice: number;
+  otdPrice: number;
+  budgetMax: number;
+  wantsPreowned: boolean;
+  preferences: string[];
+  blockers: string[];
+  confidence: number;
+};
+
+/**
+ * Extract durable, cadence-usable facts from a phone call summary. Numbers are
+ * only ever rendered deterministically downstream — a 0 means "not stated".
+ */
+export async function parseVoiceDurableFactsWithLLM(args: {
+  summary: string;
+  lead?: Conversation["lead"];
+}): Promise<VoiceDurableFactsParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VOICE_DURABLE_FACTS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model =
+    process.env.OPENAI_VOICE_DURABLE_FACTS_PARSER_MODEL ||
+    process.env.OPENAI_ROUTING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const summary = String(args.summary ?? "").trim();
+  if (!summary) return null;
+  const examples = [
+    'EXAMPLE A summary: "Customer declines the billiard gray HDFXBR Breakout priced at twenty eight grand due to cost; he is interested in a pre-owned Breakout around fifteen grand (less than twenty)."',
+    'EXAMPLE A output: {"quoted_unit":"","quoted_price":0,"otd_price":0,"budget_max":15000,"wants_preowned":true,"preferences":[],"blockers":["declined new at $28k as too expensive"],"confidence":0.92}',
+    'EXAMPLE B summary: "Customer asked prices for a Harley Breakout (pre-owned) and was quoted $14,995 asking price; with new plates, taxes, and fees the total was quoted as $16,534. Customer needs new plates."',
+    'EXAMPLE B output: {"quoted_unit":"pre-owned Breakout","quoted_price":14995,"otd_price":16534,"budget_max":0,"wants_preowned":true,"preferences":[],"blockers":["needs new plates"],"confidence":0.95}'
+  ];
+  const prompt = [
+    "Extract durable sales facts from a dealership phone call summary. Return only JSON matching the schema.",
+    "",
+    "Guidelines:",
+    "- quoted_unit: the specific unit a price was quoted for (e.g. \"2017 Breakout\"), empty string if no quote happened.",
+    "- quoted_price / otd_price: dollar amounts actually quoted on the call; 0 when not stated. otd_price is the out-the-door total.",
+    "- budget_max: the customer's stated ceiling in dollars; 0 when not stated.",
+    "- wants_preowned: true only if the customer said they want used/pre-owned.",
+    "- preferences: short durable wants (e.g. \"ape hangers\", \"long stretch rear tire\", \"engine guards\"). Empty array if none.",
+    "- blockers: durable hesitations (e.g. \"deciding on physical stamina and finances\", \"needs new plates\"). Empty array if none.",
+    "- Never invent numbers. confidence 0 to 1 for the extraction overall.",
+    "",
+    ...examples,
+    "",
+    `Call summary: ${summary.slice(0, 1200)}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "voice_durable_facts",
+      schema: VOICE_DURABLE_FACTS_JSON_SCHEMA,
+      maxOutputTokens: 260,
+      debugTag: "llm-voice-durable-facts"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      quotedUnit: String(parsed.quoted_unit ?? "").trim(),
+      quotedPrice: Number(parsed.quoted_price ?? 0),
+      otdPrice: Number(parsed.otd_price ?? 0),
+      budgetMax: Number(parsed.budget_max ?? 0),
+      wantsPreowned: !!parsed.wants_preowned,
+      preferences: Array.isArray(parsed.preferences)
+        ? parsed.preferences.map((p: unknown) => String(p ?? "").trim()).filter(Boolean).slice(0, 6)
+        : [],
+      blockers: Array.isArray(parsed.blockers)
+        ? parsed.blockers.map((b: unknown) => String(b ?? "").trim()).filter(Boolean).slice(0, 6)
+        : [],
+      confidence: Number(parsed.confidence ?? 0)
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type VehicleImageDescription = {
   isMotorcycle: boolean;
   make: string;

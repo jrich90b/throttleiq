@@ -22,6 +22,7 @@ import {
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareContext
 } from "./domain/customerPhotoShare.js";
+import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine } from "./domain/voiceCadenceFacts.js";
 import {
   buildRecentVehicleDiscussionReply,
   extractRecentVehicleDiscussionFacts,
@@ -231,6 +232,7 @@ import {
   parsePricingPaymentsIntentWithLLM,
   parseRoutingDecisionWithLLM,
   parseInboundReplyActionWithLLM,
+  parseVoiceDurableFactsWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseVehicleInfoRequestWithLLM,
@@ -10771,6 +10773,16 @@ async function buildCadenceRegeneratedDraft(
         message = `${message} ${personalizationLine}`.trim();
       }
     }
+    {
+      const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
+      if (
+        voiceFactsLine &&
+        !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
+        !wasCadenceLineUsedRecently(conv, voiceFactsLine)
+      ) {
+        message = `${message} ${voiceFactsLine}`.trim();
+      }
+    }
     return { body: message };
   }
 
@@ -10862,6 +10874,16 @@ async function buildCadenceRegeneratedDraft(
       !wasCadenceLineUsedRecently(conv, personalizationLine)
     ) {
       message = `${message} ${personalizationLine}`.trim();
+    }
+  }
+  {
+    const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
+    if (
+      voiceFactsLine &&
+      !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
+      !wasCadenceLineUsedRecently(conv, voiceFactsLine)
+    ) {
+      message = `${message} ${voiceFactsLine}`.trim();
     }
   }
   return { body: message };
@@ -26901,6 +26923,14 @@ async function processDueFollowUpsUnlocked() {
           !wasCadenceLineUsedRecently(conv, personalizationLine)
         ) {
           message = `${message} ${personalizationLine}`.trim();
+        }
+        const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
+        if (
+          voiceFactsLine &&
+          !message.toLowerCase().includes(voiceFactsLine.toLowerCase()) &&
+          !wasCadenceLineUsedRecently(conv, voiceFactsLine)
+        ) {
+          message = `${message} ${voiceFactsLine}`.trim();
         }
       }
     }
@@ -59687,6 +59717,18 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           "voice_summary",
           callScopedMessageId
         );
+        if (!isVoicemail) {
+          try {
+            const voiceFactsParse = await safeLlmParse("voice_durable_facts_parser", () =>
+              parseVoiceDurableFactsWithLLM({ summary: summaryText, lead: conv.lead ?? undefined })
+            );
+            if (applyVoiceDurableFacts(conv, voiceFactsParse, { sourceMessageId: callScopedMessageId ?? null })) {
+              saveConversation(conv);
+            }
+          } catch (err: any) {
+            console.warn("[voice-durable-facts] extraction failed", { message: err?.message ?? String(err) });
+          }
+        }
         if (!isVoicemail) {
           markOpenPricingAnswerTodosDone(conv, `${summaryText}\n${transcriptText}`, {
             channel: "call",

@@ -697,6 +697,20 @@ export type Conversation = {
     activatedAt: string;
     source?: "manual_takeover" | "manual_send";
   };
+  // Durable facts extracted from phone call summaries (voiceContext expires in
+  // 48h by design; these persist so follow-up cadence can reference what was
+  // actually discussed and quoted on calls).
+  voiceFacts?: {
+    quotedUnit?: string | null;
+    quotedPrice?: number | null;
+    otdPrice?: number | null;
+    budgetMax?: number | null;
+    wantsPreowned?: boolean | null;
+    preferences?: string[];
+    blockers?: string[];
+    updatedAt: string;
+    sourceMessageId?: string | null;
+  };
   lead?: LeadProfile;
   originalLead?: LeadProfile;
   latestLead?: LeadProfile;

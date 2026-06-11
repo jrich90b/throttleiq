@@ -1440,3 +1440,9 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 - `buildPhotoShareReplyWithVision` (customerPhotoShare) is the single reply builder at all three photo-share convergence points: nearest-inbound-image resolution (30-minute trust window around the anchor turn), vision describe, family match against the live inventory feed, reply with up to 2 real units (year/color/price when listed). Confidence-gated (`VEHICLE_IMAGE_VISION_CONFIDENCE_MIN`, default 0.7) — on any miss it falls back to the match-commit reply and the staff todo. Never guess a model to a rider.
 - Staff todo is vision-enriched ("Vision says it looks like X (NN%) — confirm from the image").
 - Kill switch: `LLM_VEHICLE_IMAGE_VISION_ENABLED=0`. Vision runs only inside photo-share routing (rare turns), one call per turn.
+
+## Voice-Aware Cadence Facts (2026-06-11)
+- Production fixture: David Gaeddert +17165872648 — four calls captured "wants pre-owned ~$15k" and a phone quote ($14,995 / $16,534 OTD, 2017 Breakout); the queued cadence said only "Still happy to help about the Breakout."
+- `parseVoiceDurableFactsWithLLM` extracts typed facts from each call summary at ingestion (quoted unit/price/OTD, budget ceiling, pre-owned intent, preferences, blockers; confidence-gated ≥0.7). Facts persist on `conv.voiceFacts` (voiceContext expires in 48h by design; these don't) and merge across calls — a later call without a quote never erases an earlier quote.
+- `buildVoiceFactsCadenceLine` renders the follow-up line DETERMINISTICALLY from typed fields (never LLM prose for numbers): quoted unit → "That X we went over on the phone is still here at $Y, about $Z out the door."; budget-only → pre-owned watch line. 45-day freshness; appended at all three cadence personalization sites with the no-repeat guards.
+- Gate: `npm run voice_cadence_facts:eval`.
