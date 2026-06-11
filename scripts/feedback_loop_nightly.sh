@@ -191,30 +191,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=web_text_widget_eval"
   npm run web_text_widget:eval
 
-  if [[ "$NIGHTLY_SHADOW_REPLAY_ENABLED" == "1" ]]; then
-    echo "[feedback-loop] step=inbound_shadow_replay -> $INBOUND_SHADOW_RUN_OUT_DIR"
-    shadow_args=(
-      --
-      --data-dir "$DATA_DIR"
-      --provider "$NIGHTLY_SHADOW_REPLAY_PROVIDER"
-      --limit "$NIGHTLY_SHADOW_REPLAY_LIMIT"
-      --since-days "$NIGHTLY_SHADOW_REPLAY_SINCE_DAYS"
-      --out-dir "$INBOUND_SHADOW_RUN_OUT_DIR"
-    )
-    if [[ "$NIGHTLY_SHADOW_REPLAY_MODE_MATRIX" == "1" ]]; then
-      shadow_args+=(--mode-matrix)
-    fi
-    if [[ -n "$NIGHTLY_SHADOW_REPLAY_ENV_FILE" ]]; then
-      shadow_args+=(--env-file "$NIGHTLY_SHADOW_REPLAY_ENV_FILE")
-    fi
-    if npm run inbound_shadow:replay "${shadow_args[@]}" | tee "$INBOUND_SHADOW_LOG"; then
-      echo "[feedback-loop] inbound_shadow_replay=pass"
-    else
-      echo "[feedback-loop] inbound_shadow_replay=fail"
-    fi
-  else
-    echo "[feedback-loop] step=inbound_shadow_replay skipped"
-  fi
+# NOTE: inbound shadow replay runs LAST (after all scorers/reports) so its
+# traffic can never influence same-loop quality readings. Moved 2026-06-11
+# after the CONVERSATIONS_DB_PATH leak incident.
 
   echo "[feedback-loop] step=vehicle_watch_catalog_eval -> $VEHICLE_WATCH_QA_JSON"
   if npm run harley_watch_model_catalog:eval -- \
@@ -306,6 +285,31 @@ trap 'record_closed_loop_run "$?"' EXIT
 
   echo "[feedback-loop] step=release_gate"
   npm run release_gate:report -- --report-root "$REPORT_ROOT" --route-watchdog "$WATCHDOG_JSON" || true
+
+  if [[ "$NIGHTLY_SHADOW_REPLAY_ENABLED" == "1" ]]; then
+    echo "[feedback-loop] step=inbound_shadow_replay -> $INBOUND_SHADOW_RUN_OUT_DIR"
+    shadow_args=(
+      --
+      --data-dir "$DATA_DIR"
+      --provider "$NIGHTLY_SHADOW_REPLAY_PROVIDER"
+      --limit "$NIGHTLY_SHADOW_REPLAY_LIMIT"
+      --since-days "$NIGHTLY_SHADOW_REPLAY_SINCE_DAYS"
+      --out-dir "$INBOUND_SHADOW_RUN_OUT_DIR"
+    )
+    if [[ "$NIGHTLY_SHADOW_REPLAY_MODE_MATRIX" == "1" ]]; then
+      shadow_args+=(--mode-matrix)
+    fi
+    if [[ -n "$NIGHTLY_SHADOW_REPLAY_ENV_FILE" ]]; then
+      shadow_args+=(--env-file "$NIGHTLY_SHADOW_REPLAY_ENV_FILE")
+    fi
+    if npm run inbound_shadow:replay "${shadow_args[@]}" | tee "$INBOUND_SHADOW_LOG"; then
+      echo "[feedback-loop] inbound_shadow_replay=pass"
+    else
+      echo "[feedback-loop] inbound_shadow_replay=fail"
+    fi
+  else
+    echo "[feedback-loop] step=inbound_shadow_replay skipped"
+  fi
 
   if [[ -n "${FEEDBACK_REPORT_EMAIL_TO:-}" || -f "${FEEDBACK_LOOP_ENV_PATH}" ]]; then
     echo "[feedback-loop] step=email_report -> ${FEEDBACK_REPORT_EMAIL_TO}"
