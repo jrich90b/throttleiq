@@ -7,8 +7,8 @@
  * Breakout." Facts persist on conv.voiceFacts (voiceContext expires in 48h)
  * and render deterministically — numbers come from typed fields, never prose.
  */
-import type { Conversation } from "./conversationStore.js";
-import type { VoiceDurableFactsParse } from "./llmDraft.js";
+import { saveConversation, type Conversation } from "./conversationStore.js";
+import { parseVoiceDurableFactsWithLLM, type VoiceDurableFactsParse } from "./llmDraft.js";
 
 const FACT_CONFIDENCE_MIN = Number(process.env.VOICE_DURABLE_FACTS_CONFIDENCE_MIN ?? 0.7);
 const FACT_FRESHNESS_DAYS = Number(process.env.VOICE_FACTS_CADENCE_MAX_AGE_DAYS ?? 45);
@@ -43,6 +43,50 @@ export function applyVoiceDurableFacts(
     sourceMessageId: opts.sourceMessageId ?? null
   };
   return true;
+}
+
+/**
+ * Lazy catch-up: conversations whose calls predate the facts parser (or whose
+ * newest summary is newer than the stored facts) get extracted at cadence
+ * build time, inside the live process — never by editing the store directly.
+ */
+export async function ensureVoiceFactsFresh(conv: Conversation): Promise<void> {
+  try {
+    const summaries = (conv.messages ?? []).filter(
+      m => m?.direction === "out" && m?.provider === "voice_summary" && String(m?.body ?? "").trim()
+    );
+    if (!summaries.length) return;
+    const latest = summaries[summaries.length - 1];
+    const latestAtMs = Date.parse(String(latest?.at ?? ""));
+    const factsAtMs = Date.parse(String(conv.voiceFacts?.updatedAt ?? ""));
+    if (Number.isFinite(factsAtMs) && (!Number.isFinite(latestAtMs) || factsAtMs >= latestAtMs)) return;
+    // Parse up to the last 3 summaries oldest-first so merge semantics hold.
+    const toParse = summaries.slice(-3);
+    let applied = false;
+    for (const summary of toParse) {
+      const parsed = await parseVoiceDurableFactsWithLLM({
+        summary: String(summary.body ?? ""),
+        lead: conv.lead ?? undefined
+      });
+      if (
+        applyVoiceDurableFacts(conv, parsed, {
+          nowIso: String(latest?.at ?? new Date().toISOString()),
+          sourceMessageId: latest?.providerMessageId ?? null
+        })
+      ) {
+        applied = true;
+      }
+    }
+    if (!applied && !conv.voiceFacts) {
+      // Remember the attempt so we don't re-parse the same summaries nightly.
+      conv.voiceFacts = { updatedAt: String(latest?.at ?? new Date().toISOString()), sourceMessageId: null };
+      saveConversation(conv);
+      return;
+    }
+    if (applied) saveConversation(conv);
+  } catch {
+    // Never let fact catch-up break a cadence build.
+  }
 }
 
 function dedupeShort(items: string[]): string[] {

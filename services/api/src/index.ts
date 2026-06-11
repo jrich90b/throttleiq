@@ -22,7 +22,7 @@ import {
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareContext
 } from "./domain/customerPhotoShare.js";
-import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine } from "./domain/voiceCadenceFacts.js";
+import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
 import {
   buildRecentVehicleDiscussionReply,
   extractRecentVehicleDiscussionFacts,
@@ -10774,6 +10774,7 @@ async function buildCadenceRegeneratedDraft(
       }
     }
     {
+      await ensureVoiceFactsFresh(conv);
       const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
       if (
         voiceFactsLine &&
@@ -10877,6 +10878,7 @@ async function buildCadenceRegeneratedDraft(
     }
   }
   {
+    await ensureVoiceFactsFresh(conv);
     const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
     if (
       voiceFactsLine &&
@@ -26924,6 +26926,7 @@ async function processDueFollowUpsUnlocked() {
         ) {
           message = `${message} ${personalizationLine}`.trim();
         }
+        await ensureVoiceFactsFresh(conv);
         const voiceFactsLine = buildVoiceFactsCadenceLine(conv, now);
         if (
           voiceFactsLine &&
