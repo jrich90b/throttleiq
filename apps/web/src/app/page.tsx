@@ -11383,6 +11383,11 @@ export default function Home() {
       window.alert("Please choose a lead update option.");
       return;
     }
+    if (closeReason === "reopen") {
+      await reopenConv();
+      setCloseReason("");
+      return;
+    }
     if (closeReason === "hold") {
       await openHoldModal(selectedConv.id);
       return;
@@ -22727,7 +22732,7 @@ export default function Home() {
               </div>
             ) : null}
 
-            {selectedConv.status !== "closed" ? (
+            {(
               <div className="mt-4 flex items-center gap-2">
                 <select
                   className="border rounded px-2 py-2 text-sm"
@@ -22735,12 +22740,18 @@ export default function Home() {
                   onChange={e => setCloseReason(e.target.value)}
                 >
                   <option value="">Update Lead...</option>
-                  <option value="sold">Sold</option>
-                  <option value="hold">Hold - Unit</option>
-                  {hasActiveUnitHold(selectedConv) ? <option value="hold_clear">Remove Hold</option> : null}
-                  <option value="not_interested">Close - Not Interested</option>
-                  <option value="no_response">Close - No Response</option>
-                  <option value="other">Close - Other</option>
+                  {selectedConv.status === "closed" ? (
+                    <option value="reopen">Re-open Lead</option>
+                  ) : (
+                    <>
+                      <option value="sold">Sold</option>
+                      <option value="hold">Hold - Unit</option>
+                      {hasActiveUnitHold(selectedConv) ? <option value="hold_clear">Remove Hold</option> : null}
+                      <option value="not_interested">Close - Not Interested</option>
+                      <option value="no_response">Close - No Response</option>
+                      <option value="other">Close - Other</option>
+                    </>
+                  )}
                 </select>
                 {closeReason === "sold" ? (
                   <select
@@ -22759,18 +22770,11 @@ export default function Home() {
                 <button className="px-3 py-2 border rounded text-sm" onClick={closeConv}>
                   Update
                 </button>
-                <button
-                  className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={deleteConv}
-                >
-                  Delete
-                </button>
-              </div>
-            ) : (
-              <div className="mt-4 flex items-center gap-2">
-                <button className="px-3 py-2 border rounded text-sm" onClick={reopenConv}>
-                  Re-open
-                </button>
+                {selectedConv.status === "closed" ? (
+                  <button className="px-3 py-2 border rounded text-sm" onClick={reopenConv}>
+                    Re-open
+                  </button>
+                ) : null}
                 <button
                   className="px-3 py-2 border rounded text-sm text-red-600 border-red-200 hover:bg-red-50"
                   onClick={deleteConv}
