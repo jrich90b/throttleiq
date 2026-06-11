@@ -15,6 +15,13 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import {
+  buildCustomerPhotoShareTodoSummary,
+  buildCustomerVehiclePhotoShareReply,
+  CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
+  detectCustomerVehiclePhotoShareText,
+  isSalesPhotoShareContext
+} from "./domain/customerPhotoShare.js";
+import {
   buildRecentVehicleDiscussionReply,
   extractRecentVehicleDiscussionFacts,
   shouldPreferRecentVehicleDiscussionFacts
@@ -47779,6 +47786,53 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent: false
     });
   }
+  const regenParserCustomerPhotoShare = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "customer_shared_vehicle_photo"
+  );
+  const regenCustomerPhotoShare =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !regenParserPricingIntent &&
+    !regenParserSchedulingIntent &&
+    !regenParserCallbackIntent &&
+    isSalesPhotoShareContext(getDialogState(conv)) &&
+    (regenParserCustomerPhotoShare ||
+      (regenInboundReplyActionFallbackAllowed &&
+        detectCustomerVehiclePhotoShareText({
+          text: event.body ?? "",
+          hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
+        })));
+  if (regenCustomerPhotoShare) {
+    setDialogState(conv, "inventory_init");
+    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    addTodo(
+      conv,
+      "note",
+      buildCustomerPhotoShareTodoSummary(conv.lead?.firstName ?? conv.lead?.name),
+      event.providerMessageId,
+      undefined,
+      undefined,
+      "followup"
+    );
+    const reply = buildCustomerVehiclePhotoShareReply({
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      mentionedModel: findMentionedModel(event.body ?? "")
+    });
+    recordRouteOutcome("regen", "customer_shared_vehicle_photo", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      fallback: !regenParserCustomerPhotoShare
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false,
+      shortAckIntent: false
+    });
+  }
   const regenLocationQuestion =
     regenParserLocationQuestion ||
     (regenInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
@@ -50618,6 +50672,7 @@ if (authToken && signature) {
     inboundReplyActionParse?.action === "schedule_context_status_update" ||
     inboundReplyActionParse?.action === "inventory_watch_acknowledgement" ||
     inboundReplyActionParse?.action === "pending_incoming_inventory_acknowledgement" ||
+    inboundReplyActionParse?.action === "customer_shared_vehicle_photo" ||
     customerAckActionParse?.action === "appointment_status_question" ||
     customerAckActionParse?.action === "immediate_arrival_request" ||
     purchaseDeliveryOperationalNoResponseBlocker;
@@ -50715,6 +50770,50 @@ if (authToken && signature) {
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
       fallback: !inboundParserPendingIncomingInventoryAcknowledgement
+    });
+    return publishLiveTwilioReply(
+      reply,
+      { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false },
+      { draftOnly: conv.mode === "human" }
+    );
+  }
+  const inboundParserCustomerPhotoShare = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "customer_shared_vehicle_photo"
+  );
+  const customerPhotoShareAccepted =
+    event.provider === "twilio" &&
+    !inboundParserExplicitCallbackRequest &&
+    !inboundParserLocationQuestion &&
+    isSalesPhotoShareContext(getDialogState(conv)) &&
+    (inboundParserCustomerPhotoShare ||
+      (inboundReplyActionFallbackAllowed &&
+        detectCustomerVehiclePhotoShareText({
+          text: event.body ?? "",
+          hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
+        })));
+  if (customerPhotoShareAccepted) {
+    setDialogState(conv, "inventory_init");
+    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    addTodo(
+      conv,
+      "note",
+      buildCustomerPhotoShareTodoSummary(conv.lead?.firstName ?? conv.lead?.name),
+      event.providerMessageId,
+      undefined,
+      undefined,
+      "followup"
+    );
+    const reply = buildCustomerVehiclePhotoShareReply({
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      mentionedModel: findMentionedModel(event.body ?? "")
+    });
+    recordRouteOutcome("live", "customer_shared_vehicle_photo", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      fallback: !inboundParserCustomerPhotoShare
     });
     return publishLiveTwilioReply(
       reply,

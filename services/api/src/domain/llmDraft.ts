@@ -1720,6 +1720,7 @@ export type InboundReplyAction =
   | "schedule_context_status_update"
   | "inventory_watch_acknowledgement"
   | "pending_incoming_inventory_acknowledgement"
+  | "customer_shared_vehicle_photo"
   | "none";
 
 export type InboundReplyActionParse = {
@@ -2768,6 +2769,7 @@ const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "schedule_context_status_update",
         "inventory_watch_acknowledgement",
         "pending_incoming_inventory_acknowledgement",
+        "customer_shared_vehicle_photo",
         "none"
       ]
     },
@@ -6277,7 +6279,15 @@ output: {"action":"pending_incoming_inventory_acknowledgement","explicit_action"
     `EXAMPLE O
 inbound: "Interested in the 2023 120th Anniversary Road Glide Special. Wants us to call him when we get it through service (Step 2)"
 history: "out: Thanks for stopping in today."
-output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants a callback once the bike is through service","reason":"The latest turn contains an explicit callback/status request, so callback routing owns the turn instead of a generic walk-in recap.","confidence":0.97}`
+output: {"action":"explicit_callback_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants a callback once the bike is through service","reason":"The latest turn contains an explicit callback/status request, so callback routing owns the turn instead of a generic walk-in recap.","confidence":0.97}`,
+    `EXAMPLE P
+inbound: "Here is a photo of the HD I like."
+history: "in: Hi scott I hope you're doing well."
+output: {"action":"customer_shared_vehicle_photo","explicit_action":true,"should_reply":true,"normalized_text":"customer shared a photo of a bike they like and wants it matched","reason":"The customer is sharing a vehicle photo as a buying signal; photo-match routing owns the turn instead of small talk or discovery questions.","confidence":0.97}`,
+    `EXAMPLE Q
+inbound: "Can you send me pictures of the Road Glide?"
+history: "out: We have a couple Road Glides on the floor."
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"The customer is asking us to send photos, not sharing one; the media-request flow owns this turn.","confidence":0.95}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6286,6 +6296,7 @@ output: {"action":"explicit_callback_request","explicit_action":true,"should_rep
     "Actions:",
     "- dealer_location_question: customer asks for the dealership's physical location/address or where the store is.",
     "- explicit_callback_request: customer explicitly asks someone to call them or says they are available/free to talk by phone now.",
+    "- customer_shared_vehicle_photo: customer shares or references sending a photo/picture of a bike they like or are considering (\"here's a photo of...\", \"I sent you a pic of...\"), or the turn is an attached image with a short caption. This is a buying signal that owns the turn over small talk and discovery questions. Asking US to send photos is NOT this action.",
     "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask.",
     "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
     "- pending_incoming_inventory_acknowledgement: customer confirms they want to be notified about a specific known incoming trade/pending unit that is not at the store yet.",
