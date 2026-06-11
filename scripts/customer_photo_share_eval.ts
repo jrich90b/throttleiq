@@ -101,6 +101,15 @@ assert.match(
   "regen photo-share handler must move dialog state off small_talk"
 );
 
+// The shared inventory-status availability route (live + regen) must hand
+// unit-less image_availability_check turns to photo-share handling instead of
+// the generic "I'll have the team check current options" punt.
+assert.match(
+  apiSource,
+  /intent === "image_availability_check"\) \{[\s\S]{0,1600}buildCustomerVehiclePhotoShareReply/,
+  "image_availability_check with no identifiable unit must route to photo-share handling"
+);
+
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
 assert.match(llmSource, /"customer_shared_vehicle_photo"/, "parser union/schema must include the action");
 assert.match(

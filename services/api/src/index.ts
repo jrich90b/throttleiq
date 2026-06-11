@@ -7884,6 +7884,45 @@ async function maybeHandleInventoryStatusParserRoute(args: {
     });
     return { kind: "reply", reply };
   }
+  if (intent === "image_availability_check") {
+    // An image-availability ask with no identifiable unit (no model, no stock
+    // id in the parse or text) IS the photo-share case: the picture is the
+    // content. The generic availability resolver can only punt here ("I'll
+    // have the team check current options..."), so route to photo-share
+    // handling instead (Mustafa +17164368801, 2026-06-11).
+    const imageTargetModel = String(args.parsedStatus?.target?.model ?? "").trim();
+    const imageTargetStock = String(args.parsedStatus?.target?.stockId ?? "").trim();
+    const imageMentionedModel = findMentionedModel(args.text ?? "");
+    if (
+      !imageTargetModel &&
+      !imageTargetStock &&
+      !imageMentionedModel &&
+      isSalesPhotoShareContext(getDialogState(args.conv))
+    ) {
+      setDialogState(args.conv, "inventory_init");
+      setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      addTodo(
+        args.conv,
+        "note",
+        buildCustomerPhotoShareTodoSummary(args.conv.lead?.firstName ?? args.conv.lead?.name),
+        args.providerMessageId ?? undefined,
+        undefined,
+        undefined,
+        "followup"
+      );
+      const reply = buildCustomerVehiclePhotoShareReply({
+        firstName: normalizeDisplayCase(args.conv.lead?.firstName)
+      });
+      recordRouteOutcome(args.scope, "customer_shared_vehicle_photo", {
+        convId: args.conv.id,
+        leadKey: args.conv.leadKey,
+        parserAction: "image_availability_check",
+        parserConfidence: args.parsedStatus?.confidence ?? null,
+        fallback: false
+      });
+      return { kind: "reply", reply };
+    }
+  }
   if (
     intent === "availability_check" ||
     intent === "alternate_inventory_request" ||
