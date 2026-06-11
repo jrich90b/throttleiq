@@ -7951,7 +7951,10 @@ export async function describeVehicleImageWithLLM(args: {
           ]
         }
       ] as any,
-      max_output_tokens: 160,
+      ...optionalReasoning(model),
+      // Reasoning models consume output budget on thinking; a small cap returns
+      // empty output_text with HTTP 200 (verified on the Mustafa photo).
+      max_output_tokens: 400,
       text: {
         format: {
           type: "json_schema",

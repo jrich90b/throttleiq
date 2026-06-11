@@ -20,7 +20,8 @@ const {
   findNearestInboundImageUrls,
   isSalesPhotoShareContext,
   resolveUploadLocalPath,
-  shouldUseVisionIdentification
+  shouldUseVisionIdentification,
+  visionFamilyCandidates
 } = await import("../services/api/src/domain/customerPhotoShare.ts");
 
 // Detector: production fixture and neighbors.
@@ -115,6 +116,14 @@ assert.deepEqual(
   [],
   "media outside the 30-minute window is not trusted"
 );
+
+assert.deepEqual(
+  visionFamilyCandidates("Electra Glide / Ultra Limited (Touring)"),
+  ["Electra Glide", "Ultra Limited"],
+  "compound vision families split into match candidates"
+);
+assert.deepEqual(visionFamilyCandidates("Fat Boy"), ["Fat Boy"]);
+assert.deepEqual(visionFamilyCandidates("Street Glide or Road Glide"), ["Street Glide", "Road Glide"]);
 
 assert.equal(shouldUseVisionIdentification(null), false);
 assert.equal(

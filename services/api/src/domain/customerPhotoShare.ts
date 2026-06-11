@@ -136,6 +136,17 @@ function withArticle(family: string): string {
   return /^[aeiou]/i.test(family) ? `an ${family}` : `a ${family}`;
 }
 
+/**
+ * Vision sometimes returns compound families ("Electra Glide / Ultra Limited
+ * (Touring)"). Split into match candidates so feed matching can try each.
+ */
+export function visionFamilyCandidates(family: string): string[] {
+  return String(family ?? "")
+    .split(/[\/,]|\bor\b/i)
+    .map(s => s.replace(/\(.*?\)/g, "").trim())
+    .filter(s => s.length >= 3);
+}
+
 export function shouldUseVisionIdentification(description: {
   isMotorcycle: boolean;
   modelFamily: string;
@@ -188,19 +199,27 @@ export async function buildPhotoShareReplyWithVision(args: {
       contextText: args.contextText
     });
     if (!shouldUseVisionIdentification(description)) return fallback;
-    const family = description!.modelFamily.trim();
+    const candidates = visionFamilyCandidates(description!.modelFamily);
+    if (!candidates.length) return fallback;
+    let family = candidates[0];
     let matches: PhotoShareInventoryMatch[] = [];
-    try {
-      const items = await findInventoryMatches({ year: null, model: family });
-      matches = (items ?? []).slice(0, 2).map((i: any) => ({
-        year: i?.year ?? null,
-        model: i?.model ?? null,
-        color: i?.color ?? null,
-        price: i?.price ?? null,
-        condition: i?.condition ?? null
-      }));
-    } catch {
-      matches = [];
+    for (const candidate of candidates) {
+      try {
+        const items = await findInventoryMatches({ year: null, model: candidate });
+        if (items?.length) {
+          family = candidate;
+          matches = items.slice(0, 2).map((i: any) => ({
+            year: i?.year ?? null,
+            model: i?.model ?? null,
+            color: i?.color ?? null,
+            price: i?.price ?? null,
+            condition: i?.condition ?? null
+          }));
+          break;
+        }
+      } catch {
+        // try the next candidate
+      }
     }
     const who = String(args.firstName ?? "").trim() || "Customer";
     return {
