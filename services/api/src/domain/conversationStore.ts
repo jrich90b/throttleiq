@@ -2195,24 +2195,46 @@ function consumeAgentContextOnInboundIfNeeded(conv: Conversation, reason: string
 
 function pickLeadInVariant(text: string): string {
   const t = String(text ?? "").toLowerCase();
+  if (
+    /\b(photo|photos|picture|pictures|pic|pics|image|images|screenshot|screenshots)\b/.test(t) &&
+    /\b(here(?:'s| is| are)|i (?:just )?sent|sending|attached|i'?m sharing)\b/.test(t)
+  ) {
+    return "Thanks for sending that over.";
+  }
   if (/(thanks|thank you|thanks again|thx|ty|appreciate)/.test(t)) return "You're welcome.";
   if (/(sorry|apologize|apologies|my bad)/.test(t)) return "No worries.";
   if (/(i left|already left|left a deposit|just letting you know|update)/.test(t)) return "Thanks for the update.";
   if (/(can you|could you|would you|do you|is it possible)/.test(t)) return "Sure.";
   if (/(i want|i'd like|i would like|looking to|want to)/.test(t)) return "Absolutely.";
   if (/[?]/.test(t)) return "Got it.";
-  return "Sounds good.";
+  // No filler agreement opener when nothing fits; callers drop the lead-in instead.
+  return "";
 }
+
+function capitalizeLeadInRest(rest: string): string {
+  const trimmed = String(rest ?? "").trim();
+  if (!trimmed) return trimmed;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+const LEAD_IN_ACK_OPENER_RE =
+  /^(thanks|thank you|no worries|you'?re welcome|sounds good|got it|sure|absolutely|perfect|great)\b/i;
 
 function normalizeGotItLeadIn(body: string, inboundText: string, provider: MessageProvider): string {
   if (!body) return body;
   if (!(provider === "twilio" || provider === "draft_ai")) return body;
   const trimmed = body.trim();
-  const match = trimmed.match(/^got it(?:\s*[—–-]|\.|,|!|:)?\s*/i);
+  const match = trimmed.match(/^(?:got it|sounds good)(?:\s*[—–-]|\.|,|!|:)?\s*/i);
   if (!match) return body;
   const rest = trimmed.slice(match[0].length);
+  if (!rest) {
+    const leadIn = pickLeadInVariant(inboundText);
+    return leadIn || trimmed;
+  }
+  // Avoid stacked acknowledgments like "Thanks for sending that over. Thanks for the photo —".
+  if (LEAD_IN_ACK_OPENER_RE.test(rest)) return capitalizeLeadInRest(rest);
   const leadIn = pickLeadInVariant(inboundText);
-  if (!rest) return leadIn;
+  if (!leadIn) return capitalizeLeadInRest(rest);
   return `${leadIn} ${rest}`.trim();
 }
 

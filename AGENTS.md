@@ -1355,3 +1355,30 @@ When changing responses:
 - Purpose:
   - prevent false booking/reschedule behavior when customers ask for photos/videos,
   - keep regenerate and live parsing consistent when customer switches from Heritage to `Street Glide Limited 3` phrasing.
+
+## Cadence Template Label-Clause Grammar Guardrail
+- `labelClause` renders as ` about <label>` (or empty), so cadence templates must never glue their own preposition onto it.
+- Production failures this caused (June 2026): `check current incentives on and send only what applies` (empty label, Mustafa +17164368801) and `current incentives on about the Street Glide Limited` (filled label, Michael Crosson +16076549423).
+- In `services/api/src/index.ts`:
+  - both cadence paths now also build `onLabelClause` (` on <label>` | empty) and `forLabelClause` (` for <label>` | empty); all cadence render ctx objects carry them.
+  - templates that need a preposition use the matching clause key (`current incentives{onLabelClause}`, `payment info{forLabelClause}`, `keep an eye out{forLabelClause}`, `keep you posted{onLabelClause}`); `on{labelClause}` / `for{labelClause}` are banned shapes.
+  - `renderFollowUpTemplate(...)` applies `repairFollowUpClauseGrammar(...)` as a render-time safety net: fixes `on/for about`, dangling `on/for` before `and`/`so`, and dangling `on/for` before punctuation.
+- Eval: `npm run cadence_template_grammar:eval` (pins the banned shapes, clause builders, repair pass, and offers-line guard).
+
+## Cadence Offers-Line Duplication Guardrail
+- Production failure: step-3 cadence sends could end `... Current offers: <url> Current offers: <url>` because `appendCadenceOffersLine(...)` ran while the message still contained an unrendered `{offersLine}` placeholder, and the later render pass substituted a second copy.
+- `appendCadenceOffersLine(...)` now returns early when the message still contains `{offersLine}` (the render pass owns insertion), and its dedupe comparison is whitespace-insensitive.
+
+## Cadence No-Repeat Guard: Stale Drafts Excluded
+- Production failure: the same discovery script went out twice five days apart (Mustafa, 4/22 + 4/27) because stale `draft_ai` messages — never customer-visible — filled the `slice(-3)` recency window and pushed the actually-sent duplicate out of range.
+- `selectNonRepeatingCadenceMessage(...)` now filters `draftStatus === "stale"` messages out of the history before windowing, and additionally blocks exact normalized repeats within the last 10 customer-visible outbounds.
+
+## Outbound Lead-In Variant Guardrail ("Sounds good." tic)
+- `normalizeGotItLeadIn(...)` in `services/api/src/domain/conversationStore.ts` rewrote `Got it` openers and defaulted to the literal string `Sounds good.` — injecting blind agreement when nothing was agreed to (e.g. replying `Sounds good.` to a customer sharing a photo of the bike they want, Mustafa 6/10).
+- Behavior now:
+  - openers `Got it` **and** `Sounds good` are both normalized;
+  - customer shared a photo/picture/screenshot (`here is/I sent/attached` + media noun) → lead-in `Thanks for sending that over.`;
+  - if the remaining draft already opens with an acknowledgment (`Thanks/No worries/Sure/...`), the lead-in is dropped instead of stacked;
+  - when no contextual lead-in fits, the filler opener is dropped (capitalized continuation) rather than defaulting to `Sounds good.`; a bare `Got it.` body is preserved.
+- State safety: lead-in normalization runs in the same pre-`stateSignalBody` stage as before; inbound-side detectors that match `sounds good` (appointment confirm, accepted-time) are untouched.
+- Eval: `npm run outbound_lead_in:eval` (behavior-level via `appendOutbound`, includes the Mustafa photo-share fixture).

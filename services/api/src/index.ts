@@ -8844,10 +8844,10 @@ async function applyPostCallSummaryActions(opts: {
 const FOLLOW_UP_MESSAGES = [
   "Hey {name}, just checking in{labelClause}. If helpful, I can send a quick price and payment snapshot.",
   "If helpful, I can send current photos or a short walkaround of{label}.",
-  "Want a simple side-by-side on{labelClause} so it is easier to compare?",
-  "I can also check current incentives on{labelClause} and send only what applies.{offersLine}",
+  "Want a simple side-by-side{onLabelClause} so it is easier to compare?",
+  "I can also check current incentives{onLabelClause} and send only what applies.{offersLine}",
   "If you’d rather stop in{labelClause}, I can send two easy time options.",
-  "No rush, {name}. I can keep an eye on{labelClause} and only text when something changes.",
+  "No rush, {name}. I can keep an eye out{forLabelClause} and only text when something changes.",
   "Still interested, or want me to send a couple options that fit what you’re looking for?",
   "If timing shifted, totally fine. Send me a day that works and I’ll keep it easy.",
   "Still happy to help{labelClause}. If timing changed, just text me and I can pick this back up.",
@@ -8952,7 +8952,7 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
     "I can send a short video of{label} plus the key differences versus similar options."
   ],
   2: [
-    "Would a side-by-side on{labelClause} help (price, payment, and condition)?",
+    "Would a side-by-side{onLabelClause} help (price, payment, and condition)?",
     "Still deciding{labelClause}, or want me to narrow it to two best-fit options?"
   ],
   4: [
@@ -9182,21 +9182,34 @@ function pickVariantNoRepeat(
   return pick;
 }
 
+function repairFollowUpClauseGrammar(text: string): string {
+  // Safety net for label-clause slot collisions: "incentives on about the X",
+  // dangling "incentives on and send", "keep you posted on?" etc.
+  return String(text ?? "")
+    .replace(/\b(?:on|for) about\b/g, "about")
+    .replace(/\s(?:on|for)\s+(and|so)\s/g, " $1 ")
+    .replace(/\s(?:on|for)([?.!,])/g, "$1");
+}
+
 function renderFollowUpTemplate(template: string, ctx: Record<string, string>): string {
   let out = template;
   for (const [key, value] of Object.entries(ctx)) {
     out = out.replace(new RegExp(`\\{${key}\\}`, "g"), value);
   }
-  return out.replace(/\s+/g, " ").trim();
+  return repairFollowUpClauseGrammar(out.replace(/\s+/g, " ")).trim();
 }
 
 function appendCadenceOffersLine(message: string, offersLine: string): string {
   const base = String(message ?? "").trim();
   const line = String(offersLine ?? "").trim();
   if (!line) return base;
+  // An unrendered {offersLine} placeholder means a later render pass will insert
+  // the offers line; appending here would double it once the template renders.
+  if (base.includes("{offersLine}")) return base;
+  const normalize = (text: string) => text.toLowerCase().replace(/\s+/g, " ");
   const url = line.match(/https?:\/\/\S+/i)?.[0]?.replace(/[),.]+$/g, "") ?? "";
-  if (url && base.toLowerCase().includes(url.toLowerCase())) return base;
-  if (base.toLowerCase().includes(line.toLowerCase())) return base;
+  if (url && normalize(base).includes(url.toLowerCase())) return base;
+  if (normalize(base).includes(normalize(line))) return base;
   return `${base} ${line}`.trim();
 }
 
@@ -10564,6 +10577,8 @@ async function buildCadenceRegeneratedDraft(
     ? formatModelLabelForFollowUp(followUpYear, followUpModel)
     : "";
   const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
+  const onLabelClause = followUpLabel ? ` on ${followUpLabel}` : "";
+  const forLabelClause = followUpLabel ? ` for ${followUpLabel}` : "";
   const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
   const modelName = formatModelToken(followUpModel);
   const modelYear = followUpYear ? `${followUpYear} ${modelName}` : modelName;
@@ -10591,6 +10606,8 @@ async function buildCadenceRegeneratedDraft(
     name: firstName,
     agent: agentName,
     labelClause,
+    onLabelClause,
+    forLabelClause,
     label: labelWithThe,
     extraLine,
     offersLine: cadenceOffersLine ? ` ${cadenceOffersLine}` : "",
@@ -10847,15 +10864,15 @@ const EMAIL_FOLLOW_UP_MESSAGES: Array<(ctx: EmailFollowUpCtx) => string> = [
 const SCHEDULE_INVITE_THRESHOLD = 3;
 
 const FRESH_INFO_FOLLOW_UPS = [
-  "Hey {name}, quick update with payment info for{labelClause}. Want me to keep an eye on similar bikes too?",
-  "Hey {name}, I can text a simple payment breakdown for{labelClause}. Want me to keep watching while you decide?",
-  "Hey {name}, want me to keep tabs on{labelClause}? I can share payment info and watch similar inventory."
+  "Hey {name}, quick update with payment info{forLabelClause}. Want me to keep an eye on similar bikes too?",
+  "Hey {name}, I can text a simple payment breakdown{forLabelClause}. Want me to keep watching while you decide?",
+  "Hey {name}, want me to keep an eye out{forLabelClause}? I can share payment info and watch similar inventory."
 ];
 
 const SOFT_EXIT_FOLLOW_UPS = [
   "Hey {name}, all good if now is not the time. Want me to text you when something similar comes in?",
   "No pressure, {name}. I can text when a similar bike or price pops up. Want me to keep watching?",
-  "Hey {name}, sounds like you want to wait. Want me to keep you posted on{labelClause}?"
+  "Hey {name}, sounds like you want to wait. Want me to keep you posted{onLabelClause}?"
 ];
 
 function isUnknownInterestVehicle(conv: any): boolean {
@@ -18072,13 +18089,25 @@ function selectNonRepeatingCadenceMessage(
   const trimmedCandidate = String(candidate ?? "").trim();
   const normalizedCandidate = normalizeOutboundText(trimmedCandidate);
   if (!normalizedCandidate) return candidate;
-  const outbounds = getOutboundMessagesByProvider(conv, providers);
+  // Stale drafts were never customer-visible; counting them dilutes the recency
+  // window and lets a repeat of an actually-sent message slip past the guard.
+  const outbounds = getOutboundMessagesByProvider(conv, providers).filter(
+    (m: any) => m?.draftStatus !== "stale"
+  );
   if (!outbounds.length) return trimmedCandidate || candidate;
   const recentNorms = outbounds
     .slice(-3)
     .map((m: any) => normalizeOutboundText(m?.body ?? ""))
     .filter(Boolean);
-  const isNearRecentDuplicate = recentNorms.some(prev => isCadenceNearDuplicateText(normalizedCandidate, prev));
+  const exactRecentNorms = new Set(
+    outbounds
+      .slice(-10)
+      .map((m: any) => normalizeOutboundText(m?.body ?? ""))
+      .filter(Boolean)
+  );
+  const isNearRecentDuplicate =
+    exactRecentNorms.has(normalizedCandidate) ||
+    recentNorms.some(prev => isCadenceNearDuplicateText(normalizedCandidate, prev));
   if (!isNearRecentDuplicate) return trimmedCandidate || candidate;
 
   const used = new Set(
@@ -26265,6 +26294,8 @@ async function processDueFollowUpsUnlocked() {
       ? formatModelLabelForFollowUp(followUpYear, followUpModel)
       : "";
     const labelClause = followUpLabel ? ` about ${followUpLabel}` : "";
+    const onLabelClause = followUpLabel ? ` on ${followUpLabel}` : "";
+    const forLabelClause = followUpLabel ? ` for ${followUpLabel}` : "";
     const labelWithThe = followUpLabel ? ` ${followUpLabel}` : " a model";
     const tradeVehicle = conv?.lead?.tradeVehicle ?? null;
     const tradeLabel =
@@ -26294,6 +26325,8 @@ async function processDueFollowUpsUnlocked() {
       name: firstName,
       agent: agentName,
       labelClause,
+      onLabelClause,
+      forLabelClause,
       label: labelWithThe,
       extraLine,
       offersLine: cadenceOffersLine ? ` ${cadenceOffersLine}` : "",
@@ -26738,6 +26771,8 @@ async function processDueFollowUpsUnlocked() {
         name: firstName,
         agent: agentName,
         labelClause,
+        onLabelClause,
+        forLabelClause,
         model: modelName,
         extraLine,
         trade: tradeName,
