@@ -23,6 +23,7 @@ import {
   isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
+import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
   buildRecentVehicleDiscussionReply,
   extractRecentVehicleDiscussionFacts,
@@ -33050,6 +33051,11 @@ app.post("/inventory/status", (req, res) => {
 });
 
 // Inbox endpoints
+app.get("/pipeline", (_req, res) => {
+  const summary = buildPipelineSummary(getAllConversations(), listOpenTodos());
+  res.json({ ok: true, ...summary });
+});
+
 app.get("/conversations", (req, res) => {
   const user = (req as any).user ?? null;
   const conversations = listConversations().filter(conv => canUserAccessConversation(user, conv));
