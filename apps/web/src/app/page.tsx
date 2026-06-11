@@ -260,6 +260,7 @@ function MediaAttachmentPreviewList({
 }
 
 type SideNavIconName =
+  | "pipeline"
   | "inbox"
   | "todos"
   | "contacts"
@@ -285,6 +286,13 @@ function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIconName; c
     "aria-hidden": true
   };
 
+  if (name === "pipeline") {
+    return (
+      <svg {...commonProps}>
+        <path d="M4 5h16l-5.5 6.5V18l-5 2v-8.5L4 5Z" />
+      </svg>
+    );
+  }
   if (name === "inbox") {
     return (
       <svg {...commonProps}>
@@ -13310,6 +13318,11 @@ export default function Home() {
           >
             <SideNavIcon name="kpi" />
           </button>
+        ) : null}
+        {!isDepartmentUser ? (
+          <a className={sideNavButtonClass(false)} title="Pipeline" href="/pipeline">
+            <SideNavIcon name="pipeline" />
+          </a>
         ) : null}
         {!isDepartmentUser ? (
           <button
