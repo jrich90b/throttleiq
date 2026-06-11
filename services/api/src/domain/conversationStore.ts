@@ -2288,6 +2288,11 @@ export function finalizeDraftAsSent(
   if (!msg) return { usedDraft: false };
   if (msg.direction !== "out" || msg.provider !== "draft_ai") return { usedDraft: false };
   if (msg.draftStatus === "stale") return { usedDraft: false };
+  // A media-only send (empty final body) must never consume the draft: doing so
+  // wiped the typed reply into originalDraftBody and dropped the media from the
+  // record (Bailey 2026-06-10, Mustafa 2026-05-11). The caller falls through to
+  // appendOutbound for the media message and the draft stays pending.
+  if (!String(finalBody ?? "").trim()) return { usedDraft: false };
 
   const original = msg.body;
   const stateSignalBody = normalizeSalesToneBase(finalBody);
