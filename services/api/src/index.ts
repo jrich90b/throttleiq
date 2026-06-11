@@ -16924,7 +16924,13 @@ function parseFutureTimeframe(text: string, base: Date): { label: string; until?
     const month = monthMap[monthKey];
     const year = base.getFullYear();
     let d = new Date(year, month, 1, 9, 0, 0, 0);
-    if (d.getTime() <= base.getTime()) d = new Date(year + 1, month, 1, 9, 0, 0, 0);
+    if (d.getTime() <= base.getTime()) {
+      // A bare mention of the current month means later this month, never the
+      // same month next year (the Dominik 2027 parking class of bug).
+      d = month === base.getMonth()
+        ? new Date(year, month + 1, 0, 9, 0, 0, 0)
+        : new Date(year + 1, month, 1, 9, 0, 0, 0);
+    }
     return { label: monthKey, until: d };
   }
 
@@ -26220,14 +26226,36 @@ async function processDueFollowUpsUnlocked() {
       may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
       oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
     };
-    const monthMatch = t.match(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{1,2}))?\b/);
+    // Day group must allow ordinal suffixes: without it, "June 20th" failed the
+    // trailing \b (digit→"th"), backtracked to a bare "june" match, defaulted to
+    // day 1, and the past-date guard parked the cadence a full year out
+    // (Dominik Roehre 2026-06-11: nextDueAt 2027-06-01).
+    const monthMatch = t.match(
+      /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{1,2})(?:st|nd|rd|th)?)?\b/
+    );
     if (monthMatch) {
-      const m = monthMap[monthMatch[1]];
-      const day = monthMatch[2] ? Number(monthMatch[2]) : 1;
-      const y = base.getFullYear();
-      let d = new Date(y, m, day, 9, 0, 0, 0);
-      if (d.getTime() <= base.getTime()) d = new Date(y + 1, m, day, 9, 0, 0, 0);
-      return { until: d };
+      const monthKey = monthMatch[1];
+      // "may" is usually the modal verb ("I may stop by"), not the month.
+      const mayIsMonth =
+        monthKey !== "may" ||
+        /\bmay\s+\d{1,2}(?:st|nd|rd|th)?\b/.test(t) ||
+        /\b(in|this|next|on|by|during|around|early|late)\s+may\b/.test(t);
+      if (mayIsMonth) {
+        const m = monthMap[monthKey];
+        const day = monthMatch[2] ? Number(monthMatch[2]) : 1;
+        const y = base.getFullYear();
+        let d = new Date(y, m, day, 9, 0, 0, 0);
+        if (d.getTime() <= base.getTime()) {
+          if (!monthMatch[2] && m === base.getMonth()) {
+            // Bare mention of the current month means later this month,
+            // never the same month next year.
+            d = new Date(y, m + 1, 0, 9, 0, 0, 0);
+          } else {
+            d = new Date(y + 1, m, day, 9, 0, 0, 0);
+          }
+        }
+        return { until: d };
+      }
     }
 
     const dowMap: Record<string, number> = {

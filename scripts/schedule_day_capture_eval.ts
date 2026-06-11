@@ -80,6 +80,72 @@ assert.deepEqual(
   "event confirmation must be charter-clean"
 );
 
+// Year-rollover root cause (task #17): parsePauseUntil's month regex had no
+// ordinal suffix in the day group, so "June 20th" failed the trailing \b,
+// backtracked to a bare "june", defaulted to day 1, and the past-date guard
+// parked Dominik's cadence at 2027-06-01T09:00Z via bumpCadenceNextDueAt.
+assert.match(
+  apiSource,
+  /Day group must allow ordinal suffixes/,
+  "parsePauseUntil ordinal fix must be documented at the regex"
+);
+assert.equal(
+  (apiSource.match(/never the\s+(?:\/\/ )?same month next year/g) ?? []).length,
+  2,
+  "bare current-month mentions must stay in the current month in BOTH parsePauseUntil and parseFutureTimeframe"
+);
+
+// Behavioral copy of the fixed parsePauseUntil month branch.
+const PAUSE_MONTHS: Record<string, number> = {
+  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+  may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11
+};
+function pauseUntilFromMonth(text: string, base: Date): Date | null {
+  const t = text.toLowerCase();
+  const monthMatch = t.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{1,2})(?:st|nd|rd|th)?)?\b/
+  );
+  if (!monthMatch) return null;
+  const monthKey = monthMatch[1];
+  const mayIsMonth =
+    monthKey !== "may" ||
+    /\bmay\s+\d{1,2}(?:st|nd|rd|th)?\b/.test(t) ||
+    /\b(in|this|next|on|by|during|around|early|late)\s+may\b/.test(t);
+  if (!mayIsMonth) return null;
+  const m = PAUSE_MONTHS[monthKey];
+  const day = monthMatch[2] ? Number(monthMatch[2]) : 1;
+  const y = base.getFullYear();
+  let d = new Date(y, m, day, 9, 0, 0, 0);
+  if (d.getTime() <= base.getTime()) {
+    d = !monthMatch[2] && m === base.getMonth()
+      ? new Date(y, m + 1, 0, 9, 0, 0, 0)
+      : new Date(y + 1, m, day, 9, 0, 0, 0);
+  }
+  return d;
+}
+const incidentBase = new Date(2026, 5, 11, 15, 25, 0);
+const dominikUntil = pauseUntilFromMonth(
+  "I signed up online for the June 20th event so it'll be that day",
+  incidentBase
+);
+assert.equal(dominikUntil?.getFullYear(), 2026, "ordinal date must not roll a year");
+assert.equal(dominikUntil?.getMonth(), 5);
+assert.equal(dominikUntil?.getDate(), 20, "June 20th must capture day 20, not default to the 1st");
+const bareJune = pauseUntilFromMonth("probably june for me", incidentBase);
+assert.equal(bareJune?.getFullYear(), 2026, "bare current-month must stay in the current year");
+assert.equal(bareJune?.getDate(), 30, "bare current-month resolves to end of month");
+assert.equal(
+  pauseUntilFromMonth("I may stop by sometime", incidentBase),
+  null,
+  "modal 'may' is not the month of May"
+);
+const inMay = pauseUntilFromMonth("probably in may", incidentBase);
+assert.equal(inMay?.getFullYear(), 2027, "explicit past month legitimately rolls forward");
+const december = pauseUntilFromMonth("not until december", incidentBase);
+assert.equal(december?.getFullYear(), 2026, "future month stays in current year");
+assert.equal(december?.getMonth(), 11);
+
 // Committed-day cadence re-anchor pins.
 assert.match(apiSource, /function reanchorCadenceForCommittedDay/, "cadence re-anchor must exist");
 assert.equal(
