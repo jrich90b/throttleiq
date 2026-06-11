@@ -101,6 +101,14 @@ assert.match(
   "regen photo-share handler must move dialog state off small_talk"
 );
 
+// Cadence regeneration must never outrank a photo-share turn (the third path
+// that hijacked Mustafa's regenerate: a cadence nudge pitching a sold unit).
+assert.match(
+  apiSource,
+  /regeneratePhotoShareTurn[\s\S]{0,400}skipCadenceContextualRegenerate[\s\S]{0,200}regeneratePhotoShareTurn/,
+  "photo-share turns must skip cadence contextual regeneration"
+);
+
 // The shared inventory-status availability route (live + regen) must hand
 // unit-less image_availability_check turns to photo-share handling instead of
 // the generic "I'll have the team check current options" punt.

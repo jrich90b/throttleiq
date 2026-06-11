@@ -46750,8 +46750,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenerateMediaAvailabilityQuestion =
     !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
   const regenerateMediaProofUpdate = shouldAcknowledgeInboundMediaProof(conv, event);
+  // A customer photo-share is a live buying signal: regenerate must produce the
+  // photo-match reply, never a cadence nudge built on stale unit context
+  // (Mustafa +17164368801: cadence regen pitched a sold Fat Boy over his photo).
+  const regeneratePhotoShareTurn =
+    detectCustomerVehiclePhotoShareText({
+      text: event.body ?? "",
+      hasInboundMedia: !!event.mediaUrls?.length
+    }) && isSalesPhotoShareContext(getDialogState(conv));
   const skipCadenceContextualRegenerate =
     cadenceRegenBlocksGeneric ||
+    regeneratePhotoShareTurn ||
     (event.provider === "sendgrid_adf" && !regenerateFromCadenceDraft) ||
     regenerateMediaAvailabilityQuestion ||
     regenerateMediaProofUpdate ||
