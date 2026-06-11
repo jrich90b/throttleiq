@@ -13862,6 +13862,7 @@ export default function Home() {
                       (String(m.body ?? "").trim() || (m.mediaUrls?.length ?? 0) > 0)
                   )
                   .slice(-40)
+                  .reverse()
                   .map((m, i) => {
                     const isIn = m.direction === "in";
                     const isDraft = m.provider === "draft_ai";

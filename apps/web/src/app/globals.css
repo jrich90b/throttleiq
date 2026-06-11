@@ -6199,7 +6199,8 @@ input[type="reset"],
   flex: 1 1 auto;
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
+  /* column-reverse + newest-first DOM order keeps scroll pinned to the latest message */
+  flex-direction: column-reverse;
   gap: 0.45rem;
   padding: 0.7rem 0.1rem 1rem;
 }
