@@ -1,7 +1,5 @@
-"use client";
-
-import PipelineBoard from "./PipelineBoard";
+import { redirect } from "next/navigation";
 
 export default function PipelinePage() {
-  return <PipelineBoard />;
+  redirect("/?section=pipeline");
 }
