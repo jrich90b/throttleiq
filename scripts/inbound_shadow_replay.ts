@@ -587,6 +587,13 @@ async function startApi(args: {
     DATA_BACKEND: "file",
     DATABASE_URL: "",
     DATA_DIR: args.dataDir,
+    // The feedback loop exports CONVERSATIONS_DB_PATH pointing at the LIVE
+    // store, and the store prefers it over DATA_DIR. Without this override the
+    // shadow API reads/writes production conversations.json (observed
+    // 2026-06-11: replayed turns transiently in the live file, plus a clobber
+    // risk against concurrent live saves).
+    CONVERSATIONS_DB_PATH: path.join(args.dataDir, "conversations.json"),
+    CONVERSATIONS_PATH: path.join(args.dataDir, "conversations.json"),
     SETTINGS_DB_PATH: path.join(args.dataDir, "settings.json"),
     TWILIO_INBOUND_JOBS_PATH: args.jobsPath,
     TWILIO_INBOUND_JOBS_MAX_ROWS: "200",

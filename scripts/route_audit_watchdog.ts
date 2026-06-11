@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import {
+  isAutomatedSenderInbound,
+  isNonSalesConversation,
+  isShadowReplayMessage
+} from "../services/api/src/domain/scoringExclusions.ts";
+
 type AnyObj = Record<string, any>;
 
 type ParsedArgs = {
@@ -119,13 +125,16 @@ function readJsonl(filePath: string): AnyObj[] {
 function collectStuckTurns(conversations: any[], olderThanSec: number, nowMs: number) {
   return conversations
     .map(conv => {
+      if (isNonSalesConversation(conv)) return null;
       const messages = Array.isArray(conv?.messages) ? [...conv.messages] : [];
       messages.sort((a, b) => toMs(String(a?.at ?? "")) - toMs(String(b?.at ?? "")));
       const lastInbound = [...messages].reverse().find((m: any) => {
         const provider = String(m?.provider ?? "");
         return (
           m?.direction === "in" &&
-          (provider === "twilio" || provider === "sendgrid" || provider === "sendgrid_adf")
+          (provider === "twilio" || provider === "sendgrid" || provider === "sendgrid_adf") &&
+          !isShadowReplayMessage(m) &&
+          !isAutomatedSenderInbound({ from: m?.from, body: m?.body, convId: conv?.id })
         );
       });
       if (!lastInbound?.at) return null;

@@ -14,6 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
+
 type Violation = {
   check: string;
   convId: string;
@@ -204,6 +206,7 @@ function main() {
     const sentNorms = new Map<string, string>();
     for (const m of msgs) {
       if (m?.direction !== "out") continue;
+      if (isShadowReplayMessage(m)) continue;
       const provider = String(m?.provider ?? "");
       const body = String(m?.body ?? "");
       const isDraft = provider === "draft_ai";

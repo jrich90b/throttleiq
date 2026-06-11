@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
+import {
+  isAutomatedSenderInbound,
+  isNonSalesConversation,
+  isShadowReplayMessage
+} from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -129,6 +134,11 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
   const convMode = String(conv?.mode ?? "").trim().toLowerCase();
   const leadEmail = String(conv?.lead?.email ?? "").trim().toLowerCase();
+  if (isShadowReplayMessage(inbound)) return "shadow_replay_turn";
+  if (isAutomatedSenderInbound({ from: inbound?.from, body: inbound?.body, convId: conv?.id })) {
+    return "automated_sender";
+  }
+  if (isNonSalesConversation(conv)) return "non_sales_thread";
   if (provider === "voice_transcript") return "provider_voice_transcript";
   if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
