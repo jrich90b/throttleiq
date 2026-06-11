@@ -80,4 +80,17 @@ assert.deepEqual(
   "event confirmation must be charter-clean"
 );
 
+// Committed-day cadence re-anchor pins.
+assert.match(apiSource, /function reanchorCadenceForCommittedDay/, "cadence re-anchor must exist");
+assert.equal(
+  (apiSource.match(/reanchorCadenceForCommittedDay\(conv, statusUpdate\.dayLabel\)/g) ?? []).length,
+  2,
+  "both status-update paths must re-anchor the cadence on committed days"
+);
+assert.match(
+  apiSource,
+  /parked his cadence until June 2027/,
+  "re-anchor documents the Dominik year-rollover incident"
+);
+
 console.log("PASS schedule day capture eval");

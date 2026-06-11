@@ -18422,6 +18422,67 @@ function scheduleWeekdayLabel(raw: string): string {
   return labels[raw] ?? "";
 }
 
+function resolveUpcomingDateFromDayLabel(label: string, now: Date = new Date()): Date | null {
+  const t = String(label ?? "").trim().toLowerCase();
+  if (!t) return null;
+  const monthIdx: Record<string, number> = {
+    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11
+  };
+  const monthDate = t.match(/^([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?$/);
+  if (monthDate && monthIdx[monthDate[1]] != null) {
+    const candidate = new Date(now.getFullYear(), monthIdx[monthDate[1]], Number(monthDate[2]), 12, 0, 0);
+    if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+      candidate.setFullYear(candidate.getFullYear() + 1);
+    }
+    return candidate;
+  }
+  const slash = t.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (slash) {
+    const candidate = new Date(now.getFullYear(), Number(slash[1]) - 1, Number(slash[2]), 12, 0, 0);
+    if (candidate.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+      candidate.setFullYear(candidate.getFullYear() + 1);
+    }
+    return candidate;
+  }
+  const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const wd = weekdays.indexOf(t);
+  if (wd >= 0) {
+    const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    const delta = (wd - candidate.getDay() + 7) % 7 || 7;
+    candidate.setDate(candidate.getDate() + delta);
+    return candidate;
+  }
+  if (t === "today") return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+  if (t === "tomorrow") {
+    const c = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    c.setDate(c.getDate() + 1);
+    return c;
+  }
+  return null;
+}
+
+/**
+ * A committed visit day re-anchors the follow-up cadence to the day after the
+ * visit (no-show recovery), instead of whatever a timeframe parse produced
+ * (Dominik 2026-06-11: "June 20th event" parked his cadence until June 2027).
+ */
+function reanchorCadenceForCommittedDay(conv: any, dayLabel: string, now: Date = new Date()): boolean {
+  const visitDate = resolveUpcomingDateFromDayLabel(dayLabel, now);
+  if (!visitDate) return false;
+  const cadence = conv.followUpCadence;
+  if (!cadence || cadence.status !== "active") return false;
+  const followUpAt = new Date(visitDate.getTime() + 22 * 60 * 60 * 1000);
+  const currentDueMs = Date.parse(String(cadence.nextDueAt ?? ""));
+  const farFuture = !Number.isFinite(currentDueMs) || currentDueMs > visitDate.getTime() + 3 * 24 * 60 * 60 * 1000;
+  const tooSoon = Number.isFinite(currentDueMs) && currentDueMs < visitDate.getTime();
+  if (!farFuture && !tooSoon) return false;
+  cadence.nextDueAt = followUpAt.toISOString();
+  cadence.pausedUntil = undefined;
+  cadence.pauseReason = undefined;
+  return true;
+}
+
 const SCHEDULE_EVENT_COMMIT_RE = /\b(event|demo days?|open house|bike night|signed up)\b/i;
 const SCHEDULE_DAY_COMMIT_RE =
   /\b(it'?ll be|that day|that date|i'?ll (?:be|come|stop|swing)|works for me|that works|see you)\b/i;
@@ -48095,6 +48156,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");
     if (statusUpdate.dayCommitted) {
+      reanchorCadenceForCommittedDay(conv, statusUpdate.dayLabel);
       addTodo(
         conv,
         "note",
@@ -55272,6 +55334,7 @@ if (authToken && signature) {
     const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");
     if (statusUpdate.dayCommitted) {
+      reanchorCadenceForCommittedDay(conv, statusUpdate.dayLabel);
       addTodo(
         conv,
         "note",
