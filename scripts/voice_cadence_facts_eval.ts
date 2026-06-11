@@ -103,6 +103,18 @@ assert.equal(
 );
 assert.equal(buildVoiceFactsCadenceLine(emptyConv, now), null);
 
+// Post-sale conversations never render quote lines.
+const soldConv: any = {
+  closedReason: "sold",
+  voiceFacts: { quotedUnit: "Breakout", quotedPrice: 14995, otdPrice: null, budgetMax: null, wantsPreowned: null, preferences: [], blockers: [], updatedAt: nowIso }
+};
+assert.equal(buildVoiceFactsCadenceLine(soldConv, now), null, "sold customers never get quote lines");
+const postSaleConv: any = {
+  followUpCadence: { kind: "post_sale" },
+  voiceFacts: { quotedUnit: "Breakout", quotedPrice: 14995, otdPrice: null, budgetMax: null, wantsPreowned: null, preferences: [], blockers: [], updatedAt: nowIso }
+};
+assert.equal(buildVoiceFactsCadenceLine(postSaleConv, now), null, "post-sale cadences never get quote lines");
+
 // Stale facts (45+ days) stop rendering.
 const staleConv: any = {
   voiceFacts: { quotedUnit: "Breakout", quotedPrice: 14995, otdPrice: null, budgetMax: null, wantsPreowned: null, preferences: [], blockers: [], updatedAt: "2026-04-01T00:00:00.000Z" }

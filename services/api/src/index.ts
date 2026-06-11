@@ -20,7 +20,7 @@ import {
   buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
-  isSalesPhotoShareContext
+  isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
 import {
@@ -7900,7 +7900,7 @@ async function maybeHandleInventoryStatusParserRoute(args: {
       !imageTargetModel &&
       !imageTargetStock &&
       !imageMentionedModel &&
-      isSalesPhotoShareContext(getDialogState(args.conv))
+      isSalesPhotoShareConversation(args.conv)
     ) {
       setDialogState(args.conv, "inventory_init");
       setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
@@ -46796,7 +46796,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     detectCustomerVehiclePhotoShareText({
       text: event.body ?? "",
       hasInboundMedia: !!event.mediaUrls?.length
-    }) && isSalesPhotoShareContext(getDialogState(conv));
+    }) && isSalesPhotoShareConversation(conv);
   const skipCadenceContextualRegenerate =
     cadenceRegenBlocksGeneric ||
     regeneratePhotoShareTurn ||
@@ -47883,7 +47883,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
-    isSalesPhotoShareContext(getDialogState(conv)) &&
+    isSalesPhotoShareConversation(conv) &&
     (regenParserCustomerPhotoShare ||
       (regenInboundReplyActionFallbackAllowed &&
         detectCustomerVehiclePhotoShareText({
@@ -50869,7 +50869,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     !inboundParserExplicitCallbackRequest &&
     !inboundParserLocationQuestion &&
-    isSalesPhotoShareContext(getDialogState(conv)) &&
+    isSalesPhotoShareConversation(conv) &&
     (inboundParserCustomerPhotoShare ||
       (inboundReplyActionFallbackAllowed &&
         detectCustomerVehiclePhotoShareText({

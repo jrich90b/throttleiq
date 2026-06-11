@@ -110,11 +110,20 @@ function formatDollars(amount: number): string {
  * Returns null when there is nothing concrete or the facts are stale.
  */
 export function buildVoiceFactsCadenceLine(
-  conv: Pick<Conversation, "voiceFacts">,
+  conv: Pick<Conversation, "voiceFacts" | "closedReason" | "sale" | "followUpCadence">,
   now: Date = new Date()
 ): string | null {
   const facts = conv?.voiceFacts;
   if (!facts) return null;
+  // Post-sale follow-ups must never resurrect pre-purchase quotes/budgets
+  // (audit 2026-06-11: 4 of 6 pending backfills were post-sale customers).
+  if (
+    conv?.closedReason === "sold" ||
+    !!conv?.sale?.soldAt ||
+    String(conv?.followUpCadence?.kind ?? "") === "post_sale"
+  ) {
+    return null;
+  }
   const updatedMs = Date.parse(String(facts.updatedAt ?? ""));
   if (!Number.isFinite(updatedMs)) return null;
   if (now.getTime() - updatedMs > FACT_FRESHNESS_DAYS * 24 * 60 * 60 * 1000) return null;

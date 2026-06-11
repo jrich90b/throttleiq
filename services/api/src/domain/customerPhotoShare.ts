@@ -47,6 +47,23 @@ export function isSalesPhotoShareContext(dialogState: string | null | undefined)
   return !NON_SALES_PHOTO_DIALOG_STATES.has(state);
 }
 
+/**
+ * Post-sale photos are proud-owner moments, not inventory-match requests
+ * (audit 2026-06-11: post-sale customers texting photos of the bike they
+ * bought would have been offered an inventory match).
+ */
+export function isSalesPhotoShareConversation(conv: {
+  closedReason?: string | null;
+  sale?: { soldAt?: string | null } | null;
+  followUpCadence?: { kind?: string | null } | null;
+  dialogState?: { name?: string | null } | null;
+}): boolean {
+  if (conv?.closedReason === "sold") return false;
+  if (conv?.sale?.soldAt) return false;
+  if (String(conv?.followUpCadence?.kind ?? "") === "post_sale") return false;
+  return isSalesPhotoShareContext(conv?.dialogState?.name ?? null);
+}
+
 export function buildCustomerVehiclePhotoShareReply(args: {
   firstName?: string | null;
   mentionedModel?: string | null;

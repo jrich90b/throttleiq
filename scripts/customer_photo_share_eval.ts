@@ -19,6 +19,7 @@ const {
   detectCustomerVehiclePhotoShareText,
   findNearestInboundImageUrls,
   isSalesPhotoShareContext,
+  isSalesPhotoShareConversation,
   resolveUploadLocalPath,
   shouldUseVisionIdentification,
   visionFamilyCandidates
@@ -64,6 +65,19 @@ assert.equal(
 
 // Context gate: paperwork/status images in delivery/finance flows are not bike matches.
 assert.equal(isSalesPhotoShareContext("purchase_delivery"), false);
+assert.equal(
+  isSalesPhotoShareConversation({ closedReason: "sold", dialogState: { name: "small_talk" } }),
+  false,
+  "sold customers' photos are proud-owner moments, not inventory matches"
+);
+assert.equal(
+  isSalesPhotoShareConversation({ followUpCadence: { kind: "post_sale" }, dialogState: { name: "small_talk" } }),
+  false
+);
+assert.equal(
+  isSalesPhotoShareConversation({ dialogState: { name: "small_talk" } }),
+  true
+);
 assert.equal(isSalesPhotoShareContext("finance_docs"), false);
 assert.equal(isSalesPhotoShareContext("small_talk"), true);
 assert.equal(isSalesPhotoShareContext("inventory_init"), true);
