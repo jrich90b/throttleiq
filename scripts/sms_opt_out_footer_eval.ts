@@ -135,4 +135,35 @@ assert.match(
   "async Twilio autopilot delivery must use the prepared opt-out copy"
 );
 
+// Opt-out confirmation policy (Joe, 2026-06-12): customers who opt out get
+// exactly ONE final confirmation. Twilio auto-confirms its own STOP keywords;
+// we confirm softer phrasings ("don't text me") immediately via the webhook
+// response — never as a suggest-mode draft, which previously left soft
+// opt-outs with silence (the suppression list blocked the drafted reply).
+assert.match(
+  apiSource,
+  /TWILIO_STOP_KEYWORDS = new Set\(\["stop", "stopall", "unsubscribe", "cancel", "end", "quit"\]\)/,
+  "Twilio-handled keyword set must match Twilio's default opt-out list"
+);
+assert.match(
+  apiSource,
+  /You're opted out and won't receive any more texts from/,
+  "opt-out confirmation copy exists"
+);
+assert.equal(
+  (apiSource.match(/appendOutbound\(conv, event\.to, event\.from, confirmation, "twilio"\)/g) ?? []).length,
+  2,
+  "both AI-path opt-out branches send the confirmation immediately (never drafted)"
+);
+assert.match(
+  apiSource,
+  /confirmHuman/,
+  "human-mode opt-outs also confirm"
+);
+assert.equal(
+  (apiSource.match(/const reply = "Understood - I'll stop texting\."/g) ?? []).length,
+  0,
+  "the old draft-only confirmation is gone"
+);
+
 console.log("sms_opt_out_footer_eval passed");

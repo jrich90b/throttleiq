@@ -5849,6 +5849,20 @@ async function applySmsOptOut(conv: any, event: { from?: string } | undefined) {
   stopRelatedCadences(conv, "opt_out", { close: true });
 }
 
+// Twilio's default US opt-out handling already replies to these exact
+// keywords with its own unsubscribe confirmation and blocks anything further
+// we send — confirming again would double-message (or bounce with 21610).
+const TWILIO_STOP_KEYWORDS = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
+function isTwilioHandledStopKeyword(text: string | null | undefined): boolean {
+  return TWILIO_STOP_KEYWORDS.has(String(text ?? "").trim().toLowerCase());
+}
+
+async function buildOptOutConfirmationText(): Promise<string> {
+  const profile = await getDealerProfileHot();
+  const dealerName = profile?.dealerName ?? "American Harley-Davidson";
+  return `You're opted out and won't receive any more texts from ${dealerName}.`;
+}
+
 async function applyWrongNumberSuppression(conv: any, event: { from?: string } | undefined) {
   await suppressRelatedPhones(conv, event, "wrong_number", "twilio");
   discardPendingDrafts(conv, "wrong_number");
@@ -51442,9 +51456,18 @@ if (authToken && signature) {
   }
   if (conv.mode === "human") {
     if (llmOptOut || isOptOut(event.body)) {
+      const confirmHuman = !isTwilioHandledStopKeyword(event.body)
+        ? await buildOptOutConfirmationText()
+        : null;
+      if (confirmHuman) {
+        appendOutbound(conv, event.to, event.from, confirmHuman, "twilio");
+      }
       await applySmsOptOut(conv, event);
       saveConversation(conv);
       await flushConversationStore();
+      if (confirmHuman) {
+        return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmHuman));
+      }
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -52181,9 +52204,22 @@ if (authToken && signature) {
   if (isSuppressed(event.from)) {
     stopFollowUpCadence(conv, "suppressed");
     if (llmOptOut || isOptOut(event.body)) {
+      // One final confirmation is the CTIA standard. Twilio auto-confirms its
+      // own STOP keywords; we confirm softer phrasings ourselves — sent
+      // immediately even in suggest mode (never drafted), via the webhook
+      // response so the suppression list can't block it.
+      if (!isTwilioHandledStopKeyword(event.body)) {
+        const confirmation = await buildOptOutConfirmationText();
+        appendOutbound(conv, event.to, event.from, confirmation, "twilio");
+        await applySmsOptOut(conv, event);
+        saveConversation(conv);
+        await flushConversationStore();
+        return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmation));
+      }
       await applySmsOptOut(conv, event);
-      const reply = "Understood - I'll stop texting.";
-      return publishLiveTwilioReply(reply);
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
     }
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
@@ -52193,9 +52229,22 @@ if (authToken && signature) {
   }
   await resetFollowUpCadenceOnInbound(conv, event.body ?? "");
   if (llmOptOut || isOptOut(event.body)) {
+    // One final confirmation is the CTIA standard. Twilio auto-confirms its
+    // own STOP keywords; we confirm softer phrasings ourselves — sent
+    // immediately even in suggest mode (never drafted), via the webhook
+    // response so the suppression list can't block it.
+    if (!isTwilioHandledStopKeyword(event.body)) {
+      const confirmation = await buildOptOutConfirmationText();
+      appendOutbound(conv, event.to, event.from, confirmation, "twilio");
+      await applySmsOptOut(conv, event);
+      saveConversation(conv);
+      await flushConversationStore();
+      return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmation));
+    }
     await applySmsOptOut(conv, event);
-    const reply = "Understood - I'll stop texting.";
-    return publishLiveTwilioReply(reply);
+    saveConversation(conv);
+    await flushConversationStore();
+    return res.status(200).type("text/xml").send(emptyTwilioWebhookResponse());
   }
   const semanticInboundText = String(event.body ?? "");
   const semanticTextLower = semanticInboundText.toLowerCase();
