@@ -1,4 +1,5 @@
 import React from "react";
+import Image from "next/image";
 
 export function InboxSection(props: any) {
   const {
@@ -881,14 +882,23 @@ export function InboxSection(props: any) {
         })}
 
         {!loading && filteredConversations.length === 0 && (
-          <div className="p-4 text-sm text-gray-600 border rounded-lg">
-            {inboxQuery.trim()
-              ? "No conversations match your search."
-              : view === "inbox"
-                ? "No open conversations."
-                : view === "campaigns"
-                  ? "No campaign threads."
-                  : "No archived conversations."}
+          <div className="p-6 text-sm text-gray-600 border rounded-lg flex flex-col items-center gap-3 text-center">
+            <Image
+              src="/app/empty-quiet.jpg"
+              alt=""
+              width={416}
+              height={277}
+              className="w-52 h-auto rounded-lg"
+            />
+            <span>
+              {inboxQuery.trim()
+                ? "No conversations match your search."
+                : view === "inbox"
+                  ? "No open conversations."
+                  : view === "campaigns"
+                    ? "No campaign threads."
+                    : "No archived conversations."}
+            </span>
           </div>
         )}
       </div>

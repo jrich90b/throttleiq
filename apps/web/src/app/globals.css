@@ -65,6 +65,8 @@ a:where(:not(.lr-marketing *)) {
   background:
     radial-gradient(980px 340px at 78% -10%, rgba(251, 127, 4, 0.18), transparent 56%),
     radial-gradient(780px 300px at 12% -16%, rgba(63, 126, 255, 0.12), transparent 58%),
+    linear-gradient(180deg, rgba(9, 13, 20, 0.88) 0%, rgba(7, 11, 18, 0.94) 100%),
+    url("/app/auth-backdrop.jpg") center / cover no-repeat,
     linear-gradient(180deg, #090d14 0%, #070b12 100%);
   color: #e7edf8;
 }
@@ -300,7 +302,10 @@ a:where(:not(.lr-marketing *)) {
   padding: 1.45rem;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(18, 28, 45, 0.96), rgba(12, 18, 30, 0.96));
+  background:
+    linear-gradient(90deg, rgba(16, 25, 41, 0.97) 0%, rgba(16, 25, 41, 0.9) 52%, rgba(12, 18, 30, 0.62) 100%),
+    url("/app/header-strip.jpg") right center / cover no-repeat,
+    linear-gradient(180deg, rgba(18, 28, 45, 0.96), rgba(12, 18, 30, 0.96));
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
 }
 

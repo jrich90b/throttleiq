@@ -1,4 +1,5 @@
 import React from "react";
+import Image from "next/image";
 import { SideNavIcon } from "./UiIcon";
 import type { SideNavIconName } from "./UiIcon";
 
@@ -559,8 +560,15 @@ export function TaskInboxSection(props: any) {
           });
         })()}
         {!loading && filteredTodos.length === 0 ? (
-          <div className="p-4 text-sm text-gray-600">
-            {todoQuery.trim() ? "No To Dos match your search." : "No open To Dos."}
+          <div className="p-6 text-sm text-gray-600 flex flex-col items-center gap-3 text-center">
+            <Image
+              src="/app/empty-clear.jpg"
+              alt=""
+              width={416}
+              height={277}
+              className="w-52 h-auto rounded-lg"
+            />
+            <span>{todoQuery.trim() ? "No To Dos match your search." : "No open To Dos."}</span>
           </div>
         ) : null}
       </div>
