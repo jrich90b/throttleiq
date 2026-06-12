@@ -283,6 +283,10 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=agent_manager_report"
   FOLLOWUP_TASK_AUDIT_PATH="$FOLLOWUP_TASK_AUDIT_JSON" npm run agent_manager:report -- --route-watchdog "$WATCHDOG_JSON"
 
+  echo "[feedback-loop] step=agent_actions_audit"
+  ACTIONS_AUDIT_OUT_DIR="$REPORT_ROOT/actions_audit" npm run agent_actions:audit -- \
+    --store "$CONVERSATIONS_DB_PATH" || true
+
   echo "[feedback-loop] step=release_gate"
   npm run release_gate:report -- --report-root "$REPORT_ROOT" --route-watchdog "$WATCHDOG_JSON" || true
 

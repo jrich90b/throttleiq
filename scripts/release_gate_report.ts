@@ -37,6 +37,10 @@ type Thresholds = {
   personaReintrosMax: number;
   freshStuckActionableMax: number;
   outcomeQaP1Max: number;
+  cadenceFarFutureRecentMax: number;
+  cadenceStalledRecentMax: number;
+  apptOutcomeMissingRecentMax: number;
+  draftUnactionedRecentMax: number;
 };
 
 const DEFAULT_THRESHOLDS: Thresholds = {
@@ -47,7 +51,13 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   repeatsMax: 0,
   personaReintrosMax: 0,
   freshStuckActionableMax: 0,
-  outcomeQaP1Max: 0
+  outcomeQaP1Max: 0,
+  // Deterministic-action checks (agent_actions_audit) — "recent" counts only,
+  // so legacy debt ages out instead of permanently dirtying the gate.
+  cadenceFarFutureRecentMax: num(process.env.RELEASE_GATE_CADENCE_FAR_FUTURE_MAX, 0),
+  cadenceStalledRecentMax: num(process.env.RELEASE_GATE_CADENCE_STALLED_MAX, 0),
+  apptOutcomeMissingRecentMax: num(process.env.RELEASE_GATE_APPT_OUTCOME_MISSING_MAX, 0),
+  draftUnactionedRecentMax: num(process.env.RELEASE_GATE_DRAFT_UNACTIONED_MAX, 2)
 };
 
 const STREAK_TARGET = Math.max(1, num(process.env.RELEASE_GATE_STREAK_DAYS, 7));
@@ -86,6 +96,7 @@ export function buildDayRow(args: {
   charterSummary: any;
   outcomeQaReport: any;
   routeWatchdog: any;
+  actionsSummary?: any;
   sinceHours: number;
   thresholds?: Thresholds;
   nowMs?: number;
@@ -132,6 +143,24 @@ export function buildDayRow(args: {
     : [];
   const outcomeQaP1 = outcomeFindings.filter(row => String(row?.severity ?? "") === "P1").length;
 
+  const actionsByCheck: Array<{ check: string; total: number; recent: number }> = Array.isArray(
+    args.actionsSummary?.summary?.byCheck
+  )
+    ? args.actionsSummary.summary.byCheck
+    : [];
+  const actionRecent = (check: string): number | null => {
+    if (!args.actionsSummary) return null;
+    const row = actionsByCheck.find(r => String(r?.check ?? "") === check);
+    return row ? num(row.recent) : 0;
+  };
+  const cadenceFarFutureRecent = actionRecent("cadence_far_future");
+  const cadenceStalledRecent = actionRecent("cadence_stalled");
+  const apptOutcomeMissingRecent = actionRecent("appointment_outcome_missing");
+  const draftUnactionedRecent = actionRecent("draft_unactioned");
+  const watchOrphanedTotal = args.actionsSummary
+    ? num(actionsByCheck.find(r => String(r?.check ?? "") === "watch_orphaned")?.total)
+    : null;
+
   const metrics: Record<string, number | null> = {
     toneRespondedPassRate: tonePass,
     toneMissingResponses: toneMissing,
@@ -141,7 +170,12 @@ export function buildDayRow(args: {
     repeats,
     personaReintros,
     freshStuckActionable,
-    outcomeQaP1
+    outcomeQaP1,
+    cadenceFarFutureRecent,
+    cadenceStalledRecent,
+    apptOutcomeMissingRecent,
+    draftUnactionedRecent,
+    watchOrphanedTotal
   };
 
   const failures: string[] = [];
@@ -165,6 +199,18 @@ export function buildDayRow(args: {
     failures.push(`fresh stuck actionable turns ${freshStuckActionable} > ${t.freshStuckActionableMax}`);
   }
   if (outcomeQaP1 > t.outcomeQaP1Max) failures.push(`outcome QA P1 ${outcomeQaP1} > ${t.outcomeQaP1Max}`);
+  if (cadenceFarFutureRecent != null && cadenceFarFutureRecent > t.cadenceFarFutureRecentMax) {
+    failures.push(`cadence far-future parks ${cadenceFarFutureRecent} > ${t.cadenceFarFutureRecentMax}`);
+  }
+  if (cadenceStalledRecent != null && cadenceStalledRecent > t.cadenceStalledRecentMax) {
+    failures.push(`cadence stalled ${cadenceStalledRecent} > ${t.cadenceStalledRecentMax}`);
+  }
+  if (apptOutcomeMissingRecent != null && apptOutcomeMissingRecent > t.apptOutcomeMissingRecentMax) {
+    failures.push(`appointment outcomes missing ${apptOutcomeMissingRecent} > ${t.apptOutcomeMissingRecentMax}`);
+  }
+  if (draftUnactionedRecent != null && draftUnactionedRecent > t.draftUnactionedRecentMax) {
+    failures.push(`unactioned drafts ${draftUnactionedRecent} > ${t.draftUnactionedRecentMax}`);
+  }
 
   return {
     date: args.date,
@@ -215,10 +261,59 @@ function selfTest() {
       { followUp: { mode: "manual_handoff" }, lastInbound: { at: "2026-06-20T01:00:00.000Z" } },
       { followUp: { mode: "active" }, lastInbound: { at: "2026-05-01T00:00:00.000Z" } }
     ] } },
+    actionsSummary: { summary: { byCheck: [
+      { check: "cadence_far_future", total: 3, recent: 0 },
+      { check: "cadence_stalled", total: 0, recent: 0 },
+      { check: "watch_orphaned", total: 13, recent: 9 },
+      { check: "appointment_outcome_missing", total: 14, recent: 0 },
+      { check: "draft_unactioned", total: 20, recent: 2 }
+    ] } },
     sinceHours: 24,
     nowMs: Date.parse("2026-06-20T08:15:00.000Z")
   });
   assertOk(cleanDay.clean, `clean day should pass, failures: ${cleanDay.failures.join("; ")}`);
+  assertOk(
+    cleanDay.metrics.watchOrphanedTotal === 13,
+    "watch orphans reported as informational metric, never a failure"
+  );
+
+  const dirtyActions = buildDayRow({
+    date: "2026-06-20",
+    toneSummary: { totalInboundTurns: 12, respondedTurns: 11, respondedPassRate: 92, missingResponseCount: 1 },
+    charterSummary: { summary: { violationCount: 0, violationRate: 0, repeatCount: 0, byCheck: [] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    actionsSummary: { summary: { byCheck: [
+      { check: "cadence_far_future", total: 5, recent: 2 },
+      { check: "cadence_stalled", total: 1, recent: 1 },
+      { check: "appointment_outcome_missing", total: 16, recent: 2 },
+      { check: "draft_unactioned", total: 26, recent: 6 }
+    ] } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-06-20T08:15:00.000Z")
+  });
+  assertOk(!dirtyActions.clean, "recent action failures dirty the day");
+  assertOk(
+    dirtyActions.failures.some(f => f.includes("cadence far-future")) &&
+      dirtyActions.failures.some(f => f.includes("cadence stalled")) &&
+      dirtyActions.failures.some(f => f.includes("appointment outcomes missing")) &&
+      dirtyActions.failures.some(f => f.includes("unactioned drafts")),
+    `action failures named, got: ${dirtyActions.failures.join("; ")}`
+  );
+
+  const noActionsData = buildDayRow({
+    date: "2026-06-20",
+    toneSummary: { totalInboundTurns: 12, respondedTurns: 11, respondedPassRate: 92, missingResponseCount: 1 },
+    charterSummary: { summary: { violationCount: 0, violationRate: 0, repeatCount: 0, byCheck: [] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-06-20T08:15:00.000Z")
+  });
+  assertOk(
+    noActionsData.clean && noActionsData.metrics.cadenceFarFutureRecent === null,
+    "missing actions summary degrades to null metrics, not failures"
+  );
 
   const dirtyDay = buildDayRow({
     date: "2026-06-20",
@@ -270,6 +365,7 @@ function main() {
   const toneSummary = readJson(path.join(reportRoot, "tone_quality", "tone_quality_summary.json"));
   const charterSummary = readJson(path.join(reportRoot, "voice_charter", "voice_charter_summary.json"));
   const outcomeQaReport = readJson(path.join(reportRoot, "outcome_qa", "outcome_qa_report.json"));
+  const actionsSummary = readJson(path.join(reportRoot, "actions_audit", "actions_audit_summary.json"));
   const watchdogPath =
     args.get("--route-watchdog") ||
     process.env.RELEASE_GATE_ROUTE_WATCHDOG_PATH ||
@@ -284,6 +380,7 @@ function main() {
     charterSummary,
     outcomeQaReport,
     routeWatchdog,
+    actionsSummary,
     sinceHours
   });
 

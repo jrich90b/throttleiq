@@ -88,6 +88,8 @@
     "persona_continuity:eval": "npx tsx scripts/persona_continuity_eval.ts",
     "release_gate:report": "npx tsx scripts/release_gate_report.ts",
     "release_gate:eval": "npx tsx scripts/release_gate_report.ts --self-test",
+    "agent_actions:audit": "npx tsx scripts/agent_actions_audit.ts",
+    "agent_actions:eval": "npx tsx scripts/agent_actions_audit.ts --self-test",
     "scoring_exclusions:eval": "npx tsx scripts/scoring_exclusions_eval.ts",
     "customer_photo_share:eval": "npx tsx scripts/customer_photo_share_eval.ts",
     "manual_send_draft_guard:eval": "npx tsx scripts/manual_send_draft_guard_eval.ts",
