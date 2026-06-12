@@ -21,15 +21,18 @@ assert.match(
   /Occurrence-aware dedupe/,
   "findMentionedModels must use occurrence-aware dedupe, not substring collapse"
 );
+// The resolver's existing multi-mention block answers per model once the
+// extraction surfaces both mentions (it was unreachable for Chuck only
+// because extraction collapsed his turn to one model).
 assert.match(
   apiSource,
-  /distinctRequestedModels\.length >= 2 && !otherInventoryRequest && !soldOrPostSale/,
-  "availability resolver must branch for multi-model turns"
+  /if \(requestedModelMentions\.length >= 2\) \{/,
+  "availability resolver must keep the per-model multi-mention block"
 );
 assert.match(
   apiSource,
-  /ride both back to back/,
-  "multi-model ride asks offer back-to-back rides"
+  /let me know what day and time you want to test ride it/,
+  "multi-model replies keep the test-ride closer"
 );
 
 // Behavioral copies (pure logic mirrored from index.ts; pinned above).

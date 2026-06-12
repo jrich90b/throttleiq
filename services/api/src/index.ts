@@ -21164,49 +21164,6 @@ async function resolveDeterministicAvailabilityReply(args: {
   );
   const explicitModelFromText =
     requestedModelMentions[0] ?? (currentTextModelCandidates.length ? null : findMentionedModel(textLower));
-  // A turn that names several bikes gets an answer for each one ("mostly
-  // interested in a Street Glide, but would also like to ride a Street Glide
-  // Limited" — Chuck Bailey 2026-06-07 drew a Street-Glide-only list).
-  const distinctRequestedModels = Array.from(
-    new Map(requestedModelMentions.map(m => [normalizeModelText(m), m])).values()
-  );
-  if (distinctRequestedModels.length >= 2 && !otherInventoryRequest && !soldOrPostSale) {
-    const yearForMulti = extractYearSingle(textLower)?.toString() ?? null;
-    const multiHolds = await listInventoryHolds();
-    const multiSolds = await listInventorySolds();
-    const segments: string[] = [];
-    for (const requested of distinctRequestedModels.slice(0, 2)) {
-      const label = normalizeDisplayCase(requested);
-      const lookupMatches = await findInventoryMatches({
-        year: yearForMulti,
-        model: canonicalizeWatchModelLabel(requested)
-      });
-      const status = classifyInventoryMatches(lookupMatches, multiHolds, multiSolds);
-      if (!status.available.length) {
-        segments.push(
-          status.held.length
-            ? `The ${label} we have is on hold right now, but I can keep an eye on it for you.`
-            : `I'm not seeing a ${label} in stock right now.`
-        );
-        continue;
-      }
-      const top = status.available
-        .slice(0, 2)
-        .map((item, idx) => `${idx + 1}) ${formatInventoryLine(item)}`)
-        .join(" | ");
-      segments.push(`${label}: ${status.available.length} in stock right now. ${top}`);
-    }
-    conv.inventoryContext = {
-      ...(conv.inventoryContext ?? {}),
-      model: distinctRequestedModels[0],
-      updatedAt: nowIso()
-    };
-    const rideAsk = /\b(ride|riding|demo)\b/i.test(textLower);
-    const closer = rideAsk
-      ? "Happy to set you up to ride both back to back. What day works for you?"
-      : "Want me to line up a time for you to check them out?";
-    return { kind: "reply", reply: `${segments.join(" ")} ${closer}` };
-  }
   const mediaRawText = String(mediaInventoryExtraction?.rawText ?? "");
   const explicitModelFromMediaText = mediaRawText ? findMentionedModel(mediaRawText) : null;
   const mediaModel = String(mediaInventoryExtraction?.model ?? "").trim();
