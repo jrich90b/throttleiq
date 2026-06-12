@@ -14340,11 +14340,12 @@ export default function Home() {
                 ))}
                 {authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions ? (
                   <button
-                    className="w-full text-left px-3 py-2 rounded text-sm border bg-white hover:bg-gray-50 border-gray-200 mt-2"
+                    className="w-full text-left px-3 py-2 rounded text-sm border bg-white hover:bg-gray-50 border-gray-200 mt-2 flex items-center gap-2"
                     title="Numbers that opted out of messaging"
                     onClick={() => goToSection("suppressions")}
                   >
-                    🚫 Suppressed ({suppressions.length})
+                    <SideNavIcon name="suppressions" className="w-4 h-4 shrink-0" />
+                    <span>Suppressed ({suppressions.length})</span>
                   </button>
                 ) : null}
               </div>
