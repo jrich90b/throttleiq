@@ -13270,15 +13270,6 @@ export default function Home() {
             <SideNavIcon name="contacts" />
           </button>
         ) : null}
-        {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
-          <button
-            className={sideNavButtonClass(section === "suppressions")}
-            title="Suppressions"
-            onClick={() => goToSection("suppressions")}
-          >
-            <SideNavIcon name="suppressions" />
-          </button>
-        ) : null}
         {!isDepartmentUser && (authUser?.role === "manager" || authUser?.permissions?.canEditAppointments) ? (
           <button
             className={sideNavButtonClass(section === "calendar")}
@@ -15141,6 +15132,12 @@ export default function Home() {
             >
               Notifications
             </button>
+            <button
+              className="w-full text-left px-4 py-3 hover:bg-gray-50"
+              onClick={() => goToSection("suppressions")}
+            >
+              Suppressions
+            </button>
           </div>
         ) : null}
 
@@ -15152,6 +15149,14 @@ export default function Home() {
 
         {section === "suppressions" && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <>
+            {authUser?.role === "manager" ? (
+              <button
+                className="mt-3 text-xs text-blue-400 hover:text-blue-300"
+                onClick={() => goToSection("settings")}
+              >
+                ← Back to Settings
+              </button>
+            ) : null}
             <div className="mt-3 flex gap-2">
               <input
                 className="flex-1 border rounded px-3 py-2 text-sm"
