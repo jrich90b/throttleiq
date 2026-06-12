@@ -6555,3 +6555,42 @@ input[type="reset"],
   color: #1f2937 !important;
   border-color: #e5e7eb !important;
 }
+
+/* UI polish: consistent motion, keyboard focus, and scrollbars */
+button,
+a,
+input,
+select,
+textarea {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(251, 127, 4, 0.55);
+  outline-offset: 1px;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(148, 163, 184, 0.4);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.65);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

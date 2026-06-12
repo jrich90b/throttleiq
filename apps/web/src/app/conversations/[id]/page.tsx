@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import { SideNavIcon } from "../../components/UiIcon";
 
 type Message = {
   id: string;
@@ -187,7 +188,7 @@ export default function ConversationPage() {
             onClick={() => setMode(isHuman ? "suggest" : "human")}
             title={isHuman ? "Disable human override" : "Human takeover"}
           >
-            <span className="mr-1">👤</span>
+            <SideNavIcon name="user" className="w-4 h-4 inline-block align-[-3px]" />
           </button>
           {modeSaving ? <span className="text-xs text-gray-500">Saving…</span> : null}
         </div>

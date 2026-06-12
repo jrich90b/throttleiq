@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { SideNavIcon } from "../components/UiIcon";
 
 type PipelineCard = {
   convId: string;
@@ -232,7 +233,11 @@ export default function PipelineBoard({
                   >
                     <div className="lr-pipeline-card-top">
                       <span className="lr-pipeline-card-name">{c.name}</span>
-                      {c.creditActive ? <span title="Active financing">🔥</span> : null}
+                      {c.creditActive ? (
+                        <span title="Active financing" className="inline-flex text-orange-500">
+                          <SideNavIcon name="flame" className="w-3.5 h-3.5" />
+                        </span>
+                      ) : null}
                     </div>
                     {c.bike ? <div className="lr-pipeline-card-bike">{c.bike}</div> : null}
                     <div className="lr-pipeline-card-meta">
@@ -240,7 +245,10 @@ export default function PipelineBoard({
                         <span className="lr-pipeline-card-price">{fmtMoney(c.quotedPrice)}</span>
                       ) : null}
                       {c.appointmentAt ? (
-                        <span className="lr-pipeline-card-appt">📅 {fmtWhen(c.appointmentAt)}</span>
+                        <span className="lr-pipeline-card-appt">
+                          <SideNavIcon name="calendar" className="w-3.5 h-3.5 inline-block align-[-2px] mr-1" />
+                          {fmtWhen(c.appointmentAt)}
+                        </span>
                       ) : c.nextDueAt ? (
                         <span className="lr-pipeline-card-due">↻ {fmtWhen(c.nextDueAt)}</span>
                       ) : null}

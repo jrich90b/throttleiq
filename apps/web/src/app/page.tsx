@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { InboxSection } from "./components/InboxSection";
 import PipelineBoard from "./pipeline/PipelineBoard";
 import { TaskInboxSection } from "./components/TaskInboxSection";
+import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
 
@@ -260,144 +261,6 @@ function MediaAttachmentPreviewList({
   );
 }
 
-type SideNavIconName =
-  | "pipeline"
-  | "inbox"
-  | "todos"
-  | "contacts"
-  | "suppressions"
-  | "calendar"
-  | "inventory"
-  | "watches"
-  | "campaigns"
-  | "mdf"
-  | "kpi"
-  | "questions"
-  | "settings";
-
-function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIconName; className?: string }) {
-  const commonProps = {
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.9,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    className,
-    "aria-hidden": true
-  };
-
-  if (name === "pipeline") {
-    return (
-      <svg {...commonProps}>
-        <path d="M4 5h16l-5.5 6.5V18l-5 2v-8.5L4 5Z" />
-      </svg>
-    );
-  }
-  if (name === "inbox") {
-    return (
-      <svg {...commonProps}>
-        <path d="M3 11.5 5.6 6a2 2 0 0 1 1.8-1.1h9.2a2 2 0 0 1 1.8 1.1L21 11.5v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-        <path d="M3 12h5l1.8 2h4.4L16 12h5" />
-      </svg>
-    );
-  }
-  if (name === "todos") {
-    return (
-      <svg {...commonProps}>
-        <rect x="4" y="3.5" width="16" height="17" rx="2.5" />
-        <path d="m8 12 2.1 2.1L16 8.3" />
-        <path d="M8 17h8" />
-      </svg>
-    );
-  }
-  if (name === "contacts") {
-    return (
-      <svg {...commonProps}>
-        <circle cx="9" cy="9" r="2.5" />
-        <path d="M4.5 17a4.5 4.5 0 0 1 9 0" />
-        <circle cx="16.5" cy="10" r="2" />
-        <path d="M14 17.5a3.5 3.5 0 0 1 6.5-1.6" />
-      </svg>
-    );
-  }
-  if (name === "suppressions") {
-    return (
-      <svg {...commonProps}>
-        <circle cx="12" cy="12" r="8" />
-        <path d="m7.2 16.8 9.6-9.6" />
-      </svg>
-    );
-  }
-  if (name === "calendar") {
-    return (
-      <svg {...commonProps}>
-        <rect x="3.5" y="5" width="17" height="15" rx="2.5" />
-        <path d="M7 3.5V7M17 3.5V7M3.5 9.5h17" />
-        <path d="M8.5 13h3.5v3.5H8.5z" />
-      </svg>
-    );
-  }
-  if (name === "inventory") {
-    return (
-      <svg {...commonProps}>
-        <circle cx="6.5" cy="17.5" r="2.4" />
-        <circle cx="17.5" cy="17.5" r="2.4" />
-        <path d="M9 17.5h4.8l-2.2-4.2h3.2l2.7 4.2" />
-        <path d="M11.5 13.3 9.6 9.7H7" />
-      </svg>
-    );
-  }
-  if (name === "watches") {
-    return (
-      <svg {...commonProps}>
-        <path d="M2.5 12s3.5-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.5 5.5-9.5 5.5-9.5-5.5-9.5-5.5z" />
-        <circle cx="12" cy="12" r="2.3" />
-      </svg>
-    );
-  }
-  if (name === "campaigns") {
-    return (
-      <svg {...commonProps}>
-        <path d="M4 13.5V10l10-4v12L4 14z" />
-        <path d="M14 10h2.2a3.8 3.8 0 0 1 0 7.6H14" />
-        <path d="M7.5 14.5 9 20h3" />
-      </svg>
-    );
-  }
-  if (name === "mdf") {
-    return (
-      <svg {...commonProps}>
-        <path d="M6 3.5h8l4 4V20a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20z" />
-        <path d="M14 3.5V8h4" />
-        <path d="M8.5 12h7M8.5 15h7M8.5 18h4" />
-      </svg>
-    );
-  }
-  if (name === "kpi") {
-    return (
-      <svg {...commonProps}>
-        <path d="M4 18.5h16" />
-        <path d="M6 16V11M11 16V8M16 16v-4" />
-        <path d="m5.5 9.5 4-3.2 4 2.2 4.5-4.3" />
-      </svg>
-    );
-  }
-  if (name === "questions") {
-    return (
-      <svg {...commonProps}>
-        <path d="M18 8.5a6 6 0 0 0-12 0c0 2-1 3.5-2 4.5h16c-1-1-2-2.5-2-4.5Z" />
-        <path d="M9.5 17.5a2.5 2.5 0 0 0 5 0" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...commonProps}>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4" />
-    </svg>
-  );
-}
 
 const BOOKING_LINK_RE =
   /(Book here|You can choose a time here|You can book an appointment here):\s*(https?:\/\/[^\s<]+)/i;
@@ -9613,21 +9476,21 @@ export default function Home() {
     if (!temperature) return null;
     if (temperature === "hot") {
       return (
-        <span className={`text-orange-500 leading-none ${sizeClass}`} title="Hot deal" aria-label="Hot deal">
-          🔥
+        <span className={`inline-flex text-orange-500 leading-none ${sizeClass}`} title="Hot deal" aria-label="Hot deal">
+          <SideNavIcon name="flame" className="w-[1.15em] h-[1.15em]" />
         </span>
       );
     }
     if (temperature === "warm") {
       return (
-        <span className={`text-amber-500 leading-none ${sizeClass}`} title="Warm deal" aria-label="Warm deal">
-          ♨️
+        <span className={`inline-flex text-amber-500 leading-none ${sizeClass}`} title="Warm deal" aria-label="Warm deal">
+          <SideNavIcon name="thermo" className="w-[1.15em] h-[1.15em]" />
         </span>
       );
     }
     return (
-      <span className={`text-sky-500 leading-none ${sizeClass}`} title="Cold deal" aria-label="Cold deal">
-        ❄️
+      <span className={`inline-flex text-sky-500 leading-none ${sizeClass}`} title="Cold deal" aria-label="Cold deal">
+        <SideNavIcon name="snowflake" className="w-[1.15em] h-[1.15em]" />
       </span>
     );
   };
@@ -13219,11 +13082,11 @@ export default function Home() {
       <div className="md:hidden lr-tablet-hide w-full flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
         <div className="w-[60px] shrink-0">
           <button
-            className="px-2 py-1 border rounded text-sm"
+            className="px-2 py-1.5 border rounded text-sm inline-flex items-center"
             onClick={() => setMobileNavOpen(true)}
             title="Menu"
           >
-            ☰
+            <SideNavIcon name="menu" className="w-4 h-4" />
           </button>
         </div>
         <div className="min-w-0 flex-1 text-center text-sm font-semibold truncate">{getSectionTitle()}</div>
@@ -13592,24 +13455,24 @@ export default function Home() {
                       </button>
                       <div className="flex flex-col border-l">
                         <button
-                          className="w-10 h-10 text-xs text-gray-600 hover:text-gray-900 hover:bg-[var(--surface-2)]"
+                          className="w-10 h-10 inline-flex items-center justify-center text-gray-600 hover:text-gray-900 hover:bg-[var(--surface-2)]"
                           title="Edit watch"
                           onClick={e => {
                             e.stopPropagation();
                             openWatchEdit(item.convId);
                           }}
                         >
-                          ✏️
+                          <SideNavIcon name="edit" className="w-4 h-4" />
                         </button>
                         <button
-                          className="w-10 h-10 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                          className="w-10 h-10 inline-flex items-center justify-center text-red-600 hover:text-red-700 hover:bg-red-50"
                           title="Delete watch"
                           onClick={e => {
                             e.stopPropagation();
                             void deleteWatchForConv(item.convId);
                           }}
                         >
-                          🗑️
+                          <SideNavIcon name="trash" className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
@@ -13921,7 +13784,8 @@ export default function Home() {
                                   target="_blank"
                                   rel="noreferrer"
                                 >
-                                  📎 {media.fileName || "attachment"}
+                                  <SideNavIcon name="paperclip" className="w-3.5 h-3.5 inline-block align-[-3px] mr-1" />
+                                  {media.fileName || "attachment"}
                                 </a>
                               );
                             })}
@@ -14033,7 +13897,7 @@ export default function Home() {
                         void openCallPickerOrStart(selectedConv);
                       }}
                     >
-                      📞
+                      <SideNavIcon name="phone" className="w-4 h-4 inline-block align-[-3px]" />
                     </button>
                     <button
                       className="lr-task-btn lr-task-btn--primary"
@@ -14672,7 +14536,17 @@ export default function Home() {
                       void startAppointmentVoiceRecording("close");
                     }}
                   >
-                    {appointmentVoiceTarget === "close" ? "🎙️ Recording... tap to stop" : "🎤 Tap to talk"}
+                    {appointmentVoiceTarget === "close" ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" aria-hidden />
+                        Recording... tap to stop
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <SideNavIcon name="mic" className="w-3.5 h-3.5" />
+                        Tap to talk
+                      </span>
+                    )}
                   </button>
                   <div className="text-[11px] text-gray-500">
                     {appointmentVoiceSupported
@@ -14803,7 +14677,17 @@ export default function Home() {
                       void startAppointmentVoiceRecording("header");
                     }}
                   >
-                    {appointmentVoiceTarget === "header" ? "🎙️ Recording... tap to stop" : "🎤 Tap to talk"}
+                    {appointmentVoiceTarget === "header" ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" aria-hidden />
+                        Recording... tap to stop
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <SideNavIcon name="mic" className="w-3.5 h-3.5" />
+                        Tap to talk
+                      </span>
+                    )}
                   </button>
                   <div className="text-[11px] text-gray-500">
                     {appointmentVoiceSupported
@@ -20177,7 +20061,7 @@ export default function Home() {
                         if (id) openConversation(id);
                       }}
                     >
-                      💬
+                      <SideNavIcon name="chat" className="w-4 h-4 inline-block align-[-3px]" />
                     </button>
                   ) : null}
                   <button
@@ -20185,7 +20069,7 @@ export default function Home() {
                     onClick={deleteContact}
                     title="Delete contact"
                   >
-                    🗑️
+                    <SideNavIcon name="trash" className="w-4 h-4 inline-block align-[-3px]" />
                   </button>
                 </div>
               </div>
@@ -20709,7 +20593,7 @@ export default function Home() {
                       disabled={callBusy}
                       title="Call customer"
                     >
-                      <span className="mr-1">📞</span>
+                      <SideNavIcon name="phone" className="w-4 h-4 inline-block align-[-3px] mr-1.5" />
                       Call
                     </button>
                   </div>
@@ -20721,7 +20605,7 @@ export default function Home() {
                     onClick={openManualAppointment}
                     title="Set appointment"
                   >
-                    📅
+                    <SideNavIcon name="calendar" className="w-4 h-4 inline-block align-[-3px]" />
                   </button>
                 ) : null}
                 {!(selectedConv.classification?.bucket === "service" || selectedConv.classification?.cta === "service_request") ? (
@@ -20730,7 +20614,7 @@ export default function Home() {
                     onClick={() => openCadenceResolve(selectedConv.id, "watch")}
                     title="Add vehicle watch"
                   >
-                    👀
+                    <SideNavIcon name="watches" className="w-4 h-4 inline-block align-[-3px]" />
                   </button>
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canToggleHumanOverride) ? (
@@ -20739,7 +20623,7 @@ export default function Home() {
                     onClick={() => setHumanMode(selectedConv.mode === "human" ? "suggest" : "human")}
                     title={selectedConv.mode === "human" ? "Disable human override" : "Human takeover"}
                   >
-                    <span className="mr-1">👤</span>
+                    <SideNavIcon name="user" className="w-4 h-4 inline-block align-[-3px]" />
                   </button>
                 ) : null}
                 {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) ? (
@@ -20937,7 +20821,17 @@ export default function Home() {
                         : "Voice input not supported on this browser."
                     }
                   >
-                    {agentContextSpeechListening ? "🎙️ Listening... tap to stop" : "🎤 Tap to talk"}
+                    {agentContextSpeechListening ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" aria-hidden />
+                        Listening... tap to stop
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <SideNavIcon name="mic" className="w-3.5 h-3.5" />
+                        Tap to talk
+                      </span>
+                    )}
                   </button>
                   {!agentContextSpeechSupported ? (
                     <span className="text-xs text-slate-500">Voice input not supported on this browser.</span>
@@ -22573,7 +22467,7 @@ export default function Home() {
                             } ${feedbackBusy ? "opacity-50 cursor-not-allowed" : ""}`}
                             title={ratedUp ? "Remove helpful vote" : "Mark helpful"}
                           >
-                            👍
+                            <SideNavIcon name="thumbsUp" className="w-3.5 h-3.5 inline-block align-[-3px]" />
                           </button>
                           <button
                             type="button"
@@ -22584,7 +22478,7 @@ export default function Home() {
                             } ${feedbackBusy ? "opacity-50 cursor-not-allowed" : ""}`}
                             title={ratedDown ? "Remove needs work vote" : "Mark needs work"}
                           >
-                            👎
+                            <SideNavIcon name="thumbsDown" className="w-3.5 h-3.5 inline-block align-[-3px]" />
                           </button>
                           {feedback?.rating ? (
                             <span className="text-[11px] text-gray-500" title={feedback.note ?? feedback.reason ?? ""}>
@@ -22852,7 +22746,7 @@ export default function Home() {
                           className="text-gray-500 hover:text-gray-800"
                           onClick={() => removeEmailAttachment(idx)}
                         >
-                          ✕
+                          <SideNavIcon name="close" className="w-3.5 h-3.5 inline-block align-[-2px]" />
                         </button>
                       </div>
                     ))}

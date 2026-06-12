@@ -1,4 +1,6 @@
 import React from "react";
+import { SideNavIcon } from "./UiIcon";
+import type { SideNavIconName } from "./UiIcon";
 
 function followUpTickerStartIso(todo: any): string | null {
   return String(todo?.dueAt ?? "").trim() || String(todo?.createdAt ?? "").trim() || null;
@@ -325,13 +327,15 @@ export function TaskInboxSection(props: any) {
                           : sectionType === "reminder"
                             ? "lr-task-card-pill--reminder"
                             : "lr-task-card-pill--todo";
-                    const pillGlyph =
-                      sectionType === "appointment" ? "📅" : sectionType === "reminder" ? "⏰" : "🔔";
+                    const pillIcon: SideNavIconName =
+                      sectionType === "appointment" ? "calendar" : sectionType === "reminder" ? "clock" : "bell";
                     return (
                       <div key={t.id} className="lr-task-card-task">
                         <div className="lr-task-card-pillrow">
                           <span className={`lr-task-card-pill ${pillVariant}`}>
-                            <span aria-hidden>{pillGlyph}</span>
+                            <span aria-hidden className="inline-flex">
+                              <SideNavIcon name={pillIcon} className="w-3.5 h-3.5" />
+                            </span>
                             {taskLabel}
                           </span>
                           {appointmentReminderSent || dealerRideOutcomeNeeded ? (
@@ -394,7 +398,9 @@ export function TaskInboxSection(props: any) {
                         <div className="lr-task-card-boxes">
                           <div className="lr-task-card-box">
                             <div className="lr-task-card-box-label">
-                              <span aria-hidden>🕐</span>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name="clock" className="w-3.5 h-3.5" />
+                              </span>
                               {whenLabel}
                             </div>
                             <div className="lr-task-card-box-value">
@@ -404,7 +410,9 @@ export function TaskInboxSection(props: any) {
                           </div>
                           <div className="lr-task-card-box">
                             <div className="lr-task-card-box-label">
-                              <span aria-hidden>⚡</span>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name="bolt" className="w-3.5 h-3.5" />
+                              </span>
                               Action
                             </div>
                             <div className="lr-task-card-box-value">{actionDisplay}</div>
@@ -530,7 +538,7 @@ export function TaskInboxSection(props: any) {
                           onClick={() => openCallFromTodo(callTask)}
                           title="Call customer"
                         >
-                          <span className="mr-1">📞</span>
+                          <SideNavIcon name="phone" className="w-4 h-4 inline-block align-[-3px] mr-1.5" />
                           Call
                         </button>
                       ) : null}
