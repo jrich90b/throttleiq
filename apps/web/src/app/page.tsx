@@ -7235,6 +7235,15 @@ export default function Home() {
     if (selectedId) void loadConversation(selectedId);
   }, [selectedId]);
 
+  // The Follow-up Schedule side window retired 2026-06-12: cadence timing
+  // lives on the pipeline; CRM/calendar notifications live in Settings.
+  useEffect(() => {
+    if (section === "questions") {
+      setSection("settings");
+      setSettingsTab("notifications");
+    }
+  }, [section]);
+
   useEffect(() => {
     if (!pendingDeepLinkCallId) return;
     if (!authUser) return;
@@ -9162,8 +9171,8 @@ export default function Home() {
   }, [questions]);
   const hasNotifications = useMemo(() => {
     const googleAlert = googleStatus ? !googleStatus.connected : false;
-    return googleAlert || crmAlerts.length > 0;
-  }, [googleStatus, crmAlerts.length]);
+    return googleAlert || questions.length > 0;
+  }, [googleStatus, questions.length]);
   const watchItems = useMemo(() => {
     return conversations.flatMap(conv => {
       const watches =
@@ -13329,20 +13338,6 @@ export default function Home() {
             <SideNavIcon name="pipeline" />
           </button>
         ) : null}
-        {!isDepartmentUser ? (
-          <button
-            className={`relative ${sideNavButtonClass(section === "questions")}`}
-            title="Questions"
-            onClick={() => goToSection("questions")}
-          >
-            <SideNavIcon name="questions" />
-            {questions.length > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
-                {questions.length > 99 ? "99+" : questions.length}
-              </span>
-            ) : null}
-          </button>
-        ) : null}
         </div>
         <div className="shrink-0 sticky bottom-0 w-full flex flex-col items-center gap-2 pt-3 border-t border-white/10 bg-[var(--palette-graphite)] pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
           <div className="text-xs text-white/60">{loading ? "…" : ""}</div>
@@ -13353,7 +13348,11 @@ export default function Home() {
               onClick={() => setSettingsOpen(v => !v)}
             >
               <SideNavIcon name="settings" />
-              {hasNotifications ? (
+              {questions.length > 0 ? (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+                  {questions.length > 99 ? "99+" : questions.length}
+                </span>
+              ) : hasNotifications ? (
                 <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-600 border border-white" />
               ) : null}
             </button>
@@ -14310,133 +14309,6 @@ export default function Home() {
           />
         ) : null}
 
-        {section === "questions" ? (
-          <div className="mt-3 border rounded-lg divide-y">
-            {cadenceAlerts.length ? (
-              <>
-                {cadenceAlerts.map(alert => (
-                  <div key={`cadence-${alert.convId}`} className="p-4 flex items-start justify-between gap-4 bg-amber-50">
-                    <div>
-                      <div className="text-sm font-medium">
-                        {alert.leadName ? `${alert.leadName}` : alert.leadKey}
-                      </div>
-                      {alert.leadName ? (
-                        <div className="text-xs text-gray-600 mt-1">{alert.leadKey}</div>
-                      ) : null}
-                      <div className="text-xs text-amber-800 mt-2">
-                        Follow-up message scheduled for {formatCadenceDate(alert.sendAt.toISOString())}.
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      <button
-                        className="px-3 py-2 border rounded text-sm bg-white"
-                        onClick={() => openCadenceResolve(alert.convId, "alert")}
-                      >
-                        Resolve
-                      </button>
-                      <button
-                        className="px-3 py-2 border rounded text-sm"
-                        onClick={() => {
-                          openConversation(alert.convId);
-                        }}
-                      >
-                        Open conversation
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </>
-            ) : null}
-            {questions.map(q => (
-              <div key={q.id} className="p-4 flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium">{q.leadKey}</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    {new Date(q.createdAt).toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-700 mt-2 line-clamp-3">{q.text}</div>
-                  {q.type === "attendance" || q.type === "cadence_checkin" ? (
-                    <div className="mt-3 grid grid-cols-1 gap-2">
-                      <label className="text-xs text-gray-600">
-                        Outcome
-                        <select
-                          className="mt-1 w-full border rounded px-2 py-1 text-sm"
-                          value={questionOutcomeById[q.id] ?? q.outcome ?? ""}
-                          onChange={e =>
-                            setQuestionOutcomeById(prev => ({ ...prev, [q.id]: e.target.value }))
-                          }
-                        >
-                          <option value="">Select outcome…</option>
-                          <option value="sold">Sold</option>
-                          <option value="hold">On hold</option>
-                          <option value="undecided">Undecided</option>
-                          <option value="no_show">No show</option>
-                        </select>
-                      </label>
-                      <label className="text-xs text-gray-600">
-                        Follow-up Action
-                        <select
-                          className="mt-1 w-full border rounded px-2 py-1 text-sm"
-                          value={questionFollowUpById[q.id] ?? q.followUpAction ?? ""}
-                          onChange={e =>
-                            setQuestionFollowUpById(prev => ({ ...prev, [q.id]: e.target.value }))
-                          }
-                        >
-                          <option value="">Auto (based on outcome)</option>
-                          <option value="resume">Resume cadence</option>
-                          <option value="pause_24h">Pause 24h</option>
-                          <option value="pause_72h">Pause 72h</option>
-                          <option value="pause_indef">Pause indefinitely</option>
-                          <option value="archive">Archive</option>
-                          <option value="none">No change</option>
-                        </select>
-                      </label>
-                    </div>
-                  ) : null}
-                  <button
-                    className="text-xs text-blue-600 mt-2 inline-block"
-                    onClick={() => {
-                      openConversation(q.convId);
-                    }}
-                  >
-                    Open conversation
-                  </button>
-                </div>
-                {(() => {
-                  const isCrmFailure = /tlp log failed/i.test(q.text ?? "");
-                  if (isCrmFailure) {
-                    const crmRetryRunning = !!crmLogRunningByQuestionId[q.id];
-                    return (
-                      <div className="flex flex-col gap-2">
-                        <button
-                          className="px-3 py-2 border rounded text-sm disabled:opacity-60 disabled:cursor-wait"
-                          disabled={crmRetryRunning}
-                          onClick={() => retryCrmLog(q)}
-                        >
-                          {crmRetryRunning ? "Running..." : "Try again"}
-                        </button>
-                        <button
-                          className="px-3 py-2 border rounded text-sm"
-                          onClick={() => markQuestionDone(q)}
-                        >
-                          Update manually
-                        </button>
-                      </div>
-                    );
-                  }
-                  return (
-                    <button className="px-3 py-2 border rounded text-sm" onClick={() => markQuestionDone(q)}>
-                      Done
-                    </button>
-                  );
-                })()}
-              </div>
-            ))}
-            {!loading && questions.length === 0 && cadenceAlerts.length === 0 ? (
-              <div className="p-4 text-sm text-gray-600">No open questions.</div>
-            ) : null}
-          </div>
-        ) : null}
 
         {section === "contacts" ? (
           <div className="lr-contacts-browser mt-4 border rounded-lg overflow-hidden bg-white grid grid-cols-[230px_minmax(0,1fr)] min-h-[620px]">
@@ -19858,24 +19730,98 @@ export default function Home() {
                       : "Status unavailable"}
                   </div>
                 </div>
-                <div className="border rounded p-3 text-sm">
-                  <div className="font-medium">CRM Updates</div>
-                  {crmAlerts.length ? (
-                    <div className="mt-2 space-y-2">
-                      {crmAlerts.slice(0, 5).map(alert => (
-                        <div key={alert.id} className="text-xs text-gray-600">
-                          {alert.text} • {new Date(alert.createdAt).toLocaleString()}
+                <div className="border rounded text-sm divide-y">
+                  <div className="p-3 font-medium">
+                    CRM &amp; Calendar Updates{questions.length ? ` (${questions.length})` : ""}
+                  </div>
+                  {questions.map(q => (
+                    <div key={q.id} className="p-3 flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{q.leadKey}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {new Date(q.createdAt).toLocaleString()}
                         </div>
-                      ))}
-                      {crmAlerts.length > 5 ? (
-                        <div className="text-xs text-gray-500">
-                          +{crmAlerts.length - 5} more in Follow-up Schedule
-                        </div>
-                      ) : null}
+                        <div className="text-sm text-gray-700 mt-2">{q.text}</div>
+                        {q.type === "attendance" || q.type === "cadence_checkin" ? (
+                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <label className="text-xs text-gray-600">
+                              Outcome
+                              <select
+                                className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                                value={questionOutcomeById[q.id] ?? q.outcome ?? ""}
+                                onChange={e =>
+                                  setQuestionOutcomeById(prev => ({ ...prev, [q.id]: e.target.value }))
+                                }
+                              >
+                                <option value="">Select outcome…</option>
+                                <option value="sold">Sold</option>
+                                <option value="hold">On hold</option>
+                                <option value="undecided">Undecided</option>
+                                <option value="no_show">No show</option>
+                              </select>
+                            </label>
+                            <label className="text-xs text-gray-600">
+                              Follow-up Action
+                              <select
+                                className="mt-1 w-full border rounded px-2 py-1 text-sm"
+                                value={questionFollowUpById[q.id] ?? q.followUpAction ?? ""}
+                                onChange={e =>
+                                  setQuestionFollowUpById(prev => ({ ...prev, [q.id]: e.target.value }))
+                                }
+                              >
+                                <option value="">Auto (based on outcome)</option>
+                                <option value="resume">Resume cadence</option>
+                                <option value="pause_24h">Pause 24h</option>
+                                <option value="pause_72h">Pause 72h</option>
+                                <option value="pause_indef">Pause indefinitely</option>
+                                <option value="archive">Archive</option>
+                                <option value="none">No change</option>
+                              </select>
+                            </label>
+                          </div>
+                        ) : null}
+                        <button
+                          className="text-xs text-blue-600 mt-2 inline-block"
+                          onClick={() => {
+                            openConversation(q.convId);
+                          }}
+                        >
+                          Open conversation
+                        </button>
+                      </div>
+                      {(() => {
+                        const isCrmFailure = /tlp log failed/i.test(q.text ?? "");
+                        if (isCrmFailure) {
+                          const crmRetryRunning = !!crmLogRunningByQuestionId[q.id];
+                          return (
+                            <div className="flex flex-col gap-2">
+                              <button
+                                className="px-3 py-2 border rounded text-sm disabled:opacity-60 disabled:cursor-wait"
+                                disabled={crmRetryRunning}
+                                onClick={() => retryCrmLog(q)}
+                              >
+                                {crmRetryRunning ? "Running..." : "Try again"}
+                              </button>
+                              <button
+                                className="px-3 py-2 border rounded text-sm"
+                                onClick={() => markQuestionDone(q)}
+                              >
+                                Update manually
+                              </button>
+                            </div>
+                          );
+                        }
+                        return (
+                          <button className="px-3 py-2 border rounded text-sm" onClick={() => markQuestionDone(q)}>
+                            Done
+                          </button>
+                        );
+                      })()}
                     </div>
-                  ) : (
-                    <div className="text-xs text-gray-600 mt-1">No recent CRM errors.</div>
-                  )}
+                  ))}
+                  {questions.length === 0 ? (
+                    <div className="p-3 text-xs text-gray-600">No open notifications.</div>
+                  ) : null}
                 </div>
               </div>
             ) : (
