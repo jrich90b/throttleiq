@@ -580,6 +580,7 @@ import {
   listOpenQuestions,
   markQuestionDone,
   markTodoDone,
+  markTodoEscalated,
   markTodoReminderSent,
   markOpenCallTodosDoneForCompletedVoiceAttempt,
   markOpenTodosDoneForConversation,
@@ -627,6 +628,12 @@ import {
 } from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
 import { isWorkerDrivenTicks, isWorkerTickTask, type WorkerTickTask } from "./domain/workerTasks.js";
+import {
+  buildEscalationDigest,
+  DEFAULT_ESCALATION_CONFIG,
+  parseBusinessMinutes,
+  resolveEscalationCandidates
+} from "./domain/taskEscalation.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
   addSuppression,
@@ -4394,7 +4401,8 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "staff-appt-notify": () => processStaffAppointmentNotifications(),
   "appt-questions": () => processAppointmentQuestions(),
   "inventory-watch": () => processInventoryWatchlist(),
-  "inventory-holds": () => processInventoryHolds()
+  "inventory-holds": () => processInventoryHolds(),
+  "task-escalations": () => processTaskEscalations()
 };
 
 function canUseWorkerInternal(req: any) {
@@ -4441,6 +4449,7 @@ if (isWorkerDrivenTicks()) {
     runBackgroundTask("appt-confirm", processAppointmentConfirmations);
     runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
     runBackgroundTask("appt-questions", processAppointmentQuestions);
+    runBackgroundTask("task-escalations", processTaskEscalations);
   }, 60_000);
 
   setTimeout(() => {
@@ -13960,6 +13969,70 @@ async function sendInternalSms(toNumber: string, body: string): Promise<boolean>
     console.warn("[staff-sms] send failed:", e?.message ?? e);
     return false;
   }
+}
+
+let lastTaskEscalationDigestAtMs = 0;
+
+/**
+ * Manager escalation digest for rep task cards waiting past the threshold
+ * during business hours (decision logic in domain/taskEscalation.ts). One
+ * digest SMS per cooldown window; included todos are marked escalatedAt so
+ * they never repeat.
+ */
+async function processTaskEscalations() {
+  if (String(process.env.TASK_ESCALATION_ENABLED ?? "1").trim() !== "1") return;
+  const nowMs = Date.now();
+  const cooldownMin = Math.max(15, Number(process.env.TASK_ESCALATION_COOLDOWN_MIN ?? 120) || 120);
+  if (nowMs - lastTaskEscalationDigestAtMs < cooldownMin * 60_000) return;
+  const cfg = await getSchedulerConfigHot();
+  const tz = cfg.timezone || "America/New_York";
+  const now = new Date(nowMs);
+  const dayKey = now.toLocaleDateString("en-US", { weekday: "long", timeZone: tz }).toLowerCase();
+  const parts = getLocalDateParts(now, tz);
+  const dayHours = (cfg.businessHours as any)?.[dayKey] ?? null;
+  const clock = {
+    minutesSinceMidnight: (parts.hour % 24) * 60 + parts.minute,
+    openMinutes: parseBusinessMinutes(dayHours?.open),
+    closeMinutes: parseBusinessMinutes(dayHours?.close)
+  };
+  const thresholdMinutes = Math.max(
+    10,
+    Number(process.env.TASK_ESCALATION_THRESHOLD_MIN ?? DEFAULT_ESCALATION_CONFIG.thresholdMinutes) ||
+      DEFAULT_ESCALATION_CONFIG.thresholdMinutes
+  );
+  const candidates = resolveEscalationCandidates({
+    todos: listOpenTodos(),
+    nowMs,
+    clock,
+    cfg: { thresholdMinutes }
+  });
+  if (!candidates.length) return;
+  let phone = normalizePhone(String(process.env.TASK_ESCALATION_NOTIFY_PHONE ?? "").trim());
+  if (!phone) {
+    const users = await listUsers();
+    const manager = users.find(u => u.role === "manager" && pickUserSmsPhone(u));
+    phone = manager ? pickUserSmsPhone(manager) : "";
+  }
+  if (!phone) return;
+  const nameById = new Map<string, string>();
+  for (const { todo } of candidates) {
+    const conv = getConversation(todo.convId);
+    const name = [conv?.lead?.firstName, conv?.lead?.lastName]
+      .map(v => String(v ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (name) nameById.set(todo.convId, name);
+  }
+  const digest = buildEscalationDigest(candidates, nameById, thresholdMinutes);
+  const sent = await sendInternalSms(phone, digest);
+  if (!sent) return;
+  lastTaskEscalationDigestAtMs = nowMs;
+  for (const { todo } of candidates) markTodoEscalated(todo.id);
+  recordRouteOutcome("live", "task_escalation_digest_sent", {
+    count: candidates.length,
+    thresholdMinutes,
+    convIds: candidates.map(c => c.todo.convId)
+  });
 }
 
 function pickUserSmsPhone(user: any): string {

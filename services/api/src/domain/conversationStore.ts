@@ -331,6 +331,7 @@ export type TodoTask = {
   reminderAt?: string;
   reminderLeadMinutes?: number;
   reminderSentAt?: string;
+  escalatedAt?: string;
   taskClass?: TodoTaskClass;
 };
 
@@ -4566,6 +4567,14 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
 
 export function listOpenTodos(): TodoTask[] {
   return todos.filter(t => t.status === "open");
+}
+
+export function markTodoEscalated(todoId: string, atIso: string = nowIso()): boolean {
+  const todo = todos.find(t => t.id === todoId);
+  if (!todo) return false;
+  todo.escalatedAt = atIso;
+  scheduleSave();
+  return true;
 }
 
 export function addInternalQuestion(
