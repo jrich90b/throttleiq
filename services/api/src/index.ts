@@ -49182,6 +49182,41 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenFutureSignals.explicit ||
     regenWeatherLikeQuestion;
   if (event.provider === "twilio" && regenFuture?.until && !regenShouldSkipFuture) {
+    // Same soft-appointment handling as the live path (Nicholas Maly).
+    const regenFutureCommit = buildScheduleContextStatusUpdateReply(String(event.body ?? ""), "");
+    if (regenFutureCommit.dayCommitted) {
+      conv.lead = conv.lead ?? {};
+      if (regenFuture.label) conv.lead.purchaseTimeframe = regenFuture.label;
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        const cfg = await getSchedulerConfigHot();
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      }
+      reanchorCadenceForCommittedDay(conv, regenFutureCommit.dayLabel);
+      addTodo(
+        conv,
+        "note",
+        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${regenFutureCommit.dayLabel}${
+          regenFutureCommit.eventCommitted ? " for the event" : ""
+        } - soft appointment, confirm and prep.`,
+        event.providerMessageId,
+        undefined,
+        undefined,
+        "followup"
+      );
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("regen", "future_timeframe_day_commit_ack", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        dayLabel: regenFutureCommit.dayLabel,
+        eventCommitted: regenFutureCommit.eventCommitted
+      });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenFutureCommit.reply);
+      }
+      return respondWithSmsRegeneratedDraft(regenFutureCommit.reply, undefined, {
+        turnSchedulingIntent: true
+      });
+    }
     conv.lead = conv.lead ?? {};
     if (regenFuture.label) conv.lead.purchaseTimeframe = regenFuture.label;
     const untilIso = regenFuture.until.toISOString();
@@ -56354,6 +56389,39 @@ if (authToken && signature) {
     schedulingSignalsBase.explicit ||
     weatherLikeQuestion;
   if (event.provider === "twilio" && future && !shouldSkipFuture) {
+    // A committed visit day inside a timeframe turn is a soft appointment,
+    // not a follow-up pause (Nicholas Maly 2026-06-11: "signed up ... for the
+    // June 20th thing" drew "I'll pause follow-up until june 20").
+    const futureCommit = buildScheduleContextStatusUpdateReply(
+      String(event.body ?? ""),
+      lastOutboundText
+    );
+    if (futureCommit.dayCommitted) {
+      conv.lead = conv.lead ?? {};
+      if (future.label) conv.lead.purchaseTimeframe = future.label;
+      if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
+        const cfg = await getSchedulerConfigHot();
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      }
+      reanchorCadenceForCommittedDay(conv, futureCommit.dayLabel);
+      addTodo(
+        conv,
+        "note",
+        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${futureCommit.dayLabel}${
+          futureCommit.eventCommitted ? " for the event" : ""
+        } - soft appointment, confirm and prep.`,
+        event.providerMessageId,
+        undefined,
+        undefined,
+        "followup"
+      );
+      setDialogState(conv, "schedule_request");
+      logRouteOutcome("future_timeframe_day_commit_ack", {
+        dayLabel: futureCommit.dayLabel,
+        eventCommitted: futureCommit.eventCommitted
+      });
+      return publishLiveTwilioReply(futureCommit.reply, { turnSchedulingIntent: true });
+    }
     conv.lead = conv.lead ?? {};
     if (future.label) conv.lead.purchaseTimeframe = future.label;
     if (future.until) {

@@ -28,9 +28,21 @@ assert.match(
 );
 assert.equal(
   (apiSource.match(/soft appointment, confirm and prep\./g) ?? []).length,
-  2,
-  "both live and regen status-update paths must create the soft-appointment todo"
+  4,
+  "status-update AND future-timeframe paths (live + regen) must create the soft-appointment todo"
 );
+
+// Day commitments that arrive via the future-timeframe route get the same
+// soft-appointment treatment, not a robotic cadence-pause ack (Nicholas Maly
+// 2026-06-11: "I signed up on the Harley website for the June 20th thing"
+// drew "I'll pause follow-up until june 20").
+assert.equal(
+  (apiSource.match(/future_timeframe_day_commit_ack/g) ?? []).length,
+  2,
+  "future-timeframe day-commit branch must exist in live and regen paths"
+);
+const NICHOLAS_TEXT = "I signed up on the Harley website for the June 20th thing";
+assert.match(NICHOLAS_TEXT, /\b(event|demo days?|open house|bike night|signed up)\b/i, "event commit cue");
 
 // Behavioral copies (pure logic mirrored from index.ts; pinned above).
 const MONTHS: Record<string, string> = {
