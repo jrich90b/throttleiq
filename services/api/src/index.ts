@@ -12033,7 +12033,12 @@ function normalizeModelText(val?: string | null): string {
     .replace(/\biron\s+883s\b/g, "iron 883")
     .replace(/\blimieteds?\b/g, "limited")
     .replace(/\blimteds?\b/g, "limited")
-    .replace(/\blimiteds\b/g, "limited");
+    .replace(/\blimiteds\b/g, "limited")
+    // "Street Gide Limited" (Chuck Bailey 2026-06-07) and autocorrect's
+    // favorite "street guide" must still match the Glide families.
+    .replace(/\bgides?\b/g, "glide")
+    .replace(/\bg(?:lied|ilde)s?\b/g, "glide")
+    .replace(/\b(street|road|tri|wide)\s+guides?\b/g, "$1 glide");
   return withoutAnniversarySuffix
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
@@ -12609,22 +12614,47 @@ function findMentionedModel(text: string): string | null {
   return matches[0] ?? null;
 }
 
+function findNormalizedPhraseSpans(
+  haystackNormalized: string,
+  needleNormalized: string
+): Array<{ start: number; end: number }> {
+  const hay = String(haystackNormalized ?? "").trim();
+  const needle = String(needleNormalized ?? "").trim();
+  if (!hay || !needle) return [];
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(?:^|\\s)(${escaped})(?=\\s|$)`, "g");
+  const spans: Array<{ start: number; end: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(hay))) {
+    const start = m.index + (m[0].length - m[1].length);
+    spans.push({ start, end: start + m[1].length });
+    if (re.lastIndex === m.index) re.lastIndex += 1;
+  }
+  return spans;
+}
+
 function findMentionedModels(text: string): string[] {
   const t = normalizeModelText(text);
   const models = getHarleyModelLexicon();
   if (!t || !models.length) return [];
   const sorted = [...models].sort((a, b) => b.length - a.length);
-  const found: string[] = [];
+  // Occurrence-aware dedupe: "a Street Glide, but would also like to ride a
+  // Street Glide Limited" is TWO requests (Chuck Bailey 2026-06-07). A
+  // shorter model name is only suppressed when its occurrences all sit
+  // inside a longer model's claimed span.
+  const claimed: Array<{ start: number; end: number }> = [];
+  const found: Array<{ model: string; normalized: string }> = [];
   for (const model of sorted) {
     const normalized = normalizeModelText(model);
-    if (!normalized || !normalizedModelPhrasePresent(t, normalized)) continue;
-    const alreadyCovered = found.some(existing =>
-      normalizeModelText(existing).includes(normalized)
-    );
-    if (alreadyCovered) continue;
-    found.push(model);
+    if (!normalized) continue;
+    if (found.some(f => f.normalized === normalized)) continue;
+    const spans = findNormalizedPhraseSpans(t, normalized);
+    const free = spans.find(s => !claimed.some(c => s.start >= c.start && s.end <= c.end));
+    if (!free) continue;
+    claimed.push(free);
+    found.push({ model, normalized });
   }
-  return found;
+  return found.map(f => f.model);
 }
 
 type MentionedModelCandidate = {
@@ -21134,6 +21164,49 @@ async function resolveDeterministicAvailabilityReply(args: {
   );
   const explicitModelFromText =
     requestedModelMentions[0] ?? (currentTextModelCandidates.length ? null : findMentionedModel(textLower));
+  // A turn that names several bikes gets an answer for each one ("mostly
+  // interested in a Street Glide, but would also like to ride a Street Glide
+  // Limited" — Chuck Bailey 2026-06-07 drew a Street-Glide-only list).
+  const distinctRequestedModels = Array.from(
+    new Map(requestedModelMentions.map(m => [normalizeModelText(m), m])).values()
+  );
+  if (distinctRequestedModels.length >= 2 && !otherInventoryRequest && !soldOrPostSale) {
+    const yearForMulti = extractYearSingle(textLower)?.toString() ?? null;
+    const multiHolds = await listInventoryHolds();
+    const multiSolds = await listInventorySolds();
+    const segments: string[] = [];
+    for (const requested of distinctRequestedModels.slice(0, 2)) {
+      const label = normalizeDisplayCase(requested);
+      const lookupMatches = await findInventoryMatches({
+        year: yearForMulti,
+        model: canonicalizeWatchModelLabel(requested)
+      });
+      const status = classifyInventoryMatches(lookupMatches, multiHolds, multiSolds);
+      if (!status.available.length) {
+        segments.push(
+          status.held.length
+            ? `The ${label} we have is on hold right now, but I can keep an eye on it for you.`
+            : `I'm not seeing a ${label} in stock right now.`
+        );
+        continue;
+      }
+      const top = status.available
+        .slice(0, 2)
+        .map((item, idx) => `${idx + 1}) ${formatInventoryLine(item)}`)
+        .join(" | ");
+      segments.push(`${label}: ${status.available.length} in stock right now. ${top}`);
+    }
+    conv.inventoryContext = {
+      ...(conv.inventoryContext ?? {}),
+      model: distinctRequestedModels[0],
+      updatedAt: nowIso()
+    };
+    const rideAsk = /\b(ride|riding|demo)\b/i.test(textLower);
+    const closer = rideAsk
+      ? "Happy to set you up to ride both back to back. What day works for you?"
+      : "Want me to line up a time for you to check them out?";
+    return { kind: "reply", reply: `${segments.join(" ")} ${closer}` };
+  }
   const mediaRawText = String(mediaInventoryExtraction?.rawText ?? "");
   const explicitModelFromMediaText = mediaRawText ? findMentionedModel(mediaRawText) : null;
   const mediaModel = String(mediaInventoryExtraction?.model ?? "").trim();
