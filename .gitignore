@@ -41,3 +41,8 @@ data/conversations.json
 
 sample.adf.xml
 .vercel
+
+# agent skills (installed locally via npx skills)
+.agents/
+.claude/skills/
+skills-lock.json
