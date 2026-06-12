@@ -50936,7 +50936,13 @@ if (authToken && signature) {
   const publishLiveTwilioReply = async (
     text: string,
     invariantHints?: CustomerReplyDraftInvariantHints,
-    options?: { providerMessageId?: string | null; mediaUrls?: string[]; draftOnly?: boolean }
+    options?: {
+      providerMessageId?: string | null;
+      mediaUrls?: string[];
+      draftOnly?: boolean;
+      /** Compliance messages (opt-out confirmations) bypass suggest-mode review. */
+      forceSend?: boolean;
+    }
   ) => {
     const invariant = evaluateEarlyLiveDraftInvariant(text, invariantHints);
     if (!invariant.allow) {
@@ -50957,7 +50963,7 @@ if (authToken && signature) {
     const mediaUrls = Array.isArray(options?.mediaUrls) && options.mediaUrls.length
       ? options.mediaUrls
       : undefined;
-    if (webhookMode === "suggest" || options?.draftOnly) {
+    if ((webhookMode === "suggest" || options?.draftOnly) && !options?.forceSend) {
       appendOutbound(
         conv,
         outboundFrom,
@@ -51459,15 +51465,12 @@ if (authToken && signature) {
       const confirmHuman = !isTwilioHandledStopKeyword(event.body)
         ? await buildOptOutConfirmationText()
         : null;
-      if (confirmHuman) {
-        appendOutbound(conv, event.to, event.from, confirmHuman, "twilio");
-      }
       await applySmsOptOut(conv, event);
+      if (confirmHuman) {
+        return publishLiveTwilioReply(confirmHuman, undefined, { forceSend: true });
+      }
       saveConversation(conv);
       await flushConversationStore();
-      if (confirmHuman) {
-        return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmHuman));
-      }
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -52210,11 +52213,8 @@ if (authToken && signature) {
       // response so the suppression list can't block it.
       if (!isTwilioHandledStopKeyword(event.body)) {
         const confirmation = await buildOptOutConfirmationText();
-        appendOutbound(conv, event.to, event.from, confirmation, "twilio");
         await applySmsOptOut(conv, event);
-        saveConversation(conv);
-        await flushConversationStore();
-        return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmation));
+        return publishLiveTwilioReply(confirmation, undefined, { forceSend: true });
       }
       await applySmsOptOut(conv, event);
       saveConversation(conv);
@@ -52235,11 +52235,8 @@ if (authToken && signature) {
     // response so the suppression list can't block it.
     if (!isTwilioHandledStopKeyword(event.body)) {
       const confirmation = await buildOptOutConfirmationText();
-      appendOutbound(conv, event.to, event.from, confirmation, "twilio");
       await applySmsOptOut(conv, event);
-      saveConversation(conv);
-      await flushConversationStore();
-      return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(confirmation));
+      return publishLiveTwilioReply(confirmation, undefined, { forceSend: true });
     }
     await applySmsOptOut(conv, event);
     saveConversation(conv);

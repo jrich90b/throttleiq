@@ -50,7 +50,7 @@ const noResponseIntent = {
 
 const apiIndex = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
 const suppressedBranchStart = apiIndex.indexOf("if (isSuppressed(event.from))");
-const suppressedBranch = suppressedBranchStart >= 0 ? apiIndex.slice(suppressedBranchStart, suppressedBranchStart + 450) : "";
+const suppressedBranch = suppressedBranchStart >= 0 ? apiIndex.slice(suppressedBranchStart, suppressedBranchStart + 1100) : "";
 const leadIdentifiersStart = apiIndex.indexOf("function getLeadIdentifiers");
 const leadIdentifiersEnd = apiIndex.indexOf("function getRelatedConversations", leadIdentifiersStart);
 const leadIdentifiersBranch =
@@ -109,9 +109,13 @@ const cases: Case[] = [
     id: "suppressed_stop_request_still_publishes_opt_out_confirmation",
     expected: true,
     run: () =>
+      // 2026-06-12: confirmation now flows through the audited boundary with
+      // forceSend (sent immediately even in suggest mode, never drafted), and
+      // Twilio-handled STOP keywords stay silent (Twilio auto-confirms those).
       suppressedBranch.includes("llmOptOut || isOptOut(event.body)") &&
-      suppressedBranch.indexOf("publishLiveTwilioReply(reply)") > suppressedBranch.indexOf("applySmsOptOut") &&
-      suppressedBranch.indexOf("publishLiveTwilioReply(reply)") < suppressedBranch.indexOf("<Response></Response>")
+      suppressedBranch.includes("isTwilioHandledStopKeyword(event.body)") &&
+      suppressedBranch.indexOf("publishLiveTwilioReply(confirmation, undefined, { forceSend: true })") >
+        suppressedBranch.indexOf("applySmsOptOut")
   },
   {
     id: "sms_stop_suppression_uses_twilio_from_when_lead_phone_blank",

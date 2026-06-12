@@ -151,14 +151,19 @@ assert.match(
   "opt-out confirmation copy exists"
 );
 assert.equal(
-  (apiSource.match(/appendOutbound\(conv, event\.to, event\.from, confirmation, "twilio"\)/g) ?? []).length,
+  (apiSource.match(/return publishLiveTwilioReply\(confirmation, undefined, \{ forceSend: true \}\)/g) ?? []).length,
   2,
-  "both AI-path opt-out branches send the confirmation immediately (never drafted)"
+  "both AI-path opt-out branches send the confirmation through the audited boundary with forceSend"
 );
 assert.match(
   apiSource,
-  /confirmHuman/,
-  "human-mode opt-outs also confirm"
+  /return publishLiveTwilioReply\(confirmHuman, undefined, \{ forceSend: true \}\)/,
+  "human-mode opt-outs also confirm through the audited boundary"
+);
+assert.match(
+  apiSource,
+  /\(webhookMode === "suggest" \|\| options\?\.draftOnly\) && !options\?\.forceSend/,
+  "forceSend bypasses suggest-mode drafting for compliance messages"
 );
 assert.equal(
   (apiSource.match(/const reply = "Understood - I'll stop texting\."/g) ?? []).length,
