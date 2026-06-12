@@ -162,8 +162,9 @@ export function TaskInboxSection(props: any) {
                 </div>
                 <div className={`text-xs ${sectionTheme.title}`}>{rows.length}</div>
               </div>
-              {rows.length
-                ? rows.map((t: any, rowIdx: number) => {
+              {rows.length ? (
+                <div className="lr-task-section-body">
+                {rows.map((t: any) => {
                     const rowConv = conversationsById.get(t.convId);
                     const reason = (t.reason ?? "").toLowerCase();
                     const sectionType = todoInboxSection(t);
@@ -175,14 +176,6 @@ export function TaskInboxSection(props: any) {
                           : sectionType === "reminder"
                             ? "Reminder"
                             : "To Do";
-                    const taskTagClass =
-                      sectionType === "followup"
-                        ? "border-[color:rgba(251,127,4,0.88)] bg-[var(--accent)] text-[#101522]"
-                        : sectionType === "appointment"
-                          ? "border-[color:rgba(16,185,129,0.55)] bg-[color:rgba(16,185,129,0.22)] text-[#d8ffef]"
-                          : sectionType === "reminder"
-                            ? "border-[color:rgba(234,179,8,0.62)] bg-[color:rgba(234,179,8,0.20)] text-[#fff4c6]"
-                            : "border-[color:rgba(59,130,246,0.52)] bg-[color:rgba(59,130,246,0.18)] text-[#dce9ff]";
                     const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
                     const isApprovalTodoTask = isApprovalTodo(t);
                     const showCallButton = !isInternalNoteTodo;
@@ -212,14 +205,56 @@ export function TaskInboxSection(props: any) {
                       Boolean(String(rowConv?.appointment?.staffNotify?.followUpSentAt ?? "").trim());
                     const followUpTickerStart = sectionType === "followup" ? followUpTickerStartIso(t) : null;
                     const followUpTicker = formatFollowUpTicker(followUpTickerStart, nowMs);
+                    const vehicleLine = String(rowConv?.vehicleDescription ?? "").trim();
+                    const hold = rowConv?.hold ?? null;
+                    const highlightLine =
+                      [String(hold?.color ?? "").trim(), String(hold?.trim ?? "").trim()]
+                        .filter(Boolean)
+                        .join(", ") ||
+                      String(hold?.label ?? "").trim() ||
+                      (rowConv?.walkIn ? "Walk-in" : "");
+                    const whenLabel =
+                      sectionType === "appointment" && appointmentTime
+                        ? "Appointment"
+                        : requestedCallTime
+                          ? "Requested call"
+                          : String(t.dueAt ?? "").trim()
+                            ? "Due"
+                            : "Created";
+                    const whenValue =
+                      sectionType === "appointment" && appointmentTime
+                        ? appointmentTime
+                        : requestedCallTime ||
+                          (String(t.dueAt ?? "").trim()
+                            ? new Date(t.dueAt).toLocaleString([], {
+                                weekday: "short",
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit"
+                              })
+                            : new Date(t.createdAt).toLocaleString([], {
+                                month: "short",
+                                day: "numeric",
+                                hour: "numeric",
+                                minute: "2-digit"
+                              }));
+                    const pillVariant =
+                      sectionType === "followup"
+                        ? "lr-task-card-pill--followup"
+                        : sectionType === "appointment"
+                          ? "lr-task-card-pill--appointment"
+                          : sectionType === "reminder"
+                            ? "lr-task-card-pill--reminder"
+                            : "lr-task-card-pill--todo";
+                    const pillGlyph =
+                      sectionType === "appointment" ? "📅" : sectionType === "reminder" ? "⏰" : "🔔";
                     return (
-                      <div
-                        key={t.id}
-                        className={`p-4 flex items-start justify-between gap-4 ${rowIdx > 0 ? "border-t" : ""}`}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${taskTagClass}`}>
+                      <div key={t.id} className="lr-task-card">
+                        <div className="min-w-0">
+                          <div className="lr-task-card-pillrow">
+                            <span className={`lr-task-card-pill ${pillVariant}`}>
+                              <span aria-hidden>{pillGlyph}</span>
                               {taskLabel}
                             </span>
                             {appointmentReminderSent ? (
@@ -266,43 +301,64 @@ export function TaskInboxSection(props: any) {
                               </span>
                             ) : null}
                           </div>
-                          {t.leadName ? (
-                            <>
-                              <div className="text-sm font-medium mt-2 flex items-center gap-1">
-                                {t.leadName}
-                                {renderDealTemperatureIcon(
-                                  rowConv ? getDealTemperature(rowConv) : null,
-                                  "text-base"
-                                )}
-                              </div>
-                              <div className="text-sm text-gray-600 break-all">{t.leadKey}</div>
-                            </>
-                          ) : (
-                            <div className="text-sm font-medium break-all mt-2 flex items-center gap-1">
-                              {t.leadKey}
-                              {renderDealTemperatureIcon(
-                                rowConv ? getDealTemperature(rowConv) : null,
-                                "text-base"
-                              )}
-                            </div>
-                          )}
-                          <div className="text-xs text-gray-500 mt-1">
-                            {t.reason} • {new Date(t.createdAt).toLocaleString()}
+                          <div
+                            className="lr-task-card-name"
+                            onClick={() => {
+                              openConversation(t.convId);
+                            }}
+                            title="Open conversation"
+                          >
+                            {t.leadName || t.leadKey}
+                            {renderDealTemperatureIcon(
+                              rowConv ? getDealTemperature(rowConv) : null,
+                              "text-base"
+                            )}
                           </div>
-                          <div className="text-sm text-gray-700 mt-2 line-clamp-3 break-words">{t.summary}</div>
-                          <div className="text-sm font-semibold text-[var(--accent)] mt-2">Action: {actionLabel}</div>
-                          {ownerDisplay ? <div className="text-xs text-gray-600 mt-1">Owner: {ownerDisplay}</div> : null}
-                          {showRequestedCallTime ? (
-                            <div className="text-xs text-gray-600 mt-1">Requested call time: {requestedCallTime}</div>
-                          ) : null}
-                          {appointmentTime ? (
-                            <div className="text-xs text-gray-600 mt-1">Appointment time: {appointmentTime}</div>
-                          ) : null}
-                          {sectionType === "appointment" && appointmentOutcomeLabel ? (
-                            <div className="text-xs text-gray-600 mt-1">Outcome: {appointmentOutcomeLabel}</div>
-                          ) : null}
+                          {vehicleLine ? <div className="lr-task-card-vehicle">{vehicleLine}</div> : null}
+                          {highlightLine ? <div className="lr-task-card-highlight">{highlightLine}</div> : null}
+                          {t.leadName ? <div className="lr-task-card-phone">{t.leadKey}</div> : null}
+                          <div className="lr-task-card-boxes">
+                            <div className="lr-task-card-box">
+                              <div className="lr-task-card-box-label">
+                                <span aria-hidden>🕐</span>
+                                {whenLabel}
+                              </div>
+                              <div className="lr-task-card-box-value">{whenValue}</div>
+                            </div>
+                            <div className="lr-task-card-box">
+                              <div className="lr-task-card-box-label">
+                                <span aria-hidden>⚡</span>
+                                Action
+                              </div>
+                              <div className="lr-task-card-box-value">{actionLabel}</div>
+                            </div>
+                          </div>
+                          <div className="lr-task-card-summary">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="lr-task-card-summary-title">Summary</div>
+                              <div className="text-[11px] text-gray-500">
+                                {t.reason} • {new Date(t.createdAt).toLocaleDateString()}
+                              </div>
+                            </div>
+                            <div className="lr-task-card-summary-row">
+                              <span className="lr-task-card-check" aria-hidden>✓</span>
+                              <span className="break-words">{t.summary}</span>
+                            </div>
+                            {showRequestedCallTime && sectionType !== "followup" ? (
+                              <div className="lr-task-card-summary-row">
+                                <span className="lr-task-card-check" aria-hidden>✓</span>
+                                <span>Requested call time: {requestedCallTime}</span>
+                              </div>
+                            ) : null}
+                            {sectionType === "appointment" && appointmentOutcomeLabel ? (
+                              <div className="lr-task-card-summary-row">
+                                <span className="lr-task-card-check" aria-hidden>✓</span>
+                                <span>Outcome: {appointmentOutcomeLabel}</span>
+                              </div>
+                            ) : null}
+                          </div>
                           {reassignInlineOpenId === t.convId && rowConv ? (
-                            <div className="mt-3 border rounded p-2 bg-gray-50" data-actions-menu>
+                            <div className="mt-3 lr-task-card-box" data-actions-menu>
                               <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
                               <select
                                 className="w-full border rounded px-2 py-1 text-xs bg-white"
@@ -360,82 +416,88 @@ export function TaskInboxSection(props: any) {
                               </div>
                             </div>
                           ) : null}
-                          <button
-                            className="text-xs text-blue-600 mt-2 inline-block"
-                            onClick={() => {
-                              openConversation(t.convId);
-                            }}
-                          >
-                            Open conversation
-                          </button>
-                        </div>
-                        <div className="shrink-0 flex flex-col items-end gap-2">
-                          {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
-                            <button
-                              className="px-3 py-2 border rounded text-sm"
-                              onClick={() => {
-                                openReassignLeadInline(rowConv);
-                              }}
-                              title="Reassign lead"
-                            >
-                              Reassign
-                            </button>
-                          ) : null}
-                          {showCallButton ? (
-                            <button
-                              className="px-3 py-2 border rounded text-sm"
-                              onClick={() => openCallFromTodo(t)}
-                              title="Call customer"
-                            >
-                              <span className="mr-1">📞</span>
-                              Call
-                            </button>
-                          ) : null}
-                          {appointmentReminderSent || dealerRideOutcomeNeeded ? null : (
-                            isApprovalTodoTask ? (
+                          <div className="lr-task-card-foot">
+                            <div className="lr-task-card-owner">
+                              {ownerDisplay ? <>Owner: {ownerDisplay}</> : <>Unassigned</>}
                               <button
-                                className="px-3 py-2 border rounded text-sm text-gray-700 bg-amber-50"
-                                onClick={() => openApprovalTodoOutcome(t)}
-                                title="Record the outcome and close this To Do"
-                              >
-                                Outcome
-                              </button>
-                            ) : (
-                              <button
-                                className="px-3 py-2 border rounded text-sm text-gray-600"
+                                className="ml-3 text-[11px] text-blue-400 hover:text-blue-300"
                                 onClick={() => {
-                                  if (sectionType === "appointment" && !appointmentOutcomeLabel) {
-                                    setAppointmentCloseTarget(t);
-                                    setAppointmentClosePrimaryOutcome("showed");
-                                    setAppointmentCloseSecondaryOutcome("needs_follow_up");
-                                    setAppointmentCloseNote("");
-                                    setAppointmentCloseOpen(true);
-                                    return;
-                                  }
-                                  void markTodoDone(t, "dismiss");
+                                  openConversation(t.convId);
                                 }}
-                                title="Close this To Do"
                               >
-                                {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                                Open conversation →
                               </button>
-                            )
-                          )}
-                          <button
-                            className="px-3 py-2 border rounded text-sm text-red-700 bg-red-50"
-                            onClick={() => {
-                              void reportTodoIssue?.(t);
-                            }}
-                            title="Report a routing, task, cadence, or UI problem"
-                          >
-                            Report issue
-                          </button>
+                            </div>
+                            <div className="lr-task-card-actions">
+                              {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
+                                <button
+                                  className="lr-task-btn"
+                                  onClick={() => {
+                                    openReassignLeadInline(rowConv);
+                                  }}
+                                  title="Reassign lead"
+                                >
+                                  Reassign
+                                </button>
+                              ) : null}
+                              {showCallButton ? (
+                                <button
+                                  className="lr-task-btn lr-task-btn--primary"
+                                  onClick={() => openCallFromTodo(t)}
+                                  title="Call customer"
+                                >
+                                  <span className="mr-1">📞</span>
+                                  Call
+                                </button>
+                              ) : null}
+                              {appointmentReminderSent || dealerRideOutcomeNeeded ? null : (
+                                isApprovalTodoTask ? (
+                                  <button
+                                    className="lr-task-btn"
+                                    onClick={() => openApprovalTodoOutcome(t)}
+                                    title="Record the outcome and close this To Do"
+                                  >
+                                    Outcome
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="lr-task-btn"
+                                    onClick={() => {
+                                      if (sectionType === "appointment" && !appointmentOutcomeLabel) {
+                                        setAppointmentCloseTarget(t);
+                                        setAppointmentClosePrimaryOutcome("showed");
+                                        setAppointmentCloseSecondaryOutcome("needs_follow_up");
+                                        setAppointmentCloseNote("");
+                                        setAppointmentCloseOpen(true);
+                                        return;
+                                      }
+                                      void markTodoDone(t, "dismiss");
+                                    }}
+                                    title="Close this To Do"
+                                  >
+                                    {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                                  </button>
+                                )
+                              )}
+                              <button
+                                className="lr-task-btn lr-task-btn--danger"
+                                onClick={() => {
+                                  void reportTodoIssue?.(t);
+                                }}
+                                title="Report a routing, task, cadence, or UI problem"
+                              >
+                                Report issue
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );
-                  })
-                : (
-                  <div className="px-4 py-3 text-xs text-gray-500">No {sectionDef.label.toLowerCase()}.</div>
-                )}
+                  })}
+                </div>
+              ) : (
+                <div className="px-4 py-3 text-xs text-gray-500">No {sectionDef.label.toLowerCase()}.</div>
+              )}
             </div>
           );
         })}
