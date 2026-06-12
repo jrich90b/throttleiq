@@ -34013,6 +34013,38 @@ app.post("/internal/worker/cadence-repair/:id", (req, res) => {
   return res.json({ ok: true, before, followUpCadence: conv.followUpCadence });
 });
 
+// Maintenance: retire legacy day-one boilerplate call todos (the class the
+// 2026-06-12 qualified-task policy stopped creating). Marks them done; never
+// touches customer-facing state.
+app.post("/internal/worker/todo-cleanup", (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
+  const olderThanDays = Math.max(1, Number(req.body?.olderThanDays ?? 7) || 7);
+  const dryRun = req.body?.dryRun === true;
+  const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+  const matches = listOpenTodos().filter(t => {
+    if (!/^call customer \(initial reply sent\)\.?$/i.test(String(t.summary ?? "").trim())) return false;
+    const createdMs = Date.parse(String(t.createdAt ?? ""));
+    return Number.isFinite(createdMs) && createdMs < cutoffMs;
+  });
+  if (!dryRun) {
+    for (const t of matches) {
+      markTodoDone(t.convId, t.id);
+    }
+    recordRouteOutcome("manual", "boilerplate_call_todo_cleanup", {
+      closed: matches.length,
+      olderThanDays
+    });
+  }
+  return res.json({
+    ok: true,
+    dryRun,
+    matched: matches.length,
+    convIds: matches.map(t => t.convId).slice(0, 100)
+  });
+});
+
 app.post("/conversations/:id/appointment", requirePermission("canEditAppointments"), async (req, res) => {
   try {
     const conv = getConversation(req.params.id);
