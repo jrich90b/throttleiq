@@ -6534,3 +6534,24 @@ input[type="reset"],
   background: rgba(251, 127, 4, 0.92);
   color: #101522;
 }
+
+/* Pipeline thread bubbles — explicit colors so the dark theme's gray-class
+   remapping (scoped to .lr-app-sidebar-panel) can never wash out the text. */
+.lr-app-theme .lr-app-sidebar-panel .lr-pipeline-msg-in,
+.lr-pipeline-msg-in {
+  background: #e5e7eb !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+.lr-app-theme .lr-app-sidebar-panel .lr-pipeline-msg-out,
+.lr-pipeline-msg-out {
+  background: #2563eb !important;
+  color: #ffffff !important;
+  border-color: #2563eb !important;
+}
+.lr-app-theme .lr-app-sidebar-panel .lr-pipeline-msg-call,
+.lr-pipeline-msg-call {
+  background: #f3f4f6 !important;
+  color: #1f2937 !important;
+  border-color: #e5e7eb !important;
+}

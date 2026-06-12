@@ -13891,10 +13891,10 @@ export default function Home() {
                           <div
                             className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-sm font-medium ${
                               isCall
-                                ? "bg-gray-50 text-gray-800 border-gray-200"
+                                ? "lr-pipeline-msg-call"
                                 : isIn
-                                  ? "bg-gray-100 text-gray-900 border-gray-200"
-                                  : "bg-blue-600 text-white border-blue-600"
+                                  ? "lr-pipeline-msg-in"
+                                  : "lr-pipeline-msg-out"
                             } ${isDraft ? "opacity-80 border-dashed" : ""}`}
                           >
                             {String(bodyText ?? "").trim()}
