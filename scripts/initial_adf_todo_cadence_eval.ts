@@ -80,4 +80,40 @@ assert.equal(openTodosFor(staffTaskConv.id).length, 1);
 
 await store.flushConversationStore();
 
+// Policy pins (Joe, 2026-06-12): no day-one boilerplate call tasks — the
+// agent qualifies by conversing; a call task appears only at qualified
+// moments (explicit callback, or the silence-qualified task after the day-3
+// cadence text with zero replies).
+const { readFile } = await import("node:fs/promises");
+const adfSource = await readFile(
+  path.resolve("services/api/src/routes/sendgridInbound.ts"),
+  "utf8"
+);
+assert.match(
+  adfSource,
+  /INITIAL_LEAD_CALL_TODO_ENABLED \?\? "0"/,
+  "day-one generic call todo must default OFF behind INITIAL_LEAD_CALL_TODO_ENABLED"
+);
+assert.match(
+  adfSource,
+  /callbackRequestedInLead/,
+  "explicit callback requests still create a call task unconditionally"
+);
+const apiSource = await readFile(path.resolve("services/api/src/index.ts"), "utf8");
+assert.match(
+  apiSource,
+  /sendsAfterThisOne === 3/,
+  "silence-qualified call task fires once, at the day-3 cadence send"
+);
+assert.match(
+  apiSource,
+  /No reply after \$\{sendsAfterThisOne \+ 1\} texts - worth a quick call\./,
+  "silence-qualified summary names the touch count"
+);
+assert.equal(
+  store.isCadenceGeneratedFollowUpTodoSummary("No reply after 4 texts - worth a quick call."),
+  false,
+  "silence-qualified task must not be suppressed as a cadence-generated summary"
+);
+
 console.log("PASS initial ADF todo/cadence eval");

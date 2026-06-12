@@ -5874,7 +5874,14 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       }
       return;
     }
-    addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
+    // Day-one boilerplate call tasks bury real work (Joe, 2026-06-12: 43 of
+    // them sat 17+ days untouched). The agent qualifies by conversing; a call
+    // task appears only when something real needs a human — explicit callback
+    // above, or the silence-qualified task the cadence creates after repeated
+    // no-reply texts (processDueFollowUps).
+    if (String(process.env.INITIAL_LEAD_CALL_TODO_ENABLED ?? "0").trim() === "1") {
+      addCallTodoIfMissing(conv, "Call customer (initial reply sent).");
+    }
   };
   const prefersPhoneOnly = conv.lead?.preferredContactMethod === "phone";
   const prefersEmailOnly = conv.lead?.preferredContactMethod === "email";

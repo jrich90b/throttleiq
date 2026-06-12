@@ -27248,7 +27248,33 @@ async function processDueFollowUpsUnlocked() {
 
     const maybeAddCallTodoForFollowUp = () => {
       if (isPostSale) return;
-      addCallTodoIfMissing(conv, buildCadenceFollowUpCallTodoSummary(conv));
+      // Joe, 2026-06-12: the agent qualifies by conversing — humans get a
+      // card only when there's something real to do. Engaged customers keep
+      // the existing cadence-follow-up summary (suppressed while the cadence
+      // is active). Silent leads surface ONE call task at the day-3 text:
+      // four touches with zero replies means the phone is the next move.
+      const everInbound = (conv.messages ?? []).some(
+        (m: any) =>
+          m?.direction === "in" &&
+          (m?.provider === "twilio" || m?.provider === "web_widget") &&
+          String(m?.body ?? "").trim()
+      );
+      if (everInbound) {
+        addCallTodoIfMissing(conv, buildCadenceFollowUpCallTodoSummary(conv));
+        return;
+      }
+      const sendsAfterThisOne = Number(conv.followUpCadence?.stepIndex ?? 0) + 1;
+      if (sendsAfterThisOne === 3) {
+        addTodo(
+          conv,
+          "call",
+          `No reply after ${sendsAfterThisOne + 1} texts - worth a quick call.`,
+          undefined,
+          undefined,
+          undefined,
+          "followup"
+        );
+      }
     };
 
     if (!forceAutoSendPostSaleCadence && (systemMode === "suggest" || enforceSalesReviewForCadence)) {

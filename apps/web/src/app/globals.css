@@ -6400,6 +6400,26 @@ input[type="reset"],
   color: #fda4af;
   font-weight: 700;
 }
+.lr-task-card-task {
+  margin-top: 0.75rem;
+}
+.lr-task-card-task + .lr-task-card-task {
+  border-top: 1px dashed var(--lr-app-border, rgba(255, 255, 255, 0.12));
+  padding-top: 0.75rem;
+}
+.lr-task-card-task .lr-task-card-pillrow {
+  align-items: center;
+}
+.lr-task-card-count {
+  flex: none;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 127, 4, 0.5);
+  background: rgba(251, 127, 4, 0.14);
+  color: #fb9d3d;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
 .lr-task-card-foot {
   margin-top: 0.85rem;
   display: flex;

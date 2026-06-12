@@ -185,21 +185,68 @@ export function TaskInboxSection(props: any) {
         </div>
       </div>
       <div className="mt-3 space-y-3">
-        {todoSectionDefs.map((sectionDef: any) => {
-          const rows = groupedTodos[sectionDef.key];
-          const sectionTheme = getTodoSectionTheme(sectionDef.key);
-          return (
-            <div key={sectionDef.key} className="border rounded-lg overflow-hidden lr-app-list-surface">
-              <div className={`px-4 py-2 flex items-center justify-between ${sectionTheme.header}`}>
-                <div className={`text-xs font-semibold uppercase tracking-wide ${sectionTheme.title}`}>
-                  {sectionDef.label}
-                </div>
-                <div className={`text-xs ${sectionTheme.title}`}>{rows.length}</div>
-              </div>
-              {rows.length ? (
-                <div className="lr-task-section-body">
-                {rows.map((t: any) => {
-                    const rowConv = conversationsById.get(t.convId);
+        {(() => {
+          // One card per customer with every open task inside it (Joe,
+          // 2026-06-12: "no doubles — keep it under the same card").
+          // Customers appear at the position of their highest-priority task;
+          // tasks within a card keep section-priority order.
+          const orderedTodos: any[] = [];
+          for (const sectionDef of todoSectionDefs) {
+            for (const t of groupedTodos[sectionDef.key] ?? []) orderedTodos.push(t);
+          }
+          const groups: Array<{ convId: string; tasks: any[] }> = [];
+          const byConv = new Map<string, { convId: string; tasks: any[] }>();
+          for (const t of orderedTodos) {
+            let g = byConv.get(t.convId);
+            if (!g) {
+              g = { convId: t.convId, tasks: [] };
+              byConv.set(t.convId, g);
+              groups.push(g);
+            }
+            g.tasks.push(t);
+          }
+          return groups.map(group => {
+            const rowConv = conversationsById.get(group.convId);
+            const first = group.tasks[0];
+            const vehicleLine = String(rowConv?.vehicleDescription ?? "").trim();
+            const hold = rowConv?.hold ?? null;
+            const highlightLine =
+              [String(hold?.color ?? "").trim(), String(hold?.trim ?? "").trim()]
+                .filter(Boolean)
+                .join(", ") ||
+              String(hold?.label ?? "").trim() ||
+              (rowConv?.walkIn ? "Walk-in" : "");
+            const ownerDisplay = String(
+              first.ownerDisplayName ?? first.ownerName ?? first.leadOwnerName ?? ""
+            ).trim();
+            const callTask = group.tasks.find(
+              (t: any) => !/(^|\b)note(\b|$)/.test(String(t.reason ?? "").toLowerCase())
+            );
+            return (
+              <div key={group.convId} className="lr-task-card">
+                <div className="min-w-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <div
+                      className="lr-task-card-name"
+                      onClick={() => {
+                        openConversation(group.convId);
+                      }}
+                      title="Open conversation"
+                    >
+                      {displayCaseName(first.leadName || "") || first.leadKey}
+                      {renderDealTemperatureIcon(
+                        rowConv ? getDealTemperature(rowConv) : null,
+                        "text-base"
+                      )}
+                    </div>
+                    {group.tasks.length > 1 ? (
+                      <span className="lr-task-card-count">{group.tasks.length} open tasks</span>
+                    ) : null}
+                  </div>
+                  {vehicleLine ? <div className="lr-task-card-vehicle">{vehicleLine}</div> : null}
+                  {highlightLine ? <div className="lr-task-card-highlight">{highlightLine}</div> : null}
+                  {first.leadName ? <div className="lr-task-card-phone">{first.leadKey}</div> : null}
+                  {group.tasks.map((t: any) => {
                     const reason = (t.reason ?? "").toLowerCase();
                     const sectionType = todoInboxSection(t);
                     const taskLabel =
@@ -210,9 +257,7 @@ export function TaskInboxSection(props: any) {
                           : sectionType === "reminder"
                             ? "Reminder"
                             : "To Do";
-                    const isInternalNoteTodo = /(^|\\b)note(\\b|$)/.test(reason);
                     const isApprovalTodoTask = isApprovalTodo(t);
-                    const showCallButton = !isInternalNoteTodo;
                     const actionLabel = todoActionLabel(t);
                     const requestedCallTime =
                       todoRequestedCallTimeLabel(t) || String(t.callbackTimeLabel ?? "").trim() || null;
@@ -220,18 +265,13 @@ export function TaskInboxSection(props: any) {
                     const actionAlreadyHasRequestedTime = /\brequested(?::| call time:)/i.test(actionLabel);
                     const showRequestedCallTime =
                       sectionType !== "appointment" && !!requestedCallTime && !actionAlreadyHasRequestedTime;
-                    const ownerDisplay = String(t.ownerDisplayName ?? t.ownerName ?? t.leadOwnerName ?? "").trim();
-                    const appointmentOutcomeStatus = String(t.appointmentOutcomeStatus ?? "").trim();
-                    const appointmentOutcomePrimaryStatus = String(t.appointmentOutcomePrimaryStatus ?? "").trim();
-                    const appointmentOutcomeSecondaryStatus = String(
-                      t.appointmentOutcomeSecondaryStatus ?? ""
-                    ).trim();
                     const appointmentOutcomeLabel = formatAppointmentOutcomeDisplay({
-                      primary: appointmentOutcomePrimaryStatus || null,
-                      secondary: appointmentOutcomeSecondaryStatus || null,
-                      legacy: appointmentOutcomeStatus || null
+                      primary: String(t.appointmentOutcomePrimaryStatus ?? "").trim() || null,
+                      secondary: String(t.appointmentOutcomeSecondaryStatus ?? "").trim() || null,
+                      legacy: String(t.appointmentOutcomeStatus ?? "").trim() || null
                     });
-                    const dealerRideOutcomeNeeded = isDealerRideOutcomeTodo(t) && !String(t.dealerRideOutcomeStatus ?? "").trim();
+                    const dealerRideOutcomeNeeded =
+                      isDealerRideOutcomeTodo(t) && !String(t.dealerRideOutcomeStatus ?? "").trim();
                     const dealerRideDefaultOutcome = rowConv?.hold ? "no_change" : "needs_follow_up";
                     const appointmentReminderSent =
                       sectionType === "appointment" &&
@@ -239,14 +279,6 @@ export function TaskInboxSection(props: any) {
                       Boolean(String(rowConv?.appointment?.staffNotify?.followUpSentAt ?? "").trim());
                     const followUpTickerStart = sectionType === "followup" ? followUpTickerStartIso(t) : null;
                     const followUpTicker = formatFollowUpTicker(followUpTickerStart, nowMs);
-                    const vehicleLine = String(rowConv?.vehicleDescription ?? "").trim();
-                    const hold = rowConv?.hold ?? null;
-                    const highlightLine =
-                      [String(hold?.color ?? "").trim(), String(hold?.trim ?? "").trim()]
-                        .filter(Boolean)
-                        .join(", ") ||
-                      String(hold?.label ?? "").trim() ||
-                      (rowConv?.walkIn ? "Walk-in" : "");
                     const apptIso = String(t.appointmentWhenIso ?? "").trim();
                     const whenLabel =
                       sectionType === "appointment" && (apptIso || appointmentTime)
@@ -290,92 +322,89 @@ export function TaskInboxSection(props: any) {
                     const pillGlyph =
                       sectionType === "appointment" ? "📅" : sectionType === "reminder" ? "⏰" : "🔔";
                     return (
-                      <div key={t.id} className="lr-task-card">
-                        <div className="min-w-0">
-                          <div className="lr-task-card-pillrow">
-                            <span className={`lr-task-card-pill ${pillVariant}`}>
-                              <span aria-hidden>{pillGlyph}</span>
-                              {taskLabel}
+                      <div key={t.id} className="lr-task-card-task">
+                        <div className="lr-task-card-pillrow">
+                          <span className={`lr-task-card-pill ${pillVariant}`}>
+                            <span aria-hidden>{pillGlyph}</span>
+                            {taskLabel}
+                          </span>
+                          {appointmentReminderSent || dealerRideOutcomeNeeded ? (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
+                              title={dealerRideOutcomeNeeded ? "Record demo ride outcome" : "Record appointment outcome"}
+                              onClick={() => {
+                                setAppointmentCloseTarget(t);
+                                setAppointmentClosePrimaryOutcome("showed");
+                                setAppointmentCloseSecondaryOutcome(
+                                  dealerRideOutcomeNeeded ? dealerRideDefaultOutcome : "needs_follow_up"
+                                );
+                                setAppointmentCloseNote("");
+                                setAppointmentCloseOpen(true);
+                              }}
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                              Outcome needed
+                            </button>
+                          ) : null}
+                          {followUpTicker ? (
+                            <span
+                              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/50 bg-[#06140f] px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums tracking-wide text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.12),0_0_12px_rgba(52,211,153,0.16)]"
+                              title={String(t.dueAt ?? "").trim() ? "How long since this follow-up became due" : "How long this follow-up has been open"}
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.85)]" />
+                              {followUpTicker}
                             </span>
-                            {appointmentReminderSent ? (
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
-                                title="Record appointment outcome"
-                                onClick={() => {
+                          ) : null}
+                          <span className="ml-auto" />
+                          {appointmentReminderSent || dealerRideOutcomeNeeded ? null : isApprovalTodoTask ? (
+                            <button
+                              className="lr-task-btn"
+                              onClick={() => openApprovalTodoOutcome(t)}
+                              title="Record the outcome and close this To Do"
+                            >
+                              Outcome
+                            </button>
+                          ) : (
+                            <button
+                              className="lr-task-btn"
+                              onClick={() => {
+                                if (sectionType === "appointment" && !appointmentOutcomeLabel) {
                                   setAppointmentCloseTarget(t);
                                   setAppointmentClosePrimaryOutcome("showed");
                                   setAppointmentCloseSecondaryOutcome("needs_follow_up");
                                   setAppointmentCloseNote("");
                                   setAppointmentCloseOpen(true);
-                                }}
-                              >
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                                Outcome needed
-                              </button>
-                            ) : null}
-                            {dealerRideOutcomeNeeded ? (
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-400/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 shadow-[0_0_0_1px_rgba(52,211,153,0.10)] animate-pulse hover:bg-emerald-400/25"
-                                title="Record demo ride outcome"
-                                onClick={() => {
-                                  setAppointmentCloseTarget(t);
-                                  setAppointmentClosePrimaryOutcome("showed");
-                                  setAppointmentCloseSecondaryOutcome(dealerRideDefaultOutcome);
-                                  setAppointmentCloseNote("");
-                                  setAppointmentCloseOpen(true);
-                                }}
-                              >
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                                Outcome needed
-                              </button>
-                            ) : null}
-                            {followUpTicker ? (
-                              <span
-                                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/50 bg-[#06140f] px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums tracking-wide text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.12),0_0_12px_rgba(52,211,153,0.16)]"
-                                title={String(t.dueAt ?? "").trim() ? "How long since this follow-up became due" : "How long this follow-up has been open"}
-                              >
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.85)]" />
-                                {followUpTicker}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div
-                            className="lr-task-card-name"
-                            onClick={() => {
-                              openConversation(t.convId);
-                            }}
-                            title="Open conversation"
-                          >
-                            {displayCaseName(t.leadName || "") || t.leadKey}
-                            {renderDealTemperatureIcon(
-                              rowConv ? getDealTemperature(rowConv) : null,
-                              "text-base"
-                            )}
-                          </div>
-                          {vehicleLine ? <div className="lr-task-card-vehicle">{vehicleLine}</div> : null}
-                          {highlightLine ? <div className="lr-task-card-highlight">{highlightLine}</div> : null}
-                          {t.leadName ? <div className="lr-task-card-phone">{t.leadKey}</div> : null}
-                          <div className="lr-task-card-boxes">
-                            <div className="lr-task-card-box">
-                              <div className="lr-task-card-box-label">
-                                <span aria-hidden>🕐</span>
-                                {whenLabel}
-                              </div>
-                              <div className="lr-task-card-box-value">
-                                {whenValue}
-                                {whenAgo ? <span className="lr-task-card-late"> • {whenAgo}</span> : null}
-                              </div>
+                                  return;
+                                }
+                                void markTodoDone(t, "dismiss");
+                              }}
+                              title="Close this To Do"
+                            >
+                              {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
+                            </button>
+                          )}
+                        </div>
+                        <div className="lr-task-card-boxes">
+                          <div className="lr-task-card-box">
+                            <div className="lr-task-card-box-label">
+                              <span aria-hidden>🕐</span>
+                              {whenLabel}
                             </div>
-                            <div className="lr-task-card-box">
-                              <div className="lr-task-card-box-label">
-                                <span aria-hidden>⚡</span>
-                                Action
-                              </div>
-                              <div className="lr-task-card-box-value">{actionDisplay}</div>
+                            <div className="lr-task-card-box-value">
+                              {whenValue}
+                              {whenAgo ? <span className="lr-task-card-late"> • {whenAgo}</span> : null}
                             </div>
                           </div>
+                          <div className="lr-task-card-box">
+                            <div className="lr-task-card-box-label">
+                              <span aria-hidden>⚡</span>
+                              Action
+                            </div>
+                            <div className="lr-task-card-box-value">{actionDisplay}</div>
+                          </div>
+                        </div>
+                        {!summaryDuplicatesAction || showRequestedCallTime || appointmentOutcomeLabel ? (
                           <div className="lr-task-card-summary">
                             <div className="flex items-center justify-between gap-2">
                               <div className="lr-task-card-summary-title">Summary</div>
@@ -402,150 +431,119 @@ export function TaskInboxSection(props: any) {
                               </div>
                             ) : null}
                           </div>
-                          {reassignInlineOpenId === t.convId && rowConv ? (
-                            <div className="mt-3 lr-task-card-box" data-actions-menu>
-                              <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
-                              <select
-                                className="w-full border rounded px-2 py-1 text-xs bg-white"
-                                value={reassignInlineTarget}
-                                onChange={e => setReassignInlineTarget(e.target.value)}
-                              >
-                                {reassignSalesOwnerOptions.length ? (
-                                  <optgroup label="Salespeople">
-                                    {reassignSalesOwnerOptions.map((owner: any) => (
-                                      <option key={`task-reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
-                                        {owner.name}
-                                      </option>
-                                    ))}
-                                  </optgroup>
-                                ) : null}
-                                <optgroup label="Departments">
-                                  <option value="department:service">Service</option>
-                                  <option value="department:parts">Parts</option>
-                                  <option value="department:apparel">Apparel</option>
-                                </optgroup>
-                              </select>
-                              {reassignInlineTarget.startsWith("department:") ? (
-                                <textarea
-                                  className="w-full border rounded px-2 py-1 text-xs mt-2 bg-white"
-                                  rows={3}
-                                  value={reassignInlineSummary}
-                                  onChange={e => setReassignInlineSummary(e.target.value)}
-                                  placeholder="Optional note for department"
-                                />
-                              ) : (
-                                <div className="mt-2 text-[11px] text-gray-500">
-                                  This will reassign lead owner only.
-                                </div>
-                              )}
-                              <div className="mt-2 flex justify-end gap-2">
-                                <button
-                                  className="px-2 py-1 border rounded text-xs"
-                                  onClick={() => {
-                                    setReassignInlineOpenId(null);
-                                    setReassignInlineTarget("department:service");
-                                    setReassignInlineSummary("");
-                                  }}
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  className="px-2 py-1 border rounded text-xs"
-                                  disabled={reassignInlineSaving}
-                                  onClick={() => {
-                                    void reassignLeadInline(rowConv);
-                                  }}
-                                >
-                                  {reassignInlineSaving ? "Saving..." : "Save"}
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                          <div className="lr-task-card-foot">
-                            <div className="lr-task-card-owner">
-                              {ownerDisplay ? <>Owner: {ownerDisplay}</> : <>Unassigned</>}
-                              <button
-                                className="ml-3 text-[11px] text-blue-400 hover:text-blue-300"
-                                onClick={() => {
-                                  openConversation(t.convId);
-                                }}
-                              >
-                                Open conversation →
-                              </button>
-                            </div>
-                            <div className="lr-task-card-actions">
-                              {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
-                                <button
-                                  className="lr-task-btn"
-                                  onClick={() => {
-                                    openReassignLeadInline(rowConv);
-                                  }}
-                                  title="Reassign lead"
-                                >
-                                  Reassign
-                                </button>
-                              ) : null}
-                              {showCallButton ? (
-                                <button
-                                  className="lr-task-btn lr-task-btn--primary"
-                                  onClick={() => openCallFromTodo(t)}
-                                  title="Call customer"
-                                >
-                                  <span className="mr-1">📞</span>
-                                  Call
-                                </button>
-                              ) : null}
-                              {appointmentReminderSent || dealerRideOutcomeNeeded ? null : (
-                                isApprovalTodoTask ? (
-                                  <button
-                                    className="lr-task-btn"
-                                    onClick={() => openApprovalTodoOutcome(t)}
-                                    title="Record the outcome and close this To Do"
-                                  >
-                                    Outcome
-                                  </button>
-                                ) : (
-                                  <button
-                                    className="lr-task-btn"
-                                    onClick={() => {
-                                      if (sectionType === "appointment" && !appointmentOutcomeLabel) {
-                                        setAppointmentCloseTarget(t);
-                                        setAppointmentClosePrimaryOutcome("showed");
-                                        setAppointmentCloseSecondaryOutcome("needs_follow_up");
-                                        setAppointmentCloseNote("");
-                                        setAppointmentCloseOpen(true);
-                                        return;
-                                      }
-                                      void markTodoDone(t, "dismiss");
-                                    }}
-                                    title="Close this To Do"
-                                  >
-                                    {sectionType === "appointment" && !appointmentOutcomeLabel ? "Record outcome" : "Close"}
-                                  </button>
-                                )
-                              )}
-                              <button
-                                className="lr-task-btn lr-task-btn--danger"
-                                onClick={() => {
-                                  void reportTodoIssue?.(t);
-                                }}
-                                title="Report a routing, task, cadence, or UI problem"
-                              >
-                                Report issue
-                              </button>
-                            </div>
-                          </div>
-                        </div>
+                        ) : null}
                       </div>
                     );
                   })}
+                  {reassignInlineOpenId === group.convId && rowConv ? (
+                    <div className="mt-3 lr-task-card-box" data-actions-menu>
+                      <div className="text-[11px] text-gray-500 mb-1">Reassign lead</div>
+                      <select
+                        className="w-full border rounded px-2 py-1 text-xs bg-white"
+                        value={reassignInlineTarget}
+                        onChange={e => setReassignInlineTarget(e.target.value)}
+                      >
+                        {reassignSalesOwnerOptions.length ? (
+                          <optgroup label="Salespeople">
+                            {reassignSalesOwnerOptions.map((owner: any) => (
+                              <option key={`task-reassign-owner-${owner.id}`} value={`owner:${owner.id}`}>
+                                {owner.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ) : null}
+                        <optgroup label="Departments">
+                          <option value="department:service">Service</option>
+                          <option value="department:parts">Parts</option>
+                          <option value="department:apparel">Apparel</option>
+                        </optgroup>
+                      </select>
+                      {reassignInlineTarget.startsWith("department:") ? (
+                        <textarea
+                          className="w-full border rounded px-2 py-1 text-xs mt-2 bg-white"
+                          rows={3}
+                          value={reassignInlineSummary}
+                          onChange={e => setReassignInlineSummary(e.target.value)}
+                          placeholder="Optional note for department"
+                        />
+                      ) : (
+                        <div className="mt-2 text-[11px] text-gray-500">
+                          This will reassign lead owner only.
+                        </div>
+                      )}
+                      <div className="mt-2 flex justify-end gap-2">
+                        <button
+                          className="px-2 py-1 border rounded text-xs"
+                          onClick={() => {
+                            setReassignInlineOpenId(null);
+                            setReassignInlineTarget("department:service");
+                            setReassignInlineSummary("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="px-2 py-1 border rounded text-xs"
+                          disabled={reassignInlineSaving}
+                          onClick={() => {
+                            void reassignLeadInline(rowConv);
+                          }}
+                        >
+                          {reassignInlineSaving ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="lr-task-card-foot">
+                    <div className="lr-task-card-owner">
+                      {ownerDisplay ? <>Owner: {ownerDisplay}</> : <>Unassigned</>}
+                      <button
+                        className="ml-3 text-[11px] text-blue-400 hover:text-blue-300"
+                        onClick={() => {
+                          openConversation(group.convId);
+                        }}
+                      >
+                        Open conversation →
+                      </button>
+                    </div>
+                    <div className="lr-task-card-actions">
+                      {(authUser?.role === "manager" || authUser?.permissions?.canAccessTodos) && rowConv ? (
+                        <button
+                          className="lr-task-btn"
+                          onClick={() => {
+                            openReassignLeadInline(rowConv);
+                          }}
+                          title="Reassign lead"
+                        >
+                          Reassign
+                        </button>
+                      ) : null}
+                      {callTask ? (
+                        <button
+                          className="lr-task-btn lr-task-btn--primary"
+                          onClick={() => openCallFromTodo(callTask)}
+                          title="Call customer"
+                        >
+                          <span className="mr-1">📞</span>
+                          Call
+                        </button>
+                      ) : null}
+                      <button
+                        className="lr-task-btn lr-task-btn--danger"
+                        onClick={() => {
+                          void reportTodoIssue?.(first);
+                        }}
+                        title="Report a routing, task, cadence, or UI problem"
+                      >
+                        Report issue
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <div className="px-4 py-3 text-xs text-gray-500">No {sectionDef.label.toLowerCase()}.</div>
-              )}
-            </div>
-          );
-        })}
+              </div>
+            );
+          });
+        })()}
         {!loading && filteredTodos.length === 0 ? (
           <div className="p-4 text-sm text-gray-600">
             {todoQuery.trim() ? "No To Dos match your search." : "No open To Dos."}
