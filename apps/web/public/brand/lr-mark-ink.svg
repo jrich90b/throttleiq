@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <mask id="channel">
+      <rect width="120" height="120" fill="white"/>
+      <g stroke="black" stroke-width="5" stroke-linejoin="round" stroke-linecap="round" fill="none">
+        <path d="M22 20 V100 H38"/>
+        <path d="M60 20 V100"/>
+        <path d="M60 20 H76 Q100 20 100 42 Q100 64 76 64 H60"/>
+        <path d="M78 64 L100 100"/>
+      </g>
+    </mask>
+  </defs>
+  <g stroke="#090d14" stroke-width="16" stroke-linejoin="round" stroke-linecap="round" fill="none" mask="url(#channel)">
+    <path d="M22 20 V100 H38"/>
+    <path d="M60 20 V100"/>
+    <path d="M60 20 H76 Q100 20 100 42 Q100 64 76 64 H60"/>
+    <path d="M78 64 L100 100"/>
+  </g>
+</svg>

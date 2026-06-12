@@ -52,7 +52,7 @@ body {
   font-family: var(--font-body), var(--font-geist-sans), system-ui, sans-serif;
 }
 
-a {
+a:where(:not(.lr-marketing *)) {
   color: var(--accent);
 }
 
