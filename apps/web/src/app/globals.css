@@ -6472,3 +6472,65 @@ input[type="reset"],
 .lr-task-section-body {
   padding: 0.75rem;
 }
+
+/* Pipeline pane composer — slim inbox-style sender with a "+" overflow menu. */
+.lr-pipeline-composer {
+  flex: none;
+  border-top: 1px solid var(--lr-app-border, rgba(255, 255, 255, 0.12));
+  padding-top: 0.6rem;
+  margin-top: 0.25rem;
+}
+.lr-pipeline-plus-menu {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 30;
+  min-width: 11rem;
+  background: var(--lr-app-surface, #0f1827);
+  border: 1px solid var(--lr-app-border, rgba(255, 255, 255, 0.16));
+  border-radius: 0.6rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+}
+.lr-pipeline-plus-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--lr-app-text, #dbe4f3);
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-radius: 0.45rem;
+  padding: 0.45rem 0.6rem;
+}
+.lr-pipeline-plus-item:hover {
+  background: rgba(251, 127, 4, 0.14);
+  color: #fb9d3d;
+}
+.lr-pipeline-plus-item:disabled {
+  opacity: 0.45;
+}
+.lr-pipeline-channel {
+  display: inline-flex;
+  border: 1px solid var(--lr-app-border, rgba(255, 255, 255, 0.16));
+  border-radius: 0.55rem;
+  overflow: hidden;
+}
+.lr-pipeline-channel button {
+  border: 0;
+  background: transparent;
+  color: var(--lr-app-muted, #8d9bb5);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.35rem 0.7rem;
+}
+.lr-pipeline-channel button:disabled {
+  opacity: 0.4;
+}
+.lr-pipeline-channel .lr-pipeline-channel--on {
+  background: rgba(251, 127, 4, 0.92);
+  color: #101522;
+}

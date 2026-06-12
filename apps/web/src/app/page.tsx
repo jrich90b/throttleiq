@@ -3060,6 +3060,7 @@ export default function Home() {
   >("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConv, setSelectedConv] = useState<ConversationDetail | null>(null);
+  const [pipelinePlusOpen, setPipelinePlusOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<"list" | "detail">("list");
   const [cadenceResolveOpen, setCadenceResolveOpen] = useState(false);
@@ -13867,22 +13868,15 @@ export default function Home() {
                     const isIn = m.direction === "in";
                     const isDraft = m.provider === "draft_ai";
                     const isCall = m.provider === "voice_summary" || m.provider === "voice_call";
+                    const bodyText =
+                      isIn && m.provider === "sendgrid"
+                        ? cleanInboundEmailForDisplay(m.body)
+                        : isIn && m.provider === "sendgrid_adf"
+                          ? cleanAdfLeadForDisplay(m.body)
+                          : m.body;
                     return (
-                      <div
-                        key={m.id ?? i}
-                        className={`lr-pipeline-bubble ${
-                          isIn ? "lr-pipeline-bubble--in" : "lr-pipeline-bubble--out"
-                        } ${isDraft ? "lr-pipeline-bubble--draft" : ""} ${isCall ? "lr-pipeline-bubble--call" : ""}`}
-                      >
-                        {isDraft ? <span className="lr-pipeline-bubble-tag">DRAFT</span> : null}
-                        {isCall ? <span className="lr-pipeline-bubble-tag">CALL</span> : null}
-                        {(m.mediaUrls?.length ?? 0) > 0 ? (
-                          <span className="lr-pipeline-bubble-tag">📎 {m.mediaUrls!.length}</span>
-                        ) : null}
-                        <div className="lr-pipeline-bubble-body">
-                          {String(m.body ?? "").trim() || "(attachment)"}
-                        </div>
-                        <div className="lr-pipeline-bubble-at">
+                      <div key={m.id ?? i} className={`text-sm ${isIn ? "" : "text-right"}`}>
+                        <div className="text-[10px] text-gray-500">
                           {m.at
                             ? new Date(m.at).toLocaleString("en-US", {
                                 month: "short",
@@ -13891,10 +13885,184 @@ export default function Home() {
                                 minute: "2-digit"
                               })
                             : ""}
+                          {isDraft ? " • DRAFT (not sent)" : isCall ? " • CALL" : ""}
                         </div>
+                        {String(bodyText ?? "").trim() ? (
+                          <div
+                            className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-sm font-medium ${
+                              isCall
+                                ? "bg-gray-50 text-gray-800 border-gray-200"
+                                : isIn
+                                  ? "bg-gray-100 text-gray-900 border-gray-200"
+                                  : "bg-blue-600 text-white border-blue-600"
+                            } ${isDraft ? "opacity-80 border-dashed" : ""}`}
+                          >
+                            {String(bodyText ?? "").trim()}
+                          </div>
+                        ) : null}
+                        {m.mediaUrls && m.mediaUrls.length ? (
+                          <div className={`mt-1 flex flex-wrap gap-1.5 ${isIn ? "" : "justify-end"}`}>
+                            {m.mediaUrls.map((url, mediaIndex) => {
+                              const media = getMediaUrlInfo(url);
+                              const previewUrl = buildConversationMediaUrl(selectedConv.id, m.id, mediaIndex);
+                              if (media.isImage) {
+                                return (
+                                  <a
+                                    key={`${url}-${mediaIndex}`}
+                                    href={previewUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title={media.fileName}
+                                  >
+                                    <img
+                                      src={previewUrl}
+                                      alt="attachment"
+                                      className="max-w-[150px] rounded border bg-white"
+                                      loading="lazy"
+                                    />
+                                  </a>
+                                );
+                              }
+                              return (
+                                <a
+                                  key={`${url}-${mediaIndex}`}
+                                  className="text-xs text-blue-400 underline"
+                                  href={previewUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  📎 {media.fileName || "attachment"}
+                                </a>
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}
+              </div>
+              <div className="lr-pipeline-composer">
+                <MediaAttachmentPreviewList attachments={smsAttachments} onRemove={removeSmsAttachment} />
+                <div className="flex items-end gap-1.5">
+                  <div className="relative">
+                    <button
+                      className="lr-task-btn px-2.5"
+                      title="More options"
+                      onClick={() => setPipelinePlusOpen(prev => !prev)}
+                    >
+                      +
+                    </button>
+                    {pipelinePlusOpen ? (
+                      <div className="lr-pipeline-plus-menu">
+                        <label className="lr-pipeline-plus-item cursor-pointer">
+                          Attach media
+                          <input
+                            type="file"
+                            accept="image/*,video/*,application/pdf"
+                            multiple
+                            className="hidden"
+                            onChange={e => {
+                              void handleSmsAttachments(e.target.files);
+                              e.target.value = "";
+                              setPipelinePlusOpen(false);
+                            }}
+                          />
+                        </label>
+                        <button
+                          className="lr-pipeline-plus-item"
+                          disabled={regenBusy || mode !== "suggest" || selectedConv.mode === "human"}
+                          onClick={() => {
+                            setPipelinePlusOpen(false);
+                            void regenerateDraft();
+                          }}
+                        >
+                          Regenerate draft
+                        </button>
+                        <button
+                          className="lr-pipeline-plus-item"
+                          onClick={() => {
+                            setPipelinePlusOpen(false);
+                            goToSection("inbox");
+                            setMobilePanel("detail");
+                            setPaymentRequestOpen(true);
+                          }}
+                        >
+                          Payment request…
+                        </button>
+                        <button
+                          className="lr-pipeline-plus-item"
+                          onClick={() => {
+                            setPipelinePlusOpen(false);
+                            clearDraft();
+                          }}
+                        >
+                          Clear draft
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <textarea
+                    value={displaySendBody}
+                    onChange={e => {
+                      if (messageFilter === "calls") setMessageFilter("sms");
+                      setSendBody(e.target.value);
+                      setSendBodySource("user");
+                    }}
+                    rows={2}
+                    className="lr-message-composer-input flex-1 border rounded px-2.5 py-2 text-sm resize-none"
+                    placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
+                  />
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-2">
+                  <div className="lr-pipeline-channel">
+                    <button
+                      className={messageFilter !== "email" ? "lr-pipeline-channel--on" : ""}
+                      onClick={() => setMessageFilter("sms")}
+                    >
+                      SMS
+                    </button>
+                    <button
+                      className={messageFilter === "email" ? "lr-pipeline-channel--on" : ""}
+                      disabled={!String(selectedConv?.lead?.email ?? "").trim().includes("@")}
+                      title={
+                        String(selectedConv?.lead?.email ?? "").trim().includes("@")
+                          ? "Send as email"
+                          : "No email on file"
+                      }
+                      onClick={() => setMessageFilter("email")}
+                    >
+                      Email
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      className="lr-task-btn"
+                      title="Call customer"
+                      disabled={callBusy}
+                      onClick={() => {
+                        void openCallPickerOrStart(selectedConv);
+                      }}
+                    >
+                      📞
+                    </button>
+                    <button
+                      className="lr-task-btn lr-task-btn--primary"
+                      disabled={
+                        composeSending ||
+                        smsAttachmentsBusy ||
+                        (messageFilter === "sms" && selectedConv.contactPreference === "call_only") ||
+                        (messageFilter === "email" &&
+                          !String(selectedConv?.lead?.email ?? "").trim().includes("@"))
+                      }
+                      onClick={() => {
+                        if (messageFilter === "calls") setMessageFilter("sms");
+                        void send();
+                      }}
+                    >
+                      {composeSending ? "Sending…" : "Send"}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           ) : (
