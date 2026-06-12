@@ -33855,6 +33855,57 @@ app.post("/conversations/:id/reopen", (req, res) => {
   return res.json({ ok: true, conversation: conv });
 });
 
+// Maintenance repair for cadence schedules damaged by parser bugs (the 2027
+// year-rollover class). Sets dates directly and never messages the customer,
+// unlike /followup-action which sends a cadence ack text.
+app.post("/conversations/:id/cadence-schedule", (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  if (!conv.followUpCadence) {
+    return res.status(400).json({ ok: false, error: "No cadence on this conversation" });
+  }
+  const parseIso = (raw: unknown): string | null | undefined => {
+    if (raw === undefined) return undefined;
+    if (raw === null || raw === "") return null;
+    const ms = Date.parse(String(raw));
+    if (!Number.isFinite(ms)) return undefined;
+    return new Date(ms).toISOString();
+  };
+  const nextDueAt = parseIso(req.body?.nextDueAt);
+  const pausedUntil = parseIso(req.body?.pausedUntil);
+  if (req.body?.nextDueAt !== undefined && nextDueAt === undefined) {
+    return res.status(400).json({ ok: false, error: "Invalid nextDueAt" });
+  }
+  if (req.body?.pausedUntil !== undefined && pausedUntil === undefined) {
+    return res.status(400).json({ ok: false, error: "Invalid pausedUntil" });
+  }
+  const before = {
+    nextDueAt: conv.followUpCadence.nextDueAt ?? null,
+    pausedUntil: conv.followUpCadence.pausedUntil ?? null
+  };
+  if (nextDueAt !== undefined) conv.followUpCadence.nextDueAt = nextDueAt ?? undefined;
+  if (pausedUntil !== undefined) {
+    conv.followUpCadence.pausedUntil = pausedUntil ?? undefined;
+    if (pausedUntil === null) conv.followUpCadence.pauseReason = undefined;
+  }
+  if (req.body?.clearPurchaseTimeframe === true && conv.lead) {
+    (conv.lead as any).purchaseTimeframe = undefined;
+    (conv.lead as any).purchaseTimeframeMonthsStart = undefined;
+  }
+  conv.updatedAt = new Date().toISOString();
+  saveConversation(conv);
+  recordRouteOutcome("live", "cadence_schedule_repair", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    before,
+    after: {
+      nextDueAt: conv.followUpCadence.nextDueAt ?? null,
+      pausedUntil: conv.followUpCadence.pausedUntil ?? null
+    }
+  });
+  return res.json({ ok: true, before, followUpCadence: conv.followUpCadence });
+});
+
 app.post("/conversations/:id/appointment", requirePermission("canEditAppointments"), async (req, res) => {
   try {
     const conv = getConversation(req.params.id);
