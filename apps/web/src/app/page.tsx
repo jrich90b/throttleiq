@@ -13423,6 +13423,15 @@ export default function Home() {
                     >
                       Notifications
                     </button>
+                    <button
+                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
+                      onClick={() => {
+                        goToSection("suppressions");
+                        setSettingsOpen(false);
+                      }}
+                    >
+                      Suppressions
+                    </button>
                   </>
                 ) : (
                   <div className="px-2 py-2 text-xs text-gray-500 border-t border-gray-100 mt-1">
