@@ -33896,6 +33896,10 @@ app.post("/internal/worker/cadence-repair/:id", (req, res) => {
     (conv.lead as any).purchaseTimeframe = undefined;
     (conv.lead as any).purchaseTimeframeMonthsStart = undefined;
   }
+  const noteTodo = String(req.body?.noteTodo ?? "").trim();
+  if (noteTodo) {
+    addTodo(conv, "note", noteTodo, undefined, undefined, undefined, "followup");
+  }
   conv.updatedAt = new Date().toISOString();
   saveConversation(conv);
   recordRouteOutcome("live", "cadence_schedule_repair", {
