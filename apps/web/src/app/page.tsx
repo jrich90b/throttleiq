@@ -3463,6 +3463,9 @@ export default function Home() {
   const [modeError, setModeError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"dealer" | "scheduler" | "users" | "notifications">("dealer");
+  const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(false);
+  const [desktopNotifyPermission, setDesktopNotifyPermission] = useState<string>("default");
+  const desktopNotifySnapshotRef = useRef<Map<string, number> | null>(null);
   const [authUser, setAuthUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -5336,7 +5339,8 @@ export default function Home() {
   }
 
   async function refreshConversations() {
-    if (document.visibilityState === "hidden") return;
+    // Hidden tabs skip refreshes unless desktop notifications need fresh data.
+    if (document.visibilityState === "hidden" && !desktopNotifyEnabled) return;
     const r = await fetch("/api/conversations", { cache: "no-store" });
     const data = await r.json();
     const next =
@@ -7198,6 +7202,85 @@ export default function Home() {
       }
     };
   }, [authUser]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      setDesktopNotifyPermission("unsupported");
+      return;
+    }
+    setDesktopNotifyPermission(Notification.permission);
+    if (
+      window.localStorage.getItem("lr_desktop_notifications") === "1" &&
+      Notification.permission === "granted"
+    ) {
+      setDesktopNotifyEnabled(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const prev = desktopNotifySnapshotRef.current;
+    const next = new Map<string, number>();
+    for (const c of conversations) next.set(c.id, c.messageCount ?? 0);
+    desktopNotifySnapshotRef.current = next;
+    // First populated list after load is a baseline, never a notification.
+    if (!prev || prev.size === 0) return;
+    if (!desktopNotifyEnabled) return;
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const alerts: Array<{ id: string; title: string; body: string }> = [];
+    for (const c of conversations) {
+      if (c.campaignThread?.status === "campaign") continue;
+      const prevCount = prev.get(c.id);
+      const name = String(c.leadName ?? "").trim() || c.leadKey;
+      const snippet = String(c.lastMessage?.body ?? "").trim().slice(0, 140);
+      if (prevCount === undefined) {
+        alerts.push({
+          id: c.id,
+          title: `New lead — ${name}`,
+          body: snippet || String(c.vehicleDescription ?? "").trim() || "Open the inbox to view."
+        });
+      } else if ((c.messageCount ?? 0) > prevCount && c.lastMessage?.direction === "in") {
+        if (document.visibilityState === "visible" && selectedIdRef.current === c.id) continue;
+        alerts.push({
+          id: c.id,
+          title: `New message — ${name}`,
+          body: snippet || "Open the conversation to view."
+        });
+      }
+    }
+    if (!alerts.length) return;
+    // A flood of "new" conversations means a resync, not real arrivals.
+    if (alerts.length > 10) return;
+    const shown = alerts.slice(0, 3);
+    for (const item of shown) {
+      const n = new Notification(item.title, {
+        body: item.body,
+        icon: "/brand/lr-app-icon.svg",
+        tag: `lr-conv-${item.id}`
+      });
+      n.onclick = () => {
+        window.focus();
+        goToSection("inbox");
+        openConversation(item.id);
+        n.close();
+      };
+    }
+    if (alerts.length > shown.length) {
+      const extra = new Notification(`LeadRider — ${alerts.length - shown.length} more updates`, {
+        body: "Open the inbox to see everything new.",
+        icon: "/brand/lr-app-icon.svg",
+        tag: "lr-conv-more"
+      });
+      extra.onclick = () => {
+        window.focus();
+        goToSection("inbox");
+        extra.close();
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations, desktopNotifyEnabled, authUser]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -19604,6 +19687,49 @@ export default function Home() {
             ) : settingsTab === "notifications" ? (
               <div className="border rounded-lg p-4 space-y-4">
                 <div className="text-lg font-semibold">Notifications</div>
+                <div className="border rounded p-3 text-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="font-medium">Desktop notifications</div>
+                      <div className="text-xs text-gray-600 mt-1">
+                        {desktopNotifyPermission === "unsupported"
+                          ? "Not supported in this browser."
+                          : desktopNotifyPermission === "denied"
+                            ? "Blocked by the browser — allow notifications for this site in your browser settings, then try again."
+                            : "Get a desktop alert when a new lead or customer message arrives. Applies to this browser only."}
+                      </div>
+                    </div>
+                    <button
+                      className={`px-3 py-1.5 border rounded text-sm shrink-0 ${
+                        desktopNotifyEnabled ? "bg-black text-white font-semibold" : "hover:bg-gray-50"
+                      }`}
+                      disabled={desktopNotifyPermission === "unsupported"}
+                      onClick={async () => {
+                        if (desktopNotifyEnabled) {
+                          setDesktopNotifyEnabled(false);
+                          window.localStorage.setItem("lr_desktop_notifications", "0");
+                          return;
+                        }
+                        let permission = Notification.permission;
+                        if (permission === "default") {
+                          permission = await Notification.requestPermission();
+                        }
+                        setDesktopNotifyPermission(permission);
+                        if (permission === "granted") {
+                          setDesktopNotifyEnabled(true);
+                          window.localStorage.setItem("lr_desktop_notifications", "1");
+                          new Notification("LeadRider notifications are on", {
+                            body: "You will get a desktop alert when a new lead or message arrives.",
+                            icon: "/brand/lr-app-icon.svg",
+                            silent: true
+                          });
+                        }
+                      }}
+                    >
+                      {desktopNotifyEnabled ? "On" : "Turn on"}
+                    </button>
+                  </div>
+                </div>
                 <div className="border rounded p-3 text-sm">
                   <div className="font-medium">Google Calendar</div>
                   <div className="text-xs text-gray-600 mt-1">
