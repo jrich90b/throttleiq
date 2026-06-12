@@ -3949,6 +3949,26 @@ function parseExactTime(text: string): { hour24: number; minute: number; timeTex
     return { hour24, minute, timeText: approxWithMinutes[0] };
   }
   if (/\bnoon(?:ish)?\b/.test(t)) return { hour24: 12, minute: 0, timeText: "noon" };
+  // Approximate time on a round hour ("around 10am", "about 3", "near 9pm").
+  // Without this, the catch-all `return null` below dropped the time entirely
+  // and bookings fell back to next-available (Chuck Bailey 2026-06-12 asked
+  // for "Monday, 15 June around 10am" and was offered Saturday Jun 13).
+  if (!approxWithMinutes) {
+    const approxBareHour = t.match(
+      /\b(?:around|about|approx(?:imately)?|close\s+to|near)\s+(\d{1,2})\s*(am|pm)?(?:\s*[-\s]?ish)?\b/
+    );
+    if (approxBareHour) {
+      const hourRaw = Number(approxBareHour[1]);
+      const meridiem = approxBareHour[2];
+      if (hourRaw >= 1 && hourRaw <= 12) {
+        let hour24 = hourRaw;
+        if (meridiem === "am") hour24 = hourRaw === 12 ? 0 : hourRaw;
+        else if (meridiem === "pm") hour24 = hourRaw === 12 ? 12 : hourRaw + 12;
+        else if (hourRaw !== 12) hour24 = hourRaw <= 7 ? hourRaw + 12 : hourRaw;
+        return { hour24, minute: 0, timeText: approxBareHour[0] };
+      }
+    }
+  }
   if (/(around|approx|approximately|ish)\b/.test(t)) return null;
 
   // Prefer explicit time tokens so dates like 3/11/2026 don't get parsed as "3".
