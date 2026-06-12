@@ -288,24 +288,30 @@ export function TaskInboxSection(props: any) {
                           : String(t.dueAt ?? "").trim()
                             ? "Due"
                             : "Created";
+                    const requestedCallPretty =
+                      requestedCallTime && Number.isFinite(new Date(requestedCallTime).getTime())
+                        ? formatWhenIso(requestedCallTime, true)
+                        : requestedCallTime;
                     const whenValue =
                       sectionType === "appointment" && (apptIso || appointmentTime)
                         ? apptIso
                           ? formatWhenIso(apptIso, true)
                           : appointmentTime
-                        : requestedCallTime ||
+                        : requestedCallPretty ||
                           (String(t.dueAt ?? "").trim()
                             ? formatWhenIso(t.dueAt, true)
                             : formatWhenIso(t.createdAt));
-                    // A long-past appointment must read as overdue history, not
-                    // an upcoming visit (Raymond Mangold: a March 25 appointment
-                    // looked current in June).
+                    // A long-past appointment or requested call must read as
+                    // overdue history, not an upcoming commitment (Raymond
+                    // Mangold: a March 25 appointment looked current in June).
                     const whenAgo =
                       sectionType === "appointment" && apptIso && !appointmentOutcomeLabel
                         ? daysAgoLabel(apptIso, nowMs)
-                        : null;
+                        : whenLabel === "Requested call" && requestedCallTime
+                          ? daysAgoLabel(requestedCallTime, nowMs)
+                          : null;
                     const actionDisplay =
-                      sectionType === "appointment"
+                      sectionType === "appointment" || whenLabel === "Requested call"
                         ? String(actionLabel ?? "").replace(/\s*\(requested:[^)]*\)\.?\s*$/i, ".")
                         : actionLabel;
                     const summaryDuplicatesAction =
