@@ -6396,6 +6396,10 @@ input[type="reset"],
   text-align: center;
   font-weight: 700;
 }
+.lr-task-card-late {
+  color: #fda4af;
+  font-weight: 700;
+}
 .lr-task-card-foot {
   margin-top: 0.85rem;
   display: flex;

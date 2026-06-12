@@ -12,8 +12,42 @@ function formatFollowUpTicker(startIso: string | null | undefined, nowMs: number
   const hours = Math.floor((elapsedSeconds % 86_400) / 3_600);
   const minutes = Math.floor((elapsedSeconds % 3_600) / 60);
   const seconds = elapsedSeconds % 60;
+  // A live seconds clock only makes sense on fresh tasks; older ones read
+  // better as a plain age ("19d 6h waiting" beats "19d 06:46:35").
+  if (days > 0) return `${days}d ${hours}h waiting`;
   const clock = [hours, minutes, seconds].map(value => String(value).padStart(2, "0")).join(":");
-  return days > 0 ? `${days}d ${clock}` : clock;
+  return clock;
+}
+
+function displayCaseName(raw: string): string {
+  const name = String(raw ?? "").trim();
+  if (!name) return name;
+  // Only normalize shouty/lowercase lead-form names; mixed case is left alone.
+  if (name !== name.toUpperCase() && name !== name.toLowerCase()) return name;
+  return name
+    .split(/\s+/)
+    .map(word => (word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : word))
+    .join(" ");
+}
+
+function formatWhenIso(iso: string, withWeekday = false): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleString([], {
+    ...(withWeekday ? { weekday: "short" as const } : {}),
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function daysAgoLabel(iso: string, nowMs: number): string | null {
+  const ms = new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms >= nowMs) return null;
+  const days = Math.floor((nowMs - ms) / 86_400_000);
+  if (days <= 0) return "earlier today";
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
 function isDealerRideOutcomeTodo(todo: any): boolean {
@@ -213,8 +247,9 @@ export function TaskInboxSection(props: any) {
                         .join(", ") ||
                       String(hold?.label ?? "").trim() ||
                       (rowConv?.walkIn ? "Walk-in" : "");
+                    const apptIso = String(t.appointmentWhenIso ?? "").trim();
                     const whenLabel =
-                      sectionType === "appointment" && appointmentTime
+                      sectionType === "appointment" && (apptIso || appointmentTime)
                         ? "Appointment"
                         : requestedCallTime
                           ? "Requested call"
@@ -222,23 +257,28 @@ export function TaskInboxSection(props: any) {
                             ? "Due"
                             : "Created";
                     const whenValue =
-                      sectionType === "appointment" && appointmentTime
-                        ? appointmentTime
+                      sectionType === "appointment" && (apptIso || appointmentTime)
+                        ? apptIso
+                          ? formatWhenIso(apptIso, true)
+                          : appointmentTime
                         : requestedCallTime ||
                           (String(t.dueAt ?? "").trim()
-                            ? new Date(t.dueAt).toLocaleString([], {
-                                weekday: "short",
-                                month: "short",
-                                day: "numeric",
-                                hour: "numeric",
-                                minute: "2-digit"
-                              })
-                            : new Date(t.createdAt).toLocaleString([], {
-                                month: "short",
-                                day: "numeric",
-                                hour: "numeric",
-                                minute: "2-digit"
-                              }));
+                            ? formatWhenIso(t.dueAt, true)
+                            : formatWhenIso(t.createdAt));
+                    // A long-past appointment must read as overdue history, not
+                    // an upcoming visit (Raymond Mangold: a March 25 appointment
+                    // looked current in June).
+                    const whenAgo =
+                      sectionType === "appointment" && apptIso && !appointmentOutcomeLabel
+                        ? daysAgoLabel(apptIso, nowMs)
+                        : null;
+                    const actionDisplay =
+                      sectionType === "appointment"
+                        ? String(actionLabel ?? "").replace(/\s*\(requested:[^)]*\)\.?\s*$/i, ".")
+                        : actionLabel;
+                    const summaryDuplicatesAction =
+                      String(t.summary ?? "").replace(/\s+/g, " ").trim().toLowerCase() ===
+                      String(actionDisplay ?? "").replace(/\s+/g, " ").trim().toLowerCase();
                     const pillVariant =
                       sectionType === "followup"
                         ? "lr-task-card-pill--followup"
@@ -308,7 +348,7 @@ export function TaskInboxSection(props: any) {
                             }}
                             title="Open conversation"
                           >
-                            {t.leadName || t.leadKey}
+                            {displayCaseName(t.leadName || "") || t.leadKey}
                             {renderDealTemperatureIcon(
                               rowConv ? getDealTemperature(rowConv) : null,
                               "text-base"
@@ -323,14 +363,17 @@ export function TaskInboxSection(props: any) {
                                 <span aria-hidden>🕐</span>
                                 {whenLabel}
                               </div>
-                              <div className="lr-task-card-box-value">{whenValue}</div>
+                              <div className="lr-task-card-box-value">
+                                {whenValue}
+                                {whenAgo ? <span className="lr-task-card-late"> • {whenAgo}</span> : null}
+                              </div>
                             </div>
                             <div className="lr-task-card-box">
                               <div className="lr-task-card-box-label">
                                 <span aria-hidden>⚡</span>
                                 Action
                               </div>
-                              <div className="lr-task-card-box-value">{actionLabel}</div>
+                              <div className="lr-task-card-box-value">{actionDisplay}</div>
                             </div>
                           </div>
                           <div className="lr-task-card-summary">
@@ -340,10 +383,12 @@ export function TaskInboxSection(props: any) {
                                 {t.reason} • {new Date(t.createdAt).toLocaleDateString()}
                               </div>
                             </div>
-                            <div className="lr-task-card-summary-row">
-                              <span className="lr-task-card-check" aria-hidden>✓</span>
-                              <span className="break-words">{t.summary}</span>
-                            </div>
+                            {!summaryDuplicatesAction ? (
+                              <div className="lr-task-card-summary-row">
+                                <span className="lr-task-card-check" aria-hidden>✓</span>
+                                <span className="break-words">{t.summary}</span>
+                              </div>
+                            ) : null}
                             {showRequestedCallTime && sectionType !== "followup" ? (
                               <div className="lr-task-card-summary-row">
                                 <span className="lr-task-card-check" aria-hidden>✓</span>
