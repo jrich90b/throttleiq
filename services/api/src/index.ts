@@ -33857,8 +33857,12 @@ app.post("/conversations/:id/reopen", (req, res) => {
 
 // Maintenance repair for cadence schedules damaged by parser bugs (the 2027
 // year-rollover class). Sets dates directly and never messages the customer,
-// unlike /followup-action which sends a cadence ack text.
-app.post("/conversations/:id/cadence-schedule", (req, res) => {
+// unlike /followup-action which sends a cadence ack text. Worker-token gated
+// so repairs can run from the box without a dashboard session.
+app.post("/internal/worker/cadence-repair/:id", (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   if (!conv.followUpCadence) {
