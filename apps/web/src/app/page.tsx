@@ -13423,15 +13423,6 @@ export default function Home() {
                     >
                       Notifications
                     </button>
-                    <button
-                      className="w-full text-left px-2 py-2 rounded hover:bg-gray-50 text-sm"
-                      onClick={() => {
-                        goToSection("suppressions");
-                        setSettingsOpen(false);
-                      }}
-                    >
-                      Suppressions
-                    </button>
                   </>
                 ) : (
                   <div className="px-2 py-2 text-xs text-gray-500 border-t border-gray-100 mt-1">
@@ -14347,6 +14338,15 @@ export default function Home() {
                     <div className="truncate">{list.name}</div>
                   </button>
                 ))}
+                {authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions ? (
+                  <button
+                    className="w-full text-left px-3 py-2 rounded text-sm border bg-white hover:bg-gray-50 border-gray-200 mt-2"
+                    title="Numbers that opted out of messaging"
+                    onClick={() => goToSection("suppressions")}
+                  >
+                    🚫 Suppressed ({suppressions.length})
+                  </button>
+                ) : null}
               </div>
               <div className="border-t pt-3 mt-3 space-y-2">
                 <input
@@ -15013,12 +15013,6 @@ export default function Home() {
             >
               Notifications
             </button>
-            <button
-              className="w-full text-left px-4 py-3 hover:bg-gray-50"
-              onClick={() => goToSection("suppressions")}
-            >
-              Suppressions
-            </button>
           </div>
         ) : null}
 
@@ -15030,14 +15024,12 @@ export default function Home() {
 
         {section === "suppressions" && (authUser?.role === "manager" || authUser?.permissions?.canAccessSuppressions) ? (
           <>
-            {authUser?.role === "manager" ? (
-              <button
-                className="mt-3 text-xs text-blue-400 hover:text-blue-300"
-                onClick={() => goToSection("settings")}
-              >
-                ← Back to Settings
-              </button>
-            ) : null}
+            <button
+              className="mt-3 text-xs text-blue-400 hover:text-blue-300"
+              onClick={() => goToSection("contacts")}
+            >
+              ← Back to Contacts
+            </button>
             <div className="mt-3 flex gap-2">
               <input
                 className="flex-1 border rounded px-3 py-2 text-sm"
