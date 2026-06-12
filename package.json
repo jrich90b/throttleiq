@@ -80,6 +80,7 @@
     "outcome_qa:audit": "npx tsx scripts/outcome_qa_audit.ts",
     "outcome_qa:eval": "npx tsx scripts/outcome_qa_audit_eval.ts",
     "deterministic_rules:promote": "npx tsx scripts/deterministic_rules_promote.ts",
+    "language_seed:filter": "npx tsx scripts/language_seed_filter.ts",
     "manual_outbound:promote": "npx tsx scripts/manual_outbound_promote.ts",
     "agent_manager:report": "npx tsx scripts/agent_manager_report.ts",
     "voice_charter:audit": "npx tsx scripts/voice_charter_audit.ts",

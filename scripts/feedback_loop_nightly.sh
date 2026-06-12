@@ -233,6 +233,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=deterministic_rules_promote"
   npm run deterministic_rules:promote
 
+  echo "[feedback-loop] step=language_seed_filter"
+  npm run language_seed:filter || true
+
   echo "[feedback-loop] step=manual_outbound_promote"
   npm run manual_outbound:promote
 
