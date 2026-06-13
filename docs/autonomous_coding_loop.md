@@ -24,13 +24,27 @@ for the next ("the loop prompts the agents").
 ```
 
 ### Block 1 — DETECT (`scripts/auto_loop_next_task.ts`)
-Merges `dealer_ready_checklist.md` open rows + the agent-manager report's
-P0/P1s, ranks them (P0 → P1 → code-shippable checklist gaps → P2/P3, preferring
-work that closes this pass), and writes `reports/auto_loop/next_task.json`. If
-nothing is open and the checklist is clean it emits `stop: true` — the loop's
-graceful exit. Richer signal comes from a live read-only production sweep
-(`ssh lightsail`, conversations.json) for new parser gaps, per the AGENTS.md
-sweep convention.
+Merges three sources and ranks them (P0 → P1 → code-shippable gaps → P2/P3,
+preferring codeable work that closes this pass), writing
+`reports/auto_loop/next_task.json`:
+1. `dealer_ready_checklist.md` open rows (non-codeable ops/external-verify rows
+   are flagged `codeable:false`).
+2. The agent-manager report's P0/P1s.
+3. **Continuous-mode fuel**: production agent-quality sweeps. Run the
+   deterministic `answer_correctness:audit` (and peers: outcome_qa,
+   agent_actions, response_latency) against live data — read-only, ON the
+   instance so prod data stays on the box — into `reports/answer_correctness/`;
+   DETECT turns each graded check's findings into a codeable reply-quality task
+   carrying a real inbound/reply reproduction.
+
+It emits `stop: true` only when **no codeable work remains**. If non-codeable
+items are still open (DocuSign/Stripe live verify, ops cutovers) it stops with a
+reason naming them — those need the user, not an unattended deploy.
+
+Caveat: always set `DATA_DIR` when running audits on the instance, or the
+conversation-store module auto-creates a stray empty store in the repo's
+`data/` dir (gitignored, but tidy it up). Tiebreak among equal-priority sweep
+tasks is currently alphabetical — count/recency weighting is a known TODO.
 
 ### Block 2 — PLAN (architect agent)
 Turns the task into an implementation plan: root-cause hypothesis, exact files,

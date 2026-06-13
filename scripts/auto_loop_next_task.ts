@@ -139,6 +139,53 @@ function parseAgentManagerTasks(report: AnyObj | null): LoopTask[] {
   }));
 }
 
+/**
+ * Continuous-mode fuel: turn production agent-quality audit findings into
+ * codeable reply-quality tasks (the Al-Davis class of bug). Reads the
+ * deterministic answer_correctness sweep; each graded check with findings
+ * becomes one task, carrying a concrete inbound/reply example so the BUILD
+ * agent has a reproduction. Recent findings (active regression) rank as P1.
+ */
+function parseSweepTasks(reportRoot: string): LoopTask[] {
+  const summary = readJson(path.join(reportRoot, "answer_correctness", "answer_correctness_summary.json"));
+  const findings = Array.isArray(summary?.findings) ? summary!.findings : [];
+  if (!findings.length) return [];
+  const byCheck = new Map<string, { count: number; recent: number; sample: AnyObj }>();
+  for (const f of findings) {
+    const check = String(f?.check ?? "uncategorized");
+    const entry = byCheck.get(check) ?? { count: 0, recent: 0, sample: f };
+    entry.count += 1;
+    if (f?.recent) entry.recent += 1;
+    // Prefer a recent sample for the reproduction.
+    if (f?.recent && !entry.sample?.recent) entry.sample = f;
+    byCheck.set(check, entry);
+  }
+  const tasks: LoopTask[] = [];
+  for (const [check, entry] of byCheck) {
+    const s = entry.sample ?? {};
+    tasks.push({
+      id: `sweep:answer_correctness:${check}`,
+      source: "agent_manager",
+      priority: entry.recent > 0 ? "P1" : "P2",
+      area: "reply_quality",
+      title: `Fix reply-quality gap: ${check} (${entry.count} findings, ${entry.recent} recent)`,
+      signal: `answer_correctness flagged "${check}" — e.g. ${String(s.detail ?? "").slice(0, 160)}`,
+      recommendedAction: `Reproduce ${check} on conv ${String(s.convId ?? "?")} parser-first (both reply paths), add an eval pinning the production turn, wire into ci:eval.`,
+      codeable: true,
+      evidence: {
+        check,
+        convId: s.convId ?? null,
+        inbound: String(s.inbound ?? "").slice(0, 240),
+        reply: String(s.reply ?? "").slice(0, 240),
+        detail: s.detail ?? null,
+        totalFindings: entry.count,
+        recentFindings: entry.recent
+      }
+    });
+  }
+  return tasks;
+}
+
 /** Lower is more urgent. P0 first, then P1, then codeable checklist gaps, then the rest. */
 function rankOf(task: LoopTask): number {
   const base = { P0: 0, P1: 10, P2: 20, P3: 30 }[task.priority];
@@ -161,27 +208,37 @@ function main(): void {
   const checklistMd = readText(checklistPath) ?? "";
   const checklistTasks = parseChecklistTasks(checklistMd);
   const agentManagerTasks = parseAgentManagerTasks(readJson(agentManagerPath));
+  const sweepTasks = parseSweepTasks(reportRoot);
 
-  const all = [...agentManagerTasks, ...checklistTasks];
+  const all = [...agentManagerTasks, ...sweepTasks, ...checklistTasks];
   const p0p1 = all.filter(t => t.priority === "P0" || t.priority === "P1");
   const checklistOpen = checklistTasks.length;
-
-  // STOP: dealer is high-level usable. Every checklist row clean-WORKING (none
-  // parsed as a gap) and no open P0/P1 anywhere.
-  const stop = checklistOpen === 0 && p0p1.length === 0;
+  const nonCodeable = all.filter(t => !t.codeable);
 
   const ranked = all
     .map(t => ({ t, r: rankOf(t) }))
     .sort((a, b) => a.r - b.r || a.t.id.localeCompare(b.t.id))
     .map(x => x.t);
+  const rankedCodeable = ranked.filter(t => t.codeable);
+
+  // STOP/checkpoint: the loop only ships code, so it halts when no CODEABLE work
+  // remains. If non-codeable items are still open (DocuSign/Stripe live verifies,
+  // ops cutovers) the loop cannot close them autonomously — that needs the user.
+  const stop = rankedCodeable.length === 0;
+  const stopReason = stop
+    ? nonCodeable.length > 0
+      ? `no codeable work left; ${nonCodeable.length} item(s) need the user (external verify / ops cutover): ${nonCodeable
+          .slice(0, 5)
+          .map(t => t.title)
+          .join("; ")}`
+      : "dealer_ready_checklist fully verified, no open P0/P1, and production sweeps are clean"
+    : null;
 
   const result: SelectorResult = {
     generatedAt: new Date().toISOString(),
     stop,
-    stopReason: stop
-      ? "dealer_ready_checklist fully verified (no non-WORKING rows, no open items) and no open P0/P1 agent-manager tasks"
-      : null,
-    task: stop ? null : ranked[0] ?? null,
+    stopReason,
+    task: stop ? null : rankedCodeable[0] ?? null,
     checklistOpenCount: checklistOpen,
     agentManagerP0P1Count: p0p1.length,
     backlog: ranked.slice(0, 12).map(t => ({
