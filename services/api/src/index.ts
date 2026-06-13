@@ -544,6 +544,7 @@ import {
   pickCatalogModelLabelFromText,
   resolveDayPartOnlyScheduleReply,
   resolveRequestedScheduleWindowMode,
+  cadenceHeldUnitModelConsistentWithLead,
   selectRequestedAvailabilityModelMentions,
   shouldClearPickupStateForSchedulingReply,
   shouldCarryLeadYearForRequestedModel,
@@ -10055,6 +10056,18 @@ async function buildCadenceHeldInventoryOverride(args: {
   const context = parserContext ?? getRecentVehicleMentionContext(conv);
   const holds = await listInventoryHolds();
   const solds = await listInventorySolds();
+  // Don't claim a held/sold unit whose model is more specific than the lead
+  // ever expressed (Rhett: generic "Road Glide" -> held "Road Glide 3").
+  const cadenceHeldUnitConsistent = (item: any, ref?: any) =>
+    cadenceHeldUnitModelConsistentWithLead({
+      unitModel: item?.model,
+      unitStockId: item?.stockId ?? item?.stock ?? ref?.stockId,
+      unitVin: item?.vin ?? ref?.vin,
+      leadModel: conv?.lead?.vehicle?.model,
+      leadDescription: conv?.lead?.vehicle?.description,
+      leadStockId: conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId,
+      leadVin: conv?.lead?.vehicle?.vin ?? conv?.lead?.vin
+    });
   const parserExactRefs =
     context.stockId || context.vin
       ? [
@@ -10075,7 +10088,7 @@ async function buildCadenceHeldInventoryOverride(args: {
         ]
       : [];
   const exactUnavailable = findExactCadenceUnavailableUnit({ conv, holds, solds, extraRefs: parserExactRefs });
-  if (exactUnavailable) {
+  if (exactUnavailable && cadenceHeldUnitConsistent(exactUnavailable.item, exactUnavailable.ref)) {
     const firstName = normalizeDisplayCase(args.name || "there");
     const fallbackModel =
       context.model && !isUnknownCadenceModel(context.model)
@@ -10165,8 +10178,10 @@ async function buildCadenceHeldInventoryOverride(args: {
   const specificTarget = !!(context.color || context.year);
   const heldItem = status.held[0];
   const soldItem = status.sold[0];
-  const shouldOverrideHeld = !!heldItem && (specificTarget || status.available.length === 0);
-  const shouldOverrideSold = !!soldItem && (specificTarget || status.available.length === 0);
+  const shouldOverrideHeld =
+    !!heldItem && (specificTarget || status.available.length === 0) && cadenceHeldUnitConsistent(heldItem);
+  const shouldOverrideSold =
+    !!soldItem && (specificTarget || status.available.length === 0) && cadenceHeldUnitConsistent(soldItem);
   recordDecisionTrace({
     scope: "regen",
     stage: "cadence.held_inventory_override",

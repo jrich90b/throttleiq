@@ -1138,6 +1138,54 @@ export function selectRequestedAvailabilityModelMentions(
   return selected;
 }
 
+function normalizeCadenceModelTokens(value: string | null | undefined): string[] {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Guard against a cadence claiming a held inventory unit the customer never
+ * actually expressed interest in. Rhett Craft (2026-06-13): a generic "Road
+ * Glide" lead was over-resolved by inventory search to a held "Road Glide 3 in
+ * Iron Horse Metallic", and the cadence draft fabricated "you were interested
+ * in the 2026 Road Glide 3" — the wrong, more-specific model, steering him off
+ * the Road Glide Limited his salesperson was actually working.
+ *
+ * Only claim a specific held unit when the customer referenced that exact unit
+ * (stock#/VIN) OR the unit's model introduces NO specificity the lead never
+ * expressed (every token of the unit model must appear in the lead's expressed
+ * model/description). A generic "Road Glide" must not become a specific "Road
+ * Glide 3"/"Road Glide Limited"/"Road Glide ST".
+ */
+export function cadenceHeldUnitModelConsistentWithLead(args: {
+  unitModel?: string | null;
+  unitStockId?: string | null;
+  unitVin?: string | null;
+  leadModel?: string | null;
+  leadDescription?: string | null;
+  leadStockId?: string | null;
+  leadVin?: string | null;
+}): boolean {
+  const unitTokens = normalizeCadenceModelTokens(args.unitModel);
+  if (!unitTokens.length) return true; // no specific model to over-claim
+  const unitStock = String(args.unitStockId ?? "").trim().toLowerCase();
+  const unitVin = String(args.unitVin ?? "").trim().toLowerCase();
+  const leadStock = String(args.leadStockId ?? "").trim().toLowerCase();
+  const leadVin = String(args.leadVin ?? "").trim().toLowerCase();
+  if (unitStock && unitStock === leadStock) return true; // customer referenced this exact unit
+  if (unitVin && unitVin === leadVin) return true;
+  const expressed = new Set<string>([
+    ...normalizeCadenceModelTokens(args.leadModel),
+    ...normalizeCadenceModelTokens(args.leadDescription)
+  ]);
+  if (!expressed.size) return false; // no expressed model -> never pin a specific unit
+  return unitTokens.every(token => expressed.has(token));
+}
+
 function normalizeInventoryWatchModelPhrase(textRaw: string | null | undefined): string {
   return String(textRaw ?? "")
     .toLowerCase()
