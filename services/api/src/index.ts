@@ -585,6 +585,7 @@ import {
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
+  shouldNudgeStaleHandoffLead,
   addInternalQuestion,
   listOpenQuestions,
   markQuestionDone,
@@ -26344,6 +26345,46 @@ async function processDueFollowUpsUnlocked() {
       .filter(shouldTodoHoldCustomerCadence)
       .map(t => t.convId)
   );
+  // Stale manual-handoff safety net: a lead handed to a human/department whose
+  // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it
+  // doesn't die silently (Mike +17163686204). Capped per tick + deduped via
+  // staleHandoffNudgedAt so it can never flood the task inbox.
+  const STALE_HANDOFF_TODOS_PER_TICK = 15;
+  const convIdsWithOpenTodo = new Set(openTodos.map(t => t.convId));
+  let staleHandoffCreated = 0;
+  for (const conv of convs) {
+    if (staleHandoffCreated >= STALE_HANDOFF_TODOS_PER_TICK) break;
+    if (!shouldNudgeStaleHandoffLead(conv, convIdsWithOpenTodo.has(conv.id), now)) continue;
+    let lastMs = 0;
+    for (const m of conv.messages ?? []) {
+      const ms = Date.parse(String(m?.at ?? ""));
+      if (Number.isFinite(ms) && ms > lastMs) lastMs = ms;
+    }
+    const idleDays = lastMs ? Math.floor((now.getTime() - lastMs) / 86_400_000) : 0;
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const handoffReason = String(conv.followUp?.reason ?? "handoff").replace(/_/g, " ");
+    const todo = addTodo(
+      conv,
+      "call",
+      `Follow up with ${who} — handed off (${handoffReason}), no activity in ${idleDays} days and no follow-up scheduled.`,
+      undefined,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    if (todo) {
+      conv.staleHandoffNudgedAt = now.toISOString();
+      saveConversation(conv);
+      staleHandoffCreated += 1;
+      recordRouteOutcome("manual", "stale_handoff_followup_todo", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        reason: handoffReason,
+        idleDays
+      });
+    }
+  }
+
   const callbackReminderTz = cfg.timezone || "America/New_York";
   for (const todo of openTodos) {
     if (todo.reason !== "call" || todo.status !== "open") continue;

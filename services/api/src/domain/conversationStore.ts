@@ -752,6 +752,8 @@ export type Conversation = {
   };
   scheduler?: SchedulerMemory;
   followUpCadence?: FollowUpCadence;
+  /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */
+  staleHandoffNudgedAt?: string;
   manualContext?: ManualContextState;
   objections?: ObjectionState;
   crm?: { lastLoggedAt?: string; lastLoggedAtByLeadRef?: Record<string, string> };
@@ -4644,6 +4646,41 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
   // Upsert cadence follow-up tasks so we never create duplicates while still
   // keeping the open follow-up aligned to the latest cadence step.
   return addTodo(conv, "call", summary, undefined, undefined, undefined, "followup");
+}
+
+/**
+ * A lead handed to a human/department (manual_handoff) has its AI cadence
+ * stopped by design — but if the human then goes quiet, the lead dies with no
+ * safety net (Mike +17163686204, 2026-06-13: web-widget sales lead, priced +
+ * pics by staff, then no cadence and no follow-up). This flags such a lead so
+ * the maintenance tick can surface ONE staff "follow up" todo (no auto-send).
+ * Pure + conservative: never re-nudges (caller sets staleHandoffNudgedAt), only
+ * fires inside a re-engageable idle window, and skips leads that already have an
+ * open todo, an active cadence, or are closed/sold.
+ */
+export function shouldNudgeStaleHandoffLead(
+  conv: Conversation,
+  hasOpenTodo: boolean,
+  now: Date = new Date(),
+  opts?: { minIdleDays?: number; maxIdleDays?: number }
+): boolean {
+  if (!conv || hasOpenTodo) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  if (conv.staleHandoffNudgedAt) return false;
+  if (conv.followUp?.mode !== "manual_handoff") return false;
+  if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  if (!messages.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  let lastMs = NaN;
+  for (const m of messages) {
+    const ms = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(ms) && (!Number.isFinite(lastMs) || ms > lastMs)) lastMs = ms;
+  }
+  if (!Number.isFinite(lastMs)) return false;
+  const idleMs = now.getTime() - lastMs;
+  const minIdleMs = (opts?.minIdleDays ?? 3) * 24 * 60 * 60 * 1000;
+  const maxIdleMs = (opts?.maxIdleDays ?? 21) * 24 * 60 * 60 * 1000;
+  return idleMs >= minIdleMs && idleMs <= maxIdleMs;
 }
 
 export function listOpenTodos(): TodoTask[] {
