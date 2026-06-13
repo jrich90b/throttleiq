@@ -88,6 +88,26 @@ this loop against American Harley. Every deploy is gated on a green `ci:eval`;
 that gate is non-negotiable.
 
 ## Run
-- One DETECT pass: `npm run auto_loop:next`
+- Fresh-signal sweep + DETECT in one shot: `npm run auto_loop:sweep`
+  (`scripts/auto_loop_sweep.ts`) — runs the deterministic answer_correctness
+  audit over a tight recent window (default 48h, `SWEEP_WINDOW_HOURS`) against
+  the live store, then DETECT, and prints whether the loop has NEW codeable
+  work. Read-only; pins `DATA_DIR` to the store's dir so no stray store is
+  created.
+- One DETECT pass on existing signal: `npm run auto_loop:next`
 - The orchestrator (Claude Code session) executes PLAN→SHIP per task and
   self-paces re-entry until DETECT emits `stop: true`.
+
+### Daily sweep cron (per dealer, on the instance)
+A tight window is what keeps the loop honest — a 30-day audit buries new
+regressions under already-fixed history (iteration 2). Run the sweep daily so a
+real regression surfaces within a day:
+
+```
+# 8:45 AM ET — fresh agent-quality signal for the autonomous loop
+45 8 * * * cd /home/ubuntu/leadrider-api/americanharley && CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports SWEEP_WINDOW_HOURS=48 npm run auto_loop:sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/auto_loop_sweep_cron.log 2>&1
+```
+
+The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
+means nothing new to code; otherwise it carries the next task + a production
+repro. For dealer #2, point the same cron at that dealer's runtime store.

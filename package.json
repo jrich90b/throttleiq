@@ -87,6 +87,7 @@
     "manual_outbound:promote": "npx tsx scripts/manual_outbound_promote.ts",
     "agent_manager:report": "npx tsx scripts/agent_manager_report.ts",
     "auto_loop:next": "npx tsx scripts/auto_loop_next_task.ts",
+    "auto_loop:sweep": "npx tsx scripts/auto_loop_sweep.ts",
     "eval:universal": "npx tsx scripts/run_eval_suite.ts --tier universal",
     "eval:dealer-americanharley": "npx tsx scripts/run_eval_suite.ts --tier dealer:americanharley",
     "eval_suite_manifest:eval": "npx tsx scripts/eval_suite_manifest_eval.ts",
