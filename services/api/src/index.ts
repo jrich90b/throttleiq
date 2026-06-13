@@ -14895,7 +14895,14 @@ async function activateAppointmentOutcomeFollowUp(args: {
 }): Promise<{ activated: boolean; nextDueAt?: string }> {
   const conv = args.conv;
   if (!conv || conv.status === "closed") return { activated: false };
-  if (args.secondaryStatus !== "needs_follow_up") return { activated: false };
+  // "not_ready" (showed, interested, just not buying yet) is the textbook
+  // nurture case and must activate a follow-up cadence, same as
+  // "needs_follow_up" — Donald Lauer +17162285210 showed/not_ready on
+  // 2026-06-12 and got zero follow-up (cadence stopped, no draft, no task).
+  const FOLLOW_UP_SECONDARY = new Set(["needs_follow_up", "not_ready"]);
+  if (!FOLLOW_UP_SECONDARY.has(String(args.secondaryStatus ?? ""))) {
+    return { activated: false };
+  }
   const cfg = await getSchedulerConfigHot();
   const timezone = cfg.timezone || "America/New_York";
   const now = nowIso();
