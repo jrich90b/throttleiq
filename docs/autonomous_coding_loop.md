@@ -111,3 +111,22 @@ real regression surfaces within a day:
 The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
 means nothing new to code; otherwise it carries the next task + a production
 repro. For dealer #2, point the same cron at that dealer's runtime store.
+
+### Unattended operation (two parts)
+There is no headless coding agent on the instance, and the live data + deploy
+access live only on the box — so the loop runs in two complementary halves:
+
+1. **Detection (always-on, server-side):** the instance sweep cron above runs
+   daily regardless of anything, refreshing `next_task.json` + a log. Pure,
+   read-only — it only generates a work order.
+2. **Coding + deploy (when the operator's Claude Code app is open):** a daily
+   scheduled task (`~/.claude/scheduled-tasks/throttleiq-loop-runner`, runs at
+   ~9:20am local, or on next app launch if closed) runs ONE iteration: fresh
+   sweep+DETECT → if a concrete reproducible regression exists, PLAN (sub-agent,
+   re-confirms the bug still reproduces on current main) → BUILD → VERIFY
+   (tsc + ci:eval). It **auto-deploys only** a small, localized, high-confidence
+   fix on a green gate; anything uncertain/large/possibly-stale → branch + PR +
+   notify. It never deploys on a red gate and never touches needs-user items.
+
+The common case is a no-op (sweep → `stop:true`), so the runner only does real
+work when a genuinely new, unguarded, concrete regression appears.
