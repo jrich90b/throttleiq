@@ -85,6 +85,7 @@
     "language_seed:filter": "npx tsx scripts/language_seed_filter.ts",
     "manual_outbound:promote": "npx tsx scripts/manual_outbound_promote.ts",
     "agent_manager:report": "npx tsx scripts/agent_manager_report.ts",
+    "auto_loop:next": "npx tsx scripts/auto_loop_next_task.ts",
     "voice_charter:audit": "npx tsx scripts/voice_charter_audit.ts",
     "voice_charter:eval": "npx tsx scripts/voice_charter_audit.ts --self-test",
     "cadence_template_voice:eval": "npx tsx scripts/cadence_template_voice_eval.ts",
