@@ -342,6 +342,10 @@ import { modelHasFinishOptions } from "./domain/msrpPriceList.js";
 import {
   computeFollowUpDueAt,
   computePostSaleDueAt,
+  buildDisengagedCadenceCloseout,
+  customerEngagedWithCadence,
+  shouldSendDisengagedCloseout,
+  DISENGAGED_TAPER_AFTER_TOUCHES,
   FINANCE_DECLINED_DAY_OFFSETS,
   FOLLOW_UP_DAY_OFFSETS,
   LONG_TERM_DAY_OFFSETS,
@@ -10713,6 +10717,13 @@ async function buildCadenceRegeneratedDraft(
   if (lastSentStepRaw == null || !Number.isFinite(lastSentStepRaw)) return null;
   const lastSentStep = Math.max(0, Math.floor(lastSentStepRaw));
   if (cadence.kind === "post_sale" || cadence.kind === "long_term") return null;
+
+  // Disengagement taper: regenerate the next cadence draft as the graceful
+  // close-out once a never-engaged lead has reached the taper step (the live
+  // tick does the same, and advanceFollowUpCadence then ends the sequence).
+  if (shouldSendDisengagedCloseout(conv, lastSentStep + 1)) {
+    return { body: buildDisengagedCadenceCloseout(conv.lead?.firstName) };
+  }
 
   const draftAtMs = new Date(String(lastDraft.at ?? "")).getTime();
   const cadenceLastSentAtMs = new Date(String(cadence.lastSentAt ?? "")).getTime();
@@ -27330,6 +27341,18 @@ async function processDueFollowUpsUnlocked() {
       isPostSale
     });
 
+    // Disengagement taper: a lead that never replied gets one graceful close-out
+    // at the taper step, then advanceFollowUpCadence ends the sequence. Keep the
+    // close-out pristine — skip dedupe rotation and context/personalization
+    // appends so it reads like a clean sign-off, not another nag.
+    const disengagedCloseoutActive = shouldSendDisengagedCloseout(
+      conv,
+      Number(cadence.stepIndex ?? 0)
+    );
+    if (disengagedCloseoutActive) {
+      message = buildDisengagedCadenceCloseout(firstName);
+    }
+
     const genericCadenceNoRepeatFallbacks = isPostSale
       ? [
           "Quick follow-up — if you need anything, just let me know.",
@@ -27339,14 +27362,20 @@ async function processDueFollowUpsUnlocked() {
       : [
           ...buildCadenceCheckInFallbacks(firstName, labelClause)
         ];
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale) {
+    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && !disengagedCloseoutActive) {
       message = selectNonRepeatingCadenceMessage(
         conv,
         message,
         cadenceNoRepeatFallbacks.length ? cadenceNoRepeatFallbacks : genericCadenceNoRepeatFallbacks
       );
     }
-    if (!leadUnitAvailabilityOverride && !heldInventoryOverride && !isPostSale && cadence.kind !== "long_term") {
+    if (
+      !leadUnitAvailabilityOverride &&
+      !heldInventoryOverride &&
+      !isPostSale &&
+      !disengagedCloseoutActive &&
+      cadence.kind !== "long_term"
+    ) {
       const contextLine = getFollowUpContextLine(conv, now);
       if (
         contextLine &&
@@ -27407,7 +27436,9 @@ async function processDueFollowUpsUnlocked() {
         : "If you want to stop in, reply with a day and time that works.";
     let emailMessage: string | null = null;
     if (useEmail) {
-      if (cadence.kind === "long_term") {
+      if (disengagedCloseoutActive) {
+        emailMessage = `${buildDisengagedCadenceCloseout(name)}\n\nThanks,`;
+      } else if (cadence.kind === "long_term") {
         const longTermBody = String(message ?? "")
           .replace(/^\s*hi\s+[^—\n-]+[—-]\s*/i, "")
           .trim();

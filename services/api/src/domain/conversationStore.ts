@@ -3793,12 +3793,63 @@ export function closeConversation(conv: Conversation, reason?: string) {
   scheduleSave();
 }
 
+// Disengagement taper. A lead that never reached back should not be nudged
+// through the entire 13-step sequence (Michael Digiulio +17168660252: 10
+// unanswered touches across SMS, email, and a voicemail, still scheduled for
+// more). After this many touches with zero customer inbound, the cadence sends
+// one graceful close-out and then ends. Joe set the threshold at 9 touches.
+export const DISENGAGED_TAPER_AFTER_TOUCHES = 9;
+
+// A lead counts as engaged only when the CUSTOMER reached back: an inbound
+// message that isn't the originating web-lead form (sendgrid_adf) or a debug
+// event. Our own outbound — texts, emails, even an outbound call/voicemail —
+// never marks a silent lead engaged.
+export function customerEngagedWithCadence(conv: Conversation): boolean {
+  return (conv.messages ?? []).some(
+    m =>
+      m?.direction === "in" &&
+      m?.provider !== "sendgrid_adf" &&
+      String(m?.body ?? "").trim().length > 0
+  );
+}
+
+export function buildDisengagedCadenceCloseout(firstName?: string): string {
+  const name = String(firstName ?? "").trim() || "there";
+  return `No rush at all, ${name}. I'll stop reaching out for now, but just text me anytime you're ready and I'll jump right back in to help.`;
+}
+
+// True when the touch about to be sent should be the disengagement close-out:
+// a never-engaged sales lead (not post-sale/long-term) at or past the taper
+// threshold.
+export function shouldSendDisengagedCloseout(conv: Conversation, sendingStep: number): boolean {
+  const cadence = conv.followUpCadence;
+  if (!cadence) return false;
+  if (cadence.kind === "post_sale" || cadence.kind === "long_term") return false;
+  if (customerEngagedWithCadence(conv)) return false;
+  return Number(sendingStep) >= DISENGAGED_TAPER_AFTER_TOUCHES;
+}
+
 export function advanceFollowUpCadence(conv: Conversation, timeZone: string) {
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
   const nextStep = conv.followUpCadence.stepIndex + 1;
   conv.followUpCadence.lastSentAt = nowIso();
   conv.followUpCadence.lastSentStep = conv.followUpCadence.stepIndex;
   conv.followUpCadence.stepIndex = nextStep;
+  // Disengagement taper: once the close-out touch has gone out to a lead that
+  // never replied, end the cadence instead of running the rest of the schedule.
+  if (
+    conv.followUpCadence.kind !== "post_sale" &&
+    conv.followUpCadence.kind !== "long_term" &&
+    !customerEngagedWithCadence(conv) &&
+    Number(conv.followUpCadence.lastSentStep ?? 0) >= DISENGAGED_TAPER_AFTER_TOUCHES
+  ) {
+    conv.followUpCadence.status = "completed";
+    conv.followUpCadence.stopReason = "disengaged_taper";
+    conv.followUpCadence.nextDueAt = undefined;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return;
+  }
   const isPostSale = conv.followUpCadence.kind === "post_sale";
   const isEngaged = conv.followUpCadence.kind === "engaged";
   const isLongTerm = conv.followUpCadence.kind === "long_term";
