@@ -97,6 +97,72 @@ function isCustomerFacingOutboundProvider(provider: unknown): boolean {
   return p === "draft_ai" || p === "human" || p === "twilio" || p === "sendgrid";
 }
 
+export type VoiceMsg = {
+  provider?: unknown;
+  at?: unknown;
+  body?: unknown;
+  providerMessageId?: unknown;
+};
+
+/**
+ * Find the voice_summary that belongs to the transcript at `transcriptIndex`
+ * within a time-sorted message array.
+ *
+ * Primary path (the real prod path): when the transcript has a
+ * providerMessageId (call SID), match the summary that shares that exact SID,
+ * regardless of time order. The runtime writes the summary BEFORE the
+ * transcript (index.ts ~60665 appends "voice_summary", then pushes
+ * "voice_transcript" later in the same handler), so the summary sits earlier in
+ * the sorted array; the old forward-only search missed it and withVoiceSummary
+ * collapsed to 0 even though the summaries existed. This scans the whole
+ * conversation but stays strictly id-keyed, so multi-call conversations never
+ * cross-link call A's transcript to call B's summary.
+ *
+ * Fallback (defensive; no SID on the transcript): keep the legacy forward-only
+ * behavior, but only link a summary that is itself id-less — never steal an
+ * earlier, identified call's summary.
+ */
+export function findSummaryForTranscript(
+  messages: VoiceMsg[],
+  transcriptIndex: number
+): { summaryAt: string; summaryText: string } | null {
+  const transcript = messages[transcriptIndex];
+  const transcriptProviderMessageId = normText(transcript?.providerMessageId) || null;
+
+  const usableSummary = (cand: VoiceMsg): { at: string; text: string } | null => {
+    const candProvider = String(cand?.provider ?? "").trim().toLowerCase();
+    if (candProvider !== "voice_summary") return null;
+    const at = toIso(cand?.at);
+    if (!at) return null;
+    const text = normText(cand?.body);
+    if (!text) return null;
+    return { at, text };
+  };
+
+  if (transcriptProviderMessageId) {
+    // Id-keyed, order-independent: require an exact SID match anywhere in the conv.
+    for (let j = 0; j < messages.length; j += 1) {
+      if (j === transcriptIndex) continue;
+      const usable = usableSummary(messages[j]);
+      if (!usable) continue;
+      const candMsgId = normText(messages[j]?.providerMessageId);
+      if (candMsgId && candMsgId === transcriptProviderMessageId) {
+        return { summaryAt: usable.at, summaryText: usable.text };
+      }
+    }
+    return null;
+  }
+
+  // No SID on the transcript: forward-only fallback, id-less summaries only.
+  for (let j = transcriptIndex + 1; j < messages.length; j += 1) {
+    const usable = usableSummary(messages[j]);
+    if (!usable) continue;
+    if (normText(messages[j]?.providerMessageId)) continue;
+    return { summaryAt: usable.at, summaryText: usable.text };
+  }
+  return null;
+}
+
 function run() {
   const parsed = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(parsed.conversationsPath)) {
@@ -133,24 +199,9 @@ function run() {
       if (!transcriptText) continue;
       const transcriptProviderMessageId = normText(msg?.providerMessageId) || null;
 
-      let summaryAt: string | null = null;
-      let summaryText: string | null = null;
-      for (let j = i + 1; j < messages.length; j += 1) {
-        const cand = messages[j];
-        const candProvider = String(cand?.provider ?? "").trim().toLowerCase();
-        if (candProvider !== "voice_summary") continue;
-        const candAt = toIso(cand?.at);
-        if (!candAt) continue;
-        const candText = normText(cand?.body);
-        if (!candText) continue;
-        const candMsgId = normText(cand?.providerMessageId);
-        if (transcriptProviderMessageId && candMsgId && transcriptProviderMessageId !== candMsgId) {
-          continue;
-        }
-        summaryAt = candAt;
-        summaryText = candText;
-        break;
-      }
+      const summaryMatch = findSummaryForTranscript(messages, i);
+      const summaryAt: string | null = summaryMatch?.summaryAt ?? null;
+      const summaryText: string | null = summaryMatch?.summaryText ?? null;
 
       let nextOutboundAt: string | null = null;
       let nextOutboundProvider: string | null = null;

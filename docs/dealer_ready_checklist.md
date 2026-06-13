@@ -12,7 +12,7 @@ evidence date whenever a capability is re-verified.
 | Calendar slot offers | WORKING | 2026-06-10 19:43Z (+15856273860) | |
 | Appointment booking/confirmation | WORKING | 2026-06-10 21:39Z confirmed (+17169085647) | |
 | Voice call capture (transcripts) | WORKING | 2026-06-10 22:04Z | |
-| Voice call summaries | WORKING* | 2026-06-10 22:04Z | *voice_feedback report showed withVoiceSummary=0 at 23:00 while summary messages exist — report join bug, investigate (open) |
+| Voice call summaries | WORKING | 2026-06-13 (report-join bug fixed: withVoiceSummary 0→423 on live data; voice_feedback_join:eval now gates ci:eval) | |
 | Traffic Log Pro walk-in ingest | WORKING | 2026-06-09 22:05Z (Perez walk-in) | |
 | Inventory watches | WORKING | 53 conversations carry watch state | |
 | Deposit / payment requests (Stripe) | WORKING | 2026-06-04 (dealer_payment_requests.json + customer flow) | Re-verify before June 30 |
@@ -21,9 +21,11 @@ evidence date whenever a capability is re-verified.
 | Worker dispatcher | SHADOW | running since 6/10 | Tick flip June 17 |
 
 ## Open verification items
-1. Voice summary report join: summaries exist as messages but voice_feedback_summary counted 0 — fix the join or the report misleads the gate.
-2. DocuSign: validate token refresh and send a test envelope before declaring day-1 ready.
-3. Stripe deposit flow: one end-to-end re-verification closer to June 30.
+1. DocuSign: validate token refresh and send a test envelope before declaring day-1 ready.
+2. Stripe deposit flow: one end-to-end re-verification closer to June 30.
+
+## Resolved
+- Voice summary report join (2026-06-13): `voice_feedback_mine` searched forward-only for each transcript's summary, but the runtime writes the summary before the transcript, so withVoiceSummary read 0 despite 423 summaries. Now keyed on the shared call SID (id-keyed bidirectional); recovers 0→423 on live data. Guarded by `voice_feedback_join:eval` in ci:eval (voice-feedback previously had no eval).
 
 ## Sizing note for dealer #2
 A 2GB Lightsail instance runs the full stack but can never build it — deploys
