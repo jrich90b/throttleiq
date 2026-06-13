@@ -99,7 +99,7 @@ export function isLikelyVoicemailTranscript(text: string): boolean {
   const t = raw.toLowerCase();
   if (!t.trim()) return true;
   const vmRe =
-    /voicemail|voice mail|mailbox|leave (a )?message|after the (tone|beep)|at the (tone|beep)|please leave|not available|unable to (answer|take your call)|your call has been forwarded|record your message|sorry we (missed|couldn't take) your call/;
+    /voicemail|voice mail|mailbox|leave (a )?message|after the (tone|beep)|at the (tone|beep)|please leave|not available|unable to (answer|take your call)|your call has been forwarded|record your message|sorry we (missed|couldn't take) your call|your message for|the person you are trying to reach|is not available|press \d|google voice|recording your message/;
   const lines = raw
     .split(/\n+/)
     .map(line => line.trim())
@@ -108,7 +108,17 @@ export function isLikelyVoicemailTranscript(text: string): boolean {
     .filter(line => /^customer:/i.test(line))
     .map(line => line.replace(/^customer:\s*/i, "").trim().toLowerCase())
     .filter(Boolean);
-  const hasNonVoicemailCustomer = customerLines.some(line => !vmRe.test(line));
+  // A "Customer:" line only proves a real conversation if it carries actual
+  // substance. Automated greetings split into short fragments — the callee's
+  // name ("Mert Platts."), "press 1", a phone number — which are NOT the
+  // customer talking. Require >= 4 words and no voicemail phrasing before a
+  // line counts as a live human response. (Merton Kreps +17165503586,
+  // 2026-06-13: "Please leave your message for" / "Mert Platts." was misread
+  // as a connected call, marking the lead engaged when it was a voicemail.)
+  const wordCount = (line: string) => line.split(/\s+/).filter(Boolean).length;
+  const hasNonVoicemailCustomer = customerLines.some(
+    line => !vmRe.test(line) && wordCount(line) >= 4
+  );
   if (hasNonVoicemailCustomer) return false;
   return vmRe.test(t);
 }

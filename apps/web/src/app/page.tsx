@@ -1028,6 +1028,12 @@ type ConversationDetail = {
     kind?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
+  contact?: {
+    attempts?: number;
+    reachedAt?: string | null;
+    lastAttemptAt?: string | null;
+    lastOutcome?: "reached" | "no_answer" | null;
+  } | null;
   manualContext?: ManualContextState | null;
   agentContext?: {
     text?: string;
@@ -1330,6 +1336,33 @@ function todoTaskTitle(todo: TodoItem | null | undefined): string {
   if (reason === "apparel") return "Apparel task";
   if (reason === "note") return "Internal note";
   return "Open task";
+}
+
+function ordinalLabel(n: number): string {
+  const num = Math.max(1, Math.floor(Number(n) || 1));
+  const mod100 = num % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${num}th`;
+  switch (num % 10) {
+    case 1:
+      return `${num}st`;
+    case 2:
+      return `${num}nd`;
+    case 3:
+      return `${num}rd`;
+    default:
+      return `${num}th`;
+  }
+}
+
+// "2nd attempt" once one call has missed; null once the customer is reached or
+// no call has been attempted yet.
+function nextContactAttemptLabel(
+  contact?: { attempts?: number; reachedAt?: string | null } | null
+): string | null {
+  if (!contact || contact.reachedAt) return null;
+  const attempts = Math.max(0, Math.floor(Number(contact.attempts ?? 0)));
+  if (attempts < 1) return null;
+  return `${ordinalLabel(attempts + 1)} attempt`;
 }
 
 function todoTaskDetail(todo: TodoItem | null | undefined, maxLength = 140): string {
@@ -20828,6 +20861,11 @@ export default function Home() {
                     <div className="mt-0.5 text-xs font-semibold text-sky-900">
                       {taskTitle}
                       {ownerLabel ? ` • ${ownerLabel}` : ""}
+                      {nextContactAttemptLabel(selectedConv.contact) ? (
+                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                          {nextContactAttemptLabel(selectedConv.contact)}
+                        </span>
+                      ) : null}
                     </div>
                     {detail ? (
                       <div className="mt-1 line-clamp-2 text-xs text-sky-800">{detail}</div>

@@ -895,6 +895,16 @@ export type Conversation = {
     reason?: string;
     messageId?: string;
   };
+  // Staff outbound-call contact tracking. `contactAttempts` counts calls that
+  // did NOT reach the customer (voicemail / no answer); the follow-up keeps
+  // cycling and the open task shows the next attempt number until `reachedAt`
+  // is set by a real two-way conversation.
+  contact?: {
+    attempts: number;
+    reachedAt?: string;
+    lastAttemptAt?: string;
+    lastOutcome?: "reached" | "no_answer";
+  };
   softTags?: Record<string, ConversationSoftTagValue>;
 };
 
@@ -4708,6 +4718,54 @@ export function markOpenCallTodosDoneForCompletedVoiceAttempt(convId: string): n
   }
   if (count > 0) scheduleSave();
   return count;
+}
+
+export function ordinalLabel(n: number): string {
+  const num = Math.max(1, Math.floor(Number(n) || 1));
+  const mod100 = num % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${num}th`;
+  switch (num % 10) {
+    case 1:
+      return `${num}st`;
+    case 2:
+      return `${num}nd`;
+    case 3:
+      return `${num}rd`;
+    default:
+      return `${num}th`;
+  }
+}
+
+// Label for the NEXT staff call attempt, given how many have already missed.
+// After one voicemail this returns "2nd attempt".
+export function nextContactAttemptLabel(conv: Conversation): string {
+  const attempts = Math.max(0, Number(conv.contact?.attempts ?? 0));
+  return `${ordinalLabel(attempts + 1)} attempt`;
+}
+
+export function registerMissedContactAttempt(conv: Conversation): number {
+  const attempts = Math.max(0, Number(conv.contact?.attempts ?? 0)) + 1;
+  conv.contact = {
+    ...(conv.contact ?? { attempts: 0 }),
+    attempts,
+    lastAttemptAt: nowIso(),
+    lastOutcome: "no_answer"
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return attempts;
+}
+
+export function registerContactReached(conv: Conversation): void {
+  conv.contact = {
+    ...(conv.contact ?? { attempts: 0 }),
+    attempts: Math.max(0, Number(conv.contact?.attempts ?? 0)),
+    reachedAt: nowIso(),
+    lastAttemptAt: nowIso(),
+    lastOutcome: "reached"
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
 }
 
 export function markTodoReminderSent(

@@ -82,9 +82,21 @@ assert.equal(
   "completed voice attempt should not close unrelated non-call tasks"
 );
 
+// Call-attempt cadence (2026-06-13, Merton Kreps): a completed outbound call
+// only resolves the call follow-up when the customer was actually REACHED. A
+// voicemail / no answer keeps the lead on the follow-up cadence and bumps the
+// attempt counter instead of closing the task.
 assert.ok(
-  /if \(!inboundCall\)\s*\{\s*markOpenCallTodosDoneForCompletedVoiceAttempt\(conv\.id\);/.test(apiSource),
-  "voice recording handler should close call follow-ups for completed outbound calls, including voicemail"
+  /if \(!inboundCall && contactedValue === "YES"\)\s*\{[\s\S]{0,200}markOpenCallTodosDoneForCompletedVoiceAttempt\(conv\.id\);/.test(
+    apiSource
+  ),
+  "voice recording handler closes call follow-ups only when contacted=YES (a voicemail keeps following up)"
+);
+assert.ok(
+  /if \(contactedValue === "YES"\) registerContactReached\(conv\);\s*\n\s*else registerMissedContactAttempt\(conv\);/.test(
+    apiSource
+  ),
+  "voice recording handler registers reached vs missed contact attempt up front"
 );
 
 console.log("PASS voice call follow-up eval");

@@ -346,6 +346,9 @@ import {
   customerEngagedWithCadence,
   shouldSendDisengagedCloseout,
   DISENGAGED_TAPER_AFTER_TOUCHES,
+  registerMissedContactAttempt,
+  registerContactReached,
+  nextContactAttemptLabel,
   FINANCE_DECLINED_DAY_OFFSETS,
   FOLLOW_UP_DAY_OFFSETS,
   LONG_TERM_DAY_OFFSETS,
@@ -60628,6 +60631,13 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
     const isVoicemail = transcriptText ? isLikelyVoicemailTranscript(transcriptText) : true;
     const contactedValue: "YES" | "NO" =
       transcriptText && !isVoicemail ? "YES" : "NO";
+    // Record the contact-attempt outcome up front so the follow-up task and the
+    // cadence below can show the right attempt number ("2nd attempt") and keep
+    // cycling until the customer is actually reached.
+    if (!inboundCall) {
+      if (contactedValue === "YES") registerContactReached(conv);
+      else registerMissedContactAttempt(conv);
+    }
     if (noteText) {
       const summaryText = isVoicemail
         ? "Voicemail — not contacted."
@@ -60714,7 +60724,7 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                 addTodo(
                   conv,
                   "call",
-                  "Call customer (follow-up): no contact after finance/prequal voicemail. Review next steps and keep the lead moving.",
+                  `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: no contact on the last call. Keep the lead moving until you reach them.`,
                   recordingSid || bodyCallSid || callbackCallSid || undefined,
                   undefined,
                   schedule,
@@ -60747,7 +60757,8 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
           });
         }
       }
-      if (!inboundCall) {
+      if (!inboundCall && contactedValue === "YES") {
+        // Reached the customer — the call task is done and the agent stands down.
         markOpenCallTodosDoneForCompletedVoiceAttempt(conv.id);
       }
 
