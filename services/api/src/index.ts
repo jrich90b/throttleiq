@@ -12039,7 +12039,21 @@ function normalizeModelText(val?: string | null): string {
     // favorite "street guide" must still match the Glide families.
     .replace(/\bgides?\b/g, "glide")
     .replace(/\bg(?:lied|ilde)s?\b/g, "glide")
-    .replace(/\b(street|road|tri|wide)\s+guides?\b/g, "$1 glide");
+    .replace(/\b(street|road|tri|wide)\s+guides?\b/g, "$1 glide")
+    // Concatenated model names people text as one word (Todd Herian
+    // 2026-06-13: "roadglide" never matched Road Glide).
+    .replace(/\broad\s*glides?\b/g, "road glide")
+    .replace(/\bstreet\s*glides?\b/g, "street glide")
+    .replace(/\belectra\s*glides?\b/g, "electra glide")
+    .replace(/\btri\s*glides?\b/g, "tri glide")
+    .replace(/\bsport\s*glides?\b/g, "sport glide")
+    .replace(/\bwide\s*glides?\b/g, "wide glide")
+    .replace(/\bultra\s*limiteds?\b/g, "ultra limited")
+    .replace(/\broad\s*kings?\b/g, "road king")
+    .replace(/\bfat\s*boys?\b/g, "fat boy")
+    .replace(/\bfat\s*bobs?\b/g, "fat bob")
+    .replace(/\blow\s*riders?\b/g, "low rider")
+    .replace(/\bstreet\s*bobs?\b/g, "street bob");
   return withoutAnniversarySuffix
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")

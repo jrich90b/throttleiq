@@ -1076,35 +1076,61 @@ function normalizeAvailabilityModelMentionText(textRaw: string | null | undefine
     .trim();
 }
 
+// A model named as the customer's CURRENT/owned bike is not a request — it is
+// the comparison or trade (Todd Herian 2026-06-13: "as long as it's a roadglide
+// compared to my current ultra limited" had the agent offer Ultra Limiteds).
+function isOwnedOrComparisonReference(before: string): boolean {
+  return (
+    // "compared to my current ___", "than my ___", "vs my ___", "against ___"
+    /\b(?:compared\s+to|versus|vs\.?|than|over|against)\s+(?:my\s+)?(?:current\s+|old\s+|existing\s+)?$/.test(
+      before
+    ) ||
+    // "my ___", "my current ___", "my old ___" (possessive, not "do you have")
+    /\bmy\s+(?:current\s+|old\s+|existing\s+)?$/.test(before) ||
+    // first-person ownership only — "i have/own/ride a ___" (never "you have a")
+    /\bi\s+(?:currently\s+)?(?:ride|own|have|drive|got)\s+(?:a\s+|an\s+|my\s+)?$/.test(before) ||
+    // "trading in my ___", "trade-in ___", "current ___"
+    /\b(?:trading\s+in|trade\s*in|trading)\s+(?:my\s+|a\s+|an\s+)?(?:current\s+|old\s+)?$/.test(before) ||
+    /\bcurrent\s+$/.test(before) ||
+    /\b(lighter|smaller|bigger|larger|heavier|easier|more manageable)\b.{0,50}\bthan(?: the)?\s*$/.test(
+      before
+    )
+  );
+}
+
 export function selectRequestedAvailabilityModelMentions(
   textRaw: string | null | undefined,
   candidates: AvailabilityModelMention[]
 ): string[] {
   const normalizedText = normalizeAvailabilityModelMentionText(textRaw);
   if (!normalizedText || !candidates.length) return [];
-  const hasAlternativeSignal =
-    /\b(or|either|any|something|lighter|smaller|smaller than|lighter than)\b/.test(normalizedText);
-  if (!hasAlternativeSignal && candidates.length < 2) {
-    return candidates[0]?.model ? [String(candidates[0].model)] : [];
-  }
-
-  const selected: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const model = String(candidate.model ?? "").trim();
-    if (!model) continue;
-    const normalizedModel = normalizeAvailabilityModelMentionText(model);
-    if (!normalizedModel) continue;
+  const referenceFor = (candidate: AvailabilityModelMention): boolean => {
+    const normalizedModel = normalizeAvailabilityModelMentionText(String(candidate.model ?? ""));
+    if (!normalizedModel) return false;
     const index =
       typeof candidate.index === "number" && candidate.index >= 0
         ? candidate.index
         : normalizedText.indexOf(normalizedModel);
     const before = index >= 0 ? normalizedText.slice(Math.max(0, index - 80), index) : "";
-    const isComparisonReference =
-      /\b(lighter|smaller|bigger|larger|heavier|easier|more manageable)\b.{0,50}\bthan(?: the)?\s*$/.test(
-        before
-      );
-    if (isComparisonReference) continue;
+    return isOwnedOrComparisonReference(before);
+  };
+  // Drop owned/comparison mentions up front so a single "my current X" never
+  // becomes the requested model, even on the single-candidate fast path.
+  const requestCandidates = candidates.filter(c => !referenceFor(c));
+  if (!requestCandidates.length) return [];
+  const hasAlternativeSignal =
+    /\b(or|either|any|something|lighter|smaller|smaller than|lighter than)\b/.test(normalizedText);
+  if (!hasAlternativeSignal && requestCandidates.length < 2) {
+    return requestCandidates[0]?.model ? [String(requestCandidates[0].model)] : [];
+  }
+
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of requestCandidates) {
+    const model = String(candidate.model ?? "").trim();
+    if (!model) continue;
+    const normalizedModel = normalizeAvailabilityModelMentionText(model);
+    if (!normalizedModel) continue;
     if (seen.has(normalizedModel)) continue;
     seen.add(normalizedModel);
     selected.push(model);
