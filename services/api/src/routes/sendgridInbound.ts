@@ -7614,6 +7614,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
     }
     ack = await applyInitialAdfPrefix(ack);
+    // Every initial-ADF reply must start a re-engagement cadence (unless the
+    // lead is booked or handed off) so an engageable lead never gets one
+    // message and then nothing (Jason/Meta-promo class; guarded by
+    // initial_adf_cadence_invariant:eval).
+    if (
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite"
+    ) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     publishAdfEmailDraft(ack);
@@ -7657,6 +7670,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         "Great question — Harley-Davidson no longer sells the Street 750 new, so we can’t factory-order that model. I can help with similar new options or locate pre-owned Street 750s for you. What matters most to you: price, engine size, or style?";
     }
     ack = await applyInitialAdfPrefix(ack);
+    // Every initial-ADF reply must start a re-engagement cadence (unless the
+    // lead is booked or handed off) so an engageable lead never gets one
+    // message and then nothing (Jason/Meta-promo class; guarded by
+    // initial_adf_cadence_invariant:eval).
+    if (
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite"
+    ) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     publishAdfEmailDraft(ack);
@@ -7745,6 +7771,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `I saw ${modelMismatch.leadModel} on the lead and ${modelMismatch.inquiryModel} in your message. ` +
       "Which one would you like pricing on?";
     ack = await applyInitialAdfPrefix(ack);
+    // Every initial-ADF reply must start a re-engagement cadence (unless the
+    // lead is booked or handed off) so an engageable lead never gets one
+    // message and then nothing (Jason/Meta-promo class; guarded by
+    // initial_adf_cadence_invariant:eval).
+    if (
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite"
+    ) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     publishAdfEmailDraft(ack);
