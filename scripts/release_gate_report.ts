@@ -41,6 +41,7 @@ type Thresholds = {
   cadenceStalledRecentMax: number;
   apptOutcomeMissingRecentMax: number;
   draftUnactionedRecentMax: number;
+  agentDraftSlowOver5minMax: number;
 };
 
 const DEFAULT_THRESHOLDS: Thresholds = {
@@ -57,7 +58,11 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   cadenceFarFutureRecentMax: num(process.env.RELEASE_GATE_CADENCE_FAR_FUTURE_MAX, 0),
   cadenceStalledRecentMax: num(process.env.RELEASE_GATE_CADENCE_STALLED_MAX, 0),
   apptOutcomeMissingRecentMax: num(process.env.RELEASE_GATE_APPT_OUTCOME_MISSING_MAX, 0),
-  draftUnactionedRecentMax: num(process.env.RELEASE_GATE_DRAFT_UNACTIONED_MAX, 2)
+  draftUnactionedRecentMax: num(process.env.RELEASE_GATE_DRAFT_UNACTIONED_MAX, 2),
+  // Agent draft speed is graded (real-time webhook drafts that took >5 min are
+  // an agent/infra problem). Effective customer-facing latency is reported but
+  // NOT graded — it is the Suggest-mode staffing lever, not an agent fault.
+  agentDraftSlowOver5minMax: num(process.env.RELEASE_GATE_AGENT_DRAFT_SLOW_MAX, 1)
 };
 
 const STREAK_TARGET = Math.max(1, num(process.env.RELEASE_GATE_STREAK_DAYS, 7));
@@ -97,6 +102,7 @@ export function buildDayRow(args: {
   outcomeQaReport: any;
   routeWatchdog: any;
   actionsSummary?: any;
+  latencySummary?: any;
   sinceHours: number;
   thresholds?: Thresholds;
   nowMs?: number;
@@ -161,6 +167,15 @@ export function buildDayRow(args: {
     ? num(actionsByCheck.find(r => String(r?.check ?? "") === "watch_orphaned")?.total)
     : null;
 
+  // Response latency: agent draft speed is graded (the agent's job); effective
+  // customer-facing latency is reported as the ops number (staff/Suggest lever).
+  const latency = args.latencySummary?.summary ?? null;
+  const agentDraftSlow = latency ? num(latency.agentDraft?.slowOver5minCount) : null;
+  const agentDraftMedianMin = latency && latency.agentDraft?.medianMin != null ? num(latency.agentDraft.medianMin) : null;
+  const effectiveMedianMin = latency && latency.effective?.medianMin != null ? num(latency.effective.medianMin) : null;
+  const effectiveUnder5minPct = latency && latency.effective?.under5minPct != null ? num(latency.effective.under5minPct) : null;
+  const effectiveOver1hPct = latency && latency.effective?.over1hPct != null ? num(latency.effective.over1hPct) : null;
+
   const metrics: Record<string, number | null> = {
     toneRespondedPassRate: tonePass,
     toneMissingResponses: toneMissing,
@@ -175,7 +190,12 @@ export function buildDayRow(args: {
     cadenceStalledRecent,
     apptOutcomeMissingRecent,
     draftUnactionedRecent,
-    watchOrphanedTotal
+    watchOrphanedTotal,
+    agentDraftSlowOver5min: agentDraftSlow,
+    agentDraftMedianMin,
+    effectiveResponseMedianMin: effectiveMedianMin,
+    effectiveUnder5minPct,
+    effectiveOver1hPct
   };
 
   const failures: string[] = [];
@@ -210,6 +230,9 @@ export function buildDayRow(args: {
   }
   if (draftUnactionedRecent != null && draftUnactionedRecent > t.draftUnactionedRecentMax) {
     failures.push(`unactioned drafts ${draftUnactionedRecent} > ${t.draftUnactionedRecentMax}`);
+  }
+  if (agentDraftSlow != null && agentDraftSlow > t.agentDraftSlowOver5minMax) {
+    failures.push(`slow agent drafts (>5min) ${agentDraftSlow} > ${t.agentDraftSlowOver5minMax}`);
   }
 
   return {
@@ -268,6 +291,12 @@ function selfTest() {
       { check: "appointment_outcome_missing", total: 14, recent: 0 },
       { check: "draft_unactioned", total: 20, recent: 2 }
     ] } },
+    // Agent drafts fast (0/1 slow); effective latency is ugly (3h median, 64%
+    // over 1h) but must NOT fail the gate — it is the ops/Suggest lever.
+    latencySummary: { summary: {
+      agentDraft: { medianMin: 0.5, p90Min: 17, slowOver5minCount: 0, turnsWithoutRealtimeDraft: 39 },
+      effective: { medianMin: 186, p90Min: 3600, under5minPct: 15, over1hPct: 64 }
+    } },
     sinceHours: 24,
     nowMs: Date.parse("2026-06-20T08:15:00.000Z")
   });
@@ -275,6 +304,28 @@ function selfTest() {
   assertOk(
     cleanDay.metrics.watchOrphanedTotal === 13,
     "watch orphans reported as informational metric, never a failure"
+  );
+  assertOk(
+    cleanDay.metrics.effectiveResponseMedianMin === 186 && cleanDay.metrics.effectiveOver1hPct === 64,
+    "effective latency is reported as a metric but never gates the day"
+  );
+
+  const slowDrafts = buildDayRow({
+    date: "2026-06-20",
+    toneSummary: { totalInboundTurns: 12, respondedTurns: 11, respondedPassRate: 92, missingResponseCount: 1 },
+    charterSummary: { summary: { violationCount: 0, violationRate: 0, repeatCount: 0, byCheck: [] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    latencySummary: { summary: {
+      agentDraft: { medianMin: 8, p90Min: 20, slowOver5minCount: 4, turnsWithoutRealtimeDraft: 2 },
+      effective: { medianMin: 9, p90Min: 25, under5minPct: 40, over1hPct: 5 }
+    } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-06-20T08:15:00.000Z")
+  });
+  assertOk(
+    !slowDrafts.clean && slowDrafts.failures.some(f => f.includes("slow agent drafts")),
+    `slow real-time agent drafts must fail the gate, got: ${slowDrafts.failures.join("; ")}`
   );
 
   const dirtyActions = buildDayRow({
@@ -366,6 +417,7 @@ function main() {
   const charterSummary = readJson(path.join(reportRoot, "voice_charter", "voice_charter_summary.json"));
   const outcomeQaReport = readJson(path.join(reportRoot, "outcome_qa", "outcome_qa_report.json"));
   const actionsSummary = readJson(path.join(reportRoot, "actions_audit", "actions_audit_summary.json"));
+  const latencySummary = readJson(path.join(reportRoot, "response_latency", "response_latency_summary.json"));
   const watchdogPath =
     args.get("--route-watchdog") ||
     process.env.RELEASE_GATE_ROUTE_WATCHDOG_PATH ||
@@ -381,6 +433,7 @@ function main() {
     outcomeQaReport,
     routeWatchdog,
     actionsSummary,
+    latencySummary,
     sinceHours
   });
 
