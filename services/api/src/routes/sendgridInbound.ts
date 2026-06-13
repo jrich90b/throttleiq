@@ -7690,6 +7690,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     ack = withInitialAvailabilityLine(ack);
     ack = await withInitialOffersLine(ack);
 
+    // Start the re-engagement cadence like every other initial-ADF branch — this
+    // early return previously skipped it, so H-D Meta promo offer leads got the
+    // first reply and then nothing (Jason +17162801172 / +17163614796, 2026-06:
+    // followUp/cadence/dialogState all null after the AI's opener).
+    if (
+      !conv.followUpCadence?.status &&
+      !conv.appointment?.bookedEventId &&
+      conv.followUp?.mode !== "manual_handoff" &&
+      conv.followUp?.mode !== "paused_indefinite"
+    ) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+    }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
     const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
