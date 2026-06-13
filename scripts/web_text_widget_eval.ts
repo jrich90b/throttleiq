@@ -334,6 +334,16 @@ cases.push(
     expected: true
   },
   {
+    // Regenerate must recover a stuck widget lead (Mike) with at least an
+    // acknowledgment, never fall through to silence.
+    id: "regenerate_widget_never_leaves_silence_acknowledgment_fallback",
+    actual:
+      regenerateRoute.includes("regenWebTextWidgetAckFallback") &&
+      regenerateRoute.includes("I'll text you right back") &&
+      /\|\|\s*regenWebTextWidgetAckFallback/.test(regenerateRoute),
+    expected: true
+  },
+  {
     id: "llm_widget_sales_parser_schema_distinguishes_requested_and_trade",
     actual:
       llmDraftSource.includes("WEB_TEXT_WIDGET_SALES_LEAD_PARSER_JSON_SCHEMA") &&

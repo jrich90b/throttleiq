@@ -46081,8 +46081,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     message: event.body ?? "",
     context: regenWebTextWidgetSalesContext
   });
+  // Recover any web-widget sales lead that produced no substantive draft
+  // (e.g. Mike +17163686204: used 2013 Street Glide with no posted price ->
+  // silence). Regenerate must never leave a widget lead in dead air either.
+  const regenWebTextWidgetAckFallback =
+    event.provider === "web_widget"
+      ? (() => {
+          const v = regenWebTextWidgetSalesContext?.requestedVehicle ?? conv.inventoryContext ?? {};
+          const label = [String((v as any)?.year ?? "").trim(), String((v as any)?.model ?? "").trim()]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          const lead = label ? `the ${label}` : "that";
+          return `Hi ${conv.lead?.firstName || "there"} — thanks for reaching out about ${lead}. Let me look into that for you and I'll text you right back.`;
+        })()
+      : "";
   const regenWebTextWidgetSalesDraft =
-    regenWebTextWidgetBuyTradeDraft || regenWebTextWidgetRequestedVehicleDraft;
+    regenWebTextWidgetBuyTradeDraft ||
+    regenWebTextWidgetRequestedVehicleDraft ||
+    regenWebTextWidgetAckFallback;
   if (regenWebTextWidgetSalesDraft) {
     applyWebTextWidgetSalesVehicleContext(conv, regenWebTextWidgetSalesContext);
     setConversationClassification(conv, webTextWidgetClassification("sales") as any);
