@@ -42,6 +42,7 @@ type Thresholds = {
   apptOutcomeMissingRecentMax: number;
   draftUnactionedRecentMax: number;
   agentDraftSlowOver5minMax: number;
+  ownedBikeOfferedMax: number;
 };
 
 const DEFAULT_THRESHOLDS: Thresholds = {
@@ -62,7 +63,10 @@ const DEFAULT_THRESHOLDS: Thresholds = {
   // Agent draft speed is graded (real-time webhook drafts that took >5 min are
   // an agent/infra problem). Effective customer-facing latency is reported but
   // NOT graded — it is the Suggest-mode staffing lever, not an agent fault.
-  agentDraftSlowOver5minMax: num(process.env.RELEASE_GATE_AGENT_DRAFT_SLOW_MAX, 1)
+  agentDraftSlowOver5minMax: num(process.env.RELEASE_GATE_AGENT_DRAFT_SLOW_MAX, 1),
+  // Offering the customer's own bike is a zero-tolerance answer-correctness
+  // miss. requested_day_reasked stays reported-only until its precision rises.
+  ownedBikeOfferedMax: num(process.env.RELEASE_GATE_OWNED_BIKE_OFFERED_MAX, 0)
 };
 
 const STREAK_TARGET = Math.max(1, num(process.env.RELEASE_GATE_STREAK_DAYS, 7));
@@ -103,6 +107,7 @@ export function buildDayRow(args: {
   routeWatchdog: any;
   actionsSummary?: any;
   latencySummary?: any;
+  correctnessSummary?: any;
   sinceHours: number;
   thresholds?: Thresholds;
   nowMs?: number;
@@ -167,6 +172,22 @@ export function buildDayRow(args: {
     ? num(actionsByCheck.find(r => String(r?.check ?? "") === "watch_orphaned")?.total)
     : null;
 
+  // Answer correctness: owned-bike-offered is graded (zero-false-positive, the
+  // Todd Herian class); requested-day-reasked is reported until its precision
+  // is higher (some conversational text trips the date parser).
+  const correctnessByCheck: Array<{ check: string; total: number; recent: number }> = Array.isArray(
+    args.correctnessSummary?.summary?.byCheck
+  )
+    ? args.correctnessSummary.summary.byCheck
+    : [];
+  const correctnessRecent = (check: string): number | null => {
+    if (!args.correctnessSummary) return null;
+    const row = correctnessByCheck.find(r => String(r?.check ?? "") === check);
+    return row ? num(row.recent) : 0;
+  };
+  const ownedBikeOfferedRecent = correctnessRecent("owned_bike_offered");
+  const requestedDayReaskedRecent = correctnessRecent("requested_day_reasked");
+
   // Response latency: agent draft speed is graded (the agent's job); effective
   // customer-facing latency is reported as the ops number (staff/Suggest lever).
   const latency = args.latencySummary?.summary ?? null;
@@ -195,7 +216,9 @@ export function buildDayRow(args: {
     agentDraftMedianMin,
     effectiveResponseMedianMin: effectiveMedianMin,
     effectiveUnder5minPct,
-    effectiveOver1hPct
+    effectiveOver1hPct,
+    ownedBikeOfferedRecent,
+    requestedDayReaskedRecent
   };
 
   const failures: string[] = [];
@@ -233,6 +256,9 @@ export function buildDayRow(args: {
   }
   if (agentDraftSlow != null && agentDraftSlow > t.agentDraftSlowOver5minMax) {
     failures.push(`slow agent drafts (>5min) ${agentDraftSlow} > ${t.agentDraftSlowOver5minMax}`);
+  }
+  if (ownedBikeOfferedRecent != null && ownedBikeOfferedRecent > t.ownedBikeOfferedMax) {
+    failures.push(`agent offered the customer's own bike ${ownedBikeOfferedRecent} > ${t.ownedBikeOfferedMax}`);
   }
 
   return {
@@ -297,10 +323,34 @@ function selfTest() {
       agentDraft: { medianMin: 0.5, p90Min: 17, slowOver5minCount: 0, turnsWithoutRealtimeDraft: 39 },
       effective: { medianMin: 186, p90Min: 3600, under5minPct: 15, over1hPct: 64 }
     } },
+    // requested_day_reasked is reported but must NOT gate the day.
+    correctnessSummary: { summary: { byCheck: [
+      { check: "owned_bike_offered", total: 1, recent: 0 },
+      { check: "requested_day_reasked", total: 4, recent: 3 }
+    ] } },
     sinceHours: 24,
     nowMs: Date.parse("2026-06-20T08:15:00.000Z")
   });
   assertOk(cleanDay.clean, `clean day should pass, failures: ${cleanDay.failures.join("; ")}`);
+  assertOk(
+    cleanDay.metrics.requestedDayReaskedRecent === 3,
+    "requested_day_reasked is reported but never gates the day"
+  );
+
+  const ownedBikeDay = buildDayRow({
+    date: "2026-06-20",
+    toneSummary: { totalInboundTurns: 12, respondedTurns: 11, respondedPassRate: 92, missingResponseCount: 1 },
+    charterSummary: { summary: { violationCount: 0, violationRate: 0, repeatCount: 0, byCheck: [] } },
+    outcomeQaReport: { findings: [] },
+    routeWatchdog: { stuckTurns: { rows: [] } },
+    correctnessSummary: { summary: { byCheck: [{ check: "owned_bike_offered", total: 1, recent: 1 }] } },
+    sinceHours: 24,
+    nowMs: Date.parse("2026-06-20T08:15:00.000Z")
+  });
+  assertOk(
+    !ownedBikeDay.clean && ownedBikeDay.failures.some(f => f.includes("own bike")),
+    `offering the customer's own bike must fail the gate, got: ${ownedBikeDay.failures.join("; ")}`
+  );
   assertOk(
     cleanDay.metrics.watchOrphanedTotal === 13,
     "watch orphans reported as informational metric, never a failure"
@@ -418,6 +468,7 @@ function main() {
   const outcomeQaReport = readJson(path.join(reportRoot, "outcome_qa", "outcome_qa_report.json"));
   const actionsSummary = readJson(path.join(reportRoot, "actions_audit", "actions_audit_summary.json"));
   const latencySummary = readJson(path.join(reportRoot, "response_latency", "response_latency_summary.json"));
+  const correctnessSummary = readJson(path.join(reportRoot, "answer_correctness", "answer_correctness_summary.json"));
   const watchdogPath =
     args.get("--route-watchdog") ||
     process.env.RELEASE_GATE_ROUTE_WATCHDOG_PATH ||
@@ -434,6 +485,7 @@ function main() {
     routeWatchdog,
     actionsSummary,
     latencySummary,
+    correctnessSummary,
     sinceHours
   });
 
