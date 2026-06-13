@@ -226,6 +226,7 @@ import {
   parseBookingIntentWithLLM,
   parseAppointmentTimingWithLLM,
   parseCustomerAckActionWithLLM,
+  parseTurnUnderstandingWithLLM,
   parseManualOutboundAppointmentWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
@@ -830,6 +831,82 @@ function appendRouteAuditLine(kind: "outcomes" | "traces", payload: Record<strin
       if (routeAuditWriteErrors <= ROUTE_AUDIT_WRITE_LOG_LIMIT) {
         console.warn(`[route-audit] ${kind} append failed:`, err?.message ?? err);
       }
+    });
+}
+
+// ── Turn Understanding shadow (Phase 1 of comprehension_consolidation_plan) ──
+// Fire-and-forget: runs the LLM understanding pass beside the deterministic
+// extractors and logs disagreements. NEVER touches the reply, conv, or store.
+// Off by default; LLM_TURN_UNDERSTANDING_SHADOW=1 enables the soak.
+let turnUnderstandingShadowQueue: Promise<void> = Promise.resolve();
+function shadowCompareTurnUnderstanding(conv: any, text: string, history: { direction: "in" | "out"; body: string }[]) {
+  if (process.env.LLM_TURN_UNDERSTANDING_SHADOW !== "1") return;
+  const body = String(text ?? "").trim();
+  if (!body) return;
+  // Snapshot the inputs now; the deterministic extractors are pure/sync.
+  const detModels = (() => {
+    try {
+      return selectRequestedAvailabilityModelMentions(body, findMentionedModelCandidates(body)).map(m =>
+        String(m).toLowerCase()
+      );
+    } catch {
+      return [];
+    }
+  })();
+  const detSchedule = (() => {
+    try {
+      const dt = parseRequestedDayTime(body.toLowerCase(), "America/New_York");
+      if (dt) return { day: `${dt.month}/${dt.day}`, hour24: dt.hour24 };
+      const d = parseRequestedDateOnly(body.toLowerCase(), "America/New_York");
+      if (d) return { day: `${d.month}/${d.day}`, hour24: null };
+      return null;
+    } catch {
+      return null;
+    }
+  })();
+  const convId = String(conv?.id ?? "");
+  const leadKey = String(conv?.leadKey ?? "");
+  turnUnderstandingShadowQueue = turnUnderstandingShadowQueue
+    .then(async () => {
+      const parsed = await parseTurnUnderstandingWithLLM({ text: body, history, lead: conv?.lead }).catch(
+        () => null
+      );
+      if (!parsed) return;
+      const llmModels = parsed.requestedModels.map(m => String(m.family).toLowerCase());
+      const llmSchedDay = parsed.requestedSchedule?.dayLabel ?? null;
+      const disagreements: string[] = [];
+      const sameSet = (a: string[], b: string[]) =>
+        a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
+      if (!sameSet(detModels, llmModels)) disagreements.push("models");
+      if (parsed.ownedOrTradeModel) disagreements.push("owned_bike_surfaced");
+      if (!!detSchedule !== !!parsed.requestedSchedule) disagreements.push("schedule_presence");
+      if (!disagreements.length) return;
+      const filePath = path.join(
+        process.env.REPORT_ROOT || path.resolve(process.cwd(), "reports"),
+        "turn_understanding_shadow",
+        `disagreements_${new Date().toISOString().slice(0, 10)}.jsonl`
+      );
+      const line =
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          convId,
+          leadKey,
+          inbound: body.slice(0, 200),
+          disagreements,
+          det: { models: detModels, schedule: detSchedule },
+          llm: {
+            models: llmModels,
+            owned: parsed.ownedOrTradeModel,
+            scheduleDay: llmSchedDay,
+            intent: parsed.primaryIntent,
+            confidence: parsed.confidence
+          }
+        }) + "\n";
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.promises.appendFile(filePath, line, "utf8");
+    })
+    .catch(() => {
+      /* shadow logging must never affect request handling */
     });
 }
 
@@ -51066,6 +51143,9 @@ if (authToken && signature) {
     return res.status(200).type("text/xml").send(twiml);
   }
   appendInbound(conv, event);
+  // Phase 1 shadow: compare the Turn Understanding pass against the
+  // deterministic extractors. Fire-and-forget; never blocks the reply.
+  shadowCompareTurnUnderstanding(conv, event.body ?? "", buildHistory(conv, 10));
   const liveManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (liveManualReconcile.changed) {
     recordRouteOutcome("live", "manual_outbound_reconciled", {
