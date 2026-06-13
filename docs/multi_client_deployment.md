@@ -185,6 +185,27 @@ You can override generated URLs when testing a custom host:
 npm run dealer:smoke -- --app https://<dealer>.leadrider.ai --api https://api.<dealer>.leadrider.ai
 ```
 
+## Per-Dealer Eval Gate (universal vs dealer-pinned)
+
+The eval suite is split into tiers (`scripts/eval_suite.manifest.ts`) so a new
+dealer is gated on shared behavior, not American Harley's data:
+
+- **universal** — shared product behavior every Harley dealer must pass. This is
+  the per-dealer gate: `npm run eval:universal`. As of 2026-06-13 the entire
+  `ci:eval` suite is universal — verified dealer-portable.
+- **dealer:americanharley** — evals pinned to AH's own data/config (none gated
+  today; `web_fallback_rank` is the canonical example). `npm run eval:dealer-americanharley`.
+
+`eval_suite_manifest:eval` runs inside `ci:eval` and **fails the gate** if a
+universal eval hardcodes a dealer-output fact (address, zip, promo domain,
+stock-id) — forcing it to be parameterized or tagged dealer-specific. That keeps
+the suite portable as it grows.
+
+**Rollout protocol for a new dealer:** launch in `suggest` mode (staff review
+every draft; edits feed the learning loop) → run `npm run eval:universal` green
+against the dealer's data → promote to `autopilot` only when that dealer's
+`release_gate` streak (`scripts/release_gate_report.ts`) reaches READY.
+
 ## American Harley Sandbox Setup
 
 American Harley is the live first client and should be used as the read-only canary. To test the repeatable Dealer Setup workflow without touching production vendor settings, seed a sandbox setup record:
