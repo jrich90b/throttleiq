@@ -25,15 +25,18 @@ const watches = [
 const badWatches = watches.filter(
   (w: any) => /held-unit follow-up guard/i.test(String(w?.note ?? "")) || /road glide 3/i.test(String(w?.model ?? ""))
 );
-const pendingDrafts = (conv.messages ?? []).filter(
-  (m: any) => m?.direction === "out" && String(m?.provider ?? "") === "draft_ai" && m?.status !== "sent"
-);
+// Only the fabricated Road Glide 3 draft — leave any other pending draft alone.
+const isBadDraft = (m: any) =>
+  m?.direction === "out" && String(m?.provider ?? "") === "draft_ai" && m?.status !== "sent" && /road glide 3/i.test(String(m?.body ?? ""));
+const badDrafts = (conv.messages ?? []).filter(isBadDraft);
+const emailDraftBad = /road glide 3/i.test(String(conv.emailDraft?.body ?? conv.emailDraft ?? ""));
 
 console.log(JSON.stringify({
   apply: APPLY,
   leadKey,
   badWatches: badWatches.map((w: any) => ({ model: w.model, color: w.color, note: w.note })),
-  pendingDrafts: pendingDrafts.map((m: any) => String(m.body ?? "").slice(0, 70))
+  badDraftsToRemove: badDrafts.map((m: any) => String(m.body ?? "").slice(0, 70)),
+  emailDraftBad
 }, null, 2));
 
 if (APPLY) {
@@ -43,10 +46,11 @@ if (APPLY) {
   conv.inventoryWatches = (Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : []).filter(keep);
   if (conv.inventoryWatch && !keep(conv.inventoryWatch)) delete conv.inventoryWatch;
   if (!conv.inventoryWatches.length) delete conv.inventoryWatches;
-  store.discardPendingDrafts(conv, "scrub_held_unit_overresolution");
+  conv.messages = (conv.messages ?? []).filter((m: any) => !isBadDraft(m));
+  if (emailDraftBad) delete conv.emailDraft;
   store.saveConversation(conv);
   await store.flushConversationStore();
-  console.log(`APPLIED: removed ${badWatches.length} bad watch(es) + discarded ${pendingDrafts.length} pending draft(s)`);
+  console.log(`APPLIED: removed ${badWatches.length} bad watch(es) + ${badDrafts.length} fabricated draft(s) (other drafts preserved)`);
 } else {
   console.log("DRY RUN — set SCRUB_APPLY=1 to apply");
 }
