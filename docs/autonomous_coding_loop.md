@@ -41,6 +41,15 @@ It emits `stop: true` only when **no codeable work remains**. If non-codeable
 items are still open (DocuSign/Stripe live verify, ops cutovers) it stops with a
 reason naming them — those need the user, not an unattended deploy.
 
+DETECT is **eval-aware** so it never re-fixes a ghost: a sweep over a 30-day
+window surfaces replies that predate fixes already shipped. A check whose
+canonical case is pinned by an eval in `ci:eval` is treated as guarded (green
+gate ⇒ current code is correct) and skipped; a check with no recent finding is
+skipped as historical. Both are reported in `skippedSweepChecks`. (2026-06-13:
+the first sweep surfaced `owned_bike_offered` and `requested_day_reasked` — both
+already fixed and eval-guarded, i.e. stale. The loop correctly shipped nothing.)
+Maintain the `GUARDED_CHECK_EVALS` map as new checks gain eval coverage.
+
 Caveat: always set `DATA_DIR` when running audits on the instance, or the
 conversation-store module auto-creates a stray empty store in the repo's
 `data/` dir (gitignored, but tidy it up). Tiebreak among equal-priority sweep

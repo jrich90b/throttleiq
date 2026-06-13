@@ -40,6 +40,7 @@ type SelectorResult = {
   checklistOpenCount: number;
   agentManagerP0P1Count: number;
   backlog: Array<Pick<LoopTask, "id" | "priority" | "title" | "source" | "codeable">>;
+  skippedSweepChecks: string[];
 };
 
 function readText(p: string): string | null {
@@ -140,16 +141,43 @@ function parseAgentManagerTasks(report: AnyObj | null): LoopTask[] {
 }
 
 /**
+ * A sweep check is "guarded" once an eval pins its canonical case in ci:eval —
+ * a green gate then proves the current code handles it, so any remaining
+ * findings are historical replies that predate the fix (Todd Herian 2026-06-13:
+ * owned_bike_offered was already fixed in d9bc78e4 + owned_bike_model_guard:eval,
+ * yet the 30-day sweep still surfaced his pre-fix reply). Map each check to the
+ * eval that guards it; checks with no mapping are genuinely unguarded and still
+ * surface as real candidates.
+ */
+const GUARDED_CHECK_EVALS: Record<string, string> = {
+  owned_bike_offered: "owned_bike_model_guard:eval",
+  requested_day_reasked: "schedule_day_capture:eval"
+};
+
+function ciEvalScriptSet(): Set<string> {
+  const pkg = readJson(path.join(process.cwd(), "package.json"));
+  const chain = String(pkg?.scripts?.["ci:eval"] ?? "");
+  const set = new Set<string>();
+  for (const m of chain.matchAll(/npm run ([\w:-]+)/g)) set.add(m[1]);
+  return set;
+}
+
+/**
  * Continuous-mode fuel: turn production agent-quality audit findings into
  * codeable reply-quality tasks (the Al-Davis class of bug). Reads the
  * deterministic answer_correctness sweep; each graded check with findings
  * becomes one task, carrying a concrete inbound/reply example so the BUILD
  * agent has a reproduction. Recent findings (active regression) rank as P1.
+ *
+ * Skips checks that are (a) already guarded by an eval in ci:eval — presumed
+ * fixed — or (b) purely historical (no recent finding), so the loop never
+ * re-fixes a ghost. Skipped checks are reported for transparency.
  */
-function parseSweepTasks(reportRoot: string): LoopTask[] {
+function parseSweepTasks(reportRoot: string, opts?: { skipped?: string[] }): LoopTask[] {
   const summary = readJson(path.join(reportRoot, "answer_correctness", "answer_correctness_summary.json"));
   const findings = Array.isArray(summary?.findings) ? summary!.findings : [];
   if (!findings.length) return [];
+  const guardingEvals = ciEvalScriptSet();
   const byCheck = new Map<string, { count: number; recent: number; sample: AnyObj }>();
   for (const f of findings) {
     const check = String(f?.check ?? "uncategorized");
@@ -162,6 +190,15 @@ function parseSweepTasks(reportRoot: string): LoopTask[] {
   }
   const tasks: LoopTask[] = [];
   for (const [check, entry] of byCheck) {
+    const guardEval = GUARDED_CHECK_EVALS[check];
+    if (guardEval && guardingEvals.has(guardEval)) {
+      opts?.skipped?.push(`${check} (guarded by ${guardEval})`);
+      continue;
+    }
+    if (entry.recent === 0) {
+      opts?.skipped?.push(`${check} (no recent findings — historical)`);
+      continue;
+    }
     const s = entry.sample ?? {};
     tasks.push({
       id: `sweep:answer_correctness:${check}`,
@@ -208,7 +245,8 @@ function main(): void {
   const checklistMd = readText(checklistPath) ?? "";
   const checklistTasks = parseChecklistTasks(checklistMd);
   const agentManagerTasks = parseAgentManagerTasks(readJson(agentManagerPath));
-  const sweepTasks = parseSweepTasks(reportRoot);
+  const skippedSweepChecks: string[] = [];
+  const sweepTasks = parseSweepTasks(reportRoot, { skipped: skippedSweepChecks });
 
   const all = [...agentManagerTasks, ...sweepTasks, ...checklistTasks];
   const p0p1 = all.filter(t => t.priority === "P0" || t.priority === "P1");
@@ -247,7 +285,8 @@ function main(): void {
       title: t.title,
       source: t.source,
       codeable: t.codeable
-    }))
+    })),
+    skippedSweepChecks
   };
 
   const outDir = path.join(reportRoot, "auto_loop");
