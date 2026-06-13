@@ -48965,7 +48965,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundForTrade = String(lastOutboundBeforeInbound?.body ?? "");
-    const regenMentionedModels = findMentionedModels(String(event.body ?? "").toLowerCase());
+    // Same owned/comparison-bike guard as the live path (Todd Herian).
+    const regenMentionedModels = selectRequestedAvailabilityModelMentions(
+      String(event.body ?? ""),
+      findMentionedModelCandidates(String(event.body ?? ""))
+    );
     const regenTestRideBikeSelection = shouldTreatInboundAsTestRideBikeSelection({
       inboundText: event.body,
       lastOutboundText: lastOutboundForTrade,
@@ -57467,7 +57471,13 @@ if (authToken && signature) {
   const explicitNoCompare = /\b(don't|do not|not)\s+(want|need)?\s*to?\s*compare\b|no compare|not comparing/i.test(
     textLower
   );
-  const mentionedModelsEarly = findMentionedModels(textLower);
+  // Exclude the customer's owned/comparison bike so test-ride routing never
+  // offers a ride on the bike they already own (Todd Herian 2026-06-13:
+  // "compared to my current ultra limited" → "test ride on the Ultra Limited").
+  const mentionedModelsEarly = selectRequestedAvailabilityModelMentions(
+    String(event.body ?? ""),
+    findMentionedModelCandidates(String(event.body ?? ""))
+  );
   const hasModelContext =
     getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
     !!conv.inventoryContext?.model ||
