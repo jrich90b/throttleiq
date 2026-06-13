@@ -286,6 +286,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=agent_manager_report"
   FOLLOWUP_TASK_AUDIT_PATH="$FOLLOWUP_TASK_AUDIT_JSON" npm run agent_manager:report -- --route-watchdog "$WATCHDOG_JSON"
 
+  echo "[feedback-loop] step=turn_understanding_shadow_summary"
+  TU_SHADOW_DIR="$REPORT_ROOT/turn_understanding_shadow" npm run turn_understanding_shadow:summary -- --days 7 || true
+
   echo "[feedback-loop] step=answer_correctness_audit"
   CORRECTNESS_AUDIT_OUT_DIR="$REPORT_ROOT/answer_correctness" npm run answer_correctness:audit -- \
     --store "$CONVERSATIONS_DB_PATH" --since-hours "$AUDIT_SINCE_HOURS" || true
