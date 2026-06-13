@@ -135,7 +135,13 @@ function parseAgentManagerTasks(report: AnyObj | null): LoopTask[] {
     signal: String(t.signal ?? ""),
     recommendedAction: String(t.recommendedAction ?? ""),
     // Routing/tone/voice/evals tasks are code; ops "restore file / confirm path" tasks usually are not.
-    codeable: !/restore|confirm|missing source|env|path/i.test(`${t.title} ${t.recommendedAction}`),
+    // Codeable only when concrete + auto-actionable. Ops/config tasks
+    // (restore/confirm/env/path) and human-judgment tasks (review/recommend/
+    // investigate/audit/monitor) are NOT things the unattended runner should
+    // auto-fix and deploy — they need a person, or a concrete repro first.
+    codeable: !/restore|confirm|missing source|env|path|review|recommend|investigat|consider|audit|monitor|triage|look into/i.test(
+      `${t.title} ${t.recommendedAction}`
+    ),
     evidence: (t.evidence as AnyObj) ?? {}
   }));
 }
