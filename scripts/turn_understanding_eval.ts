@@ -1,0 +1,132 @@
+/**
+ * Turn Understanding parser eval (Phase 0 of the comprehension-consolidation
+ * plan). Live LLM eval pinning every production miss this approach is meant to
+ * make robust: Chuck (multi-model + typo), Todd (owned vs requested bike),
+ * Dominik (event-day commitment), Al Davis (day-part carries the day), and the
+ * "around 10am" approximate time. Run with a real OPENAI key.
+ */
+const apiKey = process.env.OPENAI_API_KEY ?? "";
+if (!apiKey || apiKey.trim().length < 20 || apiKey.trim() === "...") {
+  console.error("OPENAI_API_KEY missing or placeholder; set a real key and re-run.");
+  process.exit(1);
+}
+process.env.LLM_ENABLED = "1";
+process.env.LLM_TURN_UNDERSTANDING_PARSER_ENABLED = "1";
+
+const { parseTurnUnderstandingWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
+
+type Case = {
+  id: string;
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: any;
+  check: (p: any) => string | null; // returns a failure message, or null when ok
+};
+
+const families = (p: any): string[] =>
+  (p?.requestedModels ?? []).map((m: any) => String(m.family ?? "").toLowerCase());
+
+const cases: Case[] = [
+  {
+    id: "chuck_multi_model_typo",
+    text: "I am mostly interested in a Street Glide, but would also like to ride a Street Gide Limited, if that would be possible",
+    check: p => {
+      const fams = families(p);
+      const sgCount = fams.filter(f => f.includes("street glide")).length;
+      if (sgCount < 2 && !(p.requestedModels ?? []).some((m: any) => /limited/i.test(m.trim ?? "")))
+        return `expected two Street Glide requests (one Limited), got ${JSON.stringify(p.requestedModels)}`;
+      if (p.primaryIntent !== "test_ride") return `intent should be test_ride, got ${p.primaryIntent}`;
+      return null;
+    }
+  },
+  {
+    id: "todd_owned_vs_requested",
+    text: "I picked one but you didn't have what I really wanted. As long as it's a roadglide though at least I can see how they handle compared to my current ultra limited",
+    check: p => {
+      const fams = families(p);
+      if (!fams.some(f => f.includes("road glide")))
+        return `requested model should be Road Glide, got ${JSON.stringify(p.requestedModels)}`;
+      if (fams.some(f => f.includes("ultra limited")))
+        return "Ultra Limited (owned) must NOT be a requested model";
+      if (!p.ownedOrTradeModel || !/ultra limited/i.test(p.ownedOrTradeModel.family ?? ""))
+        return `owned bike should be Ultra Limited, got ${JSON.stringify(p.ownedOrTradeModel)}`;
+      return null;
+    }
+  },
+  {
+    id: "dominik_event_day",
+    text: "I signed up online for the June 20th event so it'll be that day",
+    check: p => {
+      if (!p.requestedSchedule) return "expected a requested schedule";
+      if (!/june\s*20/i.test(p.requestedSchedule.dayLabel ?? "")) return `day should be June 20, got ${p.requestedSchedule.dayLabel}`;
+      if (!p.requestedSchedule.isCommitment) return "should be a commitment";
+      return null;
+    }
+  },
+  {
+    id: "al_davis_daypart_carry",
+    text: "Afternoon would be great",
+    history: [
+      { direction: "out", body: "I can have our sales team meet you Saturday. Do mornings or afternoons work better for you?" }
+    ],
+    check: p => {
+      if (!p.requestedSchedule) return "expected a requested schedule";
+      if (!/saturday/i.test(p.requestedSchedule.dayLabel ?? ""))
+        return `day must carry from prior turn (Saturday), got ${p.requestedSchedule.dayLabel}`;
+      if (!/afternoon/i.test(p.requestedSchedule.timeText ?? "")) return `time should be afternoon, got ${p.requestedSchedule.timeText}`;
+      return null;
+    }
+  },
+  {
+    id: "approximate_round_hour",
+    text: "Monday, 15 June around 10am",
+    history: [{ direction: "out", body: "I can line up the test ride. What day and time works best?" }],
+    check: p => {
+      if (!p.requestedSchedule) return "expected a requested schedule";
+      if (!/(june\s*15|15 june|monday)/i.test(p.requestedSchedule.dayLabel ?? "")) return `day should be June 15, got ${p.requestedSchedule.dayLabel}`;
+      if (!/10/.test(p.requestedSchedule.timeText ?? "")) return `time should mention 10, got ${p.requestedSchedule.timeText}`;
+      return null;
+    }
+  },
+  {
+    id: "opt_out",
+    text: "stop texting me please",
+    check: p => (p.flags?.isOptOut ? null : "is_opt_out should be true")
+  },
+  {
+    id: "single_availability",
+    text: "do you have any road glide specials in stock?",
+    check: p => {
+      const fams = families(p);
+      if (!fams.some(f => f.includes("road glide"))) return `should request Road Glide, got ${JSON.stringify(p.requestedModels)}`;
+      if (p.ownedOrTradeModel) return "no owned bike here";
+      return null;
+    }
+  }
+];
+
+let pass = 0;
+const failures: string[] = [];
+for (const c of cases) {
+  const parsed = await parseTurnUnderstandingWithLLM({ text: c.text, history: c.history, lead: c.lead });
+  if (!parsed) {
+    failures.push(`${c.id}: parser returned null`);
+    console.log(`FAIL ${c.id}: null parse`);
+    continue;
+  }
+  const msg = c.check(parsed);
+  if (msg) {
+    failures.push(`${c.id}: ${msg}`);
+    console.log(`FAIL ${c.id}: ${msg}`);
+  } else {
+    pass += 1;
+    console.log(`PASS ${c.id}`);
+  }
+}
+
+console.log(`\nTurn understanding: ${pass}/${cases.length} passed`);
+if (failures.length) {
+  console.error(`\n${failures.length} failures`);
+  process.exit(1);
+}
+console.log("PASS turn understanding eval");

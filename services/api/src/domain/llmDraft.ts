@@ -3903,6 +3903,225 @@ export async function parseCustomerAckActionWithLLM(args: {
   };
 }
 
+// ── Turn Understanding (Phase 0 of docs/comprehension_consolidation_plan.md) ──
+// One typed comprehension pass that will become the single authority every
+// handler reads. SHIPS DARK: defined + eval-gated, not yet wired into routing.
+export type TurnUnderstandingModel = { family: string; trim: string | null; confidence: number };
+export type TurnUnderstandingSchedule = {
+  dayLabel: string | null;
+  timeText: string | null;
+  window: "exact" | "range" | "unknown";
+  isCommitment: boolean;
+  isEvent: boolean;
+};
+export type TurnUnderstandingParse = {
+  requestedModels: TurnUnderstandingModel[];
+  ownedOrTradeModel: { family: string; trim: string | null } | null;
+  requestedSchedule: TurnUnderstandingSchedule | null;
+  primaryIntent: string;
+  flags: {
+    isOptOut: boolean;
+    isWrongNumber: boolean;
+    isComparison: boolean;
+    askedForPhotos: boolean;
+  };
+  confidence: number | null;
+};
+
+const TURN_UNDERSTANDING_PRIMARY_INTENTS = [
+  "test_ride", "pricing", "availability", "scheduling", "trade",
+  "service", "parts", "finance", "smalltalk", "optout", "other"
+];
+
+const TURN_UNDERSTANDING_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["requested_models", "owned_or_trade_model", "requested_schedule", "primary_intent", "flags", "confidence"],
+  properties: {
+    requested_models: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["family", "trim", "confidence"],
+        properties: {
+          family: { type: "string" },
+          trim: { type: "string" },
+          confidence: { type: "number" }
+        }
+      }
+    },
+    // family "" means the customer named no owned/trade bike.
+    owned_or_trade_model: {
+      type: "object",
+      additionalProperties: false,
+      required: ["family", "trim"],
+      properties: { family: { type: "string" }, trim: { type: "string" } }
+    },
+    // day_label "" means no schedule was given.
+    requested_schedule: {
+      type: "object",
+      additionalProperties: false,
+      required: ["day_label", "time_text", "window", "is_commitment", "is_event"],
+      properties: {
+        day_label: { type: "string" },
+        time_text: { type: "string" },
+        window: { type: "string", enum: ["exact", "range", "unknown"] },
+        is_commitment: { type: "boolean" },
+        is_event: { type: "boolean" }
+      }
+    },
+    primary_intent: { type: "string", enum: TURN_UNDERSTANDING_PRIMARY_INTENTS },
+    flags: {
+      type: "object",
+      additionalProperties: false,
+      required: ["is_opt_out", "is_wrong_number", "is_comparison", "asked_for_photos"],
+      properties: {
+        is_opt_out: { type: "boolean" },
+        is_wrong_number: { type: "boolean" },
+        is_comparison: { type: "boolean" },
+        asked_for_photos: { type: "boolean" }
+      }
+    },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseTurnUnderstandingWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: any;
+}): Promise<TurnUnderstandingParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TURN_UNDERSTANDING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const debug = process.env.LLM_TURN_UNDERSTANDING_PARSER_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_TURN_UNDERSTANDING_PARSER_MODEL || "gpt-5-mini";
+  const fallbackModel = process.env.OPENAI_TURN_UNDERSTANDING_PARSER_FALLBACK_MODEL || "";
+  const history = (args.history ?? [])
+    .slice(-10)
+    .map(m => `${m.direction === "in" ? "Customer" : "Agent"}: ${String(m.body ?? "").replace(/\s+/g, " ").trim()}`)
+    .filter(Boolean);
+
+  const examples = [
+    // Chuck Bailey — multi-model, typo. Both bikes are requests.
+    'input: "I am mostly interested in a Street Glide, but would also like to ride a Street Gide Limited" output: {"requested_models":[{"family":"Street Glide","trim":"","confidence":0.95},{"family":"Street Glide","trim":"Limited","confidence":0.92}],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"test_ride","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.94}',
+    // Todd Herian — owned bike vs requested bike. Road Glide wanted, Ultra Limited owned.
+    'input: "I picked one but you didn\'t have what I really wanted. As long as it\'s a roadglide though at least I can see how they handle compared to my current ultra limited" output: {"requested_models":[{"family":"Road Glide","trim":"","confidence":0.9}],"owned_or_trade_model":{"family":"Ultra Limited","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"test_ride","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":true,"asked_for_photos":false},"confidence":0.92}',
+    // Dominik Roehre — event-day commitment, no time.
+    'input: "I signed up online for the June 20th event so it\'ll be that day" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"June 20","time_text":"","window":"unknown","is_commitment":true,"is_event":true},"primary_intent":"scheduling","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.94}',
+    // Al Davis — day-part carries the day from the agent\'s prior message.
+    'input: "Afternoon would be great" history: "Agent: I can have our sales team meet you Saturday. Do mornings or afternoons work better for you?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"Saturday","time_text":"afternoon","window":"range","is_commitment":true,"is_event":false},"primary_intent":"scheduling","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.93}',
+    // Chuck again — concrete day + approximate round-hour time.
+    'input: "Monday, 15 June around 10am" history: "Agent: I can line up the test ride. What day and time works best?" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"June 15","time_text":"around 10am","window":"exact","is_commitment":true,"is_event":false},"primary_intent":"scheduling","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.95}',
+    // Simple availability, single model.
+    'input: "do you have any road glide specials in stock?" output: {"requested_models":[{"family":"Road Glide","trim":"Special","confidence":0.95}],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"availability","flags":{"is_opt_out":false,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.94}',
+    // Opt-out.
+    'input: "stop texting me" output: {"requested_models":[],"owned_or_trade_model":{"family":"","trim":""},"requested_schedule":{"day_label":"","time_text":"","window":"unknown","is_commitment":false,"is_event":false},"primary_intent":"optout","flags":{"is_opt_out":true,"is_wrong_number":false,"is_comparison":false,"asked_for_photos":false},"confidence":0.97}'
+  ];
+
+  const prompt = [
+    "You read ONE customer turn in a Harley-Davidson dealership text conversation and extract structured meaning.",
+    "Return only JSON matching the schema.",
+    "",
+    "Rules:",
+    "- requested_models: bikes the customer WANTS (to ride, buy, see, price). family is the base model (Road Glide, Street Glide, Ultra Limited, Fat Boy, ...); trim is the variant when named (Special, Limited, Ultra, S) else empty string. Multiple bikes => multiple entries. One word forms (roadglide, streetglide) map to the spaced family. Typos (gide->glide) map to the real model.",
+    "- owned_or_trade_model: the bike the customer CURRENTLY OWNS or is TRADING ('my current X', 'compared to my X', 'trading my X', 'I ride a X'). This is NEVER a requested model. family empty string if none.",
+    "- requested_schedule: a day and/or time the customer proposes. day_label is the day they named ('June 15', 'Saturday', 'tomorrow') possibly carried from the agent's last message for a bare day-part reply. time_text is their time phrase verbatim ('around 10am', 'afternoon'). window: exact for a specific time, range for a window/day-part, unknown if no time. is_commitment true when they commit to coming that day (not just asking what's available). is_event true for dealer event/open-house/demo-day signups. day_label empty string if no day given.",
+    "- primary_intent: the single best label. Asking to ride a bike is test_ride. Asking price/payment is pricing. Asking what's in stock is availability. Proposing/confirming a day is scheduling.",
+    "- flags.is_comparison true when the customer compares a wanted bike to their owned bike.",
+    "- confidence 0 to 1.",
+    "",
+    `Known lead interest: ${JSON.stringify({
+      model: args.lead?.vehicle?.model ?? args.lead?.vehicle?.description ?? null,
+      year: args.lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "turn_understanding_parser",
+      schema: TURN_UNDERSTANDING_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 600,
+      debugTag: "llm-turn-understanding-parser",
+      debug
+    });
+
+  const parsed =
+    (await runParse(primaryModel)) ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const cleanTrim = (v: unknown): string | null => {
+    const t = String(v ?? "").trim();
+    return t ? t : null;
+  };
+  const requestedModels: TurnUnderstandingModel[] = Array.isArray(parsed.requested_models)
+    ? parsed.requested_models
+        .map((m: any) => ({
+          family: String(m?.family ?? "").trim(),
+          trim: cleanTrim(m?.trim),
+          confidence:
+            typeof m?.confidence === "number" && Number.isFinite(m.confidence)
+              ? Math.max(0, Math.min(1, m.confidence))
+              : 0.5
+        }))
+        .filter((m: TurnUnderstandingModel) => m.family.length > 0)
+    : [];
+  const ownedFamily = String(parsed.owned_or_trade_model?.family ?? "").trim();
+  const ownedOrTradeModel = ownedFamily
+    ? { family: ownedFamily, trim: cleanTrim(parsed.owned_or_trade_model?.trim) }
+    : null;
+  const schedRaw = parsed.requested_schedule ?? {};
+  const dayLabel = String(schedRaw?.day_label ?? "").trim();
+  const timeText = String(schedRaw?.time_text ?? "").trim();
+  const requestedSchedule: TurnUnderstandingSchedule | null =
+    dayLabel || timeText
+      ? {
+          dayLabel: dayLabel || null,
+          timeText: timeText || null,
+          window: ["exact", "range", "unknown"].includes(String(schedRaw?.window))
+            ? (String(schedRaw?.window) as "exact" | "range" | "unknown")
+            : "unknown",
+          isCommitment: !!schedRaw?.is_commitment,
+          isEvent: !!schedRaw?.is_event
+        }
+      : null;
+  const primaryIntent = TURN_UNDERSTANDING_PRIMARY_INTENTS.includes(String(parsed.primary_intent))
+    ? String(parsed.primary_intent)
+    : "other";
+  const flags = parsed.flags ?? {};
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : null;
+
+  return {
+    requestedModels,
+    ownedOrTradeModel,
+    requestedSchedule,
+    primaryIntent,
+    flags: {
+      isOptOut: !!flags.is_opt_out,
+      isWrongNumber: !!flags.is_wrong_number,
+      isComparison: !!flags.is_comparison,
+      askedForPhotos: !!flags.asked_for_photos
+    },
+    confidence
+  };
+}
+
 export async function parseManualOutboundAppointmentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
