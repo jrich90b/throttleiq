@@ -4989,12 +4989,27 @@ app.post("/public/widget/text-us", async (req, res) => {
         message: event.body ?? "",
         context: salesVehicleContext
       });
+      // A web-widget sales lead must never get silence (Mike +17163686204
+      // 2026-06-13: asked the price of a used 2013 Street Glide with no posted
+      // price; the agent handed off and a staff task waited, but the customer
+      // heard nothing). When nothing substantive is drafted, acknowledge the
+      // request and commit to a follow-up — never guess a price.
+      const widgetAckFallback = (() => {
+        const v = conv.inventoryContext ?? {};
+        const label = [String(v?.year ?? "").trim(), String(v?.model ?? "").trim()]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        const lead = label ? `the ${label}` : "that";
+        return `Hi ${firstName || "there"} — thanks for reaching out about ${lead}. Let me look into that for you and I'll text you right back.`;
+      })();
       const draftText = String(
         buyTradeDraft ||
           requestedVehicleDraft ||
-          (result.handoff?.required ? result.handoff.ack : result.draft ?? "")
+          (result.handoff?.required ? result.handoff.ack : result.draft ?? "") ||
+          widgetAckFallback
       ).trim();
-      if ((result.shouldRespond || buyTradeDraft || requestedVehicleDraft) && draftText) {
+      if (draftText) {
         const evaluateWidgetSalesDraftInvariant = (
           text: string,
           invariantHints?: CustomerReplyDraftInvariantHints

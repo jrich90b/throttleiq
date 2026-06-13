@@ -298,6 +298,20 @@ cases.push(
       widgetRoute.includes("buildWebTextWidgetSalesBuyTradeDraft") &&
       widgetRoute.includes("web_text_widget_sales_buy_trade_draft_created"),
     expected: true
+  },
+  {
+    // Mike +17163686204 (2026-06-13): asked the price of a used 2013 Street
+    // Glide with no posted price; the agent handed off + made a staff task but
+    // published nothing, so the customer got silence. A web-widget sales lead
+    // must always at least acknowledge — never dead air.
+    id: "sales_widget_never_leaves_silence_acknowledgment_fallback",
+    actual:
+      widgetRoute.includes("widgetAckFallback") &&
+      widgetRoute.includes("I'll text you right back") &&
+      widgetRoute.includes("const draftText = String(") &&
+      /\|\|\s*widgetAckFallback/.test(widgetRoute) &&
+      widgetRoute.includes("if (draftText) {"),
+    expected: true
   }
 );
 
