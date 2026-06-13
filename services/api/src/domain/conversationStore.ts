@@ -754,6 +754,8 @@ export type Conversation = {
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */
   staleHandoffNudgedAt?: string;
+  /** Set once when an in-process deal is surfaced as an owner "nudge?" todo, so it is never re-nudged. */
+  inProcessNudgedAt?: string;
   manualContext?: ManualContextState;
   objections?: ObjectionState;
   crm?: { lastLoggedAt?: string; lastLoggedAtByLeadRef?: Record<string, string> };
@@ -4681,6 +4683,63 @@ export function shouldNudgeStaleHandoffLead(
   const minIdleMs = (opts?.minIdleDays ?? 3) * 24 * 60 * 60 * 1000;
   const maxIdleMs = (opts?.maxIdleDays ?? 21) * 24 * 60 * 60 * 1000;
   return idleMs >= minIdleMs && idleMs <= maxIdleMs;
+}
+
+function businessDaysBetween(fromMs: number, toMs: number): number {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return 0;
+  const start = new Date(fromMs);
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(toMs);
+  end.setUTCHours(0, 0, 0, 0);
+  let count = 0;
+  for (let t = start.getTime() + 86_400_000; t <= end.getTime(); t += 86_400_000) {
+    const dow = new Date(t).getUTCDay();
+    if (dow !== 0 && dow !== 6) count += 1;
+  }
+  return count;
+}
+
+/**
+ * A deal actively being worked by a human (finance/credit in process, or a
+ * specific unit held for the buyer). These should stay SILENT — the AI cadence
+ * shouldn't auto-message the customer while staff works the deal (Merton Kreps
+ * +17165503586: HDFS prequalify, finance deal in process). Conservative by
+ * design: misclassifying a lead here would wrongly silence its follow-ups, so it
+ * is reason-based only — `holding_inventory` mode (an inventory WATCH, i.e. a
+ * prospect waiting for stock) is deliberately NOT a deal in process.
+ */
+export function isInProcessDealLead(conv: Conversation): boolean {
+  if (!conv) return false;
+  if (conv.followUpCadence?.kind === "post_sale") return false;
+  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold/.test(
+    String(conv.followUp?.reason ?? "").toLowerCase()
+  );
+}
+
+/**
+ * Once an in-process deal has been quiet for N business days (no customer reply,
+ * no staff outbound, no open todo), the OWNER — not the customer — gets a single
+ * "nudge?" task to approve. Never auto-sends. Pure + dedupe-marked.
+ */
+export function shouldNudgeInProcessDeal(
+  conv: Conversation,
+  hasOpenTodo: boolean,
+  now: Date = new Date(),
+  opts?: { minIdleBusinessDays?: number }
+): boolean {
+  if (!conv || hasOpenTodo) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  if (conv.inProcessNudgedAt) return false;
+  if (!isInProcessDealLead(conv)) return false;
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  if (!messages.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  let lastMs = NaN;
+  for (const m of messages) {
+    const t = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(t) && (!Number.isFinite(lastMs) || t > lastMs)) lastMs = t;
+  }
+  if (!Number.isFinite(lastMs)) return false;
+  return businessDaysBetween(lastMs, now.getTime()) >= (opts?.minIdleBusinessDays ?? 3);
 }
 
 export function listOpenTodos(): TodoTask[] {

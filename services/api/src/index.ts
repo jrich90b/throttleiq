@@ -587,6 +587,8 @@ import {
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
   shouldNudgeStaleHandoffLead,
+  isInProcessDealLead,
+  shouldNudgeInProcessDeal,
   addInternalQuestion,
   listOpenQuestions,
   markQuestionDone,
@@ -26397,6 +26399,53 @@ async function processDueFollowUpsUnlocked() {
         reason: handoffReason,
         idleDays
       });
+    }
+  }
+
+  // In-process deals stay silent: pause the customer cadence so it doesn't
+  // auto-message while staff works the deal, and once it's gone quiet surface
+  // the OWNER (not the customer) a single "nudge?" todo to approve — no
+  // auto-send (Merton Kreps: finance deal in process). Definition is
+  // conservative (isInProcessDealLead) to avoid silencing leads that shouldn't be.
+  for (const conv of convs) {
+    if (!isInProcessDealLead(conv)) continue;
+    if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) continue;
+    const cad = conv.followUpCadence;
+    if (cad && cad.status === "active" && cad.kind !== "post_sale") {
+      const pausedMs = cad.pausedUntil ? Date.parse(cad.pausedUntil) : NaN;
+      const pausedFarEnough = Number.isFinite(pausedMs) && pausedMs > now.getTime() + 12 * 86_400_000;
+      if (!pausedFarEnough) {
+        pauseFollowUpCadence(conv, new Date(now.getTime() + 14 * 86_400_000).toISOString(), "in_process_silent");
+        saveConversation(conv);
+      }
+    }
+    if (shouldNudgeInProcessDeal(conv, convIdsWithOpenTodo.has(conv.id), now)) {
+      let lastMs = 0;
+      for (const m of conv.messages ?? []) {
+        const t = Date.parse(String(m?.at ?? ""));
+        if (Number.isFinite(t) && t > lastMs) lastMs = t;
+      }
+      const since = lastMs ? new Date(lastMs).toISOString().slice(0, 10) : "recently";
+      const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+      const dealReason = String(conv.followUp?.reason ?? "deal in process").replace(/_/g, " ");
+      const todo = addTodo(
+        conv,
+        "call",
+        `Nudge ${who}? Deal in process (${dealReason}), quiet since ${since} — your call whether/when to follow up.`,
+        undefined,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      if (todo) {
+        conv.inProcessNudgedAt = now.toISOString();
+        saveConversation(conv);
+        recordRouteOutcome("manual", "in_process_deal_nudge_todo", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          reason: dealReason
+        });
+      }
     }
   }
 
