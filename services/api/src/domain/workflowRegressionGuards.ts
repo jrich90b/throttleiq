@@ -526,8 +526,11 @@ export function isShortAckNoReplyText(textRaw: string | null | undefined): boole
   if (isWorkflowEmojiOnlyText(t)) return true;
   if (t.length > 60) return false;
   if (/[?]/.test(t)) return false;
+  // Day-part replies are scheduling language, not sign-offs: "Afternoon would
+  // be great" (Al Davis 2026-06-06) matched "great" here and the turn was
+  // silently dropped, so the Saturday-afternoon booking never happened.
   if (
-    /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch)\b/i.test(
+    /\b(price|pricing|payment|monthly|apr|term|down payment|trade|trade in|service|parts|apparel|available|availability|in stock|stock|test ride|appointment|schedule|call|video|photos?|email|watch|morning|afternoon|evening)\b/i.test(
       t
     )
   ) {
@@ -1520,6 +1523,179 @@ export function resolveRequestedScheduleWindowMode(textRaw: string | null | unde
   if (/\b(?:free|available)?\s*all\s+day\b/.test(text)) return "any_time";
   if (/\b(any\s*time|anytime)\b/.test(text)) return "any_time";
   return "none";
+}
+
+export type DayPartOnlyScheduleReplyParse = {
+  dayPart: "morning" | "afternoon" | "evening";
+  variant: "early" | "mid" | "late" | null;
+  windowLabel: string;
+  startHour24: number;
+  startMinute: number;
+  endHour24: number;
+  endMinute: number;
+};
+
+const DAY_PART_ONLY_SCHEDULE_WINDOWS: Record<
+  string,
+  { startHour24: number; startMinute: number; endHour24: number; endMinute: number }
+> = {
+  morning: { startHour24: 9, startMinute: 0, endHour24: 12, endMinute: 0 },
+  "early morning": { startHour24: 9, startMinute: 0, endHour24: 10, endMinute: 30 },
+  "mid morning": { startHour24: 9, startMinute: 30, endHour24: 11, endMinute: 30 },
+  "late morning": { startHour24: 10, startMinute: 30, endHour24: 12, endMinute: 0 },
+  afternoon: { startHour24: 12, startMinute: 0, endHour24: 17, endMinute: 0 },
+  "early afternoon": { startHour24: 12, startMinute: 0, endHour24: 14, endMinute: 0 },
+  "mid afternoon": { startHour24: 13, startMinute: 30, endHour24: 15, endMinute: 30 },
+  "late afternoon": { startHour24: 15, startMinute: 0, endHour24: 17, endMinute: 0 },
+  evening: { startHour24: 17, startMinute: 0, endHour24: 23, endMinute: 59 },
+  "early evening": { startHour24: 17, startMinute: 0, endHour24: 19, endMinute: 0 },
+  "mid evening": { startHour24: 17, startMinute: 30, endHour24: 20, endMinute: 0 },
+  "late evening": { startHour24: 19, startMinute: 0, endHour24: 23, endMinute: 59 }
+};
+
+/**
+ * A bare day-part reply ("Afternoon would be great") after we offered a day
+ * carries no day token and no clock time, so parseRequestedDayTime returns
+ * null and no slots get offered (Al Davis +17163059906, 2026-06-06). This
+ * parser owns ONLY that shape: a day-part with no day, date, time, or
+ * competing intent in the message.
+ */
+export function parseDayPartOnlyScheduleReply(
+  textRaw: string | null | undefined
+): DayPartOnlyScheduleReplyParse | null {
+  const text = String(textRaw ?? "")
+    .toLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length > 80) return null;
+  if (/\d/.test(text)) return null;
+  if (dayTokenPattern().test(text)) return null;
+  // "tonight" pins the day to today, which belongs to the existing day+part path.
+  if (/\b(tonight|tonite|weekend|noon|midday)\b/.test(text)) return null;
+  if (
+    /\b(call me|give me a call|price|pricing|payment|payments|trade|inventory|stock|available|availability|photo|photos|video|address|finance|financing|monthly|apr|service|parts)\b/.test(
+      text
+    )
+  ) {
+    return null;
+  }
+  const matches = Array.from(text.matchAll(/\b(?:(early|mid|late)[\s-]+)?(morning|afternoon|evening)s?\b/g));
+  if (!matches.length) return null;
+  const candidates: Array<{
+    dayPart: "morning" | "afternoon" | "evening";
+    variant: "early" | "mid" | "late" | null;
+    positive: boolean;
+  }> = [];
+  for (const match of matches) {
+    const idx = match.index ?? 0;
+    const before = text.slice(Math.max(0, idx - 24), idx);
+    const after = text.slice(idx + match[0].length, idx + match[0].length + 28);
+    const negatedBefore =
+      /\b(?:can'?t|cannot|can not|won'?t|not|no|don'?t|do not|doesn'?t|except|rather not)\s+(?:do\s+|in\s+the\s+|the\s+|an?\s+)?$/.test(
+        before
+      ) || /\b(?:i|we)\s+work(?:ing)?\s+(?:in\s+the\s+|the\s+)?$/.test(before);
+    const negatedAfter =
+      /^\s*(?:doesn'?t|don'?t|won'?t|isn'?t|aren'?t|no\s+good|not\b|won'?t\s+work)/.test(after);
+    if (negatedBefore || negatedAfter) continue;
+    const positive =
+      /^\s*(?:would|could|should|will|all|usually|prob(?:ably)?)?\s*(?:work(?:s)?\b|sound(?:s)?\s+(?:good|great|perfect)|(?:would\s+|will\s+)?be\s+(?:great|good|perfect|fine|better|best|ideal)|is\s+(?:great|good|perfect|fine|better|best|ideal)|are\s+(?:better|best|good|great|fine|ideal))/.test(
+        after
+      ) || /\b(?:prefer|how about|maybe|let'?s do|let'?s say|i'?d say|go with)\s*(?:an?\s+|the\s+)?$/.test(before);
+    candidates.push({
+      dayPart: match[2] as "morning" | "afternoon" | "evening",
+      variant: (match[1] as "early" | "mid" | "late" | undefined) ?? null,
+      positive
+    });
+  }
+  if (!candidates.length) return null;
+  const positives = candidates.filter(c => c.positive);
+  const pool = positives.length ? positives : candidates;
+  // Two different day-parts with no preference cue ("morning or afternoon")
+  // is ambiguous; let the normal flow ask.
+  if (new Set(pool.map(c => c.dayPart)).size > 1) return null;
+  const pick = pool[pool.length - 1];
+  const windowLabel = pick.variant ? `${pick.variant} ${pick.dayPart}` : pick.dayPart;
+  const window =
+    DAY_PART_ONLY_SCHEDULE_WINDOWS[windowLabel] ?? DAY_PART_ONLY_SCHEDULE_WINDOWS[pick.dayPart];
+  return {
+    dayPart: pick.dayPart,
+    variant: pick.variant,
+    windowLabel,
+    ...window
+  };
+}
+
+const SCHEDULE_OFFER_MONTH_LABELS: Record<string, string> = {
+  jan: "January", feb: "February", mar: "March", apr: "April", may: "May", jun: "June",
+  jul: "July", aug: "August", sep: "September", oct: "October", nov: "November", dec: "December"
+};
+
+/**
+ * The specific day our most recent outbound schedule message offered
+ * ("...meet you Saturday. Do mornings or afternoons work better?"). Returns a
+ * label parseRequestedDayTime understands ("Saturday", "June 20", "6/20").
+ * "today"/"tomorrow" are relative to when the outbound was sent and may be
+ * stale by reply time, so they are deliberately not carried.
+ */
+export function extractOfferedScheduleDayFromOutboundText(
+  textRaw: string | null | undefined
+): string | null {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const scheduleCue =
+    /\b(?:meet you|meet up|come (?:in|by|down)|stop (?:in|by)|swing by|see you|visit|appointment|appt|schedule|test ride|demo ride|set (?:up )?a time|what time|time works|works? (?:best|better|for you)|lock (?:in|it in)|book|mornings? or afternoons?)\b/;
+  if (!scheduleCue.test(text)) return null;
+  const monthDate = text.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/
+  );
+  if (monthDate) {
+    const month = SCHEDULE_OFFER_MONTH_LABELS[monthDate[1].slice(0, 3)];
+    if (month) return `${month} ${monthDate[2]}`;
+  }
+  const slashDate = text.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(?:\d{2}|\d{4}))?\b/);
+  if (slashDate) return `${slashDate[1]}/${slashDate[2]}`;
+  const weekday = text.match(
+    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/
+  );
+  if (weekday) return normalizeDayToken(weekday[1]);
+  return null;
+}
+
+const DAY_PART_ONLY_SCHEDULE_DIALOG_STATES = new Set([
+  "schedule_offer_sent",
+  "schedule_request",
+  "test_ride_offer_sent"
+]);
+
+export type DayPartOnlyScheduleResolution = {
+  dayLabel: string;
+  parse: DayPartOnlyScheduleReplyParse;
+  /** Human label for replies/todos, e.g. "Saturday afternoon". */
+  windowLabel: string;
+  /** Text parseRequestedDayTime can pin to a concrete date, e.g. "Saturday at 12:00pm". */
+  requestedText: string;
+};
+
+export function resolveDayPartOnlyScheduleReply(args: {
+  inboundText: string | null | undefined;
+  lastOutboundText: string | null | undefined;
+  dialogState: string | null | undefined;
+}): DayPartOnlyScheduleResolution | null {
+  const state = String(args.dialogState ?? "").trim().toLowerCase();
+  if (!DAY_PART_ONLY_SCHEDULE_DIALOG_STATES.has(state)) return null;
+  const parse = parseDayPartOnlyScheduleReply(args.inboundText);
+  if (!parse) return null;
+  const dayLabel = extractOfferedScheduleDayFromOutboundText(args.lastOutboundText);
+  if (!dayLabel) return null;
+  const hour12 = parse.startHour24 % 12 === 0 ? 12 : parse.startHour24 % 12;
+  const meridiem = parse.startHour24 >= 12 ? "pm" : "am";
+  return {
+    dayLabel,
+    parse,
+    windowLabel: `${dayLabel} ${parse.windowLabel}`,
+    requestedText: `${dayLabel} at ${hour12}:${String(parse.startMinute).padStart(2, "0")}${meridiem}`
+  };
 }
 
 export function buildHumanModeSchedulingDraft(args: {

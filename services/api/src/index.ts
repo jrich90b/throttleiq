@@ -534,6 +534,7 @@ import {
   isVisitPlanContextNoteText,
   inferAcceptedScheduleDayFromReplyText,
   pickCatalogModelLabelFromText,
+  resolveDayPartOnlyScheduleReply,
   resolveRequestedScheduleWindowMode,
   selectRequestedAvailabilityModelMentions,
   shouldClearPickupStateForSchedulingReply,
@@ -17591,6 +17592,46 @@ function hasRequestedScheduleWindowText(text: string | null | undefined): boolea
   return resolveRequestedScheduleWindowMode(text) !== "none";
 }
 
+/**
+ * Slots for a bare day-part reply resolved against the day our last outbound
+ * offered (Al Davis 2026-06-06: "Afternoon would be great" after a Saturday
+ * offer must search Saturday 12-5, not return nothing). calendarChecked=false
+ * means the calendar was unreachable and the caller must fall back to a soft
+ * appointment + staff todo instead of re-asking the customer.
+ */
+async function findDayPartOnlyScheduleSlots(args: {
+  conv: any;
+  resolution: NonNullable<ReturnType<typeof resolveDayPartOnlyScheduleReply>>;
+  appointmentType: string;
+}): Promise<{ slots: any[]; calendarChecked: boolean }> {
+  let timezone = "America/New_York";
+  try {
+    const cfg = await getSchedulerConfigHot();
+    timezone = cfg.timezone || timezone;
+  } catch (e: any) {
+    console.log("[scheduler] day-part window config load failed", e?.message ?? e);
+    return { slots: [], calendarChecked: false };
+  }
+  const requested = parseRequestedDayTime(args.resolution.requestedText, timezone);
+  if (!requested) return { slots: [], calendarChecked: false };
+  try {
+    const slots = await findScheduleSlotsForRequestedWindow({
+      conv: args.conv,
+      requested,
+      text: args.resolution.windowLabel,
+      appointmentType: args.appointmentType,
+      windowEndLocal: {
+        hour24: args.resolution.parse.endHour24,
+        minute: args.resolution.parse.endMinute
+      }
+    });
+    return { slots, calendarChecked: true };
+  } catch (e: any) {
+    console.log("[scheduler] day-part window slot lookup failed", e?.message ?? e);
+    return { slots: [], calendarChecked: false };
+  }
+}
+
 async function findScheduleSlotsForRequestedDay(args: {
   conv: any;
   dayInfo: { day: string; date: Date };
@@ -17655,6 +17696,8 @@ async function findScheduleSlotsForRequestedWindow(args: {
   requested: NonNullable<ReturnType<typeof parseRequestedDayTime>>;
   text: string | null | undefined;
   appointmentType: string;
+  /** Caps slot starts at a local time on the requested day (day-part windows). */
+  windowEndLocal?: { hour24: number; minute: number };
 }): Promise<any[]> {
   if (!hasRequestedScheduleWindowText(args.text)) return [];
   const cfg = await getSchedulerConfigHot();
@@ -17688,6 +17731,15 @@ async function findScheduleSlotsForRequestedWindow(args: {
   if (!sameDayPool.length) return [];
 
   const requestedStartUtc = localPartsToUtcDate(cfg.timezone, args.requested);
+  const windowEndUtc = args.windowEndLocal
+    ? localPartsToUtcDate(cfg.timezone, {
+        year: args.requested.year,
+        month: args.requested.month,
+        day: args.requested.day,
+        hour24: args.windowEndLocal.hour24,
+        minute: args.windowEndLocal.minute
+      })
+    : null;
   const windowMode = resolveRequestedScheduleWindowMode(args.text);
   const isBefore = windowMode === "before";
   const isAnyTime = windowMode === "any_time";
@@ -17705,6 +17757,7 @@ async function findScheduleSlotsForRequestedWindow(args: {
       .flatMap(d => d.candidates)
       .filter(c => {
         if (expanded.some(b => c.start < b.end && b.start < c.end)) return false;
+        if (windowEndUtc && c.start.getTime() > windowEndUtc.getTime()) return false;
         if (isAnyTime) return true;
         if (isBefore) return c.start.getTime() <= requestedStartUtc.getTime();
         return c.start.getTime() >= requestedStartUtc.getTime();
@@ -48400,6 +48453,86 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: asksCost
     });
   }
+  // Same bare day-part handling as the live path (Al Davis 2026-06-06):
+  // "Afternoon would be great" after a Saturday offer resolves to
+  // Saturday-afternoon slots before the status-update route can bounce a
+  // "what time works?" question back.
+  const regenDayPartOnlySchedule =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !conv.appointment?.bookedEventId &&
+    !regenParserExplicitCallbackRequest &&
+    !regenParserPricingIntent &&
+    !regenParserAvailabilityIntent
+      ? resolveDayPartOnlyScheduleReply({
+          inboundText: event.body ?? "",
+          lastOutboundText: regenLastOutboundForActionText,
+          dialogState: getDialogState(conv)
+        })
+      : null;
+  if (regenDayPartOnlySchedule) {
+    const regenDayPartAppointmentType = isTestRideDialogState(getDialogState(conv))
+      ? "test_ride"
+      : "inventory_visit";
+    const regenDayPartLookup = await findDayPartOnlyScheduleSlots({
+      conv,
+      resolution: regenDayPartOnlySchedule,
+      appointmentType: regenDayPartAppointmentType
+    });
+    const regenDayPartSlotReply = buildRequestedDaySlotReply(regenDayPartLookup.slots);
+    if (regenDayPartSlotReply) {
+      setLastSuggestedSlots(conv, regenDayPartLookup.slots);
+      setDialogState(
+        conv,
+        regenDayPartAppointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent"
+      );
+      recordRouteOutcome("regen", "day_part_only_schedule_slots", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        dayLabel: regenDayPartOnlySchedule.dayLabel,
+        dayPart: regenDayPartOnlySchedule.parse.windowLabel,
+        slotCount: regenDayPartLookup.slots.length
+      });
+      return respondWithSmsRegeneratedDraft(`Sounds good. ${regenDayPartSlotReply}`, undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    setRequestedTime(conv, {
+      day: regenDayPartOnlySchedule.dayLabel,
+      timeText: regenDayPartOnlySchedule.windowLabel
+    });
+    reanchorCadenceForCommittedDay(conv, regenDayPartOnlySchedule.dayLabel);
+    addTodo(
+      conv,
+      "note",
+      `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} wants ${
+        regenDayPartOnlySchedule.windowLabel
+      } - soft appointment, confirm exact time and prep.`,
+      event.providerMessageId,
+      undefined,
+      undefined,
+      "followup"
+    );
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "day_part_only_schedule_soft_appointment", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      dayLabel: regenDayPartOnlySchedule.dayLabel,
+      dayPart: regenDayPartOnlySchedule.parse.windowLabel,
+      calendarChecked: regenDayPartLookup.calendarChecked
+    });
+    return respondWithSmsRegeneratedDraft(
+      `Sounds good — ${regenDayPartOnlySchedule.windowLabel} works. I’ll get a time locked in on our end and text you to confirm.`,
+      undefined,
+      {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      }
+    );
+  }
   const regenScheduleContextStatusUpdate =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -54379,6 +54512,70 @@ if (authToken && signature) {
     logRouteOutcome("short_ack_no_reply");
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  // Bare day-part reply in a schedule context inherits the day from our last
+  // outbound offer (Al Davis 2026-06-06: "Afternoon would be great" after a
+  // Saturday offer must produce Saturday-afternoon slots, never silence or a
+  // bounced question).
+  const dayPartOnlySchedule =
+    event.provider === "twilio" && schedulingAllowed && !conv.appointment?.bookedEventId
+      ? resolveDayPartOnlyScheduleReply({
+          inboundText: event.body ?? "",
+          lastOutboundText,
+          dialogState: getDialogState(conv)
+        })
+      : null;
+  if (dayPartOnlySchedule) {
+    const dayPartAppointmentType = isTestRideDialogState(getDialogState(conv))
+      ? "test_ride"
+      : "inventory_visit";
+    const dayPartLookup = await findDayPartOnlyScheduleSlots({
+      conv,
+      resolution: dayPartOnlySchedule,
+      appointmentType: dayPartAppointmentType
+    });
+    const dayPartSlotReply = buildRequestedDaySlotReply(dayPartLookup.slots);
+    if (dayPartSlotReply) {
+      setLastSuggestedSlots(conv, dayPartLookup.slots);
+      setDialogState(
+        conv,
+        dayPartAppointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent"
+      );
+      logRouteOutcome("day_part_only_schedule_slots", {
+        dayLabel: dayPartOnlySchedule.dayLabel,
+        dayPart: dayPartOnlySchedule.parse.windowLabel,
+        slotCount: dayPartLookup.slots.length
+      });
+      return publishLiveTwilioReply(`Sounds good. ${dayPartSlotReply}`, {
+        turnSchedulingIntent: true
+      });
+    }
+    setRequestedTime(conv, {
+      day: dayPartOnlySchedule.dayLabel,
+      timeText: dayPartOnlySchedule.windowLabel
+    });
+    reanchorCadenceForCommittedDay(conv, dayPartOnlySchedule.dayLabel);
+    addTodo(
+      conv,
+      "note",
+      `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} wants ${
+        dayPartOnlySchedule.windowLabel
+      } - soft appointment, confirm exact time and prep.`,
+      event.providerMessageId,
+      undefined,
+      undefined,
+      "followup"
+    );
+    setDialogState(conv, "schedule_request");
+    logRouteOutcome("day_part_only_schedule_soft_appointment", {
+      dayLabel: dayPartOnlySchedule.dayLabel,
+      dayPart: dayPartOnlySchedule.parse.windowLabel,
+      calendarChecked: dayPartLookup.calendarChecked
+    });
+    return publishLiveTwilioReply(
+      `Sounds good — ${dayPartOnlySchedule.windowLabel} works. I’ll get a time locked in on our end and text you to confirm.`,
+      { turnSchedulingIntent: true }
+    );
   }
   const highConfidenceFinanceTurn = false;
   const highConfidenceSchedulingTurn = false;
