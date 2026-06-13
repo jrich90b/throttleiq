@@ -46,6 +46,10 @@ function env(name: string): string {
 const DEFAULT_TIMEOUT_MS = Number(process.env.TLP_TIMEOUT_MS ?? 45_000);
 const SHORT_TIMEOUT_MS = Number(process.env.TLP_SHORT_TIMEOUT_MS ?? 15_000);
 const NAV_TIMEOUT_MS = Number(process.env.TLP_NAV_TIMEOUT_MS ?? 60_000);
+// Browser launch had no explicit timeout, so a stuck launch hung on Playwright's
+// default (~180s observed in prod) before failing. Cap it so a bad launch fails
+// fast and the TLP job can retry/abort instead of blocking the queue.
+const LAUNCH_TIMEOUT_MS = Number(process.env.TLP_LAUNCH_TIMEOUT_MS ?? 90_000);
 const DEBUG = process.env.TLP_DEBUG !== "0";
 const DEBUG_DIR = process.env.TLP_DEBUG_DIR ?? "/tmp/tlp-debug";
 const TLP_VIEWPORT = { width: 1440, height: 900 };
@@ -132,6 +136,7 @@ async function createTlpBrowserSession(): Promise<TlpBrowserSession> {
     const userDataDir = await mkdtemp(join(profileRoot, "playwright-cdp-"));
     const context = await chromium.launchPersistentContext(userDataDir, {
       headless,
+      timeout: LAUNCH_TIMEOUT_MS,
       viewport: TLP_VIEWPORT,
       userAgent: TLP_USER_AGENT,
       args: [`--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${port}`]
@@ -146,7 +151,7 @@ async function createTlpBrowserSession(): Promise<TlpBrowserSession> {
     };
   }
 
-  const browser = await chromium.launch({ headless });
+  const browser = await chromium.launch({ headless, timeout: LAUNCH_TIMEOUT_MS });
   const context = await browser.newContext({
     viewport: TLP_VIEWPORT,
     userAgent: TLP_USER_AGENT
