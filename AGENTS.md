@@ -14,6 +14,13 @@ This project uses a **hybrid** approach with a **parser-first requirement for ne
 - Never comprehend free-form customer language or compose a customer reply with regex.
 - Twilio comprehension debt is ratcheted by `twilio_comprehension_debt:eval` (down-only): migrate an `isXText` guard to the parser to lower the baseline; never raise it to land a new regex.
 
+## Migrate-vs-Keep: the fail-direction test (Joe, 2026-06-14)
+Not every `isXText` regex is comprehension debt. Before retiring one for the ratchet, decide by its FAILURE DIRECTION:
+- Retiring it makes the system fail toward replying / not-closing / creating the side-effect (reply routers, invariant guards, anti-suppression, watch/notification creation) → it is a safety/side-effect/invariant gate → **KEEP it deterministic** and annotate it as a deliberate gate.
+- Retiring it makes the system fail toward a wrong or silent customer-facing answer it was composing/routing → it is comprehension → **move it to the parser** + add a replay fixture.
+- A "keep" verdict is valid; never force a migration to score ratchet points.
+- Migrated (fail-safe reply routers): `isScheduleContextStatusUpdateText`, `isDealerLocationQuestionText`, `isExplicitCustomerCallbackRequestText`, `isImmediateChatCallbackAvailabilityText`. Kept (fail-unsafe): `isWatchConfirmationIntentText` (watch creation), `hasCompetingActiveIntentText` (premature close), the regen callback no-response anti-suppression backstop.
+
 ## Parser-First Rule (New States)
 When adding a new customer state/disposition, do **not** start with standalone regex routing.
 
@@ -33,6 +40,13 @@ Required order:
 Parser-first candidates called out from production misses:
 - Hiring / careers / employment inquiries (for example “Who is the hiring manager?”, “Are you hiring?”, “Where do I send a resume?”, “I applied online, who handles that?”) should be routed through a typed parser + shared handler, not regex-only.
 - Accessory / customization / demo-status requests (for example handlebars, heated grips/seat, stereo/speakers, pipes/exhaust) should remain parser-first with deterministic fallback only.
+
+## Route Decision Centralization (cluster decisions live in routeStateReducer)
+A turn's route among competing intents in a cluster (e.g. scheduling: arrival-ack vs visit-commitment vs tentative vs decline vs appointment-status vs immediate-arrival vs purchase-delivery vs accept-tentative vs ask-for-times) is a PURE decision computed by a typed function in `services/api/src/domain/routeStateReducer.ts` (e.g. `decideSchedulingTurn`, `buildRouteDecisionSnapshot`) — NOT inline `parser || (fallback && regex)` chains whose precedence is implicit in block order (the soil the Todd Herian bug grew in).
+- Compute the decision once; the handler switches on the returned `kind`. Arm bodies (calendar checks, todos, cadence, replies) stay in `index.ts`.
+- Apply the SAME decision in BOTH `/webhooks/twilio` and `/conversations/:id/regenerate` — one function = no live/regen precedence drift.
+- Pin every centralized decision with a deterministic decision-table eval in `scripts/` (e.g. `scheduling_turn_decision_eval.ts`) wired into `ci:eval`.
+- A new cluster arm = extend the reducer function + its decision table; do not add a new inline precedence gate.
 
 ## Fallback Policy
 - Low-confidence parser, disabled LLM, or orchestrator failure must not fall back to regex-written semantic customer-facing answers.

@@ -1,6 +1,28 @@
 # Comprehension Consolidation Plan
 
-**Author:** generated 2026-06-13 · **Status:** proposed · **Owner:** Joe
+**Author:** generated 2026-06-13 · **Status:** in progress (2026-06-14) · **Owner:** Joe
+
+## Progress & how it's actually being executed (2026-06-14)
+
+This plan's endgame — one `parseTurnUnderstandingWithLLM` authority — is the
+consolidation target. The incremental path being executed toward it (shipped,
+eval-gated, in prod under `suggest` mode):
+
+- **Burndown** of comprehension regex via the `twilio_comprehension_debt:eval` ratchet
+  (42 → 38 so far), governed by the **fail-direction test** (AGENTS.md "Migrate-vs-Keep:
+  the fail-direction test"): migrate only fail-safe reply-routers; KEEP fail-unsafe
+  safety/side-effect/invariant gates.
+- **Route-decision centralization** — a complementary lever this doc originally omitted.
+  Cluster route precedence is lifted into pure `routeStateReducer` functions
+  (`decideSchedulingTurn`, 2026-06-14) with decision-table evals, applied in both the
+  live and regenerate paths (AGENTS.md "Route Decision Centralization"). This de-tangles
+  inline `parser||regex` AND de-risks the parser consolidation below (single consumer).
+- **Parser consolidation** (this doc's `TurnUnderstanding` pass) is the next big lever —
+  evidence-led via a shadow compare, NOT a fast-follow (it changes LLM behavior).
+
+Per-cluster sequence: centralize the route decision → burn down its fail-safe fallbacks →
+consolidate its parsers (shadow-compared). First cluster done: scheduling/arrival/
+visit-commitment. Next candidate: finance/pricing.
 
 ## The problem, stated precisely
 
