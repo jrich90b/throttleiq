@@ -3709,18 +3709,20 @@ export function startFollowUpCadence(
   scheduleSave();
 }
 
-// Deterministic cadence-shape selection from the lead's STRUCTURED ADF purchase-timeframe
-// field (a fixed Meta lead-gen enum — NOT free-form customer message text, so this is
-// structured-extraction + cadence side-effect, not conversational comprehension). Near-term
-// and unsure buyers get the standard day-1 ramp; explicit "not interested at this time" and
-// far-out (7+ months / multi-year) horizons get the gentle long_term [30,90,180] nurture.
+// Deterministic follow-up plan from the lead's STRUCTURED ADF purchase-timeframe field (a
+// fixed Meta lead-gen enum — NOT free-form customer message text, so this is structured-
+// extraction + cadence side-effect, not conversational comprehension):
+//   - "suppress"   — explicit "not interested at this time": send the opener, then NO
+//                    follow-ups at all (the caller sets a deliberate paused_indefinite state).
+//   - "long_term"  — far-out horizons (7+ months / multi-year): gentle [30,90,180] nurture.
+//   - "standard"   — near-term / unsure / unparseable: the standard day-1 ramp.
 // Pinned by initial_adf_cadence_timeframe:eval.
-export function resolveInitialAdfCadenceKind(input: {
+export function resolveInitialAdfCadencePlan(input: {
   purchaseTimeframe?: string | null;
   purchaseTimeframeMonthsStart?: number | null;
-}): "standard" | "long_term" {
+}): "standard" | "long_term" | "suppress" {
   const label = String(input.purchaseTimeframe ?? "").toLowerCase();
-  if (label.includes("not interested")) return "long_term";
+  if (label.includes("not interested")) return "suppress";
   if (label.includes("year")) return "long_term";
   const monthsStart = Number(input.purchaseTimeframeMonthsStart);
   if (Number.isFinite(monthsStart) && monthsStart >= 7) return "long_term";

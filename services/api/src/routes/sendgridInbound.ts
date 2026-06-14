@@ -16,7 +16,7 @@ import {
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
-  resolveInitialAdfCadenceKind,
+  resolveInitialAdfCadencePlan,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
   getAllConversations,
@@ -7727,14 +7727,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.followUp?.mode !== "manual_handoff" &&
       conv.followUp?.mode !== "paused_indefinite"
     ) {
-      const cfg = await getSchedulerConfig();
-      // Shape the cadence to the lead's purchase timeframe: near-term/unsure → standard
-      // day-1 ramp; far-out or "not interested at this time" → gentle long_term nurture.
-      const cadenceKind = resolveInitialAdfCadenceKind({
+      // Shape the follow-up to the lead's purchase timeframe: near-term/unsure → standard
+      // day-1 ramp; far-out (7+ months / multi-year) → gentle long_term nurture; explicit
+      // "not interested at this time" → opener only, no cadence (deliberate paused state).
+      const cadencePlan = resolveInitialAdfCadencePlan({
         purchaseTimeframe: conv.lead?.purchaseTimeframe,
         purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
       });
-      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone, { kind: cadenceKind });
+      if (cadencePlan === "suppress") {
+        setFollowUpMode(conv, "paused_indefinite", "meta_not_interested_at_this_time");
+      } else {
+        const cfg = await getSchedulerConfig();
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone, { kind: cadencePlan });
+      }
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
