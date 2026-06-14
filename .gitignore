@@ -34,6 +34,9 @@ services/api/data/contact_lists.json
 services/api/.env
 data/conversations.json
 
+# Local-only dealer deploy profiles (real host values); commit the .example template only
+infra/deploy/*.api.env
+
 # allow lead source catalogs to be committed
 !services/api/data/
 !services/api/data/lead_sources/
