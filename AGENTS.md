@@ -12,6 +12,7 @@ This project uses a **hybrid** approach with a **parser-first requirement for ne
 - If a conversational regex already misfires, move that decision to the parser; do not extend the pattern.
 - Use regex/deterministic ONLY for compliance/safety gates, ADF/structured parsing, side effects (close/cadence/todo/state), and invariant guards.
 - Never comprehend free-form customer language or compose a customer reply with regex.
+- Twilio comprehension debt is ratcheted by `twilio_comprehension_debt:eval` (down-only): migrate an `isXText` guard to the parser to lower the baseline; never raise it to land a new regex.
 
 ## Parser-First Rule (New States)
 When adding a new customer state/disposition, do **not** start with standalone regex routing.
