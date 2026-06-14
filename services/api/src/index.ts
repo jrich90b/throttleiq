@@ -50132,13 +50132,32 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundText = String(lastOutboundBeforeInbound?.body ?? "");
-    if (
-      shouldHandleManualQuoteDetailsReceived({
+    const askedDownRecently =
+      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down)\b/i.test(
+        lastOutboundText
+      );
+    // Pricing-continuation precedence centralized in decideFinancePricingTurn (shared with
+    // /webhooks/twilio): manual-quote-details state update outranks the finance follow-up
+    // continuation, both gated by the parser pricing route + no live scheduling/availability
+    // signal. Regen feeds its own parser signals — same pattern as decideSchedulingTurn/regenSched.
+    const regenFinancePricingTurn = decideFinancePricingTurn({
+      routeExecPricing: regenParserPricingIntent,
+      availabilitySignal: regenParserAvailabilityIntent,
+      schedulingDayTime: false,
+      schedulingDayOnlyRequest: false,
+      schedulingDayOnlyAvailability: false,
+      explicitScheduleSignal:
+        regenLlmExplicitScheduleIntent ||
+        regenParserSchedulingIntent ||
+        regenSchedulingLexicalIntent,
+      manualQuoteDetailsReceived: shouldHandleManualQuoteDetailsReceived({
         conv,
         inboundText: event.body,
         lastOutboundText
-      })
-    ) {
+      }),
+      financeFollowUpContinuation: regenDownProvided && askedDownRecently
+    });
+    if (regenFinancePricingTurn.kind === "manual_quote_details") {
       applyManualQuoteDetailsReceivedState(conv, event.body, event.providerMessageId);
       recordRouteOutcome("regen", "manual_quote_details_received", {
         convId: conv.id,
@@ -50155,11 +50174,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         }
       );
     }
-    const askedDownRecently =
-      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down)\b/i.test(
-        lastOutboundText
-      );
-    if (regenDownProvided && askedDownRecently) {
+    if (regenFinancePricingTurn.kind === "finance_followup_continuation") {
       const downLabel = `$${Number(regenPaymentBudget.downPayment).toLocaleString("en-US")}`;
       const budgetLabel =
         regenMonthlyBudget != null ? `$${Number(regenMonthlyBudget).toLocaleString("en-US")}/mo` : null;
