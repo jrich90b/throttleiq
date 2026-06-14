@@ -3682,21 +3682,49 @@ export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, ti
   return due.toISOString();
 }
 
-export function startFollowUpCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
+export function startFollowUpCadence(
+  conv: Conversation,
+  anchorAtIso: string,
+  timeZone: string,
+  opts?: { kind?: "standard" | "long_term" }
+) {
   if (conv.status === "closed") return;
   if (conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped") return;
-  const nextDueAt = computeFollowUpDueAt(anchorAtIso, FOLLOW_UP_DAY_OFFSETS[0], timeZone);
+  // A far-out / not-interested-now lead opens on the slow LONG_TERM_DAY_OFFSETS schedule
+  // (first touch ~30 days) instead of the day-1 standard ramp. Same content path
+  // (buildLongTermFollowUp); only the timing differs.
+  const kind = opts?.kind === "long_term" ? "long_term" : "standard";
+  const firstOffset = kind === "long_term" ? LONG_TERM_DAY_OFFSETS[0] : FOLLOW_UP_DAY_OFFSETS[0];
+  const nextDueAt = computeFollowUpDueAt(anchorAtIso, firstOffset, timeZone);
   conv.followUpCadence = {
     status: "active",
     anchorAt: anchorAtIso,
     nextDueAt,
     stepIndex: 0,
-    kind: "standard",
+    kind,
     scheduleInviteCount: 0,
     scheduleMuted: false
   };
   conv.updatedAt = nowIso();
   scheduleSave();
+}
+
+// Deterministic cadence-shape selection from the lead's STRUCTURED ADF purchase-timeframe
+// field (a fixed Meta lead-gen enum — NOT free-form customer message text, so this is
+// structured-extraction + cadence side-effect, not conversational comprehension). Near-term
+// and unsure buyers get the standard day-1 ramp; explicit "not interested at this time" and
+// far-out (7+ months / multi-year) horizons get the gentle long_term [30,90,180] nurture.
+// Pinned by initial_adf_cadence_timeframe:eval.
+export function resolveInitialAdfCadenceKind(input: {
+  purchaseTimeframe?: string | null;
+  purchaseTimeframeMonthsStart?: number | null;
+}): "standard" | "long_term" {
+  const label = String(input.purchaseTimeframe ?? "").toLowerCase();
+  if (label.includes("not interested")) return "long_term";
+  if (label.includes("year")) return "long_term";
+  const monthsStart = Number(input.purchaseTimeframeMonthsStart);
+  if (Number.isFinite(monthsStart) && monthsStart >= 7) return "long_term";
+  return "standard";
 }
 
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {

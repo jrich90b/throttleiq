@@ -16,6 +16,7 @@ import {
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
+  resolveInitialAdfCadenceKind,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
   getAllConversations,
@@ -7727,7 +7728,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       conv.followUp?.mode !== "paused_indefinite"
     ) {
       const cfg = await getSchedulerConfig();
-      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      // Shape the cadence to the lead's purchase timeframe: near-term/unsure → standard
+      // day-1 ramp; far-out or "not interested at this time" → gentle long_term nurture.
+      const cadenceKind = resolveInitialAdfCadenceKind({
+        purchaseTimeframe: conv.lead?.purchaseTimeframe,
+        purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+      });
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone, { kind: cadenceKind });
     }
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
