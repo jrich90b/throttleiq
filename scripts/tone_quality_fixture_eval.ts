@@ -113,6 +113,22 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 70, mustIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    id: "adf_model_trim_special_not_pricing",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Room58 - Book test ride\nRef: 11450\nName: Todd Herian\nYear: 2023\nVehicle: Harley-Davidson Road Glide Special\n\nInquiry:\nTest ride request for Road Glide Special. Preferred date: 6/20/2026. Preferred time: Whenever.",
+    outboundText:
+      "Yes — the 2023 Road Glide Special in Heirloom Red Fade is available. What day and time works best to stop in and take a look?",
+    expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    id: "adf_genuine_specials_ask_still_pricing",
+    inboundText:
+      "WEB LEAD (ADF)\nSource: Website contact form\nRef: 20003\nName: Deal Hunter\nYear: 2026\nVehicle: Harley-Davidson Road Glide\n\nInquiry:\nAny specials or deals running on a Road Glide right now?",
+    outboundText:
+      "Hi — This is Brooke at American Harley-Davidson. Thanks — I saw you wanted to learn more about a Road Glide. I’m here to help.",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "adf_service_question_hijacked_by_inventory",
     inboundText:
       "WEB LEAD (ADF)\nSource: ROOM 58 LTD\nRef: 20001\nName: Sam Service\nYear: 2018\nVehicle: Harley-Davidson Street Glide\n\nInquiry:\nDo you do NYS inspections on Harleys?",

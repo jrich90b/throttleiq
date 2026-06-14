@@ -111,7 +111,13 @@ function firstSentence(text: string): string {
 }
 
 function hasPricingSignal(text: string): boolean {
-  const t = String(text ?? "").toLowerCase();
+  // "Special" is a Harley model trim (Road Glide Special, Heritage Softail
+  // Special), not a request for deals/specials. Strip the trim usage before
+  // pricing detection so a plain test-ride lead for a "Special" isn't scored
+  // as an unanswered pricing ask. Standalone "specials"/"deals" survive.
+  const t = String(text ?? "")
+    .toLowerCase()
+    .replace(/\b(?:glide|softail)\s+special\b/g, " ");
   return /\b(price|pricing|quote|cost|msrp|otd|out[-\s]?the[-\s]?door|apr|rate|rates|monthly|payment|payments|per month|term|months?|down payment|cash down|money down|put down|financing|finance|credit|specials?|deals?|incentives?)\b/.test(
     t
   );
