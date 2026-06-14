@@ -427,7 +427,6 @@ import {
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
-  isDealerLocationQuestionText,
   isLogisticsProgressUpdateText,
   isAffordabilityRideConfidenceObjectionText,
   isDealerTransactionPolicyParserAccepted,
@@ -514,7 +513,6 @@ import {
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
   hasExplicitCalendarDateForScheduleMemory,
-  isExplicitCustomerCallbackRequestText,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
   isUnlistedInventoryQuestionText,
@@ -48694,9 +48692,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent: false
     });
   }
-  const regenLocationQuestion =
-    regenParserLocationQuestion ||
-    (regenInboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
+  // Parser-first parity with the live path: dealer_location_question is owned by
+  // the inbound_reply_action parser; the regex comprehension fallback is retired.
+  const regenLocationQuestion = regenParserLocationQuestion;
   if (
     (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
     channel === "sms" &&
@@ -50493,11 +50491,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const regenFinancePriorityHint = regenParserPricingIntent;
-  const regenCallbackFallback =
-    regenInboundReplyActionFallbackAllowed && isImmediateChatCallbackAvailabilityText(event.body ?? "");
+  // Parser-first parity with the live path: callback intent (incl. "free to talk
+  // now") is owned by the inbound_reply_action parser's explicit_callback_request;
+  // the regex comprehension fallback is retired.
   const regenCallbackRequested =
     !regenTextingTypoJoke &&
-    (regenParserCallbackIntent || regenParserExplicitCallbackRequest || regenCallbackFallback);
+    (regenParserCallbackIntent || regenParserExplicitCallbackRequest);
   const regenRouteDecision = buildRouteDecisionSnapshot({
     parserIntentOverride: regenRoutingIntentOverride,
     hasPricingIntent: regenParserPricingIntent,
@@ -54409,9 +54408,11 @@ if (authToken && signature) {
     schedulingSignalsBase.hasDayTime ||
     schedulingSignalsBase.hasDayOnlyAvailability ||
     schedulingSignalsBase.hasDayOnlyRequest;
-  const preParserLocationQuestion =
-    inboundParserLocationQuestion ||
-    (inboundReplyActionFallbackAllowed && isDealerLocationQuestionText(event.body ?? ""));
+  // Parser-first (AGENTS.md "comprehend, never regex"): the inbound_reply_action
+  // parser's dealer_location_question owns this turn. Retired the regex fallback —
+  // a low-confidence parse must fall through to safe handling, not regex
+  // comprehension (AGENTS.md Fallback Policy).
+  const preParserLocationQuestion = inboundParserLocationQuestion;
   const preParserNonWatchPrimaryIntent =
     preParserFinanceSignal || preParserSchedulingSignal || preParserLocationQuestion;
   const leadSourceText = String(conv.lead?.source ?? "").toLowerCase();
@@ -55347,22 +55348,15 @@ if (authToken && signature) {
   const intentAccepted = !!intentParse?.explicitRequest && intentConfidence >= intentConfidenceMin;
   const intentLow =
     !!intentParse?.explicitRequest && intentConfidence > 0 && intentConfidence < intentConfidenceMin;
-  const immediateChatCallbackFallback =
-    !parserCallbackIntent &&
-    !(intentAccepted && intentParse?.intent === "callback") &&
-    inboundReplyActionFallbackAllowed &&
-    isImmediateChatCallbackAvailabilityText(event.body ?? "");
-  const explicitCallbackRequestFallback =
-    !parserCallbackIntent &&
-    !(intentAccepted && intentParse?.intent === "callback") &&
-    inboundReplyActionFallbackAllowed &&
-    isExplicitCustomerCallbackRequestText(event.body ?? "");
+  // Parser-first (AGENTS.md "comprehend, never regex"): the inbound_reply_action
+  // parser's explicit_callback_request owns this turn — its mapping already covers
+  // both "call me" and "I'm free to talk now". Retired the two regex fallbacks; a
+  // low-confidence parse falls through to safe handling, not regex comprehension
+  // (AGENTS.md Fallback Policy).
   const llmCallbackRequested =
     parserCallbackIntent ||
     inboundParserExplicitCallbackRequest ||
-    (intentAccepted && intentParse?.intent === "callback") ||
-    immediateChatCallbackFallback ||
-    explicitCallbackRequestFallback;
+    (intentAccepted && intentParse?.intent === "callback");
   const customerWillCallIntent = isCustomerWillCallText(event.body ?? "");
   const textingTypoJoke = isTextingTypoJokeText(event.body ?? "");
   const callbackRequestedOverride =

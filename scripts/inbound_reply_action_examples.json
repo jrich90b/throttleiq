@@ -197,5 +197,20 @@
       "explicit_action": true,
       "should_reply": true
     }
+  },
+  {
+    "id": "available_to_talk_now_is_explicit_callback_request",
+    "text": "I'm free to talk right now if you want to hop on a call",
+    "history": [
+      { "direction": "out", "body": "Happy to walk you through the numbers — want me to give you a call?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "hasPendingIncomingInventory": false,
+    "dialogState": "none",
+    "expected": {
+      "action": "explicit_callback_request",
+      "explicit_action": true,
+      "should_reply": true
+    }
   }
 ]

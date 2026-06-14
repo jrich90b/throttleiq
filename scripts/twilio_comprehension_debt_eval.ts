@@ -17,7 +17,11 @@ import path from "node:path";
 // The current comprehension-debt count. RATCHET DOWN ONLY.
 // 42 -> 41: retired isScheduleContextStatusUpdateText (visit-commitment routing is
 // now parser-first via scheduleStatusCommitmentOutranksArrivalAck). Migration #1.
-const BASELINE = 41;
+// 41 -> 38: retired the redundant regex fallbacks for dealer location + callback in
+// the twilio handler — dealer_location_question and explicit_callback_request are
+// owned by the inbound_reply_action parser (isDealerLocationQuestionText,
+// isExplicitCustomerCallbackRequestText, isImmediateChatCallbackAvailabilityText).
+const BASELINE = 38;
 
 // Pure no-reply / safety / compliance gates — allowed to read customer text
 // (they suppress or hand off; they do not compose a comprehension reply).
