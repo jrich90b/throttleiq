@@ -5,6 +5,17 @@ This project uses a **hybrid** approach with a **parser-first requirement for ne
 - **Deterministic** for high‑risk, consistency‑critical, or compliance‑sensitive flows.
 - **LLM (guard‑railed)** for open‑ended inbound replies and nuanced follow‑ups.
 
+## HARD RULE: Twilio customer conversations are comprehension-first, never regex (Joe, 2026-06-13)
+
+**Do not understand or reply to a Twilio SMS customer with regex/keyword matching.** Customer-facing conversation on `/webhooks/twilio` (and its `/conversations/:id/regenerate` twin) must comprehend the customer through the LLM intent/parser layer. Joe has stressed this repeatedly; treat it as non-negotiable. The agent should never need to be reminded.
+
+- **A reply-quality miss is NOT fixed by adding/broadening a keyword or regex on a conversational handler.** That is whack-a-mole — it patches one phrasing and rots on the next. A customer can express the same intent infinitely many ways ("I'll be there Saturday for the pre-party" / "see you at the rally" / "count me in then" all mean *committed to a visit*). Enumerating event names or phrasings is the wrong tool.
+- **Recognize the semantic intent, not the surface words** — "customer committed to a visit on day X", "customer accepted the offer", "customer is asking about Y". That is the LLM parser's job. The deterministic layer only (a) confirms a structured fact the parser extracted (which day/time), and (b) writes from an approved template.
+- **The correct fix for a missed intent:** improve parser coverage (typed schema + few-shot) and add a **replay fixture from the exact production turn** — never a new regex branch. If a conversational regex already exists and misfires, move that decision to the parser; do not extend or "tighten" the pattern.
+- **Regex/deterministic is allowed ONLY for:** compliance & safety gates (STOP, opt-out, wrong number, suppression, no-guessing on price/finance/availability), structured/template parsing (ADF fields), side effects (close / cadence / todo / state transitions), and invariant guards. **Never** for comprehending free-form customer language or composing a customer-facing reply.
+
+This restates and hardens the Parser-First Rule below — it is the same principle, made explicit for the Twilio conversation path because it kept being violated.
+
 ## Parser-First Rule (New States)
 When adding a new customer state/disposition, do **not** start with standalone regex routing.
 
