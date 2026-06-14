@@ -3,6 +3,7 @@ export {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideFinancePricingTurn,
   decideSchedulingTurn,
   evaluateNoResponseFallback,
   nextActionFromState,

@@ -442,6 +442,7 @@ import {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideFinancePricingTurn,
   decideSchedulingTurn,
   evaluateNoResponseFallback,
   nextActionFromState,
@@ -56702,32 +56703,38 @@ if (authToken && signature) {
     const downPaymentProvided = paymentBudgetContext.downPayment != null;
     const monthlyBudgetProvided = paymentBudgetContext.monthlyBudget != null;
     const termProvided = paymentBudgetContext.termMonths != null;
-    const askedFinanceFollowUpRecently =
-      regexIntentFallbackEnabled &&
-      isFinanceFollowUpPromptText(lastOutboundText);
-    const followUpAck = isFinanceFollowUpAffirmationText(event.body ?? "");
+    // The recent-finance-prompt/affirmation regex backstop was already inert
+    // behind regexIntentFallbackEnabled=false; removed it. Continuation is
+    // parser-led (llmPaymentsIntent) plus stored payment-budget context.
     return (
       llmPaymentsIntent ||
       ((downPaymentProvided || monthlyBudgetProvided || termProvided) &&
-        (currentTurnFinanceSignal || (askedFinanceFollowUpRecently && followUpAck))) ||
-      (downPaymentProvided && monthlyBudgetProvided && currentTurnFinanceSignal) ||
-      (askedFinanceFollowUpRecently && followUpAck)
+        currentTurnFinanceSignal) ||
+      (downPaymentProvided && monthlyBudgetProvided && currentTurnFinanceSignal)
     );
   })();
-  if (
-    event.provider === "twilio" &&
-    routeExecPricing &&
-    !explicitAvailabilitySignalThisTurn &&
-    !schedulingSignals.hasDayTime &&
-    !schedulingSignals.hasDayOnlyRequest &&
-    !schedulingSignals.hasDayOnlyAvailability &&
-    !explicitScheduleSignal &&
-    shouldHandleManualQuoteDetailsReceived({
-      conv,
-      inboundText: event.body,
-      lastOutboundText
-    })
-  ) {
+  // Pricing-continuation precedence centralized in routeStateReducer.decideFinancePricingTurn:
+  // manual-quote-details state update outranks the finance follow-up continuation, both gated by
+  // the parser pricing route + no live scheduling signal. Same decision is applied in
+  // /conversations/:id/regenerate.
+  const financePricingTurn = decideFinancePricingTurn({
+    routeExecPricing,
+    availabilitySignal: explicitAvailabilitySignalThisTurn,
+    schedulingDayTime: schedulingSignals.hasDayTime,
+    schedulingDayOnlyRequest: schedulingSignals.hasDayOnlyRequest,
+    schedulingDayOnlyAvailability: schedulingSignals.hasDayOnlyAvailability,
+    explicitScheduleSignal,
+    manualQuoteDetailsReceived:
+      event.provider === "twilio" &&
+      shouldHandleManualQuoteDetailsReceived({
+        conv,
+        inboundText: event.body,
+        lastOutboundText
+      }),
+    financeFollowUpContinuation:
+      event.provider === "twilio" && financeFollowUpContinuationSignal
+  });
+  if (financePricingTurn.kind === "manual_quote_details") {
     applyManualQuoteDetailsReceivedState(conv, event.body, event.providerMessageId);
     logRouteOutcome("manual_quote_details_received", {
       turnPrimaryIntent: routeExecutionIntent
@@ -56737,16 +56744,7 @@ if (authToken && signature) {
       financeContextIntent: true
     });
   }
-  if (
-    event.provider === "twilio" &&
-    routeExecPricing &&
-    !explicitAvailabilitySignalThisTurn &&
-    !schedulingSignals.hasDayTime &&
-    !schedulingSignals.hasDayOnlyRequest &&
-    !schedulingSignals.hasDayOnlyAvailability &&
-    !explicitScheduleSignal &&
-    financeFollowUpContinuationSignal
-  ) {
+  if (financePricingTurn.kind === "finance_followup_continuation") {
     const monthlyBudget = paymentBudgetContext.monthlyBudget ?? null;
     const termMonths = paymentBudgetContext.termMonths ?? null;
     const downPayment = paymentBudgetContext.downPayment ?? null;

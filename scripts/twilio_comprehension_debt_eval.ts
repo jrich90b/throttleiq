@@ -21,7 +21,11 @@ import path from "node:path";
 // the twilio handler — dealer_location_question and explicit_callback_request are
 // owned by the inbound_reply_action parser (isDealerLocationQuestionText,
 // isExplicitCustomerCallbackRequestText, isImmediateChatCallbackAvailabilityText).
-const BASELINE = 38;
+// 38 -> 36: centralized the pricing-continuation precedence in decideFinancePricingTurn
+// and removed the already-inert (regexIntentFallbackEnabled=false) finance follow-up
+// prompt/affirmation regex backstop. Continuation is parser-led (llmPaymentsIntent +
+// stored payment-budget context). Migration #3 (finance/pricing cluster).
+const BASELINE = 36;
 
 // Pure no-reply / safety / compliance gates — allowed to read customer text
 // (they suppress or hand off; they do not compose a comprehension reply).
