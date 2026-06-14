@@ -25275,6 +25275,15 @@ function buildInventoryWatchConfirmation(watch: InventoryWatch): string {
   return `Got it — I’ll keep an eye out for ${yearText}${watch.model}${colorText}${budgetText} and text you as soon as one comes in.`;
 }
 
+// Deterministic SIDE-EFFECT / notification backstop — KEEP (AGENTS.md "side effects
+// (close/cadence/todo/state)"). An inventory watch is a promise to text the customer
+// when a unit lands. The LLM watch parsers are primary everywhere this is used
+// (semantic set_watch + inbound_reply_action inventory_watch_acknowledgement); this
+// regex is only a low-confidence safety net behind them. Fail direction if retired =
+// a silently-uncreated watch / broken notify promise / lost sale — strictly worse
+// than the fail-SAFE "less precise reply" of the retired location/callback routers.
+// Do NOT strip in a comprehension pass; retire only once parser coverage is proven
+// by fixtures from real misses.
 function isWatchConfirmationIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -48984,6 +48993,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (/\b(at|around|between|from)\b/i.test(regenNoResponseInboundText) ||
         /\b\d{1,2}(?::\d{2})?\s*(am|pm)?\b/i.test(regenNoResponseInboundText) ||
         /\b(schedule|appointment|come in|stop by|visit)\b/i.test(regenNoResponseInboundText));
+    // Deterministic anti-suppression safety gate — KEEP (AGENTS.md no-response gate).
+    // The parser signals below are primary; this regex backstop only widens "don't go
+    // silent" when the LLM is low-confidence. Fail direction is toward replying, never
+    // toward ghosting a callback request — the opposite of the reply-routing callback
+    // regex that was retired from the live handler, so it stays deterministic.
     const regenImmediateChatCallbackFallback =
       regenInboundReplyActionFallbackAllowed &&
       isImmediateChatCallbackAvailabilityText(regenNoResponseInboundText);

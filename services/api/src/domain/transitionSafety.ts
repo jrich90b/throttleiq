@@ -175,6 +175,11 @@ export function isAffordabilityRideConfidenceObjectionText(text: string): boolea
   return hasAffordabilityConcern && hasRideConfidenceConcern;
 }
 
+// Deterministic INVARIANT guard — KEEP (AGENTS.md "invariant guards"). Detects a
+// competing active intent (availability / scheduling / buying / location) so a lead
+// with a live ask is not prematurely disposition/closed. This is not reply
+// comprehension; fail direction if retired = a wrongful close (fail-UNSAFE), so it
+// stays deterministic even though it reads customer text.
 function hasCompetingActiveIntentText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
