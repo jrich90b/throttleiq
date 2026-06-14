@@ -81,19 +81,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     i += 1;
   }
 
+  const cwd = process.cwd();
+  const reportRoot = process.env.REPORT_ROOT ?? path.resolve(cwd, "reports");
+  const dataDir = process.env.DATA_DIR ?? path.resolve(cwd, "data");
   const changesPath =
     args.get("--changes") ??
     process.env.CHANGED_MESSAGES_PATH ??
-    path.resolve(process.cwd(), "reports", "changed_messages_all.json");
+    path.resolve(reportRoot, "changed_messages_all.json");
   const conversationsPath =
     args.get("--conversations") ??
     process.env.CONVERSATIONS_PATH ??
     process.env.CONVERSATIONS_DB_PATH ??
-    path.resolve(process.cwd(), "data", "conversations.json");
+    path.resolve(dataDir, "conversations.json");
   const outDir =
     args.get("--out-dir") ??
     process.env.EDIT_FEEDBACK_OUT_DIR ??
-    path.resolve(process.cwd(), "scripts", "generated");
+    path.resolve(cwd, "scripts", "generated");
 
   return { changesPath, conversationsPath, outDir };
 }

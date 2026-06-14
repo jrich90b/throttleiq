@@ -49,10 +49,11 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   const cwd = process.cwd();
+  const dataDir = process.env.DATA_DIR || path.resolve(cwd, "data");
   const conversationsPath =
     args.get("--conversations") ||
     process.env.CONVERSATIONS_DB_PATH ||
-    path.resolve(cwd, "data", "conversations.json");
+    path.resolve(dataDir, "conversations.json");
   const outDir =
     args.get("--out-dir") ||
     process.env.TONE_QUALITY_OUT_DIR ||
