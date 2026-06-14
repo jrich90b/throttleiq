@@ -357,6 +357,77 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
   return { kind: "none", visitCommitment };
 }
 
+// The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
+//
+// Once a turn is routed to pricing_payments (routeExecPricing, derived from the
+// parser via buildRouteDecisionSnapshot) and carries no live scheduling signal, the
+// /webhooks/twilio handler picks between two adjacent arms by inline block order: a
+// manual-quote-details-received state update, then the finance follow-up
+// continuation. This function is the single source of truth for that precedence and
+// the shared scheduling-suppression gate, so /webhooks/twilio and
+// /conversations/:id/regenerate cannot drift. The arm bodies (state writes, reply
+// copy, payment-budget sub-branching) stay inline in index.ts.
+//
+// Scope note: this owns ONLY the contiguous, parser-route-gated pricing-continuation
+// pair. The other finance-cluster arms — affordability objection, lien-holder info,
+// payment-numbers status — are non-contiguous early-return guards evaluated upstream
+// (before routeExecPricing is even computed), with non-finance routing interleaved
+// between them. By the fail-direction test (AGENTS.md) the lien + payment-numbers
+// guards are side-effect/handoff KEEPs, not comprehension to migrate. Folding any of
+// them into this switch would reorder them relative to that interleaved routing and
+// is intentionally NOT done here. A new pricing-continuation arm extends this
+// function + its decision table — never a new inline precedence gate.
+//
+// Precedence (faithfully reproduces the current /webhooks/twilio block order):
+//   gate G = pricing route AND no live scheduling/availability signal this turn
+//   under G:  manual_quote_details  >  finance_followup_continuation
+// ---------------------------------------------------------------------------
+
+export type FinancePricingTurnKind =
+  | "manual_quote_details"
+  | "finance_followup_continuation"
+  | "none";
+
+export type FinancePricingTurnInput = {
+  // Parser-derived route: turnPrimaryIntent === "pricing_payments".
+  routeExecPricing: boolean;
+  // Scheduling-suppression gate — any live scheduling/availability signal this turn
+  // defers the pricing-continuation arms (the customer is talking timing, not money).
+  availabilitySignal: boolean; // explicitAvailabilitySignalThisTurn
+  schedulingDayTime: boolean; // schedulingSignals.hasDayTime
+  schedulingDayOnlyRequest: boolean; // schedulingSignals.hasDayOnlyRequest
+  schedulingDayOnlyAvailability: boolean; // schedulingSignals.hasDayOnlyAvailability
+  explicitScheduleSignal: boolean; // explicitScheduleSignal
+  // Arm signals (computed at the decision point in the handler).
+  manualQuoteDetailsReceived: boolean; // shouldHandleManualQuoteDetailsReceived(...)
+  financeFollowUpContinuation: boolean; // financeFollowUpContinuationSignal
+};
+
+export type FinancePricingTurnDecision = {
+  kind: FinancePricingTurnKind;
+};
+
+export function decideFinancePricingTurn(
+  input: FinancePricingTurnInput
+): FinancePricingTurnDecision {
+  const schedulingDefers =
+    input.availabilitySignal ||
+    input.schedulingDayTime ||
+    input.schedulingDayOnlyRequest ||
+    input.schedulingDayOnlyAvailability ||
+    input.explicitScheduleSignal;
+
+  if (input.routeExecPricing && !schedulingDefers) {
+    // Manual-quote-details state update runs first (handler block order).
+    if (input.manualQuoteDetailsReceived) return { kind: "manual_quote_details" };
+    if (input.financeFollowUpContinuation) {
+      return { kind: "finance_followup_continuation" };
+    }
+  }
+
+  return { kind: "none" };
+}
+
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
   const confidence = Number.isFinite(Number(input.parserConfidence))
     ? Number(input.parserConfidence)
