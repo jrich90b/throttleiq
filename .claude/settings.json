@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Rule 0 (CLAUDE.md): before starting this task, re-read CLAUDE.md and AGENTS.md (the law). Core rules - comprehend, never regex (typed LLM parsers, never keyword/regex); deterministic ONLY for safety/compliance, structured extraction, side-effects, invariant guards; fail-direction test for migrate-vs-keep (KEEP a regex whose removal fails toward replying/not-closing/doing-the-side-effect); route decisions centralized in routeStateReducer (decideSchedulingTurn), applied in BOTH /webhooks/twilio and /conversations/:id/regenerate; parser-first in both paths; ship only when tsc + ci:eval are green with a deterministic eval for the change.\""
+            "command": "echo \"Rule 0 (CLAUDE.md): before starting this task, re-read CLAUDE.md and AGENTS.md (the law). Core rules - comprehend, never regex (typed LLM parsers, never keyword/regex); deterministic ONLY for safety/compliance, structured extraction, side-effects, invariant guards; fail-direction test for migrate-vs-keep (KEEP a regex whose removal fails toward replying/not-closing/doing-the-side-effect); route decisions centralized in routeStateReducer (decideSchedulingTurn, decideFinancePricingTurn), applied in BOTH /webhooks/twilio and /conversations/:id/regenerate; parser-first in both paths; ship only when tsc + ci:eval are green with a deterministic eval for the change.\""
           }
         ]
       }

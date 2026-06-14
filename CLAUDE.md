@@ -24,7 +24,8 @@ mode** (staff approve every draft).
    whose removal makes us fail toward a wrong/silent answer is comprehension → move it to
    the parser. "Keep" is a valid answer; never over-migrate.
 4. **Route decisions are centralized + pure.** Cluster precedence lives in
-   `services/api/src/domain/routeStateReducer.ts` (e.g. `decideSchedulingTurn`), applied in
+   `services/api/src/domain/routeStateReducer.ts` (e.g. `decideSchedulingTurn`,
+   `decideFinancePricingTurn`), applied in
    BOTH `/webhooks/twilio` and `/conversations/:id/regenerate`, pinned by a decision-table
    eval. Don't add inline `parser||regex` precedence gates.
 5. **Parser-first in both paths.** Live and regenerate must stay in sync.
@@ -32,9 +33,11 @@ mode** (staff approve every draft).
 ## Current direction — the de-tangle program
 Goal: untangle inline `parser||regex` in `index.ts` and shrink the ~10 LLM
 round-trips/turn. Per cluster, in order: **centralize the route decision → burn down
-fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 38) →
+fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 36) →
 consolidate parsers (shadow-compared)**. Endgame = one `TurnUnderstanding` pass — see
-`docs/comprehension_consolidation_plan.md`. Done: scheduling cluster. Next: finance/pricing.
+`docs/comprehension_consolidation_plan.md`. Done: scheduling cluster; finance/pricing
+pricing-continuation centralized (`decideFinancePricingTurn`, both paths). Next within
+finance/pricing: annotate the early-return guards + align the regen follow-up trigger.
 Do NOT rush parser consolidation — it changes LLM behavior; make it evidence-led.
 
 ## Before you ship
