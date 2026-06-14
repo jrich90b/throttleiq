@@ -423,27 +423,35 @@ export function isDealershipLocationQuestionText(textRaw: string | null | undefi
   );
 }
 
-export function isScheduleContextStatusUpdateText(textRaw: string | null | undefined): boolean {
-  const text = String(textRaw ?? "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return false;
-  if (/[?]/.test(String(textRaw ?? ""))) return false;
-  if (
-    /\b(?:call me|give me a call|price|pricing|payment|trade|inventory|stock|available|availability|test ride|photo|video|address|where are you)\b/.test(
-      text
-    )
-  ) {
-    return false;
-  }
+/**
+ * Parser-first visit-commitment precedence (AGENTS.md "Twilio conversations:
+ * comprehend, never regex"). A recognized future-day VISIT COMMITMENT — what the
+ * inbound_reply_action parser classifies as `schedule_context_status_update`
+ * ("I'll be there Saturday for the show", "see you Saturday", "count me in for
+ * Saturday") — confirms the committed day and must outrank the appointment-timing
+ * / customer-ack ARRIVAL-WINDOW ack ("I'll check that time and follow up"), which
+ * only fits a same-day, en-route ETA.
+ *
+ * This retires the old `isScheduleContextStatusUpdateText` regex: comprehension is
+ * the parser's job, this is pure routing precedence. Production miss it fixes:
+ * Todd Herian +15673079691, 2026-06-13 — after a Road Glide test-ride thread,
+ * "Ok I will be there for the taste of country pre party on Saturday" was
+ * downgraded to the arrival ack.
+ *
+ * It fires only inside an active schedule/visit context (so it can never hijack an
+ * unrelated turn) and mirrors the schedule_context_status_update handler's own
+ * guards, so suppressing the arrival ack always hands the turn to that handler.
+ * This is the template for the remaining Twilio comprehension-guard migrations.
+ */
+export function scheduleStatusCommitmentOutranksArrivalAck(args: {
+  parserScheduleStatusUpdate: boolean;
+  scheduleDialogState: boolean;
+  scheduleOfferContext: boolean;
+}): boolean {
   return (
-    /\b(?:sorry|my bad)\b[\s\S]{0,40}\b(?:just\s+)?saw\s+this\b/.test(text) ||
-    /^(?:yes|yeah|yep|yup|sure)\s+(?:i\s+am|i'?m|im)\b/.test(text) ||
-    /\b(?:i\s+am|i'?m|im)\s+(?:still\s+)?(?:coming|planning\s+to|going\s+to|able\s+to)\b/.test(
-      text
-    ) ||
-    /\b(?:i(?:'|’)ll|i will|we(?:'|’)ll|we will)\s+be\s+there\b/.test(text)
+    !!args.parserScheduleStatusUpdate &&
+    !!args.scheduleDialogState &&
+    !!args.scheduleOfferContext
   );
 }
 

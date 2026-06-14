@@ -245,5 +245,20 @@
       "should_reply": false,
       "should_book": false
     }
+  },
+  {
+    "id": "future_day_event_visit_commitment_not_arrival_window_1",
+    "text": "Ok I will be there for the taste of country pre party on Saturday 👍",
+    "history": [
+      {
+        "direction": "out",
+        "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?"
+      }
+    ],
+    "expected": {
+      "action": "none",
+      "should_reply": true,
+      "should_book": false
+    }
   }
 ]

@@ -72,7 +72,6 @@ import {
   isPurchaseDeliveryOperationalRequestText,
   isPurchaseDeliveryTimingText,
   isRegenerateSchedulingLanguageText,
-  isScheduleContextStatusUpdateText,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
@@ -987,16 +986,6 @@ const cases: Case[] = [
     id: "customer_returning_call_not_callback_request",
     actual: isExplicitCustomerCallbackRequestText("I can give you a call back later"),
     expected: false
-  },
-  {
-    id: "schedule_context_confirmation_detects_yes_i_am",
-    actual: isScheduleContextStatusUpdateText("Yeah I am"),
-    expected: true
-  },
-  {
-    id: "schedule_context_apology_update_detected",
-    actual: isScheduleContextStatusUpdateText("Sorry just saw this"),
-    expected: true
   },
   {
     id: "customer_check_out_bike_plan_not_inventory_browse",

@@ -15,7 +15,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 // The current comprehension-debt count. RATCHET DOWN ONLY.
-const BASELINE = 42;
+// 42 -> 41: retired isScheduleContextStatusUpdateText (visit-commitment routing is
+// now parser-first via scheduleStatusCommitmentOutranksArrivalAck). Migration #1.
+const BASELINE = 41;
 
 // Pure no-reply / safety / compliance gates — allowed to read customer text
 // (they suppress or hand off; they do not compose a comprehension reply).

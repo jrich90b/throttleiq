@@ -534,7 +534,7 @@ import {
   isPurchaseDeliveryTimingText,
   isRideChallengeLeadSignal,
   isRegenerateSchedulingLanguageText,
-  isScheduleContextStatusUpdateText,
+  scheduleStatusCommitmentOutranksArrivalAck,
   isShortAckNoReplyText,
   isStockNumberInventoryInterestText,
   isTakeOffMilwaukeeEightEngineRequestText,
@@ -18810,13 +18810,22 @@ const SCHEDULE_DAY_COMMIT_RE =
 
 function buildScheduleContextStatusUpdateReply(
   inboundText: string,
-  lastOutboundText: string
+  lastOutboundText: string,
+  options: { parserVisitCommitment?: boolean } = {}
 ): { reply: string; dayLabel: string; dayCommitted: boolean; eventCommitted: boolean } {
   const inboundDay = extractScheduleDayLabelFromContext(inboundText);
   const dayLabel = inboundDay || extractScheduleDayLabelFromContext(lastOutboundText);
   const eventCommitted = !!inboundDay && SCHEDULE_EVENT_COMMIT_RE.test(inboundText);
-  const dayCommitted = eventCommitted || (!!inboundDay && SCHEDULE_DAY_COMMIT_RE.test(inboundText));
-  if (eventCommitted) {
+  // Parser-first commitment (AGENTS.md "comprehend, never regex"): when the
+  // inbound_reply_action parser recognized this turn as a visit/schedule-status
+  // commitment and the customer named a day, the day is committed — regardless of
+  // the event's name and without keyword-matching the commitment phrasing. This
+  // replaces SCHEDULE_DAY_COMMIT_RE as the comprehension driver; the regex stays
+  // only as a fallback for non-parser callers (e.g. the future-timeframe path).
+  const parserCommitment = !!options.parserVisitCommitment && !!inboundDay;
+  const dayCommitted =
+    eventCommitted || parserCommitment || (!!inboundDay && SCHEDULE_DAY_COMMIT_RE.test(inboundText));
+  if (eventCommitted || parserCommitment) {
     return {
       reply: `Perfect, you're set for ${inboundDay}! Come find us when you get here and we'll get you taken care of. If you want a set time that day, just text me one.`,
       dayLabel: inboundDay,
@@ -46810,6 +46819,91 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       turnFinanceIntent: false
     });
   }
+  // Parser-first precedence (mirrors the live path, AGENTS.md "comprehend, never
+  // regex"): compute the inbound_reply_action parse and the last-outbound context
+  // BEFORE the arrival-ack handlers so a recognized future-day visit commitment
+  // (schedule_context_status_update) confirms the committed day instead of being
+  // downgraded to the appointment-timing / customer-ack arrival-window ack.
+  const regenActiveInventoryWatchForAction =
+    conv.inventoryWatch ??
+    (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
+      ? conv.inventoryWatches[0]
+      : null);
+  const regenPendingIncomingActionSeedText = [
+    conv.pendingIncomingInventory?.note,
+    (conv.lead as any)?.summary,
+    conv.lead?.vehicle?.description,
+    conv.lead?.vehicle?.model,
+    ...(conv.messages ?? []).slice(-4).map(m => m.body),
+    event.body
+  ]
+    .map(value => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
+  const regenPendingIncomingActionContext =
+    hasPendingIncomingInventoryContext(conv) ||
+    hasPendingIncomingInventorySignal(regenPendingIncomingActionSeedText);
+  const regenInboundReplyActionParserEligible =
+    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const regenInboundReplyActionParse = regenInboundReplyActionParserEligible
+    ? await safeLlmParse("regen_inbound_reply_action_parser", () =>
+        parseInboundReplyActionWithLLM({
+          text: event.body ?? "",
+          history: buildHistory(conv, 10),
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null,
+          hasActiveInventoryWatch: !!regenActiveInventoryWatchForAction,
+          hasPendingIncomingInventory: regenPendingIncomingActionContext
+        })
+      )
+    : null;
+  if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && regenInboundReplyActionParse) {
+    console.log("[llm-inbound-reply-action-parser][regen]", regenInboundReplyActionParse);
+  }
+  const regenInboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
+    parserEligible: regenInboundReplyActionParserEligible,
+    parsed: regenInboundReplyActionParse
+  });
+  const regenParserLocationQuestion = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "dealer_location_question"
+  );
+  const regenParserExplicitCallbackRequest = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "explicit_callback_request"
+  );
+  const regenParserScheduleStatusUpdate = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "schedule_context_status_update"
+  );
+  const regenParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "inventory_watch_acknowledgement"
+  );
+  const regenParserPendingIncomingInventoryAcknowledgement = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "pending_incoming_inventory_acknowledgement"
+  );
+  const regenInboundAtMsForAction = new Date(event.receivedAt).getTime();
+  const regenLastOutboundForAction = [...(conv.messages ?? [])]
+    .filter(m => m.direction === "out" && m.body)
+    .filter(m => {
+      if (!Number.isFinite(regenInboundAtMsForAction)) return true;
+      const atMs = new Date(m.at ?? "").getTime();
+      return !Number.isFinite(atMs) || atMs <= regenInboundAtMsForAction;
+    })
+    .slice(-1)[0];
+  const regenLastOutboundForActionText = String(regenLastOutboundForAction?.body ?? "");
+  const regenVisitCommitmentOutranksArrivalAck = scheduleStatusCommitmentOutranksArrivalAck({
+    parserScheduleStatusUpdate: regenParserScheduleStatusUpdate,
+    scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
+    scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
+  });
   if (event.provider === "twilio" && isCustomerAckActionParserAccepted(regenCustomerAckActionParse)) {
     const action = regenCustomerAckActionParse?.action;
     if (action === "no_response_needed") {
@@ -46932,7 +47026,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnFinanceIntent: false
       });
     }
-    if (action === "provide_arrival_window") {
+    if (action === "provide_arrival_window" && !regenVisitCommitmentOutranksArrivalAck) {
       const checked = await buildCustomerAckArrivalReplyWithCalendarCheck({
         conv,
         parsed: regenCustomerAckActionParse,
@@ -48141,7 +48235,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (
     event.provider === "twilio" &&
     regenAppointmentTimingAccepted &&
-    (regenAppointmentTimingIntent === "arrival_update" ||
+    ((regenAppointmentTimingIntent === "arrival_update" && !regenVisitCommitmentOutranksArrivalAck) ||
       regenAppointmentTimingIntent === "tentative_time_window" ||
       regenAppointmentTimingIntent === "decline_time")
   ) {
@@ -48376,71 +48470,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenParserSchedulingIntent = regenRoutingIntentOverride === "scheduling";
   const regenParserCallbackIntent = regenRoutingIntentOverride === "callback";
   const regenParserAvailabilityIntent = regenRoutingIntentOverride === "availability";
-  const regenActiveInventoryWatchForAction =
-    conv.inventoryWatch ??
-    (Array.isArray(conv.inventoryWatches) && conv.inventoryWatches.length
-      ? conv.inventoryWatches[0]
-      : null);
-  const regenPendingIncomingActionSeedText = [
-    conv.pendingIncomingInventory?.note,
-    (conv.lead as any)?.summary,
-    conv.lead?.vehicle?.description,
-    conv.lead?.vehicle?.model,
-    ...(conv.messages ?? []).slice(-4).map(m => m.body),
-    event.body
-  ]
-    .map(value => String(value ?? "").trim())
-    .filter(Boolean)
-    .join("\n");
-  const regenPendingIncomingActionContext =
-    hasPendingIncomingInventoryContext(conv) ||
-    hasPendingIncomingInventorySignal(regenPendingIncomingActionSeedText);
-  const regenInboundReplyActionParserEligible =
-    (event.provider === "twilio" || event.provider === "sendgrid_adf") &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_INBOUND_REPLY_ACTION_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY;
-  const regenInboundReplyActionParse = regenInboundReplyActionParserEligible
-    ? await safeLlmParse("regen_inbound_reply_action_parser", () =>
-        parseInboundReplyActionWithLLM({
-          text: event.body ?? "",
-          history: buildHistory(conv, 10),
-          lead: conv.lead,
-          followUp: conv.followUp ?? null,
-          dialogState: getDialogState(conv),
-          classification: conv.classification ?? null,
-          hasActiveInventoryWatch: !!regenActiveInventoryWatchForAction,
-          hasPendingIncomingInventory: regenPendingIncomingActionContext
-        })
-      )
-    : null;
-  if (process.env.LLM_INBOUND_REPLY_ACTION_PARSER_DEBUG === "1" && regenInboundReplyActionParse) {
-    console.log("[llm-inbound-reply-action-parser][regen]", regenInboundReplyActionParse);
-  }
-  const regenInboundReplyActionFallbackAllowed = canUseInboundReplyActionFallback({
-    parserEligible: regenInboundReplyActionParserEligible,
-    parsed: regenInboundReplyActionParse
-  });
-  const regenParserLocationQuestion = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "dealer_location_question"
-  );
-  const regenParserExplicitCallbackRequest = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "explicit_callback_request"
-  );
-  const regenParserScheduleStatusUpdate = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "schedule_context_status_update"
-  );
-  const regenParserInventoryWatchAcknowledgement = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "inventory_watch_acknowledgement"
-  );
-  const regenParserPendingIncomingInventoryAcknowledgement = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "pending_incoming_inventory_acknowledgement"
-  );
   const regenRoutePolicyMode = getRoutePolicyMode();
   const regenTestRideEligibilityReply =
     event.provider === "twilio"
@@ -48586,16 +48615,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
-  const regenInboundAtMsForAction = new Date(event.receivedAt).getTime();
-  const regenLastOutboundForAction = [...(conv.messages ?? [])]
-    .filter(m => m.direction === "out" && m.body)
-    .filter(m => {
-      if (!Number.isFinite(regenInboundAtMsForAction)) return true;
-      const atMs = new Date(m.at ?? "").getTime();
-      return !Number.isFinite(atMs) || atMs <= regenInboundAtMsForAction;
-    })
-    .slice(-1)[0];
-  const regenLastOutboundForActionText = String(regenLastOutboundForAction?.body ?? "");
   const regenPendingIncomingAcknowledgement =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -48810,12 +48829,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     !regenParserAvailabilityIntent &&
     isScheduleDialogState(getDialogState(conv)) &&
     hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv)) &&
-    (regenParserScheduleStatusUpdate ||
-      (regenInboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
+    regenParserScheduleStatusUpdate;
   if (regenScheduleContextStatusUpdate) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
-      regenLastOutboundForActionText
+      regenLastOutboundForActionText,
+      { parserVisitCommitment: regenParserScheduleStatusUpdate }
     );
     const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");
@@ -55684,6 +55703,14 @@ if (authToken && signature) {
     });
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
   }
+  // Parser-first precedence (AGENTS.md "comprehend, never regex"): a recognized
+  // future-day visit commitment (inbound_reply_action -> schedule_context_status_update)
+  // confirms the committed day and must win over the arrival-window ack below.
+  const visitCommitmentOutranksArrivalAck = scheduleStatusCommitmentOutranksArrivalAck({
+    parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
+    scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
+    scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
+  });
   if (
     event.provider === "twilio" &&
     customerAckActionAccepted &&
@@ -55691,7 +55718,7 @@ if (authToken && signature) {
     (customerAckActionParse?.action === "accept_tentative_appointment" ||
       customerAckActionParse?.action === "ask_for_available_times" ||
       customerAckActionParse?.action === "appointment_status_question" ||
-      customerAckActionParse?.action === "provide_arrival_window" ||
+      (customerAckActionParse?.action === "provide_arrival_window" && !visitCommitmentOutranksArrivalAck) ||
       customerAckActionParse?.action === "immediate_arrival_request" ||
       customerAckActionParse?.action === "purchase_delivery_update")
   ) {
@@ -55848,7 +55875,7 @@ if (authToken && signature) {
     event.provider === "twilio" &&
     appointmentTimingAccepted &&
     !pricingOrPaymentsIntent &&
-    (appointmentTimingIntent === "arrival_update" ||
+    ((appointmentTimingIntent === "arrival_update" && !visitCommitmentOutranksArrivalAck) ||
       appointmentTimingIntent === "tentative_time_window" ||
       appointmentTimingIntent === "decline_time")
   ) {
@@ -56126,12 +56153,12 @@ if (authToken && signature) {
     !routeExecAvailability &&
     isScheduleDialogState(getDialogState(conv)) &&
     hasScheduleOfferContext(lastOutboundText, getDialogState(conv)) &&
-    (inboundParserScheduleStatusUpdate ||
-      (inboundReplyActionFallbackAllowed && isScheduleContextStatusUpdateText(event.body ?? "")));
+    inboundParserScheduleStatusUpdate;
   if (scheduleContextStatusUpdate) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
-      lastOutboundText
+      lastOutboundText,
+      { parserVisitCommitment: inboundParserScheduleStatusUpdate }
     );
     const reply = statusUpdate.reply;
     setDialogState(conv, "schedule_request");

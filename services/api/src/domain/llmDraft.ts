@@ -3647,6 +3647,7 @@ export async function parseAppointmentTimingWithLLM(args: {
     'input: "Customer: It is raining" history: "out: You’re scheduled for today at 2:00 PM." output: {"intent":"decline_time","explicit_request":true,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"weather issue for appointment","confidence":0.9}',
     'input: "Customer: I couldn’t make it yesterday. How does half an hour sound? I can get there before the weather gets bad." output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"","time_text":"in half an hour","time_window":"range"},"reference":"last_appointment","normalized_text":"in half an hour","confidence":0.93}',
     'input: "Customer: Let me know because I start driving on Friday morning" output: {"intent":"arrival_update","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"driving friday morning","confidence":0.93}',
+    'input: "Customer: Ok I will be there for the taste of country pre party on Saturday 👍" output: {"intent":"none","explicit_request":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"committing to a saturday event visit","confidence":0.92}',
     'input: "Customer: Can you send pictures?" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
   ];
 
@@ -3667,6 +3668,7 @@ export async function parseAppointmentTimingWithLLM(args: {
     "Rules:",
     "- Do not classify product years or model numbers as appointment times.",
     "- Arrival updates are not schedule requests and should not produce new slot offers.",
+    "- arrival_update means the customer is en route or describes their inbound trip (\"on my way\", \"leaving now\", \"be there by 5:30\", \"driving in Friday\"). A future-day VISIT COMMITMENT that just confirms attending on a day or at an event (\"I'll be there Saturday for the show\", \"see you Saturday\", \"count me in for Saturday\") is NOT arrival_update — classify it none so the schedule-status handler confirms the committed day.",
     "- If customer says 'around 11/12', keep that full range as time_text.",
     "- If customer says 'later this month same time', preserve later_this_month/same time context.",
     "- Use empty strings for unknown requested.day and requested.time_text.",
@@ -3781,6 +3783,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: 1-2 o’clock ish" history: "out: What time works for you today?" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"1-2 o’clock-ish","time_window":"range"},"reference":"last_outbound","normalized_text":"1-2 o’clock-ish","confidence":0.93}',
     'input: "Customer: be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"9:00 AM","time_window":"exact"},"reference":"last_outbound","normalized_text":"be there at 9:00 AM","confidence":0.96}',
     'input: "Customer: On my way doing my best to be there by 530" output: {"action":"provide_arrival_window","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.95}',
+    'input: "Customer: Ok I will be there for the taste of country pre party on Saturday 👍" output: {"action":"none","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"committing to a saturday event visit","confidence":0.9}',
     'input: "Customer: I can come now" history: "out: When would you like to come in and finalize?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"now","time_window":"unknown"},"reference":"none","normalized_text":"today now","confidence":0.96}',
     'input: "Customer: can I come right now?" history: "out: What time works best to stop in?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"right now","time_window":"unknown"},"reference":"none","normalized_text":"today right now","confidence":0.96}',
     'input: "Customer: Talk soon!" history: "out: You’re welcome — happy to help, talk soon!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.97}',
@@ -3820,6 +3823,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- If the customer asks whether an existing appointment is today/still on/confirmed, set appointment_status_question, not ask_for_available_times.",
     "- For appointment_status_question, should_book=false. The parser never confirms a new booking.",
     "- If the customer says they can come now/right now, set immediate_arrival_request, should_book=false, and do not say a time is noted.",
+    "- provide_arrival_window is only a same-day, en-route ETA (\"on my way\", \"be there by 5:30\"). A future-day VISIT COMMITMENT that confirms attending on a day or at an event (\"I'll be there Saturday for the show\", \"see you Saturday\") is NOT provide_arrival_window; set none so the schedule-status handler confirms the committed day.",
     "- If the customer says they will give/send/provide/let you know the time later, set customer_will_provide_time and should_reply=false.",
     "- If the customer is buying/picking up/taking delivery and gives '1-2ish', classify purchase_delivery_update, not trade appraisal scheduling.",
     "- If the customer says they will be there at a concrete time after a pickup/paperwork/delivery coordination message, classify purchase_delivery_update and acknowledge the arrival time.",
@@ -6514,7 +6518,11 @@ output: {"action":"customer_shared_vehicle_photo","explicit_action":true,"should
     `EXAMPLE Q
 inbound: "Can you send me pictures of the Road Glide?"
 history: "out: We have a couple Road Glides on the floor."
-output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"The customer is asking us to send photos, not sharing one; the media-request flow owns this turn.","confidence":0.95}`
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"The customer is asking us to send photos, not sharing one; the media-request flow owns this turn.","confidence":0.95}`,
+    `EXAMPLE R
+inbound: "Ok I will be there for the taste of country pre party on Saturday 👍"
+history: "out: We've got a couple Road Glides ready to ride — want to swing in and take one out?"
+output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer commits to coming in Saturday for an event","reason":"After a scheduling/visit thread the customer commits to a concrete future day to come in (for an event); confirm the committed day rather than reading it as an en-route arrival window.","confidence":0.95}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6524,7 +6532,7 @@ output: {"action":"none","explicit_action":false,"should_reply":true,"normalized
     "- dealer_location_question: customer asks for the dealership's physical location/address or where the store is.",
     "- explicit_callback_request: customer explicitly asks someone to call them or says they are available/free to talk by phone now.",
     "- customer_shared_vehicle_photo: customer shares or references sending a photo/picture of a bike they like or are considering (\"here's a photo of...\", \"I sent you a pic of...\"), or the turn is an attached image with a short caption. This is a buying signal that owns the turn over small talk and discovery questions. Asking US to send photos is NOT this action.",
-    "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask.",
+    "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask. This includes a future-day VISIT COMMITMENT (\"I'll be there Saturday for the show\", \"see you Saturday\", \"count me in for Saturday\") — confirm the committed day; do not treat it as an en-route arrival window.",
     "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
     "- pending_incoming_inventory_acknowledgement: customer confirms they want to be notified about a specific known incoming trade/pending unit that is not at the store yet.",
     "- none: no matching high-priority action; leave the turn to the normal router.",

@@ -182,5 +182,20 @@
       "explicit_action": true,
       "should_reply": true
     }
+  },
+  {
+    "id": "future_day_visit_commitment_is_schedule_status_update",
+    "text": "Ok I will be there for the taste of country pre party on Saturday 👍",
+    "history": [
+      { "direction": "out", "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "hasPendingIncomingInventory": false,
+    "dialogState": "test_ride_offer_sent",
+    "expected": {
+      "action": "schedule_context_status_update",
+      "explicit_action": true,
+      "should_reply": true
+    }
   }
 ]

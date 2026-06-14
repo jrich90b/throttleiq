@@ -5,8 +5,7 @@ import {
   hasInventoryWatchConfirmationText,
   hasPriorOutOfStockNoticeForModel,
   isDealershipLocationQuestionText,
-  isExplicitCustomerCallbackRequestText,
-  isScheduleContextStatusUpdateText
+  isExplicitCustomerCallbackRequestText
 } from "../services/api/src/domain/workflowRegressionGuards.ts";
 import { applyDraftStateInvariants } from "../services/api/src/domain/draftStateInvariants.ts";
 import {
@@ -205,20 +204,6 @@ function evaluateProfile(input: DealerProfileInput) {
       actual: isDealerLocationQuestionText("What is my street address on file?"),
       expected: false,
       note: "Dealer-location fallback must not capture customer/account address questions."
-    },
-    {
-      id: "schedule_status_update_gets_actionable_reply",
-      classification: "global",
-      actual: isScheduleContextStatusUpdateText("Sorry, just saw this."),
-      expected: true,
-      note: "A concrete schedule-context update should ask for the missing time instead of no-response."
-    },
-    {
-      id: "schedule_status_question_keeps_specific_router_priority",
-      classification: "global",
-      actual: isScheduleContextStatusUpdateText("Sorry, just saw this — what address is this at?"),
-      expected: false,
-      note: "Question turns should stay available to address/availability/scheduling-specific routes."
     },
     {
       id: "inventory_watch_confirmation_detected",

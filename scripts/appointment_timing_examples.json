@@ -148,5 +148,19 @@
       "time_window": "range",
       "reference": "last_appointment"
     }
+  },
+  {
+    "id": "future_day_event_visit_commitment_not_arrival_update_1",
+    "text": "Ok I will be there for the taste of country pre party on Saturday 👍",
+    "history": [
+      {
+        "direction": "out",
+        "body": "We've got a couple Road Glides ready to ride — want to swing in and take one out?"
+      }
+    ],
+    "expected": {
+      "intent": "none",
+      "explicit_request": false
+    }
   }
 ]
