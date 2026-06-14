@@ -3,6 +3,7 @@ export {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideSchedulingTurn,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,

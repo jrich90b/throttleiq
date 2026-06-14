@@ -249,6 +249,114 @@ export function buildRouteDecisionSnapshot(input: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Scheduling-cluster route precedence (Phase 0 of the routing-de-tangle program).
+//
+// The /webhooks/twilio handler decides the scheduling cluster — arrival-window ack
+// vs future-day visit commitment vs tentative window vs decline vs appointment-status
+// question vs immediate arrival vs purchase-delivery vs accept-tentative vs ask-for-
+// times — as a chain of inline `if` blocks whose precedence was implicit in their
+// order. That ordering is the soil the Todd Herian bug grew in (appointment-timing's
+// arrival_update block ran before the schedule-status block, so a visit commitment got
+// the vague arrival ack). This function is the single, testable source of truth for
+// that precedence; the handler switches on `kind` and keeps the arm bodies (calendar
+// checks, todos, cadence re-anchor, replies) inline.
+//
+// Precedence (faithfully reproduces the current block order):
+//   A. customer-ack actions  (highest — the live customer-ack block runs first and
+//      always returns once entered)
+//   B. appointment-timing intents
+//   C. recognized future-day visit commitment (schedule_context_status_update)
+// with the Todd rule folded in: a visit commitment preempts the arrival-window ack
+// (provide_arrival_window / arrival_update) but NOT the other A/B arms.
+// ---------------------------------------------------------------------------
+
+export type SchedulingTurnKind =
+  | "accept_tentative"
+  | "ask_available_times"
+  | "appointment_status_question"
+  | "arrival_window"
+  | "immediate_arrival"
+  | "purchase_delivery"
+  | "arrival_update"
+  | "tentative_window"
+  | "decline_time"
+  | "visit_commitment"
+  | "none";
+
+export type SchedulingTurnInput = {
+  // Block A — customer-ack parser (action string + whether the parse was accepted).
+  customerAckActionAccepted: boolean;
+  customerAckAction?: string | null;
+  // Block B — appointment-timing parser (intent string + whether accepted).
+  appointmentTimingAccepted: boolean;
+  appointmentTimingIntent?: string | null;
+  // Block C — inbound_reply_action schedule_context_status_update (accepted).
+  parserScheduleStatusUpdate: boolean;
+  // Context gates available where the decision is computed.
+  pricingOrPaymentsIntent: boolean;
+  scheduleDialogState: boolean;
+  scheduleOfferContext: boolean;
+};
+
+export type SchedulingTurnDecision = {
+  kind: SchedulingTurnKind;
+  /** A recognized future-day visit commitment holds (parser + active schedule context). */
+  visitCommitment: boolean;
+};
+
+export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurnDecision {
+  // Same recognition as workflowRegressionGuards.scheduleStatusCommitmentOutranksArrivalAck:
+  // a visit commitment requires the parser signal AND an active schedule/visit context.
+  const visitCommitment =
+    !!input.parserScheduleStatusUpdate &&
+    !!input.scheduleDialogState &&
+    !!input.scheduleOfferContext;
+
+  // Block A — customer-ack actions. Mirrors the live customer-ack block: it only fires
+  // for these actions and (once entered) always returns, so it has top precedence.
+  if (input.customerAckActionAccepted && !input.pricingOrPaymentsIntent) {
+    switch (input.customerAckAction) {
+      case "accept_tentative_appointment":
+        return { kind: "accept_tentative", visitCommitment };
+      case "ask_for_available_times":
+        return { kind: "ask_available_times", visitCommitment };
+      case "appointment_status_question":
+        return { kind: "appointment_status_question", visitCommitment };
+      case "provide_arrival_window":
+        // Visit commitment preempts the vague arrival-window ack (the Todd rule).
+        if (!visitCommitment) return { kind: "arrival_window", visitCommitment };
+        break;
+      case "immediate_arrival_request":
+        return { kind: "immediate_arrival", visitCommitment };
+      case "purchase_delivery_update":
+        return { kind: "purchase_delivery", visitCommitment };
+      default:
+        break; // non-cluster ack action → fall through to appointment-timing
+    }
+  }
+
+  // Block B — appointment-timing intents (reached only when A didn't claim the turn).
+  if (input.appointmentTimingAccepted && !input.pricingOrPaymentsIntent) {
+    if (input.appointmentTimingIntent === "arrival_update" && !visitCommitment) {
+      return { kind: "arrival_update", visitCommitment };
+    }
+    if (input.appointmentTimingIntent === "tentative_time_window") {
+      return { kind: "tentative_window", visitCommitment };
+    }
+    if (input.appointmentTimingIntent === "decline_time") {
+      return { kind: "decline_time", visitCommitment };
+    }
+  }
+
+  // Block C — recognized future-day visit commitment. The handler additionally gates
+  // this on the top-level route (no pricing/availability/callback) where routeExec* is
+  // known; this function owns the visit-commitment recognition + precedence.
+  if (visitCommitment) return { kind: "visit_commitment", visitCommitment };
+
+  return { kind: "none", visitCommitment };
+}
+
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
   const confidence = Number.isFinite(Number(input.parserConfidence))
     ? Number(input.parserConfidence)

@@ -73,20 +73,24 @@ assert.doesNotMatch(
   "the comprehension regex must be retired from the twilio + regenerate handlers (parser-first)"
 );
 
-// live + regen each compute the precedence and gate the arrival-ack arms with it.
+// Scheduling-cluster precedence (incl. visit-commitment-beats-arrival-ack) is now
+// centralized in decideSchedulingTurn (routeStateReducer.ts) and exhaustively pinned by
+// scheduling_turn_decision_eval.ts. Here we pin that BOTH handler paths route through
+// that single decision so the live/regen drift the Todd bug rode on cannot return.
 assert.ok(
-  (apiSource.match(/scheduleStatusCommitmentOutranksArrivalAck\(/g) ?? []).length >= 2,
-  "live + regen paths must both compute the visit-commitment precedence"
+  (apiSource.match(/decideSchedulingTurn\(/g) ?? []).length >= 2,
+  "live + regen paths must both route the scheduling cluster through decideSchedulingTurn"
 );
 assert.ok(
-  /provide_arrival_window" && !visitCommitmentOutranksArrivalAck/.test(apiSource) &&
-    /arrival_update" && !visitCommitmentOutranksArrivalAck/.test(apiSource),
-  "live arrival-ack arms (customer-ack + appointment-timing) must defer to the visit commitment"
+  /sched\.kind === "visit_commitment"/.test(apiSource) &&
+    /regenSched\.kind === "visit_commitment"/.test(apiSource),
+  "live + regen schedule-status arms must gate on the centralized visit_commitment decision"
 );
 assert.ok(
-  /provide_arrival_window" && !regenVisitCommitmentOutranksArrivalAck/.test(apiSource) &&
-    /arrival_update" && !regenVisitCommitmentOutranksArrivalAck/.test(apiSource),
-  "regen arrival-ack arms (customer-ack + appointment-timing) must defer to the visit commitment"
+  /sched\.kind === "arrival_window"/.test(apiSource) &&
+    /sched\.kind === "arrival_update"/.test(apiSource) &&
+    /regenSched\.kind === "arrival_update"/.test(apiSource),
+  "the arrival-ack arms (live + regen) must gate on the centralized decision, not inline regex"
 );
 
 // 3) The schedule-status reply confirms the committed day — never the arrival ack

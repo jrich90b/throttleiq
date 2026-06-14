@@ -442,6 +442,7 @@ import {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideSchedulingTurn,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
@@ -48239,12 +48240,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenAppointmentTimingIntent = regenAppointmentTimingAccepted
     ? regenAppointmentTimingParse?.intent
     : "none";
+  // Centralized scheduling precedence (regen), sharing decideSchedulingTurn with the
+  // live path for the appointment-timing + visit-commitment arms — this eliminates the
+  // live/regen precedence drift where the Todd bug lived. Block A is already resolved
+  // by the regen customer-ack block above, so disable it here; regen never gated
+  // appointment-timing on pricing, so pass pricingOrPaymentsIntent=false.
+  const regenSched = decideSchedulingTurn({
+    customerAckActionAccepted: false,
+    customerAckAction: null,
+    appointmentTimingAccepted: regenAppointmentTimingAccepted,
+    appointmentTimingIntent: regenAppointmentTimingIntent,
+    parserScheduleStatusUpdate: regenParserScheduleStatusUpdate,
+    pricingOrPaymentsIntent: false,
+    scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
+    scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
+  });
   if (
     event.provider === "twilio" &&
-    regenAppointmentTimingAccepted &&
-    ((regenAppointmentTimingIntent === "arrival_update" && !regenVisitCommitmentOutranksArrivalAck) ||
-      regenAppointmentTimingIntent === "tentative_time_window" ||
-      regenAppointmentTimingIntent === "decline_time")
+    (regenSched.kind === "arrival_update" ||
+      regenSched.kind === "tentative_window" ||
+      regenSched.kind === "decline_time")
   ) {
     const checked =
       regenAppointmentTimingIntent === "arrival_update"
@@ -48828,15 +48843,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
     );
   }
+  // Visit-commitment recognition + precedence owned by decideSchedulingTurn (regenSched);
+  // regen keeps its own top-level gates (channel + parser callback/pricing/availability).
   const regenScheduleContextStatusUpdate =
     event.provider === "twilio" &&
     channel === "sms" &&
     !regenParserExplicitCallbackRequest &&
     !regenParserPricingIntent &&
     !regenParserAvailabilityIntent &&
-    isScheduleDialogState(getDialogState(conv)) &&
-    hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv)) &&
-    regenParserScheduleStatusUpdate;
+    regenSched.kind === "visit_commitment";
   if (regenScheduleContextStatusUpdate) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
@@ -55711,26 +55726,34 @@ if (authToken && signature) {
     });
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true }, { draftOnly: true });
   }
-  // Parser-first precedence (AGENTS.md "comprehend, never regex"): a recognized
-  // future-day visit commitment (inbound_reply_action -> schedule_context_status_update)
-  // confirms the committed day and must win over the arrival-window ack below.
-  const visitCommitmentOutranksArrivalAck = scheduleStatusCommitmentOutranksArrivalAck({
+  // Scheduling-cluster precedence centralized in decideSchedulingTurn
+  // (routeStateReducer.ts): one tested decision feeds the customer-ack,
+  // appointment-timing, and visit-commitment arms below, so precedence is a single
+  // source of truth instead of implicit block ordering + scattered gates. A recognized
+  // future-day visit commitment outranks the arrival-window ack (the Todd rule).
+  // AGENTS.md "comprehend, never regex".
+  const sched = decideSchedulingTurn({
+    customerAckActionAccepted,
+    customerAckAction: customerAckActionParse?.action,
+    appointmentTimingAccepted,
+    appointmentTimingIntent,
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
+    pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
   });
   if (
     event.provider === "twilio" &&
-    customerAckActionAccepted &&
-    !pricingOrPaymentsIntent &&
-    (customerAckActionParse?.action === "accept_tentative_appointment" ||
-      customerAckActionParse?.action === "ask_for_available_times" ||
-      customerAckActionParse?.action === "appointment_status_question" ||
-      (customerAckActionParse?.action === "provide_arrival_window" && !visitCommitmentOutranksArrivalAck) ||
-      customerAckActionParse?.action === "immediate_arrival_request" ||
-      customerAckActionParse?.action === "purchase_delivery_update")
+    (sched.kind === "accept_tentative" ||
+      sched.kind === "ask_available_times" ||
+      sched.kind === "appointment_status_question" ||
+      sched.kind === "arrival_window" ||
+      sched.kind === "immediate_arrival" ||
+      sched.kind === "purchase_delivery")
   ) {
-    const action = customerAckActionParse.action;
+    // sched.kind being a customer-ack kind implies customerAckActionAccepted, i.e. a
+    // non-null parse (the old `?.action ===` outer gate used to narrow this).
+    const action = customerAckActionParse!.action;
     if (action === "immediate_arrival_request") {
       discardPendingDrafts(conv, "immediate_arrival_request");
       delete conv.emailDraft;
@@ -55866,10 +55889,10 @@ if (authToken && signature) {
           : buildAppointmentArrivalAck({
               intent: "arrival_update",
               explicitRequest: true,
-              requested: customerAckActionParse.requested,
+              requested: customerAckActionParse!.requested,
               reference: "none",
-              normalizedText: customerAckActionParse.normalizedText ?? null,
-              confidence: customerAckActionParse.confidence
+              normalizedText: customerAckActionParse!.normalizedText ?? null,
+              confidence: customerAckActionParse!.confidence
             });
     recordRouteOutcome("live", `customer_ack_${action}`, {
       convId: conv.id,
@@ -55881,11 +55904,9 @@ if (authToken && signature) {
   }
   if (
     event.provider === "twilio" &&
-    appointmentTimingAccepted &&
-    !pricingOrPaymentsIntent &&
-    ((appointmentTimingIntent === "arrival_update" && !visitCommitmentOutranksArrivalAck) ||
-      appointmentTimingIntent === "tentative_time_window" ||
-      appointmentTimingIntent === "decline_time")
+    (sched.kind === "arrival_update" ||
+      sched.kind === "tentative_window" ||
+      sched.kind === "decline_time")
   ) {
     const checked =
       appointmentTimingIntent === "arrival_update"
@@ -56154,14 +56175,15 @@ if (authToken && signature) {
     });
     return publishLiveTwilioReply(inventoryUnitClarificationReply, { turnAvailabilityIntent: true });
   }
+  // Visit-commitment recognition + precedence is owned by decideSchedulingTurn (sched);
+  // here we only add the top-level route gate (no pricing/availability/callback), which
+  // needs routeExec* computed above.
   const scheduleContextStatusUpdate =
     event.provider === "twilio" &&
     !routeExecCallback &&
     !routeExecPricing &&
     !routeExecAvailability &&
-    isScheduleDialogState(getDialogState(conv)) &&
-    hasScheduleOfferContext(lastOutboundText, getDialogState(conv)) &&
-    inboundParserScheduleStatusUpdate;
+    sched.kind === "visit_commitment";
   if (scheduleContextStatusUpdate) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
