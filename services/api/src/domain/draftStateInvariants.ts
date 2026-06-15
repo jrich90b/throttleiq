@@ -91,11 +91,20 @@ function looksLikeUnresolvedOtherInventoryDraft(text: string): boolean {
 }
 
 function unresolvedOtherInventoryFallback(input: Partial<DraftStateInvariantInput>): string {
+  // The raw feed entity "Harley-Davidson Other" means no specific model was
+  // resolved (e.g. an HD.com "Request a Quote" lead with Vehicle: Other). The
+  // repair must NOT leak that entity, but the old "I'll have the team check
+  // current options..." line was vague corporate filler that named no next
+  // step and addressed no pricing ask — it scored as intent_mismatch +
+  // adf_direct_ask_unanswered. Ask which bike they want (the only way to
+  // advance a quote with no model) and name the pricing follow-through, in
+  // staff voice. Keep a pricing-deferral signal ("pull current pricing") so
+  // the reply genuinely answers the quote ask.
   const inboundText = String(input.inboundText ?? "").toLowerCase();
   if (/\b(budget|range|under|below|around|about|max|maximum|bags|bagger|saddlebags?)\b/.test(inboundText)) {
-    return "I’ll have the team check current options in your range with bags and follow up shortly.";
+    return "Let me pull current options in your range with bags and get you real pricing. I’ll text the numbers right over.";
   }
-  return "I’ll have the team check current options that fit what you’re asking for and follow up shortly.";
+  return "Happy to help! Which Harley are you eyeing? Once I know the model, I’ll check what we’ve got in stock and pull current pricing for you.";
 }
 
 export function repairLikelyTruncatedDraftText(

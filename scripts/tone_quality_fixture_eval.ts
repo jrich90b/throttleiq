@@ -129,6 +129,29 @@ const FIXTURES: Fixture[] = [
     expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    // Model-less "Request a Quote" ADF (Vehicle: Other). The old draft-state
+    // repair ("I'll have the team check current options that fit...") named no
+    // next step and carried no pricing signal, so it scored intent_mismatch +
+    // adf_direct_ask_unanswered. This pins that the vague team-check style is
+    // still caught.
+    id: "adf_quote_model_less_generic_team_check_fails",
+    inboundText:
+      "WEB LEAD (ADF) Source: HD.com Request a Quote Ref: 11456 Name: Nicholas Braun Email: nicholasmbraun95@gmail.com Phone: 7166286477 Year: 2026 Vehicle: Harley-Davidson Other  Inquiry: Customer Comments: PreferredMethodOfContact - text(sms), InterestedInCustomizingMotorcycle - no-",
+    outboundText:
+      "I’ll have the team check current options that fit what you’re asking for and follow up shortly. Reply STOP to opt out.",
+    expect: { maxScore: 70, mustIncludeIssues: ["intent_mismatch", "adf_direct_ask_unanswered"] }
+  },
+  {
+    // The repaired opener for the same lead: asks which bike (the only way to
+    // advance a quote with no model) and names the pricing follow-through.
+    id: "adf_quote_model_less_repaired_opener_passes",
+    inboundText:
+      "WEB LEAD (ADF) Source: HD.com Request a Quote Ref: 11456 Name: Nicholas Braun Email: nicholasmbraun95@gmail.com Phone: 7166286477 Year: 2026 Vehicle: Harley-Davidson Other  Inquiry: Customer Comments: PreferredMethodOfContact - text(sms), InterestedInCustomizingMotorcycle - no-",
+    outboundText:
+      "Happy to help! Which Harley are you eyeing? Once I know the model, I’ll check what we’ve got in stock and pull current pricing for you.",
+    expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch"] }
+  },
+  {
     id: "adf_service_question_hijacked_by_inventory",
     inboundText:
       "WEB LEAD (ADF)\nSource: ROOM 58 LTD\nRef: 20001\nName: Sam Service\nYear: 2018\nVehicle: Harley-Davidson Street Glide\n\nInquiry:\nDo you do NYS inspections on Harleys?",

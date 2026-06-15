@@ -487,6 +487,23 @@ const cases: Case[] = [
     }
   },
   {
+    id: "other_inventory_model_less_quote_repaired",
+    expectedAllow: true,
+    expectedReason: "unresolved_inventory_entity_repaired",
+    expectedDraftContains: "pull current pricing",
+    input: {
+      inboundText:
+        "WEB LEAD (ADF) Source: HD.com Request a Quote Year: 2026 Vehicle: Harley-Davidson Other",
+      draftText:
+        "I'm not seeing a new 2026 Harley-Davidson Other in stock right now. I can check similar options or keep an eye out.",
+      followUpMode: "manual_handoff",
+      followUpReason: "pricing",
+      dialogState: "pricing_init",
+      classificationBucket: "inventory_interest",
+      classificationCta: "ask_payment"
+    }
+  },
+  {
     id: "truncated_in_good_smalltalk_repaired",
     expectedAllow: true,
     expectedReason: "truncated_draft_repaired",
