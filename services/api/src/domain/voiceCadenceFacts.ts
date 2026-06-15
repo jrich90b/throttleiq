@@ -110,7 +110,7 @@ function formatDollars(amount: number): string {
  * Returns null when there is nothing concrete or the facts are stale.
  */
 export function buildVoiceFactsCadenceLine(
-  conv: Pick<Conversation, "voiceFacts" | "closedReason" | "sale" | "followUpCadence">,
+  conv: Pick<Conversation, "voiceFacts" | "closedReason" | "sale" | "followUpCadence" | "lead">,
   now: Date = new Date()
 ): string | null {
   const facts = conv?.voiceFacts;
@@ -142,7 +142,38 @@ export function buildVoiceFactsCadenceLine(
     return `Still keeping an eye out for ${preowned} around ${formatDollars(budget)} for you.`;
   }
   if (facts.preferences?.length) {
-    return `Still watching for something with ${facts.preferences.slice(0, 2).join(" and ")} for you.`;
+    // Don't say we're "watching for" a model we're already presenting as available — the
+    // cadence body offers the lead's in-stock unit, so "still watching for <that model>"
+    // reads as a contradiction (Alexander Roehre, Ref 11233: a phone-mined "Street Glide"
+    // preference on a Street Glide lead produced "we still have one available ... still
+    // watching for something with Street Glide"). Drop preferences that match the offered
+    // model; only surface genuinely different ones.
+    const offeredModel = normalizeModelTokenForVoiceFacts(
+      conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? ""
+    );
+    const novel = facts.preferences.filter(p => !preferenceMatchesOfferedModel(p, offeredModel));
+    if (novel.length) {
+      return `Still watching for something with ${novel.slice(0, 2).join(" and ")} for you.`;
+    }
+    return null;
   }
   return null;
+}
+
+function normalizeModelTokenForVoiceFacts(value: string): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\bharley[-\s]?davidson\b/g, "")
+    .replace(/\bh[-\s]?d\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function preferenceMatchesOfferedModel(preference: string, offeredModel: string): boolean {
+  if (!offeredModel) return false;
+  const p = normalizeModelTokenForVoiceFacts(preference);
+  if (!p) return false;
+  // The preference IS the offered model, or a more specific variant of it
+  // ("Street Glide", "2026 Street Glide", "Street Glide Special").
+  return p === offeredModel || p.includes(offeredModel);
 }

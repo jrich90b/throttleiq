@@ -121,6 +121,47 @@ const staleConv: any = {
 };
 assert.equal(buildVoiceFactsCadenceLine(staleConv, now), null, "stale facts excluded");
 
+// Preference that IS the model we already offer must NOT produce a "watching for" line —
+// it contradicts the in-stock offer in the cadence body (Alexander Roehre, Ref 11233:
+// phone-mined "Street Glide" preference on a Street Glide lead).
+const offeredModelConv: any = { lead: { vehicle: { model: "Street Glide" } } };
+applyVoiceDurableFacts(
+  offeredModelConv,
+  { quotedUnit: "", quotedPrice: 0, otdPrice: 0, budgetMax: 0, wantsPreowned: false, preferences: ["Street Glide"], blockers: [], confidence: 0.9 },
+  { nowIso }
+);
+assert.equal(
+  buildVoiceFactsCadenceLine(offeredModelConv, now),
+  null,
+  "no 'watching for' line for the model we already offer (Alexander Roehre 11233)"
+);
+
+// A genuinely different model the customer mentioned on the call still surfaces a watch line.
+const novelPrefConv: any = { lead: { vehicle: { model: "Street Glide" } } };
+applyVoiceDurableFacts(
+  novelPrefConv,
+  { quotedUnit: "", quotedPrice: 0, otdPrice: 0, budgetMax: 0, wantsPreowned: false, preferences: ["Road Glide"], blockers: [], confidence: 0.9 },
+  { nowIso }
+);
+assert.equal(
+  buildVoiceFactsCadenceLine(novelPrefConv, now),
+  "Still watching for something with Road Glide for you.",
+  "a different model still surfaces a watch line"
+);
+
+// Mixed: the offered model is dropped, the novel one is kept.
+const mixedPrefConv: any = { lead: { vehicle: { description: "Harley-Davidson Street Glide" } } };
+applyVoiceDurableFacts(
+  mixedPrefConv,
+  { quotedUnit: "", quotedPrice: 0, otdPrice: 0, budgetMax: 0, wantsPreowned: false, preferences: ["Street Glide", "Road Glide"], blockers: [], confidence: 0.9 },
+  { nowIso }
+);
+assert.equal(
+  buildVoiceFactsCadenceLine(mixedPrefConv, now),
+  "Still watching for something with Road Glide for you.",
+  "offered model filtered, novel preference kept"
+);
+
 // Wiring pins: ingestion + all three cadence append sites + parser fixture.
 const apiSource = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(apiSource, /parseVoiceDurableFactsWithLLM\(\{ summary: summaryText/, "voice summary ingestion must extract durable facts");
