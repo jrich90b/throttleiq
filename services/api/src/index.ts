@@ -47418,8 +47418,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         const dealerName = regenDealerProfile?.dealerName ?? "American Harley-Davidson";
         const agentName = resolveConversationAgentName(conv, regenDealerProfile?.agentName ?? "Alexandra");
         const firstName = normalizeDisplayCase(conv.lead?.firstName);
-        const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-        reply = `${greeting}This is ${agentName} at ${dealerName}. ${reply}`.trim();
+        reply = `${buildAgentIntro(firstName, agentName, dealerName)}${reply}`.trim();
       }
       recordRouteOutcome("regen", "vehicle_info_request", {
         convId: conv.id,
@@ -47583,13 +47582,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     const replyBody = buildInitialAdfFirstTimeRiderGuidanceReply({
       parsed: regenAdfFirstTimeRiderDecision,
       dealerProfile,
       text: event.body ?? ""
     });
-    const reply = `${greeting}This is ${agentName} at ${dealerName}. ${replyBody}`.trim();
+    const reply = `${buildAgentIntro(firstName, agentName, dealerName)}${replyBody}`.trim();
     applyFirstTimeRiderGuidanceState(conv, regenAdfFirstTimeRiderDecision);
     if (
       regenAdfFirstTimeRiderDecision.intent === "rider_course_info" ||
@@ -47655,9 +47653,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         .filter(Boolean)
         .join(" ")
         .trim() || "the bike";
-      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const withPrefix = (body: string) =>
-        `${greeting}This is ${agentName} at ${dealerName}. ${body}`.trim();
+        `${buildAgentIntro(firstName, agentName, dealerName)}${body}`.trim();
       const factReply = await applyVehicleFactQuestionDecision({
         conv: scopedAdfConv,
         text: event.body ?? "",
@@ -47759,7 +47756,6 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     const offersResolution = resolveOffersUrl({
       dealerProfile,
       conversation: conv
@@ -47767,7 +47763,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const offersLine =
       buildOffersLine(offersResolution.preferredUrl, { prefix: "Current offers:" }) || "";
     const reply = [
-      `${greeting}This is ${agentName} at ${dealerName}. Thanks — I got your H-D Meta promo offer request. I can help with pricing — which model are you interested in, and any trim or color?`,
+      `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your H-D Meta promo offer request. Which model are you interested in, and any trim or color?`,
       offersLine
     ]
       .filter(Boolean)
@@ -49533,12 +49529,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         ? firstName
           ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
           : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
-        : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options.`
+        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options.`
       : hasPriorOutbound
         ? firstName
           ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
           : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options."
-        : `${firstName ? `Hi ${firstName} — ` : "Hi — "}This is ${agentName} at ${dealerName}. Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
+        : `${buildAgentIntro(firstName, agentName, dealerName)}Thanks — I received your credit application. I’ll have our finance team reach out shortly.`;
     if (asksIfInventoryIsAllOnline) {
       reply = `${reply} ${buildInventoryOnlineCompletenessReply()}`;
     }
@@ -50784,8 +50780,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const enforceInitialAdfPrefixForRegen = (text: string): string => {
     const body = String(text ?? "").trim();
     if (!body) return body;
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const prefix = `${greeting}This is ${agentName} at ${dealerName}.`;
+    const prefix = buildAgentIntro(firstName, agentName, dealerName).trim();
     if (body.toLowerCase().startsWith(prefix.toLowerCase())) {
       return body;
     }

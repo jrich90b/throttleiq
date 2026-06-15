@@ -1848,7 +1848,7 @@ function buildInitialEmailDraft(
     const dateLine = isOpenPreferredTime(preferredTime)
       ? `I have ${preferredDateLabel} noted. What time works best for you?`
       : `I have ${preferredDateLabel} at ${preferredTime} noted. I’ll confirm availability and get that lined up.`;
-    const draft = `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. This is ${agentName} at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`;
+    const draft = `Hi ${name},\n\nThanks for your interest in a test ride${modelClause}. It's ${agentName} over at ${dealerName}. ${dateLine}\n\nIf a walkaround or extra photos would help before then, just let me know.`;
     return formatEmailLayout(draft, { firstName: name, fallbackName: "there" });
   }
   const thanks = isTestRide
@@ -1862,7 +1862,7 @@ function buildInitialEmailDraft(
       : model
         ? `Thanks for your interest in the ${model}.`
         : "Thanks for your interest.";
-  const intro = `This is ${agentName} at ${dealerName}.`;
+  const intro = `It's ${agentName} over at ${dealerName}.`;
   const emailSegment = buildInitialInventoryEmailSegment({
     model,
     bookingUrl,
