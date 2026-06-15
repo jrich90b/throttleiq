@@ -562,6 +562,7 @@ import {
   toAuthorityModels,
   type AuthorityModel
 } from "./domain/turnUnderstandingAuthority.js";
+import { isParserSoftVisitCommitment } from "./domain/softVisitSignal.js";
 
 import {
   upsertConversationByLeadKey,
@@ -48426,7 +48427,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
-    if (regenAppointmentTimingIntent === "tentative_time_window") {
+    // Route parity with live: tentative window OR a parser-driven soft-visit commitment
+    // (Todd "I'll be there Saturday" — intent:none + committed day) triggers the soft-visit window.
+    if (
+      regenAppointmentTimingIntent === "tentative_time_window" ||
+      isParserSoftVisitCommitment(regenAppointmentTimingParse)
+    ) {
       const cfg = await getSchedulerConfigHot();
       await applySoftVisitCadenceWindow(
         conv,
@@ -56288,7 +56294,13 @@ if (authToken && signature) {
   if (effectiveTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
   }
-  if (schedulingSignalsBase.softVisit) {
+  // Soft-visit commitment is parser-driven (the appointment-timing parser already reads
+  // "I'll be there Saturday" as intent:none + a committed day) OR'd with the legacy regex —
+  // see isParserSoftVisitCommitment. Fixes weekday/event commitments the regex missed
+  // (Todd Herian Ref 11438). Over-firing only DELAYS a follow-up (fail-safe).
+  const softVisitCommitment =
+    schedulingSignalsBase.softVisit === true || isParserSoftVisitCommitment(appointmentTimingParse);
+  if (softVisitCommitment) {
     schedulingSignals.explicit = false;
     schedulingSignals.hasDayTime = false;
     schedulingSignals.hasDayOnlyAvailability = false;
@@ -56300,7 +56312,7 @@ if (authToken && signature) {
     schedulingSignals.hasDayOnlyAvailability = false;
     schedulingSignals.hasDayOnlyRequest = false;
   }
-  const softVisitIntent = schedulingSignalsBase.softVisit === true;
+  const softVisitIntent = softVisitCommitment;
   if (event.provider === "twilio" && softVisitIntent) {
     const cfg = await getSchedulerConfigHot();
     const appliedWindow = await applySoftVisitCadenceWindow(conv, event.body ?? "", cfg.timezone);
