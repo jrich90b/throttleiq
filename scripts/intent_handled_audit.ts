@@ -56,6 +56,13 @@ const EMOJI_ONLY_RE = /^[\p{Emoji}\p{Extended_Pictographic}\s❤️👍👎]+$/u
 const BARE_ACK_RE =
   /^(?:ok|okay|k|kk|yes|yep|yeah|no|nope|thanks|thank you|ty|thx|sounds good|got it|great|perfect|cool|will do|👍|👌)[.!]?$/i;
 const CLOSEOUT_RE = /\b(no need|already (?:called|bought|handled|taken care)|all set|nevermind|never mind)\b/i;
+// Short gratitude/closeout ("thank you bro", "thanks man", "appreciate it") is a
+// courtesy, not a new ask — a polite reply to it is correct. Judging it as a turn
+// made the judge reach back to OLDER requests and cry wolf (false major:
+// "Thank you bro" -> "You're welcome!"). Bounded to short, question-free gratitude
+// so a real ask riding on a thanks ("thanks, can you send more pics?") still counts.
+const GRATITUDE_RE =
+  /^(?:thanks?|thank you|thank u|ty|thx|tysm|appreciate (?:it|that|you|ya)|preciate it|much appreciated)\b/i;
 
 export function isNonActionableInbound(text: string): boolean {
   const raw = String(text ?? "").trim();
@@ -63,6 +70,7 @@ export function isNonActionableInbound(text: string): boolean {
   if (EMOJI_ONLY_RE.test(raw)) return true;
   if (BARE_ACK_RE.test(raw)) return true;
   if (raw.split(/\s+/).length <= 2 && !raw.includes("?")) return true;
+  if (GRATITUDE_RE.test(raw) && !raw.includes("?") && raw.split(/\s+/).length <= 4) return true;
   if (CLOSEOUT_RE.test(norm(raw))) return true;
   return false;
 }
@@ -138,11 +146,14 @@ export function selectIntentJudgeCandidates(
 export function buildIntentJudgePrompt(c: IntentJudgeCandidate): string {
   return [
     "You are a sales-ops QA reviewer for a Harley-Davidson dealership's text agent.",
-    "Decide ONE thing: did the agent's reply actually ADDRESS what the customer asked or",
-    "clearly wanted on their latest turn? Answering their question, or taking the obviously",
+    "Decide ONE thing: did the agent's reply ADDRESS what the customer asked or clearly",
+    "wanted ON THEIR LATEST MESSAGE? Answering their question, or taking the obviously",
     "intended next step (including an honest 'a teammate will get you X' handoff), counts as",
     "addressed. A fluent but off-topic reply, a reply that answers a DIFFERENT question, or a",
     "generic non-answer is NOT addressed. Judge substance, not tone or grammar.",
+    "Judge ONLY the latest customer message. If it is a thank-you, acknowledgement, or",
+    "closeout with no new ask, a courteous reply counts as addressed — do NOT penalize for",
+    "older requests earlier in the thread (those are tracked elsewhere).",
     "",
     c.context.length ? `Conversation so far:\n${c.context.join("\n")}` : "Conversation so far: (none)",
     "",
@@ -242,13 +253,24 @@ function selfTest() {
   };
 
   // isNonActionableInbound
-  for (const skip of ["👍", "ok", "thanks!", "yes", "No need, I already called"]) {
+  for (const skip of [
+    "👍",
+    "ok",
+    "thanks!",
+    "yes",
+    "No need, I already called",
+    "Thank you bro", // short gratitude — was a false major ("You're welcome!")
+    "thanks man appreciate it",
+    "Appreciate it!"
+  ]) {
     assert(isNonActionableInbound(skip), `non-actionable: "${skip}"`);
   }
   for (const keep of [
     "What do I have to do to reserve one",
     "Is the bike in store?",
-    "the new 2026 superglide please"
+    "the new 2026 superglide please",
+    "thanks, can you send more pics?", // gratitude + a real ask -> still actionable
+    "thanks for the info and any appointments later this month same time"
   ]) {
     assert(!isNonActionableInbound(keep), `actionable: "${keep}"`);
   }
