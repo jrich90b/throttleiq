@@ -2598,7 +2598,14 @@ function isPublicPath(pathname: string): boolean {
     pathname.startsWith("/automation-runs/ingest") ||
     pathname.startsWith("/support-mail/poll") ||
     pathname.startsWith("/personal-mail/poll") ||
-    pathname.startsWith("/mdf/portal-runner") ||
+    // Only the runner-machine poll is public (it self-authenticates via the
+    // x-mdf-runner-machine-id token in requireMdfPortalRunner). The other
+    // /mdf/portal-runner routes (install.sh, registration) are requireManager-gated
+    // HUMAN endpoints — they must NOT be public, or the auth middleware skips
+    // populating req.user and requireManager 403s every manager. Origin: managers
+    // got "manager required" downloading the MDF runner because the broad
+    // "/mdf/portal-runner" prefix swept those human endpoints into the public list.
+    pathname.startsWith("/mdf/portal-runner/tasks") ||
     pathname.startsWith("/internal/worker") ||
     pathname.startsWith("/warranty-rma/portal-runner") ||
     pathname.startsWith("/provider-browser-runner") ||

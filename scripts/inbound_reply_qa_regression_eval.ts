@@ -168,4 +168,10 @@ assert.ok(
   "Credit-app regenerate flow should block salesperson-mention fact replies when finance handoff state is active"
 );
 
+assert.ok(
+  apiIndex.includes('app.get("/mdf/portal-runner/install.sh", requireManager') &&
+    apiIndex.includes('pathname.startsWith("/mdf/portal-runner/tasks")'),
+  "MDF runner install.sh stays manager-gated and the public-path list is scoped to the machine /tasks endpoint (not the broad /mdf/portal-runner prefix, which would skip auth and 403 every manager)"
+);
+
 console.log("PASS inbound reply QA regression checks");
