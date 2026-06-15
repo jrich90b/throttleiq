@@ -14,6 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
+import { buildAgentIntro } from "./domain/agentVoice.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
@@ -49704,7 +49705,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       (wantsCall || inboundReferencesOtherPerson(event.body ?? "") || explicitMentionedHandoff);
     const courtesyOnly = isThankYouSignoffNoRequest(event.body ?? "");
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
-      ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
+      ? buildAgentIntro(customerName, agentName, dealerName)
       : "";
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
@@ -55779,7 +55780,7 @@ if (authToken && signature) {
       (wantsCall || inboundReferencesOtherPerson(event.body ?? "") || explicitMentionedHandoff);
     const courtesyOnly = isThankYouSignoffNoRequest(event.body ?? "");
     const intro = isDirectUserMention(event.body ?? "", mentionedUser)
-      ? `Hey ${customerName} — this is ${agentName} at ${dealerName}. `
+      ? buildAgentIntro(customerName, agentName, dealerName)
       : "";
     const handoff = wantsCall
       ? `I'll have ${firstName} reach out.`
@@ -57184,10 +57185,8 @@ if (authToken && signature) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
       const firstName = normalizeDisplayCase(conv.lead?.firstName);
-      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const replyRaw =
-        `${greeting}thanks for your H‑D Meta promo offer request. ` +
-        `This is ${agentName} at ${dealerName}. ` +
+        `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your H‑D Meta promo offer request. ` +
         `Are you leaning more toward ${foundModels.join(" or ")}?`;
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
       return publishLiveTwilioReply(reply);
@@ -58569,10 +58568,9 @@ if (authToken && signature) {
       conv.lead?.vehicle?.year ?? null,
       conv.lead?.vehicle?.model ?? null
     );
-    const context = bikeLabel ? ` You asked about the ${bikeLabel}.` : "";
     const firstName = conv.lead?.firstName?.trim();
-    const greeting = firstName ? `Hi ${firstName} — ` : "";
-    const reply = `${greeting}This is ${agentName} at ${dealerName}.${context} Want a walkaround video, or to stop in and see it?`;
+    const contextLine = bikeLabel ? `You asked about the ${bikeLabel}. ` : "";
+    const reply = `${buildAgentIntro(firstName, agentName, dealerName)}${contextLine}Want a walkaround video, or to stop in and see it?`;
     return publishLiveTwilioReply(reply);
   }
 
