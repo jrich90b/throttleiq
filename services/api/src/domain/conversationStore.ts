@@ -460,7 +460,8 @@ export type DialogStateName =
   | "rider_course_info"
   | "schedule_request"
   | "schedule_offer_sent"
-  | "schedule_booked";
+  | "schedule_booked"
+  | "reservation_handoff";
 
 export type LeadProfile = {
   leadRef?: string;

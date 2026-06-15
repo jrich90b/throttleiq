@@ -22,6 +22,7 @@ import {
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
+import { buildReservationHandoffReply, detectReservationRequestText } from "./domain/reservationIntent.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
@@ -9177,6 +9178,19 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER: Record<number, string[]> = {
 
 const FOLLOW_UP_INVITE_BASE_CHALLENGER =
   "Easiest thing is to come in and see{label} in person, {name}. What day works? I'll have it ready up front.";
+
+// Best-available unit label for a reservation handoff todo. Avoids the
+// "2026 Other trade" contamination by skipping full-line/"other" placeholders.
+function reservationUnitLabel(conv: any): string {
+  const year = conv?.lead?.vehicle?.year ?? null;
+  const model = conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "";
+  if (!model || /full line|other/i.test(String(model))) return "a unit";
+  return formatModelLabel(year ? String(year) : null, String(model)) || "a unit";
+}
+
+function firstNameToken(value: unknown): string {
+  return String(value ?? "").trim().split(/\s+/)[0] ?? "";
+}
 
 const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
   0: [
@@ -48762,6 +48776,46 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent: false
     });
   }
+  // Reservation / pre-order intent (regen parity with the live path): staff-only
+  // handoff ack + high-priority owner call task; preempts the watch routing.
+  const regenParserReservationRequest = isAcceptedInboundReplyAction(
+    regenInboundReplyActionParse,
+    "customer_reservation_request"
+  );
+  const regenReservationRequest =
+    event.provider === "twilio" &&
+    channel === "sms" &&
+    !regenParserCallbackIntent &&
+    (regenParserReservationRequest ||
+      (regenInboundReplyActionFallbackAllowed && detectReservationRequestText(event.body ?? "")));
+  if (regenReservationRequest) {
+    setDialogState(conv, "reservation_handoff");
+    const { reply, todoSummary } = buildReservationHandoffReply({
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      ownerFirstName: firstNameToken(conv.leadOwner?.name),
+      unitLabel: reservationUnitLabel(conv)
+    });
+    const owner = conv.leadOwner
+      ? {
+          id: String(conv.leadOwner.id ?? "").trim() || undefined,
+          name: String(conv.leadOwner.name ?? "").trim() || undefined
+        }
+      : undefined;
+    addTodo(conv, "call", todoSummary, event.providerMessageId, owner, undefined, "followup");
+    recordRouteOutcome("regen", "customer_reservation_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: regenInboundReplyActionParse?.action ?? null,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      fallback: !regenParserReservationRequest
+    });
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false,
+      turnSchedulingIntent: false,
+      shortAckIntent: false
+    });
+  }
   // Parser-first parity with the live path: dealer_location_question is owned by
   // the inbound_reply_action parser; the regex comprehension fallback is retired.
   const regenLocationQuestion = regenParserLocationQuestion;
@@ -51905,6 +51959,47 @@ if (authToken && signature) {
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
       fallback: !inboundParserCustomerPhotoShare
+    });
+    return publishLiveTwilioReply(
+      reply,
+      { turnAvailabilityIntent: false, turnFinanceIntent: false, turnSchedulingIntent: false },
+      { draftOnly: conv.mode === "human" }
+    );
+  }
+  // Reservation / pre-order intent: high-intent buy signal. Staff-only handoff
+  // (Joe, 2026-06-15) — confirm warmly, never quote terms, create a high-priority
+  // owner call task. Runs before the watch/availability routing so a "reserve
+  // one" turn can't collapse into a notify-when-it-arrives watch (Nicholas Braun).
+  const inboundParserReservationRequest = isAcceptedInboundReplyAction(
+    inboundReplyActionParse,
+    "customer_reservation_request"
+  );
+  const reservationRequestAccepted =
+    event.provider === "twilio" &&
+    !inboundParserExplicitCallbackRequest &&
+    !inboundParserLocationQuestion &&
+    (inboundParserReservationRequest ||
+      (inboundReplyActionFallbackAllowed && detectReservationRequestText(event.body ?? "")));
+  if (reservationRequestAccepted) {
+    setDialogState(conv, "reservation_handoff");
+    const { reply, todoSummary } = buildReservationHandoffReply({
+      firstName: normalizeDisplayCase(conv.lead?.firstName),
+      ownerFirstName: firstNameToken(conv.leadOwner?.name),
+      unitLabel: reservationUnitLabel(conv)
+    });
+    const owner = conv.leadOwner
+      ? {
+          id: String(conv.leadOwner.id ?? "").trim() || undefined,
+          name: String(conv.leadOwner.name ?? "").trim() || undefined
+        }
+      : undefined;
+    addTodo(conv, "call", todoSummary, event.providerMessageId, owner, undefined, "followup");
+    recordRouteOutcome("live", "customer_reservation_request", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      fallback: !inboundParserReservationRequest
     });
     return publishLiveTwilioReply(
       reply,

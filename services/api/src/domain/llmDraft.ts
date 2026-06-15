@@ -1721,6 +1721,7 @@ export type InboundReplyAction =
   | "inventory_watch_acknowledgement"
   | "pending_incoming_inventory_acknowledgement"
   | "customer_shared_vehicle_photo"
+  | "customer_reservation_request"
   | "none";
 
 export type InboundReplyActionParse = {
@@ -2770,6 +2771,7 @@ const INBOUND_REPLY_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "inventory_watch_acknowledgement",
         "pending_incoming_inventory_acknowledgement",
         "customer_shared_vehicle_photo",
+        "customer_reservation_request",
         "none"
       ]
     },
@@ -6522,7 +6524,15 @@ output: {"action":"none","explicit_action":false,"should_reply":true,"normalized
     `EXAMPLE R
 inbound: "Ok I will be there for the taste of country pre party on Saturday 👍"
 history: "out: We've got a couple Road Glides ready to ride — want to swing in and take one out?"
-output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer commits to coming in Saturday for an event","reason":"After a scheduling/visit thread the customer commits to a concrete future day to come in (for an event); confirm the committed day rather than reading it as an en-route arrival window.","confidence":0.95}`
+output: {"action":"schedule_context_status_update","explicit_action":true,"should_reply":true,"normalized_text":"customer commits to coming in Saturday for an event","reason":"After a scheduling/visit thread the customer commits to a concrete future day to come in (for an event); confirm the committed day rather than reading it as an en-route arrival window.","confidence":0.95}`,
+    `EXAMPLE S
+inbound: "What do I have to do to reserve one"
+history: "in: I know it's a limited run and I would like to reserve one\nout: sorry, we don't have the 2026 Superglide in stock right now."
+output: {"action":"customer_reservation_request","explicit_action":true,"should_reply":true,"normalized_text":"customer wants to reserve/pre-order a limited-run unit and is asking how","reason":"The customer wants to RESERVE a unit (limited run), a high-intent buy signal. This is NOT an inventory watch/notify-when-it-arrives; reservation handoff owns the turn.","confidence":0.97}`,
+    `EXAMPLE T
+inbound: "Can you let me know if one comes in?"
+history: "out: We don't have that one in stock right now."
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified if one comes in","reason":"Asking to be NOTIFIED when one arrives is an inventory watch, not a reservation/pre-order. Reserve = wants to put one aside now; watch = tell me when it shows up.","confidence":0.95}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -6533,6 +6543,7 @@ output: {"action":"schedule_context_status_update","explicit_action":true,"shoul
     "- explicit_callback_request: customer explicitly asks someone to call them or says they are available/free to talk by phone now.",
     "- customer_shared_vehicle_photo: customer shares or references sending a photo/picture of a bike they like or are considering (\"here's a photo of...\", \"I sent you a pic of...\"), or the turn is an attached image with a short caption. This is a buying signal that owns the turn over small talk and discovery questions. Asking US to send photos is NOT this action.",
     "- schedule_context_status_update: recent dealer outbound asked about scheduling/visit timing and customer gives a concrete status/update/confirmation with no higher-priority ask. This includes a future-day VISIT COMMITMENT (\"I'll be there Saturday for the show\", \"see you Saturday\", \"count me in for Saturday\") — confirm the committed day; do not treat it as an en-route arrival window.",
+    "- customer_reservation_request: customer wants to RESERVE / pre-order / put one aside or hold a build slot on a unit (\"I'd like to reserve one\", \"what do I have to do to reserve one\", \"can I put a deposit down to hold it\"). High-intent buy signal owning the turn. This is NOT asking to be notified when one arrives (that is inventory_watch_acknowledgement), and NOT reserving an appointment/time (that is scheduling).",
     "- inventory_watch_acknowledgement: customer confirms, accepts, or asks us to keep watching inventory after active watch or out-of-stock context.",
     "- pending_incoming_inventory_acknowledgement: customer confirms they want to be notified about a specific known incoming trade/pending unit that is not at the store yet.",
     "- none: no matching high-priority action; leave the turn to the normal router.",
@@ -6544,6 +6555,7 @@ output: {"action":"schedule_context_status_update","explicit_action":true,"shoul
     "- Do not classify 'returning your call' as explicit_callback_request unless the customer asks for another call.",
     "- Third-person CRM/ADF note phrasing like 'wants us to call him when it gets through service' still counts as explicit_callback_request.",
     "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
+    "- Choose customer_reservation_request over inventory_watch_acknowledgement/availability when the customer wants to RESERVE/pre-order/hold a unit now, even in out-of-stock or limited-run context. 'reserve one' = put one aside now; 'let me know when one comes in' = watch.",
     "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; phrases like 'hit me up if one comes in' count as explicit watch acknowledgement.",
     "- Choose pending_incoming_inventory_acknowledgement before inventory_watch_acknowledgement when the context is a known trade/pending unit coming in.",
     "- The parser selects the action only. It never authors the final customer reply.",
@@ -6593,7 +6605,8 @@ output: {"action":"schedule_context_status_update","explicit_action":true,"shoul
     actionRaw === "explicit_callback_request" ||
     actionRaw === "schedule_context_status_update" ||
     actionRaw === "inventory_watch_acknowledgement" ||
-    actionRaw === "pending_incoming_inventory_acknowledgement"
+    actionRaw === "pending_incoming_inventory_acknowledgement" ||
+    actionRaw === "customer_reservation_request"
   ) {
     action = actionRaw;
   }
