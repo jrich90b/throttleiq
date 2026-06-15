@@ -1944,6 +1944,7 @@ function emailReplyInvariantHintsFromOrchestratorResult(result: Awaited<ReturnTy
   };
 }
 import { getSystemMode } from "../domain/settingsStore.js";
+import { decideFirstTouchAutoSend, firstTouchAutoSendDebugEnabled } from "../domain/firstTouchAutoSend.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
@@ -5514,6 +5515,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return { ok: false, reason };
     }
     appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai", undefined, mediaUrls);
+    // First-touch auto-send STEP 1 (dark): shadow-measure eligibility only — NO send.
+    // Live customer-send is STEP 2 (approve-first); see docs/first_touch_autosend_spec.md.
+    if (firstTouchAutoSendDebugEnabled()) {
+      const shadow = decideFirstTouchAutoSend({
+        enabled: true, // measure potential regardless of the live flag
+        isFirstTouch: isInitialAdf,
+        isDeterministicReply: true, // publishEarlyAdfSmsDraft is the deterministic early-ADF opener path
+        suppressed: false, // STEP 2 wires isSuppressed(leadKey)
+        callOnly: conv?.lead?.preferredContactMethod === "phone",
+        optedOut: false,
+        invariantAllow: true, // past the invariant.allow gate above
+        hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
+      });
+      console.log("[first_touch_autosend shadow]", {
+        convId: conv?.id ?? null,
+        wouldSend: shadow.send,
+        reason: shadow.reason
+      });
+    }
     return { ok: true, draft: invariant.draftText };
   };
   const hasDealerRideInitialThankYouDraft = () =>
