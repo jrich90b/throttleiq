@@ -451,6 +451,32 @@ export function decideCadenceInviteArm(conversationId: string): CadenceInviteArm
   return (h >>> 0) % 2 === 0 ? "control" : "challenger";
 }
 
+// --- Draft-model A/B experiment (2026-06-15) -------------------------------
+// Tests whether a stronger model lifts reply/booking quality on the customer-
+// facing draft (gpt-5 challenger vs the gpt-5-mini control). Assignment is the
+// same pure, deterministic 50/50 split — keyed on the lead so a given customer
+// always gets one model for their whole thread, and the offline report can
+// recompute each conversation's arm with no message tagging. Parsers/routing are
+// intentionally NOT on this arm, so the experiment isolates the draft model and
+// can't perturb route decisions (or the measurement). Uses a distinct salt from
+// the cadence arm so the two experiments don't correlate.
+export type DraftModelArm = "control" | "challenger";
+
+export function decideDraftModelArm(leadKey: string): DraftModelArm {
+  if (!String(leadKey ?? "")) return "control";
+  const key = `draftmodel:${String(leadKey)}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  // Use a well-mixed range (NOT the low bit): FNV-1a's `% 2` depends only on the
+  // XOR of byte low bits, which a fixed salt can't decorrelate from the cadence
+  // arm and buckets weakly. `% 100` uses well-mixed bits — a fair 50/50 split
+  // that's independent of decideCadenceInviteArm's low-bit split.
+  return (h >>> 0) % 100 < 50 ? "control" : "challenger";
+}
+
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
   const confidence = Number.isFinite(Number(input.parserConfidence))
     ? Number(input.parserConfidence)

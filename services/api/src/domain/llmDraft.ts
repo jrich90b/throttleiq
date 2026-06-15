@@ -6,8 +6,24 @@ import { dataPath } from "./dataDir.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
+import { decideDraftModelArm } from "./routeStateReducer.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// --- Draft-model A/B (2026-06-15) ------------------------------------------
+// Resolves the customer-facing DRAFT model per lead: gpt-5 challenger vs the
+// gpt-5-mini control, 50/50 by lead via decideDraftModelArm. Only the draft
+// composer uses this — parsers/routing stay on OPENAI_MODEL so the experiment
+// isolates the reply model. Kill switch DRAFT_MODEL_AB_ENABLED=0 forces control.
+function draftModelControl(): string {
+  return process.env.OPENAI_MODEL || "gpt-5-mini";
+}
+function resolveDraftModelForLead(leadKey?: string | null): { model: string; arm: "control" | "challenger" } {
+  if (process.env.DRAFT_MODEL_AB_ENABLED === "0") return { model: draftModelControl(), arm: "control" };
+  const challenger = process.env.OPENAI_DRAFT_MODEL_CHALLENGER || "gpt-5";
+  const arm = decideDraftModelArm(String(leadKey ?? ""));
+  return { model: arm === "challenger" ? challenger : draftModelControl(), arm };
+}
 
 type ManualReplyExample = {
   inboundText?: string;
@@ -9110,7 +9126,13 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
 }
 
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
-  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  // Draft-model A/B: the customer-facing reply composer runs on the lead's arm
+  // (gpt-5 challenger vs gpt-5-mini control). Shared by live + regenerate via the
+  // orchestrator, so both paths get the same per-lead model.
+  const { model, arm: draftModelArm } = resolveDraftModelForLead(ctx.leadKey);
+  if (process.env.OPENAI_DRAFT_MODEL_DEBUG === "1") {
+    console.log("[draft-model-ab]", { leadKey: ctx.leadKey, arm: draftModelArm, model });
+  }
   const manualIntentHint = inferManualIntentHintFromDraftContext(ctx);
   const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
 
