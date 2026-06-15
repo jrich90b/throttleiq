@@ -7,6 +7,7 @@ export {
   decideDraftModelArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
+  isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,

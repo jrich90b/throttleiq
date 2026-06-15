@@ -447,6 +447,7 @@ import {
   decideCadenceInviteArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
+  isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
@@ -49650,7 +49651,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     conv.classification?.cta === "prequalify" ||
     getDialogState(conv) === "payments_handoff" ||
     /\bcredit_app|prequal/.test(String(conv.followUp?.reason ?? ""));
-  if (mentionedUser && !latestInboundCreditContext) {
+  // Mirror of the live path: an explicit scheduling ask outranks the mentioned-user/
+  // callback shortcut (Jeffrey +17164182619), so a regenerated reply routes to scheduling
+  // instead of a spurious callback-to-rep + generic ack.
+  const regenTurnHasExplicitSchedulingAsk =
+    regenAppointmentTimingAccepted &&
+    isExplicitSchedulingAskIntent(regenAppointmentTimingIntent ?? null);
+  if (mentionedUser && !latestInboundCreditContext && !regenTurnHasExplicitSchedulingAsk) {
     const firstName =
       getCustomerFacingMentionName(mentionedUser, event.body ?? "");
     if (isPaymentNumbersStatusQuestionText(event.body ?? "")) {
@@ -55659,7 +55666,15 @@ if (authToken && signature) {
       financeContextIntent: true
     });
   }
-  if (event.provider === "twilio" && mentionedUser) {
+  // Explicit scheduling ask outranks the mentioned-user/callback shortcut. Await the
+  // in-flight appointment-timing parse now (Jeffrey +17164182619): a "would Saturday be a
+  // possibility?" turn that merely greets the rep by name must route to scheduling, not a
+  // spurious callback-to-rep + generic ack. Mirrored in the regenerate path.
+  const earlyAppointmentTimingParse = await appointmentTimingParsePromise;
+  const turnHasExplicitSchedulingAsk =
+    isAppointmentTimingParserAccepted(earlyAppointmentTimingParse) &&
+    isExplicitSchedulingAskIntent(earlyAppointmentTimingParse?.intent ?? null);
+  if (event.provider === "twilio" && mentionedUser && !turnHasExplicitSchedulingAsk) {
     const firstName = getCustomerFacingMentionName(mentionedUser, event.body ?? "");
     const updateText = String(event.body ?? "").trim();
     const noteSummary =

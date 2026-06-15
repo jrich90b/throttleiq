@@ -164,7 +164,7 @@ assert.ok(
 );
 assert.ok(
   apiIndex.includes("const latestInboundCreditContext =") &&
-    apiIndex.includes("if (mentionedUser && !latestInboundCreditContext)"),
+    apiIndex.includes("if (mentionedUser && !latestInboundCreditContext"),
   "Credit-app regenerate flow should block salesperson-mention fact replies when finance handoff state is active"
 );
 

@@ -15,7 +15,10 @@
  * visit_commitment arm separately, where those flags are known.)
  */
 import assert from "node:assert/strict";
-import { decideSchedulingTurn } from "../services/api/src/domain/routeStateReducer.ts";
+import {
+  decideSchedulingTurn,
+  isExplicitSchedulingAskIntent
+} from "../services/api/src/domain/routeStateReducer.ts";
 
 type Row = {
   id: string;
@@ -98,5 +101,22 @@ for (const row of rows) {
   }
   passed += 1;
 }
+
+// Explicit-scheduling-ask predicate — the mentioned-user/callback shortcut in both
+// /webhooks/twilio and /conversations/:id/regenerate is suppressed when this is true, so
+// a scheduling ask that merely greets the rep by name routes to scheduling instead of a
+// spurious callback. Origin: Jeffrey +17164182619 (2026-06-15) — "Good morning Scott… the
+// bike is finally paid off… would Saturday be a possibility?" parsed as appointment-timing
+// ask_for_times but the "Good morning Scott" greeting hijacked the turn into a callback-to-
+// Scott + a bare "Thanks for the update." ack, dropping the Saturday request.
+assert.equal(isExplicitSchedulingAskIntent("ask_for_times"), true, "ask_for_times is an explicit scheduling ask");
+assert.equal(isExplicitSchedulingAskIntent("provide_new_time"), true, "provide_new_time is an explicit scheduling ask");
+assert.equal(isExplicitSchedulingAskIntent("accept_proposed_time"), false, "accept (confirmation) is not the ask gate");
+assert.equal(isExplicitSchedulingAskIntent("arrival_update"), false, "arrival_update must not suppress the mention shortcut");
+assert.equal(isExplicitSchedulingAskIntent("tentative_time_window"), false, "tentative window is not an explicit ask");
+assert.equal(isExplicitSchedulingAskIntent("none"), false, "no scheduling ask");
+assert.equal(isExplicitSchedulingAskIntent(null), false, "null intent");
+assert.equal(isExplicitSchedulingAskIntent(undefined), false, "undefined intent");
+passed += 8;
 
 console.log(`PASS scheduling-turn decision eval (${passed} rows)`);

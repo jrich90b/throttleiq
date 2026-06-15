@@ -357,6 +357,21 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
   return { kind: "none", visitCommitment };
 }
 
+// An EXPLICIT scheduling ask from the appointment-timing parser: the customer is
+// actively asking for times or proposing a day/time to come in. This must OUTRANK the
+// mentioned-user / callback shortcut so that greeting the rep by name ("Good morning
+// Scott… would Saturday be a possibility?") doesn't get hijacked into a callback-to-Scott
+// and drop the scheduling request. Origin: Jeffrey +17164182619 (2026-06-15) — a paid-off
+// + "would Saturday be a possibility?" turn was consumed by the mentioned_user callback
+// path (callback todo scheduled for Scott + generic ack) because the message opened with
+// the rep's name; the correct scheduling routing (schedulingPrimaryIntent at index.ts
+// already handles ask_for_times + a day) never ran. Fail direction if dropped: the mention
+// shortcut silently eats a real scheduling request, so this gate stays deterministic and
+// is applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+export function isExplicitSchedulingAskIntent(intent?: string | null): boolean {
+  return intent === "ask_for_times" || intent === "provide_new_time";
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the
