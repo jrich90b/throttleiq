@@ -76,6 +76,7 @@ A turn's route among competing intents in a cluster (e.g. scheduling: arrival-ac
   - `parts` / `apparel` / `service` intent (from parser or explicit text) must be evaluated before generic availability heuristics like “in stock”.
   - This prevents part-number and gear inquiries from being misrouted as inventory-availability sales leads.
 - Keep deterministic source overrides (for example forced walk-in/test-ride/trade source rules) after parser mapping.
+- Model-less quote leads (Vehicle resolves to "Harley-Davidson Other", e.g. an HD.com "Request a Quote" with no model): the `unresolvedOtherInventoryFallback` draft-state repair must NOT punt to a vague "I'll have the team check current options..." line. It must advance the lead — ask which Harley they're eyeing (the only way to quote with no model) and name a pricing follow-through (`pull current pricing`) so the reply answers the quote ask. Vague team-check fillers score `intent_mismatch` + `adf_direct_ask_unanswered` and fail the tone gate. (Tone fixtures must use the **single-line** ADF inbound — `\n`-reformatting drops the `Request a Quote` pricing-ask detection.)
 
 ## Channel Layout Guardrail
 - Outbound drafting must remain channel-specific:
