@@ -442,6 +442,7 @@ import {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideCadenceInviteArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
   evaluateNoResponseFallback,
@@ -9153,6 +9154,30 @@ const FOLLOW_UP_VARIANTS_NO_SLOTS: Record<number, string[]> = {
   ]
 };
 
+// --- Appointment/stop-in invite A/B: CHALLENGER arm copy (2026-06-14) -------
+// Treatment for `decideCadenceInviteArm` === "challenger". Same scheduling
+// state-signal class as the control invite banks (every string carries a
+// `draftHasSchedulingPrompt` token so `registerScheduleInviteSent` still fires),
+// but a warmer, rider-to-rider register with a concrete reason to come in (see
+// it in person) instead of the generic "want a couple time options?" ask.
+// Charter-clean + zero em-dashes (held by cadence_template_voice + invite A/B evals).
+const FOLLOW_UP_VARIANTS_WITH_SLOTS_CHALLENGER: string[] = [
+  "Hey {name}, best way to size{label} up is to come in and see it in person. I've got {a} or {b} open, which works best?{extraLine}",
+  "{name}, nothing beats seeing{label} in person. Want to stop in? I can hold {a} or {b}, just say which.{extraLine}",
+  "If you want to stop in and check out{label} in person, {name}, {a} or {b} both work. Which one's easier?{extraLine}"
+];
+
+const FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER: Record<number, string[]> = {
+  4: [
+    "Hey {name}, worth coming in to see{label} in person? Tell me what day works and I'll have it up front for you.",
+    "Want to swing by and check out{label}, {name}? Just tell me what day's good and it's ready when you are.",
+    "No rush, {name}. Whenever you want to come in and see{label}, just say the word and I'll set it up."
+  ]
+};
+
+const FOLLOW_UP_INVITE_BASE_CHALLENGER =
+  "Easiest thing is to come in and see{label} in person, {name}. What day works? I'll have it ready up front.";
+
 const FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS: Record<number, string[]> = {
   0: [
     "Hey {name}, want me to send 2-3 bikes that fit what you're after, with ballpark price and payments?{extraLine}",
@@ -10823,6 +10848,8 @@ async function buildCadenceRegeneratedDraft(
     modelYear,
     trade: tradeName
   };
+  // Appointment/stop-in invite A/B: pure 50/50 by conv id (same in live + regen).
+  const inviteArm = decideCadenceInviteArm(conv.id);
   const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
     conv,
     name: firstName
@@ -10876,8 +10903,10 @@ async function buildCadenceRegeneratedDraft(
       }
     } else if (!message) {
       const fallbackTemplate =
-        FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
-        FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
+        lastSentStep === 4 && inviteArm === "challenger"
+          ? FOLLOW_UP_INVITE_BASE_CHALLENGER
+          : FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
+            FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1];
       message = renderFollowUpTemplate(fallbackTemplate, baseCtx);
     } else if (message.includes("{")) {
       message = renderFollowUpTemplate(message, baseCtx);
@@ -10958,7 +10987,9 @@ async function buildCadenceRegeneratedDraft(
         ? noModelStepVariants
         : engagedKind
           ? engagedNoSlotMap[lastSentStep] ?? engagedNoSlotMap[0] ?? []
-          : FOLLOW_UP_VARIANTS_NO_SLOTS[lastSentStep] ?? FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
+          : lastSentStep === 4 && inviteArm === "challenger"
+            ? FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER[4]
+            : FOLLOW_UP_VARIANTS_NO_SLOTS[lastSentStep] ?? FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
     const fallback = renderFollowUpTemplate(
       FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
         FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1],
@@ -26994,6 +27025,8 @@ async function processDueFollowUpsUnlocked() {
       modelYear,
       trade: tradeName
     };
+    // Appointment/stop-in invite A/B: pure 50/50 by conv id (same in live + regen).
+    const inviteArm = decideCadenceInviteArm(conv.id);
     const walkInComment = String(conv.lead?.walkInComment ?? "").trim();
     const walkInCommentLabel = labelWithThe.trim() || "a model";
     const hasFinanceDocsCadenceSignal = hasCadenceFinanceDocsSignal(conv);
@@ -27036,14 +27069,19 @@ async function processDueFollowUpsUnlocked() {
     const engagedWithSlot =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_WITH_SLOTS.general;
+    // Appointment-invite A/B: standard step-4 invite swaps to the challenger bank.
+    const standardNoSlotBank = (step: number): string[] =>
+      step === 4 && inviteArm === "challenger"
+        ? FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER[4]
+        : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [];
     const pickNoSlotVariantsForStep = (step: number): string[] => {
       if (!hasSpecificFollowUpModel) {
         return (
           FOLLOW_UP_VARIANTS_NO_MODEL_NO_SLOTS[step] ??
-          (isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [])
+          (isEngagedCadence ? engagedNoSlotMap[step] ?? [] : standardNoSlotBank(step))
         );
       }
-      return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : FOLLOW_UP_VARIANTS_NO_SLOTS[step] ?? [];
+      return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : standardNoSlotBank(step);
     };
   const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
     conv,
@@ -27257,7 +27295,9 @@ async function processDueFollowUpsUnlocked() {
             )
           : pickVariantNoRepeat(
               cadence,
-              FOLLOW_UP_VARIANTS_WITH_SLOTS,
+              inviteArm === "challenger"
+                ? FOLLOW_UP_VARIANTS_WITH_SLOTS_CHALLENGER
+                : FOLLOW_UP_VARIANTS_WITH_SLOTS,
               `${conv.leadKey}|${cadence.stepIndex}`,
               `standard:${cadence.stepIndex}:slots`
             );

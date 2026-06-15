@@ -24,7 +24,9 @@ const BANKS = [
   "SELL_FOLLOW_UP_MESSAGES",
   "TRADE_IN_FOLLOW_UP_MESSAGES",
   "FRESH_INFO_FOLLOW_UPS",
-  "SOFT_EXIT_FOLLOW_UPS"
+  "SOFT_EXIT_FOLLOW_UPS",
+  "FOLLOW_UP_VARIANTS_WITH_SLOTS_CHALLENGER",
+  "FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER"
 ] as const;
 
 function extractBankStrings(source: string, bankName: string): string[] {

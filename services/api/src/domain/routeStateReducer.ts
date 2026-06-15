@@ -428,6 +428,29 @@ export function decideFinancePricingTurn(
   return { kind: "none" };
 }
 
+// --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
+// The appointment-invite cadence message is our lowest-replying touch with real
+// volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy
+// to learn whether a warmer, reason-to-come-in register lifts replies/bookings.
+//
+// Assignment is a PURE, deterministic 50/50 split of conversation id (no stored
+// state, no randomness — same conv always lands in the same arm), so it is
+// identical in the live cadence tick and the regenerate path and the offline
+// report can recompute each conversation's arm without any message tagging.
+export type CadenceInviteArm = "control" | "challenger";
+
+export function decideCadenceInviteArm(conversationId: string): CadenceInviteArm {
+  const id = String(conversationId ?? "");
+  if (!id) return "control";
+  // FNV-1a 32-bit hash for a stable, well-distributed split.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 2 === 0 ? "control" : "challenger";
+}
+
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
   const confidence = Number.isFinite(Number(input.parserConfidence))
     ? Number(input.parserConfidence)
