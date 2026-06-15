@@ -27,6 +27,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isJustifiedLongTermCadencePark } from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -99,11 +100,15 @@ export function auditConversations(
     if (open && cadence?.status === "active" && !isPostSale) {
       const dueMs = parseMs(cadence.nextDueAt);
       if (dueMs != null) {
-        // Far-future park: due >90d out without a stated timeframe that covers it.
+        // Far-future park: due >90d out without a stated timeframe that covers
+        // it. A deliberate long-term cadence step (kind "long_term" with a
+        // deferred message) is a justified park, not a scheduler/parser fault —
+        // exclude it so a correct behavior doesn't block the clean-week gate.
+        // The year-rollover bug fingerprint is never excused (see classifier).
         const daysOut = (dueMs - nowMs) / DAY_MS;
         const justifiedMonths = timeframeJustifiesMonths(conv?.lead?.purchaseTimeframe);
         const justifiedDays = justifiedMonths * 31 + 45; // stated window + grace
-        if (daysOut > 90 && daysOut > justifiedDays) {
+        if (daysOut > 90 && daysOut > justifiedDays && !isJustifiedLongTermCadencePark(cadence)) {
           const touchedMs =
             parseMs(cadence.contextTagUpdatedAt) ?? parseMs(cadence.anchorAt) ?? parseMs(conv.updatedAt);
           farFuture.push({
@@ -283,6 +288,51 @@ function selfTest() {
       lead: { firstName: "Tasked" },
       followUp: { mode: "active" },
       followUpCadence: { status: "active", kind: "standard", nextDueAt: "2026-06-05T00:00:00.000Z" }
+    },
+    // Justified long-term park (the Courtney Ward class): kind long_term with a
+    // deferred message and a stated 4-6mo timeframe. Parked ~8mo out, which
+    // overshoots the timeframe window — but it's a deliberate long-term touch,
+    // not a fault, so it must NOT be flagged even though it was touched recently.
+    {
+      id: "+11",
+      status: "open",
+      lead: { firstName: "Courtney", purchaseTimeframe: "4-6 Months" },
+      followUpCadence: {
+        status: "active",
+        kind: "long_term",
+        stepIndex: 2,
+        nextDueAt: "2027-02-16T16:57:00.000Z",
+        anchorAt: "2026-06-11T19:00:00.000Z",
+        deferredMessage: "You mentioned a 4-6 Months timeline. Just reach out when the time is right."
+      }
+    },
+    // Long-term cadence BUT parked on the year-rollover fingerprint (1st of the
+    // month at 09:00 ET = 13:00Z): a rollover bug must stay flagged even though
+    // the kind is long_term and it carries a deferred message.
+    {
+      id: "+12",
+      status: "open",
+      lead: { firstName: "Rolled" },
+      followUpCadence: {
+        status: "active",
+        kind: "long_term",
+        nextDueAt: "2027-05-01T13:00:00.000Z",
+        anchorAt: "2026-06-11T19:00:00.000Z",
+        deferredMessage: "stand-in deferred message"
+      }
+    },
+    // Long-term cadence parked far out with NO deferred message: not a
+    // deliberate message-bearing touch, so stay conservative and flag it.
+    {
+      id: "+13",
+      status: "open",
+      lead: { firstName: "Silent" },
+      followUpCadence: {
+        status: "active",
+        kind: "long_term",
+        nextDueAt: "2027-03-10T12:34:00.000Z",
+        anchorAt: "2026-04-01T00:00:00.000Z"
+      }
     }
   ];
   const results = auditConversations(convs, { nowMs, openTodoConvIds: new Set(["+10"]) });
@@ -291,10 +341,14 @@ function selfTest() {
     console.error(`SELF-TEST FAIL: ${label}`);
     process.exit(1);
   };
-  if (byCheck.cadence_far_future.total !== 1 || byCheck.cadence_far_future.recent !== 1) {
-    fail(`far_future expected 1/1, got ${byCheck.cadence_far_future.total}/${byCheck.cadence_far_future.recent}`);
+  if (byCheck.cadence_far_future.total !== 3 || byCheck.cadence_far_future.recent !== 2) {
+    fail(`far_future expected 3/2, got ${byCheck.cadence_far_future.total}/${byCheck.cadence_far_future.recent}`);
   }
-  if (byCheck.cadence_far_future.offenders[0].convId !== "+1") fail("far_future flags the 2027 park");
+  const farFutureIds = byCheck.cadence_far_future.offenders.map((o: Offender) => o.convId);
+  if (!farFutureIds.includes("+1")) fail("far_future flags the 2027 park");
+  if (farFutureIds.includes("+11")) fail("far_future must exclude the justified long_term park (+11)");
+  if (!farFutureIds.includes("+12")) fail("far_future must still flag a long_term park on the rollover fingerprint (+12)");
+  if (!farFutureIds.includes("+13")) fail("far_future must still flag a long_term park with no deferred message (+13)");
   if (byCheck.cadence_stalled.total !== 1 || byCheck.cadence_stalled.offenders[0].convId !== "+3") {
     fail("stalled flags the overdue cadence only");
   }

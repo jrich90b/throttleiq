@@ -8,8 +8,10 @@ import path from "node:path";
 
 import {
   isAutomatedSenderInbound,
+  isJustifiedLongTermCadencePark,
   isNonSalesConversation,
-  isShadowReplayMessage
+  isShadowReplayMessage,
+  isYearRolloverParkFingerprint
 } from "../services/api/src/domain/scoringExclusions.ts";
 
 // Shadow replay markers (scripts/inbound_shadow_replay.ts id formats).
@@ -42,6 +44,54 @@ assert.equal(
 assert.equal(isNonSalesConversation({ followUp: { reason: "hiring_manager_inquiry" } }), true);
 assert.equal(isNonSalesConversation({ followUp: { reason: "post_sale" } }), false);
 assert.equal(isNonSalesConversation({}), false);
+
+// Year-rollover park fingerprint (the cadence bug that must stay flagged):
+// 1st of a month at a round 9-o'clock boundary (09:00Z, or 09:00 ET = 13:00Z/14:00Z).
+assert.equal(isYearRolloverParkFingerprint("2027-06-01T09:00:00.000Z"), true); // original signature
+assert.equal(isYearRolloverParkFingerprint("2027-05-01T13:00:00.000Z"), true); // 09:00 EDT
+assert.equal(isYearRolloverParkFingerprint("2027-01-01T14:00:00.000Z"), true); // 09:00 EST
+assert.equal(isYearRolloverParkFingerprint("2027-02-16T16:57:00.000Z"), false); // legit long-term date
+assert.equal(isYearRolloverParkFingerprint("2026-09-15T14:30:00.000Z"), false); // non-zero minutes
+assert.equal(isYearRolloverParkFingerprint("2027-05-01T18:00:00.000Z"), false); // 1st but not a 9-o'clock hour
+assert.equal(isYearRolloverParkFingerprint(null), false);
+
+// Justified long-term parks (the Courtney Ward / ride-challenge class) are
+// excluded from the far-future actions audit, but the rollover bug never is.
+assert.equal(
+  isJustifiedLongTermCadencePark({
+    kind: "long_term",
+    nextDueAt: "2027-02-16T16:57:00.000Z",
+    deferredMessage: "You mentioned a 4-6 Months timeline. Reach out when the time is right."
+  }),
+  true
+);
+assert.equal(
+  isJustifiedLongTermCadencePark({
+    kind: "long_term",
+    nextDueAt: "2026-09-15T14:30:00.000Z",
+    deferredMessage: "ride_challenge_final_mileage"
+  }),
+  true
+);
+// Rollover fingerprint is never excused, even on a long_term cadence.
+assert.equal(
+  isJustifiedLongTermCadencePark({
+    kind: "long_term",
+    nextDueAt: "2027-05-01T13:00:00.000Z",
+    deferredMessage: "stand-in"
+  }),
+  false
+);
+// Non-long_term kinds and message-less long_term parks stay flagged.
+assert.equal(
+  isJustifiedLongTermCadencePark({ kind: "standard", nextDueAt: "2027-02-16T16:57:00.000Z", deferredMessage: "x" }),
+  false
+);
+assert.equal(
+  isJustifiedLongTermCadencePark({ kind: "long_term", nextDueAt: "2027-03-10T12:34:00.000Z" }),
+  false
+);
+assert.equal(isJustifiedLongTermCadencePark(null), false);
 
 // Scorers must be wired to the shared module.
 const wiring: Array<[string, RegExp[]]> = [
