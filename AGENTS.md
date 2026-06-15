@@ -227,9 +227,17 @@ These must remain deterministic to avoid brittle or risky LLM behavior:
      `services/api/src/domain/agentVoice.ts`; applied via `applyInitialAdfPrefix` in
      `services/api/src/routes/sendgridInbound.ts`. Pinned by `agent_voice:eval`.
    - The invariant is: every initial ADF reply opens with a greeting that identifies the
-     agent + dealer (no em-dash, no "This is" corporate phrasing). Other intro sites
-     (finance/credit acks, dealer-ride, test-ride email) are being migrated to
-     `buildAgentIntro` next.
+     agent + dealer (no em-dash, no "This is" corporate phrasing).
+   - Migration progress (2026-06-15): the live-path `orchestrator.ts` reply drafts
+     (callback handoff, pricing + pricing-handoff, trade estimator, international-shipping
+     decline, availability-unknown) now front-load `buildAgentIntro`, and the
+     `llmDraft.ts` first-outbound few-shots emit the softened line too. Use
+     `buildAgentIntro` where a greeting is built inline and `buildAgentIntroPhrase`
+     ("it's {agent} over at {dealer}. ") for a greeting-less mid-reply identity line.
+     ADF-only drafts (finance prequal/credit, demo ride, first-touch availability,
+     `buildLongTermMessage`) are intentionally left on inline phrasing — `applyInitialAdfPrefix`
+     strips and re-prepends the softened intro on that path. Remaining: email drafts
+     (`sendgridInbound`/`index.ts`) and `index.ts` mid-reply intros.
 
 2) **Follow‑up cadence templates**
    - SMS cadence: `FOLLOW_UP_MESSAGES`
