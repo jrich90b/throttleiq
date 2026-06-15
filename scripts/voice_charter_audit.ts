@@ -74,6 +74,11 @@ export function checkMessage(body: string, opts: {
   if (lower.includes("the the")) {
     out.push({ check: "doubled_article", detail: "contains 'the the'" });
   }
+  // A modal/auxiliary must be followed by a bare verb, never a bare determiner.
+  // "I can a couple time options" (the verb dropped at runtime) is always broken.
+  if (/\b(?:i|we|you|they)\s+(?:can|could|will|would|can't|cannot|won't)\s+(?:a|an|the|some|any|two|your|my)\b/i.test(text)) {
+    out.push({ check: "dropped_verb", detail: "modal verb followed by a determiner (verb dropped)" });
+  }
   const fullName = text.match(/^(?:[Hh]ey|[Hh]i|[Hh]ello)\s+([A-Z][a-z']+)\s+([A-Z][a-z']+)\s*[,—–-]/);
   if (fullName && !["Harley", "Davidson"].includes(fullName[2])) {
     out.push({ check: "full_name_greeting", detail: `${fullName[1]} ${fullName[2]}` });
@@ -125,6 +130,21 @@ function selfTest() {
     checkMessage("Just checking back on the the Nightster. 100 in stock.", base)
       .some(v => v.check === "doubled_article"),
     "doubled article detected"
+  );
+  assert(
+    checkMessage("If you want to come in, I can a couple time options.", base)
+      .some(v => v.check === "dropped_verb"),
+    "dropped verb after modal detected"
+  );
+  assert(
+    checkMessage("If you want to come in, I can send a couple time options.", base)
+      .every(v => v.check !== "dropped_verb"),
+    "grammatical modal phrase passes (verb present)"
+  );
+  assert(
+    checkMessage("If helpful, I can send a quick price and payment snapshot.", base)
+      .every(v => v.check !== "dropped_verb"),
+    "modal followed by a verb does not trip the dropped-verb check"
   );
   assert(
     checkMessage("No rush, Glenn. When you're ready, text me.", base)

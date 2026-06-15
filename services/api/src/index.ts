@@ -27594,7 +27594,12 @@ async function processDueFollowUpsUnlocked() {
     const replyTo = maybeTagReplyTo(emailReplyTo, conv);
     const bookingUrl = buildBookingUrlForLead(dealerProfile?.bookingUrl, conv);
     const name = conv.lead?.firstName?.trim() || "there";
-    const label = hasSpecificFollowUpModel && followUpLabel ? `the ${followUpLabel}` : "your inquiry";
+    // followUpLabel already carries its article — formatModelLabelForFollowUp
+    // returns "the <model>". Re-prefixing "the" here shipped customers
+    // "the the <model>" in the email cadence. Use it as-is; the live path
+    // (labelWithThe) and EMAIL_FOLLOW_UP_MESSAGES already expect a full
+    // "the <model>" noun phrase.
+    const label = hasSpecificFollowUpModel && followUpLabel ? followUpLabel : "your inquiry";
     const bookingLine = conv.scheduleSoft && !allowProactiveSchedule
       ? "If you need anything, just let me know."
       : bookingUrl

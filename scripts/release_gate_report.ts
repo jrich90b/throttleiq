@@ -70,7 +70,7 @@ const DEFAULT_THRESHOLDS: Thresholds = {
 };
 
 const STREAK_TARGET = Math.max(1, num(process.env.RELEASE_GATE_STREAK_DAYS, 7));
-const TEMPLATE_SOURCED_CHECKS = new Set(["banned_phrase", "doubled_article", "bare_check_in"]);
+const TEMPLATE_SOURCED_CHECKS = new Set(["banned_phrase", "doubled_article", "bare_check_in", "dropped_verb"]);
 
 function num(input: unknown, fallback = 0): number {
   const n = Number(input);

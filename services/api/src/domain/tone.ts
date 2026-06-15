@@ -51,6 +51,40 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A modal/auxiliary ("can", "will", "could", ...) must be followed by a bare
+// verb, never a bare determiner/quantifier. "I can a couple time options" (the
+// verb "send" dropped by a malformed rewrite or a hand edit) is therefore always
+// ungrammatical. Used both to reject a rewrite that would introduce the gap and
+// to repair one that slipped through to a sent message.
+const MODAL_VERB_GAP_RE =
+  /\b(i|we|you|they)\s+(can|could|will|would|can't|cannot|won't)\s+(a|an|the|some|any|two|your|my)\b/i;
+
+function hasModalVerbGap(text: string): boolean {
+  return MODAL_VERB_GAP_RE.test(String(text ?? ""));
+}
+
+export function repairDroppedModalVerb(text: string): string {
+  const out = String(text ?? "");
+  if (!out || !hasModalVerbGap(out)) return out;
+  // Restore the domain-default verb ("send") between the modal and the
+  // determiner so the sentence reads grammatically again. A modal is never
+  // grammatically followed by a determiner, so this only fires on a real gap.
+  return out.replace(
+    /\b(i|we|you|they)\s+(can|could|will|would|can't|cannot|won't)\s+(a|an|the|some|any|two|your|my)\b/gi,
+    (_m, subject: string, modal: string, det: string) => `${subject} ${modal} send ${det}`
+  );
+}
+
+export function repairDoubledArticle(text: string): string {
+  // Collapse an accidental doubled determiner ("the the X", "a a X", "an an X")
+  // produced when a label-prefix path prepends an article to a label that
+  // already carries one. Deterministic cleanup of our own composed copy; a
+  // doubled article is never grammatical, so this is safe on any outbound text.
+  const out = String(text ?? "");
+  if (!out) return out;
+  return out.replace(/\b(the|a|an)\s+\1\b/gi, "$1");
+}
+
 function resolveDeterministicToneRulesPath(): string {
   const configured = normalizeText(process.env.DETERMINISTIC_TONE_RULES_PATH);
   return configured || dataPath("deterministic_tone_rules.json");
@@ -152,7 +186,14 @@ function applyDeterministicToneRules(text: string): string {
   if (!loaded) return out;
 
   for (const rule of loaded.rewrites) {
-    out = out.replace(rule.pattern, rule.replace);
+    const candidate = out.replace(rule.pattern, rule.replace);
+    if (candidate === out) continue;
+    // Verb-loss guard: a promoted/manual rewrite must never turn a grammatical
+    // modal phrase into a verb-dropped one ("I can send two ..." ->
+    // "I can a couple ..."). Skip any rule whose effect introduces that gap so a
+    // malformed delta can't ship a broken sentence to a customer.
+    if (hasModalVerbGap(candidate) && !hasModalVerbGap(out)) continue;
+    out = candidate;
   }
 
   if (loaded.blockedExact.has(normalizeRuleKey(out))) {
@@ -292,6 +333,12 @@ export function applyDeterministicToneOverrides(text: string): string {
   out = applyDeterministicToneRules(out);
   out = repairDanglingAcknowledgements(out);
   out = repairIncompleteSentence(out);
+  // Final grammar net before the text reaches a customer: restore a verb dropped
+  // between a modal and a determiner, and collapse a doubled article. Both run
+  // last so they also catch gaps introduced by an upstream edit, not just a
+  // tone rewrite.
+  out = repairDroppedModalVerb(out);
+  out = repairDoubledArticle(out);
   return out;
 }
 
