@@ -265,18 +265,80 @@ function fileManifest(files: MdfUploadedFile[]): string {
     .join("\n");
 }
 
-function fileContentInputs(files: MdfUploadedFile[]) {
+const SPREADSHEET_MAX_CHARS = 20000;
+
+function isCsvFile(file: MdfUploadedFile): boolean {
+  return /text\/csv|application\/csv/i.test(file.mimeType) || /\.csv$/i.test(file.name);
+}
+
+function isXlsxFile(file: MdfUploadedFile): boolean {
+  return /spreadsheetml/i.test(file.mimeType) || /\.xlsx$/i.test(file.name);
+}
+
+function formatSpreadsheetCell(value: unknown): string {
+  if (value == null) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "object") {
+    const v: any = value;
+    if (typeof v.text === "string") return v.text; // hyperlink / richText container
+    if (Array.isArray(v.richText)) return v.richText.map((r: any) => r?.text ?? "").join("");
+    if (typeof v.result !== "undefined" && v.result !== null) return String(v.result); // formula result
+    if (typeof v.hyperlink === "string") return v.hyperlink;
+    return "";
+  }
+  return String(value);
+}
+
+// Convert a CSV/XLSX claim source file into tab-separated text the extractor LLM can read
+// (it ingests PDFs/images directly but not spreadsheets). Bounded so a large workbook
+// can't blow up the prompt. Returns null for non-spreadsheet files (or unparseable ones).
+export async function spreadsheetFileToText(file: MdfUploadedFile): Promise<string | null> {
+  if (isCsvFile(file)) {
+    return file.buffer.toString("utf-8").slice(0, SPREADSHEET_MAX_CHARS).trim() || null;
+  }
+  if (isXlsxFile(file)) {
+    try {
+      const mod: any = await import("exceljs");
+      const ExcelJS = mod.default ?? mod;
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(file.buffer);
+      const lines: string[] = [];
+      wb.eachSheet((sheet: any) => {
+        lines.push(`# Sheet: ${sheet.name}`);
+        sheet.eachRow({ includeEmpty: false }, (row: any) => {
+          const values = Array.isArray(row.values) ? (row.values as unknown[]).slice(1) : [];
+          lines.push(values.map(formatSpreadsheetCell).join("\t"));
+        });
+      });
+      return lines.join("\n").slice(0, SPREADSHEET_MAX_CHARS).trim() || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function fileContentInputs(files: MdfUploadedFile[]) {
   const content: any[] = [];
-  files.forEach((file, index) => {
-    const input = fileInput(file);
-    if (!input) return;
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
     const role = file.providedRole || inferRoleFromName(file.name);
+    const sheetText = await spreadsheetFileToText(file);
+    if (sheetText) {
+      content.push({
+        type: "input_text",
+        text: `File ${index + 1}: ${file.name}. User-selected role: ${role}. Spreadsheet contents (tab-separated rows):\n${sheetText}`
+      });
+      continue;
+    }
+    const input = fileInput(file);
+    if (!input) continue;
     content.push({
       type: "input_text",
       text: `File ${index + 1}: ${file.name}. User-selected role: ${role}.`
     });
     content.push(input);
-  });
+  }
   return content;
 }
 
@@ -467,7 +529,7 @@ async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Pr
     return role === "invoice" || role === "receipt";
   });
   if (!invoiceFiles.length) return null;
-  const inputs = fileContentInputs(invoiceFiles);
+  const inputs = await fileContentInputs(invoiceFiles);
   if (!inputs.length) return null;
   const prompt = [
     "Extract ONLY invoice/payment fields from these MDF invoice or receipt files.",
@@ -533,9 +595,9 @@ async function createMdfJsonResponse(
 
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
   if (!files.length) return fallbackPacket(files, "Upload at least one invoice, receipt, creative, or proof file.");
-  const supportedInputs = fileContentInputs(files);
+  const supportedInputs = await fileContentInputs(files);
   if (!supportedInputs.length) {
-    return fallbackPacket(files, "No supported PDF or image files were uploaded.");
+    return fallbackPacket(files, "No supported PDF, image, or spreadsheet (CSV/XLSX) files were uploaded.");
   }
   if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) {
     return fallbackPacket(files, "LLM extraction is not enabled.");

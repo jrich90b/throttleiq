@@ -16201,18 +16201,18 @@ export default function Home() {
                 <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Upload</div>
                 <h3 className="mt-1 text-lg font-semibold">Claim source files</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  PDFs and images are supported. Use invoices, billing summaries, receipts, live ad screenshots, flyers, scripts, keyword lists, or event photos.
+                  PDFs, images, and spreadsheets (Excel/CSV) are supported. Use invoices, billing summaries, receipts, media/spend exports, live ad screenshots, flyers, scripts, keyword lists, or event photos.
                 </p>
                 <label className="mt-4 flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center hover:bg-gray-100">
                   <span className="text-sm font-semibold text-gray-800">
                     {mdfPacket ? "Add files to this claim" : "Upload MDF files"}
                   </span>
-                  <span className="mt-1 text-xs text-gray-500">PDF, PNG, JPG, or WebP</span>
+                  <span className="mt-1 text-xs text-gray-500">PDF, PNG, JPG, WebP, Excel (.xlsx), or CSV</span>
                   <input
                     className="hidden"
                     type="file"
                     multiple
-                    accept="application/pdf,image/png,image/jpeg,image/webp"
+                    accept="application/pdf,image/png,image/jpeg,image/webp,.csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     onChange={event => {
                       const nextFiles = Array.from(event.target.files ?? []).map((file, index) => ({
                         id: `${Date.now()}-${index}-${file.name}-${file.size}`,
