@@ -11,7 +11,8 @@ import {
   isNonActionableTurnText,
   modelAuthorityEnabled,
   passesModelRelevanceGuard,
-  resolveAuthoritativeModels
+  resolveAuthoritativeModels,
+  toAuthorityModels
 } from "../services/api/src/domain/turnUnderstandingAuthority.ts";
 
 // 1) Non-actionable detector
@@ -102,6 +103,46 @@ assert.ok(!passesModelRelevanceGuard("Road Glide", "Perfect. See you then."), "c
   assert.equal(modelAuthorityEnabled(), false, "flag=0 disabled (ships dark)");
   if (prev === undefined) delete process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY;
   else process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY = prev;
+}
+
+// 9) toAuthorityModels mapper (STEP 2 — maps pass.requestedModels -> resolver input)
+{
+  const mapped = toAuthorityModels([
+    { family: "Road Glide", trim: "Limited", confidence: 0.92 },
+    { family: "  ", confidence: 0.9 }, // empty family dropped
+    { family: "Street Glide" } // missing confidence => defaults to 1 (not gated out)
+  ]);
+  assert.deepEqual(
+    mapped,
+    [
+      { family: "Road Glide", trim: "Limited", confidence: 0.92 },
+      { family: "Street Glide", trim: null, confidence: 1 }
+    ],
+    "maps families, drops empties, defaults confidence to 1"
+  );
+  assert.deepEqual(toAuthorityModels(null), [], "null requestedModels => []");
+  assert.deepEqual(toAuthorityModels(undefined), [], "undefined => []");
+}
+
+// 10) STEP-2 live-cutover invariant: at each wired site, flag OFF (the per-turn helper
+//     returns []) => output is the deterministic list VERBATIM, identically in the live
+//     + regen paths (parity by construction — both route through the one resolver).
+{
+  const sitePassthrough = (det: string[]) =>
+    resolveAuthoritativeModels({ enabled: false, llmModels: [], deterministicModels: det, inboundText: "do you have a road glide?" }).models;
+  for (const det of [[], ["Road Glide"], ["Street Glide", "Low Rider S"]]) {
+    assert.deepEqual(sitePassthrough(det), det, `dark passthrough preserves ${JSON.stringify(det)}`);
+  }
+  const args = {
+    enabled: true,
+    llmModels: toAuthorityModels([{ family: "Fat Boy", confidence: 0.9 }]),
+    deterministicModels: ["Street Glide"],
+    inboundText: "can I test ride a fat boy"
+  };
+  const live = resolveAuthoritativeModels(args);
+  const regen = resolveAuthoritativeModels({ ...args });
+  assert.deepEqual(live.models, regen.models, "live + regen identical for identical inputs (parity)");
+  assert.deepEqual(live.models, ["Fat Boy"], "confident relevant model wins at the site");
 }
 
 console.log("PASS model authority eval");

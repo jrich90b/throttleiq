@@ -556,6 +556,12 @@ import {
   shouldSuppressInitialInventoryPhotoAppend,
   shouldSuppressVoiceCallbackTodoForAppointment
 } from "./domain/workflowRegressionGuards.js";
+import {
+  resolveAuthoritativeModels,
+  modelAuthorityEnabled,
+  toAuthorityModels,
+  type AuthorityModel
+} from "./domain/turnUnderstandingAuthority.js";
 
 import {
   upsertConversationByLeadKey,
@@ -923,6 +929,34 @@ function shadowCompareTurnUnderstanding(conv: any, text: string, history: { dire
     .catch(() => {
       /* shadow logging must never affect request handling */
     });
+}
+
+// ── Turn-Understanding model authority (Phase 2 STEP 2 — live cutover, MODELS only) ──
+// When TURN_UNDERSTANDING_MODEL_AUTHORITY=1, run the consolidated understanding pass
+// once per turn and let its relevance-guarded, confident requestedModels win over the
+// deterministic extractor at the model-selection sites (via resolveAuthoritativeModels).
+// Flag OFF (default) => returns [] WITHOUT calling the LLM, so resolveAuthoritativeModels
+// passes the deterministic list through verbatim: an exact dark no-op, zero added latency.
+// Memoized per turn so the live availability + test-ride sites share one pass call.
+const turnAuthorityModelMemo = new Map<string, Promise<AuthorityModel[]>>();
+async function resolveTurnAuthorityModels(conv: any, text: string): Promise<AuthorityModel[]> {
+  if (!modelAuthorityEnabled()) return [];
+  const body = String(text ?? "").trim();
+  if (!body) return [];
+  const lastInbound = Array.isArray(conv?.messages)
+    ? [...conv.messages].reverse().find((m: any) => m?.direction === "in")
+    : null;
+  const key = `${String(conv?.id ?? "")}:${String(lastInbound?.id ?? body.slice(0, 80))}`;
+  let pending = turnAuthorityModelMemo.get(key);
+  if (!pending) {
+    if (turnAuthorityModelMemo.size > 500) turnAuthorityModelMemo.clear();
+    const history = buildHistory(conv, 10);
+    pending = parseTurnUnderstandingWithLLM({ text: body, history, lead: conv?.lead })
+      .then(parsed => toAuthorityModels(parsed?.requestedModels))
+      .catch(() => []);
+    turnAuthorityModelMemo.set(key, pending);
+  }
+  return pending;
 }
 
 function recordRouteOutcome(scope: "live" | "regen" | "manual", outcome: string, detail?: Record<string, unknown>) {
@@ -21419,10 +21453,19 @@ async function resolveDeterministicAvailabilityReply(args: {
     }
   }
   const currentTextModelCandidates = findMentionedModelCandidates(args.text);
-  const requestedModelMentions = selectRequestedAvailabilityModelMentions(
+  const deterministicRequestedModelMentions = selectRequestedAvailabilityModelMentions(
     args.text,
     currentTextModelCandidates
   );
+  // Phase 2 STEP 2: model authority (dark unless TURN_UNDERSTANDING_MODEL_AUTHORITY=1).
+  // Flag off => resolveTurnAuthorityModels returns [] (no LLM) and the resolver returns
+  // the deterministic list verbatim — exact passthrough.
+  const requestedModelMentions = resolveAuthoritativeModels({
+    enabled: modelAuthorityEnabled(),
+    llmModels: await resolveTurnAuthorityModels(conv, args.text),
+    deterministicModels: deterministicRequestedModelMentions,
+    inboundText: args.text
+  }).models;
   const explicitModelFromText =
     requestedModelMentions[0] ?? (currentTextModelCandidates.length ? null : findMentionedModel(textLower));
   const mediaRawText = String(mediaInventoryExtraction?.rawText ?? "");
@@ -42278,10 +42321,12 @@ app.get("/mdf/claims", requireManager, (_req, res) => {
 
 function mdfUploadExt(originalName: string, mimeType: string): string {
   const originalExt = path.extname(originalName || "").toLowerCase();
-  if ([".pdf", ".png", ".jpg", ".jpeg", ".webp"].includes(originalExt)) return originalExt;
+  if ([".pdf", ".png", ".jpg", ".jpeg", ".webp", ".csv", ".xlsx"].includes(originalExt)) return originalExt;
   if (mimeType === "application/pdf") return ".pdf";
   if (mimeType === "image/png") return ".png";
   if (mimeType === "image/webp") return ".webp";
+  if (mimeType === "text/csv" || mimeType === "application/csv") return ".csv";
+  if (mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return ".xlsx";
   return ".jpg";
 }
 
@@ -42312,15 +42357,26 @@ async function buildMdfPacketFromUploads(files: RawMdfUpload[], notes: string) {
   if (!files.length) throw new Error("Upload at least one MDF file.");
   if (files.length > 16) throw new Error("Upload 16 MDF files or fewer.");
   const maxBytesPerFile = 25 * 1024 * 1024;
-  const allowed = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
+  const allowed = new Set([
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "text/csv",
+    "application/csv",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  ]);
+  // Browsers label CSV/XLSX inconsistently (text/csv, application/vnd.ms-excel, octet-stream,
+  // or empty), so also accept by extension. Content is parsed in mdfAssistant.spreadsheetFileToText.
+  const allowedByExt = /\.(csv|xlsx)$/i;
   const normalized: MdfUploadedFile[] = [];
   const uploadDir = path.resolve(getDataDir(), "uploads", "mdf");
   await fs.promises.mkdir(uploadDir, { recursive: true });
   const publicBase = process.env.PUBLIC_BASE_URL ?? "";
   for (const file of files) {
     const mimeType = String(file.mimeType ?? "").toLowerCase();
-    if (!allowed.has(mimeType)) {
-      throw new Error("Only PDF, PNG, JPG, and WebP files are supported.");
+    if (!allowed.has(mimeType) && !allowedByExt.test(String(file.originalName ?? ""))) {
+      throw new Error("Only PDF, PNG, JPG, WebP, Excel (.xlsx), and CSV files are supported.");
     }
     if (Number(file.size ?? 0) > maxBytesPerFile) {
       throw new Error("Each MDF file must be 25MB or smaller.");
@@ -49365,10 +49421,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       .slice(-1)[0];
     const lastOutboundForTrade = String(lastOutboundBeforeInbound?.body ?? "");
     // Same owned/comparison-bike guard as the live path (Todd Herian).
-    const regenMentionedModels = selectRequestedAvailabilityModelMentions(
+    const regenDeterministicMentions = selectRequestedAvailabilityModelMentions(
       String(event.body ?? ""),
       findMentionedModelCandidates(String(event.body ?? ""))
     );
+    // Phase 2 STEP 2: same model authority as the live path (dark unless flag on) — keeps
+    // regen + live model selection in lockstep through the one resolver.
+    const regenMentionedModels = resolveAuthoritativeModels({
+      enabled: modelAuthorityEnabled(),
+      llmModels: await resolveTurnAuthorityModels(conv, String(event.body ?? "")),
+      deterministicModels: regenDeterministicMentions,
+      inboundText: String(event.body ?? "")
+    }).models;
     const regenTestRideBikeSelection = shouldTreatInboundAsTestRideBikeSelection({
       inboundText: event.body,
       lastOutboundText: lastOutboundForTrade,
@@ -57968,10 +58032,17 @@ if (authToken && signature) {
   // Exclude the customer's owned/comparison bike so test-ride routing never
   // offers a ride on the bike they already own (Todd Herian 2026-06-13:
   // "compared to my current ultra limited" → "test ride on the Ultra Limited").
-  const mentionedModelsEarly = selectRequestedAvailabilityModelMentions(
+  const earlyDeterministicMentions = selectRequestedAvailabilityModelMentions(
     String(event.body ?? ""),
     findMentionedModelCandidates(String(event.body ?? ""))
   );
+  // Phase 2 STEP 2: model authority (dark unless flag on); parity with the regen path.
+  const mentionedModelsEarly = resolveAuthoritativeModels({
+    enabled: modelAuthorityEnabled(),
+    llmModels: await resolveTurnAuthorityModels(conv, String(event.body ?? "")),
+    deterministicModels: earlyDeterministicMentions,
+    inboundText: String(event.body ?? "")
+  }).models;
   const hasModelContext =
     getHarleyModelLexicon().some(m => textLower.includes(m.toLowerCase())) ||
     !!conv.inventoryContext?.model ||

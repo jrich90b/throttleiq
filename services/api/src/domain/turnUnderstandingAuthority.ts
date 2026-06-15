@@ -75,6 +75,23 @@ export function passesModelRelevanceGuard(family: string, inboundText: string): 
   return !isNonActionableTurnText(inboundText); // actionable turn may use the active subject
 }
 
+/**
+ * Map a turn-understanding pass's requestedModels into AuthorityModel[] (the
+ * resolver's `llmModels` input). Pure; drops empty families; defaults missing
+ * confidence to 1 so an un-scored model isn't silently filtered by the gate.
+ */
+export function toAuthorityModels(
+  requestedModels: Array<{ family?: string | null; trim?: string | null; confidence?: number | null }> | null | undefined
+): AuthorityModel[] {
+  return (requestedModels ?? [])
+    .map(m => ({
+      family: String(m?.family ?? "").trim(),
+      trim: m?.trim ?? null,
+      confidence: typeof m?.confidence === "number" ? m.confidence : 1
+    }))
+    .filter(m => m.family.length > 0);
+}
+
 export function resolveAuthoritativeModels(input: ModelAuthorityInput): ModelAuthorityDecision {
   const det = (input.deterministicModels ?? []).map(s => String(s ?? "").trim()).filter(Boolean);
   if (!input.enabled) {
