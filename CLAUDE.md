@@ -45,10 +45,17 @@ Do NOT rush parser consolidation — it changes LLM behavior; make it evidence-l
 - Gates (must be green): `(cd services/api && node ../../node_modules/typescript/bin/tsc -p
   tsconfig.json --noEmit)` and `npm run ci:eval`. Every behavior change needs a
   deterministic eval wired into `ci:eval`.
+- `npm run ci:eval` needs `OPENAI_API_KEY` (LLM-backed evals). It lives in the gitignored
+  `.env` (and `services/api/.env`) — load it before running the gate, e.g.
+  `set -a; source .env; set +a`. Never print or commit the key; `.env` stays untracked.
 - New customer state/route → typed parser + replay fixture + decision-table eval, in both paths.
 - Stage only files you changed (never `git add -A`). Commit trailer:
-  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. Push to `main` + deploy are
-  eval-gated; fetch first; confirm the push when another author's commit is unpushed locally.
+  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- Push to `main` and `npm run deploy:api` are PRE-AUTHORIZED (Joe, 2026-06-15; supersedes
+  the old "confirm every push" rule): once both gates above are green, push and deploy
+  eval-gated work without asking each time. Still required: `git fetch` first; do the work
+  on a branch off `main`; and if another author's commit is unpushed locally, note it in
+  your summary (surface it, don't block on it).
 
 ## Where to look, by task
 - **Customer messaging / routing / parsers (backend):** `AGENTS.md` (parser-first, route
