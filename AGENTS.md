@@ -220,10 +220,16 @@ Current parser artifacts:
 ## Deterministic (Must‑Keep)
 These must remain deterministic to avoid brittle or risky LLM behavior:
 
-1) **Initial ADF reply prefix**
-   - Always start with:  
-     `Hi {firstName} — This is {agentName} at {dealerName}.`
-   - Implemented in `services/api/src/routes/sendgridInbound.ts` (`applyInitialAdfPrefix`).
+1) **Initial ADF reply prefix** (softened to the Agent Voice Charter, 2026-06-15)
+   - Always start with:
+     `Hey {firstName}, it's {agentName} over at {dealerName}.`
+   - Built by the single source of truth `buildAgentIntro(...)` in
+     `services/api/src/domain/agentVoice.ts`; applied via `applyInitialAdfPrefix` in
+     `services/api/src/routes/sendgridInbound.ts`. Pinned by `agent_voice:eval`.
+   - The invariant is: every initial ADF reply opens with a greeting that identifies the
+     agent + dealer (no em-dash, no "This is" corporate phrasing). Other intro sites
+     (finance/credit acks, dealer-ride, test-ride email) are being migrated to
+     `buildAgentIntro` next.
 
 2) **Follow‑up cadence templates**
    - SMS cadence: `FOLLOW_UP_MESSAGES`

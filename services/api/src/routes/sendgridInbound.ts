@@ -43,6 +43,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
+import { buildAgentIntro, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
@@ -5453,8 +5454,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentName = profile?.agentName ?? "Brooke";
     const prefixLeadProfile = activeAdfLeadProfile ?? conv.lead;
     const firstName = normalizeDisplayCase(prefixLeadProfile?.firstName);
-    const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
-    const prefix = `${greeting}This is ${agentName} at ${dealerName}. `;
+    const prefix = buildAgentIntro(firstName, agentName, dealerName);
     const prefixLower = prefix.toLowerCase();
     let body = String(text ?? "").trim();
     if (body.toLowerCase().startsWith(prefixLower)) return body;
@@ -5464,7 +5464,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       prefixLeadProfile?.vehicle?.year ?? null,
       prefixLeadProfile?.vehicle?.model ?? prefixLeadProfile?.vehicle?.description ?? null
     );
-    body = body.replace(/^hi\s+[^—]+—\s*/i, "");
+    body = stripLeadingAgentGreeting(body);
     body = body.replace(/^i (just )?saw[^.]*\.\s*/i, "");
     if (isMetaLead) {
       body = body.replace(/^thanks\s*[-—]\s*i saw you wanted to learn more about[^.]*\.\s*/i, "");
