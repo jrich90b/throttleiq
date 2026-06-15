@@ -33,6 +33,7 @@ function leadName(lead: AnyObj | undefined): string | null {
 function run() {
   const cwd = process.cwd();
   const dataDir = process.env.DATA_DIR || path.resolve(cwd, "data");
+  const reportRoot = process.env.REPORT_ROOT || path.resolve(cwd, "reports");
   const conversationsPath =
     process.env.CONVERSATIONS_DB_PATH || path.join(dataDir, "conversations.json");
   const sinceHoursRaw = String(process.env.CHANGED_MESSAGES_SINCE_HOURS ?? "").trim();
@@ -45,8 +46,7 @@ function run() {
     process.exit(1);
   }
 
-  const runtimeRoot = path.resolve(path.dirname(conversationsPath), "..");
-  const defaultChangedPath = path.join(runtimeRoot, "reports", "changed_messages_all.json");
+  const defaultChangedPath = path.join(reportRoot, "changed_messages_all.json");
   const changedPath = process.env.CHANGED_MESSAGES_PATH || defaultChangedPath;
 
   const { conversations } = parseStore(conversationsPath);
