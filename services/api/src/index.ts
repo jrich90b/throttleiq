@@ -612,6 +612,8 @@ import {
   reassignOpenTodoOwnersForConversation,
   deleteConversation,
   setFollowUpMode,
+  applyMetaPromoInitialCadence,
+  isNearTermMetaTimeframe,
   incrementPricingAttempt,
   markPricingEscalated,
   getPricingAttempts,
@@ -47840,8 +47842,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ruleName: "meta_promo_generic_model"
     };
     setDialogState(conv, "pricing_init");
-    stopFollowUpCadence(conv, "meta_promo_generic_model_regen");
-    setFollowUpMode(conv, "paused_indefinite", "meta_promo_generic_model_regen");
+    // Route parity with the live ADF intake: apply the SAME timeframe-shaped cadence
+    // instead of stopping it. The old stopFollowUpCadence + paused_indefinite here
+    // silently killed the follow-up the live intake had set whenever a draft was
+    // regenerated — a warm 0-3mo Meta buyer would get one opener and then nothing.
+    const metaRegenCfg = await getSchedulerConfig();
+    applyMetaPromoInitialCadence(conv, metaRegenCfg.timezone);
+    if (
+      String(process.env.META_NEARTERM_CALL_TODO ?? "1").trim() !== "0" &&
+      isNearTermMetaTimeframe({
+        purchaseTimeframe: conv.lead?.purchaseTimeframe,
+        purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+      })
+    ) {
+      addCallTodoIfMissing(
+        conv,
+        "New H-D Meta promo lead — 0-3 month buyer. Call to qualify and pin the model/budget."
+      );
+    }
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }

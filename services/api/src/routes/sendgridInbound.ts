@@ -16,7 +16,8 @@ import {
   updateHoldingFromInbound,
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
-  resolveInitialAdfCadencePlan,
+  applyMetaPromoInitialCadence,
+  isNearTermMetaTimeframe,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
   getAllConversations,
@@ -7741,28 +7742,27 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // early return previously skipped it, so H-D Meta promo offer leads got the
     // first reply and then nothing (Jason +17162801172 / +17163614796, 2026-06:
     // followUp/cadence/dialogState all null after the AI's opener).
-    if (
-      !conv.followUpCadence?.status &&
-      !conv.appointment?.bookedEventId &&
-      conv.followUp?.mode !== "manual_handoff" &&
-      conv.followUp?.mode !== "paused_indefinite"
-    ) {
-      // Shape the follow-up to the lead's purchase timeframe: near-term/unsure → standard
-      // day-1 ramp; far-out (7+ months / multi-year) → gentle long_term nurture; explicit
-      // "not interested at this time" → opener only, no cadence (deliberate paused state).
-      const cadencePlan = resolveInitialAdfCadencePlan({
-        purchaseTimeframe: conv.lead?.purchaseTimeframe,
-        purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
-      });
-      if (cadencePlan === "suppress") {
-        setFollowUpMode(conv, "paused_indefinite", "meta_not_interested_at_this_time");
-      } else {
-        const cfg = await getSchedulerConfig();
-        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone, { kind: cadencePlan });
-      }
-    }
+    // Centralized timeframe-shaped cadence — shared with the regen path (route parity).
+    // near-term/unsure → standard ramp; 7+ months → long_term nurture; "not interested" →
+    // opener only (paused). Never stops an already-active cadence.
+    const metaCfg = await getSchedulerConfig();
+    applyMetaPromoInitialCadence(conv, metaCfg.timezone);
     queueInitialDraftForPreferredContact(ack, initialMediaUrls);
     maybeAddInitialCallTodo();
+    // Owner call task for a hot (0-3 month) Meta promo buyer so a salesperson works it
+    // instead of relying on AI cadence alone (kill switch META_NEARTERM_CALL_TODO=0).
+    if (
+      String(process.env.META_NEARTERM_CALL_TODO ?? "1").trim() !== "0" &&
+      isNearTermMetaTimeframe({
+        purchaseTimeframe: conv.lead?.purchaseTimeframe,
+        purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+      })
+    ) {
+      addCallTodoIfMissing(
+        conv,
+        "New H-D Meta promo lead — 0-3 month buyer. Call to qualify and pin the model/budget."
+      );
+    }
     const emailGreeting = firstName ? `Hi ${firstName},` : "Hi,";
     const offersLine = await resolveInitialOffersLine();
     const emailLines = [

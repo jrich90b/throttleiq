@@ -22,6 +22,7 @@ const QUEUE = /queueInitialDraftForPreferredContact\(/;
 const RETURN = /return res\.status\(200\)/;
 const SIGNALS: RegExp[] = [
   /startFollowUpCadence\(/,
+  /applyMetaPromoInitialCadence\(/, // shared Meta cadence helper (starts a cadence or pauses)
   /scheduleLongTermFollowUp\(/,
   /setFollowUpMode\(\s*conv,\s*"(manual_handoff|holding_inventory|paused_indefinite)"/,
   /result\.autoClose|closeConversation\(/, // lead is being closed — no follow-up wanted

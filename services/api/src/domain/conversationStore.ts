@@ -3730,6 +3730,47 @@ export function resolveInitialAdfCadencePlan(input: {
   return "standard";
 }
 
+// Near-term (0-3 month) purchase window. Distinct from resolveInitialAdfCadencePlan's
+// "standard" (which also covers 4-6mo + unsure). Structured-field check (lead timeframe),
+// NOT comprehension — used to create an owner call task on hot Meta promo leads.
+export function isNearTermMetaTimeframe(input: {
+  purchaseTimeframe?: string | null;
+  purchaseTimeframeMonthsStart?: number | null;
+}): boolean {
+  const label = String(input.purchaseTimeframe ?? "").toLowerCase();
+  if (label.includes("not interested")) return false;
+  if (label.includes("0-3") || /\b0\s*[-–]\s*3\b/.test(label)) return true;
+  // numeric fallback — guard against null/undefined (Number(null) === 0 would falsely match).
+  const m = input.purchaseTimeframeMonthsStart;
+  return typeof m === "number" && Number.isFinite(m) && m >= 0 && m <= 3;
+}
+
+// Centralized initial-ADF follow-up cadence for Meta promo leads, applied in BOTH the live
+// ADF intake and the regenerate path (route parity). Shapes the cadence to the lead's
+// purchase timeframe via resolveInitialAdfCadencePlan and — critically — NEVER stops an
+// already-active cadence. The regen path previously called stopFollowUpCadence +
+// paused_indefinite here, silently killing the follow-up the live intake had set (a warm
+// 0-3mo buyer would get one opener and then nothing if a draft was regenerated).
+export function applyMetaPromoInitialCadence(conv: Conversation, timeZone: string): void {
+  if (
+    conv.followUpCadence?.status ||
+    conv.appointment?.bookedEventId ||
+    conv.followUp?.mode === "manual_handoff" ||
+    conv.followUp?.mode === "paused_indefinite"
+  ) {
+    return;
+  }
+  const cadencePlan = resolveInitialAdfCadencePlan({
+    purchaseTimeframe: conv.lead?.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+  });
+  if (cadencePlan === "suppress") {
+    setFollowUpMode(conv, "paused_indefinite", "meta_not_interested_at_this_time");
+  } else {
+    startFollowUpCadence(conv, new Date().toISOString(), timeZone, { kind: cadencePlan });
+  }
+}
+
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
   if (conv.closedReason !== "sold" && !conv.sale?.soldAt) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);
