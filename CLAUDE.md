@@ -36,8 +36,9 @@ round-trips/turn. Per cluster, in order: **centralize the route decision → bur
 fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 36) →
 consolidate parsers (shadow-compared)**. Endgame = one `TurnUnderstanding` pass — see
 `docs/comprehension_consolidation_plan.md`. Done: scheduling cluster; finance/pricing
-pricing-continuation centralized (`decideFinancePricingTurn`, both paths). Next within
-finance/pricing: annotate the early-return guards + align the regen follow-up trigger.
+pricing-continuation centralized (`decideFinancePricingTurn`, both paths); early-return
+guards annotated by fail-direction. Next within finance/pricing: align the regen
+follow-up trigger (still uses the `askedDownRecently` regex vs the parser signal).
 Do NOT rush parser consolidation — it changes LLM behavior; make it evidence-led.
 
 ## Before you ship
