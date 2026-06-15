@@ -102,6 +102,35 @@ const cases: Case[] = [
       if (p.ownedOrTradeModel) return "no owned bike here";
       return null;
     }
+  },
+  {
+    // Relevance guard: a bare thank-you after a model was offered must NOT carry it in.
+    id: "relevance_bare_thanks_no_model",
+    text: "Thanks Joe",
+    history: [{ direction: "out", body: "That Breakout just came in, want to take a look?" }],
+    check: p =>
+      (p.requestedModels ?? []).length
+        ? `bare thanks must not carry the thread model, got ${JSON.stringify(p.requestedModels)}`
+        : null
+  },
+  {
+    // Slang/shorthand the deterministic layer misses: "23 lrs" = 2023 Low Rider S.
+    id: "slang_lrs_low_rider_s",
+    text: "Can you lmk when you get the 23 lrs?",
+    check: p =>
+      families(p).some(f => f.includes("low rider s"))
+        ? null
+        : `'23 lrs' should map to Low Rider S, got ${JSON.stringify(p.requestedModels)}`
+  },
+  {
+    // Owned bike stated, nothing requested — owned, not a request.
+    id: "owned_883_not_requested",
+    text: "I like the 883 that's what I have right now",
+    check: p => {
+      if ((p.requestedModels ?? []).length) return `owned 883 must not be a request, got ${JSON.stringify(p.requestedModels)}`;
+      if (!p.ownedOrTradeModel || !/883/.test(p.ownedOrTradeModel.family ?? "")) return "883 should be owned/trade model";
+      return null;
+    }
   }
 ];
 
