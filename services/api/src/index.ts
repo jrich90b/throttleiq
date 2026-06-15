@@ -53089,6 +53089,13 @@ if (authToken && signature) {
     });
   }
 
+  // Deterministic COMPREHENSION reply-router — MIGRATE candidate (AGENTS.md "comprehend,
+  // never regex" + Migrate-vs-Keep). This reads the customer's affordability / ride-
+  // confidence objection with a regex and composes a reply. Fail direction if retired =
+  // a less-precise generic orchestrator reply (fail-SAFE), the same class as the already-
+  // migrated location/callback routers — so this is comprehension debt to move to a typed
+  // parser + replay fixture, NOT a deterministic gate to keep. Not yet migrated (needs
+  // parser coverage); do not delete without a parser replacement.
   if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
@@ -53237,6 +53244,11 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply);
   }
 
+  // Deterministic SIDE-EFFECT / handoff gate — KEEP (AGENTS.md "side effects
+  // (close/cadence/todo/state)"). A lien-holder info request fires a finance-doc todo +
+  // manual handoff (maybeEscalateLienHolderInfoRequest createTodo/setManualHandoff). Fail
+  // direction if retired = a silently-dropped finance handoff (fail-UNSAFE), so it stays
+  // deterministic until parser coverage is proven by real-miss fixtures.
   if (isLienHolderInfoRequestText(event.body ?? "")) {
     const dealerProfileForLien = await getDealerProfileHot();
     const reply = maybeEscalateLienHolderInfoRequest(conv, event, dealerProfileForLien, {
@@ -55518,6 +55530,11 @@ if (authToken && signature) {
       (await summarizeSalespersonNoteWithLLM({ text: updateText, history: recentHistory })) ?? "";
     const todoText = noteSummary || updateText || `Update for ${firstName}`;
     addTodo(conv, "note", todoText, event.providerMessageId);
+    // Deterministic SIDE-EFFECT / handoff gate — KEEP (AGENTS.md "side effects
+    // (close/cadence/todo/state)"). A "did you run my numbers?" status question creates a
+    // payments todo, sets payments_handoff/manual_handoff, and escalates pricing. Fail
+    // direction if retired = a silently-dropped payments-status handoff (fail-UNSAFE), so
+    // it stays deterministic until parser coverage is proven by real-miss fixtures.
     if (isPaymentNumbersStatusQuestionText(event.body ?? "")) {
       addTodo(
         conv,
