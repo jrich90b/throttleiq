@@ -23,6 +23,7 @@ import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
+import { buildAgentIntro } from "./agentVoice.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -2409,8 +2410,9 @@ export async function orchestrateInbound(
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const firstName = ctx?.lead?.firstName?.trim() || "";
     const ack =
-      `Hi, this is ${agentName} at ${dealerName}. ` +
+      buildAgentIntro(firstName, agentName, dealerName) +
       buildInternationalShippingUnavailableReply(dealerProfile);
     return finalize({
       intent: "GENERAL",
@@ -2623,7 +2625,6 @@ export async function orchestrateInbound(
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
       const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
       const firstName = ctx?.lead?.firstName?.trim() || "";
-      const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
       const rawModel = ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "";
       const modelKnown = !!rawModel && !isUnknownModel(rawModel);
       const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
@@ -2636,9 +2637,7 @@ export async function orchestrateInbound(
         ? `I’ll have ${salesName} reach out.`
         : "I’ll have someone from our sales team reach out.";
       const ack =
-        `${greeting}${thanks}` +
-        `This is ${agentName} at ${dealerName}. ` +
-        `${reachOut}`;
+        `${buildAgentIntro(firstName, agentName, dealerName)}${thanks}${reachOut}`;
       return finalize({
         intent,
         stage: "ENGAGED",
@@ -3670,8 +3669,8 @@ export async function orchestrateInbound(
           const disclaimer = "MSRP is before tax, fees, trade-in, and financing.";
           const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
-            `Hi ${firstName} — thanks for your interest in the ${yearLabel}${modelLabel}. ` +
-            `This is ${agentName} at ${dealerName}. ${priceLine} ${disclaimer}` +
+            `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your interest in the ${yearLabel}${modelLabel}. ` +
+            `${priceLine} ${disclaimer}` +
             (timelineNote ? ` ${timelineNote}` : "") +
             (financeLine ? ` ${financeLine}` : "");
           return finalize({
@@ -3712,8 +3711,7 @@ export async function orchestrateInbound(
               : null;
             const timelineNote = longTermInvite ? longTermInvite.trim() : "";
             const draft =
-              `Hi ${firstName} — thanks for your interest in the ${originalLabel}. ` +
-              `This is ${agentName} at ${dealerName}. ` +
+              `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your interest in the ${originalLabel}. ` +
               `We don’t have a ${originalLabel} in stock right now, ` +
               `but we do have ${fallbackLabel} units available. ${priceLine} ` +
               `${fallbackNote ? `Right now there's ${fallbackNote} available. ` : ""}` +
@@ -3739,7 +3737,7 @@ export async function orchestrateInbound(
             : "Thanks for the update.";
           const timelineNote = longTermInvite ? longTermInvite.trim() : "";
           const draft =
-            `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+            `${buildAgentIntro(firstName, agentName, dealerName)}` +
             `${openingLine} I’d love to help with pricing. Which ${yearLabel}model are you interested in?` +
             (timelineNote ? ` ${timelineNote}` : "") +
             (financeLine ? ` ${financeLine}` : "");
@@ -3764,7 +3762,7 @@ export async function orchestrateInbound(
             : "Thanks for reaching out. ";
         const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
-          `Hi ${firstName} — ${thankLine}This is ${agentName} at ${dealerName}. ` +
+          `${buildAgentIntro(firstName, agentName, dealerName)}${thankLine}` +
           "I’ll have a manager pull the exact pricing and follow up shortly." +
           (timelineNote ? ` ${timelineNote}` : "") +
           (financeLine ? ` ${financeLine}` : "");
@@ -3962,9 +3960,10 @@ export async function orchestrateInbound(
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const firstName = ctx?.lead?.firstName?.trim() || "";
     const ack =
-      `Hi, this is ${agentName} at ${dealerName}. ` +
-      "Thanks for checking — I’m going to have a manager verify availability and follow up shortly.";
+      buildAgentIntro(firstName, agentName, dealerName) +
+      "Thanks for checking. I’m going to have a manager verify availability and follow up shortly.";
     return finalize({
       intent,
       stage: "ENGAGED",
@@ -4542,8 +4541,8 @@ export async function orchestrateInbound(
         const tradeModel = normalizeModelLabel(trade?.model ?? trade?.description);
         const tradeLabel = (tradeYear + tradeModel).trim();
         const opening = tradeLabel
-          ? `Hi ${leadFirst} — thanks for using our trade‑in estimator on your ${tradeLabel}. `
-          : `Hi ${leadFirst} — thanks for using our trade‑in estimator. `;
+          ? `Thanks for using our trade‑in estimator on your ${tradeLabel}. `
+          : `Thanks for using our trade‑in estimator. `;
         const disclaimer =
           "The estimate is a guide; final trade value comes from an in‑person evaluation and can be higher. ";
         const schedule =
@@ -4554,7 +4553,7 @@ export async function orchestrateInbound(
           intent: "TRADE_IN",
           stage: "ENGAGED",
           shouldRespond: true,
-          draft: `${opening}This is ${agentName} at ${dealerName}. ${disclaimer}${schedule}`,
+          draft: `${buildAgentIntro(leadFirst, agentName, dealerName)}${opening}${disclaimer}${schedule}`,
           suggestedSlots
         });
       }

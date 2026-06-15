@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   buildAgentGreeting,
   buildAgentIntro,
+  buildAgentIntroPhrase,
   stripLeadingAgentGreeting
 } from "../services/api/src/domain/agentVoice.ts";
 
@@ -21,6 +22,14 @@ assert.equal(intro, "Hey Nicholas, it's Alexandra over at American Harley-Davids
 assert.ok(!intro.includes("—"), "intro must contain no em-dash (charter)");
 assert.ok(!/this is /i.test(intro), "intro must not use the old 'This is' phrasing");
 assert.ok(intro.startsWith("Hey "), "intro must open with 'Hey'");
+
+// Greeting-less phrase: the intro clause without a "Hey {name}," — used for mid-reply
+// identity lines and `${buildAgentGreeting(...)}` openers. buildAgentIntro is just the
+// greeting + this phrase, so the two must stay in lock-step.
+const introPhrase = buildAgentIntroPhrase("Alexandra", "American Harley-Davidson");
+assert.equal(introPhrase, "it's Alexandra over at American Harley-Davidson. ");
+assert.ok(!/this is /i.test(introPhrase), "intro phrase must not use the old 'This is' phrasing");
+assert.equal(buildAgentGreeting("Nicholas") + introPhrase, intro, "buildAgentIntro = greeting + phrase");
 
 // Stripper removes BOTH the old and new leading greeting forms before re-prefixing.
 assert.equal(stripLeadingAgentGreeting("Hi Nicholas — thanks for reaching out."), "thanks for reaching out.");

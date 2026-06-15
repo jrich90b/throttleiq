@@ -21,7 +21,19 @@ export function buildAgentIntro(
   agentName: string,
   dealerName: string
 ): string {
-  return `${buildAgentGreeting(firstName)}it's ${agentName} over at ${dealerName}. `;
+  return `${buildAgentGreeting(firstName)}${buildAgentIntroPhrase(agentName, dealerName)}`;
+}
+
+/**
+ * Greeting-less intro clause: "it's {agent} over at {dealer}. " (trailing space).
+ * Use when a greeting is emitted separately (e.g. a template already opens with
+ * `buildAgentGreeting(...)`) or for a bare mid-reply identity line that should not
+ * re-introduce with a fresh "Hey {name}," — pair it after a comma/greeting, never
+ * standalone after a period (the lowercase "it's" would start a sentence). Openers
+ * that build their own greeting should use `buildAgentIntro` instead.
+ */
+export function buildAgentIntroPhrase(agentName: string, dealerName: string): string {
+  return `it's ${agentName} over at ${dealerName}. `;
 }
 
 /**
