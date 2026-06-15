@@ -155,3 +155,77 @@ regression shows up the next morning, not in a customer's thread.
 - New customer phrasings ("roadglide", "around 10", "my current X") are handled
   on first contact — no new regex required.
 - The deterministic extractor count goes DOWN over time, not up.
+
+---
+
+## Design refinement (2026-06-15): Phase-1 evidence + the three antipatterns
+
+Phase 1 has data now (`turn_understanding_shadow:backfill`, 400 historical turns,
+correctness-judged), and an NLU-architecture audit named three structural
+antipatterns. Both sharpen Phase 2 below.
+
+### Phase-1 result — the win is real but smaller than the gross signal
+- **GROSS** model/schedule disagreement (understanding pass vs deterministic
+  extractors): **25.3%** of turns.
+- **NET** (correctness-judged: the LLM is *correct AND relevant to this turn*):
+  **~5% of turns** — only **~20% of the gross signal is a genuine win**.
+- The other ~80% is the pass **over-attaching a thread model onto a turn that
+  doesn't need one** ("Thanks Joe" → Breakout, "This bike is awesome" → Road
+  Glide). Genuine wins are slang/shorthand/compound spellings ("21 SGS", "23 lrs",
+  "tri glide") + owned-vs-requested separation — the exact moles we hand-patch.
+- **Implication:** consolidation is worth the ~1-in-20-turns genuine resolution,
+  but a naive cutover would TRADE today's "det misses 5%" for a NEW
+  "LLM over-attaches on ~20%" failure mode. Hence the **relevance guard** below is
+  a hard requirement, not a nicety.
+
+### Antipattern 1 — fragmented intent taxonomy → ONE enum
+11 intent/action enums (ROUTING_DECISION, InboundReplyAction, TURN_UNDERSTANDING
+primary_intent, booking/ack/disposition/accessory…) where "scheduling"/"callback"/
+"availability" mean different things, forcing inline conversions in `index.ts`.
+- Define a **single canonical `TurnIntent` enum** the understanding pass emits,
+  plus a thin, table-driven adapter for any legacy consumer not yet migrated.
+- Net new arms extend the ONE enum + its decision table (per the route-centralization
+  rule), never a new parser.
+
+### Antipattern 2 — label-only slots → DATA slots in the schema
+Today parsers emit flags (`asksDownPayment=true`) not values; pricing/trade then
+run *separate* inference passes to recover the data. Extend `TurnUnderstanding`
+with the slots the handlers actually need, so extraction happens once:
+```
+finance:  { monthlyTarget|null, downPayment|null, term|null, riderToRider:bool }
+trade:    { hasTrade:bool, tradeModel|null, direction: cash|trade|either|null }
+// (models / schedule / owned already in the Phase-0 schema)
+```
+Each slot is confidence-tagged; the publisher reads slots, never re-parses text.
+
+### Antipattern 3 — per-cluster clarification → ONE slot-fill/clarify router
+Each cluster hand-rolls its missing-slot ask via dialog states (`pricing_need_model`,
+`trade_trade`, `clarify_schedule`), and the confidence gate is applied separately
+from slot completeness — so a turn can pass routing yet still need a second clarify.
+- Add a **central required-slots table** per intent (e.g. pricing requires `model`;
+  trade requires `direction`; booking requires `day`+`time`) and one router that,
+  given the understanding object, asks for the FIRST missing required slot
+  **atomically** — one consolidated question, not a chain of per-cluster states.
+- Confidence-low and slot-missing collapse into the same clarify decision.
+
+### The relevance guard (the over-attachment fix — Phase 2 gate)
+Before any extracted model/slot becomes authority, it must pass a **relevance
+test**: the customer referenced it on THIS turn, OR it is the unambiguous active
+subject of the thread AND the turn is actionable for it. A model pulled from
+context onto a bare ack ("ok", "thanks", "see you then") is **dropped**, not
+acted on. Pin with a fixture set drawn from the backfill's false-positive samples;
+`answer_correctness` must show no rise in wrong-model drafts.
+
+### Few-shot upgrade (cheap, do in Phase 0/1)
+`turn_understanding` carries only ~7 few-shots for an 11-label space (routing has
+34). Seed it from the backfill's genuine-win samples (slang/shorthand/owned-vs-
+requested) AND its over-attachment negatives (bare acks → no model). This alone
+should lift net precision before any cutover.
+
+### Updated phase gates
+- **Phase 2 entry:** relevance guard implemented + its fixtures green; backfill
+  net-win precision (correct+relevant / gross) ≥ an agreed bar (e.g. ≥80%) after
+  the few-shot upgrade; `answer_correctness` `owned_bike_offered` = 0 in shadow.
+- **Per-decision cutover** stays one-at-a-time, kill-switched, graded next morning.
+- This remains an **approve-first** change (core comprehension) per the tiered
+  autonomy policy — Phase 0/1 + this doc are safe; Phase 2 cutover needs Joe's OK.
