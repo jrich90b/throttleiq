@@ -131,6 +131,30 @@ const cases: Case[] = [
       if (!p.ownedOrTradeModel || !/883/.test(p.ownedOrTradeModel.family ?? "")) return "883 should be owned/trade model";
       return null;
     }
+  },
+  {
+    // Schedule relevance: an en-route ETA is logistics, not a new schedule request.
+    // Metric (and Phase-2 booking) key on a DAY-anchored commitment; a lone time
+    // with no day is not a bookable request, so we pin no dayLabel + no commitment.
+    id: "arrival_eta_no_schedule",
+    text: "Heading out, should be there a little after 11:30",
+    check: p => {
+      const s = p.requestedSchedule;
+      if (s && (s.dayLabel ?? "").trim()) return `en-route ETA must not carry a day, got ${JSON.stringify(s)}`;
+      if (s && s.isCommitment) return `en-route ETA must not be a scheduling commitment, got ${JSON.stringify(s)}`;
+      return null;
+    }
+  },
+  {
+    // Schedule relevance: a sign-off after a time is set is not a new schedule request.
+    id: "signoff_no_schedule",
+    text: "Perfect. See you then.",
+    history: [{ direction: "out", body: "Great, you're all set for Saturday at 2." }],
+    check: p => {
+      const s = p.requestedSchedule;
+      const hasSched = s && ((s.dayLabel ?? "").trim() || (s.timeText ?? "").trim());
+      return hasSched ? `sign-off must not be a requested_schedule, got ${JSON.stringify(s)}` : null;
+    }
   }
 ];
 
