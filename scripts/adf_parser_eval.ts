@@ -97,8 +97,78 @@ Description: Would like to know what you could do for trade or cash.]]></comment
  </prospect>
 </adf>`;
 
+// Trade Accelerator truncates the model mid-string, landing inside an open paren:
+// "C50K8 Boulevard (Two-Tone)" arrives as "C50K8 Boulevard (Two". The dangling "(Two"
+// was leaking straight into customer drafts (Laricuss Nelson, Ref 11466). We strip the
+// unclosed parenthetical from BOTH the trade and the active vehicle.
+const laricussTruncatedTradeAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-06-15T22:09:12+00:00</requestdate>
+   <id sequence="1" source="Trade Accelerator">11466</id>
+   <vehicle interest="buy" status="NEW">
+     <year>2026</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Road Glide (Spec</model>
+     <vin></vin>
+   </vehicle>
+   <vehicle interest="trade-in">
+     <year>2008</year>
+     <make>SUZUKI</make>
+     <model>C50K8 Boulevard (Two</model>
+     <vin></vin>
+     <odometer unit="MILES"></odometer>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Laricuss</name>
+       <name part="last">Nelson</name>
+       <email>nelsonlaricuss@gmail.com</email>
+       <phone type="cellphone">7162202658</phone>
+       <comment><![CDATA[trade-in appraisal request]]></comment>
+     </contact>
+   </customer>
+   <provider>
+     <name part="full" type="individual">Trade Accelerator - Trade In</name>
+   </provider>
+ </prospect>
+</adf>`;
+
+// A COMPLETE parenthetical must be left untouched — only unclosed fragments are stripped.
+const completeParenTradeAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-06-15T22:09:12+00:00</requestdate>
+   <id sequence="1" source="Trade Accelerator">11467</id>
+   <vehicle interest="buy" status="NEW">
+     <year>2026</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Road Glide</model>
+     <vin></vin>
+   </vehicle>
+   <vehicle interest="trade-in">
+     <year>2008</year>
+     <make>SUZUKI</make>
+     <model>Boulevard (Two-Tone)</model>
+     <vin></vin>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Test</name>
+       <name part="last">Complete</name>
+       <phone type="cellphone">7160000000</phone>
+       <comment><![CDATA[trade-in appraisal request]]></comment>
+     </contact>
+   </customer>
+ </prospect>
+</adf>`;
+
 const markLead = parseAdfXml(markNicholsTradeAcceleratorAdf);
 const matthewLead = parseAdfXml(matthewWallValueMyTradeAdf);
+const laricussLead = parseAdfXml(laricussTruncatedTradeAdf);
+const completeParenLead = parseAdfXml(completeParenTradeAdf);
 
 const checks: Check[] = [
   { id: "mark_lead_ref", actual: markLead.leadRef, expected: "11310" },
@@ -121,7 +191,18 @@ const checks: Check[] = [
     id: "matthew_primary_not_metadata_year",
     actual: matthewLead.year === "2026" ? "2026" : "not_2026",
     expected: "not_2026"
-  }
+  },
+  // Dangling "(Two" stripped from the trade model + description (the leak into drafts)
+  { id: "laricuss_trade_model_sanitized", actual: laricussLead.tradeVehicle?.model, expected: "C50K8 Boulevard" },
+  {
+    id: "laricuss_trade_desc_no_open_paren",
+    actual: (laricussLead.tradeVehicle?.description ?? "").includes("("),
+    expected: false
+  },
+  // Same strip applied to the active/buy vehicle model
+  { id: "laricuss_buy_model_sanitized", actual: laricussLead.vehicleModel, expected: "Road Glide" },
+  // Complete parenthetical preserved — only UNCLOSED fragments are stripped
+  { id: "complete_paren_trade_model_preserved", actual: completeParenLead.tradeVehicle?.model, expected: "Boulevard (Two-Tone)" }
 ];
 
 let passed = 0;

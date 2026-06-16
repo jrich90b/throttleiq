@@ -154,6 +154,23 @@ function normalizeDisplayCase(raw?: string | null): string | undefined {
   return letters === letters.toUpperCase() ? toTitleCase(trimmed) : trimmed;
 }
 
+// Some lead feeds (e.g. Trade Accelerator) truncate the vehicle model mid-string,
+// landing inside an open parenthetical — "C50K8 Boulevard (Two-Tone)" arrives as
+// "C50K8 Boulevard (Two". Left as-is it leaks a dangling, unclosed "(Two" straight
+// into customer drafts. Drop the trailing fragment from the unmatched "(" onward so
+// the draft reads "Suzuki C50K8 Boulevard". Only triggers when an open paren has no
+// matching close — a COMPLETE "(Two-Tone)" is left untouched. Fail-safe: worst case
+// it drops a partial trailing color/trim token, never a closed parenthetical.
+function stripDanglingParenthetical(raw?: string | null): string | undefined {
+  if (raw == null) return undefined;
+  const value = String(raw);
+  const open = (value.match(/\(/g) ?? []).length;
+  const close = (value.match(/\)/g) ?? []).length;
+  if (open <= close) return value.trim() || undefined;
+  const cut = value.slice(0, value.lastIndexOf("("));
+  return cut.replace(/[\s\-–—:,(]+$/u, "").trim() || undefined;
+}
+
 function parseColorTrimFromItem(item?: string) {
   if (!item) return {};
   let working = item.replace(/\s+/g, " ").trim();
@@ -509,7 +526,7 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     }
     vehicleModel = vehicleModel.replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, "").trim();
   }
-  vehicleModel = normalizeDisplayCase(vehicleModel);
+  vehicleModel = stripDanglingParenthetical(normalizeDisplayCase(vehicleModel));
   let vehicleTrim = text(vehicle?.trim) ?? parsedFromComment.trim;
   vehicleTrim = normalizeDisplayCase(vehicleTrim);
   const vehicleCondition =
@@ -558,10 +575,10 @@ export function parseAdfXml(adfXml: string): ParsedAdfLead {
     const tradeOdometerRaw = text(tradeVehicleRaw?.odometer);
     const tradeMileage =
       tradeOdometerRaw != null ? Number(String(tradeOdometerRaw).replace(/,/g, "")) : undefined;
-    tradeModel = normalizeDisplayCase(tradeModel);
+    tradeModel = stripDanglingParenthetical(normalizeDisplayCase(tradeModel));
     const tradeDesc =
       [tradeMake, tradeModel].filter(Boolean).join(" ") ||
-      text(tradeVehicleRaw?.description) ||
+      stripDanglingParenthetical(text(tradeVehicleRaw?.description)) ||
       undefined;
     tradeVehicle = {
       year: tradeYear,
