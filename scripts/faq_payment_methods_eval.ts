@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-import { buildPaymentMethodsReply } from "../services/api/src/domain/paymentMethodsReply.ts";
+import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "../services/api/src/domain/paymentMethodsReply.ts";
 
 const orch = fs.readFileSync(path.resolve("services/api/src/domain/orchestrator.ts"), "utf8");
 const draft = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
@@ -36,6 +36,45 @@ assert.equal(buildPaymentMethodsReply({ creditCardCapUsd: null }), buildPaymentM
 assert.ok(/case "payment_methods":\s*\n\s*return buildPaymentMethodsReply\(/.test(orch), "the payment_methods case must call buildPaymentMethodsReply");
 assert.ok(/creditCardCapUsd: dealerProfile\?\.payments\?\.creditCardCapUsd/.test(orch), "the FAQ call site must pass the dealer-profile card cap");
 assert.ok(/creditCardCapUsd\?: number;/.test(profile), "DealerProfile.payments must expose creditCardCapUsd");
+
+// 1d) The deterministic answer fires in BOTH paths INDEPENDENT of the dark FAQ layer flag.
+//     The FAQ layer ships dark (FAQ_LAYER_ENABLED is unset in prod), so before this guard a tender
+//     question fell through to the non-deterministic LLM draft — which can drift into an inventory
+//     prompt and trip the manual_handoff invariant (Bobby Kindred regen no-op, 6/16). The classifier
+//     now runs whenever the cheap tender hint matches, and payment_methods is emitted even when
+//     faqLayerEligible is false. Every OTHER FAQ topic still requires the layer enabled (unchanged).
+assert.ok(/hasPaymentMethodsTenderHint\(/.test(orch), "the tender hint must gate the payment-methods classifier call in orchestrator");
+assert.ok(/faqLayerEligible \|\| tenderQuestionHint/.test(orch), "the FAQ classifier must run on a tender-hint turn even when the FAQ layer is dark");
+assert.ok(
+  /faqParse!?\.topic === "payment_methods" \|\| faqLayerEligible/.test(orch),
+  "payment_methods must emit regardless of the FAQ layer flag; other topics still require faqLayerEligible"
+);
+
+// 1e) The tender hint recognizes accepted-payment questions and ignores monthly-payment/financing
+//     turns (so the classifier call stays bounded). Fail-direction is safe either way.
+for (const t of [
+  "Do I have to have cash or can I use debit",
+  "do you take cards",
+  "can I pay with a credit card",
+  "is it cash only?",
+  "what forms of payment do you accept",
+  "can I use a cashier's check",
+  "do you accept apple pay"
+]) {
+  assert.ok(hasPaymentMethodsTenderHint(t), `tender hint should fire on: ${t}`);
+}
+for (const t of [
+  "what are my monthly payments",
+  "can I make payments on it",
+  "how much down do you need",
+  "what's the APR",
+  "what's the out the door price",
+  "I have your business card",
+  "is the bike still available",
+  ""
+]) {
+  assert.ok(!hasPaymentMethodsTenderHint(t), `tender hint should NOT fire on: ${t}`);
+}
 
 // 2) payment_methods is a recognized topic everywhere (type enum in BOTH files, schema, validator).
 assert.ok(/\|\s*"payment_methods"/.test(draft), "DealershipFaqTopicParse must include payment_methods");

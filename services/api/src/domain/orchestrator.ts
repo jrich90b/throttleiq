@@ -2,7 +2,7 @@
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { buildTradeAdfAck } from "./tradeAdfReply.js";
-import { buildPaymentMethodsReply } from "./paymentMethodsReply.js";
+import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2893,7 +2893,22 @@ export async function orchestrateInbound(
     !specialsQuestion &&
     !depositRequest &&
     !callbackRequest;
-  if (faqLayerEligible) {
+  // Payment-method (tender) questions — "do I have to have cash", "can I use debit", "do you
+  // take cards", "cash only?" — get a factual, controlled answer (accepted tenders + the dealer's
+  // card cap) and must answer DETERMINISTICALLY in BOTH the live and regenerate paths, even
+  // though the broader FAQ layer ships dark (FAQ_LAYER_ENABLED unset in prod). Left to the general
+  // LLM draft they answer non-deterministically and can drift into an inventory prompt that trips
+  // the manual_handoff invariant — that is exactly why Bobby Kindred's regenerate no-opped (6/16).
+  // Parser-first: the FAQ classifier is the comprehension authority; the cheap tender hint only
+  // bounds when we spend the classifier call. Fail-direction is safe (a missed hint falls back to
+  // the LLM draft). payment_methods escapes the dark gate; every other FAQ topic is unchanged.
+  const tenderQuestionHint =
+    useLLM &&
+    !specialsQuestion &&
+    !depositRequest &&
+    !callbackRequest &&
+    hasPaymentMethodsTenderHint(String(event.body ?? ""));
+  if (faqLayerEligible || tenderQuestionHint) {
     const faqParse = await parseDealershipFaqTopicWithLLM({
       text: event.body,
       history,
@@ -2904,11 +2919,14 @@ export async function orchestrateInbound(
         ? faqParse.confidence
         : 0;
     const faqConfidenceMin = Number(process.env.LLM_FAQ_TOPIC_CONFIDENCE_MIN ?? 0.8);
+    // The tender answer fires regardless of the dark FAQ flag; every other topic still requires the
+    // layer to be enabled and the flow to be ambiguous (existing behavior, unchanged).
     if (
       faqParse &&
       faqParse.topic !== "none" &&
       faqParse.explicitRequest === true &&
-      faqConfidence >= faqConfidenceMin
+      faqConfidence >= faqConfidenceMin &&
+      (faqParse.topic === "payment_methods" || faqLayerEligible)
     ) {
       const dealerProfile = await getDealerProfileWithAgentName();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
@@ -2917,7 +2935,7 @@ export async function orchestrateInbound(
         stage: "ENGAGED",
         shouldRespond: true,
         draft: buildDealershipFaqReply({
-          topic: faqParse.topic,
+          topic: faqParse!.topic,
           lead: ctx?.lead ?? null,
           dealerName,
           creditCardCapUsd: dealerProfile?.payments?.creditCardCapUsd ?? null
