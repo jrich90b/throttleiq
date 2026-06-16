@@ -46407,6 +46407,29 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       ...(draft ? { draft } : {})
     });
   };
+  // BOTH-PATHS PARITY: when orchestrate's draft trips an invariant guard, the LIVE twilio path
+  // emits a safe fallback reply (buildInvariantGuardFallbackReply) instead of going silent. The
+  // regenerate path used to just respondRegenerateSkipped — which DISCARDS the pending drafts and
+  // returns no draft, so a staff "Regenerate" click on a guard-tripping turn (e.g. a manual_handoff
+  // deal) showed a spinner, then wiped the existing good draft with nothing to replace it (Bobby
+  // Kindred, 6/16). Mirror the live fallback here so regenerate always produces a visible draft.
+  const regenInvariantFallback = (
+    reason: string,
+    hints?: {
+      turnFinanceIntent?: boolean;
+      turnAvailabilityIntent?: boolean;
+      turnSchedulingIntent?: boolean;
+    }
+  ): string | null => {
+    const merged = { ...regenDraftInvariantHints, ...(hints ?? {}) };
+    return buildInvariantGuardFallbackReply({
+      reason,
+      inboundText: event.body ?? "",
+      hasActionableFinanceContext: !!merged.turnFinanceIntent,
+      hasActionableAvailabilityContext: !!merged.turnAvailabilityIntent,
+      hasActionableSchedulingContext: !!merged.turnSchedulingIntent
+    });
+  };
   const respondWithSmsRegeneratedDraft = (
     text: string,
     mediaUrls?: string[],
@@ -46431,6 +46454,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       routeOutcome: "draft_published"
     });
     if (!published.ok) {
+      const fallbackText = regenInvariantFallback(published.reason, invariantHints);
+      if (fallbackText) {
+        const fallbackPublished = publishCustomerReplyDraft({
+          conv,
+          channel: "sms",
+          text: fallbackText,
+          evaluateInvariant: evaluateRegenDraftInvariant,
+          from: event.to,
+          to: String(conv.leadKey ?? "").trim() || event.from,
+          mediaUrls,
+          invariantHints,
+          routeScope: "regen",
+          routeOutcome: "draft_invariant_fallback_published"
+        });
+        if (fallbackPublished.ok) {
+          return res.json({ ok: true, conversation: conv, draft: fallbackPublished.draft });
+        }
+      }
       return respondRegenerateSkipped(published.reason);
     }
     return res.json({ ok: true, conversation: conv, draft: published.draft });
@@ -46446,6 +46487,21 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       routeOutcome: "email_draft_published"
     });
     if (!published.ok) {
+      const fallbackText = regenInvariantFallback(published.reason);
+      if (fallbackText) {
+        const fallbackPublished = publishCustomerReplyDraft({
+          conv,
+          channel: "email",
+          text: fallbackText,
+          evaluateInvariant: evaluateRegenDraftInvariant,
+          discardPendingDraftsBeforePublish: false,
+          routeScope: "regen",
+          routeOutcome: "email_draft_invariant_fallback_published"
+        });
+        if (fallbackPublished.ok) {
+          return res.json({ ok: true, conversation: conv, draft: fallbackPublished.draft });
+        }
+      }
       return respondRegenerateSkipped(published.reason);
     }
     return res.json({ ok: true, conversation: conv, draft: published.draft });
@@ -51142,6 +51198,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         discardPendingDraftsBeforePublish: false
       });
       if (!published.ok) {
+        // Parity with the live path: emit the invariant fallback instead of wiping the draft.
+        const fallbackText = regenInvariantFallback(published.reason);
+        if (fallbackText) {
+          const fallbackPublished = publishCustomerReplyDraft({
+            conv,
+            channel: "email",
+            text: fallbackText,
+            evaluateInvariant: evaluateRegenDraftInvariant,
+            discardPendingDraftsBeforePublish: false,
+            routeScope: "regen",
+            routeOutcome: "email_draft_invariant_fallback_published"
+          });
+          if (fallbackPublished.ok) {
+            return res.json({ ok: true, conversation: conv, draft: fallbackPublished.draft });
+          }
+        }
         return respondRegenerateSkipped(published.reason);
       }
       return res.json({
@@ -51166,6 +51238,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       to: String(conv.leadKey ?? "").trim() || event.from
     });
     if (!published.ok) {
+      // Parity with the live path: emit the invariant fallback instead of wiping the good draft.
+      const fallbackText = regenInvariantFallback(published.reason);
+      if (fallbackText) {
+        const fallbackPublished = publishCustomerReplyDraft({
+          conv,
+          channel: "sms",
+          text: fallbackText,
+          evaluateInvariant: evaluateRegenDraftInvariant,
+          from: event.to,
+          to: String(conv.leadKey ?? "").trim() || event.from,
+          routeScope: "regen",
+          routeOutcome: "draft_invariant_fallback_published"
+        });
+        if (fallbackPublished.ok) {
+          return res.json({ ok: true, conversation: conv, draft: fallbackPublished.draft });
+        }
+      }
       return respondRegenerateSkipped(published.reason);
     }
     return res.json({
