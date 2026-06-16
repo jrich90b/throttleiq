@@ -270,6 +270,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=stale_handoff_todo_audit"
   npm run stale_handoff_todo:audit || true
 
+  echo "[feedback-loop] step=soft_visit_miss_audit"
+  SOFT_VISIT_MISS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run soft_visit_miss:audit || true
+
   WATCHDOG_SINCE_MIN=$((AUDIT_SINCE_HOURS * 60))
   echo "[feedback-loop] step=route_watchdog -> $WATCHDOG_JSON"
   npm run route_watchdog:run -- \
