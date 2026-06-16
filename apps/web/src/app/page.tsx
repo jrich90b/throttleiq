@@ -3580,6 +3580,7 @@ export default function Home() {
     warrantyRmaWorkflow: "talon_reference" as "talon_reference" | "non_talon_submission",
     stripePaymentsEnabled: false,
     stripeConnectedAccountId: "",
+    creditCardCapUsd: "",
     taxRate: "8"
   });
   const [dealerPaymentStripeStatus, setDealerPaymentStripeStatus] = useState<any>(null);
@@ -7480,6 +7481,7 @@ export default function Home() {
           warrantyRmaWorkflow: warrantyRmaWorkflow as "talon_reference" | "non_talon_submission",
           stripePaymentsEnabled: stripePayments.enabled === true || !!stripeConnectedAccountId,
           stripeConnectedAccountId,
+          creditCardCapUsd: String((profile as any)?.payments?.creditCardCapUsd ?? ""),
           taxRate: String(taxRate)
         });
         setDealerHours(profile.hours ?? {});
@@ -12196,7 +12198,8 @@ export default function Home() {
             ...(((dealerProfile as any)?.payments?.stripe ?? {}) as Record<string, any>),
             enabled: !!dealerProfileForm.stripePaymentsEnabled,
             connectedAccountId: dealerProfileForm.stripeConnectedAccountId.trim() || undefined
-          }
+          },
+          creditCardCapUsd: Number(dealerProfileForm.creditCardCapUsd) > 0 ? Number(dealerProfileForm.creditCardCapUsd) : 0
         },
         taxRate: Number(dealerProfileForm.taxRate) || 0
       };
@@ -18887,9 +18890,24 @@ export default function Home() {
                           }
                         />
                       </label>
+                      <label className="space-y-1">
+                        <div className="text-xs text-gray-600">Card payment max ($)</div>
+                        <input
+                          className="border rounded px-3 py-2 text-sm w-full"
+                          inputMode="numeric"
+                          placeholder="No limit"
+                          value={dealerProfileForm.creditCardCapUsd}
+                          onChange={e =>
+                            setDealerProfileForm({
+                              ...dealerProfileForm,
+                              creditCardCapUsd: e.target.value.replace(/[^0-9]/g, "")
+                            })
+                          }
+                        />
+                      </label>
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
-                      Used for ballpark payment estimates when county tax is unknown.
+                      Tax rate is used for ballpark payment estimates. Card payment max (debit &amp; credit) appears in the agent&apos;s payment-method answer — leave blank for no limit.
                     </div>
                   </div>
 
