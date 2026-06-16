@@ -19,3 +19,28 @@ export function isFabricatedGratitudeLeadIn(leadIn: string, customerText: string
   if (!GRATITUDE_RESPONSE_LEADIN.test(String(leadIn ?? ""))) return false;
   return !CUSTOMER_GRATITUDE.test(String(customerText ?? ""));
 }
+
+// The other half of the same class: a reply opening "Totally fair question / Great question"
+// when the customer did not actually ask a question (a form, a statement). We detect the
+// customer-IS-a-question GENEROUSLY (any "?" or interrogative phrasing) so the audit only
+// flags clear non-questions — it should never cry wolf on a real question.
+const QUESTION_FRAME_LEADIN = /\b(totally fair question|fair question|great question|good question)\b/i;
+const CUSTOMER_IS_QUESTION =
+  /\?|\b(what|whats|how|hows|when|where|which|who|why|do you|does|did you|can you|could you|would you|will you|is there|are there|any|how much|how many|tell me|wondering|curious about|let me know)\b/i;
+
+export function isFabricatedQuestionFrame(replyOpener: string, customerText: string): boolean {
+  if (!QUESTION_FRAME_LEADIN.test(String(replyOpener ?? ""))) return false;
+  return !CUSTOMER_IS_QUESTION.test(String(customerText ?? ""));
+}
+
+export type FabricatedFrame = { fabricated: boolean; type: "gratitude" | "question" | null };
+
+// Inspect ONLY the opening sentence of a reply — the fabricated frame is always the opener.
+// Used by the nightly fabricated_frame audit to surface replies that invent a conversational
+// frame (you thanked me / you asked a question) the customer's turn doesn't warrant.
+export function detectFabricatedFrame(reply: string, customerText: string): FabricatedFrame {
+  const opener = String(reply ?? "").split(/(?<=[.!?])\s+/)[0] ?? "";
+  if (isFabricatedGratitudeLeadIn(opener, customerText)) return { fabricated: true, type: "gratitude" };
+  if (isFabricatedQuestionFrame(opener, customerText)) return { fabricated: true, type: "question" };
+  return { fabricated: false, type: null };
+}
