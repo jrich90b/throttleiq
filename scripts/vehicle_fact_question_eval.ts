@@ -40,6 +40,17 @@ const fixtures: Fixture[] = [
     history: unitHistory
   },
   {
+    // Replay of the 6/16 service-records routing miss: a past-tense maintenance-history question
+    // must classify as service_records (not service_status / scheduling) so the service handoff is
+    // framed as "check the service records", not "check availability".
+    id: "service_records_tires_changed",
+    text: "Do u when the last time the tires were changed",
+    expectedType: "service_records",
+    expectedExplicit: true,
+    expectedFieldContains: "service_records",
+    history: unitHistory
+  },
+  {
     id: "short_total_price_question_1",
     text: "Total price ?",
     expectedType: "price",

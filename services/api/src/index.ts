@@ -24631,6 +24631,40 @@ function buildServiceSchedulingHandoffReply(text: string | null | undefined): st
     : "Got it — I’ll have service check availability and follow up.";
 }
 
+// Pure picker for the service-department handoff reply. The handoff side-effects (service todo +
+// manual_handoff) are right for any service-department turn, but a service-RECORDS/history question
+// ("when were the tires last changed") must NOT be framed as a scheduling-availability request —
+// the customer is asking about PAST maintenance, not booking a future visit. Records → records
+// framing; otherwise the existing scheduling framing.
+function buildServiceDepartmentHandoffReply(
+  text: string | null | undefined,
+  isServiceRecordsQuestion: boolean
+): string {
+  if (isServiceRecordsQuestion) {
+    return "Good question — I’ll check the service records and follow up shortly.";
+  }
+  return buildServiceSchedulingHandoffReply(text);
+}
+
+// Parser-first resolver: the vehicle-fact classifier (questionType === "service_records") decides
+// whether a service-department turn is a records/history question; the cheap hint bounds the LLM
+// call. Fail-safe: no hint / not a records question → the scheduling framing. Shared by both the
+// live and regenerate service-handoff blocks so the framing is identical.
+async function resolveServiceDepartmentHandoffReply(
+  conv: any,
+  text: string | null | undefined
+): Promise<string> {
+  const raw = String(text ?? "");
+  let isServiceRecordsQuestion = false;
+  if (hasVehicleFactQuestionParserHint(raw)) {
+    const parse = await safeLlmParse("service_handoff_records_check", () =>
+      parseVehicleFactQuestionWithLLM({ text: raw, history: buildHistory(conv, 8), lead: conv.lead })
+    );
+    isServiceRecordsQuestion = parse?.questionType === "service_records";
+  }
+  return buildServiceDepartmentHandoffReply(raw, isServiceRecordsQuestion);
+}
+
 function sanitizeDepartmentClassificationForTurn(
   conv: any,
   inboundText: string,
@@ -47024,7 +47058,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    const reply = buildServiceSchedulingHandoffReply(event.body);
+    const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
     if (channel === "email") {
       return respondWithEmailRegeneratedDraft(reply);
     }
@@ -56128,7 +56162,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "service_request");
     stopFollowUpCadence(conv, "manual_handoff");
     stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply = buildServiceSchedulingHandoffReply(event.body);
+    const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
     recordRouteOutcome("live", "service_scheduling_handoff", {
       convId: conv.id,
       leadKey: conv.leadKey
