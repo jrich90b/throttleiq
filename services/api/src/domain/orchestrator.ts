@@ -130,7 +130,8 @@ function buildDealershipFaqReply(args: {
     | "authorized_dealer_benefits"
     | "test_ride"
     | "test_ride_eligibility"
-    | "new_vs_used";
+    | "new_vs_used"
+    | "payment_methods";
   lead?: LeadProfile | null;
   dealerName: string;
 }): string {
@@ -161,6 +162,8 @@ function buildDealershipFaqReply(args: {
       return `Good question. Programs change, but we can check current APR and cash offers right now on ${bikeLabel}. Want me to pull today’s programs?`;
     case "no_money_down":
       return "Some qualified buyers can do low or no money down. It’s application-dependent, but we can check your options quickly.";
+    case "payment_methods":
+      return "No cash required — debit works great. We also take credit cards, a certified check, or we can set up financing. Whatever’s easiest for you!";
     case "trade_in":
       return "Yes — we take Harley and non-Harley trades. Value depends on condition, miles, and market.";
     case "trade_tax_advantage":

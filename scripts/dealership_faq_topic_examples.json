@@ -54,5 +54,29 @@
       "topic": "none",
       "explicit_request": true
     }
+  },
+  {
+    "id": "payment_methods_cash_or_debit_1",
+    "text": "Do I have to have cash or can I use debit",
+    "expected": {
+      "topic": "payment_methods",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "payment_methods_take_cards_1",
+    "text": "Do you guys take credit cards?",
+    "expected": {
+      "topic": "payment_methods",
+      "explicit_request": true
+    }
+  },
+  {
+    "id": "payment_methods_card_or_cash_1",
+    "text": "Can I pay with a card or do you only take cash?",
+    "expected": {
+      "topic": "payment_methods",
+      "explicit_request": true
+    }
   }
 ]

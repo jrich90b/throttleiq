@@ -1859,6 +1859,7 @@ export type DealershipFaqTopicParse = {
     | "test_ride"
     | "test_ride_eligibility"
     | "new_vs_used"
+    | "payment_methods"
     | "none";
   explicitRequest: boolean;
   confidence?: number;
@@ -2879,6 +2880,7 @@ const DEALERSHIP_FAQ_TOPIC_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
         "test_ride",
         "test_ride_eligibility",
         "new_vs_used",
+        "payment_methods",
         "none"
       ]
     },
@@ -6994,6 +6996,15 @@ output: {"topic":"finance_specials","explicit_request":true,"confidence":0.97}`,
     `EXAMPLE I
 inbound: "Can I do no money down?"
 output: {"topic":"no_money_down","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE I2
+inbound: "Do I have to have cash or can I use debit"
+output: {"topic":"payment_methods","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE I3
+inbound: "Do you guys take credit cards?"
+output: {"topic":"payment_methods","explicit_request":true,"confidence":0.97}`,
+    `EXAMPLE I4
+inbound: "Can I pay with a card or do you only take cash?"
+output: {"topic":"payment_methods","explicit_request":true,"confidence":0.97}`,
     `EXAMPLE J
 inbound: "Can I trade my bike in?"
 output: {"topic":"trade_in","explicit_request":true,"confidence":0.98}`,
@@ -7046,6 +7057,7 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     "- test_ride: asks if test rides are available.",
     "- test_ride_eligibility: asks which model years, new/used bikes, or in-stock bikes are eligible for test rides.",
     "- new_vs_used: asks whether new or used is better.",
+    "- payment_methods: asks which forms of payment/tender are accepted (cash, debit, credit card, check, financing) — e.g. \"can I use debit\", \"do you take cards\", \"cash only?\". This is NOT a price question.",
     "- none: not an FAQ-style question above.",
     "",
     "Rules:",
@@ -7108,7 +7120,8 @@ output: {"topic":"none","explicit_request":true,"confidence":0.99}`
     topicRaw === "authorized_dealer_benefits" ||
     topicRaw === "test_ride" ||
     topicRaw === "test_ride_eligibility" ||
-    topicRaw === "new_vs_used"
+    topicRaw === "new_vs_used" ||
+    topicRaw === "payment_methods"
       ? topicRaw
       : "none";
   const confidence =
