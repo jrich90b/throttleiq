@@ -1,6 +1,7 @@
 // services/api/src/domain/orchestrator.ts
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
+import { buildTradeAdfAck } from "./tradeAdfReply.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2571,13 +2572,20 @@ export async function orchestrateInbound(
     const mileageLine = mileage ? `I have it at about ${mileage.toLocaleString()} miles. ` : "";
     const mileageAsk = mileage ? "" : "How many miles are on it?";
     const leadLine = hasTrade ? `I have you on a ${tradeLabel}. ` : "";
+    // An ADF web-lead is a FORM, not a customer question — its body trips the trade/
+    // appraisal keywords above, but "Totally fair question…" answers a question nobody
+    // asked (and, mid-conversation, ignores the live relationship). Acknowledge the form
+    // instead; the "Totally fair question" framing stays for genuine customer-SMS trade
+    // questions. See buildTradeAdfAck (tradeAdfReply.ts).
     const draft =
-      "Totally fair question. " +
-      leadLine +
-      mileageLine +
-      "We can start with an estimate based on the bike details. " +
-      "If the numbers look good, you can bring it in for an appraisal or I can schedule a pickup. " +
-      mileageAsk;
+      event.provider === "sendgrid_adf"
+        ? buildTradeAdfAck({ bikeLabel: tradeLabel, midConversation: hasPriorOutbound })
+        : "Totally fair question. " +
+          leadLine +
+          mileageLine +
+          "We can start with an estimate based on the bike details. " +
+          "If the numbers look good, you can bring it in for an appraisal or I can schedule a pickup. " +
+          mileageAsk;
     return finalize({
       intent: "TRADE_IN",
       stage: "ENGAGED",
