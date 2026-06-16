@@ -77,6 +77,9 @@ function selfTest(): void {
   const partsAdf: any = { id: "parts", status: "open", messages: [custIn], classification: { bucket: "parts", cta: "parts_request" } };
   // DLA demo-ride that ended in no purchase — looks like a sales bucket, but they already came in and passed.
   const dlaNoPurchase: any = { id: "dla", status: "open", messages: [custIn], classification: { bucket: "test_ride", cta: "schedule_test_ride" }, followUp: { mode: "manual_handoff", reason: "dealer_ride_no_purchase" } };
+  // The offered_no_book split: deferred (not a miss) vs soft-visit (coming in) vs the real watch bucket.
+  const customerNotReady: any = { id: "deferred", status: "open", messages: [custIn], followUp: { mode: "active", reason: "future_timeframe" } };
+  const softVisitPending: any = { id: "softvisit", status: "open", messages: [custIn], scheduleSoft: { windowLabel: "Saturday" } };
 
   const financeTodos = [{ convId: "finance", reason: "approval", summary: "Credit approval task" }];
   const c = (conv: any, todos?: any[]) => classifyBookingFunnel(conv, { nowMs, openTodos: todos });
@@ -84,9 +87,11 @@ function selfTest(): void {
   assert.equal(c(booked).leak, "booked", "bookedEventId -> booked");
   assert.equal(c(booked).booked, true);
   assert.equal(c(booked).salesIntent, true, "a bike shopper is sales-intent");
-  assert.equal(c(offeredNoBook).leak, "offered_no_book", "scheduling-prompt outbound + no booking -> offered_no_book");
+  assert.equal(c(offeredNoBook).leak, "accepted_no_time", "scheduling-prompt outbound + no defer/soft-visit/booking -> accepted_no_time (the real gap)");
   assert.equal(c(offeredNoBook).offered, true);
-  assert.equal(c(offeredViaSlots).leak, "offered_no_book", "suggested slots count as offered");
+  assert.equal(c(offeredViaSlots).leak, "accepted_no_time", "suggested slots, no booking -> accepted_no_time");
+  assert.equal(c(customerNotReady).leak, "customer_not_ready", "future_timeframe (system-tagged defer) -> customer_not_ready, not a miss");
+  assert.equal(c(softVisitPending).leak, "soft_visit_pending", "soft-visit window set -> soft_visit_pending (coming in, no slot)");
   assert.equal(c(notOffered).leak, "not_offered", "answered but never offered a time -> not_offered (coverage leak)");
   assert.equal(c(notOffered).offered, false);
   assert.equal(c(financePending, financeTodos).leak, "finance_pending", "active credit deal -> finance_pending (deferred by design)");
@@ -107,17 +112,20 @@ function selfTest(): void {
   assert.equal(c(dlaNoPurchase).leak, "not_sales", "DLA demo-ride with no purchase -> not_sales (already came in, don't re-push)");
   assert.equal(c(dlaNoPurchase).salesIntent, false);
 
-  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost, rideChallenge, eventRsvp, serviceAdf, partsAdf, dlaNoPurchase].map(x => c(x));
+  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost, rideChallenge, eventRsvp, serviceAdf, partsAdf, dlaNoPurchase, customerNotReady, softVisitPending].map(x => c(x));
   rows.push(c(financePending, financeTodos));
   const s = buildBookingFunnelSummary(rows);
-  assert.equal(s.population, 15, "summary covers all rows");
+  assert.equal(s.population, 17, "summary covers all rows");
   assert.equal(s.notSales, 5, "five non-sales rows excluded (rsvp, ride-challenge, service, parts, dla-no-purchase)");
-  assert.equal(s.salesPopulation, 10, "sales population = population - notSales");
+  assert.equal(s.salesPopulation, 12, "sales population = population - notSales");
+  assert.equal(s.leaks.accepted_no_time, 2, "offered_no_book split: 2 real watch-bucket leads");
+  assert.equal(s.leaks.customer_not_ready, 1, "1 deferred lead pulled out of the leak");
+  assert.equal(s.leaks.soft_visit_pending, 1, "1 soft-visit lead pulled out of the leak");
   const bucketSum = Object.values(s.leaks).reduce((a, b) => a + b, 0);
-  assert.equal(bucketSum, 15, "buckets are mutually exclusive + exhaustive (incl. not_sales)");
-  // engaged = SALES leads where the customer replied = all sales rows except the ADF-only one (9)
-  assert.equal(s.engaged, 9, "engaged excludes the ADF-only lead AND all non-sales leads");
-  assert.equal(s.offered, 4, "offered among sales-engaged: booked + 2 offered + won");
+  assert.equal(bucketSum, 17, "buckets are mutually exclusive + exhaustive (incl. not_sales)");
+  // engaged = SALES leads where the customer replied = all sales rows except the ADF-only one (11)
+  assert.equal(s.engaged, 11, "engaged excludes the ADF-only lead AND all non-sales leads");
+  assert.equal(s.offered, 5, "offered among sales-engaged: booked + 2 offered + won + soft-visit");
   assert.equal(s.booked, 2, "booked: confirmed appt + won-with-event");
   assert.ok(s.offerToBookPct > 0 && s.offerToBookPct <= 100, "offer->book conversion is a sane %");
 
@@ -147,14 +155,15 @@ function main(): void {
   const rows: BookingFunnelClass[] = inWindow.map(c => classifyBookingFunnel(c, { nowMs, openTodos }));
   const summary = buildBookingFunnelSummary(rows);
 
-  // Actionable examples: the two leaks the agent CAN fix (never offered, offered-no-book).
+  // Actionable examples: the two leaks the agent CAN fix — never offered, and offered-but-
+  // accepted-with-no-time (the real conversion gap, with the deferred/soft-visit cases removed).
   const examples: Record<string, Array<{ convId: string; name: string; lastInbound: string }>> = {
     not_offered: [],
-    offered_no_book: []
+    accepted_no_time: []
   };
   inWindow.forEach((c, i) => {
     const leak = rows[i].leak;
-    if ((leak === "not_offered" || leak === "offered_no_book") && examples[leak].length < maxExamples) {
+    if ((leak === "not_offered" || leak === "accepted_no_time") && examples[leak].length < maxExamples) {
       examples[leak].push({ convId: String(c?.id ?? c?.leadKey ?? ""), name: name(c), lastInbound: lastInbound(c) });
     }
   });
@@ -174,12 +183,14 @@ function main(): void {
   console.log(`  Offer -> book:    ${s.offerToBookPct}%  (booked / offered)`);
   console.log(`  Showed:           ${s.showed}`);
   console.log("  Where engaged leads sit:");
-  console.log(`    not_offered (coverage leak):   ${s.leaks.not_offered}`);
-  console.log(`    offered_no_book (conv. leak):  ${s.leaks.offered_no_book}`);
-  console.log(`    finance_pending (by design):   ${s.leaks.finance_pending}`);
-  console.log(`    manual_handoff (staff-owned):  ${s.leaks.manual_handoff}`);
-  console.log(`    holding_inventory:             ${s.leaks.holding_inventory}`);
-  console.log(`    booked / won / lost:           ${s.leaks.booked} / ${s.leaks.closed_won} / ${s.leaks.closed_lost}`);
+  console.log(`    not_offered (coverage leak):       ${s.leaks.not_offered}`);
+  console.log(`    accepted_no_time (REAL conv. gap): ${s.leaks.accepted_no_time}`);
+  console.log(`    customer_not_ready (deferred):     ${s.leaks.customer_not_ready}`);
+  console.log(`    soft_visit_pending (coming in):    ${s.leaks.soft_visit_pending}`);
+  console.log(`    finance_pending (by design):       ${s.leaks.finance_pending}`);
+  console.log(`    manual_handoff (staff-owned):      ${s.leaks.manual_handoff}`);
+  console.log(`    holding_inventory:                 ${s.leaks.holding_inventory}`);
+  console.log(`    booked / won / lost:               ${s.leaks.booked} / ${s.leaks.closed_won} / ${s.leaks.closed_lost}`);
   console.log(`  Report: ${path.join(outDir, "booking_funnel_summary.json")}`);
 }
 

@@ -26,7 +26,11 @@ export type BookingLeak =
   | "finance_pending" // booking deferred by an active finance/credit deal (by design)
   | "manual_handoff" // staff owns the conversation, not an agent-bookable leak
   | "holding_inventory" // waiting on stock — not ready to book
-  | "offered_no_book" // agent offered a time, no booking resulted (the conversion leak)
+  // The old "offered_no_book" bucket, split three ways (digging the real conversion gap out
+  // of the legitimate non-bookings):
+  | "accepted_no_time" // offered, customer didn't defer, has no soft visit — the REAL watch bucket (e.g. a vague "sounds good" the agent never converted to a concrete time)
+  | "customer_not_ready" // customer deferred / future timeframe / stepping back (the system already tagged it) — not an agent miss
+  | "soft_visit_pending" // committed to a soft visit (they're coming in, just no calendar slot) — not a leak
   | "not_offered" // engaged, but the agent never offered a time (the coverage leak)
   | "not_sales"; // NOT a sales-intent lead — must never be asked to book (ride challenge, event RSVP, rental, hiring, rider course). Excluded from the funnel.
 
@@ -69,6 +73,11 @@ export function isSalesIntentLead(conv: any): boolean {
   if (NON_SALES_SOURCE.test(String(conv?.lead?.source ?? ""))) return false;
   return true;
 }
+
+// The system's OWN "customer isn't ready now" states (set by its comprehension layer) —
+// a lead in one of these deferred itself; not offering/booking it is correct, not a miss.
+const NOT_READY_REASON =
+  /future_timeframe|not_ready_no_timeframe|health_recovery_delay|stepping_back|customer_deferred/i;
 
 // Last-resort: did any of OUR OWN outbound propose a time / visit / slots?
 const SCHEDULING_OFFER_OUTBOUND =
@@ -118,6 +127,8 @@ export function classifyBookingFunnel(
   // Single mutually-exclusive bucket. Non-sales leads are filtered out FIRST — they must
   // never be asked to book, so they don't count as a leak. Then terminal outcomes, then the
   // open leaks.
+  const mode = String(conv?.followUp?.mode ?? "");
+  const reason = String(conv?.followUp?.reason ?? "");
   let leak: BookingLeak;
   if (!salesIntent) leak = "not_sales";
   else if (stage === "won") leak = "closed_won";
@@ -125,9 +136,14 @@ export function classifyBookingFunnel(
   else if (booked) leak = "booked";
   else if (!engaged) leak = "not_engaged";
   else if (stage === "finance") leak = "finance_pending";
-  else if (String(conv?.followUp?.mode ?? "") === "manual_handoff") leak = "manual_handoff";
-  else if (String(conv?.followUp?.mode ?? "") === "holding_inventory") leak = "holding_inventory";
-  else if (offered) leak = "offered_no_book";
+  else if (mode === "manual_handoff") leak = "manual_handoff";
+  else if (mode === "holding_inventory") leak = "holding_inventory";
+  // Was the customer told (by the system's own classification) to not be pushed now?
+  else if (NOT_READY_REASON.test(reason)) leak = "customer_not_ready";
+  // Committed to a soft visit / window — they're coming in, just no calendar slot.
+  else if (conv?.scheduleSoft) leak = "soft_visit_pending";
+  // Offered a time, no defer, no soft visit, no booking — the real watch bucket.
+  else if (offered) leak = "accepted_no_time";
   else leak = "not_offered";
 
   return { salesIntent, engaged, offered, booked, showed, stage, leak };
@@ -160,7 +176,9 @@ export function buildBookingFunnelSummary(
     finance_pending: 0,
     manual_handoff: 0,
     holding_inventory: 0,
-    offered_no_book: 0,
+    accepted_no_time: 0,
+    customer_not_ready: 0,
+    soft_visit_pending: 0,
     not_offered: 0,
     not_sales: 0
   };
