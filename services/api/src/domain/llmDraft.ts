@@ -3,6 +3,7 @@ import fs from "node:fs";
 import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
+import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
@@ -721,12 +722,17 @@ export async function generateBlendedLeadInWithLLM(args: {
     "- Do not promise follow-up/checking.",
     "- Do not mention pricing/scheduling/availability directly.",
     "- Avoid generic phrases like 'Got it.' or 'I’m here if you need anything.'",
+    "- Do NOT respond to thanks the customer did not give: never say 'You're welcome', 'No problem', 'Anytime', or 'Happy to help' unless the customer actually thanked you. Affection or honesty (e.g. \"I love my bike\", \"to be honest…\") is NOT gratitude.",
     "",
     "Good examples:",
     "- \"Haha, fair one.\"",
     "- \"Good one.\"",
     "- \"Love it.\"",
     "- \"Great question.\"",
+    "- input: \"I absolutely love my bike\" -> \"Love that.\"",
+    "",
+    "Bad examples (never produce):",
+    "- input: \"I absolutely love my bike\" -> \"You're welcome.\"  (no thanks was given)",
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Humor hint: ${hasHumorHint ? "true" : "false"}`,
@@ -764,7 +770,7 @@ export async function generateBlendedLeadInWithLLM(args: {
     });
     if (parsed && typeof parsed === "object") {
       const leadIn = normalizeLeadIn(parsed.lead_in ?? "");
-      if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn)) {
+      if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn) && !isFabricatedGratitudeLeadIn(leadIn, text)) {
         const confidence =
           typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
             ? Math.max(0, Math.min(1, parsed.confidence))
@@ -799,7 +805,7 @@ export async function generateBlendedLeadInWithLLM(args: {
       model
     });
     const leadIn = normalizeLeadIn(resp.output_text ?? "");
-    if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn)) {
+    if (leadIn && !isGeneric(leadIn) && !/\?/.test(leadIn) && !isFabricatedGratitudeLeadIn(leadIn, text)) {
       return { leadIn, confidence: 0.75, source: "freeform" };
     }
   } catch {}
