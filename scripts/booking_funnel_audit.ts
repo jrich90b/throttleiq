@@ -64,37 +64,60 @@ function selfTest(): void {
   const financePending: any = {
     id: "finance", status: "open", messages: [custIn], followUp: { mode: "manual_handoff", reason: "credit_app" }
   };
-  const manualHandoff: any = { id: "handoff", status: "open", messages: [custIn], followUp: { mode: "manual_handoff", reason: "service_request" } };
+  const manualHandoff: any = { id: "handoff", status: "open", messages: [custIn], followUp: { mode: "manual_handoff", reason: "composite_sales_inquiry" } };
   const holding: any = { id: "holding", status: "open", messages: [custIn], followUp: { mode: "holding_inventory", reason: "inventory_watch" } };
   const notEngaged: any = { id: "silent", status: "open", messages: [{ direction: "in", provider: "sendgrid_adf", at: inboundAt, body: "WEB LEAD (ADF)" }] };
   const won: any = { id: "won", status: "closed", closedReason: "sold", closedAt: inboundAt, messages: [custIn], appointment: { bookedEventId: "evt_2" } };
   const lost: any = { id: "lost", status: "closed", closedReason: "no_response", closedAt: inboundAt, messages: [custIn] };
+  // NON-sales leads — must never count as a booking leak.
+  const rideChallenge: any = { id: "ride", status: "open", messages: [custIn], followUp: { mode: "active", reason: "ride_challenge_signup" } };
+  const eventRsvp: any = { id: "rsvp", status: "open", messages: [custIn], classification: { bucket: "event_promo", cta: "event_rsvp" } };
+  const rentalSource: any = { id: "rental", status: "open", messages: [custIn], lead: { source: "Eagle Rider" } };
+  const serviceAdf: any = { id: "service", status: "open", messages: [custIn], classification: { bucket: "service", cta: "service_request" } };
+  const partsAdf: any = { id: "parts", status: "open", messages: [custIn], classification: { bucket: "parts", cta: "parts_request" } };
+  // DLA demo-ride that ended in no purchase — looks like a sales bucket, but they already came in and passed.
+  const dlaNoPurchase: any = { id: "dla", status: "open", messages: [custIn], classification: { bucket: "test_ride", cta: "schedule_test_ride" }, followUp: { mode: "manual_handoff", reason: "dealer_ride_no_purchase" } };
 
   const financeTodos = [{ convId: "finance", reason: "approval", summary: "Credit approval task" }];
   const c = (conv: any, todos?: any[]) => classifyBookingFunnel(conv, { nowMs, openTodos: todos });
 
   assert.equal(c(booked).leak, "booked", "bookedEventId -> booked");
   assert.equal(c(booked).booked, true);
+  assert.equal(c(booked).salesIntent, true, "a bike shopper is sales-intent");
   assert.equal(c(offeredNoBook).leak, "offered_no_book", "scheduling-prompt outbound + no booking -> offered_no_book");
   assert.equal(c(offeredNoBook).offered, true);
   assert.equal(c(offeredViaSlots).leak, "offered_no_book", "suggested slots count as offered");
   assert.equal(c(notOffered).leak, "not_offered", "answered but never offered a time -> not_offered (coverage leak)");
   assert.equal(c(notOffered).offered, false);
   assert.equal(c(financePending, financeTodos).leak, "finance_pending", "active credit deal -> finance_pending (deferred by design)");
-  assert.equal(c(manualHandoff).leak, "manual_handoff", "staff-owned -> manual_handoff");
+  assert.equal(c(manualHandoff).leak, "manual_handoff", "sales handoff (non-service) -> manual_handoff");
   assert.equal(c(holding).leak, "holding_inventory", "waiting on stock -> holding_inventory");
   assert.equal(c(notEngaged).leak, "not_engaged", "ADF-only / no reply -> not_engaged");
   assert.equal(c(won).leak, "closed_won", "sold -> closed_won");
   assert.equal(c(lost).leak, "closed_lost", "closed no-sale -> closed_lost");
+  // Non-sales: excluded from the funnel regardless of engagement.
+  assert.equal(c(rideChallenge).leak, "not_sales", "ride-challenge signup -> not_sales (never asked to book)");
+  assert.equal(c(rideChallenge).salesIntent, false);
+  assert.equal(c(eventRsvp).leak, "not_sales", "event RSVP -> not_sales");
+  assert.equal(c(eventRsvp).salesIntent, false);
+  assert.equal(c(rentalSource).leak, "not_sales", "rental source -> not_sales");
+  assert.equal(c(serviceAdf).leak, "not_sales", "service ADF -> not_sales");
+  assert.equal(c(serviceAdf).salesIntent, false);
+  assert.equal(c(partsAdf).leak, "not_sales", "parts ADF -> not_sales");
+  assert.equal(c(dlaNoPurchase).leak, "not_sales", "DLA demo-ride with no purchase -> not_sales (already came in, don't re-push)");
+  assert.equal(c(dlaNoPurchase).salesIntent, false);
 
-  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost].map(x => c(x));
+  const rows = [booked, offeredNoBook, offeredViaSlots, notOffered, manualHandoff, holding, notEngaged, won, lost, rideChallenge, eventRsvp, serviceAdf, partsAdf, dlaNoPurchase].map(x => c(x));
   rows.push(c(financePending, financeTodos));
   const s = buildBookingFunnelSummary(rows);
-  assert.equal(s.population, 10, "summary covers all rows");
-  assert.equal(s.leaks.booked + s.leaks.closed_won + s.leaks.closed_lost + s.leaks.not_engaged + s.leaks.finance_pending + s.leaks.manual_handoff + s.leaks.holding_inventory + s.leaks.offered_no_book + s.leaks.not_offered, 10, "buckets are mutually exclusive + exhaustive");
-  // engaged = all except not_engaged (9); offered among engaged = booked + offeredNoBook + slots + won = 4
-  assert.equal(s.engaged, 9, "engaged excludes the ADF-only lead");
-  assert.equal(s.offered, 4, "offered among engaged: booked + 2 offered + won");
+  assert.equal(s.population, 15, "summary covers all rows");
+  assert.equal(s.notSales, 5, "five non-sales rows excluded (rsvp, ride-challenge, service, parts, dla-no-purchase)");
+  assert.equal(s.salesPopulation, 10, "sales population = population - notSales");
+  const bucketSum = Object.values(s.leaks).reduce((a, b) => a + b, 0);
+  assert.equal(bucketSum, 15, "buckets are mutually exclusive + exhaustive (incl. not_sales)");
+  // engaged = SALES leads where the customer replied = all sales rows except the ADF-only one (9)
+  assert.equal(s.engaged, 9, "engaged excludes the ADF-only lead AND all non-sales leads");
+  assert.equal(s.offered, 4, "offered among sales-engaged: booked + 2 offered + won");
   assert.equal(s.booked, 2, "booked: confirmed appt + won-with-event");
   assert.ok(s.offerToBookPct > 0 && s.offerToBookPct <= 100, "offer->book conversion is a sane %");
 
@@ -143,7 +166,9 @@ function main(): void {
   fs.writeFileSync(path.join(outDir, "booking_funnel_summary.json"), JSON.stringify(report, null, 2));
 
   const s = summary;
-  console.log(`Booking funnel — last ${sinceDays} days (${s.population} convs, ${s.engaged} engaged)`);
+  console.log(`Booking funnel — last ${sinceDays} days`);
+  console.log(`  Scope: ${s.population} convs -> ${s.salesPopulation} sales-intent (${s.notSales} non-sales excluded: ride challenge / RSVP / rental / hiring / …)`);
+  console.log(`  Sales-intent engaged: ${s.engaged}`);
   console.log(`  Offered a time:   ${s.offered}/${s.engaged} engaged  (${s.offeredRatePct}%)`);
   console.log(`  Booked appt:      ${s.booked}/${s.engaged} engaged  (${s.bookRatePct}%)`);
   console.log(`  Offer -> book:    ${s.offerToBookPct}%  (booked / offered)`);

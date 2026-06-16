@@ -27,9 +27,11 @@ export type BookingLeak =
   | "manual_handoff" // staff owns the conversation, not an agent-bookable leak
   | "holding_inventory" // waiting on stock — not ready to book
   | "offered_no_book" // agent offered a time, no booking resulted (the conversion leak)
-  | "not_offered"; // engaged, but the agent never offered a time (the coverage leak)
+  | "not_offered" // engaged, but the agent never offered a time (the coverage leak)
+  | "not_sales"; // NOT a sales-intent lead — must never be asked to book (ride challenge, event RSVP, rental, hiring, rider course). Excluded from the funnel.
 
 export type BookingFunnelClass = {
+  salesIntent: boolean;
   engaged: boolean;
   offered: boolean;
   booked: boolean;
@@ -37,6 +39,36 @@ export type BookingFunnelClass = {
   stage: PipelineStage;
   leak: BookingLeak;
 };
+
+// Is this lead actually shopping for a bike (so "answer -> offer a time" applies), or a
+// non-sales contact that must NEVER be asked to book a sales appointment? Non-sales =
+// Ride Challenge entry, event RSVP, rental, hiring/careers, rider-course question,
+// SERVICE or PARTS request, a non-sales text-widget inquiry (which classifies as
+// service/parts), or a Dealer Lead App demo-ride that ended in NO PURCHASE
+// (followUp.reason "dealer_ride_no_purchase"/"dealer_ride_lost" — they already came in
+// and passed, so don't push another sales appointment).
+//
+// Keyed on the system's OWN structured classification (classification.bucket/cta), the
+// handler-set followUp.reason, and the structured ADF lead source — NOT free customer text
+// (so it stays inside the "structured extraction is allowed" lane). High-precision exclusion:
+// a misclassification only drops a lead from the metric (under-count), never a customer reply.
+// Caveat: an RSVP/challenge/no-purchase lead who later genuinely shops may stay tagged
+// non-sales and be undercounted — acceptable for a metric; revisit if the volume matters.
+const NON_SALES_BUCKET = /^(event_promo|service|parts)$/i;
+const NON_SALES_FOLLOWUP_REASON =
+  /ride_challenge|hiring_manager|rider_course|eagle.?rider|rental|service_request|service_dept|parts_request|parts_dept|dealer_ride_no_purchase|dealer_ride_lost/i;
+const NON_SALES_SOURCE =
+  /ride challenge|event rsvp|national event|rolling rsvp|eagle.?rider|careers|hiring|service department|parts department/i;
+
+export function isSalesIntentLead(conv: any): boolean {
+  const cls = conv?.classification ?? {};
+  const bucket = String(cls.bucket ?? "").toLowerCase();
+  const cta = String(cls.cta ?? "").toLowerCase();
+  if (NON_SALES_BUCKET.test(bucket) || cta === "event_rsvp") return false; // event RSVP / service / parts
+  if (NON_SALES_FOLLOWUP_REASON.test(String(conv?.followUp?.reason ?? ""))) return false; // challenge / hiring / rider course / rental / DLA no-purchase
+  if (NON_SALES_SOURCE.test(String(conv?.lead?.source ?? ""))) return false;
+  return true;
+}
 
 // Last-resort: did any of OUR OWN outbound propose a time / visit / slots?
 const SCHEDULING_OFFER_OUTBOUND =
@@ -77,14 +109,18 @@ export function classifyBookingFunnel(
   opts: { openTodos?: Array<{ convId?: string; reason?: string; summary?: string }>; nowMs?: number } = {}
 ): BookingFunnelClass {
   const stage = deriveLeadStage(conv, opts);
+  const salesIntent = isSalesIntentLead(conv);
   const engaged = hasCustomerInbound(conv);
   const offered = agentOfferedATime(conv);
   const booked = isBookedAppointment(conv, stage);
   const showed = stage === "showed";
 
-  // Single mutually-exclusive bucket (terminal outcomes first, then the open leaks).
+  // Single mutually-exclusive bucket. Non-sales leads are filtered out FIRST — they must
+  // never be asked to book, so they don't count as a leak. Then terminal outcomes, then the
+  // open leaks.
   let leak: BookingLeak;
-  if (stage === "won") leak = "closed_won";
+  if (!salesIntent) leak = "not_sales";
+  else if (stage === "won") leak = "closed_won";
   else if (stage === "lost") leak = "closed_lost";
   else if (booked) leak = "booked";
   else if (!engaged) leak = "not_engaged";
@@ -94,20 +130,22 @@ export function classifyBookingFunnel(
   else if (offered) leak = "offered_no_book";
   else leak = "not_offered";
 
-  return { engaged, offered, booked, showed, stage, leak };
+  return { salesIntent, engaged, offered, booked, showed, stage, leak };
 }
 
 export type BookingFunnelSummary = {
-  population: number; // conversations in scope (window-filtered)
-  engaged: number;
+  population: number; // all conversations in scope (window-filtered)
+  notSales: number; // excluded — never asked to book (ride challenge / RSVP / rental / hiring / …)
+  salesPopulation: number; // population - notSales
+  engaged: number; // SALES-intent leads where the customer replied (the funnel denominator)
   offered: number;
   booked: number;
   showed: number;
-  // Rates over ENGAGED leads (the meaningful denominator — they replied).
+  // Rates over SALES-intent ENGAGED leads (the meaningful denominator — they replied AND want a bike).
   offeredRatePct: number; // offered / engaged
   bookRatePct: number; // booked / engaged
   offerToBookPct: number; // booked / offered (the conversion the operator cares about)
-  // Mutually-exclusive buckets (sum === population).
+  // Mutually-exclusive buckets (sum === population). not_sales holds the excluded leads.
   leaks: Record<BookingLeak, number>;
 };
 
@@ -123,14 +161,20 @@ export function buildBookingFunnelSummary(
     manual_handoff: 0,
     holding_inventory: 0,
     offered_no_book: 0,
-    not_offered: 0
+    not_offered: 0,
+    not_sales: 0
   };
+  let notSales = 0;
   let engaged = 0;
   let offered = 0;
   let booked = 0;
   let showed = 0;
   for (const r of rows) {
     leaks[r.leak] += 1;
+    if (!r.salesIntent) {
+      notSales += 1;
+      continue; // non-sales leads never count toward the offer/book funnel
+    }
     if (r.engaged) engaged += 1;
     if (r.offered && r.engaged) offered += 1;
     if (r.booked) booked += 1;
@@ -139,6 +183,8 @@ export function buildBookingFunnelSummary(
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 : 0);
   return {
     population: rows.length,
+    notSales,
+    salesPopulation: rows.length - notSales,
     engaged,
     offered,
     booked,
