@@ -8,7 +8,17 @@
  * content ever reaching the LLM. CSV is decoded directly; XLSX via exceljs.
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import { spreadsheetFileToText } from "../services/api/src/domain/mdfAssistant.ts";
+
+// Pin the upload whitelist (buildMdfPacketFromUploads in index.ts) so the xlsx/csv
+// mime types + the .csv/.xlsx extension fallback can't be narrowed back out — that
+// whitelist throws BEFORE the extractor runs, so parsing support alone isn't enough.
+const apiIndex = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.ok(
+  apiIndex.includes("spreadsheetml.sheet") && apiIndex.includes("allowedByExt"),
+  "MDF claim upload whitelist must accept Excel (xlsx mime) + CSV via the .csv/.xlsx extension fallback"
+);
 
 function file(name: string, mimeType: string, buffer: Buffer) {
   return { name, mimeType, size: buffer.length, buffer };
