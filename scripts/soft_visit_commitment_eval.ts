@@ -42,15 +42,28 @@ for (const [p, label] of fails) {
   assert.equal(isParserSoftVisitCommitment(p), false, `must be false: ${label}`);
 }
 
-// 2) Both-path wiring (route parity) — live + regen gates both route on the parser signal.
+// 2) Both-path wiring (route parity) + warm visit-ack — source guards.
 const idx = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+// live: parser signal OR'd into the soft-visit gate.
 assert.ok(
   /softVisitCommitment\b[\s\S]{0,140}isParserSoftVisitCommitment\(appointmentTimingParse\)/.test(idx),
   "live path must OR the parser soft-visit signal into the soft-visit gate"
 );
+// regen: a REACHABLE soft-visit branch on the parser signal (NOT nested in the kind-gated
+// tentative block, which intent:none never enters).
 assert.ok(
-  /regenAppointmentTimingIntent === "tentative_time_window"[\s\S]{0,90}isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
-  "regen path must also route on the parser soft-visit signal (parity)"
+  /event\.provider === "twilio" && isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/.test(idx),
+  "regen path must have a reachable soft-visit branch on the parser signal (parity)"
+);
+// warm visit-ack builder exists and BOTH paths build it.
+assert.ok(/function buildSoftVisitCommitmentAck\(/.test(idx), "warm visit-ack builder must exist");
+const ackUses = (idx.match(/buildSoftVisitCommitmentAck\(conv,/g) || []).length;
+assert.ok(ackUses >= 2, `both live + regen must build the warm visit-ack (found ${ackUses})`);
+// live short-circuit must be gated on a PURE soft visit so a compound (pricing/availability/
+// callback/...) turn is never dropped.
+assert.ok(
+  /pureSoftVisit\b[\s\S]{0,400}!pricingOrPaymentsIntent[\s\S]{0,400}!callbackRequestedOverride/.test(idx),
+  "live warm-ack must be gated on a pure soft visit (no competing intent dropped)"
 );
 
-console.log("PASS soft-visit-commitment eval (parser signal + both-path parity)");
+console.log("PASS soft-visit-commitment eval (parser signal + warm ack + both-path parity)");

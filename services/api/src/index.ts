@@ -7561,6 +7561,20 @@ function buildSoftVisitScheduleInvite(conv: any, firstName: string): string | nu
   return `${greeting}just checking in — are you still thinking of stopping by ${label}? If so, what time works best so I can line it up?`;
 }
 
+// Warm visit acknowledgment for a FRESH soft-visit commitment ("I'll be there Saturday").
+// Distinct from buildSoftVisitScheduleInvite (the later "still planning to stop by?" reminder):
+// this confirms the visit warmly and offers to prep, instead of the generic orchestrator draft
+// ("You're welcome. I'll check that time and follow up.") staff had to override. Deterministic
+// templated stage (same family as the soft-visit invite), Agent-Voice-Charter tone. Reads
+// conv.scheduleSoft.windowLabel (populated by applySoftVisitCadenceWindow).
+function buildSoftVisitCommitmentAck(conv: any, firstName: string): string | null {
+  const label = String(conv?.scheduleSoft?.windowLabel ?? "").trim();
+  if (!label) return null;
+  const name = String(firstName ?? "").trim();
+  const lead = name ? `Awesome, ${name} — ` : "Awesome — ";
+  return `${lead}see you ${label}! Want me to have anything specific ready for you when you stop in?`;
+}
+
 function buildCustomerAckTentativeLockInReply(parsed: CustomerAckActionParse | null): string {
   const phrase = customerAckActionRequestedPhrase(parsed);
   if (phrase) {
@@ -48427,12 +48441,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
-    // Route parity with live: tentative window OR a parser-driven soft-visit commitment
-    // (Todd "I'll be there Saturday" — intent:none + committed day) triggers the soft-visit window.
-    if (
-      regenAppointmentTimingIntent === "tentative_time_window" ||
-      isParserSoftVisitCommitment(regenAppointmentTimingParse)
-    ) {
+    // A tentative window ("maybe Saturday") gets the soft-visit cadence window. (A pure
+    // soft-visit COMMITMENT, intent:none, is handled in its own reachable branch below — it
+    // never enters this kind-gated block, so it must not be routed here.)
+    if (regenAppointmentTimingIntent === "tentative_time_window") {
       const cfg = await getSchedulerConfigHot();
       await applySoftVisitCadenceWindow(
         conv,
@@ -49324,6 +49336,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     const regenEffectiveAction =
       regenRoutePolicyMode === "legacy" ? regenLegacyAction : regenPolicyDecision.action;
+    // Soft-visit commitment (parser-driven, appointment-timing intent:none) — route parity
+    // with live: warm visit-ack + soft-visit cadence window. Placed after all higher-priority
+    // regen intent branches have returned, so a compound turn (pricing/availability/etc.) is
+    // never dropped here — only a pure soft commitment reaches this point.
+    if (event.provider === "twilio" && isParserSoftVisitCommitment(regenAppointmentTimingParse)) {
+      const cfg = await getSchedulerConfigHot();
+      const appliedWindow = await applySoftVisitCadenceWindow(
+        conv,
+        `${event.body ?? ""} ${appointmentTimingRequestedPhrase(regenAppointmentTimingParse)}`,
+        cfg.timezone
+      );
+      if (getDialogState(conv) === "none") setDialogState(conv, "schedule_soft");
+      const ack = appliedWindow ? buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName)) : null;
+      if (ack) {
+        recordRouteOutcome("regen", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
+        if (channel === "email") return respondWithEmailRegeneratedDraft(ack);
+        return respondWithSmsRegeneratedDraft(ack, undefined, { turnSchedulingIntent: true });
+      }
+    }
     if (regenEffectiveAction === "ack_progress_update") {
       const progressReply = "Thanks for the update. Anything you need, just text me.";
       if (channel === "email") {
@@ -56324,6 +56355,26 @@ if (authToken && signature) {
     }
     if (getDialogState(conv) === "none") {
       setDialogState(conv, "schedule_soft");
+    }
+    // Warm visit-ack for a PURE soft commitment (no competing pricing/availability/callback/
+    // booking/explicit-schedule intent — those route to their own arms and must not be dropped).
+    // Replaces the generic orchestrator draft ("You're welcome. I'll check that time...") that
+    // staff had to override (Todd Herian Ref 11438).
+    const pureSoftVisit =
+      appliedWindow &&
+      !pricingOrPaymentsIntent &&
+      !effectiveTestRideIntent &&
+      !bookingIntentAccepted &&
+      !callbackRequestedOverride &&
+      !llmAvailabilityIntent &&
+      !llmExplicitScheduleIntent &&
+      !llmSchedulingIntent;
+    if (pureSoftVisit) {
+      const softVisitAck = buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName));
+      if (softVisitAck) {
+        recordRouteOutcome("live", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
+        return publishLiveTwilioReply(softVisitAck, { turnSchedulingIntent: true });
+      }
     }
   }
   const schedulingExplicit = schedulingAllowed ? schedulingSignals.explicit : false;
