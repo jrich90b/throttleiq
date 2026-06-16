@@ -3728,13 +3728,17 @@ export function resolveInitialAdfCadencePlan(input: {
   if (label.includes("not interested")) return "suppress";
   if (label.includes("year")) return "long_term";
   const monthsStart = Number(input.purchaseTimeframeMonthsStart);
-  if (Number.isFinite(monthsStart) && monthsStart >= 7) return "long_term";
+  // 4+ months out is NOT a hot buyer — soft-invite in the opener, then the gentle long_term
+  // nurture, never the aggressive day-1 ramp (Joe, 2026-06-16; was >= 7). Only 0-3mo (and
+  // unsure/unparseable) stay on standard; 0-3mo also gets the owner call task.
+  if (Number.isFinite(monthsStart) && monthsStart >= 4) return "long_term";
   return "standard";
 }
 
-// Near-term (0-3 month) purchase window. Distinct from resolveInitialAdfCadencePlan's
-// "standard" (which also covers 4-6mo + unsure). Structured-field check (lead timeframe),
-// NOT comprehension — used to create an owner call task on hot Meta promo leads.
+// Near-term (0-3 month) purchase window — the hot Meta buyers. Lines up with
+// resolveInitialAdfCadencePlan's "standard" (now 0-3mo + unsure/unparseable; 4+mo routes to
+// long_term). Structured-field check (lead timeframe), NOT comprehension — used to create an
+// owner call task on hot Meta promo leads.
 export function isNearTermMetaTimeframe(input: {
   purchaseTimeframe?: string | null;
   purchaseTimeframeMonthsStart?: number | null;
