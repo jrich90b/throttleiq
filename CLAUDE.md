@@ -38,8 +38,23 @@ consolidate parsers (shadow-compared)**. Endgame = one `TurnUnderstanding` pass 
 `docs/comprehension_consolidation_plan.md`. Done: scheduling cluster; finance/pricing
 pricing-continuation centralized (`decideFinancePricingTurn`, both paths); early-return
 guards annotated by fail-direction. Next within finance/pricing: align the regen
-follow-up trigger (still uses the `askedDownRecently` regex vs the parser signal).
-Do NOT rush parser consolidation — it changes LLM behavior; make it evidence-led.
+follow-up trigger (still `askedDownRecently` regex vs the parser signal).
+
+**Consolidation is evidence-scoped, NOT a big-bang rewrite (880-turn judged backfill).**
+The consolidated pass's gross disagreement (~25%) is ~80% LLM *over-attachment* (a thread
+model glued onto turns that don't need one — "Thanks Joe" → Breakout); the real net win is
+**~5% of turns, concentrated in MODEL resolution** (slang/shorthand: "21 SGS", "tri glides").
+So:
+- **Any consolidation ships behind a relevance guard** (`passesModelRelevanceGuard`,
+  `turnUnderstandingAuthority.ts`) — never act on a model the customer didn't reference this
+  turn, or you trade det-misses for a worse over-attachment failure mode.
+- Phase 2 is scoped to the **model-resolution slice**: STEP 1 resolver dark (`b8d8b61b`),
+  STEP 2 live cutover (`871b306d`, flag `TURN_UNDERSTANDING_MODEL_AUTHORITY=1`) — **canary
+  active** (watch `answer_correctness` `owned_bike_offered`=0). The broad taxonomy/clarify/
+  slot-fill rewrite is RULED OUT (sub-5% ceiling); gate cutovers on customer-facing
+  correctness, not shadow-disagreement.
+Make it evidence-led; any core-comprehension cutover is approve-first (open a PR, don't
+auto-build it).
 
 ## Before you ship
 - Gates (must be green): `(cd services/api && node ../../node_modules/typescript/bin/tsc -p
