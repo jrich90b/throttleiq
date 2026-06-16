@@ -19,15 +19,15 @@ const draft = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"
 const profile = fs.readFileSync(path.resolve("services/api/src/domain/dealerProfile.ts"), "utf8");
 const examples = JSON.parse(fs.readFileSync(path.resolve("scripts/dealership_faq_topic_examples.json"), "utf8")) as Array<{ text: string; expected: { topic: string } }>;
 
-// 1) The reply answers payment_methods directly — confirms debit, never the pricing handoff.
+// 1) The reply answers payment_methods directly — confirms debit + credit cards, never pricing.
 const plain = buildPaymentMethodsReply().toLowerCase();
-assert.ok(/debit/.test(plain), "the payment_methods reply must address debit (the customer's question)");
-assert.ok(/credit cards/.test(plain), "default reply mentions credit cards (no cap)");
+assert.ok(/debit and credit cards/.test(plain), "the reply must address BOTH debit and credit cards (the customer's question)");
 assert.ok(!/up to \$/.test(plain), "default reply states no card cap");
 assert.ok(!/manager.*pull|exact pricing|exact numbers/.test(plain), "the payment_methods reply must NOT be the pricing-manager handoff");
 
-// 1b) A configured credit-card cap is rendered; 0 / null / undefined render no cap.
-assert.ok(/credit cards \(up to \$1,000\)/.test(buildPaymentMethodsReply({ creditCardCapUsd: 1000 })), "a $1,000 cap renders 'credit cards (up to $1,000)'");
+// 1b) A configured card cap applies to BOTH card types; 0 / null / undefined render no cap.
+const capped = buildPaymentMethodsReply({ creditCardCapUsd: 1000 });
+assert.ok(/debit and credit cards up to \$1,000/.test(capped), "a $1,000 cap renders 'debit and credit cards up to $1,000'");
 assert.ok(/up to \$5,000/.test(buildPaymentMethodsReply({ creditCardCapUsd: 5000 })), "cap is formatted with thousands separator");
 assert.equal(buildPaymentMethodsReply({ creditCardCapUsd: 0 }), buildPaymentMethodsReply(), "cap of 0 -> no stated cap");
 assert.equal(buildPaymentMethodsReply({ creditCardCapUsd: null }), buildPaymentMethodsReply(), "null cap -> no stated cap");
