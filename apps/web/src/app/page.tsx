@@ -728,19 +728,19 @@ function getCadenceAlert(cadence?: {
     (kind === "long_term" || kind === "post_sale");
   if (status !== "active" && !preserveStoppedCadence) return null;
   const nowMs = Date.now();
-  if (cadence.pausedUntil) {
-    const pausedAt = new Date(cadence.pausedUntil);
-    if (!Number.isNaN(pausedAt.getTime())) {
-      const msUntilPause = pausedAt.getTime() - nowMs;
-      if (msUntilPause > 0) {
-        return { sendAt: pausedAt, msUntil: msUntilPause };
-      }
-    }
+  // The cadence sends at nextDueAt but is held while pausedUntil is in the future, so the
+  // EFFECTIVE next send is the LATER of the two. Showing pausedUntil alone made a paused lead
+  // read as "sending tomorrow" when its real next touch is days out (e.g. a soft-visit lead
+  // paused by a manual reply until 6/16 but actually next due 6/20 — Todd Herian).
+  const nextDueRaw = cadence.nextDueAt ?? cadence.anchorAt ?? null;
+  const nextDue = nextDueRaw ? new Date(nextDueRaw) : null;
+  const paused = cadence.pausedUntil ? new Date(cadence.pausedUntil) : null;
+  let sendAt: Date | null = null;
+  if (nextDue && !Number.isNaN(nextDue.getTime())) sendAt = nextDue;
+  if (paused && !Number.isNaN(paused.getTime()) && paused.getTime() > nowMs) {
+    if (!sendAt || paused.getTime() > sendAt.getTime()) sendAt = paused;
   }
-  const sendAtRaw = cadence.nextDueAt ?? cadence.anchorAt ?? null;
-  if (!sendAtRaw) return null;
-  const sendAt = new Date(sendAtRaw);
-  if (Number.isNaN(sendAt.getTime())) return null;
+  if (!sendAt) return null;
   const msUntil = sendAt.getTime() - nowMs;
   if (msUntil <= 0) return null;
   return { sendAt, msUntil };
