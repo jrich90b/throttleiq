@@ -616,6 +616,8 @@ import {
   applyMetaPromoInitialCadence,
   isNearTermMetaTimeframe,
   shouldPromptSoftVisitOutcome,
+  shouldHoldSoftVisitForOutcome,
+  softVisitOutcomeAutoResumeReached,
   incrementPricingAttempt,
   markPricingEscalated,
   getPricingAttempts,
@@ -26574,6 +26576,45 @@ async function processDueFollowUpsUnlocked() {
       saveConversation(conv);
       softVisitOutcomeCreated += 1;
       recordRouteOutcome("manual", "soft_visit_outcome_todo", { convId: conv.id, leadKey: conv.leadKey });
+    }
+  }
+
+  // Soft-visit OUTCOME hold: once the visit day arrives, keep the customer cadence QUIET
+  // (no generic nurture) until the rep knows whether they showed — the day-before reminder
+  // has already fired the prior day, so the hold never suppresses it. We re-extend
+  // pausedUntil each tick (reason soft_visit_outcome_pending), mirroring the in_process_silent
+  // hold below. If no outcome is recorded within ~3 business days, shouldHoldSoftVisitForOutcome
+  // flips false and we RELEASE: clear the hold + the stale visit-window copy so the cadence
+  // auto-resumes a fresh, gentle re-invite (still staff-approved in suggest mode). Showed-up
+  // needs no special case here — the rep closing/selling already stops the cadence, and the
+  // hold predicate respects closed/sold/booked.
+  for (const conv of convs) {
+    const cad = conv.followUpCadence;
+    if (!cad || cad.status !== "active" || cad.kind === "post_sale") continue;
+    if (shouldHoldSoftVisitForOutcome(conv, now.getTime())) {
+      const pausedMs = cad.pausedUntil ? Date.parse(cad.pausedUntil) : NaN;
+      const heldFarEnough = Number.isFinite(pausedMs) && pausedMs > now.getTime() + 2 * 86_400_000;
+      if (!heldFarEnough) {
+        pauseFollowUpCadence(conv, new Date(now.getTime() + 7 * 86_400_000).toISOString(), "soft_visit_outcome_pending");
+        saveConversation(conv);
+      }
+    } else if (
+      conv.scheduleSoft &&
+      cad.pauseReason === "soft_visit_outcome_pending" &&
+      softVisitOutcomeAutoResumeReached(conv, now.getTime())
+    ) {
+      cad.pausedUntil = undefined;
+      cad.pauseReason = undefined;
+      cad.nextDueAt = now.toISOString();
+      // Freshen the copy: drop the now-stale "stopping by Saturday?" window so the resumed
+      // cadence sends a clean re-invite instead of referencing the day they didn't make.
+      conv.scheduleSoft.reminderAt = undefined;
+      conv.scheduleSoft.windowStart = undefined;
+      conv.scheduleSoft.windowEnd = undefined;
+      conv.scheduleSoft.windowLabel = undefined;
+      conv.scheduleSoft.autoResumedAt = now.toISOString();
+      saveConversation(conv);
+      recordRouteOutcome("manual", "soft_visit_outcome_auto_resume", { convId: conv.id, leadKey: conv.leadKey });
     }
   }
 

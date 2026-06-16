@@ -798,6 +798,8 @@ export type Conversation = {
     windowStart?: { year: number; month: number; day: number; dayOfWeek: string };
     windowEnd?: { year: number; month: number; day: number; dayOfWeek: string };
     windowLabel?: string;
+    outcomePromptedAt?: string;
+    autoResumedAt?: string;
   };
   pickup?: {
     stage?: "need_town" | "need_street" | "need_time" | "ready";
@@ -3791,6 +3793,51 @@ export function shouldPromptSoftVisitOutcome(conv: any, nowMs: number): boolean 
   // so we never ask "did they come in?" before the visit day is actually over (any US tz).
   const dueMs = Date.UTC(y, mo - 1, d) + 36 * 3_600_000;
   return nowMs >= dueMs;
+}
+
+// How long a soft-visit lead stays quiet awaiting an outcome before the cadence
+// auto-resumes a gentle re-invite on its own (suggest mode still gates the draft).
+export const SOFT_VISIT_OUTCOME_AUTO_RESUME_BUSINESS_DAYS = 3;
+
+function softVisitVisitDayMs(conv: any): number | null {
+  const ss = conv?.scheduleSoft;
+  const day = ss?.windowEnd ?? ss?.windowStart; // later day of a multi-day window
+  const y = Number(day?.year);
+  const mo = Number(day?.month);
+  const d = Number(day?.day);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+  return Date.UTC(y, mo - 1, d);
+}
+
+// The grace window after the visit has elapsed with no outcome recorded — the cadence
+// should now auto-resume rather than hold the customer silent indefinitely (Joe, 6/15:
+// "auto-resume after ~3 business days").
+export function softVisitOutcomeAutoResumeReached(conv: any, nowMs: number): boolean {
+  const visitDayMs = softVisitVisitDayMs(conv);
+  if (visitDayMs == null) return false;
+  return businessDaysBetween(visitDayMs, nowMs) >= SOFT_VISIT_OUTCOME_AUTO_RESUME_BUSINESS_DAYS;
+}
+
+// A soft-visit lead stays QUIET from the visit day through until the rep knows whether
+// the customer showed: no generic nurture fires before the outcome is known. The
+// day-before reminder has already gone out (the prior day), so holding from the visit
+// day on never suppresses it. Booked appt / closed / sold own the outcome instead. Once
+// the ~3-business-day grace passes with no outcome, this flips false and the cadence
+// auto-resumes (the tick then freshens the stale visit-window copy). Pure decision —
+// the hold itself is applied in the maintenance tick, mirroring the in_process_silent hold.
+export function shouldHoldSoftVisitForOutcome(conv: any, nowMs: number): boolean {
+  const ss = conv?.scheduleSoft;
+  if (!ss) return false;
+  if (ss.autoResumedAt) return false; // already auto-resumed once — never re-hold
+  if (conv?.appointment?.bookedEventId) return false; // a booked appt owns the outcome
+  if (conv?.closedAt || conv?.closedReason || conv?.sale?.soldAt) return false;
+  const cad = conv?.followUpCadence;
+  if (!cad || cad.status !== "active" || cad.kind === "post_sale") return false;
+  const visitDayMs = softVisitVisitDayMs(conv);
+  if (visitDayMs == null) return false;
+  if (nowMs < visitDayMs) return false; // before the visit day — let the day-before reminder fire
+  if (softVisitOutcomeAutoResumeReached(conv, nowMs)) return false; // grace elapsed — auto-resume
+  return true;
 }
 
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
