@@ -71,6 +71,22 @@ auto-build it).
   eval-gated work without asking each time. Still required: `git fetch` first; do the work
   on a branch off `main`; and if another author's commit is unpushed locally, note it in
   your summary (surface it, don't block on it).
+- **DEPLOY THE API ONLY VIA `npm run deploy:api` — NEVER `bash scripts/deploy_api_lightsail.sh`
+  raw (footgun, hit 2026-06-16).** The npm script passes
+  `--profile infra/deploy/americanharley.api.env(.example)`, which sets the dealer's repo dir
+  (`/home/ubuntu/leadrider-api/americanharley`), `DEPLOY_DATA_DIR` (the americanharley store),
+  the runtime `DEPLOY_ENV_FILE`, and the safety rails (`DEPLOY_EXPECTED_DATA_DIR`,
+  `DEPLOY_MIN_CONVERSATIONS`, `DEPLOY_REQUIRED_CONVERSATION_TEXT`). Run the script **without a
+  profile** and it silently defaults to the BASE data dir (`/home/ubuntu/throttleiq-runtime/data`)
+  and `pm2 restart --update-env` repoints the LIVE americanharley API at the wrong store (it
+  served the base 471-conv store instead of the 562-conv one until restored from
+  `~/.pm2/dump.pm2.bak`). The americanharley API runs from `/home/ubuntu/leadrider-api/americanharley`
+  (NOT `/home/ubuntu/throttleiq`, which is the base checkout). See the `deploy-api-needs-profile-flag`
+  memory for the recovery runbook.
+- **Web deploys (`npm run deploy:web` / `deploy_web_lightsail.sh`) change Next.js Server Action
+  IDs.** Any console tab open from before the deploy will fail regenerate/actions with "Failed to
+  find Server Action" until the user HARD-REFRESHES (Cmd/Ctrl+Shift+R). Tell the user to refresh
+  after a web deploy; the API is unaffected. Only redeploy web when a web change actually ships.
 
 ## Where to look, by task
 - **Customer messaging / routing / parsers (backend):** `AGENTS.md` (parser-first, route
