@@ -42,7 +42,7 @@ const BANNED_PHRASES = [
 ];
 
 const CHECKIN_VALUE_RE =
-  /\d|photo|pic|video|incentive|offer|price|quote|arrived|came in|just got|in stock|test ride|appraisal|what day|set a time|stop in|come in|trade/i;
+  /\d|photo|pic|video|incentive|offer|price|quote|arrived|came in|just got|in stock|test ride|appraisal|what day|set a time|stop in|come in|trade|(?:we|i)\s+(?:spoke|talked|chatted|discussed|met)|spoke about|talked about|chatted about|last (?:time|week|we)|when we (?:spoke|talked|met)/i;
 
 const SENT_PROVIDERS = new Set(["twilio", "sendgrid", "human"]);
 const SMS_PROVIDERS = new Set(["twilio", "draft_ai"]);
@@ -120,6 +120,13 @@ function selfTest() {
     checkMessage("Just checking in — that 2021 Ultra Limited you liked dropped to $20,995.", base)
       .every(v => v.check !== "bare_check_in"),
     "check-in with concrete value passes"
+  );
+  assert(
+    checkMessage(
+      "Hey Peter, we spoke on Saturday about the Forty-Eight. Just checking in, let me know if you have any questions or concerns.",
+      base
+    ).every(v => v.check !== "bare_check_in"),
+    "check-in that recalls a prior conversation about a named bike passes"
   );
   assert(
     checkMessage("Hey — got it — sending now — talk soon.", base)
