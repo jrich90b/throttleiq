@@ -3771,6 +3771,28 @@ export function applyMetaPromoInitialCadence(conv: Conversation, timeZone: strin
   }
 }
 
+// Soft-visit OUTCOME: a customer who committed to coming in on a day/event ("I'll be there
+// Saturday") needs a showed-up/no-show outcome once the visit day passes — booked appointments
+// + dealer rides have this, soft visits didn't. Pure decision (nowMs passed in) so it's
+// unit-testable. True iff there's a soft-visit window whose day has passed, no booked
+// appointment owns the outcome, the conv is open, and we haven't already prompted (idempotent).
+export function shouldPromptSoftVisitOutcome(conv: any, nowMs: number): boolean {
+  const ss = conv?.scheduleSoft;
+  if (!ss) return false;
+  if (ss.outcomePromptedAt) return false; // already surfaced once (dedup)
+  if (conv?.appointment?.bookedEventId) return false; // a booked appointment owns the outcome
+  if (conv?.closedAt || conv?.closedReason || conv?.sale?.soldAt) return false;
+  const day = ss.windowEnd ?? ss.windowStart; // date-parts {year,month,day}
+  const y = Number(day?.year);
+  const mo = Number(day?.month);
+  const d = Number(day?.day);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return false;
+  // Prompt the morning AFTER the visit day: window-day 00:00 UTC + 36h ≈ ~8am ET the next day,
+  // so we never ask "did they come in?" before the visit day is actually over (any US tz).
+  const dueMs = Date.UTC(y, mo - 1, d) + 36 * 3_600_000;
+  return nowMs >= dueMs;
+}
+
 export function startPostSaleCadence(conv: Conversation, anchorAtIso: string, timeZone: string) {
   if (conv.closedReason !== "sold" && !conv.sale?.soldAt) return;
   const nextDueAt = computePostSaleDueAt(anchorAtIso, POST_SALE_DAY_OFFSETS[0], timeZone);

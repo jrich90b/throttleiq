@@ -615,6 +615,7 @@ import {
   setFollowUpMode,
   applyMetaPromoInitialCadence,
   isNearTermMetaTimeframe,
+  shouldPromptSoftVisitOutcome,
   incrementPricingAttempt,
   markPricingEscalated,
   getPricingAttempts,
@@ -14231,6 +14232,31 @@ function addDealerRideOutcomeTodo(conv: any, args: { customerName: string; token
   );
 }
 
+// Soft-visit outcome owner todo (no auto-send). Fires once the visit day passes (see
+// shouldPromptSoftVisitOutcome) so staff record showed-up / no-show and the agent stops
+// cadencing a customer who already came in (or buys). Idempotent via scheduleSoft.outcomePromptedAt.
+function maybeCreateSoftVisitOutcomeTodo(conv: any, nowMs: number): boolean {
+  if (!shouldPromptSoftVisitOutcome(conv, nowMs)) return false;
+  const name = normalizeDisplayCase(conv?.lead?.firstName) || conv?.lead?.name || "this lead";
+  const label = String(conv?.scheduleSoft?.windowLabel ?? "").trim() || "their planned day";
+  const todo = addTodo(
+    conv,
+    "other",
+    [
+      `Soft-visit outcome needed for ${name} — they said they'd come in ${label}.`,
+      "Did they make it in? Mark showed up / no-show.",
+      "If they didn't make it, want me to text them about another time?"
+    ].join("\n"),
+    `soft_visit_outcome:${conv?.id}`,
+    undefined,
+    { dueAt: new Date(nowMs).toISOString() },
+    "todo",
+    { allowSoldLead: true }
+  );
+  if (conv?.scheduleSoft) conv.scheduleSoft.outcomePromptedAt = nowIso();
+  return !!todo;
+}
+
 function summarizeConversationForStaff(conv: any): string {
   const lastInbound = String(getLastInboundBody(conv) ?? "").trim();
   if (lastInbound) {
@@ -26531,6 +26557,23 @@ async function processDueFollowUpsUnlocked() {
         reason: handoffReason,
         idleDays
       });
+    }
+  }
+
+  // Soft-visit outcome backstop: a customer who committed to coming in on a day/event
+  // ("I'll be there Saturday") needs an OUTCOME once the visit day passes — did they make it
+  // in? Booked appointments + dealer rides have this; soft visits didn't, so the agent kept
+  // cadencing blind. After the window passes (no booked appt, not yet prompted) surface the
+  // OWNER a single showed-up/no-show todo (no auto-send). Capped + deduped via
+  // scheduleSoft.outcomePromptedAt so it can never flood the task inbox.
+  const SOFT_VISIT_OUTCOME_TODOS_PER_TICK = 15;
+  let softVisitOutcomeCreated = 0;
+  for (const conv of convs) {
+    if (softVisitOutcomeCreated >= SOFT_VISIT_OUTCOME_TODOS_PER_TICK) break;
+    if (maybeCreateSoftVisitOutcomeTodo(conv, now.getTime())) {
+      saveConversation(conv);
+      softVisitOutcomeCreated += 1;
+      recordRouteOutcome("manual", "soft_visit_outcome_todo", { convId: conv.id, leadKey: conv.leadKey });
     }
   }
 
