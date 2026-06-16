@@ -447,6 +447,7 @@ import {
   decideCadenceInviteArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
+  resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
   nextActionFromState,
@@ -47461,6 +47462,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  // Payments-specific parser intent (mirror of the live llmPaymentsIntent) — feeds the centralized
+  // finance follow-up continuation signal further down, replacing the askedDownRecently regex.
+  let regenLlmPaymentsIntent = false;
   if (event.provider === "twilio") {
     const regenHistory = buildHistory(conv, 12);
     const pricingPaymentsParse = await safeLlmParse("regen_pricing_payments_parser", () =>
@@ -47470,6 +47474,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         lead: conv.lead
       })
     );
+    regenLlmPaymentsIntent =
+      isPricingPaymentsIntentParserAccepted(pricingPaymentsParse) &&
+      pricingPaymentsParse?.intent === "payments";
     const externalApprovalTransferDecision = resolveExternalDealerApprovalTransferDecision(
       event.body ?? "",
       pricingPaymentsParse
@@ -50467,14 +50474,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       })
       .slice(-1)[0];
     const lastOutboundText = String(lastOutboundBeforeInbound?.body ?? "");
-    const askedDownRecently =
-      /\b(how much can you put down|how much (?:are|can) you put down|about how much down|how much down|money down|down payment|cash down)\b/i.test(
-        lastOutboundText
-      );
     // Pricing-continuation precedence centralized in decideFinancePricingTurn (shared with
     // /webhooks/twilio): manual-quote-details state update outranks the finance follow-up
     // continuation, both gated by the parser pricing route + no live scheduling/availability
-    // signal. Regen feeds its own parser signals — same pattern as decideSchedulingTurn/regenSched.
+    // signal. The finance follow-up continuation now uses the SHARED parser-led signal
+    // (resolveFinanceFollowUpContinuation) — same as live — replacing the askedDownRecently regex
+    // that read our own last outbound. regenParserPricingIntent is the routing pricing/payments
+    // bucket (currentTurnFinanceSignal equivalent); regenLlmPaymentsIntent is payments-specific.
     const regenFinancePricingTurn = decideFinancePricingTurn({
       routeExecPricing: regenParserPricingIntent,
       availabilitySignal: regenParserAvailabilityIntent,
@@ -50490,7 +50496,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         inboundText: event.body,
         lastOutboundText
       }),
-      financeFollowUpContinuation: regenDownProvided && askedDownRecently
+      financeFollowUpContinuation: resolveFinanceFollowUpContinuation({
+        paymentsIntent: regenLlmPaymentsIntent,
+        financeSignal: regenParserPricingIntent,
+        downProvided: regenDownProvided,
+        monthlyProvided: regenMonthlyBudget != null,
+        termProvided: regenTermMonths != null
+      })
     });
     if (regenFinancePricingTurn.kind === "manual_quote_details") {
       applyManualQuoteDetailsReceivedState(conv, event.body, event.providerMessageId);
@@ -57142,20 +57154,16 @@ if (authToken && signature) {
       conv.scheduleSoft = undefined;
     }
   }
-  const financeFollowUpContinuationSignal = (() => {
-    const downPaymentProvided = paymentBudgetContext.downPayment != null;
-    const monthlyBudgetProvided = paymentBudgetContext.monthlyBudget != null;
-    const termProvided = paymentBudgetContext.termMonths != null;
-    // The recent-finance-prompt/affirmation regex backstop was already inert
-    // behind regexIntentFallbackEnabled=false; removed it. Continuation is
-    // parser-led (llmPaymentsIntent) plus stored payment-budget context.
-    return (
-      llmPaymentsIntent ||
-      ((downPaymentProvided || monthlyBudgetProvided || termProvided) &&
-        currentTurnFinanceSignal) ||
-      (downPaymentProvided && monthlyBudgetProvided && currentTurnFinanceSignal)
-    );
-  })();
+  // Parser-led continuation, centralized in resolveFinanceFollowUpContinuation (shared with the
+  // regenerate path so the trigger is identical). llmPaymentsIntent + stored payment-budget context;
+  // the old recent-finance-prompt/affirmation regex backstop was already inert and is gone.
+  const financeFollowUpContinuationSignal = resolveFinanceFollowUpContinuation({
+    paymentsIntent: llmPaymentsIntent,
+    financeSignal: currentTurnFinanceSignal,
+    downProvided: paymentBudgetContext.downPayment != null,
+    monthlyProvided: paymentBudgetContext.monthlyBudget != null,
+    termProvided: paymentBudgetContext.termMonths != null
+  });
   // Pricing-continuation precedence centralized in routeStateReducer.decideFinancePricingTurn:
   // manual-quote-details state update outranks the finance follow-up continuation, both gated by
   // the parser pricing route + no live scheduling signal. Same decision is applied in

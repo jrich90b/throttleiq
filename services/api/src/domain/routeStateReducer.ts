@@ -443,6 +443,27 @@ export function decideFinancePricingTurn(
   return { kind: "none" };
 }
 
+// The finance follow-up CONTINUATION signal (the financeFollowUpContinuation arm of
+// decideFinancePricingTurn). Centralized so BOTH /webhooks/twilio and /conversations/:id/regenerate
+// compute it identically (route-parity law). Parser-led: a payments-specific parser intent, OR
+// stored payment-budget context (down/monthly/term) paired with a pricing/payments route signal.
+// This replaced the regen path's `askedDownRecently` regex (which read OUR last outbound text) —
+// the live path had already dropped that regex backstop, and regen now matches via this helper.
+export function resolveFinanceFollowUpContinuation(args: {
+  paymentsIntent: boolean; // parser: turn is payments-specific (live: llmPaymentsIntent)
+  financeSignal: boolean; // parser: pricing-or-payments route this turn (live: currentTurnFinanceSignal)
+  downProvided: boolean;
+  monthlyProvided: boolean;
+  termProvided: boolean;
+}): boolean {
+  const { paymentsIntent, financeSignal, downProvided, monthlyProvided, termProvided } = args;
+  return (
+    paymentsIntent ||
+    ((downProvided || monthlyProvided || termProvided) && financeSignal) ||
+    (downProvided && monthlyProvided && financeSignal)
+  );
+}
+
 // --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
 // The appointment-invite cadence message is our lowest-replying touch with real
 // volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy

@@ -15,7 +15,12 @@
  * in would reorder them relative to interleaved non-finance routing).
  */
 import assert from "node:assert/strict";
-import { decideFinancePricingTurn } from "../services/api/src/domain/routeStateReducer.ts";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  decideFinancePricingTurn,
+  resolveFinanceFollowUpContinuation
+} from "../services/api/src/domain/routeStateReducer.ts";
 
 type Row = {
   id: string;
@@ -63,4 +68,51 @@ for (const row of rows) {
   passed += 1;
 }
 
-console.log(`PASS finance-pricing-turn decision eval (${passed} rows)`);
+// --- resolveFinanceFollowUpContinuation: the SHARED parser-led continuation signal --------------
+// Centralized so the live (/webhooks/twilio) and regenerate paths compute the financeFollowUpContinuation
+// arm identically. This replaced the regen path's askedDownRecently regex (which read our own last
+// outbound). Parser-led: a payments-specific intent OR payment-budget context + a pricing/payments route.
+const ffuBase = {
+  paymentsIntent: false,
+  financeSignal: false,
+  downProvided: false,
+  monthlyProvided: false,
+  termProvided: false
+};
+const ffuRows: Array<{ id: string; input: Parameters<typeof resolveFinanceFollowUpContinuation>[0]; want: boolean }> = [
+  { id: "payments_intent_alone", input: { ...ffuBase, paymentsIntent: true }, want: true },
+  { id: "down_plus_finance_signal", input: { ...ffuBase, downProvided: true, financeSignal: true }, want: true },
+  { id: "monthly_plus_finance_signal", input: { ...ffuBase, monthlyProvided: true, financeSignal: true }, want: true },
+  { id: "term_plus_finance_signal", input: { ...ffuBase, termProvided: true, financeSignal: true }, want: true },
+  { id: "budget_without_finance_signal", input: { ...ffuBase, downProvided: true }, want: false },
+  { id: "finance_signal_without_budget", input: { ...ffuBase, financeSignal: true }, want: false },
+  { id: "all_false", input: { ...ffuBase }, want: false }
+];
+for (const row of ffuRows) {
+  assert.equal(
+    resolveFinanceFollowUpContinuation(row.input),
+    row.want,
+    `ffu ${row.id}: expected ${row.want}`
+  );
+  passed += 1;
+}
+
+// --- both-paths source guards -------------------------------------------------------------------
+const indexSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
+const ffuCalls = indexSrc.split("resolveFinanceFollowUpContinuation(").length - 1;
+assert.ok(
+  ffuCalls >= 2,
+  `both the live and regenerate paths must call resolveFinanceFollowUpContinuation (found ${ffuCalls})`
+);
+assert.ok(
+  !/regenDownProvided && askedDownRecently/.test(indexSrc),
+  "regen path must NOT use the old regenDownProvided && askedDownRecently regex trigger"
+);
+assert.ok(
+  // "about how much down" was unique to the removed askedDownRecently regex (a broader finance
+  // detector at ~22886 shares other tokens, so key on this one).
+  !/about how much down/.test(indexSrc),
+  "the askedDownRecently down-payment regex must be removed from the regen path"
+);
+
+console.log(`PASS finance-pricing-turn decision eval (${passed} rows; incl. continuation signal + both-paths guards)`);
