@@ -12,16 +12,30 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
+import { buildPaymentMethodsReply } from "../services/api/src/domain/paymentMethodsReply.ts";
+
 const orch = fs.readFileSync(path.resolve("services/api/src/domain/orchestrator.ts"), "utf8");
 const draft = fs.readFileSync(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
+const profile = fs.readFileSync(path.resolve("services/api/src/domain/dealerProfile.ts"), "utf8");
 const examples = JSON.parse(fs.readFileSync(path.resolve("scripts/dealership_faq_topic_examples.json"), "utf8")) as Array<{ text: string; expected: { topic: string } }>;
 
-// 1) The reply builder answers payment_methods directly — confirms debit, never the pricing handoff.
-const caseMatch = orch.match(/case "payment_methods":\s*\n\s*return\s*("(?:[^"\\]|\\.)*");/);
-assert.ok(caseMatch, "buildDealershipFaqReply must have a case \"payment_methods\" returning a reply");
-const reply = caseMatch![1].toLowerCase();
-assert.ok(/debit/.test(reply), "the payment_methods reply must address debit (the customer's question)");
-assert.ok(!/manager.*pull|exact pricing|exact numbers/.test(reply), "the payment_methods reply must NOT be the pricing-manager handoff");
+// 1) The reply answers payment_methods directly — confirms debit, never the pricing handoff.
+const plain = buildPaymentMethodsReply().toLowerCase();
+assert.ok(/debit/.test(plain), "the payment_methods reply must address debit (the customer's question)");
+assert.ok(/credit cards/.test(plain), "default reply mentions credit cards (no cap)");
+assert.ok(!/up to \$/.test(plain), "default reply states no card cap");
+assert.ok(!/manager.*pull|exact pricing|exact numbers/.test(plain), "the payment_methods reply must NOT be the pricing-manager handoff");
+
+// 1b) A configured credit-card cap is rendered; 0 / null / undefined render no cap.
+assert.ok(/credit cards \(up to \$1,000\)/.test(buildPaymentMethodsReply({ creditCardCapUsd: 1000 })), "a $1,000 cap renders 'credit cards (up to $1,000)'");
+assert.ok(/up to \$5,000/.test(buildPaymentMethodsReply({ creditCardCapUsd: 5000 })), "cap is formatted with thousands separator");
+assert.equal(buildPaymentMethodsReply({ creditCardCapUsd: 0 }), buildPaymentMethodsReply(), "cap of 0 -> no stated cap");
+assert.equal(buildPaymentMethodsReply({ creditCardCapUsd: null }), buildPaymentMethodsReply(), "null cap -> no stated cap");
+
+// 1c) Wiring: the FAQ case uses the builder, and the dealer profile feeds the cap in.
+assert.ok(/case "payment_methods":\s*\n\s*return buildPaymentMethodsReply\(/.test(orch), "the payment_methods case must call buildPaymentMethodsReply");
+assert.ok(/creditCardCapUsd: dealerProfile\?\.payments\?\.creditCardCapUsd/.test(orch), "the FAQ call site must pass the dealer-profile card cap");
+assert.ok(/creditCardCapUsd\?: number;/.test(profile), "DealerProfile.payments must expose creditCardCapUsd");
 
 // 2) payment_methods is a recognized topic everywhere (type enum in BOTH files, schema, validator).
 assert.ok(/\|\s*"payment_methods"/.test(draft), "DealershipFaqTopicParse must include payment_methods");

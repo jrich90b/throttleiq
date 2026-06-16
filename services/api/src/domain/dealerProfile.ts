@@ -68,6 +68,10 @@ export type DealerProfile = {
       capabilitiesReady?: boolean;
       updatedAt?: string;
     };
+    // Max $ the dealer will run on a credit card for a bike purchase (processing-fee policy).
+    // Set it and the payment_methods FAQ reply states the cap ("credit cards (up to $1,000)");
+    // omit it for no stated cap. See buildPaymentMethodsReply.
+    creditCardCapUsd?: number;
   };
   taxRate?: number;
 };

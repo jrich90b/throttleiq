@@ -2,6 +2,7 @@
 import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { buildTradeAdfAck } from "./tradeAdfReply.js";
+import { buildPaymentMethodsReply } from "./paymentMethodsReply.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -134,6 +135,7 @@ function buildDealershipFaqReply(args: {
     | "payment_methods";
   lead?: LeadProfile | null;
   dealerName: string;
+  creditCardCapUsd?: number | null;
 }): string {
   const yearLabel = args.lead?.vehicle?.year ? `${args.lead.vehicle.year} ` : "";
   const modelRaw = args.lead?.vehicle?.model ?? args.lead?.vehicle?.description ?? "that bike";
@@ -163,7 +165,7 @@ function buildDealershipFaqReply(args: {
     case "no_money_down":
       return "Some qualified buyers can do low or no money down. It’s application-dependent, but we can check your options quickly.";
     case "payment_methods":
-      return "No cash required — debit works great. We also take credit cards, a certified check, or we can set up financing. Whatever’s easiest for you!";
+      return buildPaymentMethodsReply({ creditCardCapUsd: args.creditCardCapUsd });
     case "trade_in":
       return "Yes — we take Harley and non-Harley trades. Value depends on condition, miles, and market.";
     case "trade_tax_advantage":
@@ -2917,7 +2919,8 @@ export async function orchestrateInbound(
         draft: buildDealershipFaqReply({
           topic: faqParse.topic,
           lead: ctx?.lead ?? null,
-          dealerName
+          dealerName,
+          creditCardCapUsd: dealerProfile?.payments?.creditCardCapUsd ?? null
         })
       });
     }
