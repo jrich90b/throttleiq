@@ -32,7 +32,11 @@ if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) {
   process.exit(1);
 }
 
-const SENT_PROVIDERS = new Set(["twilio", "human", "sendgrid"]);
+// Real follow-up actions: sent SMS/email AND logged call summaries (the live hook
+// evaluates calls too, so the backfill must as well).
+const SENT_PROVIDERS = new Set(["twilio", "human", "sendgrid", "voice_summary"]);
+const channelFor = (provider: string): "sms" | "email" | "call" =>
+  provider === "sendgrid" ? "email" : provider === "voice_summary" ? "call" : "sms";
 const ms = (s: unknown) => {
   const t = new Date(String(s ?? "")).getTime();
   return Number.isFinite(t) ? t : 0;
@@ -63,6 +67,7 @@ type Row = {
 
 const wouldClose: Row[] = [];
 const fulfilledLowConf: Row[] = [];
+const notFulfilled: Row[] = [];
 let evaluated = 0;
 let skippedNoOutbound = 0;
 
@@ -82,7 +87,7 @@ const candidates = eligible
       .sort((a: any, b: any) => ms(a?.at) - ms(b?.at));
     const latest = outbound[outbound.length - 1];
     if (!latest) return null;
-    const channel = String(latest.provider) === "sendgrid" ? "email" : "sms";
+    const channel = channelFor(String(latest.provider));
     const name = `${conv.lead?.firstName ?? ""} ${conv.lead?.lastName ?? ""}`.trim() || conv.leadKey;
     return { task: t, conv, latest, channel, name };
   })
@@ -102,7 +107,7 @@ for (const c of toScan) {
   });
   evaluated += 1;
   const v = verdicts?.find(x => x.taskId === c.task.id);
-  if (!v || !v.fulfilled) continue;
+  if (!v) continue;
   const row: Row = {
     convId: c.conv.id,
     name: c.name,
@@ -114,7 +119,8 @@ for (const c of toScan) {
     confidence: v.confidence,
     evidence: v.evidence
   };
-  if (v.confidence >= 0.85) wouldClose.push(row);
+  if (!v.fulfilled) notFulfilled.push(row);
+  else if (v.confidence >= 0.85) wouldClose.push(row);
   else fulfilledLowConf.push(row);
 }
 
@@ -134,4 +140,12 @@ console.log(`\nWOULD CLOSE (fulfilled, confidence ≥ 0.85): ${wouldClose.length
 wouldClose.sort((a, b) => b.confidence - a.confidence).forEach(r => console.log(fmt(r)));
 console.log(`\nfulfilled but BELOW 0.85 (would stay open): ${fulfilledLowConf.length}`);
 fulfilledLowConf.sort((a, b) => b.confidence - a.confidence).forEach(r => console.log(fmt(r)));
+console.log(`\nNOT fulfilled (stay open) — sanity-check the parser was right: ${notFulfilled.length}`);
+notFulfilled
+  .sort((a, b) => b.confidence - a.confidence)
+  .forEach(r =>
+    console.log(
+      `  [${r.confidence.toFixed(2)}] ${r.name} (${r.channel}) — task: ${r.summary} | action: "${r.action}"`
+    )
+  );
 console.log("\n(Read-only — nothing was changed.)");
