@@ -61,12 +61,52 @@ export function formatMissingControls(missing: PreflightControl[]): string {
   return missing.map(control => `${control.label} (${control.selector})`).join("; ");
 }
 
-/** Operator-facing summary for a failed preflight (returned as the task result). */
-export function ansiraFormChangedSummary(missing: PreflightControl[]): string {
+/**
+ * Shared shell for every preflight failure: states the form changed, that NOTHING was
+ * saved (zero partial state — the safety promise), the specific detail, and the fix.
+ */
+function preflightFailureSummary(detail: string): string {
   return (
-    "MDF preflight failed — the Ansira Create MDF Recap form is missing controls the runner depends on. " +
-    "This usually means Ansira changed the form layout. No draft was created (nothing was saved). " +
-    `Missing: ${formatMissingControls(missing)}. ` +
+    "MDF preflight failed — the Ansira Create MDF Recap form changed (likely an Ansira update). " +
+    "No draft was created (nothing was saved). " +
+    `${detail} ` +
     "Re-inspect the form in the runner's Chrome window and update the runner's selectors before retrying."
   );
+}
+
+/** Operator-facing summary when load-bearing controls are missing. */
+export function ansiraFormChangedSummary(missing: PreflightControl[]): string {
+  return preflightFailureSummary(`Missing controls the runner depends on: ${formatMissingControls(missing)}.`);
+}
+
+/**
+ * Phase-A check: the runner picks the claim type by selecting a Marketing Activity option
+ * by its visible text (selectOptionByText → Playwright `hasText`, a case-insensitive
+ * "contains" match). If Ansira renames that option — most likely at YEAR ROLLOVER
+ * ("2026 Media Claim" → "2027 Media Claim") — the select would otherwise throw mid-run with
+ * a generic error. This catches it up front, before any fill. Mirrors the runner's
+ * contains-match so it neither false-positives nor misses. Returns a detail string when the
+ * required option is absent, else null. An empty `requiredLabel` (a claim type the
+ * deterministic path doesn't drive) returns null — not our concern here.
+ */
+export function marketingActivityOptionIssue(
+  requiredLabel: string,
+  availableOptions: string[]
+): string | null {
+  const norm = (s: string) => String(s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  const need = norm(requiredLabel);
+  if (!need) return null;
+  const present = availableOptions.some(option => norm(option).includes(need));
+  if (present) return null;
+  const shown = availableOptions.map(option => option.trim()).filter(Boolean);
+  return (
+    `Marketing Activity option "${requiredLabel}" was not found in the dropdown ` +
+    "(the runner needs it to pick the claim type — most likely an Ansira rename such as a year rollover). " +
+    `Available options: ${shown.length ? shown.join(", ") : "(none)"}.`
+  );
+}
+
+/** Operator-facing summary when the required Marketing Activity option is missing/renamed. */
+export function ansiraMarketingOptionSummary(detail: string): string {
+  return preflightFailureSummary(detail);
 }

@@ -14,8 +14,10 @@ import assert from "node:assert/strict";
 import {
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
+  ansiraMarketingOptionSummary,
   findMissingFormControls,
-  formatMissingControls
+  formatMissingControls,
+  marketingActivityOptionIssue
 } from "./mdf_portal_preflight.ts";
 
 // 1) The guard must cover the controls the filler actually reads/writes — including
@@ -73,5 +75,45 @@ assert.ok(
   formatted.includes("Save for Later") && formatted.includes("(#app-draft-submit-btn)"),
   "formatted list pairs label + selector"
 );
+
+// 8) Marketing-activity OPTION check (Phase A) — the live options observed 2026-06-17.
+const liveOptions = ["-- Select --", "2026 Event Claim", "2026 Media Claim", "Minimum Advertised Price (MAP) Only"];
+assert.equal(
+  marketingActivityOptionIssue("2026 Media Claim", liveOptions),
+  null,
+  "required option present in the live dropdown → no issue"
+);
+assert.equal(
+  marketingActivityOptionIssue("2026 Event Claim", liveOptions),
+  null,
+  "event option present → no issue"
+);
+
+// Mirrors the runner's `hasText` contains-match (and is whitespace/case-insensitive), so a
+// decorated option text still matches and doesn't false-positive.
+assert.equal(
+  marketingActivityOptionIssue("2026 Media Claim", ["  2026   MEDIA claim  (FY26)"]),
+  null,
+  "contains-match tolerates decoration + case/whitespace, like the runner"
+);
+
+// Year rollover: the option Ansira renames first. Must be CAUGHT, name the required label,
+// and list what's actually available so the fix is obvious.
+const rollover = marketingActivityOptionIssue("2026 Media Claim", ["-- Select --", "2027 Event Claim", "2027 Media Claim"]);
+assert.ok(rollover, "a year-rollover rename of the required option is detected");
+assert.ok(rollover!.includes("2026 Media Claim"), "issue names the required option");
+assert.ok(rollover!.includes("2027 Media Claim"), "issue lists the available options for diagnosis");
+
+// Empty dropdown (broken form) → issue, not a silent pass.
+assert.ok(marketingActivityOptionIssue("2026 Media Claim", []), "no options at all is reported");
+
+// An empty required label (a claim type the deterministic path doesn't drive) → not our concern.
+assert.equal(marketingActivityOptionIssue("", liveOptions), null, "empty required label is a no-op");
+
+// The option-failure summary shares the safety shell: nothing saved, points at Ansira.
+const optionSummary = ansiraMarketingOptionSummary(rollover!);
+assert.ok(/no draft was created/i.test(optionSummary), "option summary states no draft was created");
+assert.ok(/ansira/i.test(optionSummary), "option summary points at Ansira");
+assert.ok(optionSummary.includes("2026 Media Claim"), "option summary carries the detail");
 
 console.log("PASS mdf portal preflight eval");

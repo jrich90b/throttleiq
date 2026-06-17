@@ -6,7 +6,13 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ANSIRA_FORM_CONTROLS, ansiraFormChangedSummary, findMissingFormControls } from "./mdf_portal_preflight.ts";
+import {
+  ANSIRA_FORM_CONTROLS,
+  ansiraFormChangedSummary,
+  ansiraMarketingOptionSummary,
+  findMissingFormControls,
+  marketingActivityOptionIssue
+} from "./mdf_portal_preflight.ts";
 
 type AgentTaskStatus = "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
 
@@ -1392,6 +1398,21 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
   if (loginBlocker) {
     await browser.close();
     return { code: 2, summary: loginBlocker };
+  }
+
+  // Phase-A preflight: confirm the Marketing Activity option the runner needs still exists
+  // BEFORE selecting it. A renamed option (most likely a year rollover — "2026 Media Claim"
+  // → "2027 Media Claim") would otherwise throw mid-select with a generic error. Read the
+  // option texts the same way the runner matches them (visible text), so the check tracks
+  // the actual select behavior.
+  const activityOptions = await page
+    .locator("#app-marketing-activity option")
+    .allTextContents()
+    .catch(() => [] as string[]);
+  const optionIssue = marketingActivityOptionIssue(portalClaimLabel, activityOptions);
+  if (optionIssue) {
+    await browser.close();
+    return { code: 2, summary: ansiraMarketingOptionSummary(optionIssue) };
   }
 
   await selectOptionByText(page, "#app-marketing-activity", portalClaimLabel);
