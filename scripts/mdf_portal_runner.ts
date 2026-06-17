@@ -366,7 +366,18 @@ function chooseTask(tasks: AgentTask[], options: RunnerOptions): AgentTask | nul
   const rows = pendingMdfTasks(tasks);
   if (options.taskId) return rows.find(task => task.id === options.taskId) ?? null;
   if (options.claimId) return rows.find(task => claimIdFromTask(task) === options.claimId) ?? null;
-  return rows.find(task => task.status === "needs_approval" || task.status === "queued") ?? null;
+  // RUN ONCE: MDF tasks are created as needs_approval (approval.required); the runner
+  // stamps output ("MDF portal runner started.") the moment it begins. Only pick a task
+  // that has NOT run yet (no output) — otherwise a completed task stays needs_approval
+  // and the daemon re-runs it every tick, clicking "Create MDF Recap" and spawning a NEW
+  // draft each time. A task that needs retrying must be re-triggered (a fresh task).
+  return (
+    rows.find(
+      task =>
+        (task.status === "needs_approval" || task.status === "queued") &&
+        !String(task.output?.summary ?? "").trim()
+    ) ?? null
+  );
 }
 
 function updateTask(tasks: AgentTask[], id: string, status: AgentTaskStatus, summary: string, links: string[] = []) {
