@@ -54,6 +54,7 @@ const eligible = open.filter(t =>
 );
 
 type Row = {
+  taskId: string;
   convId: string;
   name: string;
   reason: string;
@@ -119,6 +120,7 @@ for (const c of toScan) {
   const v = verdicts?.find(x => x.taskId === c.task.id);
   if (!v) continue;
   const row: Row = {
+    taskId: c.task.id,
     convId: c.conv.id,
     name: c.name,
     reason: c.task.reason,
@@ -158,4 +160,19 @@ notFulfilled
       `  [${r.confidence.toFixed(2)}] ${r.name} (${r.channel}) — task: ${r.summary} | action: "${r.action}"`
     )
   );
+// Full pick-list: every evaluated task, most-likely-done first, with a stable #
+// and the task id so specific ones can be closed on request.
+const allRows = [...wouldClose, ...fulfilledLowConf, ...notFulfilled].sort(
+  (a, b) => Number(b.fulfilled) - Number(a.fulfilled) || b.confidence - a.confidence
+);
+console.log(`\n=== ALL EVALUATED — pick by # (${allRows.length}) ===`);
+allRows.forEach((r, i) => {
+  const mark = r.fulfilled ? (r.confidence >= 0.85 ? "DONE✓≥.85" : "done?<.85") : "open    ";
+  console.log(
+    `#${String(i + 1).padStart(2, " ")} [${mark} ${r.confidence.toFixed(2)}] ${r.name} (${r.convId}) task=${r.taskId}\n` +
+      `     task: ${r.summary}\n` +
+      `     ${r.channel}: "${r.action}"\n` +
+      `     why: ${r.evidence}`
+  );
+});
 console.log("\n(Read-only — nothing was changed.)");
