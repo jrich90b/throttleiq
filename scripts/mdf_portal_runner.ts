@@ -392,11 +392,13 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Stop at the final review/save-draft step.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
     "- Start at h-dnet.com. Do not open the saved Marketing Development Fund launcher URL directly.",
-    "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox.",
+    "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox. That opens the Ansira MDF app (app.ansira.com) — often in a NEW TAB, so switch to that tab.",
+    "- ARRIVAL CHECK (important): once ANY open tab is on `app.ansira.com` and is NOT a sign-in page (e.g. `app.ansira.com/member/...`), you have ALREADY reached the MDF portal. STOP searching the H-DNet header for a 'Marketing Development Fund' menu item and stop clicking H-DNet account/toolbox buttons — switch to that Ansira tab and work there.",
+    "- In the Ansira MDF app, go to the claims / MDF area and click `Create Claim` (or open the matching existing draft for this campaign), then fill the fields below from the packet and upload the listed files. Save as draft or stop at the review step — never final submit.",
     options.useSavedChromeLogin
       ? "- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, you may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for manual login/MFA if autofill is not already present."
       : "- If the browser is not logged into H-DNet, stop on the H-DNet/Microsoft login screen and let the user sign in manually.",
-    "- If the browser lands on an Ansira login page, stop and go back to h-dnet.com; do not enter credentials directly into Ansira.",
+    "- Only a SIGN-IN page (H-DNet/Microsoft, or an Ansira login page asking for credentials) is a stop condition — stop and let the user log in. The logged-in Ansira app (`app.ansira.com/member/...`) is the DESTINATION, not a blocker: do NOT navigate it back to h-dnet.com.",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,
