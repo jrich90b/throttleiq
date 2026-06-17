@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -1425,8 +1425,75 @@ async function isCdpReachable(cdpUrl: string): Promise<boolean> {
   }
 }
 
+// Single-flight lock: only one --run may drive the shared CDP browser at a time.
+// A daemon restart can orphan an in-flight runner (it keeps running) while a new
+// daemon spawns fresh runners — multiple agents then fight over the same Chrome
+// (observed 2026-06-17: 3 concurrent agents clobbering each other's tabs). This
+// cross-process lockfile makes the new runner stand down while another is live.
+// A lock whose pid is dead, or older than the stale window, is reclaimed.
+const RUN_LOCK_PATH = path.join(os.tmpdir(), "leadrider-mdf-portal-runner.lock");
+const RUN_LOCK_STALE_MS = 15 * 60 * 1000;
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM"; // exists but not signalable -> still alive
+  }
+}
+
+function acquireRunLock(): boolean {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const fd = openSync(RUN_LOCK_PATH, "wx"); // atomic exclusive create
+      writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAtMs: Date.now() }));
+      closeSync(fd);
+      return true;
+    } catch (err: any) {
+      if (err?.code !== "EEXIST") return true; // unexpected fs error -> fail open (never block all runs)
+      try {
+        const info = JSON.parse(readFileSync(RUN_LOCK_PATH, "utf8") || "{}");
+        const pid = Number(info?.pid);
+        const startedAtMs = Number(info?.startedAtMs);
+        const alive = isPidAlive(pid);
+        const fresh = Number.isFinite(startedAtMs) && Date.now() - startedAtMs < RUN_LOCK_STALE_MS;
+        if (alive && fresh) return false; // genuinely held by a live, recent runner
+        unlinkSync(RUN_LOCK_PATH); // stale (dead pid or timed out) -> reclaim and retry
+      } catch {
+        return false; // can't read/parse the lock -> treat as held (don't risk a collision)
+      }
+    }
+  }
+  return false;
+}
+
+function releaseRunLock(): void {
+  try {
+    const info = JSON.parse(readFileSync(RUN_LOCK_PATH, "utf8") || "{}");
+    if (Number(info?.pid) === process.pid) unlinkSync(RUN_LOCK_PATH);
+  } catch {
+    /* nothing to release / already gone */
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  // Hold the single-flight lock only for an actual browser run (not list/dry-run).
+  const wantsBrowserRun = options.run && !options.dryRun && !options.list;
+  if (wantsBrowserRun && !acquireRunLock()) {
+    console.log("Another MDF portal runner is already running (single-flight lock held); skipping this run.");
+    return;
+  }
+  try {
+    await runMain(options);
+  } finally {
+    if (wantsBrowserRun) releaseRunLock();
+  }
+}
+
+async function runMain(options: RunnerOptions) {
   const remoteBundles = options.apiBase ? await loadRemoteBundles(options) : null;
   const tasks = remoteBundles ? remoteBundles.map(row => row.task) : await loadTasks();
   const mdfTasks = pendingMdfTasks(tasks);
