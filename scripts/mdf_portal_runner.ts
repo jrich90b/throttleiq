@@ -75,7 +75,7 @@ type RunnerOptions = {
   idleOk: boolean;
   portalUrl: string;
   launcherUrl: string;
-  claimFormUrl: string;
+  recapEntryUrl: string;
   cdpUrl: string;
   apiBase: string;
   token: string;
@@ -144,12 +144,12 @@ function parseArgs(argv: string[]): RunnerOptions {
     launcherUrl:
       process.env.MDF_PORTAL_LAUNCHER_URL?.trim() ||
       "https://launcher.myapps.microsoft.com/api/signin/6fed78a2-dbcb-4685-a0b9-3033ab4a4dd1?tenantId=625f2ee0-190f-4e6f-9cbb-be276a887c4d",
-    // The Ansira Create-Claim form — a stable direct URL (verified 6/17). After the
-    // launcher establishes SSO, navigate straight here instead of hunting for a
-    // "Create Claim" link from the Ansira home page.
-    claimFormUrl:
-      process.env.MDF_PORTAL_CLAIM_FORM_URL?.trim() ||
-      "https://app.ansira.com/member/reimbursements/claims/create",
+    // The MDF Recap list page (verified 6/17). The recap form at …/claims/create only
+    // renders when instantiated via the "Create MDF Recap" button on THIS list page — a
+    // direct nav to …/claims/create does not stick. So land here, then click Create.
+    recapEntryUrl:
+      process.env.MDF_PORTAL_RECAP_ENTRY_URL?.trim() ||
+      "https://app.ansira.com/member/reimbursements/claims",
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
     token: process.env.MDF_PORTAL_RUNNER_TOKEN?.trim() || process.env.AUTOMATION_RUN_WRITE_TOKEN?.trim() || "",
@@ -429,7 +429,8 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Only a SIGN-IN page (H-DNet/Microsoft, or an Ansira login page asking for credentials) is a stop condition — stop and let the user log in. The logged-in Ansira app (`app.ansira.com/member/...`) is the DESTINATION, not a blocker: do NOT navigate it back to h-dnet.com.",
     "",
     "## Ansira Create-Claim Form — fill these EXACT fields",
-    `0. As soon as any tab is on app.ansira.com (logged in), navigate that tab DIRECTLY to: ${options.claimFormUrl} . That opens the Create-Claim form. Do NOT hunt for a 'Create Claim' link/menu and do NOT browse Orders & Activity — just go to that URL.`,
+    `0a. As soon as any tab is on app.ansira.com (logged in), navigate that tab DIRECTLY to: ${options.recapEntryUrl} (the MDF Recap list page). Do NOT hunt menus, the toolbox, or Orders & Activity.`,
+    "0b. On that list page, click the **\"Create MDF Recap\"** button to open the recap form (it lands on …/reimbursements/claims/create). If a tab is already on …/claims/create, just use it.",
     `1. "Marketing Activity *" dropdown (#app-marketing-activity): choose "${marketingActivity}" (the option matching this claim's type and activity year).`,
     "2. Pre-approval radios: select **\"No, continue without a pre-approval\"** (unless a pre-approval ID is provided in the packet — then choose \"Yes\" and enter it).",
     "3. \"Activity Start Date\" (#app-claim-start-date) and \"Activity End Date\" (#app-claim-end-date): use the Activity start/end dates from Extracted Fields below.",
@@ -667,11 +668,11 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
     path.join(rootDir, "scripts", "mdf_portal_browser_use.py"),
     "--prompt",
     promptPath,
-    // Start browser-use directly on the Ansira Create-Claim form: the live M365 session
-    // in the dedicated profile auto-SSOs Ansira, so it lands ON the form (no home->form
-    // hunt, no un-clickable toolbox). Falls back to the launcher / h-dnet if unset.
+    // Start browser-use on the MDF Recap list page (live M365 session auto-SSOs Ansira),
+    // so it lands one click from the form — it just clicks "Create MDF Recap". Falls back
+    // to the launcher / h-dnet if unset.
     "--portal-url",
-    options.claimFormUrl || options.launcherUrl || options.portalUrl,
+    options.recapEntryUrl || options.launcherUrl || options.portalUrl,
     "--result",
     resultPath,
     "--max-steps",
