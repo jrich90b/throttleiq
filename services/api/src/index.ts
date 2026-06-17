@@ -15,6 +15,7 @@ import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro } from "./domain/agentVoice.js";
+import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
@@ -27309,9 +27310,14 @@ async function processDueFollowUpsUnlocked() {
       const repName = resolvePostSaleSender(conv);
       const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
       const bikeModel = getPostSaleModel(conv);
+      // The Custom Coverage / factory-warranty accessory reminder (step 2) is NEW-bike
+      // only — for pre-owned it would be a false warranty claim, so swap in a warm
+      // "enjoying it / anything you need" check-in. Fails safe to pre-owned when the
+      // purchase condition is unknown. (postSaleCadence.ts)
+      const isNewBike = postSaleVehicleIsNew(conv);
       const smsTemplates = [
         `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`,
-        `Hi ${firstName} — ${repName} at ${dealerName}. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`,
+        postSaleAccessoryOrEnjoyMessage({ firstName, repName, dealerName, bikeModel, isNewBike }),
         `Hi ${firstName} — ${repName} at ${dealerName}. Happy 1-year anniversary with your ${bikeModel}. If you’re ever thinking about trading in, let me know.`,
         `Hi ${firstName} — ${repName} at ${dealerName}. Just checking in. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
       ];
