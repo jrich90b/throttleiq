@@ -74,6 +74,7 @@ type RunnerOptions = {
   guided: boolean;
   idleOk: boolean;
   portalUrl: string;
+  launcherUrl: string;
   cdpUrl: string;
   apiBase: string;
   token: string;
@@ -134,6 +135,14 @@ function parseArgs(argv: string[]): RunnerOptions {
     guided: false,
     idleOk: false,
     portalUrl: process.env.MDF_HDNET_URL?.trim() || hDNetHomeUrl,
+    // Direct SSO launcher for the MDF (Ansira) app — the toolbox > Marketing Development
+    // Fund item's real href (discovered 2026-06-17 via CDP). Navigating here SSO's
+    // straight into app.ansira.com, bypassing the un-clickable SharePoint toolbox widget
+    // and the same-named SharePoint reference page (…/MARKETING-DEVELOPMENT-FUND.aspx).
+    // Tenant/app-specific (americanharley); override per dealer via MDF_PORTAL_LAUNCHER_URL.
+    launcherUrl:
+      process.env.MDF_PORTAL_LAUNCHER_URL?.trim() ||
+      "https://launcher.myapps.microsoft.com/api/signin/6fed78a2-dbcb-4685-a0b9-3033ab4a4dd1?tenantId=625f2ee0-190f-4e6f-9cbb-be276a887c4d",
     cdpUrl: process.env.MDF_PORTAL_CDP_URL?.trim() || process.env.BROWSER_USE_CDP_URL?.trim() || "",
     apiBase: process.env.MDF_PORTAL_API_BASE_URL?.trim() || "",
     token: process.env.MDF_PORTAL_RUNNER_TOKEN?.trim() || process.env.AUTOMATION_RUN_WRITE_TOKEN?.trim() || "",
@@ -391,11 +400,10 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "- Do not click final submit.",
     "- Stop at the final review/save-draft step.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
-    "- Start at h-dnet.com. Do not open the saved Marketing Development Fund launcher URL directly.",
-    "- If H-DNet is logged in, click the header toolbox icon (`.avaQuickLinksExtension.headerExtension`) and choose `Marketing Development Fund` from My Toolbox. That opens the Ansira MDF app (app.ansira.com) — often in a NEW TAB, so switch to that tab.",
-    "- FALLBACK (use this — do NOT loop on the toolbox): if the toolbox icon will not click or the `Marketing Development Fund` item is not clickable after 2 attempts, and H-DNet is logged in, just navigate the current tab directly to `https://app.ansira.com/member/home`. The H-DNet SSO session carries you straight in. Only if THAT shows a credentials/sign-in page should you stop for manual login.",
-    "- Also: if any tab is ALREADY on `app.ansira.com`, switch to it instead of clicking the toolbox at all.",
-    "- ARRIVAL CHECK (important): once ANY open tab is on `app.ansira.com` and is NOT a sign-in page (e.g. `app.ansira.com/member/...`), you have ALREADY reached the MDF portal. STOP searching the H-DNet header for a 'Marketing Development Fund' menu item and stop clicking H-DNet account/toolbox buttons — switch to that Ansira tab and work there.",
+    `- PRIMARY ROUTE — do this FIRST: navigate the current tab directly to the MDF SSO launcher URL: ${options.launcherUrl} . This is the H-DNet single sign-on launcher; it lands you in the Ansira MDF app (app.ansira.com). You do NOT need the toolbox.`,
+    "- If a tab is ALREADY on `app.ansira.com`, just switch to it — you are already in.",
+    "- Do NOT click the SharePoint page link whose URL ends in `MARKETING-DEVELOPMENT-FUND.aspx` — that is a reference/info DOC, not the app. The toolbox header icon (`.avaQuickLinksExtension.headerExtension`) is a non-clickable `<div>` widget; do NOT loop trying to click it.",
+    "- ARRIVAL CHECK: once ANY open tab is on `app.ansira.com` and is NOT a sign-in page (e.g. `app.ansira.com/member/...`), you have reached the MDF portal — switch to that tab and work there.",
     "- In the Ansira MDF app, go to the claims / MDF area and click `Create Claim` (or open the matching existing draft for this campaign), then fill the fields below from the packet and upload the listed files. Save as draft or stop at the review step — never final submit.",
     options.useSavedChromeLogin
       ? "- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, you may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for manual login/MFA if autofill is not already present."
@@ -628,8 +636,10 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
     path.join(rootDir, "scripts", "mdf_portal_browser_use.py"),
     "--prompt",
     promptPath,
+    // Start browser-use at the SSO launcher so it lands in Ansira on step 1, instead
+    // of h-dnet.com where it gets stuck on the un-clickable toolbox widget.
     "--portal-url",
-    options.portalUrl,
+    options.launcherUrl || options.portalUrl,
     "--result",
     resultPath,
     "--max-steps",
