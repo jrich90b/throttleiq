@@ -1269,52 +1269,45 @@ async function openMdfSsoEntry(page: any, portalUrl: string, options: RunnerOpti
 }
 
 async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions): Promise<{ page: any; blocker: string | null }> {
-  if (!/app\.ansira\.com\/member/i.test(page.url())) {
-    page = await openMdfSsoEntry(page, options.portalUrl, options);
-  }
-  let text = await pageBodyText(page);
-  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
-    return {
-      page,
-      blocker: options.useSavedChromeLogin
-        ? "The MDF runner is at the H-DNet/Microsoft sign-in screen. Chrome saved login/autofill was tried when available, but manual login or MFA is still required."
-        : "The MDF runner is at the H-DNet/Microsoft sign-in screen. Sign in through H-DNet, then create a fresh portal draft task."
-    };
-  }
-
-  if (!/app\.ansira\.com\/member/i.test(page.url())) {
-    return {
-      page,
-      blocker: "The MDF runner did not reach Ansira through the H-DNet toolbox route. Log into h-dnet.com and open MDF from the toolbox once, then run the portal draft again."
-    };
-  }
-
-  await page.goto(ansiraClaimCreateUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 60_000
+  const sessionExpired = (where: string): { page: any; blocker: string } => ({
+    page,
+    blocker:
+      `The MDF runner hit the Ansira/H-DNet sign-in screen (${where}) — the session has expired. ` +
+      "Log into h-dnet.com in the runner's dedicated Chrome window, confirm app.ansira.com/member/reimbursements/claims shows the claims list (not a login), then run the portal draft again."
   });
-  await page.waitForTimeout(3000);
-  text = await pageBodyText(page);
-  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url())) {
-    page = await openMdfSsoEntry(page, options.portalUrl, options);
-    text = await pageBodyText(page);
-    if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url()) || !/app\.ansira\.com\/member/i.test(page.url())) {
-      return {
-        page,
-        blocker: "The MDF runner reached an Ansira login page instead of the H-DNet SSO session. Log into h-dnet.com and open MDF from the toolbox once, then run the portal draft again."
-      };
-    }
-    await page.goto(ansiraClaimCreateUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000
-    });
-    await page.waitForTimeout(3000);
-    text = await pageBodyText(page);
+  const onLogin = async (): Promise<boolean> => {
+    const url = String(page.url());
+    if (/\/auth\/login|login\.microsoftonline\.com/i.test(url)) return true;
+    return isLoginPage(await pageBodyText(page));
+  };
+  const hasForm = async (): Promise<boolean> =>
+    (await page.locator("#app-marketing-activity").count().catch(() => 0)) > 0;
+
+  // 1) Go straight to the MDF Recap list. The live M365 session auto-SSOs Ansira — no toolbox.
+  await page.goto(options.recapEntryUrl || ansiraClaimCreateUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+  await page.waitForTimeout(4000);
+  if (await onLogin()) return sessionExpired("recap list");
+
+  // 2) Click "Create MDF Recap" to instantiate the form (a bare nav to /create does not render it).
+  const createBtn = page.getByText(/create\s+mdf\s+recap/i).first();
+  if (await createBtn.count().catch(() => 0)) {
+    await createBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await createBtn.click({ timeout: 15_000 }).catch(() => {});
+    await page.waitForTimeout(4000);
   }
-  if (isLoginPage(text) || /app\.ansira\.com\/auth\/login/i.test(page.url()) || !/Create Claim/i.test(text)) {
+
+  // 3) Confirm the create form rendered; one retry via the direct create URL.
+  if (!(await hasForm())) {
+    await page.goto(ansiraClaimCreateUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+  }
+  if (await onLogin()) return sessionExpired("create form");
+  if (!(await hasForm())) {
     return {
       page,
-      blocker: "The MDF runner could not reach the Ansira claim form through the H-DNet SSO route. Open H-DNet, use the toolbox MDF link once, then run the portal draft again."
+      blocker:
+        "The MDF runner reached Ansira but could not open the Create MDF Recap form (no Marketing Activity field found). " +
+        "Open the MDF Recap list and click Create MDF Recap manually once, then run the portal draft again."
     };
   }
   return { page, blocker: null };
