@@ -6,6 +6,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ANSIRA_FORM_CONTROLS, ansiraFormChangedSummary, findMissingFormControls } from "./mdf_portal_preflight.ts";
 
 type AgentTaskStatus = "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
 
@@ -1395,6 +1396,22 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
 
   await selectOptionByText(page, "#app-marketing-activity", portalClaimLabel);
   await page.waitForTimeout(1500);
+
+  // Preflight: selecting the activity expands the rest of the form. Before we fill
+  // anything or save, confirm the controls the filler depends on are present. If
+  // Ansira changed the form layout, bail loud and early with ZERO partial state (no
+  // draft created) instead of crashing mid-fill or tripping a save-time error. We
+  // wait for the bottom-of-form Save button to attach first so a slow render isn't
+  // mistaken for a layout change.
+  await page.locator("#app-draft-submit-btn").waitFor({ state: "attached", timeout: 20_000 }).catch(() => {});
+  const missingControls = await findMissingFormControls(
+    ANSIRA_FORM_CONTROLS,
+    async selector => (await page.locator(selector).count().catch(() => 0)) > 0
+  );
+  if (missingControls.length) {
+    await browser.close();
+    return { code: 2, summary: ansiraFormChangedSummary(missingControls) };
+  }
 
   const startDate = toUsDate(extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]));
   const endDate = toUsDate(extractedField(claim, ["activityEndDate", "activity_end_date", "endDate"]));
