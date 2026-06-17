@@ -46,6 +46,28 @@ assert.equal(
   "VIN match (case-insensitive) -> they meant this unit"
 );
 
+// Jason Roorda (Lead Ref 11460, 2026-06-17): lead = Snake Venom Street Glide Special U889-21;
+// a DIFFERENT same-model unit (Gauntlet Gray U886-21) was on hold. A different stock#/VIN of
+// the same model is NOT the customer's bike -> must REJECT, so the follow-up never says
+// "you were interested in the Gauntlet Gray ... on hold."
+assert.equal(
+  consistent({ unitModel: "Street Glide Special", unitStockId: "U886-21", leadModel: "Street Glide Special", leadStockId: "U889-21" }),
+  false,
+  "a unit-specific lead (U889-21) must not be claimed by a different same-model held stock (U886-21)"
+);
+assert.equal(
+  consistent({ unitModel: "Street Glide Special", unitVin: "1HD1KRP10MB000886", leadModel: "Street Glide Special", leadVin: "1HD1KRP10MB626979" }),
+  false,
+  "a different VIN of the same model must not be claimed for a unit-specific lead"
+);
+// Don't over-tighten: a unit-specific lead whose held candidate has NO stock/VIN still
+// falls back to model-token consistency (model-only match stays allowed).
+assert.equal(
+  consistent({ unitModel: "Street Glide Special", leadModel: "Street Glide Special", leadStockId: "U889-21" }),
+  true,
+  "unit-specific lead + model-only held candidate -> model-token consistency (same model ok)"
+);
+
 // No expressed model -> never pin a specific unit.
 assert.equal(consistent({ unitModel: "Road Glide 3", leadModel: "", leadDescription: "" }), false, "no expressed model");
 

@@ -1186,6 +1186,15 @@ export function cadenceHeldUnitModelConsistentWithLead(args: {
   const leadVin = String(args.leadVin ?? "").trim().toLowerCase();
   if (unitStock && unitStock === leadStock) return true; // customer referenced this exact unit
   if (unitVin && unitVin === leadVin) return true;
+  // When the customer referenced a SPECIFIC unit (stock#/VIN) and the held/sold unit is a
+  // DIFFERENT specific unit, never claim it — even if the model matches. Origin: Jason
+  // Roorda's lead was the Snake Venom Street Glide Special U889-21, but a held same-model
+  // unit (Gauntlet Gray U886-21) passed the model-token check, so the follow-up wrongly
+  // said "you were interested in the Gauntlet Gray … on hold." A different stock# of the
+  // same model is not the customer's bike. (Exact matches already returned true above.)
+  const leadIsUnitSpecific = !!leadStock || !!leadVin;
+  const unitIsSpecific = !!unitStock || !!unitVin;
+  if (leadIsUnitSpecific && unitIsSpecific) return false;
   const expressed = new Set<string>([
     ...normalizeCadenceModelTokens(args.leadModel),
     ...normalizeCadenceModelTokens(args.leadDescription)
