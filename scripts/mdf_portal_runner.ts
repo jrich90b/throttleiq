@@ -453,7 +453,7 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "   8a. INVOICE files (the PDFs listed with role=invoice / named in each invoice's 'files=' above): upload each invoice's PDF to THAT invoice row's own Upload File control — invoice #1's PDF on row #1, invoice #2's PDF on row #2. Never put the same PDF on more than one row.",
     "   8b. SUPPORTING documents (the files marked '(supporting only)' above — the .xlsx files): upload these ONLY to the separate \"Supporting Documents\" upload area, never onto an invoice row.",
     "9. \"Claimed Amount\" (#app-claimed-amount): the media amount being claimed — default to the eligible invoice total unless the packet/eligibility notes say otherwise.",
-    "10. SAVE THE DRAFT: click **\"Save for Later\"**. Do NOT click \"Submit\". Then stop and report exactly what was filled and what still needs human attention (see Missing Fields / Eligibility Concerns below).",
+    "10. SAVE THE DRAFT: click **\"Save for Later\"** (id app-draft-submit-btn). Do NOT click \"Submit\". Once you have clicked Save for Later you are DONE — immediately report what was filled/uploaded and what still needs human attention (Missing Fields / Eligibility Concerns below) and STOP. Do NOT keep searching the page for a 'saved' confirmation banner; one may not appear.",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,
