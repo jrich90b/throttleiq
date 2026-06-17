@@ -219,6 +219,7 @@ import {
   generateBlendedLeadInWithLLM,
   generateEmpathySupportReplyWithLLM,
   generateWebFallbackReplyWithLLM,
+  classifyTaskFulfillmentWithLLM,
   classifyCadenceContextWithLLM,
   parseCadenceRegenerateContextWithLLM,
   parseCompositeSalesInquiryWithLLM,
@@ -562,6 +563,12 @@ import {
   HELD_GUARD_WATCH_NOTE,
   planStaleHeldUnitWatchHeal
 } from "./domain/heldUnitWatchHeal.js";
+import {
+  isAutoCloseEligibleTask,
+  decideTaskAutoClose,
+  isTaskFulfillmentAutoCloseEnabled,
+  taskFulfillmentAutoCloseShadowEnabled
+} from "./domain/taskFulfillmentAutoClose.js";
 import {
   resolveAuthoritativeModels,
   modelAuthorityEnabled,
@@ -10201,6 +10208,74 @@ async function applyStaleHeldUnitWatchHeal(conv: any): Promise<boolean> {
     }
   });
   return true;
+}
+
+// Task-fulfillment auto-close (SHADOW by default). When a follow-up action — an
+// outbound SMS/email or a logged call — lands on a conversation that has open call
+// / follow-up tasks, ask the LLM parser whether the action accomplished any task's
+// objective and, if confident, close that task. Dark until TASK_FULFILLMENT_AUTOCLOSE=1:
+// the decision is computed + logged either way (stage task_autoclose.shadow) so we
+// can review what a live cutover would close — e.g. Don Pagels' "notify when the
+// Freewheeler is available" call task, fulfilled by the "it is available" text.
+// Best-effort: never throws into the send/call path. See domain/taskFulfillmentAutoClose.ts.
+async function runTaskFulfillmentAutoClose(
+  conv: any,
+  action: { channel: "sms" | "email" | "call"; text: string }
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!taskFulfillmentAutoCloseShadowEnabled() && !isTaskFulfillmentAutoCloseEnabled()) return;
+    const actionText = String(action?.text ?? "").trim();
+    if (!actionText) return;
+    const eligible = listOpenTodos().filter(
+      t =>
+        t.convId === conv.id &&
+        isAutoCloseEligibleTask({
+          status: t.status,
+          reason: t.reason,
+          taskClass: t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)
+        })
+    );
+    if (!eligible.length) return;
+    const verdicts = await classifyTaskFulfillmentWithLLM({
+      action: { channel: action.channel, text: actionText },
+      tasks: eligible.map(t => ({ id: t.id, reason: t.reason, summary: t.summary })),
+      recentHistory: [...(conv.messages ?? [])].slice(-6).map((m: any) => ({
+        direction: m?.direction === "in" ? "in" : "out",
+        body: String(m?.body ?? "")
+      }))
+    });
+    if (!verdicts) return;
+    const enabled = isTaskFulfillmentAutoCloseEnabled();
+    for (const task of eligible) {
+      const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
+      const decision = decideTaskAutoClose({ enabled, eligible: true, verdict });
+      if (verdict?.fulfilled || decision.close) {
+        recordDecisionTrace({
+          scope: "live",
+          stage: decision.close ? "task_autoclose.closed" : "task_autoclose.shadow",
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          detail: {
+            taskId: task.id,
+            reason: task.reason,
+            taskClass: task.taskClass ?? null,
+            summary: String(task.summary ?? "").slice(0, 140),
+            channel: action.channel,
+            fulfilled: verdict?.fulfilled ?? false,
+            confidence: verdict?.confidence ?? null,
+            evidence: String(verdict?.evidence ?? "").slice(0, 180),
+            decision: decision.reason
+          }
+        });
+      }
+      if (decision.close) {
+        markTodoDone(conv.id, task.id);
+      }
+    }
+  } catch {
+    // Best-effort shadow tooling — never block or fail a send/call.
+  }
 }
 
 async function buildCadenceHeldInventoryOverride(args: {
@@ -46233,6 +46308,8 @@ app.post("/conversations/:id/send", async (req, res) => {
       markAppointmentAcknowledged(conv);
       queueTuningLog(null);
       queueTlpLog();
+      // Shadow auto-close: did this email fulfill an open call/follow-up task? (fire-and-forget)
+      void runTaskFulfillmentAutoClose(conv, { channel: "email", text: emailBody });
       return res.json({ ok: true, conversation: conv });
   } catch (err: any) {
     console.warn("[email] send failed", {
@@ -46319,6 +46396,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     await reconcileManualSmsSendState({ hadOutbound, delivered: true, sourceMessageId: msg.sid ?? null });
     queueTuningLog(msg.sid);
     queueTlpLog();
+    // Shadow auto-close: did this SMS fulfill an open call/follow-up task? (fire-and-forget)
+    void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: smsBody });
 
     return res.json({
       ok: true,
@@ -61484,6 +61563,13 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             sourceMessageId: recordingSid || bodyCallSid || callbackCallSid || undefined
           });
         }
+      }
+      if (!inboundCall && String(summaryText ?? "").trim()) {
+        // Shadow auto-close: would this call (by its summary) fulfill an open task —
+        // objective-aware, vs the blunt "reached => close all call tasks" below? Dark
+        // until the flag flips; logs the comparison. Runs BEFORE the blunt close so
+        // the tasks are still open to evaluate.
+        await runTaskFulfillmentAutoClose(conv, { channel: "call", text: String(summaryText ?? "") });
       }
       if (!inboundCall && contactedValue === "YES") {
         // Reached the customer — the call task is done and the agent stands down.

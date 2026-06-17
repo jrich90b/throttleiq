@@ -1260,6 +1260,138 @@ export async function parseCadenceRegenerateContextWithLLM(args: {
   };
 }
 
+const TASK_FULFILLMENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdicts"],
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["task_id", "fulfilled", "confidence", "evidence"],
+        properties: {
+          task_id: { type: "string" },
+          fulfilled: { type: "boolean" },
+          confidence: { type: "number" },
+          evidence: { type: "string" }
+        }
+      }
+    }
+  }
+};
+
+export type TaskFulfillmentVerdictParse = {
+  taskId: string;
+  fulfilled: boolean;
+  confidence: number;
+  evidence: string;
+};
+
+/**
+ * Decide, per open task, whether a single follow-up action (an outbound SMS/email
+ * or a logged call) ACCOMPLISHED that task's objective. Comprehension, not
+ * keywords: "Notify when X is available" is fulfilled by a message that tells the
+ * customer X is now available — NOT by a promise to notify later, unrelated photos,
+ * or a message sent while X is still unavailable. A call fulfills a "call back"
+ * task only when the customer was reached (a voicemail does not). Returns one
+ * verdict per input task (or null when the LLM parser is unavailable). The caller
+ * gates the actual close behind decideTaskAutoClose + the dark flag.
+ */
+export async function classifyTaskFulfillmentWithLLM(args: {
+  action: { channel: "sms" | "email" | "call"; text: string };
+  tasks: { id: string; reason: string; summary: string }[];
+  recentHistory?: { direction: "in" | "out"; body: string }[];
+}): Promise<TaskFulfillmentVerdictParse[] | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TASK_FULFILLMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const tasks = (args.tasks ?? []).filter(t => t && t.id && String(t.summary ?? "").trim());
+  if (!tasks.length) return null;
+  const actionText = String(args.action?.text ?? "").trim();
+  if (!actionText) return null;
+  const channel = args.action?.channel === "email" ? "email" : args.action?.channel === "call" ? "call" : "sms";
+
+  const debug = process.env.LLM_TASK_FULFILLMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_TASK_FULFILLMENT_PARSER_MODEL ||
+    process.env.OPENAI_CONVERSATION_STATE_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_TASK_FULFILLMENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+
+  const history = (args.recentHistory ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const taskLines = tasks.map(t => JSON.stringify({ task_id: t.id, type: t.reason, objective: t.summary }));
+
+  const examples = [
+    'action(sms): "Hey Don, we got that deal finalized on the freewheeler, so it is available" task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":true,"confidence":0.96,"evidence":"tells the customer the unit is now available, which is the task objective"}',
+    'action(sms): "Hey Don, I rolled it outside. It was just a reflection." task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.9,"evidence":"sends photos but does not say the unit is available; it was not yet available"}',
+    'action(sms): "Ok will do. Thanks Don" task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.95,"evidence":"promises to notify later; the notify action has not happened yet"}',
+    'action(call): "Spoke with the customer, confirmed the trade payoff and next steps." task: {"task_id":"t2","type":"call","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":true,"confidence":0.92,"evidence":"reached the customer and covered the payoff topic"}',
+    'action(call): "Left a voicemail, no answer." task: {"task_id":"t2","type":"call","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":false,"confidence":0.95,"evidence":"voicemail; customer was not reached"}',
+    'action(sms): "Hey, just checking in - how is it going?" task: {"task_id":"t3","type":"call","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}'
+  ];
+
+  const prompt = [
+    "You are a precision parser for a motorcycle dealership task tracker.",
+    "Return only JSON matching the schema.",
+    "",
+    "For EACH task, decide whether the single follow-up action below ACCOMPLISHED that task's objective.",
+    "",
+    "Rules:",
+    "- fulfilled=true ONLY when the action itself carries out the objective.",
+    "- A message that PROMISES future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
+    "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only by an action that COMMUNICATES X is now available/arrived/ready. Sending photos or unrelated updates does not fulfill it.",
+    "- A logged CALL fulfills a 'call back / contact' task only if the customer was REACHED; a voicemail or no-answer does not.",
+    "- A generic check-in that does not address the specific objective is NOT fulfilled.",
+    "- When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
+    "- confidence is 0..1. Always emit exactly one verdict per input task_id.",
+    "",
+    `Follow-up action channel: ${channel}`,
+    `Follow-up action text: ${actionText}`,
+    history.length ? `Recent conversation (for context):\n${history.join("\n")}` : "Recent conversation: (none)",
+    "Open tasks:",
+    ...taskLines,
+    "Examples:",
+    ...examples
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "task_fulfillment_parser",
+      schema: TASK_FULFILLMENT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 60 + tasks.length * 60,
+      debugTag: "llm-task-fulfillment-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed || !Array.isArray(parsed.verdicts)) return null;
+
+  const clamp01 = (n: unknown): number =>
+    typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0;
+
+  return parsed.verdicts
+    .map((v: any) => ({
+      taskId: String(v?.task_id ?? "").trim(),
+      fulfilled: !!v?.fulfilled,
+      confidence: clamp01(v?.confidence),
+      evidence: cleanOptionalString(v?.evidence) ?? ""
+    }))
+    .filter((v: TaskFulfillmentVerdictParse) => v.taskId);
+}
+
 export type CadencePersonalizationParse = {
   line: string;
   confidence?: number;
