@@ -1290,19 +1290,25 @@ export type TaskFulfillmentVerdictParse = {
 };
 
 /**
- * Decide, per open task, whether a single follow-up action (an outbound SMS/email
- * or a logged call) ACCOMPLISHED that task's objective. Comprehension, not
- * keywords: "Notify when X is available" is fulfilled by a message that tells the
- * customer X is now available — NOT by a promise to notify later, unrelated photos,
- * or a message sent while X is still unavailable. A call fulfills a "call back"
- * task only when the customer was reached (a voicemail does not). Returns one
- * verdict per input task (or null when the LLM parser is unavailable). The caller
- * gates the actual close behind decideTaskAutoClose + the dark flag.
+ * Decide, per open task, whether the dealer's follow-up ACTIVITY (a window of
+ * outbound SMS/email/call activity, with customer replies for context) has already
+ * ACCOMPLISHED that task's objective. Comprehension, not keywords: "Notify when X
+ * is available" is fulfilled by a message that tells the customer X is now
+ * available — NOT by a promise to notify later, unrelated photos, or a message sent
+ * while X is still unavailable. A call fulfills a "call back" task only when the
+ * customer was reached (a voicemail does not). Reading the whole window (not a
+ * single message) is what lets it close tasks ALREADY completed earlier in the
+ * thread. Returns one verdict per input task (or null when the parser is
+ * unavailable / the dealer did nothing). The caller gates the actual close behind
+ * decideTaskAutoClose + the dark flag.
  */
 export async function classifyTaskFulfillmentWithLLM(args: {
-  action: { channel: "sms" | "email" | "call"; text: string };
   tasks: { id: string; reason: string; summary: string }[];
-  recentHistory?: { direction: "in" | "out"; body: string }[];
+  /** The dealer's follow-up activity to match against the tasks, oldest→newest
+   *  (out = our SMS/email/call; in = customer). For a live send: the recent window
+   *  ending with the just-sent message. For a backlog sweep: everything since the
+   *  task was created. */
+  activity: { direction: "in" | "out"; channel?: "sms" | "email" | "call"; text: string }[];
 }): Promise<TaskFulfillmentVerdictParse[] | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -1312,9 +1318,16 @@ export async function classifyTaskFulfillmentWithLLM(args: {
 
   const tasks = (args.tasks ?? []).filter(t => t && t.id && String(t.summary ?? "").trim());
   if (!tasks.length) return null;
-  const actionText = String(args.action?.text ?? "").trim();
-  if (!actionText) return null;
-  const channel = args.action?.channel === "email" ? "email" : args.action?.channel === "call" ? "call" : "sms";
+  const activity = (args.activity ?? [])
+    .map(a => ({
+      direction: a.direction === "in" ? "in" : "out",
+      channel: a.channel,
+      text: String(a.text ?? "").replace(/\s+/g, " ").trim()
+    }))
+    .filter(a => a.text)
+    .slice(-12);
+  // Nothing the DEALER did since the task -> nothing could have fulfilled it.
+  if (!activity.some(a => a.direction === "out")) return null;
 
   const debug = process.env.LLM_TASK_FULFILLMENT_PARSER_DEBUG === "1";
   const primaryModel =
@@ -1326,39 +1339,41 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     process.env.OPENAI_TASK_FULFILLMENT_PARSER_MODEL_FALLBACK ||
     (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
 
-  const history = (args.recentHistory ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const activityLines = activity.map(a => {
+    const who = a.direction === "out" ? `dealer${a.channel ? `/${a.channel}` : ""}` : "customer";
+    return `${who}: ${a.text}`;
+  });
   const taskLines = tasks.map(t => JSON.stringify({ task_id: t.id, type: t.reason, objective: t.summary }));
 
   const examples = [
-    'action(sms): "Hey Don, we got that deal finalized on the freewheeler, so it is available" task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":true,"confidence":0.96,"evidence":"tells the customer the unit is now available, which is the task objective"}',
-    'action(sms): "Hey Don, I rolled it outside. It was just a reflection." task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.9,"evidence":"sends photos but does not say the unit is available; it was not yet available"}',
-    'action(sms): "Ok will do. Thanks Don" task: {"task_id":"t1","type":"call","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.95,"evidence":"promises to notify later; the notify action has not happened yet"}',
-    'action(call): "Spoke with the customer, confirmed the trade payoff and next steps." task: {"task_id":"t2","type":"call","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":true,"confidence":0.92,"evidence":"reached the customer and covered the payoff topic"}',
-    'action(call): "Left a voicemail, no answer." task: {"task_id":"t2","type":"call","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":false,"confidence":0.95,"evidence":"voicemail; customer was not reached"}',
-    'action(sms): "Hey, just checking in - how is it going?" task: {"task_id":"t3","type":"call","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}'
+    'dealer/sms: "Hey Don, we got that deal finalized on the freewheeler, so it is available" | task {"task_id":"t1","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":true,"confidence":0.96,"evidence":"dealer told the customer the unit is now available, which is the objective"}',
+    'dealer/sms: "Hey Don, I rolled it outside. It was just a reflection." | task {"task_id":"t1","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.9,"evidence":"sends photos but never says the unit is available"}',
+    'dealer/sms: "Ok will do. Thanks Don" | task {"task_id":"t1","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.95,"evidence":"only promises to notify later; the notify has not happened"}',
+    'dealer/call: "Spoke with the customer, confirmed the trade payoff and next steps." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":true,"confidence":0.92,"evidence":"reached the customer and covered the payoff"}',
+    'dealer/call: "Left a voicemail, no answer." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":false,"confidence":0.95,"evidence":"voicemail; customer was not reached"}',
+    'dealer/sms: "Hey, just checking in - how is it going?" | task {"task_id":"t3","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}'
   ];
 
   const prompt = [
     "You are a precision parser for a motorcycle dealership task tracker.",
     "Return only JSON matching the schema.",
     "",
-    "For EACH task, decide whether the single follow-up action below ACCOMPLISHED that task's objective.",
+    "Below is the dealer's recent follow-up activity in one conversation (dealer = our team's outbound SMS/email/call; customer = inbound), oldest to newest. For EACH task, decide whether the dealer's follow-up has already ACCOMPLISHED that task's objective ANYWHERE in this activity.",
     "",
     "Rules:",
-    "- fulfilled=true ONLY when the action itself carries out the objective.",
-    "- A message that PROMISES future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
-    "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only by an action that COMMUNICATES X is now available/arrived/ready. Sending photos or unrelated updates does not fulfill it.",
-    "- A logged CALL fulfills a 'call back / contact' task only if the customer was REACHED; a voicemail or no-answer does not.",
+    "- fulfilled=true ONLY when the dealer's follow-up actually carries out the objective.",
+    "- PROMISING future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
+    "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only when the dealer COMMUNICATES X is now available/arrived/ready. Photos or unrelated updates do not fulfill it.",
+    "- A CALL fulfills a 'call back / contact' task only if the customer was REACHED; a voicemail or no-answer does not.",
     "- A generic check-in that does not address the specific objective is NOT fulfilled.",
-    "- When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
-    "- confidence is 0..1. Always emit exactly one verdict per input task_id.",
+    "- Judge only the dealer's actions; customer messages are context. When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
+    "- confidence is 0..1. Emit exactly one verdict per input task_id.",
     "",
-    `Follow-up action channel: ${channel}`,
-    `Follow-up action text: ${actionText}`,
-    history.length ? `Recent conversation (for context):\n${history.join("\n")}` : "Recent conversation: (none)",
+    "Follow-up activity (oldest to newest):",
+    ...activityLines,
     "Open tasks:",
     ...taskLines,
-    "Examples:",
+    "Examples (dealer follow-up then verdict):",
     ...examples
   ].join("\n");
 

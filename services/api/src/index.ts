@@ -10237,13 +10237,23 @@ async function runTaskFulfillmentAutoClose(
         })
     );
     if (!eligible.length) return;
-    const verdicts = await classifyTaskFulfillmentWithLLM({
-      action: { channel: action.channel, text: actionText },
-      tasks: eligible.map(t => ({ id: t.id, reason: t.reason, summary: t.summary })),
-      recentHistory: [...(conv.messages ?? [])].slice(-6).map((m: any) => ({
-        direction: m?.direction === "in" ? "in" : "out",
-        body: String(m?.body ?? "")
+    const provChannel = (p: string): "sms" | "email" | "call" =>
+      p === "sendgrid" || p === "sendgrid_adf" ? "email" : p.startsWith("voice") ? "call" : "sms";
+    const activity = [...(conv.messages ?? [])]
+      .slice(-8)
+      .map((m: any) => ({
+        direction: (m?.direction === "in" ? "in" : "out") as "in" | "out",
+        channel: provChannel(String(m?.provider ?? "")),
+        text: String(m?.body ?? "")
       }))
+      .filter(a => a.text.trim());
+    // Make sure the triggering action is the final item even if message append timing differs.
+    if (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText) {
+      activity.push({ direction: "out", channel: action.channel, text: actionText });
+    }
+    const verdicts = await classifyTaskFulfillmentWithLLM({
+      tasks: eligible.map(t => ({ id: t.id, reason: t.reason, summary: t.summary })),
+      activity
     });
     if (!verdicts) return;
     const enabled = isTaskFulfillmentAutoCloseEnabled();

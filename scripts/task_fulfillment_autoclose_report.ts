@@ -76,34 +76,44 @@ const candidates = eligible
     const conv = getConversation(t.convId);
     if (!conv) return null;
     const createdMs = ms(t.createdAt);
-    const outbound = [...(conv.messages ?? [])]
+    // The dealer's follow-up ACTIVITY since the task was created: real sent
+    // dealer actions (SMS/email/call summary) + customer replies for context.
+    const since = [...(conv.messages ?? [])]
+      .filter((m: any) => String(m?.body ?? "").trim() && ms(m?.at) >= createdMs)
+      .sort((a: any, b: any) => ms(a?.at) - ms(b?.at))
       .filter(
         (m: any) =>
-          m?.direction === "out" &&
-          SENT_PROVIDERS.has(String(m?.provider ?? "")) &&
-          String(m?.body ?? "").trim() &&
-          ms(m?.at) >= createdMs
-      )
-      .sort((a: any, b: any) => ms(a?.at) - ms(b?.at));
-    const latest = outbound[outbound.length - 1];
-    if (!latest) return null;
+          (m?.direction === "in") ||
+          (m?.direction === "out" && SENT_PROVIDERS.has(String(m?.provider ?? "")))
+      );
+    const dealerActions = since.filter((m: any) => m?.direction === "out");
+    if (!dealerActions.length) return null;
+    const activity = since.map((m: any) => ({
+      direction: (m?.direction === "in" ? "in" : "out") as "in" | "out",
+      channel: channelFor(String(m?.provider ?? "")),
+      text: String(m?.body ?? "")
+    }));
+    const latest = dealerActions[dealerActions.length - 1];
     const channel = channelFor(String(latest.provider));
     const name = `${conv.lead?.firstName ?? ""} ${conv.lead?.lastName ?? ""}`.trim() || conv.leadKey;
-    return { task: t, conv, latest, channel, name };
+    return { task: t, conv, activity, latest, channel, name };
   })
-  .filter(Boolean) as Array<{ task: any; conv: any; latest: any; channel: string; name: string }>;
+  .filter(Boolean) as Array<{
+  task: any;
+  conv: any;
+  activity: { direction: "in" | "out"; channel: "sms" | "email" | "call"; text: string }[];
+  latest: any;
+  channel: string;
+  name: string;
+}>;
 
 skippedNoOutbound = eligible.length - candidates.length;
 const toScan = candidates.slice(0, LIMIT);
 
 for (const c of toScan) {
   const verdicts = await classifyTaskFulfillmentWithLLM({
-    action: { channel: c.channel as "sms" | "email", text: String(c.latest.body ?? "") },
     tasks: [{ id: c.task.id, reason: c.task.reason, summary: c.task.summary }],
-    recentHistory: [...(c.conv.messages ?? [])].slice(-6).map((m: any) => ({
-      direction: m?.direction === "in" ? "in" : "out",
-      body: String(m?.body ?? "")
-    }))
+    activity: c.activity
   });
   evaluated += 1;
   const v = verdicts?.find(x => x.taskId === c.task.id);
