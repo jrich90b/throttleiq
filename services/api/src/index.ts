@@ -559,6 +559,10 @@ import {
   shouldSuppressVoiceCallbackTodoForAppointment
 } from "./domain/workflowRegressionGuards.js";
 import {
+  HELD_GUARD_WATCH_NOTE,
+  planStaleHeldUnitWatchHeal
+} from "./domain/heldUnitWatchHeal.js";
+import {
   resolveAuthoritativeModels,
   modelAuthorityEnabled,
   toAuthorityModels,
@@ -586,6 +590,7 @@ import {
   startFollowUpCadence,
   pauseFollowUpCadence,
   stopFollowUpCadence,
+  resumeFollowUpCadence,
   scheduleLongTermFollowUp,
   advanceFollowUpCadence,
   getAllConversations,
@@ -9654,7 +9659,12 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
   const sold = soldKey ? solds?.[soldKey] : null;
   const hold = holdKey ? holds?.[holdKey] : null;
   const exact = await findInventoryPrice({ stockId, vin });
-  if (!sold && !hold && exact?.item) return null;
+  if (!sold && !hold && exact?.item) {
+    // The lead's exact unit is confirmed available — undo any stale held-unit
+    // follow-up hold so the standard cadence resumes instead of staying stopped.
+    await applyStaleHeldUnitWatchHeal(conv);
+    return null;
+  }
 
   const firstName = normalizeDisplayCase(args.name || "there");
   const modelLabel =
@@ -10103,7 +10113,7 @@ function ensureInventoryWatchForHeldCadence(
     make: String(item?.make ?? "Harley-Davidson").trim() || "Harley-Davidson",
     ...(condition ? { condition } : {}),
     ...(color ? { color } : {}),
-    note: "Created from held-unit follow-up guard.",
+    note: HELD_GUARD_WATCH_NOTE,
     exactness: Number.isFinite(yearRaw) ? "year_model" : "model_only",
     status: "active",
     createdAt
@@ -10128,6 +10138,69 @@ function ensureInventoryWatchForHeldCadence(
   conv.inventoryWatchPending = undefined;
   setFollowUpMode(conv, "holding_inventory", "inventory_watch");
   stopFollowUpCadence(conv, "inventory_watch");
+}
+
+// Undo a stale held-unit follow-up hold once the lead's own unit is confirmed
+// available again. A held/sold override stops the standard cadence and flips to
+// holding_inventory + an auto-created inventory watch; if that hold was built on a
+// unit that's actually in stock (e.g. a same-model different-stock unit was
+// misattributed before the EXACT-unit guard, or the unit came back), the cadence
+// stays stopped forever. Called from buildCadenceLeadUnitAvailabilityOverride in
+// BOTH the live cadence path and regenerate, so a regenerate now re-triggers the
+// correct follow-up cadence. Conservative: only touches watches it created itself
+// (the held-guard note) and only un-holds when nothing customer-requested remains.
+// See domain/heldUnitWatchHeal.ts for the pure decision.
+async function applyStaleHeldUnitWatchHeal(conv: any): Promise<boolean> {
+  if (!conv) return false;
+  const watches: any[] = Array.isArray(conv.inventoryWatches)
+    ? conv.inventoryWatches
+    : conv.inventoryWatch
+      ? [conv.inventoryWatch]
+      : [];
+  // Cheap pre-check: nothing auto-created to heal -> skip (avoids a tz fetch on the hot path).
+  if (!watches.some(w => String(w?.note ?? "").trim() === HELD_GUARD_WATCH_NOTE)) return false;
+
+  const plan = planStaleHeldUnitWatchHeal({
+    watches,
+    followUpMode: conv?.followUp?.mode ?? null,
+    followUpReason: conv?.followUp?.reason ?? null,
+    cadenceStatus: conv?.followUpCadence?.status ?? null,
+    cadenceStopReason: conv?.followUpCadence?.stopReason ?? null,
+    cadenceKind: conv?.followUpCadence?.kind ?? null,
+    dialogState: getDialogState(conv) ?? null
+  });
+  if (!plan.removeHeldGuardWatch) return false;
+
+  const remaining = watches.filter(
+    w => String(w?.note ?? "").trim() !== HELD_GUARD_WATCH_NOTE
+  );
+  conv.inventoryWatches = remaining.length ? remaining : undefined;
+  conv.inventoryWatch = remaining.length ? remaining[0] : undefined;
+  if (!remaining.length) conv.inventoryWatchPending = undefined;
+
+  if (plan.restoreActiveMode) {
+    setFollowUpMode(conv, "active", "held_unit_available_heal");
+  }
+  if (plan.resumeCadence) {
+    const cfg = await getSchedulerConfigHot();
+    resumeFollowUpCadence(conv, cfg.timezone || "America/New_York");
+  }
+  if (plan.resetDialogState) {
+    setDialogState(conv, "inventory_answered");
+  }
+  recordDecisionTrace({
+    scope: "live",
+    stage: "cadence.stale_held_unit_watch_healed",
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    detail: {
+      clearedAllWatches: plan.clearedAllWatches,
+      restoredActiveMode: plan.restoreActiveMode,
+      resumedCadence: plan.resumeCadence,
+      resetDialogState: plan.resetDialogState
+    }
+  });
+  return true;
 }
 
 async function buildCadenceHeldInventoryOverride(args: {

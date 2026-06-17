@@ -3903,6 +3903,34 @@ export function stopFollowUpCadence(conv: Conversation, reason: string) {
   scheduleSave();
 }
 
+// Resume a cadence that was stopped (e.g. a stale inventory-watch hold that
+// turned out to be invalid — the customer's unit was actually available). Recomputes
+// nextDueAt for the CURRENT step from the anchor so the scheduler picks it back up,
+// and clears the stop reason. No-op unless currently stopped. Mirrors the inline
+// `ensureCadenceActive` resume used on customer-reply resumes.
+export function resumeFollowUpCadence(conv: Conversation, timeZone: string) {
+  const cad = conv.followUpCadence;
+  if (!cad || cad.status !== "stopped") return;
+  cad.status = "active";
+  cad.stopReason = undefined;
+  cad.anchorAt = cad.anchorAt ?? nowIso();
+  const offsets =
+    cad.kind === "long_term"
+      ? LONG_TERM_DAY_OFFSETS
+      : cad.kind === "post_sale"
+        ? POST_SALE_DAY_OFFSETS
+        : FOLLOW_UP_DAY_OFFSETS;
+  const idx = Math.min(cad.stepIndex ?? 0, offsets.length - 1);
+  cad.nextDueAt =
+    cad.kind === "post_sale"
+      ? computePostSaleDueAt(cad.anchorAt, offsets[idx], timeZone)
+      : computeFollowUpDueAt(cad.anchorAt, offsets[idx], timeZone);
+  cad.pausedUntil = undefined;
+  cad.pauseReason = undefined;
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
 export function pauseFollowUpCadence(conv: Conversation, untilIso: string, reason?: string) {
   if (!conv.followUpCadence || conv.followUpCadence.status !== "active") return;
   conv.followUpCadence.pausedUntil = untilIso;
