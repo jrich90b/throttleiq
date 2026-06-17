@@ -438,7 +438,7 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     `5. "Claim Name *" (#app-claim-name): "${(fields.campaignName || claim.title || "").toString().slice(0, 90)}".`,
     "6. \"Additional Notes\" (#app-additional-notes): paste the Description Draft below.",
     "7. Invoice section — ONE row per invoice listed below (fields invoices[n][vendor_name|invoice_date|invoice_number|invoice_amount]): enter Vendor Name, Invoice Date, Invoice Number, Invoice Amount. Use the add-invoice control to add a row for each additional invoice.",
-    "8. Upload: use the \"Upload File\" buttons (file inputs name=\"files[]\") to attach the invoice PDFs and supporting files listed under Uploaded Files below.",
+    "8. Upload: the packet files have been downloaded locally and provided to your upload action — use the \"Upload File\" controls (file inputs name=\"files[]\") to attach each one (invoice PDFs + supporting docs). If your upload action lists no available files, note it and continue (do not block).",
     "9. \"Claimed Amount\" (#app-claimed-amount): the media amount being claimed — default to the eligible invoice total unless the packet/eligibility notes say otherwise.",
     "10. SAVE THE DRAFT: click **\"Save for Later\"**. Do NOT click \"Submit\". Then stop and report exactly what was filled and what still needs human attention (see Missing Fields / Eligibility Concerns below).",
     "",
@@ -662,7 +662,37 @@ async function openUrl(url: string) {
   if (result.code !== 0) throw new Error(result.stderr || `Could not open ${url}`);
 }
 
-async function runBrowserUse(promptPath: string, resultPath: string, options: RunnerOptions): Promise<{ code: number; summary: string }> {
+// The packet's uploaded files are remote URLs; browser-use can only attach LOCAL files
+// (and only ones in available_file_paths). Download them next to the prompt so the agent
+// can upload them. Best-effort: a file that won't download is skipped (the agent reports
+// it as still-needed rather than failing the whole run).
+async function downloadClaimFiles(claim: any, destDir: string, token?: string): Promise<string[]> {
+  const files = Array.isArray(claim?.packet?.uploadedFiles) ? claim.packet.uploadedFiles : [];
+  if (!files.length) return [];
+  await mkdir(destDir, { recursive: true });
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const out: string[] = [];
+  for (const f of files) {
+    const url = String(f?.url ?? "").trim();
+    if (!/^https?:\/\//i.test(url)) continue;
+    const name = (String(f?.name ?? "").trim() || `file-${out.length + 1}`).replace(/[^\w.\-]+/g, "_");
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        console.warn(`[mdf] file download HTTP ${res.status} for ${name}`);
+        continue;
+      }
+      const dest = path.join(destDir, name);
+      await writeFile(dest, Buffer.from(await res.arrayBuffer()));
+      out.push(dest);
+    } catch (err: any) {
+      console.warn(`[mdf] file download error for ${name}: ${err?.message ?? err}`);
+    }
+  }
+  return out;
+}
+
+async function runBrowserUse(promptPath: string, resultPath: string, options: RunnerOptions, filesDir?: string): Promise<{ code: number; summary: string }> {
   const python = process.env.MDF_BROWSER_USE_PYTHON?.trim() || "python3";
   const args = [
     path.join(rootDir, "scripts", "mdf_portal_browser_use.py"),
@@ -678,6 +708,7 @@ async function runBrowserUse(promptPath: string, resultPath: string, options: Ru
     "--max-steps",
     options.maxSteps
   ];
+  if (filesDir) args.push("--files-dir", filesDir);
   if (options.cdpUrl) args.push("--cdp-url", options.cdpUrl);
   const timeoutSeconds = Math.max(60, Number(process.env.MDF_BROWSER_USE_TIMEOUT_SECONDS ?? "600"));
   const result = await runProcess(python, args, { timeoutMs: timeoutSeconds * 1000 });
@@ -1661,11 +1692,19 @@ async function runMain(options: RunnerOptions) {
     return;
   }
 
+  // Download the packet's files locally so browser-use can attach them to the form's
+  // file inputs (file inputs need local paths; the packet only carries remote URLs).
+  const filesDir = path.join(runsDir, `${task.id}-files`);
+  const localFiles = await downloadClaimFiles(claim, filesDir, options.token);
+  if (localFiles.length) {
+    console.log(`Downloaded ${localFiles.length} file(s) for upload: ${localFiles.map(f => path.basename(f)).join(", ")}`);
+  }
+
   let result: { code: number; summary: string; links?: string[] };
   try {
     result = playwrightAvailable
       ? await runPlaywrightPortalDraft(claim, options)
-      : await runBrowserUse(promptPath, resultPath, options);
+      : await runBrowserUse(promptPath, resultPath, options, localFiles.length ? filesDir : undefined);
   } catch (err: any) {
     result = {
       code: 2,

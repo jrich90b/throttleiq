@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--portal-url", required=True, help="Portal URL to open before running the task.")
     parser.add_argument("--result", required=True, help="Path to write JSON result summary.")
     parser.add_argument("--cdp-url", default="", help="Optional Chrome DevTools Protocol URL for logged-in Chrome.")
+    parser.add_argument("--files-dir", default="", help="Local dir of downloaded packet files the agent may upload.")
     parser.add_argument("--max-steps", type=int, default=int(os.getenv("MDF_BROWSER_USE_MAX_STEPS", "35")))
     return parser.parse_args()
 
@@ -67,21 +68,34 @@ async def run() -> int:
         raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
 
     prompt = prompt_path.read_text(encoding="utf-8")
+
+    available_file_paths: list[str] = []
+    if args.files_dir:
+        files_dir = Path(args.files_dir)
+        if files_dir.is_dir():
+            available_file_paths = [str(p) for p in sorted(files_dir.iterdir()) if p.is_file()]
+
+    files_note = (
+        "These local files are available to your upload action — attach them to the form's "
+        '"Upload File" inputs: ' + ", ".join(available_file_paths)
+        if available_file_paths
+        else "No local files were provided for upload; do not block on file uploads."
+    )
+
     task = "\n\n".join(
         [
-            f"Open this MDF portal URL first: {args.portal_url}",
+            f"Open this URL first: {args.portal_url}",
             (
-                "Navigation rule: the correct authenticated route is H-DNet SSO. "
-                "If you are on H-DNet, click the header toolbox icon with CSS selector "
-                "`.avaQuickLinksExtension.headerExtension`, then choose `Marketing Development Fund` "
-                "from My Toolbox. If you land on an Ansira login page, go back to H-DNet and use "
-                "the toolbox SSO route instead of typing credentials. If H-DNet/Microsoft login "
-                "appears and Chrome has already autofilled saved credentials, you may click Next "
-                "or Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for "
-                "manual login/MFA if autofill is not already present."
+                "Follow the navigation and form rules in the task below EXACTLY. Do not read, type, "
+                "copy, reveal, or transmit any credentials; if a sign-in page needs input and Chrome "
+                "autofill is not already present, stop for manual login."
             ),
+            files_note,
             prompt,
-            "Important final rule: do not click final submit. Stop at draft/review and report what remains.",
+            (
+                'Important final rule: to save the draft click "Save for Later". NEVER click "Submit". '
+                "Stop at draft/review and report exactly what was filled, what was uploaded, and what remains."
+            ),
         ]
     )
 
@@ -93,7 +107,7 @@ async def run() -> int:
 
     llm = choose_llm()
     browser = Browser(**browser_kwargs)
-    agent = Agent(task=task, llm=llm, browser=browser)
+    agent = Agent(task=task, llm=llm, browser=browser, available_file_paths=available_file_paths)
     history = await agent.run(max_steps=max(5, args.max_steps))
 
     summary = str(history)
