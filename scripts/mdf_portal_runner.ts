@@ -381,6 +381,17 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
   const missing = claim.packet.missingFields ?? [];
   const docs = claim.packet.requiredDocumentation ?? [];
   const concerns = claim.packet.eligibility?.concerns ?? [];
+  // Map our claim type to the Ansira "Marketing Activity" dropdown option (form fields
+  // mapped from the live form 2026-06-17). Year prefix comes from the activity start date.
+  const claimTypeLc = String(claim.packet.claimType ?? "").toLowerCase();
+  const activityTypeLc = String(claim.packet.activityType ?? "").toLowerCase();
+  const activityYear = String(fields.activityStartDate ?? "").slice(0, 4) || new Date().getFullYear().toString();
+  const marketingActivity =
+    claimTypeLc.includes("event") || activityTypeLc.includes("event")
+      ? `${activityYear} Event Claim`
+      : claimTypeLc.includes("map") || activityTypeLc.includes("map")
+        ? "Minimum Advertised Price (MAP) Only"
+        : `${activityYear} Media Claim`;
   const fileLines = files.map(file => {
     const role = file.inferredRole ? ` (${file.inferredRole.replace(/_/g, " ")})` : "";
     return `- ${file.name}${role}${file.url ? `: ${file.url}` : ""}`;
@@ -397,8 +408,8 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
     "",
     "## Safety Rules",
     "- You may fill the portal draft and upload supporting files.",
-    "- Do not click final submit.",
-    "- Stop at the final review/save-draft step.",
+    "- CRITICAL: to save the draft click the **\"Save for Later\"** button. NEVER click **\"Submit\"** — \"Submit\" final-submits the claim. \"Save for Later\" is the only save action you may use.",
+    "- Stop after \"Save for Later\" (or at the final review step) and report what was filled.",
     "- If login, MFA, uncertain field mapping, missing documentation, or portal errors block the work, stop and report the blocker.",
     `- PRIMARY ROUTE — do this FIRST: navigate the current tab directly to the MDF SSO launcher URL: ${options.launcherUrl} . This is the H-DNet single sign-on launcher; it lands you in the Ansira MDF app (app.ansira.com). You do NOT need the toolbox.`,
     "- If a tab is ALREADY on `app.ansira.com`, just switch to it — you are already in.",
@@ -409,6 +420,18 @@ function buildPrompt(task: AgentTask, claim: MdfClaimEntry, options: RunnerOptio
       ? "- If H-DNet/Microsoft login appears and Chrome has already autofilled saved credentials, you may click Next/Sign in. Do not read, type, copy, reveal, or transmit credentials. Stop for manual login/MFA if autofill is not already present."
       : "- If the browser is not logged into H-DNet, stop on the H-DNet/Microsoft login screen and let the user sign in manually.",
     "- Only a SIGN-IN page (H-DNet/Microsoft, or an Ansira login page asking for credentials) is a stop condition — stop and let the user log in. The logged-in Ansira app (`app.ansira.com/member/...`) is the DESTINATION, not a blocker: do NOT navigate it back to h-dnet.com.",
+    "",
+    "## Ansira Create-Claim Form — fill these EXACT fields (form lives at app.ansira.com/member/reimbursements/claims/create)",
+    `1. "Marketing Activity *" dropdown (#app-marketing-activity): choose "${marketingActivity}" (the option matching this claim's type and activity year).`,
+    "2. Pre-approval radios: select **\"No, continue without a pre-approval\"** (unless a pre-approval ID is provided in the packet — then choose \"Yes\" and enter it).",
+    "3. \"Activity Start Date\" (#app-claim-start-date) and \"Activity End Date\" (#app-claim-end-date): use the Activity start/end dates from Extracted Fields below.",
+    "4. \"Currency *\" (#app-claim-currency): select USD.",
+    `5. "Claim Name *" (#app-claim-name): "${(fields.campaignName || claim.title || "").toString().slice(0, 90)}".`,
+    "6. \"Additional Notes\" (#app-additional-notes): paste the Description Draft below.",
+    "7. Invoice section — ONE row per invoice listed below (fields invoices[n][vendor_name|invoice_date|invoice_number|invoice_amount]): enter Vendor Name, Invoice Date, Invoice Number, Invoice Amount. Use the add-invoice control to add a row for each additional invoice.",
+    "8. Upload: use the \"Upload File\" buttons (file inputs name=\"files[]\") to attach the invoice PDFs and supporting files listed under Uploaded Files below.",
+    "9. \"Claimed Amount\" (#app-claimed-amount): the media amount being claimed — default to the eligible invoice total unless the packet/eligibility notes say otherwise.",
+    "10. SAVE THE DRAFT: click **\"Save for Later\"**. Do NOT click \"Submit\". Then stop and report exactly what was filled and what still needs human attention (see Missing Fields / Eligibility Concerns below).",
     "",
     "## Claim Details",
     `- Claim type: ${claim.packet.claimType || "needs review"}`,
