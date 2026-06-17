@@ -1351,7 +1351,8 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     'dealer/sms: "Ok will do. Thanks Don" | task {"task_id":"t1","objective":"Notify Don when the 2016 Freewheeler trade arrives or is ready to show."} -> {"task_id":"t1","fulfilled":false,"confidence":0.95,"evidence":"only promises to notify later; the notify has not happened"}',
     'dealer/call: "Spoke with the customer, confirmed the trade payoff and next steps." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":true,"confidence":0.92,"evidence":"reached the customer and covered the payoff"}',
     'dealer/call: "Left a voicemail, no answer." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":false,"confidence":0.95,"evidence":"voicemail; customer was not reached"}',
-    'dealer/sms: "Hey, just checking in - how is it going?" | task {"task_id":"t3","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}'
+    'dealer/sms: "Hey, just checking in - how is it going?" | task {"task_id":"t3","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}',
+    'dealer/sms: "Hey Wayne, that 2013 Street Glide is here, welcome to stop by after 4." | task {"task_id":"t4","type":"call","objective":"Call the customer."} -> {"task_id":"t4","fulfilled":false,"confidence":0.9,"evidence":"a call task is only fulfilled by a reached phone call; an SMS does not fulfill it even though it contacts the customer"}'
   ];
 
   const prompt = [
@@ -1364,7 +1365,8 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     "- fulfilled=true ONLY when the dealer's follow-up actually carries out the objective.",
     "- PROMISING future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
     "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only when the dealer COMMUNICATES X is now available/arrived/ready. Photos or unrelated updates do not fulfill it.",
-    "- A CALL fulfills a 'call back / contact' task only if the customer was REACHED; a voicemail or no-answer does not.",
+    "- STRICT on call tasks: if a task's type is \"call\", it is fulfilled ONLY by a reached phone CALL (a dealer/call action where the customer was actually reached). An SMS or email does NOT fulfill a call-type task, even if it contacts the customer; a voicemail or no-answer also does not.",
+    "- For non-call follow-up tasks, any channel (SMS, email, or a reached call) can fulfill the objective.",
     "- A generic check-in that does not address the specific objective is NOT fulfilled.",
     "- Judge only the dealer's actions; customer messages are context. When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
     "- confidence is 0..1. Emit exactly one verdict per input task_id.",
