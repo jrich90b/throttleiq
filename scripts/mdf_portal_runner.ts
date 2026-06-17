@@ -662,7 +662,7 @@ portal_url = ${JSON.stringify(portalUrl)}
 html_url = ${JSON.stringify(htmlUrl)}
 prompt_path = ${JSON.stringify(promptPath)}
 blocked_summary = ${JSON.stringify(blockedSummary.slice(0, 1200))}
-use_saved_chrome_login = ${JSON.stringify(options.useSavedChromeLogin)}
+use_saved_chrome_login = ${options.useSavedChromeLogin ? "True" : "False"}
 
 def safe_js(expr):
     try:
