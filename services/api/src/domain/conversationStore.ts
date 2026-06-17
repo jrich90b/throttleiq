@@ -1516,15 +1516,36 @@ async function loadFromPostgres(): Promise<boolean> {
   }
 }
 
+// Hydration must be serialized. hydrateParsedStore() clear-and-replaces the
+// shared in-memory maps (conversations/todos/questions), so two overlapping
+// loads race on that shared state. The module-import boot load and an explicit
+// reloadConversationStore() (the /debug/conversations/reload endpoint, or an
+// eval that sets CONVERSATIONS_DB_PATH then reloads) can otherwise run
+// concurrently: reloadConversationStore() awaits only its own load, so a
+// late-resolving boot load (its fs.readFile delayed behind threadpool
+// contention) clears the maps *after* the reload returned — wiping rows written
+// in between. That is the voice_call_followup eval flake (a freshly-added call
+// follow-up todo vanishing between two assertions) and a latent prod data-loss
+// path. Chaining each load after any in-flight one guarantees the clears happen
+// in order, so a reload transitively awaits the boot load and nothing dangles
+// past it.
+let hydrationChain: Promise<void> = Promise.resolve();
+
 async function loadStoreOnStartup() {
-  if (getDataBackend() === "postgres") {
-    const ok = await loadFromPostgres();
-    if (ok) return;
-    // Postgres unreachable at boot: hydrate from the file snapshot rather than
-    // starting empty. Degraded mode forces file snapshots back on, so the
-    // snapshot stays as fresh as the last healthy flush.
-  }
-  await loadFromDisk();
+  const run = hydrationChain.then(async () => {
+    if (getDataBackend() === "postgres") {
+      const ok = await loadFromPostgres();
+      if (ok) return;
+      // Postgres unreachable at boot: hydrate from the file snapshot rather than
+      // starting empty. Degraded mode forces file snapshots back on, so the
+      // snapshot stays as fresh as the last healthy flush.
+    }
+    await loadFromDisk();
+  });
+  // Advance the chain even if this load throws, so the next load still waits for
+  // this one to settle before it clears the maps.
+  hydrationChain = run.catch(() => {});
+  await run;
 }
 
 let storeReadyPromise: Promise<void> | null = null;
