@@ -3,6 +3,7 @@ import { loadSystemPrompt } from "./loadPrompt.js";
 import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { buildTradeAdfAck } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
+import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -3312,6 +3313,11 @@ export async function orchestrateInbound(
             downPayment,
             downPaymentAssumed
           });
+          // Financial empathy: if the customer led with a monthly target, acknowledge it
+          // before the ballpark (which serves as the out-the-door reference). Generation-only.
+          if (targetMonthly != null) {
+            pricingOrPaymentsLine = buildMonthlyTargetAck(targetMonthly) + pricingOrPaymentsLine;
+          }
           const termProvided = extractPreferredTermMonths(event.body) != null;
           const downProvided = downPayment != null || downPaymentAssumed;
           const monthlyProvided = targetMonthly != null;
@@ -3637,6 +3643,10 @@ export async function orchestrateInbound(
           downPayment,
           downPaymentAssumed
         });
+        // Financial empathy: acknowledge a stated monthly target before the ballpark. Generation-only.
+        if (targetMonthly != null) {
+          draft = buildMonthlyTargetAck(targetMonthly) + draft;
+        }
         const termProvided = extractPreferredTermMonths(event.body) != null;
         const downProvided = downPayment != null || downPaymentAssumed;
         const monthlyProvided = targetMonthly != null;
