@@ -7,6 +7,7 @@ export {
   decideDraftModelArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
+  decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
