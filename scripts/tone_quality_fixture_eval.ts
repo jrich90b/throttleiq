@@ -121,6 +121,27 @@ const FIXTURES: Fixture[] = [
     expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    // Hardship disclosed on a normal sales/logistics turn (Nicholas Braun: deposit/hold request
+    // texted from a hospital bed). A tone-deaf sales push that never acknowledges the hardship
+    // must flag hardship_ack_missing. The runtime fix (hardshipEmpathyAck.ts) prepends the ack;
+    // this scorer net catches any reply that goes out without it.
+    id: "hardship_disclosure_unacknowledged_sales_push",
+    inboundText:
+      "Thank you Joe I am still very much interested and want to hold it, I've had a medical emergency since we've talked and I'm currently still in the hospital, is there a way I can send the money to hold it?",
+    outboundText:
+      "Love it — those limited runs move quick. I'll have Stone reach out to get one reserved for you.",
+    expect: { maxScore: 70, mustIncludeIssues: ["hardship_ack_missing"] }
+  },
+  {
+    // The acknowledged reply (your rewrite shape) clears it.
+    id: "hardship_disclosure_acknowledged_passes",
+    inboundText:
+      "Thank you Joe I am still very much interested and want to hold it, I've had a medical emergency since we've talked and I'm currently still in the hospital, is there a way I can send the money to hold it?",
+    outboundText:
+      "I'm really sorry to hear that — take all the time you need to heal. Yes, we can absolutely hold it; I'll get a hold of you tomorrow and we can arrange the deposit over the phone if that's easier.",
+    expect: { mustNotIncludeIssues: ["hardship_ack_missing"] }
+  },
+  {
     // Traffic Log Pro deal-progression note (Dana Carr): the "Inquiry" body is a
     // staff CRM note ("Left a $2,000 deposit ... finalize deal. (Step 6)"), not a
     // customer pricing question. The pricing keyword `deal` must NOT fabricate an

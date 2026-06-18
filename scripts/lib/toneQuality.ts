@@ -23,7 +23,8 @@ export type ToneIssueCode =
   | "redundant_current_bike_stock_count"
   | "appointment_status_answer_mismatch"
   | "adf_direct_ask_unanswered"
-  | "post_sale_logistics_schedule_mismatch";
+  | "post_sale_logistics_schedule_mismatch"
+  | "hardship_ack_missing";
 
 export type ToneIssue = {
   code: ToneIssueCode;
@@ -583,6 +584,46 @@ function hasScheduleTimeCheckLanguage(text: string): boolean {
   );
 }
 
+/**
+ * Detection net for the hardship-empathy gap (the runtime fix lives in
+ * services/api/src/domain/hardshipEmpathyAck.ts, gated on the LLM affect parser's needsEmpathy).
+ * Deterministic + conservative — this is a SCORER signal that surfaces candidates for the nightly,
+ * not a behavior driver, so it keys on unambiguous hardship language only. Slang collisions
+ * ("sick bike", "killer deal") are avoided by requiring explicit medical/grief/emergency phrasing.
+ */
+export function customerDisclosedHardship(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(in the hospital|hospitalized|hospitalised|medical emergency|in the icu|emergency room|in the er|surgery|having an operation|diagnosed with|chemo|chemotherapy)\b/.test(
+      t
+    ) ||
+    /\b(had|got into|been in|was in) (a|an) (bad )?(car )?(accident|wreck|crash)\b/.test(t) ||
+    /\b(passed away|passed last|funeral|in hospice|terminally ill|on life support)\b/.test(t) ||
+    /\b(lost my|losing my) (wife|husband|spouse|partner|mom|mother|dad|father|son|daughter|child|brother|sister|grandfather|grandmother)\b/.test(
+      t
+    ) ||
+    /\b(family|medical|health) emergency\b/.test(t) ||
+    /\bi'?ve had a (medical|health|family) (emergency|crisis)\b/.test(t)
+  );
+}
+
+/** True when the reply acknowledges the hardship ANYWHERE (generous — this is the "did we nod to it" check). */
+export function outboundAcknowledgesHardship(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  return (
+    /\b(so |very |really |truly )?sorry\b/.test(t) ||
+    /\bsorry to hear\b/.test(t) ||
+    /\b(hope|hoping) (you|everything|things|all|she|he|they)\b/.test(t) ||
+    /\b(take care|get well|feel better|wishing you|thinking of you|sending|praying|stay strong|no rush at all|take your time|whenever you'?re ready|focus on)\b/.test(
+      t
+    ) ||
+    /\b(that'?s (so |really )?(tough|rough|hard|terrible|awful|unfortunate))\b/.test(t) ||
+    /\b(glad|relieved|happy) (you'?re|to hear)\b/.test(t)
+  );
+}
+
 export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const rawInboundText = String(input.inboundText ?? "");
   const inboundText = normalizeText(input.inboundText);
@@ -604,6 +645,8 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
   const postSaleLogisticsScheduleMismatch =
     isPostSalePropertyDropoffLogisticsText(inboundText) && hasScheduleTimeCheckLanguage(outboundText);
   const adfDirectAskMisses = detectAdfDirectAskMisses(rawInboundText, outboundText);
+  const hardshipAckMissing =
+    customerDisclosedHardship(rawInboundText) && !outboundAcknowledgesHardship(outboundText);
 
   const issues: ToneIssue[] = [];
   let score = 100;
@@ -713,6 +756,14 @@ export function evaluateTurnToneQuality(input: ToneEvalInput): ToneEvalResult {
       detail: `ADF direct ask not addressed: ${missedKinds}`
     });
     score -= weight;
+  }
+  if (hardshipAckMissing) {
+    issues.push({
+      code: "hardship_ack_missing",
+      weight: 35,
+      detail: "customer disclosed a personal hardship; reply did not acknowledge it before business"
+    });
+    score -= 35;
   }
 
   score = Math.max(0, Math.min(100, score));
