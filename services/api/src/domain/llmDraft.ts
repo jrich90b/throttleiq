@@ -1817,6 +1817,12 @@ export type TradeTargetValueParse = {
   confidence?: number;
 };
 
+export type TradeQualifierResponseParse = {
+  // Whether the customer's reply to "do you have a trade?" indicates they HAVE a trade.
+  hasTrade: "affirmed" | "declined" | "unclear";
+  confidence?: number;
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2798,6 +2804,16 @@ const TRADE_TARGET_VALUE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     has_target_value: { type: "boolean" },
     amount: { type: "number" },
     raw_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const TRADE_QUALIFIER_RESPONSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["has_trade", "confidence"],
+  properties: {
+    has_trade: { type: "string", enum: ["affirmed", "declined", "unclear"] },
     confidence: { type: "number" }
   }
 };
@@ -5743,6 +5759,87 @@ export async function parseTradePayoffWithLLM(args: {
     providesLienHolderInfo,
     confidence
   };
+}
+
+// Classifies a customer's reply to the dealership "do you have a trade?" qualifier.
+// Replaced the inline regex pair (isNoTradeResponseText for decline + isAffirmative/"i have"
+// for affirm) in BOTH /webhooks/twilio and /conversations/:id/regenerate. Comprehension only —
+// year/model slotting stays deterministic (extractYearSingle/findMentionedModel at the call site).
+export async function parseTradeQualifierResponseWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<TradeQualifierResponseParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_TRADE_QUALIFIER_RESPONSE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_TRADE_QUALIFIER_RESPONSE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_TRADE_QUALIFIER_RESPONSE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_TRADE_QUALIFIER_RESPONSE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    'You parse a customer\'s reply to the dealership question "Do you have a trade?" in an SMS conversation.',
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify has_trade:",
+    '- "affirmed": the customer indicates they DO have a trade-in (yes / I have one / names a bike they would trade / asks what you would give them for it).',
+    '- "declined": the customer indicates they do NOT have a trade (no trade / nope / without a trade / don\'t have one / not trading).',
+    '- "unclear": the reply does not answer the trade question (a different topic, a question back about something else, or genuinely ambiguous).',
+    "",
+    "Examples:",
+    '- "nope" -> {"has_trade":"declined","confidence":0.95}',
+    '- "no trade" -> {"has_trade":"declined","confidence":0.97}',
+    '- "without a trade" -> {"has_trade":"declined","confidence":0.95}',
+    '- "I don\'t have a trade" -> {"has_trade":"declined","confidence":0.97}',
+    '- "not trading anything in" -> {"has_trade":"declined","confidence":0.95}',
+    '- "yeah I do" -> {"has_trade":"affirmed","confidence":0.95}',
+    '- "I\'ve got a 2019 Road Glide" -> {"has_trade":"affirmed","confidence":0.96}',
+    '- "yes, a Sportster" -> {"has_trade":"affirmed","confidence":0.96}',
+    '- "what would you give me for it?" -> {"has_trade":"affirmed","confidence":0.8}',
+    '- "not sure yet" -> {"has_trade":"unclear","confidence":0.8}',
+    '- "what\'s the out the door price?" -> {"has_trade":"unclear","confidence":0.9}',
+    "",
+    "Rules:",
+    "- Only judge whether they HAVE a trade; do not infer year/model here.",
+    "- confidence is 0..1.",
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "trade_qualifier_response_parser",
+      schema: TRADE_QUALIFIER_RESPONSE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-trade-qualifier-response-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.has_trade ?? "").toLowerCase();
+  const hasTrade: TradeQualifierResponseParse["hasTrade"] =
+    raw === "affirmed" || raw === "declined" ? raw : "unclear";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { hasTrade, confidence };
 }
 
 export async function parseTradeTargetValueWithLLM(args: {

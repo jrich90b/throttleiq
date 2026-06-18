@@ -260,6 +260,7 @@ import {
   parseUnifiedSemanticSlotsWithLLM,
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
+  parseTradeQualifierResponseWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
@@ -22760,18 +22761,6 @@ function buildMediaAffirmativeReply(
     return `Okay — I’ll have one of the guys send photos of ${bikeLabel} over to you.`;
   }
   return `Okay, I’ll have one of the guys send a walkaround video of ${bikeLabel} over to you.`;
-}
-
-function isNoTradeResponseText(text: string): boolean {
-  const t = String(text ?? "").toLowerCase().trim();
-  if (!t) return false;
-  return (
-    /\bno\b[\s-]*(trade|trades?)\b/.test(t) ||
-    /\b(nope|nah)\b[\s,!.]*(trade|trades?)?\b/.test(t) ||
-    /\bwithout\b[\s-]*(a )?(trade|trades?)\b/.test(t) ||
-    /\b(don['’]?t|do not)\s+have\s+(a\s+)?trade\b/.test(t) ||
-    /\b(not)\s+(trading|trading in|doing a trade)\b/.test(t)
-  );
 }
 
 async function findAutoMediaUrlsForConversationContext(
@@ -49848,7 +49837,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     const lastOutboundAskedTradeQualifier =
       /\bdo you have a trade\b/i.test(lastOutboundForTrade) || /\bany trade\b/i.test(lastOutboundForTrade);
-    if (lastOutboundAskedTradeQualifier && isNoTradeResponseText(event.body ?? "")) {
+    // Parser-first: same trade-qualifier classifier as live (replaces isNoTradeResponseText).
+    // Regen acts only on the decline branch (parity with prior behavior); affirmed/unclear fall through.
+    const regenTradeQualifierResponse = lastOutboundAskedTradeQualifier
+      ? await parseTradeQualifierResponseWithLLM({ text: event.body ?? "" })
+      : null;
+    if (regenTradeQualifierResponse?.hasTrade === "declined") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = {};
       const paymentBudget = resolvePaymentBudgetForConversation(conv, String(event.body ?? ""));
@@ -54960,9 +54954,12 @@ if (authToken && signature) {
   if (event.provider === "twilio" && lastOutboundAskedTradeQualifier && !parserPrecheckBlocksDeterministicShortcut) {
     const tradeYear = extractYearSingle(inboundLower);
     const tradeModel = findMentionedModel(inboundLower);
-    const tradeAffirmed = isAffirmative(inboundText) || /\b(i have|i got|i've got|ive got)\b/i.test(inboundText);
-    const tradeDeclined = isNoTradeResponseText(inboundText);
-    if (tradeAffirmed) {
+    // Parser-first: classify the trade-qualifier reply (replaces the isAffirmative/"i have"
+    // affirm regex + isNoTradeResponseText decline regex). Year/model stay deterministic above.
+    // "unclear" or a null parse falls through — safer than a silent regex miss. Same parser runs
+    // in /conversations/:id/regenerate.
+    const tradeQualifierResponse = await parseTradeQualifierResponseWithLLM({ text: inboundText });
+    if (tradeQualifierResponse?.hasTrade === "affirmed") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = conv.lead.tradeVehicle ?? {};
       if (tradeYear) conv.lead.tradeVehicle.year = String(tradeYear);
@@ -54983,7 +54980,7 @@ if (authToken && signature) {
         : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
       return publishLiveTwilioReply(reply);
     }
-    if (tradeDeclined) {
+    if (tradeQualifierResponse?.hasTrade === "declined") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = {};
       const paymentBudget = resolvePaymentBudgetForConversation(conv, inboundText);
