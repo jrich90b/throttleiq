@@ -83,6 +83,12 @@ const NOT_READY_REASON =
 const SCHEDULING_OFFER_OUTBOUND =
   /\b(what day and time|what time works|when works best|do any of these times|times work|line it up|set up a time|set a time|grab a time|book a time|find a time|come in|stop(?:ping)? by|swing by|schedule (?:a |an )?(?:visit|appointment|time)|available times|what day works)\b/i;
 
+/** Does this outbound text already contain a scheduling/visit offer? Reused by the proactive
+ * visit-invite gate (don't double-offer; recognize a prior offer so we never re-nag). */
+export function textContainsSchedulingOffer(text: string): boolean {
+  return SCHEDULING_OFFER_OUTBOUND.test(String(text ?? ""));
+}
+
 function hasCustomerInbound(conv: any): boolean {
   return (conv?.messages ?? []).some(
     (m: any) =>

@@ -4,6 +4,8 @@ import type { InboundMessageEvent, OrchestratorResult } from "./types.js";
 import { buildTradeAdfAck } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
 import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
+import { textContainsSchedulingOffer } from "./bookingFunnel.js";
+import { appendVisitInvite, shouldAppendVisitInvite } from "./proactiveVisitInvite.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2119,6 +2121,31 @@ export async function orchestrateInbound(
       suggestedSlots: result.suggestedSlots ?? [],
       debugFlow: result.debugFlow ?? flowDebug ?? undefined
     };
+    // Booking steering: after a sales-info answer (pricing/payments/availability) that didn't
+    // offer a visit, and only if we've never offered one this conversation, append a soft test-ride
+    // invite — turning an answered question into a gentle nudge toward booking. Conservative,
+    // generation-only, once-per-conversation (the invite matches the offer detector). See
+    // proactiveVisitInvite.ts. Applies in BOTH paths (both call orchestrateInbound → finalize).
+    const offeredEarlier =
+      (history ?? []).some(m => m.direction === "out" && textContainsSchedulingOffer(m.body)) ||
+      ["offered", "booked", "confirmed"].includes(String(ctx?.appointment?.status ?? "")) ||
+      !!ctx?.appointment?.bookedEventId;
+    const visitInviteWrongContext =
+      ["manual_handoff", "holding_inventory"].includes(String(ctx?.followUp?.mode ?? "")) ||
+      ["booked", "confirmed"].includes(String(ctx?.appointment?.status ?? "")) ||
+      !!ctx?.appointment?.bookedEventId;
+    if (
+      shouldAppendVisitInvite({
+        intent: String(out.intent ?? ""),
+        shouldRespond: !!out.shouldRespond,
+        draft: String(out.draft ?? ""),
+        draftAlreadyOffers: textContainsSchedulingOffer(String(out.draft ?? "")),
+        alreadyOfferedThisConversation: offeredEarlier,
+        wrongContext: visitInviteWrongContext
+      })
+    ) {
+      out.draft = appendVisitInvite(String(out.draft ?? ""));
+    }
     console.log("[orchestrateInbound] return", {
       provider: event.provider,
       suggestedSlotsLen: out.suggestedSlots?.length ?? 0
