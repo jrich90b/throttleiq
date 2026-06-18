@@ -5,6 +5,7 @@ export {
   buildRouteDecisionSnapshot,
   decideCadenceInviteArm,
   decideDraftModelArm,
+  decideDealStatusCheckTurn,
   decideFinancePricingTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,

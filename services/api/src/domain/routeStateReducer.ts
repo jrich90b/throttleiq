@@ -521,6 +521,56 @@ export function decideVehicleChoiceConfidenceTurn(
   return { kind: "offer_alternatives" };
 }
 
+// --- Deal/progress status check (2026-06-18) -------------------------------
+//
+// A customer asking an OPEN status question about their deal/order/bike — "how are
+// we looking", "any update?", "where are we at?", "what's the latest?", "any word?" —
+// needs a real status answer, NOT a social pleasantry. Production miss: "How are we
+// looking" was read as small talk and got "Doing well—hope your day's going great
+// too!". This intent is a fallback that fires ONLY when the more-specific status
+// intents (appointment_status_question, purchase_delivery_logistics) did not claim the
+// turn and it would otherwise land in the small-talk branch.
+//
+// Centralized + pure so the live + regenerate small-talk-rescue stay in lockstep, and
+// so the precedence is pinned by a decision-table eval. The parser signal is computed
+// at the call site and fed in; this owns only the gate. The reply body + owner
+// follow-up todo stay in index.ts.
+//
+// FAIL DIRECTION: when the parser is unsure we return `none` and the existing behavior
+// runs (the social ack) — we only rescue on a confident, explicit status check, so we
+// never turn genuine small talk ("how's your day going?") into a deal-status reply.
+// ---------------------------------------------------------------------------
+export type DealStatusCheckTurnKind = "answer_status" | "none";
+
+export type DealStatusCheckTurnInput = {
+  // The parser returned a non-null result (LLM enabled + usable parse).
+  parserAccepted: boolean;
+  // Parser intent: "deal_status_check" | "none" (or null when not accepted).
+  intent?: string | null;
+  // The parser judged this an explicit status ask (not incidental).
+  explicitRequest: boolean;
+  // Parser confidence 0..1 (0 when no parse).
+  confidence: number;
+  // Confidence floor to act on (default 0.7).
+  confidenceMin: number;
+};
+
+export type DealStatusCheckTurnDecision = {
+  kind: DealStatusCheckTurnKind;
+};
+
+export function decideDealStatusCheckTurn(
+  input: DealStatusCheckTurnInput
+): DealStatusCheckTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "deal_status_check") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "answer_status" };
+}
+
 // --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
 // The appointment-invite cadence message is our lowest-replying touch with real
 // volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy

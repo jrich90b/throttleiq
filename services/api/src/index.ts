@@ -267,6 +267,7 @@ import {
   parseTradePayoffWithLLM,
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
+  parseDealStatusCheckWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
@@ -454,6 +455,7 @@ import {
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   decideCadenceInviteArm,
+  decideDealStatusCheckTurn,
   decideFinancePricingTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
@@ -2083,6 +2085,71 @@ async function resolveVehicleChoiceAlternativesReply(
   markPendingShortListPrompt(conv, "vehicle_choice_open_to_alternatives");
   const label = formatModelToken(referencedModel) || referencedModel;
   return buildVehicleChoiceAlternativesReply(conv, text, label);
+}
+
+// Deal/progress status check: confidence floor to rescue a status check from the small-talk
+// pleasantry path (default 0.7). Override-able for tuning.
+function dealStatusCheckConfidenceMin(): number {
+  const raw = Number(process.env.LLM_DEAL_STATUS_CHECK_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the deal-status parser only runs on status-ish phrasings (it lives inside
+// the small-talk branch, so this further narrows an already-small set of turns). This is a gate,
+// NOT comprehension: a hint miss falls through to the existing behavior (fail-safe), and the
+// parser — not this regex — owns the deal_status_check vs pleasantry decision.
+const DEAL_STATUS_CHECK_HINT_RE =
+  /\b(how(?:'?s| is| are)?\s+(?:we|it|things|everything)|how\s+we\s+look|any\s+(?:update|word|news|movement|progress)|what'?s\s+(?:the\s+)?(?:latest|new|news|word|update)|where\s+(?:are\s+)?(?:we|things)\b|where\s+do\s+we\s+stand|hear(?:d)?\s+(?:anything|back)|coming\s+along|status\s+(?:update|on)|update\s+on)\b/i;
+
+function dealStatusCheckParserHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return DEAL_STATUS_CHECK_HINT_RE.test(t);
+}
+
+// Honest status acknowledgement — no fabricated status. By the time this fires the specific
+// status handlers (appointment / delivery) have already declined the turn, so we genuinely
+// don't have an automated answer: acknowledge + commit to a real follow-up (a staff todo is
+// created at the call site). This is a safe handoff per AGENTS.md fallback policy, NOT a
+// pleasantry and NOT a fabricated update.
+function buildDealStatusCheckReply(): string {
+  return "Good question — let me grab the latest on where things stand and I'll get right back to you.";
+}
+
+// Shared by BOTH the live and regenerate small-talk-rescue sites (route-parity law). Returns an
+// honest status reply (and creates an owner follow-up todo) ONLY when a confident, explicit deal
+// status check is detected; otherwise null so the existing small-talk pleasantry path runs.
+async function resolveDealStatusCheckReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!dealStatusCheckParserHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("deal_status_check_parser", () =>
+    parseDealStatusCheckWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_DEAL_STATUS_CHECK_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-deal-status-check-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideDealStatusCheckTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: dealStatusCheckConfidenceMin()
+  });
+  if (decision.kind !== "answer_status") return null;
+  addTodo(
+    conv,
+    "call",
+    "Customer asked for a deal/progress status update. Pull the latest and follow up with where things stand.",
+    providerMessageId ?? undefined
+  );
+  recordRouteOutcome(scope, "deal_status_check", { convId: conv.id, leadKey: conv.leadKey });
+  return buildDealStatusCheckReply();
 }
 
 function buildActionableStylePreferenceReply(args: {
@@ -49752,6 +49819,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
+        // Rescue a deal/progress status check before composing a pleasantry (parity with live).
+        const regenDealStatusReply = await resolveDealStatusCheckReply(
+          conv,
+          regenNoResponseInboundText,
+          (inbound as any)?.providerMessageId,
+          "regen"
+        );
+        if (regenDealStatusReply) {
+          if (channel === "email") {
+            return respondWithEmailRegeneratedDraft(regenDealStatusReply);
+          }
+          return respondWithSmsRegeneratedDraft(regenDealStatusReply);
+        }
         const regenStyleReply = buildActionableStylePreferenceReply({
           conv,
           inboundText: regenNoResponseInboundText
@@ -57304,6 +57384,18 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
+        // Rescue a deal/progress status check ("how are we looking", "any update?") that the
+        // small-talk classifier read as banter, BEFORE composing a pleasantry. Parser-first +
+        // fail-safe (null => existing small-talk behavior). Same resolver runs in regenerate.
+        const dealStatusReply = await resolveDealStatusCheckReply(
+          conv,
+          noResponseInboundText,
+          event.providerMessageId,
+          "live"
+        );
+        if (dealStatusReply) {
+          return publishLiveTwilioReply(dealStatusReply, undefined, { draftOnly: true });
+        }
         const noResponseStyleReply = buildActionableStylePreferenceReply({
           conv,
           inboundText: noResponseInboundText

@@ -1833,6 +1833,16 @@ export type VehicleChoiceConfidenceParse = {
   confidence?: number;
 };
 
+export type DealStatusCheckParse = {
+  // "deal_status_check": the customer is asking for the status/progress of THEIR deal,
+  //   order, or bike with us ("how are we looking", "any update?", "where are we at?",
+  //   "what's the latest?", "any word?"). It needs a real status answer, not a pleasantry.
+  // "none": a social pleasantry / off-topic / a different concrete ask.
+  intent: "deal_status_check" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2834,6 +2844,17 @@ const VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
   required: ["stance", "confidence"],
   properties: {
     stance: { type: "string", enum: ["committed", "open_to_alternatives", "unclear"] },
+    confidence: { type: "number" }
+  }
+};
+
+const DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["deal_status_check", "none"] },
+    explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -5959,6 +5980,98 @@ export async function parseVehicleChoiceConfidenceWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { stance, confidence };
+}
+
+// Deal/progress status check (2026-06-18). Distinguishes an open status question about the
+// customer's OWN deal/order/bike ("how are we looking", "any update?", "where are we at?")
+// from a social pleasantry ("how's your day going?"). Used to rescue these turns from the
+// small-talk pleasantry path. Returns null when disabled/low-signal — callers treat null as
+// "no status check" and fall through to existing behavior.
+export async function parseDealStatusCheckWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<DealStatusCheckParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEAL_STATUS_CHECK_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEAL_STATUS_CHECK_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEAL_STATUS_CHECK_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEAL_STATUS_CHECK_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
+    "for the STATUS / PROGRESS of their own deal, order, or bike with the dealership — an open",
+    '"where do things stand with us?" question that needs a real business answer, not a pleasantry.',
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "deal_status_check": an open status/progress question about THEIR deal, order, bike, paperwork,',
+    '  trade, or financing with us. The give-away is "we"/"us"/"my deal"/"it" + a progress/update sense:',
+    '  "how are we looking", "how we looking", "any update?", "any word?", "what\'s the latest?",',
+    '  "where are we at?", "how\'s it coming along?", "hear anything back?", "any news on my bike?".',
+    '- "none": a social pleasantry or off-topic chit-chat ("how\'s your day going?", "how are you?",',
+    '  "hope you\'re well", "happy friday", sports/weather banter), OR a concrete different ask that',
+    "  another handler owns (a specific price/payment question, a scheduling time, a trade value, a",
+    "  photo request, hours/directions). Those are not general status checks.",
+    "",
+    "Hard rules (precision matters — a false positive turns small talk into a deal-status reply):",
+    '- "how are YOU" / "how\'s your day" / "how you doing" = pleasantry = none.',
+    '- "how are WE looking" / "how we lookin" / "where we at" = the shared deal = deal_status_check.',
+    "- If it names a specific concrete ask (a number, a day/time, a model to look up), prefer none and",
+    "  let the specific handler take it.",
+    "- explicit_request=true only when the customer is clearly asking us for an update right now.",
+    "- confidence is 0..1; use >= 0.7 only when the status-vs-pleasantry read is clear.",
+    "",
+    "Examples:",
+    '- "How are we looking" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.9}',
+    '- "any update?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.9}',
+    '- "where are we at on the bike?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.92}',
+    '- "what\'s the latest?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.88}',
+    '- "any word back on my financing?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.85}',
+    '- "how\'s your day going?" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "how are you?" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "happy friday!" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "what\'s the out the door price?" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "deal_status_check_parser",
+      schema: DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-deal-status-check-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: DealStatusCheckParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "deal_status_check" ? "deal_status_check" : "none";
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitRequest, confidence };
 }
 
 export async function parseTradeTargetValueWithLLM(args: {
