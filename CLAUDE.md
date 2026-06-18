@@ -36,9 +36,13 @@ round-trips/turn. Per cluster, in order: **centralize the route decision → bur
 fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 36) →
 consolidate parsers (shadow-compared)**. Endgame = one `TurnUnderstanding` pass — see
 `docs/comprehension_consolidation_plan.md`. Done: scheduling cluster; finance/pricing
-pricing-continuation centralized (`decideFinancePricingTurn`, both paths); early-return
-guards annotated by fail-direction. Next within finance/pricing: align the regen
-follow-up trigger (still `askedDownRecently` regex vs the parser signal).
+pricing-continuation centralized (`decideFinancePricingTurn`, both paths), early-return
+guards annotated by fail-direction, AND the regen follow-up trigger aligned to the parser
+signal (`resolveFinanceFollowUpContinuation`, both paths, `3332efe8`) — finance/pricing
+burn-down candidates were adversarially reclassified KEEP (6/17 architecture map), so the
+cluster is effectively de-tangled. Next actionable: migrate `isNoTradeResponseText` (the one
+fail-direction-cleared comprehension regex, trade cluster) and the parser-consolidation
+round-trip win (collapse `parseUnifiedSemanticSlotsWithLLM`'s sub-calls; shadow-compared).
 
 **Consolidation is evidence-scoped, NOT a big-bang rewrite (880-turn judged backfill).**
 The consolidated pass's gross disagreement (~25%) is ~80% LLM *over-attachment* (a thread
