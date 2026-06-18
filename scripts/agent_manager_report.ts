@@ -124,6 +124,7 @@ function latestConversationActivityIso(conversationAudit: AnyObj | null): string
 }
 
 function latestConversationStoreActivityIso(conversationsPath: string): string | null {
+  if (!conversationsPath) return null;
   const raw = readJson(conversationsPath);
   const conversations = Array.isArray(raw)
     ? raw
@@ -238,6 +239,10 @@ function main() {
     path.join(parsed.reportRoot, "route_watchdog.json");
   const routeWatchdog = routeWatchdogPath ? readJson(routeWatchdogPath) : null;
   const opsAnomaliesExists = fs.existsSync(opsAnomaliesPath);
+  const configuredConversationsPath =
+    process.env.CONVERSATIONS_DB_PATH ||
+    process.env.CONVERSATIONS_PATH ||
+    (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, "conversations.json") : "");
 
   const tasks: TaskCandidate[] = [];
   const stuckCount = num(routeWatchdog?.stuckTurns?.count);
@@ -312,6 +317,7 @@ function main() {
     ? followupTaskAudit.summary.issueCounts
     : [];
   const latestConversationActivityAt =
+    latestConversationStoreActivityIso(configuredConversationsPath) ||
     latestConversationStoreActivityIso(String(conversationAudit?.summary?.filePath ?? "")) ||
     latestConversationActivityIso(conversationAudit);
   const latestConversationActivityMs = Date.parse(String(latestConversationActivityAt ?? ""));
@@ -485,7 +491,7 @@ function main() {
       evidence: {
         latestConversationActivityAt,
         sourceDataAgeHours,
-        conversationsPath: conversationAudit?.summary?.filePath ?? null
+        conversationsPath: configuredConversationsPath || conversationAudit?.summary?.filePath || null
       }
     });
   }
