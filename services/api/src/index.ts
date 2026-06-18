@@ -25,7 +25,11 @@ import {
   isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { buildReservationHandoffReply, detectReservationRequestText } from "./domain/reservationIntent.js";
-import { buildTestRideInitReply, resolveNamedSchedulingDay } from "./domain/testRideDayAwareReply.js";
+import {
+  buildTestRideInitReply,
+  makeSchedulingReaskDayAware,
+  resolveNamedSchedulingDay
+} from "./domain/testRideDayAwareReply.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
@@ -13313,10 +13317,14 @@ async function buildTestRideInventorySelectionReply(args: {
     };
     setDialogState(args.conv, "test_ride_init");
     if (hasSchedulingRequest) return null;
-    return `Got it — I can line up the test ride on the ${formatModelLabel(
+    // Day-aware (parity with the test-ride-init sites): if the customer named a relative day this
+    // turn, acknowledge it + ask time-of-day instead of re-asking the day. detectSchedulingSignals
+    // (hasSchedulingRequest) is blind to a bare day, so we'd otherwise re-ask one already given.
+    const selectionLabel = formatModelLabel(
       selectedYear ? String(selectedYear) : latest.candidate.year,
       latest.candidate.model
-    )}. What day and time works best?`;
+    );
+    return buildTestRideInitReply(selectionLabel, resolveNamedSchedulingDay(null, inboundText));
   }
 
   if (mostRecentAvailable) {
@@ -21655,7 +21663,14 @@ async function resolveDeterministicAvailabilityReply(args: {
       }
       return {
         kind: "reply",
-        reply: `Yes — ${detail}${url} is available right now. Let me know what day and time works for you to stop in.`
+        // Day-aware: if the customer named a relative day this turn ("is it available? I'm off
+        // tomorrow"), acknowledge it + ask the time instead of re-asking the day. Additive — the
+        // base reply is unchanged when no day was named. Deterministic day (this resolver is
+        // deterministic by design; the day is a structured extraction, like extractYearSingle).
+        reply: makeSchedulingReaskDayAware(
+          `Yes — ${detail}${url} is available right now. Let me know what day and time works for you to stop in.`,
+          resolveNamedSchedulingDay(null, args.text)
+        )
       };
     }
   }

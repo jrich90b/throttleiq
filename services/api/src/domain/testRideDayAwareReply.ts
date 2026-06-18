@@ -1,18 +1,22 @@
 /**
- * Day-aware test-ride-init reply (the "requested_day_reasked" answer-correctness fix).
+ * Day-aware scheduling re-asks (the "requested_day_reasked" answer-correctness fix).
  *
- * When a customer names a day while selecting a bike for a test ride, the agent must
- * ACKNOWLEDGE that day and ask only for the time-of-day — never re-ask "what day?". The
- * day is comprehended upstream by the appointment-timing parser (requested.day); this
- * module shapes the reply and resolves the day label, preferring the parser's day and
- * falling back to deterministic extraction (structured extraction — allowed deterministic,
- * the same idiom as extractYearSingle at the call site).
+ * When a customer names a day in an active-scheduling turn, the agent must ACKNOWLEDGE that day
+ * and ask only for the time-of-day — never re-ask "what day?". The day is comprehended upstream
+ * by the appointment-timing parser (requested.day); this module shapes the reply and resolves the
+ * day label, preferring the parser's day and falling back to deterministic extraction (structured
+ * extraction — allowed deterministic, the same idiom as extractYearSingle at the call sites).
  *
- * SCOPE: active-scheduling RELATIVE days only (today / tomorrow / weekday). Month-dates and
- * soft-commitment / event-RSVP days are intentionally out of scope here (the call site —
- * the test-ride-bike-selection block — already gates to an active scheduling turn, and the
- * resolver returns null for anything outside the relative-day set). Pinned by
- * scripts/test_ride_day_reask_eval.ts.
+ * Two builders share the same day resolution: buildTestRideInitReply (test-ride init) and
+ * makeSchedulingReaskDayAware (general "what day and time works…" re-asks — availability answer,
+ * etc.). Both are purely additive: behavior only differs when a relative day is actually present.
+ *
+ * SCOPE: active-scheduling RELATIVE days only (today / tomorrow / weekday) where the named day is
+ * the day the customer WANTS. Month-dates and soft-commitment / event-RSVP days (intent=none) are
+ * out of scope (the resolver returns null for anything outside the relative-day set). Decline /
+ * conflict re-asks ("I can't make it tomorrow", rejecting offered slots) are also out of scope —
+ * there the named day is the one that does NOT work, so acknowledging it would be wrong; those
+ * re-asks are intentionally left day-blind. Pinned by scripts/test_ride_day_reask_eval.ts.
  */
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -38,15 +42,43 @@ export function resolveNamedSchedulingDay(parserDay: string | null | undefined, 
 }
 
 /**
+ * Format a relative day for mid-sentence use: today/tomorrow stay lowercase, a weekday is
+ * capitalized ("Monday"). Shared by the test-ride and general scheduling re-ask builders.
+ */
+function formatNamedDayWord(namedDayLabel: string): string {
+  const d = String(namedDayLabel ?? "").trim();
+  return d === "today" || d === "tomorrow" ? d : d.charAt(0).toUpperCase() + d.slice(1);
+}
+
+/**
  * The test-ride-init reply. With a named day → acknowledge it and ask the time-of-day.
  * Without one → the original "what day and time" prompt (correct when no day was given, so
  * this change is purely additive — behavior only differs when a day is actually present).
  */
 export function buildTestRideInitReply(label: string, namedDayLabel: string | null): string {
   if (namedDayLabel) {
-    const d = namedDayLabel.trim();
-    const dayWord = d === "today" || d === "tomorrow" ? d : d.charAt(0).toUpperCase() + d.slice(1);
-    return `Got it — I can line up the test ride on the ${label} for ${dayWord}. Morning or afternoon work better?`;
+    return `Got it — I can line up the test ride on the ${label} for ${formatNamedDayWord(
+      namedDayLabel
+    )}. Morning or afternoon work better?`;
   }
   return `Got it — I can line up the test ride on the ${label}. What day and time works best?`;
+}
+
+/**
+ * Make a generic "what day and time works…" scheduling re-ask day-aware: when the customer named
+ * a relative day this turn, rewrite the re-ask to acknowledge that day and ask only the time
+ * ("…what time tomorrow works…"). Returns the base reply unchanged when no day was named — purely
+ * additive, the same idiom as buildTestRideInitReply (reply-shaping, not comprehension: the day
+ * itself is resolved upstream by resolveNamedSchedulingDay).
+ *
+ * USE ONLY where the named day is the day the customer WANTS (active scheduling — availability /
+ * test-ride / provide_new_time). Do NOT use in decline / conflict re-asks (see the module SCOPE
+ * note): there the named day is the one that does NOT work.
+ */
+export function makeSchedulingReaskDayAware(baseReply: string, namedDayLabel: string | null): string {
+  if (!namedDayLabel) return baseReply;
+  return String(baseReply ?? "").replace(
+    /\bwhat day and time works\b/i,
+    `what time ${formatNamedDayWord(namedDayLabel)} works`
+  );
 }
