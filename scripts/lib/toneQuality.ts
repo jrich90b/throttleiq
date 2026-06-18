@@ -241,8 +241,27 @@ function uniqueAskKinds(kinds: AdfDirectAskKind[]): AdfDirectAskKind[] {
   return Array.from(new Set(kinds));
 }
 
+/**
+ * Traffic Log Pro / deal-tracker progression notes arrive as ADF leads but the
+ * "Inquiry" body is a STAFF-authored, third-person CRM note describing an
+ * in-store event ("came in", "showed him the bike", "remind me Friday",
+ * "Left a $2,000 deposit ... finalize deal", "Sold/Delivered ... Sold by Scott")
+ * — not a question the customer typed into a web form. They carry the
+ * "(Step N)" progression marker. The agent's correct reply is a soft
+ * re-engagement, NOT a pricing/scheduling answer, so these must never count as
+ * an unanswered ADF direct ask (e.g. Dana Carr's "finalize deal (Step 6)"
+ * tripping the pricing keyword `deal`). Keying on the explicit "(Step N)"
+ * fingerprint keeps this precise — customers don't write "(Step 6)".
+ */
+export function isAdfDealProgressionNote(inboundText: string): boolean {
+  if (!isAdfInboundText(inboundText)) return false;
+  const body = extractAdfCustomerText(inboundText);
+  return /\(\s*step\s*\d+\s*\)/i.test(body);
+}
+
 export function detectAdfDirectAsks(inboundText: string): AdfDirectAskKind[] {
   if (!isAdfInboundText(inboundText)) return [];
+  if (isAdfDealProgressionNote(inboundText)) return [];
   const t = extractAdfCustomerText(inboundText).toLowerCase();
   if (!t) return [];
 

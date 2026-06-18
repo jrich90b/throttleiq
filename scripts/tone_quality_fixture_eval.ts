@@ -121,6 +121,18 @@ const FIXTURES: Fixture[] = [
     expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
   },
   {
+    // Traffic Log Pro deal-progression note (Dana Carr): the "Inquiry" body is a
+    // staff CRM note ("Left a $2,000 deposit ... finalize deal. (Step 6)"), not a
+    // customer pricing question. The pricing keyword `deal` must NOT fabricate an
+    // adf_direct_ask_unanswered; the soft re-engagement reply is correct.
+    id: "adf_deal_progression_step_note_not_pricing_ask",
+    inboundText:
+      "WEB LEAD (ADF) Source: Traffic Log Pro Ref: 11473 Name: Dana Carr Email: danacarr25@aol.com Phone: 7162607633 Stock: U889-21 VIN: 1HD1KRP10MB626979 Year: 2021 Vehicle: Harley-Davidson Street Glide Special (Snake Venom - Black Finish)  Inquiry: Left a $2,000 deposit on the motorcycle. will be back either Friday or next week to finalize deal. (Step 6)",
+    outboundText:
+      "Hey Dana, It's Stone. Thanks again for coming in today. We will talk either Friday or next week Reply STOP to opt out.",
+    expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "adf_genuine_specials_ask_still_pricing",
     inboundText:
       "WEB LEAD (ADF)\nSource: Website contact form\nRef: 20003\nName: Deal Hunter\nYear: 2026\nVehicle: Harley-Davidson Road Glide\n\nInquiry:\nAny specials or deals running on a Road Glide right now?",
