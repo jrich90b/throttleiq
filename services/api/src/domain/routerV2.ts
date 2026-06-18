@@ -6,6 +6,7 @@ export {
   decideCadenceInviteArm,
   decideDraftModelArm,
   decideFinancePricingTurn,
+  decideFinanceProcessQuestionTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
