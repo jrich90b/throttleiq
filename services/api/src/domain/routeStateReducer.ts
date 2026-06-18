@@ -464,6 +464,63 @@ export function resolveFinanceFollowUpContinuation(args: {
   );
 }
 
+// --- Vehicle-choice confidence / open-to-alternatives (2026-06-18) ---------
+//
+// When a customer is lukewarm/undecided about a SPECIFIC bike they referenced,
+// proactively offer 1-2 alternatives; when they're committed, stay out of the way.
+// This is fuzzy comprehension with a real false-positive risk — offering
+// alternatives to a confident buyer undercuts their choice and reads as not
+// listening. So the DEFAULT is to stay silent and this decision FAILS toward
+// stay_silent: we only offer when EVERYTHING lines up.
+//
+// Centralized + pure so /webhooks/twilio and /conversations/:id/regenerate can't
+// drift, and so the precedence is pinned by a decision-table eval. The parser
+// signal (parseVehicleChoiceConfidenceWithLLM) + the model-relevance guard
+// (passesModelRelevanceGuard) are computed at the call site and fed in as inputs;
+// this function owns ONLY the precedence. The reply body stays in index.ts.
+//
+// Gate (all required to offer; any miss => stay_silent):
+//   parser accepted  AND  stance === "open_to_alternatives"
+//   AND  confidence >= confidenceMin (default 0.8)
+//   AND  a specific bike/model was referenced this turn/context
+//   AND  the model-relevance guard passes (never act on a model the customer
+//        didn't reference this turn — the over-attachment failure mode).
+// ---------------------------------------------------------------------------
+export type VehicleChoiceConfidenceTurnKind = "offer_alternatives" | "stay_silent";
+
+export type VehicleChoiceConfidenceTurnInput = {
+  // The parser returned a non-null result (LLM enabled + a usable parse).
+  parserAccepted: boolean;
+  // Parser stance: "committed" | "open_to_alternatives" | "unclear" (or null when not accepted).
+  stance?: string | null;
+  // Parser confidence 0..1 (0 when no parse).
+  confidence: number;
+  // Confidence floor to act on (default 0.8 — high bar, this can undercut a buyer).
+  confidenceMin: number;
+  // A specific bike/model was referenced this turn (named) or is the active subject.
+  hasReferencedModel: boolean;
+  // passesModelRelevanceGuard(referencedModel, inboundText) — the over-attachment guard.
+  modelRelevanceGuardPassed: boolean;
+};
+
+export type VehicleChoiceConfidenceTurnDecision = {
+  kind: VehicleChoiceConfidenceTurnKind;
+};
+
+export function decideVehicleChoiceConfidenceTurn(
+  input: VehicleChoiceConfidenceTurnInput
+): VehicleChoiceConfidenceTurnDecision {
+  // FAIL DIRECTION = stay_silent. Each guard below, when it trips, keeps us quiet.
+  if (!input.parserAccepted) return { kind: "stay_silent" };
+  if (input.stance !== "open_to_alternatives") return { kind: "stay_silent" }; // committed/unclear => quiet
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "stay_silent" }; // low confidence => don't risk second-guessing a buyer
+  }
+  if (!input.hasReferencedModel) return { kind: "stay_silent" }; // no referenced bike => nothing to compare
+  if (!input.modelRelevanceGuardPassed) return { kind: "stay_silent" }; // over-attachment guard
+  return { kind: "offer_alternatives" };
+}
+
 // --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
 // The appointment-invite cadence message is our lowest-replying touch with real
 // volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy

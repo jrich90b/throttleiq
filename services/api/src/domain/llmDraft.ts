@@ -1823,6 +1823,16 @@ export type TradeQualifierResponseParse = {
   confidence?: number;
 };
 
+export type VehicleChoiceConfidenceParse = {
+  // How settled the customer is on the SPECIFIC bike they referenced this turn:
+  // - "committed": they've decided / want this exact bike ("this is the one", "I'll take the Road Glide").
+  // - "open_to_alternatives": lukewarm/undecided/comparison-shopping ("what else do you have",
+  //   "I'm torn between the X and Y", "not sure this is the one", "is there something cheaper/newer").
+  // - "unclear": off-topic, no stance about the bike choice.
+  stance: "committed" | "open_to_alternatives" | "unclear";
+  confidence?: number;
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2814,6 +2824,16 @@ const TRADE_QUALIFIER_RESPONSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   required: ["has_trade", "confidence"],
   properties: {
     has_trade: { type: "string", enum: ["affirmed", "declined", "unclear"] },
+    confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["stance", "confidence"],
+  properties: {
+    stance: { type: "string", enum: ["committed", "open_to_alternatives", "unclear"] },
     confidence: { type: "number" }
   }
 };
@@ -5840,6 +5860,105 @@ export async function parseTradeQualifierResponseWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { hasTrade, confidence };
+}
+
+// Vehicle-choice confidence / open-to-alternatives (2026-06-18).
+// Reads how settled the customer is on the SPECIFIC bike they referenced this turn so the
+// orchestrator can proactively offer a couple of alternatives ONLY when they're lukewarm —
+// and stay out of the way when they're committed. The decision/relevance-guard precedence
+// lives in decideVehicleChoiceConfidenceTurn (routeStateReducer); this parser only reads the
+// stance. Returns null when disabled/low-signal — callers must treat null as "stay silent".
+export async function parseVehicleChoiceConfidenceWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  referencedModel?: string | null;
+}): Promise<VehicleChoiceConfidenceParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_CHOICE_CONFIDENCE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_CHOICE_CONFIDENCE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const referenced = String(args.referencedModel ?? "").trim();
+  const prompt = [
+    "You read how SETTLED a motorcycle shopper is on the SPECIFIC bike they're discussing in an SMS",
+    "thread with a Harley dealership. The dealership may proactively offer a couple of OTHER bikes,",
+    "but only when the customer is lukewarm — never when they've made up their mind.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify stance:",
+    '- "committed": the customer has decided on / clearly wants THIS bike. Examples: "this is the one",',
+    '  "I want the Street Glide", "let\'s do it", "I\'ve decided on the Road Glide", "I\'ll take it",',
+    '  "yeah let\'s move forward on that one", "the Low Rider S is exactly what I want".',
+    '- "open_to_alternatives": lukewarm, undecided, or comparison-shopping about the bike CHOICE.',
+    '  Examples: "what else do you have", "I\'m torn between the Street Glide and the Road Glide",',
+    '  "not sure this is the one", "are there other options", "is there something cheaper",',
+    '  "anything newer?", "do you have something with less miles", "still looking around",',
+    '  "I\'m not totally sold on it", "what would you recommend instead".',
+    '- "unclear": no stance about which bike to buy — a different topic (pricing math, scheduling,',
+    '  trade, financing, hours, directions), a bare acknowledgement, or genuinely ambiguous.',
+    "",
+    "Hard rules (precision matters — a false 'open_to_alternatives' undercuts a confident buyer):",
+    "- A question about the SAME bike (its price, payment, color, miles, availability, a test ride) is",
+    '  NOT "open_to_alternatives" — it is "unclear" here unless they signal they\'re weighing other bikes.',
+    "- Wanting MORE info on the same bike (photos, specs) is not openness to alternatives.",
+    '- Default to "unclear" when the turn does not clearly express the bike-choice stance.',
+    "- confidence is 0..1; only use >= 0.8 when the stance is unambiguous.",
+    "",
+    "Examples:",
+    '- "this is the one I want" -> {"stance":"committed","confidence":0.96}',
+    '- "I\'ll take the Road Glide" -> {"stance":"committed","confidence":0.95}',
+    '- "let\'s do it" -> {"stance":"committed","confidence":0.9}',
+    '- "what else do you have?" -> {"stance":"open_to_alternatives","confidence":0.92}',
+    '- "I\'m torn between the Street Glide and the Road Glide" -> {"stance":"open_to_alternatives","confidence":0.93}',
+    '- "not sure this is the one honestly" -> {"stance":"open_to_alternatives","confidence":0.9}',
+    '- "is there anything cheaper?" -> {"stance":"open_to_alternatives","confidence":0.88}',
+    '- "any newer ones?" -> {"stance":"open_to_alternatives","confidence":0.85}',
+    '- "what\'s the out the door price on it?" -> {"stance":"unclear","confidence":0.9}',
+    '- "can I come by Saturday?" -> {"stance":"unclear","confidence":0.92}',
+    '- "send me a couple photos" -> {"stance":"unclear","confidence":0.85}',
+    '- "thanks!" -> {"stance":"unclear","confidence":0.95}',
+    "",
+    referenced ? `Bike under discussion: ${referenced}` : "Bike under discussion: (unspecified)",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_choice_confidence_parser",
+      schema: VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-vehicle-choice-confidence-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.stance ?? "").toLowerCase();
+  const stance: VehicleChoiceConfidenceParse["stance"] =
+    raw === "committed" || raw === "open_to_alternatives" ? raw : "unclear";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { stance, confidence };
 }
 
 export async function parseTradeTargetValueWithLLM(args: {

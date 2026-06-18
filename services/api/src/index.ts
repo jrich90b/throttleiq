@@ -266,6 +266,7 @@ import {
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   parseTradeQualifierResponseWithLLM,
+  parseVehicleChoiceConfidenceWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
@@ -455,6 +456,7 @@ import {
   decideCadenceInviteArm,
   decideFinancePricingTurn,
   decideSchedulingTurn,
+  decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
@@ -578,6 +580,7 @@ import {
 import {
   resolveAuthoritativeModels,
   modelAuthorityEnabled,
+  passesModelRelevanceGuard,
   toAuthorityModels,
   type AuthorityModel
 } from "./domain/turnUnderstandingAuthority.js";
@@ -2015,6 +2018,71 @@ function buildShortListClarifierReply(conv: any, inboundText: string): {
     hasPreferenceHint,
     reply: "Perfect — any must-have model or color before I pull the short list?"
   };
+}
+
+// Vehicle-choice confidence: confidence floor to offer alternatives (default 0.8 — a high
+// bar, because a false positive undercuts a buyer who already chose). Override-able for tuning.
+function vehicleChoiceConfidenceMin(): number {
+  const raw = Number(process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.8;
+}
+
+// Reply for an "open_to_alternatives" turn. Reuses the short-list clarifier (our existing
+// recommendation funnel) so we never freehand inventory: acknowledge the bike they referenced
+// without undercutting it, offer to line up a couple of options to compare, then ask the one
+// narrowing question the clarifier already owns.
+function buildVehicleChoiceAlternativesReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  referencedLabel: string | null
+): string {
+  const clarifier = buildShortListClarifierReply(conv, inboundText);
+  const lead = referencedLabel
+    ? `Totally fair — the ${referencedLabel} is a strong pick, and I'm happy to line up a couple of other options to compare so you feel good about it. `
+    : `Totally fair — happy to line up a couple of other options to compare so you feel good about it. `;
+  return `${lead}${clarifier.reply}`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law).
+// FAIL DIRECTION = stay silent: returns a reply ONLY when the customer is lukewarm about a
+// SPECIFIC referenced bike at high confidence and the model-relevance guard passes; otherwise
+// null (the orchestrator/LLM handles the turn normally). The deterministic pre-gates (no
+// referenced model, relevance-guard fail) short-circuit BEFORE the LLM call — both fail toward
+// silence and save a round-trip — while the full precedence stays owned by the pure
+// decideVehicleChoiceConfidenceTurn (pinned by the decision-table eval).
+async function resolveVehicleChoiceAlternativesReply(
+  conv: Conversation | null | undefined,
+  inboundText: string
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  const referencedModel =
+    findMentionedModel(text.toLowerCase()) ?? resolveKnownModelContextForShortList(conv);
+  if (!referencedModel) return null; // no specific bike referenced => nothing to compare
+  const guardPassed = passesModelRelevanceGuard(referencedModel, text); // over-attachment guard
+  if (!guardPassed) return null;
+  const parse = await safeLlmParse("vehicle_choice_confidence_parser", () =>
+    parseVehicleChoiceConfidenceWithLLM({
+      text,
+      history: buildHistory(conv, 8),
+      referencedModel
+    })
+  );
+  if (process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-vehicle-choice-confidence-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideVehicleChoiceConfidenceTurn({
+    parserAccepted: !!parse,
+    stance: parse?.stance ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleChoiceConfidenceMin(),
+    hasReferencedModel: true,
+    modelRelevanceGuardPassed: guardPassed
+  });
+  if (decision.kind !== "offer_alternatives") return null;
+  markPendingShortListPrompt(conv, "vehicle_choice_open_to_alternatives");
+  const label = formatModelToken(referencedModel) || referencedModel;
+  return buildVehicleChoiceAlternativesReply(conv, text, label);
 }
 
 function buildActionableStylePreferenceReply(args: {
@@ -49874,6 +49942,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       return respondWithSmsRegeneratedDraft(reply);
     }
+    // Vehicle-choice confidence / open-to-alternatives (parity with live /webhooks/twilio).
+    // Same shared resolver, same fail-toward-silence gate; SMS-only + no explicit routing
+    // override (mirrors the live twilio-only + parserPrecheckBlocksDeterministicShortcut gate).
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenVehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(
+        conv,
+        String(event.body ?? "")
+      );
+      if (regenVehicleChoiceReply) {
+        recordRouteOutcome("regen", "vehicle_choice_open_to_alternatives", {
+          convId: conv.id,
+          leadKey: conv.leadKey
+        });
+        return respondWithSmsRegeneratedDraft(regenVehicleChoiceReply);
+      }
+    }
     const lastOutboundForMedia = String(lastOutboundBeforeInbound?.body ?? "");
     const activeBike =
       formatModelLabel(
@@ -55011,6 +55095,21 @@ if (authToken && signature) {
         turnFinanceIntent: true,
         financeContextIntent: true
       });
+    }
+  }
+  // Vehicle-choice confidence / open-to-alternatives. When the customer is lukewarm about a
+  // SPECIFIC bike they referenced, proactively offer a couple of alternatives; when committed,
+  // stay out of the way. Low precedence + tightly gated (parser stance + high confidence +
+  // relevance guard) so it FAILS toward silence and never preempts a more specific intent.
+  // Same resolver runs in /conversations/:id/regenerate (route-parity law).
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const vehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, inboundText);
+    if (vehicleChoiceReply) {
+      recordRouteOutcome("live", "vehicle_choice_open_to_alternatives", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return publishLiveTwilioReply(vehicleChoiceReply, undefined, { draftOnly: true });
     }
   }
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
