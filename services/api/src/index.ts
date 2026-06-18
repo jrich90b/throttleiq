@@ -25,6 +25,7 @@ import {
   isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { buildReservationHandoffReply, detectReservationRequestText } from "./domain/reservationIntent.js";
+import { buildTestRideInitReply, resolveNamedSchedulingDay } from "./domain/testRideDayAwareReply.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
@@ -49831,9 +49832,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const label = selectedModel
         ? formatModelLabel(selectedYear ? String(selectedYear) : null, selectedModel)
         : "that bike";
-      return respondWithSmsRegeneratedDraft(
-        `Got it — I can line up the test ride on the ${label}. What day and time works best?`
-      );
+      // Day-aware (parity with live): acknowledge a named day + ask time-of-day rather than
+      // re-asking the day. Deterministic day extraction from the inbound (regen).
+      const regenNamedDay = resolveNamedSchedulingDay(null, String(event.body ?? ""));
+      return respondWithSmsRegeneratedDraft(buildTestRideInitReply(label, regenNamedDay));
     }
     const lastOutboundAskedTradeQualifier =
       /\bdo you have a trade\b/i.test(lastOutboundForTrade) || /\bany trade\b/i.test(lastOutboundForTrade);
@@ -58517,7 +58519,11 @@ if (authToken && signature) {
     const label = selectedModel
       ? formatModelLabel(selectedYear ? String(selectedYear) : null, selectedModel)
       : "that bike";
-    const reply = `Got it — I can line up the test ride on the ${label}. What day and time works best?`;
+    // Day-aware: if the customer already named a day this turn, acknowledge it + ask the
+    // time-of-day instead of re-asking the day (the requested_day_reasked miss). Prefer the
+    // appointment-timing parser's captured day; fall back to deterministic extraction.
+    const namedDay = resolveNamedSchedulingDay(appointmentTimingParse?.requested?.day, textLower);
+    const reply = buildTestRideInitReply(label, namedDay);
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && finishPreferenceOnlyRaw && !hasModelContext) {
