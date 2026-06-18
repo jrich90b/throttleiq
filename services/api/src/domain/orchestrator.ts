@@ -6,6 +6,7 @@ import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./payment
 import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
 import { textContainsSchedulingOffer } from "./bookingFunnel.js";
 import { appendVisitInvite, shouldAppendVisitInvite } from "./proactiveVisitInvite.js";
+import { prependHardshipAck, shouldPrependHardshipAck } from "./hardshipEmpathyAck.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2110,6 +2111,7 @@ export async function orchestrateInbound(
       | null;
     dealerProfile?: any;
     agentNameOverride?: string | null;
+    needsEmpathy?: boolean | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -2133,7 +2135,9 @@ export async function orchestrateInbound(
     const visitInviteWrongContext =
       ["manual_handoff", "holding_inventory"].includes(String(ctx?.followUp?.mode ?? "")) ||
       ["booked", "confirmed"].includes(String(ctx?.appointment?.status ?? "")) ||
-      !!ctx?.appointment?.bookedEventId;
+      !!ctx?.appointment?.bookedEventId ||
+      // Don't nudge a booking in the same breath as acknowledging a personal hardship.
+      !!ctx?.needsEmpathy;
     if (
       shouldAppendVisitInvite({
         intent: String(out.intent ?? ""),
@@ -2145,6 +2149,23 @@ export async function orchestrateInbound(
       })
     ) {
       out.draft = appendVisitInvite(String(out.draft ?? ""));
+    }
+    // Hardship empathy: when the affect parser confidently flagged a personal hardship/serious
+    // situation (needsEmpathy), LEAD the reply with a short acknowledgment before any business.
+    // The handoff and frustration paths already do this; this covers a normal sales/logistics
+    // turn that carries a hardship disclosure (e.g. a deposit/hold request texted from a hospital
+    // bed). Prepend at this single finalize choke point so it applies in BOTH paths. Guarded
+    // against double-ack and suppressed in manual-handoff context. See hardshipEmpathyAck.ts.
+    const hardshipWrongContext = String(ctx?.followUp?.mode ?? "") === "manual_handoff";
+    if (
+      shouldPrependHardshipAck({
+        needsEmpathy: !!ctx?.needsEmpathy,
+        shouldRespond: !!out.shouldRespond,
+        draft: String(out.draft ?? ""),
+        wrongContext: hardshipWrongContext
+      })
+    ) {
+      out.draft = prependHardshipAck(String(out.draft ?? ""));
     }
     console.log("[orchestrateInbound] return", {
       provider: event.provider,
@@ -4790,7 +4811,8 @@ export async function orchestrateInbound(
         handoff,
         callbackRequest: callbackRequested,
         voiceSummary: ctx?.voiceSummary ?? null,
-        memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null
+        memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null,
+        needsEmpathy: ctx?.needsEmpathy ?? null
       });
 
       let memorySummary: string | null = null;

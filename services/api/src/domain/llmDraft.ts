@@ -239,6 +239,11 @@ export type DraftContext = {
   memorySummary?: string | null;
   pickup?: any;
   weather?: any;
+  // Affect: the LLM affect parser confidently flagged a personal hardship/serious situation this
+  // turn (illness, injury, hospitalization, grief/loss, family or financial emergency). When set,
+  // the draft must lead with a brief, genuine acknowledgment and drop any scarcity/urgency push.
+  // A deterministic backstop (hardshipEmpathyAck.ts) also prepends an acknowledgment at finalize.
+  needsEmpathy?: boolean | null;
 
   // Inventory verification inputs (optional)
   stockId?: string | null;
@@ -9439,6 +9444,17 @@ SMS RULES (strict):
 - If the customer asks for a phone call today/now and dealerClosedToday is false, acknowledge and confirm someone can call today.
 `;
 
+  const hardshipRules = ctx.needsEmpathy
+    ? `
+HARDSHIP (the customer disclosed a personal hardship or serious situation — illness, injury, hospitalization, grief/loss, a family or financial emergency):
+- OPEN with one short, genuine line acknowledging THAT specific hardship before anything else.
+- Be human and warm; never minimize it and never sound scripted.
+- Drop ALL scarcity/urgency/sales pressure ("moves quick", "won't last", "limited", "act now") — this is not the moment.
+- You may still answer their actual request (e.g. how to leave a deposit / hold a bike), but gently, with no push to come in.
+- Reassure there's no rush and you're there when they're ready.
+`
+    : "";
+
   const instructions = `
 You write dealership sales replies for a Harley-Davidson dealership.
 
@@ -9457,7 +9473,7 @@ VOICE / STYLE (strict):
 - After the first intro, use a natural short form of the dealership name (like "American H-D" for American Harley-Davidson) instead of the full name every time.
 - Offer something concrete (photos, numbers, a time window, an answer) instead of generic offers to help.
 ${channelRules}
-
+${hardshipRules}
 CONTROLLED VARIATIONS (use these to sound human):
 - Use ONE variant per response section. Do not repeat the same variant if it already appeared in the thread.
 - Prefer natural contractions (I'm, you're, that's).
