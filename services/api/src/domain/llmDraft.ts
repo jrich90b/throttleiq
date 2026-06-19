@@ -1857,6 +1857,19 @@ export type FinanceProcessQuestionParse = {
   confidence?: number;
 };
 
+export type DraftQualityJudgeParse = {
+  // Per-axis pass flags for a customer-facing draft, judged against the customer's turn.
+  intentOk: boolean; // does the draft actually ADDRESS what the customer asked?
+  toneOk: boolean; // is it ON-VOICE (warm, human, not corporate; per the voice charter)?
+  dispositionOk: boolean; // is it RIGHT FOR THE CUSTOMER'S STATE (empathy if stressed; not
+  //                          pushy if not ready; not undercutting if committed)?
+  safetyOk: boolean; // SAFE — no fabricated facts, no premature booking, no compliance issue?
+  overall: "good" | "needs_regenerate" | "hold";
+  confidence?: number;
+  reason?: string;
+  steering?: string; // hint to steer a re-draft when overall !== "good"
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2881,6 +2894,22 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
+  }
+};
+
+const DRAFT_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent_ok", "tone_ok", "disposition_ok", "safety_ok", "overall", "confidence", "reason", "steering"],
+  properties: {
+    intent_ok: { type: "boolean" },
+    tone_ok: { type: "boolean" },
+    disposition_ok: { type: "boolean" },
+    safety_ok: { type: "boolean" },
+    overall: { type: "string", enum: ["good", "needs_regenerate", "hold"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
   }
 };
 
@@ -6188,6 +6217,128 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+// Multi-dimensional pre-send draft-quality judge (2026-06-19). Reads a customer-facing draft
+// against the customer's turn and scores it on intent / tone / disposition / safety, returning
+// an overall verdict + a steering hint for a re-draft. Used by the (dark) draft-quality gate to
+// shadow-log what it WOULD regenerate/hold before any live cutover. Returns null when
+// disabled/low-signal — callers treat null as "pass" (don't block a draft we can't judge).
+export async function judgeDraftQualityWithLLM(args: {
+  draft: string;
+  inbound: string; // the customer's latest message this draft is replying to
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  channel?: "sms" | "email";
+}): Promise<DraftQualityJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DRAFT_QUALITY_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DRAFT_QUALITY_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DRAFT_QUALITY_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DRAFT_QUALITY_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const draft = String(args.draft ?? "").trim();
+  const inbound = String(args.inbound ?? "").trim();
+  if (!draft || !inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. You read the DRAFT reply",
+    "the agent wants to send and the CUSTOMER message it is replying to, and you judge the draft on",
+    "four axes. Return only JSON matching the provided schema.",
+    "",
+    "Axes (each a boolean — true = passes):",
+    "- intent_ok: does the draft actually ADDRESS what the customer asked / needs this turn? A fluent",
+    "  reply that answers a DIFFERENT thing, dodges the question, or talks past the ask fails this.",
+    "- tone_ok: is it on-voice — warm, natural, like a helpful person texting a friend? Stiff/corporate",
+    "  (\"This is X. Per your inquiry...\"), robotic, or over-eager hard-sell fails. A 'Reply STOP' footer",
+    "  on SMS is fine. Sparing emoji is fine.",
+    "- disposition_ok: is it right for the customer's emotional state? If they're stressed, frustrated,",
+    "  grieving, or money-tight → acknowledge before pitching. If they're not ready / just looking →",
+    "  don't push a visit hard. If they're committed to a bike → don't undercut their choice. If they",
+    "  just want info → answer it, don't pivot to scheduling.",
+    "- safety_ok: no FABRICATED facts (a specific price, stock #, or availability the agent can't know),",
+    "  no confirming a booking that isn't booked, no compliance problem.",
+    "",
+    "overall:",
+    "- \"good\": all four axes pass; send as-is.",
+    "- \"needs_regenerate\": a recoverable problem — tone is off, it's awkward, it half-missed but the",
+    "  right info/approach is available; a re-draft would likely fix it.",
+    "- \"hold\": it answers the WRONG thing, fabricates a fact, or is unsafe — a re-draft of the same",
+    "  logic may not fix it; a human (or a code fix) should look. When unsure between regenerate and",
+    "  hold, prefer needs_regenerate.",
+    "",
+    "Rules:",
+    "- Judge the DRAFT, not the customer. Be fair: do not fail a draft that is genuinely fine.",
+    "- steering: one short instruction for a re-draft (e.g. \"answer the price question directly\",",
+    "  \"warm it up — drop the corporate intro\", \"acknowledge the stress before suggesting a visit\").",
+    "  Empty string when overall is good.",
+    "- confidence is 0..1; use >= 0.8 only when the verdict is clear.",
+    "",
+    "Examples:",
+    '- customer: "What is the asking price?" | draft: "Doing well—hope your day is going great too!" ->',
+    '  {"intent_ok":false,"tone_ok":true,"disposition_ok":false,"safety_ok":true,"overall":"hold",',
+    '   "confidence":0.95,"reason":"answers small talk, ignores the price question","steering":"answer the price question or say you will get the exact price"}',
+    '- customer: "what is the out the door price" | draft: "Great question — let me grab the exact',
+    '  out-the-door number from my manager and text it right over. Anything else you want me to include?" ->',
+    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.9,"reason":"addresses the price ask without fabricating a number","steering":""}',
+    '- customer: "my wife just passed, putting this on hold" | draft: "No problem! Want to come in',
+    '  Saturday at 10 to check it out?" ->',
+    '  {"intent_ok":false,"tone_ok":false,"disposition_ok":false,"safety_ok":true,"overall":"hold","confidence":0.95,"reason":"pushes a visit on a grieving customer who asked to pause","steering":"acknowledge their loss with empathy, no scheduling, leave the door open"}',
+    '- customer: "is it still available" | draft: "Yes it is! When can you come in?" ->',
+    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.82,"reason":"confirms availability and invites a visit appropriately","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${inbound}`,
+    `DRAFT reply to judge: ${draft}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "draft_quality_judge",
+      schema: DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-draft-quality-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const overallRaw = String(parsed.overall ?? "").toLowerCase();
+  const overall: DraftQualityJudgeParse["overall"] =
+    overallRaw === "hold" || overallRaw === "needs_regenerate" ? overallRaw : "good";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    intentOk: parsed.intent_ok !== false,
+    toneOk: parsed.tone_ok !== false,
+    dispositionOk: parsed.disposition_ok !== false,
+    safetyOk: parsed.safety_ok !== false,
+    overall,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
 }
 
 export async function parseTradeTargetValueWithLLM(args: {
