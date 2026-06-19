@@ -7,6 +7,7 @@ import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
+import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import { decideDraftModelArm } from "./routeStateReducer.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -1899,6 +1900,25 @@ export type DraftQualityJudgeParse = {
   steering?: string; // hint to steer a re-draft when overall !== "good"
 };
 
+export type CadenceQualityJudgeParse = {
+  // Judges a PROACTIVE follow-up cadence message (one WE initiate, no inbound to answer) against
+  // the conversation state. Distinct axes from the inbound draft judge — "does it address the ask"
+  // doesn't apply; "should we even send this" does.
+  sendWorthy: boolean; // is sending this proactive touch the right move at all? (not on a closed/
+  //                      paused deal, not redundant with a recent message, a real reason to reach out)
+  stateFit: boolean; // matches reality — right unit/model/stage, doesn't re-ask something answered,
+  //                    doesn't reference a sold/held/changed unit
+  toneOk: boolean; // sounds like a real American H-D salesperson texting a buyer — NEVER a bot;
+  //                  no corporate/AI tells (banned phrases), no nagging
+  dispositionOk: boolean; // not pushy given the customer's disposition / where they are in the funnel
+  overall: "good" | "needs_regenerate" | "suppress" | "hold";
+  // "suppress" = don't send this proactive touch at all (the message itself is the problem — wrong
+  //   moment / nothing worth saying), as opposed to "needs_regenerate" (send, but reword).
+  confidence?: number;
+  reason?: string;
+  steering?: string; // hint to steer a re-draft when overall === "needs_regenerate"
+};
+
 export type ShouldRespondJudgeParse = {
   // Given the customer's turn the agent chose to STAY SILENT on, did it actually warrant a reply?
   // true = a real ask/need was dropped (a wrongful silence). false = silence is appropriate.
@@ -2960,6 +2980,22 @@ const SHOULD_RESPOND_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
     category: { type: "string", enum: ["answer_needed", "social_reciprocation", "no_reply"] },
     confidence: { type: "number" },
     reason: { type: "string" }
+  }
+};
+
+const CADENCE_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["send_worthy", "state_fit", "tone_ok", "disposition_ok", "overall", "confidence", "reason", "steering"],
+  properties: {
+    send_worthy: { type: "boolean" },
+    state_fit: { type: "boolean" },
+    tone_ok: { type: "boolean" },
+    disposition_ok: { type: "boolean" },
+    overall: { type: "string", enum: ["good", "needs_regenerate", "suppress", "hold"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
   }
 };
 
@@ -6597,6 +6633,131 @@ export async function judgeDraftQualityWithLLM(args: {
     toneOk: parsed.tone_ok !== false,
     dispositionOk: parsed.disposition_ok !== false,
     safetyOk: parsed.safety_ok !== false,
+    overall,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+// Cadence-quality judge (2026-06-19). Judge #3 in the self-correcting loop. The draft-quality +
+// no-response judges only fire on INBOUND-triggered turns; the proactive follow-up cadence (the
+// nudges WE initiate on a schedule) was judged only by deterministic guards. This LLM judge adds
+// the open-ended quality net on top: should this proactive touch go out at all, does it fit state,
+// does it sound like a real employee (not a bot), is it pushy. Returns null when disabled/low-signal
+// — callers treat null as "no opinion" (shadow logs nothing). STEP 1 is shadow only.
+export async function judgeCadenceQualityWithLLM(args: {
+  message: string; // the proactive cadence message about to go out
+  channel?: "sms" | "email";
+  cadenceKind?: string | null; // e.g. post_sale / meta_promo / inventory_watch / nurture
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  daysSinceLastInbound?: number | null;
+}): Promise<CadenceQualityJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CADENCE_QUALITY_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CADENCE_QUALITY_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CADENCE_QUALITY_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CADENCE_QUALITY_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const message = String(args.message ?? "").trim();
+  if (!message) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  // Surface any computer-like phrases already present so the tone axis has a concrete anchor.
+  const bannedHits = findComputerLikePhrases(message);
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. The agent is about to send",
+    "a PROACTIVE follow-up (a scheduled cadence touch — the CUSTOMER did not just message; WE are",
+    "reaching out). Judge whether this message should go out, and how good it is, on four axes.",
+    "Return only JSON matching the provided schema.",
+    "",
+    "Axes (each a boolean — true = passes):",
+    "- send_worthy: is sending this proactive touch the right move RIGHT NOW? Fails if the deal looks",
+    "  done/closed, the customer asked for space, we just messaged them, or there's no real reason to",
+    "  reach out (an empty 'just checking in' with nothing new).",
+    "- state_fit: does it match reality? Fails if it references the wrong/again-asked thing, a unit that's",
+    "  sold/held/changed, a step already completed, or contradicts what the thread shows.",
+    "- tone_ok: does it sound like a REAL American H-D salesperson texting a buyer they like — warm,",
+    "  short, plain, low-pressure? Fails on anything that reads like a computer: corporate/CRM filler,",
+    "  marketing-speak, robotic phrasing, or a nagging tone. Banned computer-like phrases are an",
+    "  automatic tone_ok=false.",
+    "- disposition_ok: is it right for where the customer is? Not pushy if they're not ready, not a hard",
+    "  sell, paces the relationship.",
+    "",
+    "overall:",
+    '- "good": all four pass; send as-is.',
+    '- "needs_regenerate": worth sending, but reword (tone off, awkward, mild state slip a re-draft fixes).',
+    '- "suppress": do NOT send this proactive touch — wrong moment or nothing worth saying (send_worthy',
+    "  false). The problem is sending at all, not the wording.",
+    '- "hold": references something wrong/unsafe (fabricated fact, sold unit) that needs a human/code look.',
+    "",
+    "Rules:",
+    "- Be fair: do not fail a genuinely good, warm, relevant nudge.",
+    "- A proactive touch with a CONCRETE reason (a new arrival, a price, a photo, a real question, a",
+    "  referenced past chat) is usually send_worthy; a bare contentless ping usually is not.",
+    "- steering: one short re-draft instruction; empty string unless overall is needs_regenerate.",
+    "- confidence is 0..1; use >= 0.8 only when the verdict is clear.",
+    "",
+    "Examples:",
+    '- msg: "Hey Charlie, the 2026 Street Glide in Vivid Black just landed — want to come take a look this',
+    '  week?" -> {"send_worthy":true,"state_fit":true,"tone_ok":true,"disposition_ok":true,"overall":"good","confidence":0.9,"reason":"concrete new-arrival reason, warm and short","steering":""}',
+    '- msg: "Just checking in!" -> {"send_worthy":false,"state_fit":true,"tone_ok":true,"disposition_ok":true,"overall":"suppress","confidence":0.85,"reason":"no concrete reason to reach out","steering":""}',
+    '- msg: "Per your inquiry, we would be delighted to assist you in exploring our wide range of',
+    '  options at your earliest convenience." -> {"send_worthy":true,"state_fit":true,"tone_ok":false,"disposition_ok":true,"overall":"needs_regenerate","confidence":0.92,"reason":"reads like a corporate bot","steering":"rewrite plain and warm, like a rep texting a friend"}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Cadence kind: ${args.cadenceKind ?? "unknown"}`,
+    typeof args.daysSinceLastInbound === "number"
+      ? `Days since the customer last replied: ${args.daysSinceLastInbound}`
+      : "Days since the customer last replied: unknown",
+    bannedHits.length ? `Banned computer-like phrases present: ${bannedHits.join(", ")}` : "Banned computer-like phrases present: none",
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `PROACTIVE cadence message to judge: ${message}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "cadence_quality_judge",
+      schema: CADENCE_QUALITY_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-cadence-quality-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const overallRaw = String(parsed.overall ?? "").toLowerCase();
+  const overall: CadenceQualityJudgeParse["overall"] =
+    overallRaw === "hold" || overallRaw === "needs_regenerate" || overallRaw === "suppress"
+      ? overallRaw
+      : "good";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    sendWorthy: parsed.send_worthy !== false,
+    stateFit: parsed.state_fit !== false,
+    toneOk: parsed.tone_ok !== false,
+    dispositionOk: parsed.disposition_ok !== false,
     overall,
     confidence,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,

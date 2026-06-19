@@ -116,6 +116,64 @@ export function decideNoResponseJudge(input: {
   };
 }
 
+// --- Cadence-quality gate (sibling of the draft gate, for PROACTIVE follow-ups) ---------------
+// The agent is about to send a scheduled cadence touch (no inbound to answer). The cadence-quality
+// judge scores it; this gate maps the verdict to an action. STEP 1 is shadow: it only logs what it
+// WOULD do.
+//   - "pass"       — send it (good, or we couldn't confidently judge).
+//   - "regenerate" — worth sending, but reword (the judge's steering).
+//   - "suppress"   — do NOT send this proactive touch (wrong moment / nothing worth saying).
+//   - "hold"       — references something wrong/unsafe; a human/code fix should look.
+// FAIL DIRECTION (shadow + suggest mode) = pass: a missing/low-confidence verdict never blocks a
+// cadence draft (in suggest mode a human approves it anyway). NOTE: at the LIVE/auto-send cutover the
+// caller raises the bar so an UNSURE proactive touch is suppressed — an unsolicited bad message has
+// no upside — but the gate keeps the verdict authoritative; only the confidence bar changes.
+
+export type CadenceQualityVerdict = {
+  overall: "good" | "needs_regenerate" | "suppress" | "hold";
+  confidence?: number;
+};
+
+export type CadenceQualityAction = "pass" | "regenerate" | "suppress" | "hold";
+
+export type CadenceQualityGateDecision = {
+  action: CadenceQualityAction;
+  live: boolean;
+  reason: string;
+};
+
+export function decideCadenceQualityGate(input: {
+  enabled: boolean; // CADENCE_QUALITY_JUDGE_ENABLED — allow changing/suppressing a live cadence draft
+  verdict: CadenceQualityVerdict | null;
+  minConfidence?: number;
+}): CadenceQualityGateDecision {
+  const min = input.minConfidence ?? DRAFT_QUALITY_MIN_CONFIDENCE;
+  if (!input.verdict) return { action: "pass", live: false, reason: "no_verdict" };
+  if (input.verdict.overall === "good") return { action: "pass", live: false, reason: "good" };
+  if (!(typeof input.verdict.confidence === "number" && input.verdict.confidence >= min)) {
+    return { action: "pass", live: false, reason: "below_confidence" };
+  }
+  const action: CadenceQualityAction =
+    input.verdict.overall === "hold"
+      ? "hold"
+      : input.verdict.overall === "suppress"
+        ? "suppress"
+        : "regenerate";
+  return { action, live: !!input.enabled, reason: input.enabled ? `live_${action}` : `shadow_would_${action}` };
+}
+
+/** Reads CADENCE_QUALITY_JUDGE_ENABLED. Default OFF (dark) — never changes a live cadence draft. */
+export function isCadenceQualityJudgeEnabled(): boolean {
+  const raw = String(process.env.CADENCE_QUALITY_JUDGE_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/** Reads CADENCE_QUALITY_JUDGE_SHADOW. Default ON so the dark hook records what it WOULD do. */
+export function cadenceQualityJudgeShadowEnabled(): boolean {
+  const raw = String(process.env.CADENCE_QUALITY_JUDGE_SHADOW ?? "1").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 /** Reads NO_RESPONSE_JUDGE_ENABLED. Default OFF (dark). */
 export function isNoResponseJudgeEnabled(): boolean {
   const raw = String(process.env.NO_RESPONSE_JUDGE_ENABLED ?? "").trim().toLowerCase();
