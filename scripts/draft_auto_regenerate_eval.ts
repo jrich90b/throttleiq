@@ -31,6 +31,11 @@ assert.ok(/Re-draft still bad — keep the ORIGINAL/.test(llm), "a still-failing
 assert.ok(/selfHealDraftWithLLM\(\{ draft: baseDraft, ctx: draftCtx \}\)/.test(orch), "the orchestrator must self-heal the generated draft");
 // Observability for the live cutover: every real heal/failure logs before/after.
 assert.ok(/\[draft-self-heal\]/.test(orch), "self-heal attempts must log before/after for audit");
+// De-dup: self-heal caches its verdict + the publish gate reuses it (no double judge call).
+assert.ok(/export function cacheSelfHealVerdict/.test(llm) && /export function getCachedSelfHealVerdict/.test(llm), "self-heal verdict cache must be exported");
+assert.ok(/cacheSelfHealVerdict\(inbound,/.test(llm), "self-heal must cache the verdict for the draft it returns");
+const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.ok(/getCachedSelfHealVerdict\(inbound, candidate\) \?\?/.test(idx), "the publish gate must reuse the cached self-heal verdict before judging");
 
 // --- 2) Behavioral (no LLM): dark = pure no-op. ---
 assert.equal(draftAutoRegenerateEnabled(), false, "auto-regenerate must default OFF (dark)");

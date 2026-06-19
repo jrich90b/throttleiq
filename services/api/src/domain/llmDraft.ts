@@ -10342,6 +10342,35 @@ export function draftAutoRegenerateEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
+// De-dup the live double-judge: when self-heal (in the orchestrator) judges a draft, the publish gate
+// would judge the SAME draft again moments later in the same request. selfHeal caches the verdict it
+// computed for the draft it returns; the gate reuses it (same inbound+draft) instead of paying a second
+// LLM call. Short TTL + small cap so it's a same-request memo, not durable state. Miss => the gate just
+// judges as before (safe fallback). Single-process API, so the cache is shared across the request flow.
+const SELF_HEAL_VERDICT_TTL_MS = 120_000;
+const selfHealVerdictCache = new Map<string, { verdict: DraftQualityJudgeParse; at: number }>();
+function selfHealVerdictKey(inbound: string, draft: string): string {
+  return `${String(inbound ?? "").slice(0, 240)} ${String(draft ?? "").trim().slice(0, 500)}`;
+}
+export function cacheSelfHealVerdict(inbound: string, draft: string, verdict: DraftQualityJudgeParse | null): void {
+  if (!verdict || !String(draft ?? "").trim()) return;
+  const now = Date.now();
+  if (selfHealVerdictCache.size > 200) {
+    for (const [k, v] of selfHealVerdictCache) if (now - v.at > SELF_HEAL_VERDICT_TTL_MS) selfHealVerdictCache.delete(k);
+  }
+  selfHealVerdictCache.set(selfHealVerdictKey(inbound, draft), { verdict, at: now });
+}
+export function getCachedSelfHealVerdict(inbound: string, draft: string): DraftQualityJudgeParse | null {
+  const key = selfHealVerdictKey(inbound, draft);
+  const hit = selfHealVerdictCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SELF_HEAL_VERDICT_TTL_MS) {
+    selfHealVerdictCache.delete(key);
+    return null;
+  }
+  return hit.verdict;
+}
+
 // STEP 3 of the self-correcting loop — INLINE auto-regenerate. After the orchestrator produces a
 // draft, this judges it; on a confident hold-class verdict it regenerates ONCE with the judge's
 // steering (the actual PATCH — see DraftContext.steering) and RE-JUDGES. If the re-draft passes, it
@@ -10362,20 +10391,25 @@ export async function selfHealDraftWithLLM(args: {
     const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
     const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
     if (!v1 || v1.overall === "good" || conf1 < 0.8) {
+      // Draft is good/unsure — cache the verdict so the publish gate reuses it (no second judge call).
+      cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "passed" };
     }
     // The PATCH: regenerate with the judge's steering so the re-draft fixes what was wrong.
     const steering = String(v1.steering || v1.reason || "").trim();
     const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
     if (!steered || steered === original.trim()) {
+      cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
       return { draft: original, healed: false, outcome: "still_failing" };
     }
     const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
     const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
     if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
       // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
+      cacheSelfHealVerdict(inbound, original, v1);
       return { draft: original, healed: false, outcome: "still_failing" };
     }
+    cacheSelfHealVerdict(inbound, steered, v2); // healed draft's verdict → gate reuses it to pass
     return { draft: steered, healed: true, outcome: "healed" };
   } catch {
     return { draft: original, healed: false, outcome: "no_op" }; // fail-safe: never break draft production

@@ -273,7 +273,8 @@ import {
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
   judgeShouldRespondWithLLM,
-  judgeCadenceQualityWithLLM
+  judgeCadenceQualityWithLLM,
+  getCachedSelfHealVerdict
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -3882,13 +3883,17 @@ async function gateDraftBeforePublish(
   try {
     const inbound = String(getLastInboundBody(conv) ?? "").trim();
     if (!inbound) return { held: false };
-    const verdict = await judgeDraftQualityWithLLM({
-      draft: candidate,
-      inbound,
-      history: buildHistory(conv, 8),
-      lead: conv.lead,
-      channel
-    });
+    // De-dup: if self-heal already judged THIS exact draft this request, reuse its verdict (no 2nd LLM
+    // call). Miss => judge as before. Halves the per-draft judge cost when auto-regenerate is on.
+    const verdict =
+      getCachedSelfHealVerdict(inbound, candidate) ??
+      (await judgeDraftQualityWithLLM({
+        draft: candidate,
+        inbound,
+        history: buildHistory(conv, 8),
+        lead: conv.lead,
+        channel
+      }));
     const decision = decideDraftQualityGate({ enabled: true, verdict });
     // First live slice = HOLD-class only (the backtest showed it catches real fabrications/wrong-
     // answers; needs_regenerate is noisier + has no auto-regenerate yet). When STEP 3 (auto-
