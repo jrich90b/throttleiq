@@ -17,7 +17,11 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { decideDraftQualityGate, DRAFT_QUALITY_MIN_CONFIDENCE } from "../services/api/src/domain/draftQualityGate.ts";
+import {
+  decideDraftQualityGate,
+  DRAFT_QUALITY_MIN_CONFIDENCE,
+  draftQualityHoldClassOnly
+} from "../services/api/src/domain/draftQualityGate.ts";
 
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
@@ -42,6 +46,20 @@ assert.ok(
   /if \(!isDraftQualityJudgeEnabled\(\)\) \{\s*\n\s*void runDraftQualityJudgeShadow/.test(index),
   "the post-publish shadow hook must be skipped when the live gate is enabled"
 );
+
+// First live slice = HOLD-class only. The gate must honor draftQualityHoldClassOnly (default ON),
+// so a needs_regenerate verdict does NOT hold while it's on.
+assert.ok(/export function draftQualityHoldClassOnly/.test(fs.readFileSync("services/api/src/domain/draftQualityGate.ts", "utf8")), "the hold-class-only flag must exist");
+assert.ok(/DRAFT_QUALITY_HOLD_CLASS_ONLY/.test(index) || /draftQualityHoldClassOnly\(\)/.test(index), "the gate must consult the hold-class-only policy");
+assert.ok(/decision\.action === "regenerate" && !holdOnly/.test(index), "needs_regenerate must only hold when hold-class-only is OFF");
+assert.equal(draftQualityHoldClassOnly(), true, "hold-class-only must default ON (the safe first slice)");
+{
+  const prev = process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY;
+  process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY = "0";
+  assert.equal(draftQualityHoldClassOnly(), false, "DRAFT_QUALITY_HOLD_CLASS_ONLY=0 must widen to both classes");
+  if (prev === undefined) delete process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY;
+  else process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY = prev;
+}
 
 // --- 2) Pure decision coverage: the gate HOLDS only on a confident hold/regenerate while live. ---
 type V = Parameters<typeof decideDraftQualityGate>[0]["verdict"];
