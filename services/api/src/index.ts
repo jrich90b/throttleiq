@@ -19769,7 +19769,7 @@ function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string
 function stripTradeIntroSentence(text: string): string {
   return String(text ?? "")
     .replace(
-      /^([^.!?]*\bthanks for (reaching out about selling|using our trade[-\s]?in estimator)[^.!?]*[.!?]\s*)/i,
+      /^([^.!?]*\bthanks for (reaching out about selling|the message about selling|using our trade[-\s]?in estimator)[^.!?]*[.!?]\s*)/i,
       ""
     )
     .trim();

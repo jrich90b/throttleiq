@@ -195,7 +195,7 @@ function buildDealershipFaqReply(args: {
     case "new_vs_used":
       return "New gives you full warranty and latest tech; used lowers upfront cost. If you want, I can compare both options for your budget.";
     default:
-      return "Thanks for reaching out. How can I help?";
+      return "Thanks for the message. How can I help?";
   }
 }
 
@@ -1287,9 +1287,9 @@ type HandoffReason = "pricing" | "payments" | "approval" | "manager" | "other";
 function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
   const tf = timeframe ? timeframe.trim() : "a future";
   if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
+    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just text me when the time is right.`;
   }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
+  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just text me when the time is right.`;
 }
 
 function deriveModelFromDescription(desc?: string | null): string | null {
@@ -2354,7 +2354,7 @@ export async function orchestrateInbound(
     }
     if (wantsPickupPrompt) {
       const draft =
-        `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+        `Hi ${leadFirst} — thanks for the message about selling your ${yearLabel}${modelLabel}. ` +
         `I can help with a trade‑in appraisal.${mileageLine} If the weather’s rough, we can pick the bike up. ` +
         "What town are you located in?";
       return finalize({
@@ -2366,7 +2366,7 @@ export async function orchestrateInbound(
       });
     }
     const draft =
-      `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+      `Hi ${leadFirst} — thanks for the message about selling your ${yearLabel}${modelLabel}. ` +
       `I can help with a trade‑in appraisal.${mileageLine} ${optionLine}` +
       `${pickupOfferLine} If you want to stop in, I can set a time.`;
     return finalize({
@@ -2391,16 +2391,16 @@ export async function orchestrateInbound(
     const draft = isPrequalSubmission
       ? hasPriorOutbound
         ? `Perfect, thanks ${leadFirst} — we just saw your pre-qualification submission come through for ${bikeLabel}. ` +
-          "Our business manager will review it and reach out shortly to go over options and next steps."
+          "Our business manager will review it and follow up shortly to go over options and next steps."
         : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
           `This is ${agentName} at ${dealerName}. We received your pre-qualification submission. ` +
-          "I’ll have our business manager reach out to review options."
+          "I’ll have our business manager follow up to review options."
       : hasPriorOutbound
         ? `Perfect, thanks ${leadFirst} — we just saw your online credit app come through for ${bikeLabel}. ` +
-          "Our business manager will review it and reach out shortly to go over options."
+          "Our business manager will review it and follow up shortly to go over options."
         : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
           `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
-          "I’ll have our business manager reach out to go over your options.";
+          "I’ll have our business manager follow up to go over your options.";
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
@@ -2676,8 +2676,8 @@ export async function orchestrateInbound(
         : "Thanks for your inquiry. ";
       const salesName = await detectSalespersonMention(event.body);
       const reachOut = salesName
-        ? `I’ll have ${salesName} reach out.`
-        : "I’ll have someone from our sales team reach out.";
+        ? `I’ll have ${salesName} get in touch.`
+        : "I’ll have someone from our sales team get in touch.";
       const ack =
         `${buildAgentIntro(firstName, agentName, dealerName)}${thanks}${reachOut}`;
       return finalize({
@@ -2803,7 +2803,7 @@ export async function orchestrateInbound(
     });
   }
 
-  const fallbackDraft = "Thanks for reaching out. How can I help?";
+  const fallbackDraft = "Thanks for the message. How can I help?";
   const dayName = extractDayName(event.body);
   const dayPart = extractDayPart(event.body);
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
@@ -2823,7 +2823,7 @@ export async function orchestrateInbound(
       event.body
     )
       ? buildTakeOffMilwaukeeEightEngineReply()
-      : "Thanks — I’ll have our parts department reach out shortly.";
+      : "Thanks — I’ll have our parts department follow up shortly.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2833,7 +2833,7 @@ export async function orchestrateInbound(
     });
   }
   if (detectApparelFallbackRequest(event.body)) {
-    const draft = "Thanks — I’ll have our MotorClothes team check on that and reach out shortly.";
+    const draft = "Thanks — I’ll have our MotorClothes team check on that and follow up shortly.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2845,7 +2845,7 @@ export async function orchestrateInbound(
   if (detectServiceFallbackRequest(event.body) && !financeRequest) {
     const draft = /\bservice records?\b/i.test(event.body)
       ? "Thanks for the details — I’ll have the team check service records and follow up."
-      : "We’ve received your service request and will have the service department reach out.";
+      : "We’ve received your service request and will have the service department follow up.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -3829,7 +3829,7 @@ export async function orchestrateInbound(
           ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
           : isInitialFacebookLeadTouch
             ? "Thanks for your Facebook quote request. "
-            : "Thanks for reaching out. ";
+            : "Thanks for the message. ";
         const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
           `${buildAgentIntro(firstName, agentName, dealerName)}${thankLine}` +

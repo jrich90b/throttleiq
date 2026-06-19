@@ -161,7 +161,7 @@ const cases: Case[] = [
       receivedAt: now
     },
     ctx: {},
-    expectedIncludes: ["parts department", "reach out"],
+    expectedIncludes: ["parts department", "follow up"],
     expectedExcludes: ["How can I help?", "in stock"]
   },
   {
