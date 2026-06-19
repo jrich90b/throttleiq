@@ -10427,9 +10427,24 @@ async function applyStaleHeldUnitWatchHeal(conv: any): Promise<boolean> {
 // can review what a live cutover would close — e.g. Don Pagels' "notify when the
 // Freewheeler is available" call task, fulfilled by the "it is available" text.
 // Best-effort: never throws into the send/call path. See domain/taskFulfillmentAutoClose.ts.
+// Closure-signal pre-filter for the INBOUND task-auto-close trigger. A gate, NOT comprehension:
+// a miss just means we don't run the (parser-first) fulfillment check on this inbound (fail-safe —
+// the task stays open, existing behavior). The classifier still owns the close decision, and it
+// still requires a prior dealer outbound that actually accomplished the objective. This lets a
+// customer's "I'm all set" / "just curious" close a task the staff already handled, even when no
+// staff reply follows (the outbound hook only fires on a send).
+const TASK_AUTOCLOSE_INBOUND_CLOSURE_RE =
+  /\b(all set|i'?m good|we'?re good|no need|no thanks|that'?s all|that'?s it|just curious|never\s?mind|got (?:it|what i needed|everything i needed)|all good|appreciate it|thanks,?\s*(?:that'?s|i'?m|just|no)\b)/i;
+
+function taskAutoCloseInboundClosureHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return TASK_AUTOCLOSE_INBOUND_CLOSURE_RE.test(t);
+}
+
 async function runTaskFulfillmentAutoClose(
   conv: any,
-  action: { channel: "sms" | "email" | "call"; text: string }
+  action: { channel: "sms" | "email" | "call"; text: string; direction?: "out" | "in" }
 ): Promise<void> {
   try {
     if (!conv?.id) return;
@@ -10456,8 +10471,14 @@ async function runTaskFulfillmentAutoClose(
         text: String(m?.body ?? "")
       }))
       .filter(a => a.text.trim());
-    // Make sure the triggering action is the final item even if message append timing differs.
-    if (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText) {
+    // For an OUTBOUND trigger (a staff/agent send), make sure that just-sent message is the final
+    // item even if message-append timing differs. For an INBOUND trigger (a customer closure like
+    // "I'm all set"), the window already ends with that inbound — do NOT push it as an out action;
+    // the classifier still requires a prior dealer OUT in the window to have fulfilled anything.
+    if (
+      (action.direction ?? "out") !== "in" &&
+      (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText)
+    ) {
       activity.push({ direction: "out", channel: action.channel, text: actionText });
     }
     const verdicts = await classifyTaskFulfillmentWithLLM({
@@ -52189,6 +52210,13 @@ if (authToken && signature) {
   // Phase 1 shadow: compare the Turn Understanding pass against the
   // deterministic extractors. Fire-and-forget; never blocks the reply.
   shadowCompareTurnUnderstanding(conv, event.body ?? "", buildHistory(conv, 10));
+  // Inbound-closure task auto-close: when the customer signals they're done ("I'm all set",
+  // "just curious"), re-check whether a staff follow-up already fulfilled an open call/follow-up
+  // task and close it — so customer-resolved tasks close even with no trailing staff send.
+  // Fire-and-forget; gated by a cheap closure hint; the parser-first classifier owns the verdict.
+  if (taskAutoCloseInboundClosureHint(event.body ?? "")) {
+    void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: event.body ?? "", direction: "in" });
+  }
   const liveManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (liveManualReconcile.changed) {
     recordRouteOutcome("live", "manual_outbound_reconciled", {
