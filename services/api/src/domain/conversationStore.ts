@@ -26,6 +26,7 @@ import {
   type DraftStateInvariantInput
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
+import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -2031,6 +2032,19 @@ export function appendOutbound(
   if (!isEmailThread) {
     tonedBody = formatSmsLayout(tonedBody);
     tonedBody = ensureInitialSmsOptOutFooter(conv, tonedBody, { provider, from, to });
+  }
+  // Voice quality (shadow): flag computer-like / banned phrases in AI drafts so we can SEE how
+  // often they slip in. This is the UNIVERSAL draft sink, so one hook covers both inbound replies
+  // and the proactive follow-up cadence. Deterministic + cheap; logs only, never mutates the draft
+  // — the right fix is a regenerate (judge-driven), not naive mid-sentence deletion.
+  if (provider === "draft_ai" && String(process.env.VOICE_BANNED_PHRASE_SHADOW ?? "1") !== "0") {
+    const bannedHits = findComputerLikePhrases(tonedBody);
+    if (bannedHits.length) {
+      console.warn(
+        "[voice-banned-phrase-shadow]",
+        JSON.stringify({ convId: conv.id, channel: isEmailThread ? "email" : "sms", phrases: bannedHits })
+      );
+    }
   }
   // If this is an email-thread draft, store it as an email draft instead of a SMS draft.
   if (
