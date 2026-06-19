@@ -279,6 +279,7 @@ import {
   decideDraftQualityGate,
   isDraftQualityJudgeEnabled,
   draftQualityJudgeShadowEnabled,
+  draftQualityHoldClassOnly,
   decideNoResponseJudge,
   isNoResponseJudgeEnabled,
   noResponseJudgeShadowEnabled,
@@ -3889,7 +3890,12 @@ async function gateDraftBeforePublish(
       channel
     });
     const decision = decideDraftQualityGate({ enabled: true, verdict });
-    if (decision.live && (decision.action === "hold" || decision.action === "regenerate")) {
+    // First live slice = HOLD-class only (the backtest showed it catches real fabrications/wrong-
+    // answers; needs_regenerate is noisier + has no auto-regenerate yet). When STEP 3 (auto-
+    // regenerate) lands, set DRAFT_QUALITY_HOLD_CLASS_ONLY=0 to also act on regenerate.
+    const holdOnly = draftQualityHoldClassOnly();
+    const acts = decision.action === "hold" || (decision.action === "regenerate" && !holdOnly);
+    if (decision.live && acts) {
       return { held: true, reason: `live_${decision.action}`, judgeReason: verdict?.reason };
     }
   } catch {

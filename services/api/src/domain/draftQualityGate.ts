@@ -200,3 +200,15 @@ export function draftQualityJudgeShadowEnabled(): boolean {
   const raw = String(process.env.DRAFT_QUALITY_JUDGE_SHADOW ?? "1").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }
+
+/**
+ * Reads DRAFT_QUALITY_HOLD_CLASS_ONLY. Default ON: the live gate holds ONLY on the `hold` class
+ * (wrong-answer / fabricated-fact / unsafe) and lets `needs_regenerate` publish. This is the safe
+ * FIRST live slice — the backtest showed the hold class catches real fabrications/wrong-answers that
+ * humans let through, while `needs_regenerate` is noisier AND has no auto-regenerate yet (it would
+ * just hold with no recovery). Set to 0 once STEP 3 (auto-regenerate) lands to also act on regenerate.
+ */
+export function draftQualityHoldClassOnly(): boolean {
+  const raw = String(process.env.DRAFT_QUALITY_HOLD_CLASS_ONLY ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "no";
+}
