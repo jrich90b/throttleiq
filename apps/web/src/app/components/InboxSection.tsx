@@ -465,7 +465,17 @@ export function InboxSection(props: any) {
                               >
                                 {c.mode === "human" ? "Human" : "AI"}
                               </button>
-                              {c.pendingDraft ? <span className="lr-inbox-meta-pill">Draft</span> : null}
+                              {c.draftHeld ? (
+                                <span
+                                  className="lr-inbox-meta-pill"
+                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}
+                                  title="Draft held by the quality check — being fixed"
+                                >
+                                  Held
+                                </span>
+                              ) : c.pendingDraft ? (
+                                <span className="lr-inbox-meta-pill">Draft</span>
+                              ) : null}
                               <span className="lr-inbox-meta-pill" title={`${c.messageCount} messages`}>
                                 {c.messageCount}
                               </span>
@@ -477,7 +487,9 @@ export function InboxSection(props: any) {
                           ) : null}
 
                           <div className="text-sm text-gray-700 mt-2 line-clamp-2">
-                            {c.pendingDraftPreview ? (
+                            {c.draftHeld ? (
+                              <span style={{ color: "#92400e" }}>Draft held — being fixed (nothing to send)</span>
+                            ) : c.pendingDraftPreview ? (
                               <>Draft: {renderBookingLinkLine(c.pendingDraftPreview)}</>
                             ) : (
                               renderBookingLinkLine(c.lastMessage?.body ?? "(no messages)")
