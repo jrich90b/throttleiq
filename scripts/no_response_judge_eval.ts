@@ -39,6 +39,8 @@ assert.ok(
   `the shadow hook must be wired at BOTH the regen chokepoint and the live terminal no-response; found ${callSites}`
 );
 assert.ok(/STEP 1 is shadow-only: never produce a reply/.test(index), "STEP 1 must be shadow-only (no live reply)");
+// Social-reciprocation opportunities ("have a good weekend!") surface in shadow so staff can decide.
+assert.ok(/social_reciprocation/.test(llm) && /no_response\.social_reciprocation/.test(index), "social-reciprocation must be categorized + surfaced");
 
 // --- 2) Decision-table coverage (pure). ---
 type V = Parameters<typeof decideNoResponseJudge>[0]["verdict"];
@@ -58,13 +60,14 @@ for (const r of rows) {
 }
 
 // --- 3) LLM coverage (gated; skips cleanly). ---
-const cases: { id: string; inbound: string; wantRespond: boolean }[] = [
-  { id: "price_question", inbound: "What is the asking price?", wantRespond: true },
-  { id: "media_request", inbound: "can you send me a couple pics of it?", wantRespond: true },
-  { id: "availability_question", inbound: "is it still available?", wantRespond: true },
-  { id: "pure_ack", inbound: "👍", wantRespond: false },
-  { id: "closeout", inbound: "thanks, I was just curious", wantRespond: false },
-  { id: "opt_out", inbound: "STOP", wantRespond: false }
+const cases: { id: string; inbound: string; wantRespond: boolean; wantCategory?: string }[] = [
+  { id: "price_question", inbound: "What is the asking price?", wantRespond: true, wantCategory: "answer_needed" },
+  { id: "media_request", inbound: "can you send me a couple pics of it?", wantRespond: true, wantCategory: "answer_needed" },
+  { id: "availability_question", inbound: "is it still available?", wantRespond: true, wantCategory: "answer_needed" },
+  // Social closers: NOT a dropped ask (should_respond false) but surfaced as a reciprocation chance.
+  { id: "social_weekend", inbound: "have a good weekend!", wantRespond: false, wantCategory: "social_reciprocation" },
+  { id: "pure_ack", inbound: "👍", wantRespond: false, wantCategory: "no_reply" },
+  { id: "opt_out", inbound: "STOP", wantRespond: false, wantCategory: "no_reply" }
 ];
 
 let ran = 0;
@@ -77,6 +80,9 @@ for (const c of cases) {
     c.wantRespond,
     `[${c.id}] expected should_respond=${c.wantRespond}, got ${v.shouldRespond} (${v.reason})`
   );
+  if (c.wantCategory) {
+    assert.equal(v.category, c.wantCategory, `[${c.id}] expected category=${c.wantCategory}, got ${v.category} (${v.reason})`);
+  }
 }
 
 console.log(
