@@ -918,6 +918,7 @@ type ConversationListItem = {
   lastMessage?: { direction: "in" | "out"; body: string; provider?: string } | null;
   pendingDraft?: boolean;
   pendingDraftPreview?: string | null;
+  draftHeld?: boolean | null;
 };
 
 type Message = {

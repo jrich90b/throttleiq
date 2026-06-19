@@ -3218,6 +3218,10 @@ export function listConversations() {
         status: c.status ?? "open",
         closedAt: c.closedAt ?? null,
         closedReason: c.closedReason ?? null,
+        // STEP 2: the agent's draft was held by the quality gate (being fixed) — surfaced as a flag
+        // so the inbox can show a "Held" state instead of an empty/no-draft row. Boolean only (the
+        // held reason stays server-side).
+        draftHeld: c.draftHeld ? true : null,
         createdAt: c.createdAt,
         updatedAt,
         lastMessage: lastNonCall,
