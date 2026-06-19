@@ -141,14 +141,24 @@ restore_if_backup_exists() {
   WATCHDOG_SINCE_MIN=$(( FAST_LOOP_SINCE_HOURS * 60 ))
   export ROUTE_AUDIT_DIR
 
+  # Cost split: the DETERMINISTIC detectors run every hour (free). The LLM-judge audits (intent_handled,
+  # outcome_qa) cost per turn, and the live held-gate already flags the worst wrong-intent/fabrication in
+  # real time — so run those only every LLM_AUDIT_EVERY_HOURS (default 4). 10# forces base-10 on the hour.
+  HOUR_NOW="$(date +%H)"
+  RUN_LLM_AUDITS=$(( 10#$HOUR_NOW % ${LLM_AUDIT_EVERY_HOURS:-4} == 0 ? 1 : 0 ))
+
   echo "[feedback-hourly] step=followup_task_consistency_audit"   # cadence / task / handoff state
   npm run followup_task_consistency:audit -- --conversations "$CONVERSATIONS_DB_PATH" --since-hours "$FAST_LOOP_SINCE_HOURS" --out "$FOLLOWUP_TASK_AUDIT_JSON" || true
 
   echo "[feedback-hourly] step=stale_handoff_todo_audit"          # handed-off leads going stale
   npm run stale_handoff_todo:audit || true
 
-  echo "[feedback-hourly] step=intent_handled_audit"              # wrong-intent (the Adam/Douglas class)
-  INTENT_HANDLED_SINCE_HOURS="$FAST_LOOP_SINCE_HOURS" npm run intent_handled:audit || true
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=intent_handled_audit"            # wrong-intent (the Adam/Douglas class) — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    INTENT_HANDLED_SINCE_HOURS="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" npm run intent_handled:audit || true
+  else
+    echo "[feedback-hourly] step=intent_handled_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
 
   echo "[feedback-hourly] step=compliance_send_audit"             # opt-out / STOP footer
   npm run compliance:audit || true
@@ -169,8 +179,12 @@ restore_if_backup_exists() {
   mkdir -p "$OUTCOME_QA_OUT_DIR" "$BOOKING_FUNNEL_OUT_DIR"
   export OUTCOME_QA_OUT_DIR
 
-  echo "[feedback-hourly] step=outcome_qa_audit"                  # context / outcomes / disposition QA
-  OUTCOME_QA_SINCE_HOURS="$FAST_LOOP_SINCE_HOURS" npm run outcome_qa:audit -- --conversations "$CONVERSATIONS_DB_PATH" --out-dir "$OUTCOME_QA_OUT_DIR" || true
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=outcome_qa_audit"               # context / outcomes / disposition QA — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    OUTCOME_QA_SINCE_HOURS="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" npm run outcome_qa:audit -- --conversations "$CONVERSATIONS_DB_PATH" --out-dir "$OUTCOME_QA_OUT_DIR" || true
+  else
+    echo "[feedback-hourly] step=outcome_qa_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
 
   echo "[feedback-hourly] step=booking_funnel_audit"              # appointment bookings (offer->book misses)
   BOOKING_FUNNEL_OUT_DIR="$BOOKING_FUNNEL_OUT_DIR" npx tsx scripts/booking_funnel_audit.ts --since-days 1 --out-dir "$BOOKING_FUNNEL_OUT_DIR" > /dev/null 2>&1 || true
