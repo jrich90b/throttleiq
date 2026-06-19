@@ -274,6 +274,16 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=stale_handoff_todo_audit"
   npm run stale_handoff_todo:audit || true
 
+  # Stale-fulfilled tasks: open call/follow-up tasks whose objective a recent follow-up already
+  # accomplished but that are still Open (the Douglas Kellner class). With TASK_FULFILLMENT_AUTOCLOSE=1
+  # live this set should be ~empty in the happy path; anything in it is auto-close UNDER-firing and is
+  # surfaced to the agent-watch monitor. Read-only; never blocks the loop.
+  echo "[feedback-loop] step=task_autoclose_stale_report"
+  mkdir -p "$REPORT_ROOT/task_autoclose"
+  LLM_ENABLED=1 CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" \
+    npx tsx scripts/task_fulfillment_autoclose_report.ts --limit=200 \
+    > "$REPORT_ROOT/task_autoclose/task_autoclose_report.txt" 2>&1 || true
+
   echo "[feedback-loop] step=soft_visit_miss_audit"
   SOFT_VISIT_MISS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run soft_visit_miss:audit || true
 
