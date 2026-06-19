@@ -97,7 +97,9 @@ const cases: Case[] = [
   {
     id: "good_availability_invite",
     inbound: "is it still available?",
-    draft: "It is! Happy to hold it for you — want to swing by this week to take a look?",
+    // Clean fixture: confirm availability + invite, with no over-commitment ("hold it for you"
+    // is an unconfirmable promise the judge rightly questions — keep the good case unambiguous).
+    draft: "It is! Want to swing by this week to take a look?",
     wantGood: true
   }
 ];

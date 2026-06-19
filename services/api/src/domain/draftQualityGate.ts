@@ -83,6 +83,51 @@ export function decideDraftQualityGate(input: {
   return { action, live: !!input.enabled, reason: input.enabled ? `live_${action}` : `shadow_would_${action}` };
 }
 
+// --- No-response gate (sibling of the draft gate) ---------------------------------
+// The agent stayed SILENT on a customer turn; the judge says whether that was a miss. This
+// gate maps the verdict to an action. STEP 1 is shadow: it only logs what it WOULD do.
+//   - "pass"             — silence was fine (or we couldn't confidently judge).
+//   - "flag_missing_response" — the turn warranted a reply; (later) generate one instead of silence.
+// FAIL DIRECTION = pass (never manufacture a reply on an unsure/low-confidence verdict).
+
+export type ShouldRespondVerdict = { shouldRespond: boolean; confidence?: number };
+
+export type NoResponseGateDecision = {
+  action: "pass" | "flag_missing_response";
+  live: boolean;
+  reason: string;
+};
+
+export function decideNoResponseJudge(input: {
+  enabled: boolean; // NO_RESPONSE_JUDGE_ENABLED — allow producing a reply where we'd have been silent
+  verdict: ShouldRespondVerdict | null;
+  minConfidence?: number;
+}): NoResponseGateDecision {
+  const min = input.minConfidence ?? DRAFT_QUALITY_MIN_CONFIDENCE;
+  if (!input.verdict) return { action: "pass", live: false, reason: "no_verdict" };
+  if (!input.verdict.shouldRespond) return { action: "pass", live: false, reason: "silence_ok" };
+  if (!(typeof input.verdict.confidence === "number" && input.verdict.confidence >= min)) {
+    return { action: "pass", live: false, reason: "below_confidence" };
+  }
+  return {
+    action: "flag_missing_response",
+    live: !!input.enabled,
+    reason: input.enabled ? "live_flag_missing_response" : "shadow_would_flag_missing_response"
+  };
+}
+
+/** Reads NO_RESPONSE_JUDGE_ENABLED. Default OFF (dark). */
+export function isNoResponseJudgeEnabled(): boolean {
+  const raw = String(process.env.NO_RESPONSE_JUDGE_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/** Reads NO_RESPONSE_JUDGE_SHADOW. Default ON so the dark hook records wrongful silences. */
+export function noResponseJudgeShadowEnabled(): boolean {
+  const raw = String(process.env.NO_RESPONSE_JUDGE_SHADOW ?? "1").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 /** Reads DRAFT_QUALITY_JUDGE_ENABLED. Default OFF (dark) — never changes a live draft. */
 export function isDraftQualityJudgeEnabled(): boolean {
   const raw = String(process.env.DRAFT_QUALITY_JUDGE_ENABLED ?? "").trim().toLowerCase();

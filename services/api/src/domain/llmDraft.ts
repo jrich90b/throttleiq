@@ -1870,6 +1870,15 @@ export type DraftQualityJudgeParse = {
   steering?: string; // hint to steer a re-draft when overall !== "good"
 };
 
+export type ShouldRespondJudgeParse = {
+  // Given the customer's turn the agent chose to STAY SILENT on, did it actually warrant a reply?
+  // true = a real ask/need was dropped (a wrongful silence). false = silence is appropriate
+  // (opt-out, pure ack/thanks, closeout "no need", a first-person deferral, off-topic banter).
+  shouldRespond: boolean;
+  confidence?: number;
+  reason?: string;
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2894,6 +2903,17 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
+  }
+};
+
+const SHOULD_RESPOND_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["should_respond", "confidence", "reason"],
+  properties: {
+    should_respond: { type: "boolean" },
+    confidence: { type: "number" },
+    reason: { type: "string" }
   }
 };
 
@@ -6217,6 +6237,94 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+// No-response judge (2026-06-19). The agent chose to STAY SILENT on a customer turn. This judges
+// whether that silence was a MISS — a real ask/need dropped — or correct (opt-out, pure ack,
+// closeout, deferral, off-topic). Used by the (dark) no-response gate to shadow-log wrongful
+// silences before any live cutover. Returns null when disabled/low-signal — callers treat null as
+// "silence was fine" (don't manufacture a reply we can't justify).
+export async function judgeShouldRespondWithLLM(args: {
+  inbound: string; // the customer message the agent went silent on
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<ShouldRespondJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SHOULD_RESPOND_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SHOULD_RESPOND_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SHOULD_RESPOND_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SHOULD_RESPOND_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const inbound = String(args.inbound ?? "").trim();
+  if (!inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "A Harley dealership's AI agent chose to STAY SILENT (send no reply) on the customer message",
+    "below. Judge whether that silence was a MISS — the customer made a real ask or raised a need",
+    "the dealership should answer — or whether silence was the right call.",
+    "Return only JSON matching the provided schema.",
+    "",
+    "should_respond = true when the customer asked a question or made a request the dealership should",
+    "  answer/act on: price, availability, photos, financing, a time to come in, a callback, a",
+    "  specific question, a complaint, a problem. Staying silent on these is a miss.",
+    "should_respond = false when silence is correct:",
+    "- an opt-out / STOP, or 'wrong number',",
+    "- a pure acknowledgement or thanks with no ask ('👍', 'ok', 'sounds good', 'thanks!', 'perfect'),",
+    "- a closeout that needs nothing ('no need, I already called', 'all set', 'I was just curious'),",
+    "- a first-person deferral ('I'll let you know', 'I'll reach out when I'm ready'),",
+    "- pure off-topic banter already handled.",
+    "",
+    "Rules:",
+    "- Judge by the customer's message + recent thread. A bare 'ok' AFTER we asked a question may still",
+    "  warrant a follow-up; a bare 'ok' as a closeout does not — use the thread.",
+    "- When genuinely unsure, prefer should_respond=false (don't manufacture a reply).",
+    "- confidence is 0..1; use >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- "What is the asking price?" -> {"should_respond":true,"confidence":0.95,"reason":"a direct price question went unanswered"}',
+    '- "can you send me a couple pics?" -> {"should_respond":true,"confidence":0.92,"reason":"a media request went unanswered"}',
+    '- "👍" -> {"should_respond":false,"confidence":0.95,"reason":"pure acknowledgement, no ask"}',
+    '- "thanks, I was just curious" -> {"should_respond":false,"confidence":0.92,"reason":"closeout, needs nothing"}',
+    '- "STOP" -> {"should_respond":false,"confidence":0.98,"reason":"opt-out"}',
+    '- "I\'ll let you know when I\'m ready" -> {"should_respond":false,"confidence":0.85,"reason":"first-person deferral"}',
+    "",
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer message the agent stayed silent on: ${inbound}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "should_respond_judge",
+      schema: SHOULD_RESPOND_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-should-respond-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    shouldRespond: parsed.should_respond === true,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined
+  };
 }
 
 // Multi-dimensional pre-send draft-quality judge (2026-06-19). Reads a customer-facing draft
