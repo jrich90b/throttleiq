@@ -571,6 +571,50 @@ export function decideDealStatusCheckTurn(
   return { kind: "answer_status" };
 }
 
+// --- Finance-process / logistics handoff (2026-06-18) ----------------------
+//
+// A customer asking about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing
+// and its related steps — insurance timing, down-payment deadlines, order-of-operations
+// ("if I pay the full 10% down do I get more time for insurance?", "can I get insurance
+// after I sign?", "when do I need the down payment by?") — needs the finance/business
+// manager's exact answer, NOT a generic restatement of the requirement. Production miss
+// (Adam +17166033199, surfaced by intent_handled_audit): asked whether paying 10% down
+// extends the insurance deadline, got "we'd just need insurance before we finalize" — which
+// didn't answer the conditional. The agent can't know dealer finance policy, so the safe,
+// correct move is a finance-manager handoff that acknowledges the specific question.
+//
+// Distinct from the NUMBER questions other handlers own (monthly payment, rate, amount
+// down) — those are not a process handoff. Centralized + pure; the parser signal is fed in.
+//
+// FAIL DIRECTION: unsure => none, and the existing finance handling runs. We only hand off
+// on a confident, explicit process/logistics question.
+// ---------------------------------------------------------------------------
+export type FinanceProcessQuestionTurnKind = "finance_process_handoff" | "none";
+
+export type FinanceProcessQuestionTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "finance_process_handoff" | "none"
+  explicitRequest: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type FinanceProcessQuestionTurnDecision = {
+  kind: FinanceProcessQuestionTurnKind;
+};
+
+export function decideFinanceProcessQuestionTurn(
+  input: FinanceProcessQuestionTurnInput
+): FinanceProcessQuestionTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "finance_process_handoff") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "finance_process_handoff" };
+}
+
 // --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
 // The appointment-invite cadence message is our lowest-replying touch with real
 // volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy

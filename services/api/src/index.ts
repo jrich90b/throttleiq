@@ -268,6 +268,7 @@ import {
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
   parseDealStatusCheckWithLLM,
+  parseFinanceProcessQuestionWithLLM,
   summarizeVoiceTranscriptWithLLM
 } from "./domain/llmDraft.js";
 import type {
@@ -457,6 +458,7 @@ import {
   decideCadenceInviteArm,
   decideDealStatusCheckTurn,
   decideFinancePricingTurn,
+  decideFinanceProcessQuestionTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
@@ -2150,6 +2152,72 @@ async function resolveDealStatusCheckReply(
   );
   recordRouteOutcome(scope, "deal_status_check", { convId: conv.id, leadKey: conv.leadKey });
   return buildDealStatusCheckReply();
+}
+
+// Finance-process / logistics handoff: confidence floor (default 0.7).
+function financeProcessConfidenceMin(): number {
+  const raw = Number(process.env.LLM_FINANCE_PROCESS_QUESTION_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the finance-process parser only runs on process/logistics-ish phrasings.
+// A gate, NOT comprehension: a hint miss falls through to existing behavior (fail-safe), and the
+// parser — not this regex — owns the handoff-vs-number-question decision.
+const FINANCE_PROCESS_QUESTION_HINT_RE =
+  /\b(insurance|binder|proof of insurance|down\s*payment|put .* down|how long (do|have)|more time|by when|when (do|does|is|will)|what comes first|before (we|you|i) (finalize|sign|can)|after (i|we) sign|need .*(before|first)|paperwork|the title|finaliz)\b/i;
+
+function financeProcessQuestionHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return FINANCE_PROCESS_QUESTION_HINT_RE.test(t);
+}
+
+// Honest finance-manager handoff — NO fabricated policy. The agent can't know dealer/lender
+// process rules (insurance deadlines, down-payment timing), so it acknowledges the specific
+// question and routes to the business manager (safe handoff per AGENTS.md fallback policy).
+function buildFinanceProcessHandoffReply(): string {
+  return "Good question — that's one our finance manager can answer exactly so you get it right. Let me loop them in and they'll reach out shortly.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// the handoff reply (and sets the payments handoff state + a manager todo + stops cadence) ONLY
+// when a confident, explicit finance-PROCESS question is detected; otherwise null so the existing
+// finance handling runs. Mirrors the isPaymentNumbersStatusQuestionText handoff side effects.
+async function resolveFinanceProcessHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!financeProcessQuestionHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("finance_process_question_parser", () =>
+    parseFinanceProcessQuestionWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-finance-process-question-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideFinanceProcessQuestionTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: financeProcessConfidenceMin()
+  });
+  if (decision.kind !== "finance_process_handoff") return null;
+  addTodo(
+    conv,
+    "payments",
+    `Finance-process question for the business manager. Customer asked: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "finance_process_question");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "finance_process_question", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "finance_process_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildFinanceProcessHandoffReply();
 }
 
 function buildActionableStylePreferenceReply(args: {
@@ -48026,6 +48094,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  // Finance-process / logistics handoff (parity with live /webhooks/twilio).
+  {
+    const regenFinanceProcessReply = await resolveFinanceProcessHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenFinanceProcessReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenFinanceProcessReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenFinanceProcessReply);
+    }
+  }
+
   const cadenceRegenContextParserEligible =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
@@ -53870,6 +53954,25 @@ if (authToken && signature) {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
+  }
+
+  // Finance-process / logistics handoff: a conditional/timing/sequencing question about the
+  // financing process (insurance timing, down-payment deadlines, order of operations) gets a
+  // finance-manager handoff, not a generic non-answer. Parser-first + fail-safe (null => existing
+  // finance handling). Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const financeProcessReply = await resolveFinanceProcessHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (financeProcessReply) {
+      return publishLiveTwilioReply(financeProcessReply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasCompositeSalesInquiryParserHint(semanticInboundText)) {

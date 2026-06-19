@@ -1843,6 +1843,17 @@ export type DealStatusCheckParse = {
   confidence?: number;
 };
 
+export type FinanceProcessQuestionParse = {
+  // "finance_process_handoff": a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS
+  //   of financing & its related steps (insurance timing, down-payment deadlines, order of
+  //   operations) that needs the finance/business manager's exact answer.
+  // "none": a finance NUMBER question (payment, rate, amount down) another handler owns, or
+  //   anything non-finance-process.
+  intent: "finance_process_handoff" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type ResponseControlParse = {
   intent:
     | "opt_out"
@@ -2854,6 +2865,17 @@ const DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   required: ["intent", "explicit_request", "confidence"],
   properties: {
     intent: { type: "string", enum: ["deal_status_check", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["finance_process_handoff", "none"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
@@ -6066,6 +6088,97 @@ export async function parseDealStatusCheckWithLLM(args: {
 
   const intent: DealStatusCheckParse["intent"] =
     String(parsed.intent ?? "").toLowerCase() === "deal_status_check" ? "deal_status_check" : "none";
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitRequest, confidence };
+}
+
+// Finance-process / logistics handoff (2026-06-18, Adam +17166033199 via intent_handled_audit).
+// Detects a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing & related
+// steps (insurance timing, down-payment deadlines, order of operations) that needs the finance
+// manager's exact answer — distinct from a NUMBER question (payment, rate, amount down) other
+// handlers own. Returns null when disabled/low-signal — callers treat null as "no handoff".
+export async function parseFinanceProcessQuestionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<FinanceProcessQuestionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FINANCE_PROCESS_QUESTION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FINANCE_PROCESS_QUESTION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
+    "about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing and its related steps —",
+    "insurance, down payment, paperwork, titling, deadlines, order of operations. These need the",
+    "finance/business manager's exact answer (they depend on dealer + lender policy), so the agent",
+    "should hand off rather than guess.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "finance_process_handoff": a conditional / timing / sequencing / "what do I need and when"',
+    "  question about the financing process or its requirements. Examples: does paying more down",
+    "  buy more time for insurance; can I get insurance after signing; what comes first; when is",
+    "  the down payment / insurance / title due; how long do I have to get X; can I do Y before Z.",
+    '- "none": a finance NUMBER question another handler owns (what\'s my monthly payment, what rate,',
+    "  how much total down, out-the-door price), OR a non-finance turn (scheduling, availability,",
+    "  trade value, photos, social).",
+    "",
+    "Hard rules (precision matters — don't hand off normal number questions):",
+    "- Amount/rate/payment questions ('what's my payment', 'how much down', 'what APR') = none.",
+    "- A question about WHEN something is due or WHETHER a condition changes a deadline/step =",
+    "  finance_process_handoff (that's policy/process, not a number we quote).",
+    "- explicit_request=true only when the customer is clearly asking us to clarify the process.",
+    "- confidence is 0..1; use >= 0.7 only when the process-vs-number read is clear.",
+    "",
+    "Examples:",
+    '- "if I pay the whole 10% needed do I have more time to get insurance or no" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "can I get the insurance after I sign the paperwork?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "what comes first, insurance or the financing?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "how long do I have to get insurance once I put money down?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.88}',
+    '- "when do I need to have the down payment in by?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.85}',
+    '- "what\'s my monthly payment going to be?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    '- "how much do I need for a down payment?" -> {"intent":"none","explicit_request":false,"confidence":0.85}',
+    '- "what rate can I get?" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "finance_process_question_parser",
+      schema: FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-finance-process-question-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: FinanceProcessQuestionParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "finance_process_handoff" ? "finance_process_handoff" : "none";
   const explicitRequest = parsed.explicit_request === true;
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
