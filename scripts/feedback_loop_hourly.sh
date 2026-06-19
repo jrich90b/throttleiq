@@ -164,6 +164,17 @@ restore_if_backup_exists() {
   echo "[feedback-hourly] step=route_watchdog"                    # actionable inbound with no response
   npm run route_watchdog:run -- --conversations "$CONVERSATIONS_DB_PATH" --route-audit-dir "$ROUTE_AUDIT_DIR" --since-min "$WATCHDOG_SINCE_MIN" --out "$WATCHDOG_JSON" || true
 
+  OUTCOME_QA_OUT_DIR="${OUTCOME_QA_OUT_DIR:-$REPORT_ROOT/outcome_qa}"
+  BOOKING_FUNNEL_OUT_DIR="${BOOKING_FUNNEL_OUT_DIR:-$REPORT_ROOT/booking_funnel}"
+  mkdir -p "$OUTCOME_QA_OUT_DIR" "$BOOKING_FUNNEL_OUT_DIR"
+  export OUTCOME_QA_OUT_DIR
+
+  echo "[feedback-hourly] step=outcome_qa_audit"                  # context / outcomes / disposition QA
+  OUTCOME_QA_SINCE_HOURS="$FAST_LOOP_SINCE_HOURS" npm run outcome_qa:audit -- --conversations "$CONVERSATIONS_DB_PATH" --out-dir "$OUTCOME_QA_OUT_DIR" || true
+
+  echo "[feedback-hourly] step=booking_funnel_audit"              # appointment bookings (offer->book misses)
+  BOOKING_FUNNEL_OUT_DIR="$BOOKING_FUNNEL_OUT_DIR" npx tsx scripts/booking_funnel_audit.ts --since-days 1 --out-dir "$BOOKING_FUNNEL_OUT_DIR" > /dev/null 2>&1 || true
+
   echo "[feedback-hourly] step=agent_manager_report"
   npm run agent_manager:report
 
