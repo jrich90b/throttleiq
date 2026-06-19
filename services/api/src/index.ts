@@ -268,6 +268,7 @@ import {
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
   parseDealStatusCheckWithLLM,
+  parseConversationCloseoutWithLLM,
   parseFinanceProcessQuestionWithLLM,
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
@@ -466,6 +467,7 @@ import {
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   decideCadenceInviteArm,
+  decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
@@ -2162,6 +2164,87 @@ async function resolveDealStatusCheckReply(
   );
   recordRouteOutcome(scope, "deal_status_check", { convId: conv.id, leadKey: conv.leadKey });
   return buildDealStatusCheckReply();
+}
+
+// Conversation closeout / sign-off: confidence floor (default 0.7 — biased toward NOT closing out).
+function conversationCloseoutConfidenceMin(): number {
+  const raw = Number(process.env.LLM_CONVERSATION_CLOSEOUT_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the closeout parser only runs on closer-ish phrasings. A gate, NOT
+// comprehension: a hint miss falls through to existing behavior (fail-safe), and the parser —
+// not this regex — owns the reciprocate-vs-silent-vs-none decision.
+const CONVERSATION_CLOSEOUT_HINT_RE =
+  /\b(?:have a (?:good|great|nice)|good (?:night|one)|take care|talk (?:soon|to you|later)|see you|catch you|thanks again|thank you|appreciate|you guys (?:are|rock)|the best|ride safe|stay safe|happy (?:friday|holidays?|weekend)|weekend|cya|later|peace|cheers|bye|good bye|goodbye|you too|same to you|all set|we'?re good)\b/i;
+
+function conversationCloseoutHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return CONVERSATION_CLOSEOUT_HINT_RE.test(t);
+}
+
+// Defense-in-depth actionable-signal guard fed to the pure decision: never close out a turn that
+// asks for anything (mirrors the isCloseoutSignoffNoResponseText guard tokens + any question mark).
+// The parser independently returns none on asks; this is the deterministic safety floor.
+function closeoutHasActionableSignal(text: string): boolean {
+  const raw = String(text ?? "");
+  if (/[?]/.test(raw)) return true;
+  return /\b(?:call|text|appointment|schedule|book|available|availability|price|pricing|payment|trade|inventory|stock|test ride|ride today|come in|stop in|how much|when can|what time)\b/i.test(
+    raw
+  );
+}
+
+// Deterministic warm closer when the LLM generator is unavailable — still terminal (no pivot/question).
+function buildCloseoutReciprocationFallbackReply(text: string): string {
+  const t = String(text ?? "").toLowerCase();
+  if (/\bweekend\b/.test(t)) return "You too — have a great weekend!";
+  if (/\b(?:night|evening)\b/.test(t)) return "You too — have a good one!";
+  if (/\b(?:the best|you guys (?:are|rock)|appreciate|thank)\b/.test(t)) return "Appreciate that — ride safe!";
+  return "Anytime — take care!";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Reads a
+// conversational closer and returns either a terminal warm reciprocation OR a silent close (no
+// reply), or null when it's not a confident closeout (=> existing small-talk behavior runs).
+// Scope = the immediate exchange only; the follow-up cadence is intentionally untouched.
+async function resolveConversationCloseoutReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<{ kind: "reciprocate"; reply: string } | { kind: "silent" } | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!conversationCloseoutHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("conversation_closeout_parser", () =>
+    parseConversationCloseoutWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-conversation-closeout-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideConversationCloseoutTurn({
+    parserAccepted: !!parse,
+    kind: parse?.kind ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: conversationCloseoutConfidenceMin(),
+    hasActionableSignal: closeoutHasActionableSignal(text)
+  });
+  if (decision.kind === "none") return null;
+  if (decision.kind === "close_silent") {
+    recordRouteOutcome(scope, "conversation_closeout_silent", { convId: conv.id, leadKey: conv.leadKey });
+    return { kind: "silent" };
+  }
+  // reciprocate_and_close: ONE brief warm farewell, no pivot/question (closingHint forces it).
+  const generated = await safeLlmParse("conversation_closeout_reply", () =>
+    generateSmallTalkReplyWithLLM({
+      text,
+      history: buildHistory(conv, 8),
+      closingHint: true
+    })
+  );
+  const reply = String(generated?.reply ?? "").trim() || buildCloseoutReciprocationFallbackReply(text);
+  recordRouteOutcome(scope, "conversation_closeout_reciprocate", { convId: conv.id, leadKey: conv.leadKey });
+  return { kind: "reciprocate", reply };
 }
 
 // Finance-process / logistics handoff: confidence floor (default 0.7).
@@ -50080,6 +50163,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           }
           return respondWithSmsRegeneratedDraft(regenStyleReply.reply);
         }
+        // Conversation closeout (parity with live): a warm closer gets ONE terminal warm reply (no
+        // pivot/question); a bare echo after we already signed off regenerates to no reply. Parser-
+        // first + fail-safe (null => existing small-talk reply). Scope = immediate exchange only.
+        const regenCloseout = await resolveConversationCloseoutReply(conv, regenNoResponseInboundText, "regen");
+        if (regenCloseout?.kind === "silent") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout_regen");
+          return respondRegenerateSkipped("conversation_closeout_silent");
+        }
+        if (regenCloseout?.kind === "reciprocate") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout_regen");
+          setDialogState(conv, "small_talk");
+          if (channel === "email") {
+            return respondWithEmailRegeneratedDraft(regenCloseout.reply);
+          }
+          return respondWithSmsRegeneratedDraft(regenCloseout.reply);
+        }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: regenNoResponseInboundText,
           history,
@@ -57664,6 +57763,24 @@ if (authToken && signature) {
             family: noResponseStyleReply.family
           });
           return publishLiveTwilioReply(noResponseStyleReply.reply);
+        }
+        // Conversation closeout: a warm closer ("have a good weekend!") gets ONE terminal warm
+        // reciprocation (no bike pivot, no question) and then we stop; a bare echo after we already
+        // signed off gets silence. Parser-first + fail-safe (null => existing small-talk reply).
+        // Same resolver runs in regenerate (route parity). Scope = immediate exchange only.
+        const closeout = await resolveConversationCloseoutReply(conv, noResponseInboundText, "live");
+        if (closeout?.kind === "silent") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout");
+          discardPendingDrafts(conv, "conversation_closeout_silent");
+          delete conv.emailDraft;
+          saveConversation(conv);
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        if (closeout?.kind === "reciprocate") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout");
+          setDialogState(conv, "small_talk");
+          return publishLiveTwilioReply(closeout.reply);
         }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
