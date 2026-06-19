@@ -8,6 +8,7 @@ import path from "node:path";
 
 import {
   isAutomatedSenderInbound,
+  isClosingAckNoAction,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
   isShadowReplayMessage,
@@ -54,6 +55,24 @@ assert.equal(isYearRolloverParkFingerprint("2027-02-16T16:57:00.000Z"), false); 
 assert.equal(isYearRolloverParkFingerprint("2026-09-15T14:30:00.000Z"), false); // non-zero minutes
 assert.equal(isYearRolloverParkFingerprint("2027-05-01T18:00:00.000Z"), false); // 1st but not a 9-o'clock hour
 assert.equal(isYearRolloverParkFingerprint(null), false);
+
+// Closing acknowledgments — silence is the designed closeout behavior, so the
+// tone scorer must not grade them as missing_response (Ethan Mouyeos's "Good to
+// know. Thank you!" to a post-sale cadence info push was a phantom miss 6/19).
+assert.equal(isClosingAckNoAction("Good to know. Thank you!"), true);
+assert.equal(isClosingAckNoAction("Makes sense, appreciate it"), true);
+assert.equal(isClosingAckNoAction("Thanks 👍"), true);
+assert.equal(isClosingAckNoAction("Good to hear that, thanks so much!"), true);
+assert.equal(isClosingAckNoAction("ok thank you"), true);
+assert.equal(isClosingAckNoAction("You too, have a great weekend"), true);
+// Fail-direction guards: anything carrying an actual ask must STILL be graded.
+assert.equal(isClosingAckNoAction("Good to know. Can you send the price?"), false); // question
+assert.equal(isClosingAckNoAction("Thanks! When can I come in?"), false); // question
+assert.equal(isClosingAckNoAction("Good to know, what's the monthly payment"), false); // actionable cue
+assert.equal(isClosingAckNoAction("thanks, is the street glide still available"), false); // actionable cue
+assert.equal(isClosingAckNoAction("Thanks for the info, I'll stop by tomorrow"), false); // actionable cue
+assert.equal(isClosingAckNoAction("Cool 😎"), false); // bare reaction, no substantive closer
+assert.equal(isClosingAckNoAction(""), false);
 
 // Justified long-term parks (the Courtney Ward / ride-challenge class) are
 // excluded from the far-future actions audit, but the rollover bug never is.

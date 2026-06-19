@@ -36,6 +36,53 @@ export function isAutomatedSenderInbound(args: {
 
 const NON_SALES_FOLLOWUP_REASONS = new Set(["hiring_manager_inquiry", "vendor_inquiry", "spam"]);
 
+/**
+ * A closing acknowledgment is a short, non-actionable customer turn made up
+ * ENTIRELY of info-ack / gratitude / sign-off clauses — e.g. "Good to know.
+ * Thank you!", "Makes sense, appreciate it", "Thanks 👍". Staying silent on
+ * these is the designed closeout behavior (decideConversationCloseoutTurn:
+ * reciprocate-once-then-stop), so a quality scorer must NOT grade them as a
+ * `missing_response`. The single-token short-ack matcher in the tone scorer
+ * misses multi-clause closers and emoji-suffixed acks; this catches those.
+ *
+ * Deliberately conservative (fail-direction: skipping a turn that DID need a
+ * reply would HIDE a real miss): bounded length, no question mark, no
+ * actionable cue, EVERY clause must be a known closer, and at least one clause
+ * must be a substantive gratitude/acknowledgment (so a bare "ok" — already
+ * handled by the short-ack matcher — does not newly qualify here).
+ */
+const CLOSING_ACK_ACTIONABLE_CUE_RE =
+  /\b(available|in stock|price|pricing|payment|payments|apr|finance|financing|monthly|down payment|term|months|come in|stop by|schedule|appointment|call me|callback|text me|tomorrow|today|next week|when)\b/i;
+// A single closer phrase: an info-ack, a thanks, or a sign-off.
+const CLOSING_ACK_PHRASE =
+  "(?:ok(?:ay)?|kk?|got it|sounds good|thank you(?: so| very)?(?: much)?|thanks(?: so| very)?(?: much)?|thx|ty|perfect|awesome|cool|great|will do|good to know|good to hear(?: that)?|good deal|makes sense|noted|understood|appreciate (?:it|that|you)|much appreciated|no problem|np|all good|all set|fair enough|you too|you as well|same to you|cheers|have a (?:good|great) (?:one|day|weekend|night))";
+// Separator between stacked closers: punctuation/whitespace, optional "and"/"&".
+const CLOSING_ACK_SEP = "(?:[\\s.!,]+(?:and |& )?)";
+const CLOSING_ACK_FULL_RE = new RegExp(
+  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_PHRASE}${CLOSING_ACK_SEP}?)+$`,
+  "i"
+);
+// Requires at least one substantive gratitude/acknowledgment, so a bare "ok" /
+// "cool" reaction (handled by the short-ack matcher) does not newly qualify.
+const CLOSING_ACK_SUBSTANTIVE_RE =
+  /(thank|thx|\bty\b|appreciate|cheers|good to (?:know|hear)|good deal|no problem|all (?:good|set)|will do|sounds good|makes sense|noted|understood|fair enough|you (?:too|as well)|same to you|have a (?:good|great))/i;
+
+export function isClosingAckNoAction(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (raw.length > 60) return false;
+  if (/\?/.test(raw)) return false;
+  const normalized = raw
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, " ")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  if (CLOSING_ACK_ACTIONABLE_CUE_RE.test(normalized)) return false;
+  if (!CLOSING_ACK_FULL_RE.test(normalized)) return false;
+  return CLOSING_ACK_SUBSTANTIVE_RE.test(normalized);
+}
+
 export function isNonSalesConversation(conv: {
   followUp?: { reason?: string | null } | null;
 }): boolean {

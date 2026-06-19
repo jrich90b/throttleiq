@@ -3,6 +3,7 @@ import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
 import {
   isAutomatedSenderInbound,
+  isClosingAckNoAction,
   isNonSalesConversation,
   isShadowReplayMessage
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -144,6 +145,7 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
+  if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";
   if (isCloseoutUpdateNoReplyNeeded(inboundText)) return "closeout_update_no_reply";
   if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(inboundText)) {
     return "manual_handoff_non_actionable";
