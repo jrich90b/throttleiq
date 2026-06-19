@@ -246,6 +246,11 @@ export type DraftContext = {
   inventoryUrl?: string | null;
   inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN" | null;
   inventoryNote?: string | null;
+
+  // STEP 3 self-correcting loop: a correction hint from the draft-quality judge for a RE-draft.
+  // When set, the generator is told what was wrong with the prior attempt so the regeneration
+  // actually patches it (vs. a blind re-roll). Empty/absent on a first-pass draft.
+  steering?: string | null;
 };
 
 function userAskedForEmail(ctx: DraftContext): boolean {
@@ -10331,6 +10336,52 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
   }
 }
 
+/** Reads DRAFT_QUALITY_AUTO_REGENERATE. Default OFF (dark) — selfHeal is a no-op until flipped. */
+export function draftAutoRegenerateEnabled(): boolean {
+  const raw = String(process.env.DRAFT_QUALITY_AUTO_REGENERATE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+// STEP 3 of the self-correcting loop — INLINE auto-regenerate. After the orchestrator produces a
+// draft, this judges it; on a confident hold-class verdict it regenerates ONCE with the judge's
+// steering (the actual PATCH — see DraftContext.steering) and RE-JUDGES. If the re-draft passes, it
+// becomes the healed draft; if it still fails, the ORIGINAL is returned unchanged and the downstream
+// publish gate holds it (cause #3 — a code/routing bug a re-roll can't fix). Dark unless
+// DRAFT_QUALITY_AUTO_REGENERATE is on; a pure no-op when off (no extra LLM calls). One attempt by
+// design — the re-judge is what guarantees we never SHIP a still-bad draft.
+export async function selfHealDraftWithLLM(args: {
+  draft: string;
+  ctx: DraftContext;
+}): Promise<{ draft: string; healed: boolean; outcome: "no_op" | "passed" | "healed" | "still_failing" }> {
+  const original = String(args.draft ?? "");
+  if (!draftAutoRegenerateEnabled()) return { draft: original, healed: false, outcome: "no_op" };
+  const channel: "sms" | "email" = args.ctx.channel === "email" ? "email" : "sms";
+  const inbound = String(args.ctx.inquiry ?? "").trim();
+  if (!original.trim() || !inbound) return { draft: original, healed: false, outcome: "no_op" };
+  try {
+    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
+    if (!v1 || v1.overall === "good" || conf1 < 0.8) {
+      return { draft: original, healed: false, outcome: "passed" };
+    }
+    // The PATCH: regenerate with the judge's steering so the re-draft fixes what was wrong.
+    const steering = String(v1.steering || v1.reason || "").trim();
+    const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
+    if (!steered || steered === original.trim()) {
+      return { draft: original, healed: false, outcome: "still_failing" };
+    }
+    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
+    if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
+      // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
+      return { draft: original, healed: false, outcome: "still_failing" };
+    }
+    return { draft: steered, healed: true, outcome: "healed" };
+  } catch {
+    return { draft: original, healed: false, outcome: "no_op" }; // fail-safe: never break draft production
+  }
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   // Draft-model A/B: the customer-facing reply composer runs on the lead's arm
   // (gpt-5 challenger vs gpt-5-mini control). Shared by live + regenerate via the
@@ -10364,9 +10415,18 @@ SMS RULES (strict):
 - If the customer asks for a phone call today/now and dealerClosedToday is false, acknowledge and confirm someone can call today.
 `;
 
+  const steeringHint = String(ctx.steering ?? "").trim();
+  const steeringBlock = steeringHint
+    ? `
+IMPORTANT — THIS IS A RE-DRAFT. A prior attempt was held by quality review. Fix exactly this and keep everything else on-voice:
+- ${steeringHint}
+- Do NOT state any price, stock number, rate, or availability you are not certain of. If unsure, say you'll confirm.
+- Address what the customer actually asked this turn; don't change the subject.
+`
+    : "";
   const instructions = `
 You write dealership sales replies for a Harley-Davidson dealership.
-
+${steeringBlock}
 VOICE / STYLE (strict):
 - Friendly, professional, concise.
 - Sound like a real dealership rep: warm, confident, low‑pressure.

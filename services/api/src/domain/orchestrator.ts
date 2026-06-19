@@ -11,6 +11,7 @@ import {
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   generateDraftWithLLM,
+  selfHealDraftWithLLM,
   summarizeConversationMemoryWithLLM
 } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
@@ -4762,8 +4763,8 @@ export async function orchestrateInbound(
       const vinForNote = ctx?.lead?.vehicle?.vin ?? null;
       const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
 
-      const draft = await generateDraftWithLLM({
-        channel: "sms",
+      const draftCtx = {
+        channel: "sms" as const,
         leadSource: ctx?.leadSource ?? null,
         bucket: ctx?.bucket ?? null,
         cta: ctx?.cta ?? null,
@@ -4791,7 +4792,13 @@ export async function orchestrateInbound(
         callbackRequest: callbackRequested,
         voiceSummary: ctx?.voiceSummary ?? null,
         memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null
-      });
+      };
+      const baseDraft = await generateDraftWithLLM(draftCtx);
+      // STEP 3 (dark unless DRAFT_QUALITY_AUTO_REGENERATE): if the judge would HOLD this draft,
+      // regenerate ONCE with its steering and re-judge — self-heal before it ever reaches the gate.
+      // No-op (no extra LLM calls) when the flag is off; on failure returns the original (gate holds).
+      const heal = await selfHealDraftWithLLM({ draft: baseDraft, ctx: draftCtx });
+      const draft = heal.draft;
 
       let memorySummary: string | null = null;
       if (ambiguousFlow && ctx?.memorySummaryShouldUpdate) {
