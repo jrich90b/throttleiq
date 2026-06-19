@@ -4798,6 +4798,15 @@ export async function orchestrateInbound(
       // regenerate ONCE with its steering and re-judge — self-heal before it ever reaches the gate.
       // No-op (no extra LLM calls) when the flag is off; on failure returns the original (gate holds).
       const heal = await selfHealDraftWithLLM({ draft: baseDraft, ctx: draftCtx });
+      // Observability for the live cutover: log every actual self-heal attempt (before/after) so the
+      // rewrites can be audited. Only fires when auto-regenerate is on (no_op otherwise), and only on
+      // a real heal/failure — not on the common pass-through — so it's low-volume.
+      if (heal.outcome === "healed" || heal.outcome === "still_failing") {
+        console.warn(
+          "[draft-self-heal]",
+          JSON.stringify({ outcome: heal.outcome, before: String(baseDraft).slice(0, 160), after: String(heal.draft).slice(0, 160) })
+        );
+      }
       const draft = heal.draft;
 
       let memorySummary: string | null = null;
