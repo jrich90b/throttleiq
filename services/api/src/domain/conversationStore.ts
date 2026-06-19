@@ -823,6 +823,11 @@ export type Conversation = {
     reason: string; // gate action: "live_hold" | "live_regenerate"
     judgeReason?: string;
     channel: "sms" | "email";
+    // Diagnosis context for the agent-watch code-fix loop ("the bridge"): the customer turn the bad
+    // draft replied to + the held draft itself. A held draft self-heal couldn't fix is a SIGNAL of a
+    // code/comprehension bug; these previews let the monitor diagnose it without re-running anything.
+    inboundPreview?: string;
+    draftPreview?: string;
   } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;

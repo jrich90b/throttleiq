@@ -284,6 +284,14 @@ trap 'record_closed_loop_run "$?"' EXIT
     npx tsx scripts/task_fulfillment_autoclose_report.ts --limit=200 \
     > "$REPORT_ROOT/task_autoclose/task_autoclose_report.txt" 2>&1 || true
 
+  # THE BRIDGE: drafts the quality gate held (and self-heal couldn't fix) are candidate code/
+  # comprehension bugs. Surface them with diagnosis context so the agent-watch loop can fix the CODE
+  # parser-first (approve-first PR), then re-regenerate to release the hold. Read-only; never blocks.
+  echo "[feedback-loop] step=draft_held_report"
+  mkdir -p "$REPORT_ROOT/draft_held"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" DRAFT_HELD_REPORT_OUT="$REPORT_ROOT/draft_held/draft_held_report.txt" \
+    npx tsx scripts/draft_held_report.ts > /dev/null 2>&1 || true
+
   echo "[feedback-loop] step=soft_visit_miss_audit"
   SOFT_VISIT_MISS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run soft_visit_miss:audit || true
 

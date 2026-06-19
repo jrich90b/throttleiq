@@ -3933,7 +3933,10 @@ async function publishCustomerReplyDraft(args: {
       at: new Date().toISOString(),
       reason: gate.reason,
       judgeReason: gate.judgeReason,
-      channel: args.channel
+      channel: args.channel,
+      // Diagnosis context for the agent-watch code-fix loop (the bridge).
+      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
     };
     saveConversation(args.conv);
     recordDecisionTrace({
