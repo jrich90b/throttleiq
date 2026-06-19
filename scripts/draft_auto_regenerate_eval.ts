@@ -29,6 +29,8 @@ assert.ok(/generateDraftWithLLM\(\{ \.\.\.args\.ctx, steering \}\)/.test(llm), "
 assert.ok(/Re-draft still bad — keep the ORIGINAL/.test(llm), "a still-failing re-draft must NOT be shipped (keep original; gate holds)");
 // Wired into the orchestrator at the generation site.
 assert.ok(/selfHealDraftWithLLM\(\{ draft: baseDraft, ctx: draftCtx \}\)/.test(orch), "the orchestrator must self-heal the generated draft");
+// Observability for the live cutover: every real heal/failure logs before/after.
+assert.ok(/\[draft-self-heal\]/.test(orch), "self-heal attempts must log before/after for audit");
 
 // --- 2) Behavioral (no LLM): dark = pure no-op. ---
 assert.equal(draftAutoRegenerateEnabled(), false, "auto-regenerate must default OFF (dark)");
