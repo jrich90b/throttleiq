@@ -269,8 +269,14 @@ import {
   parseVehicleChoiceConfidenceWithLLM,
   parseDealStatusCheckWithLLM,
   parseFinanceProcessQuestionWithLLM,
-  summarizeVoiceTranscriptWithLLM
+  summarizeVoiceTranscriptWithLLM,
+  judgeDraftQualityWithLLM
 } from "./domain/llmDraft.js";
+import {
+  decideDraftQualityGate,
+  isDraftQualityJudgeEnabled,
+  draftQualityJudgeShadowEnabled
+} from "./domain/draftQualityGate.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -3602,6 +3608,61 @@ type CustomerReplyDraftInvariantEvaluator = (
   invariantHints?: CustomerReplyDraftInvariantHints
 ) => { allow: boolean; draftText: string; reason?: string };
 
+// Draft-quality pre-send judge — SHADOW (STEP 1). Runs the multi-dimensional judge over a
+// just-published draft and LOGS what the (dark) gate WOULD do (regenerate / hold) without
+// ever changing the live draft. Fire-and-forget; gated by the shadow/enable flags so it adds
+// no LLM call when both are off. The live regenerate/hold + auto-release-on-fix is a later,
+// approve-first step; this step only earns trust by measuring precision in production.
+async function runDraftQualityJudgeShadow(
+  conv: any,
+  draft: string,
+  channel: "sms" | "email",
+  scope: "live" | "regen" | "manual"
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!draftQualityJudgeShadowEnabled() && !isDraftQualityJudgeEnabled()) return;
+    const draftText = String(draft ?? "").trim();
+    if (!draftText) return;
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    if (!inbound) return;
+    const verdict = await judgeDraftQualityWithLLM({
+      draft: draftText,
+      inbound,
+      history: buildHistory(conv, 8),
+      lead: conv.lead,
+      channel
+    });
+    if (!verdict) return;
+    const decision = decideDraftQualityGate({ enabled: isDraftQualityJudgeEnabled(), verdict });
+    if (decision.action !== "pass") {
+      recordDecisionTrace({
+        scope,
+        stage: decision.live ? `draft_quality.${decision.action}` : "draft_quality.shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          overall: verdict.overall,
+          intentOk: verdict.intentOk,
+          toneOk: verdict.toneOk,
+          dispositionOk: verdict.dispositionOk,
+          safetyOk: verdict.safetyOk,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          steering: String(verdict.steering ?? "").slice(0, 180),
+          channel,
+          draftPreview: draftText.slice(0, 140)
+        }
+      });
+    }
+    // STEP 1 is shadow-only: never mutate the draft here, even when decision.live is true.
+  } catch {
+    // Best-effort shadow tooling — never block or fail a draft publish.
+  }
+}
+
 function publishCustomerReplyDraft(args: {
   conv: Conversation;
   channel: "sms" | "email";
@@ -3658,6 +3719,8 @@ function publishCustomerReplyDraft(args: {
       ...(args.routeDetail ?? {})
     });
   }
+  // Shadow: judge the just-published draft (fire-and-forget; never blocks the publish).
+  void runDraftQualityJudgeShadow(args.conv, draft, args.channel, args.routeScope ?? "live");
   return { ok: true, draft };
 }
 
