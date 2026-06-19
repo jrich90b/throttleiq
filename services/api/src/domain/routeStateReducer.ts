@@ -605,6 +605,45 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
   return { kind: "pause_watch" };
 }
 
+// --- ADF intake department route (2026-06-19) ------------------------------
+//
+// On an initial web (ADF) lead, the Inquiry field is the customer's stated request, so naming an
+// apparel/parts/service item there IS that department's request — even with no action verb. The
+// SMS-tuned action-signal gates (correct for incidental mid-thread mentions) wrongly dropped a terse
+// ADF item and the lead fell through to inventory_interest (Kelly Gantzer "small womens black leather
+// vest" got a bogus "not in stock" reply + an inventory watch on the "Full Line" placeholder bike).
+// parseAdfDepartmentInterestWithLLM reads the Inquiry (+ Vehicle) and this pure decision turns a
+// confident apparel/parts/service verdict into a department route; everything else (vehicle / none)
+// stays out so the normal bike flow runs.
+//
+// FAIL DIRECTION: unsure => none (the standard vehicle/inventory path runs). Over-routing a real bike
+// shopper to the apparel desk is worse than the current miss, so we only act on a confident
+// apparel/parts/service verdict; a "vehicle" or "none" verdict, low confidence, or no parser => none.
+// ---------------------------------------------------------------------------
+export type AdfDepartmentRouteKind = "apparel" | "parts" | "service" | "none";
+
+export type AdfDepartmentRouteInput = {
+  parserAccepted: boolean;
+  department?: "apparel" | "parts" | "service" | "vehicle" | "none" | null;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type AdfDepartmentRouteDecision = {
+  kind: AdfDepartmentRouteKind;
+};
+
+export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDepartmentRouteDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  if (input.department === "apparel" || input.department === "parts" || input.department === "service") {
+    return { kind: input.department };
+  }
+  return { kind: "none" };
+}
+
 // --- Finance-process / logistics handoff (2026-06-18) ----------------------
 //
 // A customer asking about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing

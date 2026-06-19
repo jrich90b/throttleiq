@@ -72,7 +72,8 @@ import {
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
-  parseWalkInOutcomeWithLLM
+  parseWalkInOutcomeWithLLM,
+  parseAdfDepartmentInterestWithLLM
 } from "../domain/llmDraft.js";
 import type {
   CompositeSalesInquiryParse,
@@ -115,7 +116,7 @@ import {
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
 import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
-import { resolveRoutingParserDecision } from "../domain/routerV2.js";
+import { resolveRoutingParserDecision, decideAdfDepartmentRoute } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import {
@@ -824,7 +825,9 @@ function normalizeInventoryColorForMatch(colorRaw?: string | null): string {
 
 function isGenericLeadModel(modelText: string): boolean {
   const t = modelText.trim().toLowerCase();
-  return !t || /^(other|full line|full lineup|null)$/.test(t);
+  // A placeholder "Full Line" / "Other" is never a real bookable model — match it even when a make
+  // prefixes it ("Harley-Davidson Full Line"), so we never build an inventory watch on the placeholder.
+  return !t || /^(other|full line|full lineup|null)$/.test(t) || /\bfull line(up)?$/.test(t);
 }
 
 const MODEL_NOISE_TOKENS = new Set([
@@ -4988,6 +4991,50 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     catalogApparelIntent ||
     /\b(apparel|motorclothes|merch|jacket|helmet|gloves|boots|shirt|hoodie)\b/i.test(inquiryText) ||
     /\bapparel|motorclothes\b/i.test(leadSourceLower);
+  // ADF intake department override (2026-06-19, Kelly Gantzer "small womens black leather vest").
+  // On an initial ADF lead the Inquiry field IS the customer's request, so the SMS-tuned action-signal
+  // gates above (catalog*Intent / *IntentFromText, which need a verb like "do you have") wrongly drop a
+  // terse, verb-less apparel/parts/service item and the lead falls through to inventory_interest (a
+  // bogus "not in stock" reply + an inventory watch on the placeholder vehicle). When those signals all
+  // missed but the lead plausibly isn't a bike (a catalog apparel/parts cue OR a placeholder vehicle),
+  // ask the focused ADF department parser and let a confident verdict steer the bucket. Gated so it adds
+  // no LLM cost on clean bike leads or anything the existing signals already routed.
+  const adfDepartmentVehicleContext = String(
+    lead.vehicleModel ?? lead.vehicleDescription ?? ""
+  ).trim();
+  const adfDepartmentExistingSignal =
+    semanticPartsIntent ||
+    semanticApparelIntent ||
+    semanticServiceIntent ||
+    partsIntentFromText ||
+    apparelIntentFromText ||
+    serviceSupportIntentFromParser;
+  const adfDepartmentCue =
+    catalogMatch.apparelTerms.length > 0 ||
+    catalogMatch.partsTerms.length > 0 ||
+    isGenericLeadModel(adfDepartmentVehicleContext);
+  let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "none" } = { kind: "none" };
+  if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
+    const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
+      inquiry: effectiveInquiry,
+      vehicle: adfDepartmentVehicleContext || null,
+      leadSource
+    });
+    adfDepartmentRoute = decideAdfDepartmentRoute({
+      parserAccepted: !!adfDepartmentParse,
+      department: adfDepartmentParse?.department ?? null,
+      confidence: adfDepartmentParse?.confidence ?? 0,
+      confidenceMin: Number(process.env.ADF_DEPARTMENT_CONFIDENCE_MIN ?? 0.7)
+    });
+    if (adfDepartmentRoute.kind !== "none") {
+      console.log("[sendgrid inbound] adf department override", {
+        department: adfDepartmentRoute.kind,
+        item: adfDepartmentParse?.item ?? null,
+        confidence: adfDepartmentParse?.confidence ?? null,
+        vehicle: adfDepartmentVehicleContext || null
+      });
+    }
+  }
   const jumpStartExperienceLead =
     isJumpStartExperienceText(effectiveInquiry) ||
     isJumpStartExperienceText(lead.comment ?? null) ||
@@ -5026,13 +5073,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (initialAdfRiderCourseDecision) {
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
-  } else if (semanticPartsIntent || partsIntentFromText) {
+  } else if (adfDepartmentRoute.kind === "parts" || semanticPartsIntent || partsIntentFromText) {
     inferredBucket = "parts";
     inferredCta = "parts_request";
-  } else if (semanticApparelIntent || apparelIntentFromText) {
+  } else if (adfDepartmentRoute.kind === "apparel" || semanticApparelIntent || apparelIntentFromText) {
     inferredBucket = "apparel";
     inferredCta = "apparel_request";
-  } else if (semanticServiceIntent || serviceSupportIntentFromParser) {
+  } else if (adfDepartmentRoute.kind === "service" || semanticServiceIntent || serviceSupportIntentFromParser) {
     inferredBucket = "service";
     inferredCta = "service_request";
   } else if (!leadSource || rule.ruleName === "default") {
@@ -5189,7 +5236,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     bucket: inferredBucket,
     cta: inferredCta,
     channel,
-    ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
+    ruleName: forcedTestRide
+      ? "room58_book_test_ride_forced"
+      : adfDepartmentRoute.kind !== "none"
+        ? `adf_department_${adfDepartmentRoute.kind}`
+        : rule.ruleName
   });
   const inferredBucketKey = String(inferredBucket ?? "").trim().toLowerCase();
   const inferredCtaKey = String(inferredCta ?? "").trim().toLowerCase();

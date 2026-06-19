@@ -2413,6 +2413,19 @@ export type ConversationStateParse = {
   confidence?: number;
 };
 
+// ADF intake department classifier (2026-06-19, Kelly Gantzer +17169094022 "small womens black
+// leather vest" via the agent-watch sweep). On an initial web (ADF) lead the Inquiry field IS the
+// customer's stated request — naming an apparel/parts/service item there is a department request even
+// with no action verb, so the SMS-tuned action-signal gates (which correctly suppress incidental
+// mentions mid-thread) wrongly drop it and the lead falls through to inventory_interest (bogus
+// "not in stock" reply + inventory watch on the "Full Line" placeholder vehicle). This focused parser
+// reads the terse Inquiry (+ the often-placeholder Vehicle field) and decides the department.
+export type AdfDepartmentInterestParse = {
+  department: "apparel" | "parts" | "service" | "vehicle" | "none";
+  item: string | null;
+  confidence: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -2993,6 +3006,17 @@ const CONVERSATION_CLOSEOUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   required: ["kind", "confidence"],
   properties: {
     kind: { type: "string", enum: ["reciprocate_and_close", "close_silent", "none"] },
+    confidence: { type: "number" }
+  }
+};
+
+const ADF_DEPARTMENT_INTEREST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["department", "item", "confidence"],
+  properties: {
+    department: { type: "string", enum: ["apparel", "parts", "service", "vehicle", "none"] },
+    item: { type: ["string", "null"] },
     confidence: { type: "number" }
   }
 };
@@ -6440,6 +6464,104 @@ export async function parseWatchOptOutWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, confidence };
+}
+
+// ADF intake department classifier — see AdfDepartmentInterestParse above for why. Returns null when
+// disabled/empty/low-signal; callers treat null as "no department override" and let the normal
+// vehicle/inventory flow run. Gated to fire only on initial ADF leads that plausibly aren't a bike
+// (a catalog apparel/parts cue, or a placeholder vehicle) so it adds no cost on the hot path.
+export async function parseAdfDepartmentInterestWithLLM(args: {
+  inquiry: string;
+  vehicle?: string | null;
+  leadSource?: string | null;
+}): Promise<AdfDepartmentInterestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ADF_DEPARTMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_ADF_DEPARTMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_ADF_DEPARTMENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_ADF_DEPARTMENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const inquiry = String(args.inquiry ?? "").trim();
+  if (!inquiry) return null;
+  const vehicle = String(args.vehicle ?? "").trim();
+  const leadSource = String(args.leadSource ?? "").trim();
+
+  const prompt = [
+    "You triage a NEW web lead (ADF) for a Harley-Davidson dealership. The customer filled out a lead",
+    "form; the 'Inquiry' field below is their own stated request. Decide which department the request",
+    "is for. Return only JSON that matches the provided schema.",
+    "",
+    "departments:",
+    "- apparel: wearable MotorClothes / gear / clothing — jackets, vests, chaps, helmets, gloves, boots,",
+    "  shirts, hoodies, hats, rain/heated gear, sizes (small/L/XL) of any of those.",
+    "- parts: motorcycle components / accessories — OEM or aftermarket parts, brake pads, tires, sissy",
+    "  bars, exhaust, batteries, fitment/ordering of a part.",
+    "- service: maintenance / repair / install labor / inspection / recalls / diagnostics.",
+    "- vehicle: an actual MOTORCYCLE — a model, trim, inventory availability, test ride, price/payment",
+    "  on a bike, trade-in. This is the default for bike shoppers.",
+    "- none: a greeting, an unrelated topic, or no identifiable subject.",
+    "",
+    "Hard rules:",
+    "- The Inquiry field IS the request. Naming an apparel/parts/service item is a department request —",
+    "  do NOT require an action verb like 'do you have' or 'looking for'. 'leather vest' alone = apparel.",
+    "- The Vehicle field is frequently a placeholder ('Harley-Davidson Full Line', 'Full Line', 'Other')",
+    "  on non-bike inquiries — when the Inquiry names gear/parts/service, trust the Inquiry over Vehicle.",
+    "- A specific motorcycle model, year, test ride, or bike-availability/price question is 'vehicle',",
+    "  not a department, even if it mentions a color or size of the BIKE.",
+    "- 'item' is the short noun the customer named (e.g. 'leather vest', 'brake pads'), or null.",
+    "- confidence 0..1; use >= 0.7 only when the department is clear.",
+    "",
+    "Examples:",
+    '- Inquiry "small womens black leather vest" / Vehicle "Harley-Davidson Full Line" -> {"department":"apparel","item":"leather vest","confidence":0.97}',
+    '- Inquiry "looking for a riding jacket size XL" -> {"department":"apparel","item":"riding jacket","confidence":0.96}',
+    '- Inquiry "do you carry HD hoodies and a half helmet" -> {"department":"apparel","item":"hoodie, half helmet","confidence":0.95}',
+    '- Inquiry "need a new battery and brake pads for my Street Glide" -> {"department":"parts","item":"battery, brake pads","confidence":0.96}',
+    '- Inquiry "want to order a sissy bar" -> {"department":"parts","item":"sissy bar","confidence":0.95}',
+    '- Inquiry "5k service and oil change" -> {"department":"service","item":"oil change","confidence":0.96}',
+    '- Inquiry "interested in a 2024 Street Glide" / Vehicle "Street Glide" -> {"department":"vehicle","item":"Street Glide","confidence":0.96}',
+    '- Inquiry "do you have any Road Glides in stock in black" -> {"department":"vehicle","item":"Road Glide","confidence":0.95}',
+    '- Inquiry "Harley-Davidson Full Line" -> {"department":"none","item":null,"confidence":0.6}',
+    '- Inquiry "hi just looking around" -> {"department":"none","item":null,"confidence":0.8}',
+    "",
+    `Vehicle: ${vehicle || "(none)"}`,
+    leadSource ? `Lead source: ${leadSource}` : "Lead source: (none)",
+    `Inquiry: ${inquiry}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "adf_department_interest_parser",
+      schema: ADF_DEPARTMENT_INTEREST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 90,
+      debugTag: "llm-adf-department-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const deptRaw = String(parsed.department ?? "").toLowerCase();
+  const department: AdfDepartmentInterestParse["department"] =
+    deptRaw === "apparel" || deptRaw === "parts" || deptRaw === "service" || deptRaw === "vehicle"
+      ? deptRaw
+      : "none";
+  const item = typeof parsed.item === "string" && parsed.item.trim() ? parsed.item.trim() : null;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : 0;
+  return { department, item, confidence };
 }
 
 // Finance-process / logistics handoff (2026-06-18, Adam +17166033199 via intent_handled_audit).
