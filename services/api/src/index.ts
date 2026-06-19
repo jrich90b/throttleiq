@@ -270,12 +270,16 @@ import {
   parseDealStatusCheckWithLLM,
   parseFinanceProcessQuestionWithLLM,
   summarizeVoiceTranscriptWithLLM,
-  judgeDraftQualityWithLLM
+  judgeDraftQualityWithLLM,
+  judgeShouldRespondWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
   isDraftQualityJudgeEnabled,
-  draftQualityJudgeShadowEnabled
+  draftQualityJudgeShadowEnabled,
+  decideNoResponseJudge,
+  isNoResponseJudgeEnabled,
+  noResponseJudgeShadowEnabled
 } from "./domain/draftQualityGate.js";
 import type {
   AffectParse,
@@ -3660,6 +3664,50 @@ async function runDraftQualityJudgeShadow(
     // STEP 1 is shadow-only: never mutate the draft here, even when decision.live is true.
   } catch {
     // Best-effort shadow tooling — never block or fail a draft publish.
+  }
+}
+
+// No-response pre-send judge — SHADOW (STEP 1). The agent chose silence on a customer turn; this
+// runs the should-respond judge and LOGS whether that silence was a wrongful miss, without ever
+// producing a reply. Fire-and-forget; flag-gated. The live "generate a reply instead of silence"
+// action is a later, approve-first step. Covers the blind spot the draft judge can't see (no draft
+// is produced on a suppression, so the draft judge never fires).
+async function runNoResponseJudgeShadow(
+  conv: any,
+  inbound: string,
+  scope: "live" | "regen" | "manual"
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!noResponseJudgeShadowEnabled() && !isNoResponseJudgeEnabled()) return;
+    const text = String(inbound ?? "").trim();
+    if (!text) return;
+    const verdict = await judgeShouldRespondWithLLM({
+      inbound: text,
+      history: buildHistory(conv, 8),
+      lead: conv.lead
+    });
+    if (!verdict) return;
+    const decision = decideNoResponseJudge({ enabled: isNoResponseJudgeEnabled(), verdict });
+    if (decision.action !== "pass") {
+      recordDecisionTrace({
+        scope,
+        stage: decision.live ? "no_response.flag" : "no_response.shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          shouldRespond: verdict.shouldRespond,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          inboundPreview: text.slice(0, 140)
+        }
+      });
+    }
+    // STEP 1 is shadow-only: never produce a reply here, even when decision.live is true.
+  } catch {
+    // Best-effort shadow tooling — never block or fail the request.
   }
 }
 
@@ -46892,6 +46940,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey
     });
+    // Shadow: when regenerate produces NO draft (true silence), judge whether the turn warranted a
+    // reply. The keptExisting case (draft provided) is not a silence — skip it.
+    if (!draft) {
+      void runNoResponseJudgeShadow(conv, getLastInboundBody(conv) ?? "", "regen");
+    }
     discardPendingDrafts(conv, note);
     saveConversation(conv);
     return res.json({
@@ -57667,6 +57720,9 @@ if (authToken && signature) {
         shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse,
         policyReason: policyNoResponseDecision.reason
       });
+      // Shadow: the live path definitively chose silence on this turn — judge whether it warranted
+      // a reply (the wrongful-silence blind spot the draft judge can't see).
+      void runNoResponseJudgeShadow(conv, noResponseInboundText, "live");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
