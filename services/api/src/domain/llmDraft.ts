@@ -7,7 +7,7 @@ import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
-import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
+import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
 import { decideDraftModelArm } from "./routeStateReducer.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -567,6 +567,7 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "- Do NOT switch into pricing/availability/scheduling unless asked.",
     "- Avoid stiff fallback phrases like 'I'm checking that now'.",
     "- Do NOT use phrases like 'I'm here if you need anything' or 'Got it.' as the main reply.",
+    `- ${bannedPhraseAvoidanceInstruction()}`,
     "",
     "Good examples:",
     closingHint ? "- input: \"have a good weekend!\" -> \"You too — enjoy the weekend!\"" : null,
@@ -738,6 +739,7 @@ export async function generateBlendedLeadInWithLLM(args: {
     "- Do not promise follow-up/checking.",
     "- Do not mention pricing/scheduling/availability directly.",
     "- Avoid generic phrases like 'Got it.' or 'I’m here if you need anything.'",
+    `- ${bannedPhraseAvoidanceInstruction()}`,
     "- Do NOT respond to thanks the customer did not give: never say 'You're welcome', 'No problem', 'Anytime', or 'Happy to help' unless the customer actually thanked you. Affection or honesty (e.g. \"I love my bike\", \"to be honest…\") is NOT gratitude.",
     "",
     "Good examples:",
@@ -10377,6 +10379,7 @@ VOICE / STYLE (strict):
 - If the customer sounds frustrated or confused, add one short empathy line ("I get that" / "I know that's frustrating") and move on.
 - At most ONE em dash (—) per message. Prefer commas or periods. Real staff texts almost never use them.
 - Never use these phrases: "if helpful", "if it helps", "simple compare", "next-step options", "quick walkaround", "payment snapshot", "narrow it down", "I'm here if you need anything", "all good either way".
+- ${bannedPhraseAvoidanceInstruction()}
 - After the first intro, use a natural short form of the dealership name (like "American H-D" for American Harley-Davidson) instead of the full name every time.
 - Offer something concrete (photos, numbers, a time window, an answer) instead of generic offers to help.
 ${channelRules}
@@ -10388,9 +10391,9 @@ CONTROLLED VARIATIONS (use these to sound human):
 
 SMS VARIATIONS:
 - Intro (first outbound only):
-  1) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for your inquiry."
-  2) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for reaching out."
-  3) "Hey {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  1) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for your message."
+  2) "Hey {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  3) "Hey {firstName}, it's {agentName} over at {dealerName}. Glad you got in touch."
 - Acknowledge:
   1) "Got it."
   2) "Thanks for the details."
@@ -10403,8 +10406,8 @@ SMS VARIATIONS:
   1) "Do any of these times work?"
   2) "Which works best?"
 - Reminder offer (when they say later / next month / I’ll let you know):
-  1) "No rush — I’m here when you’re ready. Just reach out when the time is right."
-  2) "Totally fine. I’ll be here when you’re ready — just reach out when you’re ready to move forward."
+  1) "No rush — I’m here when you’re ready. Just text me when the time is right."
+  2) "Totally fine. I’ll be here when you’re ready — just text me when you’re ready to move forward."
 - Soft scheduling when timing is uncertain (only if they asked to schedule):
   1) "I can pencil you in and we can adjust if needed."
   2) "If you want, I can hold a time and we can move it if needed."
@@ -10414,9 +10417,9 @@ SMS VARIATIONS:
 
 EMAIL VARIATIONS:
 - Intro (first outbound only):
-  1) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for your inquiry."
-  2) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for reaching out."
-  3) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for contacting us."
+  1) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for your message."
+  2) "Hi {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  3) "Hi {firstName}, it's {agentName} over at {dealerName}. Glad you got in touch."
 - Acknowledge:
   1) "Thanks for the details."
   2) "I appreciate the info."

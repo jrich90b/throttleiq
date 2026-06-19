@@ -104,3 +104,17 @@ export function findComputerLikePhrases(text: string | null | undefined): string
 export function hasComputerLikePhrase(text: string | null | undefined): boolean {
   return findComputerLikePhrases(text).length > 0;
 }
+
+/**
+ * A prompt line to feed the denylist into LLM reply generators as HARD NEGATIVES — prevention,
+ * so the model never writes a computer-like phrase in the first place (the safe, grammar-preserving
+ * complement to the post-hoc shadow detection). Keep it one line so it slots into existing prompts.
+ */
+export function bannedPhraseAvoidanceInstruction(): string {
+  return (
+    "Never write computer-like / corporate phrases — sound like a real person texting, not a bot. " +
+    "Banned (do not use these or close variants, including -ing forms like \"reaching out\"): " +
+    COMPUTER_LIKE_PHRASES.join(", ") +
+    "."
+  );
+}

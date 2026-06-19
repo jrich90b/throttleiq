@@ -20,7 +20,8 @@ import fs from "node:fs";
 import {
   COMPUTER_LIKE_PHRASES,
   findComputerLikePhrases,
-  hasComputerLikePhrase
+  hasComputerLikePhrase,
+  bannedPhraseAvoidanceInstruction
 } from "../services/api/src/domain/voiceBannedPhrases.ts";
 
 // --- 1) Source guard. ---
@@ -30,6 +31,20 @@ assert.ok(new Set(COMPUTER_LIKE_PHRASES).size === COMPUTER_LIKE_PHRASES.length, 
 for (const must of ["reach out", "feel free to", "rest assured", "utilize", "seamless", "happy to assist"]) {
   assert.ok(COMPUTER_LIKE_PHRASES.includes(must), `denylist must include "${must}"`);
 }
+// Prevention (a): the avoidance instruction must exist, list the phrases, and be fed into the LLM
+// reply generators as hard negatives — and the main generator must no longer PRESCRIBE banned tells.
+const avoidance = bannedPhraseAvoidanceInstruction();
+assert.ok(/never/i.test(avoidance) && avoidance.includes("reach out"), "avoidance instruction must list the banned phrases");
+const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+const generatorRefs = (llm.match(/bannedPhraseAvoidanceInstruction\(\)/g) || []).length;
+assert.ok(generatorRefs >= 3, `avoidance instruction must be injected into the LLM generators; found ${generatorRefs} ref(s)`);
+// The generator must NOT prescribe the banned tells in its own variation menus anymore, and the
+// de-corporatized replacements must be present (narrow checks — "reach out" legitimately appears in
+// customer-utterance fixtures and the judge prompts, so we don't assert its global absence).
+assert.ok(!/Thanks for reaching out\./.test(llm), 'generator must not prescribe "Thanks for reaching out."');
+assert.ok(/Just text me when the time is right/.test(llm), "reminder variant must be de-corporatized to 'text me'");
+assert.ok(/Thanks for your message\./.test(llm), "intro variant must be de-corporatized to 'Thanks for your message.'");
+
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.ok(/findComputerLikePhrases/.test(store), "the matcher must be wired into conversationStore.ts");
 assert.ok(/VOICE_BANNED_PHRASE_SHADOW/.test(store), "the shadow flag must gate the hook");
