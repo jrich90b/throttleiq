@@ -3,6 +3,7 @@ export {
   buildNoResponseFallbackReply,
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
+  decideAdfDepartmentRoute,
   decideCadenceInviteArm,
   decideConversationCloseoutTurn,
   decideDraftModelArm,
