@@ -272,7 +272,8 @@ import {
   parseFinanceProcessQuestionWithLLM,
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
-  judgeShouldRespondWithLLM
+  judgeShouldRespondWithLLM,
+  judgeCadenceQualityWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -280,7 +281,10 @@ import {
   draftQualityJudgeShadowEnabled,
   decideNoResponseJudge,
   isNoResponseJudgeEnabled,
-  noResponseJudgeShadowEnabled
+  noResponseJudgeShadowEnabled,
+  decideCadenceQualityGate,
+  isCadenceQualityJudgeEnabled,
+  cadenceQualityJudgeShadowEnabled
 } from "./domain/draftQualityGate.js";
 import type {
   AffectParse,
@@ -3747,6 +3751,67 @@ async function runDraftQualityJudgeShadow(
     // STEP 1 is shadow-only: never mutate the draft here, even when decision.live is true.
   } catch {
     // Best-effort shadow tooling — never block or fail a draft publish.
+  }
+}
+
+// Cadence-quality judge — SHADOW (STEP 1). Judge #3. The draft + no-response judges only see
+// INBOUND-triggered turns; this runs on a PROACTIVE follow-up cadence message about to go out and
+// LOGS whether it should send / fits state / sounds human / isn't pushy — without ever altering or
+// suppressing the cadence draft. Fire-and-forget; flag-gated. The live "suppress/regenerate the
+// cadence touch" action is a later, approve-first step.
+async function runCadenceQualityJudgeShadow(
+  conv: any,
+  message: string,
+  channel: "sms" | "email"
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!cadenceQualityJudgeShadowEnabled() && !isCadenceQualityJudgeEnabled()) return;
+    const text = String(message ?? "").trim();
+    if (!text) return;
+    let daysSinceLastInbound: number | null = null;
+    const lastInbound = [...(conv.messages ?? [])].reverse().find((m: any) => m?.direction === "in" && m?.body);
+    const lastMs = lastInbound?.at ? Date.parse(String(lastInbound.at)) : NaN;
+    if (Number.isFinite(lastMs)) {
+      daysSinceLastInbound = Math.max(0, Math.floor((Date.now() - lastMs) / 86_400_000));
+    }
+    const cadenceKind = conv.followUpCadence?.kind ?? null;
+    const verdict = await judgeCadenceQualityWithLLM({
+      message: text,
+      channel,
+      cadenceKind,
+      history: buildHistory(conv, 8),
+      lead: conv.lead,
+      daysSinceLastInbound
+    });
+    if (!verdict) return;
+    const decision = decideCadenceQualityGate({ enabled: isCadenceQualityJudgeEnabled(), verdict });
+    if (decision.action !== "pass") {
+      recordDecisionTrace({
+        scope: "manual",
+        stage: decision.live ? `cadence_quality.${decision.action}` : "cadence_quality.shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          overall: verdict.overall,
+          sendWorthy: verdict.sendWorthy,
+          stateFit: verdict.stateFit,
+          toneOk: verdict.toneOk,
+          dispositionOk: verdict.dispositionOk,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          steering: String(verdict.steering ?? "").slice(0, 180),
+          channel,
+          cadenceKind,
+          messagePreview: text.slice(0, 140)
+        }
+      });
+    }
+    // STEP 1 is shadow-only: never suppress/alter the cadence draft here, even when decision.live is true.
+  } catch {
+    // Best-effort shadow tooling — never block or fail the cadence tick.
   }
 }
 
@@ -28502,6 +28567,9 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
+      // Cadence-quality judge (shadow): observe whether this proactive touch should send / fits
+      // state / sounds human / isn't pushy. Fire-and-forget; never blocks or alters the cadence draft.
+      void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms");
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
