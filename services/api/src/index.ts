@@ -269,6 +269,7 @@ import {
   parseVehicleChoiceConfidenceWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
+  parseWatchOptOutWithLLM,
   parseFinanceProcessQuestionWithLLM,
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
@@ -475,6 +476,7 @@ import {
   decideCadenceInviteArm,
   decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
+  decideWatchOptOutTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideSchedulingTurn,
@@ -2170,6 +2172,60 @@ async function resolveDealStatusCheckReply(
   );
   recordRouteOutcome(scope, "deal_status_check", { convId: conv.id, leadKey: conv.leadKey });
   return buildDealStatusCheckReply();
+}
+
+// Watch opt-out: confidence floor (default 0.7 — moderate; biased toward KEEPING the watch on doubt).
+function watchOptOutConfidenceMin(): number {
+  const raw = Number(process.env.LLM_WATCH_OPT_OUT_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the watch-opt-out parser only runs on disinterest/opt-out-ish phrasings. A gate,
+// NOT comprehension: a hint miss falls through to existing behavior; the parser owns the decision.
+const WATCH_OPT_OUT_HINT_RE =
+  /\b(not interested|no longer|take me off|stop (the )?alert|stop notif|stop (let|text)|unsubscrib|all set|already (bought|got|purchased)|found (one|something)|no thanks|not looking|don'?t need|cancel (the )?(watch|alert)|opt[-\s]?out)\b/i;
+function watchOptOutHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return WATCH_OPT_OUT_HINT_RE.test(t);
+}
+
+function buildWatchOptOutAck(): string {
+  return "No problem — I'll take you off the alerts for that one. Just text me anytime if you want back on.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). PAUSES the
+// customer's inventory watch (so the watch-fire engine stops notifying) + stops the related cadence,
+// and returns a brief ack — ONLY when the conv has an ACTIVE watch AND a confident, explicit watch
+// opt-out is detected; otherwise null so existing handling runs. Lighter than a full disposition
+// closeout (keeps them as a lead, just off the alerts).
+async function resolveWatchOptOutReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove
+  if (!watchOptOutHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("watch_opt_out_parser", () =>
+    parseWatchOptOutWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-watch-opt-out-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideWatchOptOutTurn({
+    hasActiveWatch: true,
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: watchOptOutConfidenceMin()
+  });
+  if (decision.kind !== "pause_watch") return null;
+  const paused = pauseInventoryWatches(conv);
+  stopFollowUpCadence(conv, "watch_opt_out");
+  recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
+  return buildWatchOptOutAck();
 }
 
 // Conversation closeout / sign-off: confidence floor (default 0.7 — biased toward NOT closing out).
@@ -4907,6 +4963,27 @@ async function processInventoryWatchlist(targetConvId?: string) {
   }
 }
 
+// Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
+function hasActiveInventoryWatch(conv: any): boolean {
+  const watches = conv?.inventoryWatches?.length ? conv.inventoryWatches : conv?.inventoryWatch ? [conv.inventoryWatch] : [];
+  return watches.some((w: any) => w && w.status !== "paused");
+}
+
+// Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
+// engine skips paused watches — 4834/4945). Reversible — keeps the record so they can be re-added if
+// they ask. Returns how many were paused.
+function pauseInventoryWatches(conv: any): number {
+  const watches = conv?.inventoryWatches?.length ? conv.inventoryWatches : conv?.inventoryWatch ? [conv.inventoryWatch] : [];
+  let paused = 0;
+  for (const w of watches) {
+    if (w && w.status !== "paused") {
+      w.status = "paused";
+      paused++;
+    }
+  }
+  return paused;
+}
+
 async function notifyInventoryWatchersForAvailableItem(
   matchedItem: InventoryFeedItem,
   opts?: { reason?: string; excludeConvId?: string | null }
@@ -4964,7 +5041,7 @@ async function notifyInventoryWatchersForAvailableItem(
     const colorText = color ? ` in ${color}` : "";
     const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
     const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
-    const baseReply = `${opener} — ${name}${colorText} is available again. Want details or a time to check it out?`;
+    const baseReply = `${opener} — ${name}${colorText} is available again. Want details or a time to check it out?\nNot looking anymore? Just say so and I'll stop these alerts.`;
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();
     const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
     const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
@@ -6568,6 +6645,7 @@ async function suppressRelatedPhones(
 async function applySmsOptOut(conv: any, event: { from?: string } | undefined) {
   await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
   stopFollowUpCadence(conv, "opt_out");
+  pauseInventoryWatches(conv); // remove from watch alerts too (so a reopen can't refire)
   closeConversation(conv, "opt_out");
   stopRelatedCadences(conv, "opt_out", { close: true });
 }
@@ -22810,6 +22888,7 @@ function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositi
   stopFollowUpCadence(conv, decision.reason);
   setFollowUpMode(conv, "paused_indefinite", decision.reason);
   setDialogState(conv, decision.state as DialogStateName);
+  pauseInventoryWatches(conv); // a customer stepping back is off the watch alerts too
   closeConversation(conv, decision.reason);
   stopRelatedCadences(conv, decision.reason, { close: true });
 }
@@ -50277,6 +50356,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
+        // Watch opt-out: pause the watch (stop the alerts) on a confident opt-out before composing a
+        // pleasantry. Parser-first + fail-safe (null => existing behavior). Parity with live.
+        const regenWatchOptOutReply = await resolveWatchOptOutReply(conv, regenNoResponseInboundText, "regen");
+        if (regenWatchOptOutReply) {
+          if (channel === "email") return respondWithEmailRegeneratedDraft(regenWatchOptOutReply);
+          return respondWithSmsRegeneratedDraft(regenWatchOptOutReply);
+        }
         // Rescue a deal/progress status check before composing a pleasantry (parity with live).
         const regenDealStatusReply = await resolveDealStatusCheckReply(
           conv,
@@ -57884,6 +57970,12 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
+        // Watch opt-out: pause the watch (stop the alerts) on a confident opt-out before composing a
+        // pleasantry. Parser-first + fail-safe (null => existing behavior). Same resolver in regenerate.
+        const watchOptOutReply = await resolveWatchOptOutReply(conv, noResponseInboundText, "live");
+        if (watchOptOutReply) {
+          return publishLiveTwilioReply(watchOptOutReply);
+        }
         // Rescue a deal/progress status check ("how are we looking", "any update?") that the
         // small-talk classifier read as banter, BEFORE composing a pleasantry. Parser-first +
         // fail-safe (null => existing small-talk behavior). Same resolver runs in regenerate.
