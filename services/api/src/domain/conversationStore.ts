@@ -814,6 +814,16 @@ export type Conversation = {
   financeDocs?: FinanceDocsState;
   tradePayoff?: TradePayoffState;
   emailDraft?: string;
+  // STEP 2 of the self-correcting draft loop: when the pre-publish quality gate fails a draft, we
+  // store NO draft and set this "held / being fixed" marker instead — so a bad draft never reaches
+  // the outgoing field. Cleared the moment a passing draft publishes. Dark unless the live gate flag
+  // is on. The console renders a held conversation with no editable textarea / no Send.
+  draftHeld?: {
+    at: string;
+    reason: string; // gate action: "live_hold" | "live_regenerate"
+    judgeReason?: string;
+    channel: "sms" | "email";
+  } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   financeOutcome?: {

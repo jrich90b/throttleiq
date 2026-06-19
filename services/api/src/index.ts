@@ -3868,7 +3868,37 @@ async function runNoResponseJudgeShadow(
   }
 }
 
-function publishCustomerReplyDraft(args: {
+// STEP 2 pre-publish quality gate (dark unless DRAFT_QUALITY_JUDGE_ENABLED). Runs the draft-quality
+// judge BEFORE the draft is stored, so a failing draft is never written to the outgoing field. When
+// the flag is OFF this short-circuits immediately (no judge call, no latency) — behavior identical to
+// before. Returns held=true (with the gate action) only on a confident hold/regenerate while live.
+async function gateDraftBeforePublish(
+  conv: Conversation,
+  candidate: string,
+  channel: "sms" | "email"
+): Promise<{ held: false } | { held: true; reason: string; judgeReason?: string }> {
+  if (!isDraftQualityJudgeEnabled()) return { held: false }; // dark: no judge call, no latency
+  try {
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    if (!inbound) return { held: false };
+    const verdict = await judgeDraftQualityWithLLM({
+      draft: candidate,
+      inbound,
+      history: buildHistory(conv, 8),
+      lead: conv.lead,
+      channel
+    });
+    const decision = decideDraftQualityGate({ enabled: true, verdict });
+    if (decision.live && (decision.action === "hold" || decision.action === "regenerate")) {
+      return { held: true, reason: `live_${decision.action}`, judgeReason: verdict?.reason };
+    }
+  } catch {
+    // Fail-open: a judge error must never block a draft (fail toward publishing).
+  }
+  return { held: false };
+}
+
+async function publishCustomerReplyDraft(args: {
   conv: Conversation;
   channel: "sms" | "email";
   text: string;
@@ -3881,11 +3911,40 @@ function publishCustomerReplyDraft(args: {
   routeScope?: "live" | "regen" | "manual";
   routeOutcome?: string;
   routeDetail?: Record<string, unknown>;
-}): { ok: true; draft: string } | { ok: false; reason: string } {
+}): Promise<{ ok: true; draft: string } | { ok: false; reason: string; held?: boolean }> {
   const invariant = args.evaluateInvariant(args.text, args.invariantHints);
   if (!invariant.allow) {
     return { ok: false, reason: invariant.reason ?? "draft_invariant_blocked" };
   }
+
+  // STEP 2 gate: on a held verdict, store NO draft — clear any existing draft + set the held marker
+  // so the outgoing field never shows it. Dark unless the live flag is on (then this is a no-op).
+  const gate = await gateDraftBeforePublish(args.conv, invariant.draftText, args.channel);
+  if (gate.held) {
+    discardPendingDrafts(args.conv, "draft_quality_held");
+    delete args.conv.emailDraft;
+    args.conv.draftHeld = {
+      at: new Date().toISOString(),
+      reason: gate.reason,
+      judgeReason: gate.judgeReason,
+      channel: args.channel
+    };
+    saveConversation(args.conv);
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "draft_quality.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        reason: gate.reason,
+        judgeReason: String(gate.judgeReason ?? "").slice(0, 180),
+        channel: args.channel
+      }
+    });
+    return { ok: false, reason: "draft_quality_held", held: true };
+  }
+  // A passing draft supersedes any prior held state on this conversation.
+  if (args.conv.draftHeld) args.conv.draftHeld = null;
 
   const shouldDiscardPendingDrafts =
     args.discardPendingDraftsBeforePublish ?? (args.channel === "sms");
@@ -3924,8 +3983,12 @@ function publishCustomerReplyDraft(args: {
       ...(args.routeDetail ?? {})
     });
   }
-  // Shadow: judge the just-published draft (fire-and-forget; never blocks the publish).
-  void runDraftQualityJudgeShadow(args.conv, draft, args.channel, args.routeScope ?? "live");
+  // Shadow: judge the just-published draft (fire-and-forget; never blocks the publish). Skipped when
+  // the live gate is ON — gateDraftBeforePublish already judged this draft synchronously above, so
+  // running the shadow hook too would double the LLM call.
+  if (!isDraftQualityJudgeEnabled()) {
+    void runDraftQualityJudgeShadow(args.conv, draft, args.channel, args.routeScope ?? "live");
+  }
   return { ok: true, draft };
 }
 
@@ -5577,7 +5640,7 @@ app.post("/public/widget/text-us", async (req, res) => {
             classificationCta: conv.classification?.cta ?? null,
             ...(invariantHints ?? {})
           });
-        publishCustomerReplyDraft({
+        await publishCustomerReplyDraft({
           conv,
           channel: "sms",
           text: draftText,
@@ -12820,7 +12883,7 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     return { queued: false, reason: "phone_preferred", draft };
   }
   if (preferredMethod === "email") {
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "email",
       text: draft,
@@ -12842,7 +12905,7 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     ) {
       return { queued: false, reason: "duplicate", draft };
     }
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text: draft,
@@ -47137,7 +47200,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // to clear; there is no draft to clear anyway).
     return res.json({ ok: true, conversation: conv, skipped: true, note: reason, preservedDraft: true });
   };
-  const respondWithSmsRegeneratedDraft = (
+  const respondWithSmsRegeneratedDraft = async (
     text: string,
     mediaUrls?: string[],
     invariantHints?: {
@@ -47148,7 +47211,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent?: boolean;
     }
   ) => {
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text,
@@ -47165,8 +47228,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
-  const respondWithEmailRegeneratedDraft = (text: string) => {
-    const published = publishCustomerReplyDraft({
+  const respondWithEmailRegeneratedDraft = async (text: string) => {
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "email",
       text,
@@ -51942,7 +52005,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   await seedInventoryWatchPendingFromReply(conv, event, reply);
 
     if (channel === "email") {
-      const published = publishCustomerReplyDraft({
+      const published = await publishCustomerReplyDraft({
         conv,
         channel: "email",
         text: reply,
@@ -51966,7 +52029,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
 
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text: reply,
@@ -53551,7 +53614,7 @@ if (authToken && signature) {
               : null
         });
         if (draft) {
-          const published = publishCustomerReplyDraft({
+          const published = await publishCustomerReplyDraft({
             conv,
             channel: "sms",
             text: draft,
