@@ -154,7 +154,7 @@ function extractColor(item: Record<string, any>): string | undefined {
   return undefined;
 }
 
-function normalizeModel(s: string): string {
+export function normalizeModel(s: string): string {
   const raw = s
     .toLowerCase()
     // common model-word cleanup for user-entered text
@@ -170,7 +170,7 @@ function normalizeModel(s: string): string {
   return raw;
 }
 
-function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
+export function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
   if (!candidateRaw) return false;
   const candidate = normalizeModel(candidateRaw);
   const target = normalizeModel(targetRaw);

@@ -175,6 +175,14 @@ restore_if_backup_exists() {
   echo "[feedback-hourly] step=booking_funnel_audit"              # appointment bookings (offer->book misses)
   BOOKING_FUNNEL_OUT_DIR="$BOOKING_FUNNEL_OUT_DIR" npx tsx scripts/booking_funnel_audit.ts --since-days 1 --out-dir "$BOOKING_FUNNEL_OUT_DIR" > /dev/null 2>&1 || true
 
+  echo "[feedback-hourly] step=watch_fire_miss_audit"             # active watch + matching unit in stock + not notified
+  mkdir -p "$REPORT_ROOT/watch_fire_miss"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" WATCH_FIRE_MISS_OUT="$REPORT_ROOT/watch_fire_miss/watch_fire_miss_report.txt" npx tsx scripts/watch_fire_miss_audit.ts > /dev/null 2>&1 || true
+
+  echo "[feedback-hourly] step=cross_lead_leak_audit"             # another customer's contact in the wrong thread
+  mkdir -p "$REPORT_ROOT/cross_lead_leak"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" CROSS_LEAD_LEAK_OUT="$REPORT_ROOT/cross_lead_leak/cross_lead_leak_report.txt" npx tsx scripts/cross_lead_leak_audit.ts > /dev/null 2>&1 || true
+
   echo "[feedback-hourly] step=agent_manager_report"
   npm run agent_manager:report
 
