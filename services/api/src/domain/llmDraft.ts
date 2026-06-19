@@ -1872,9 +1872,15 @@ export type DraftQualityJudgeParse = {
 
 export type ShouldRespondJudgeParse = {
   // Given the customer's turn the agent chose to STAY SILENT on, did it actually warrant a reply?
-  // true = a real ask/need was dropped (a wrongful silence). false = silence is appropriate
-  // (opt-out, pure ack/thanks, closeout "no need", a first-person deferral, off-topic banter).
+  // true = a real ask/need was dropped (a wrongful silence). false = silence is appropriate.
   shouldRespond: boolean;
+  // Finer category so social-closer opportunities surface separately in the shadow data:
+  // - "answer_needed": a real question/request/need was dropped (=> shouldRespond true).
+  // - "social_reciprocation": a warm brief reply would be on-brand but is OPTIONAL ("have a good
+  //   weekend!" -> "you too!"; a heartfelt thank-you) — shouldRespond stays false (we don't force
+  //   it), but it's surfaced so staff can decide whether the agent should warmly reciprocate.
+  // - "no_reply": truly nothing needed (opt-out/STOP, pure ack, closeout "no need", deferral).
+  category: "answer_needed" | "social_reciprocation" | "no_reply";
   confidence?: number;
   reason?: string;
 };
@@ -2909,9 +2915,10 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
 const SHOULD_RESPOND_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["should_respond", "confidence", "reason"],
+  required: ["should_respond", "category", "confidence", "reason"],
   properties: {
     should_respond: { type: "boolean" },
+    category: { type: "string", enum: ["answer_needed", "social_reciprocation", "no_reply"] },
     confidence: { type: "number" },
     reason: { type: "string" }
   }
@@ -6271,29 +6278,34 @@ export async function judgeShouldRespondWithLLM(args: {
     "the dealership should answer — or whether silence was the right call.",
     "Return only JSON matching the provided schema.",
     "",
-    "should_respond = true when the customer asked a question or made a request the dealership should",
-    "  answer/act on: price, availability, photos, financing, a time to come in, a callback, a",
-    "  specific question, a complaint, a problem. Staying silent on these is a miss.",
-    "should_respond = false when silence is correct:",
-    "- an opt-out / STOP, or 'wrong number',",
-    "- a pure acknowledgement or thanks with no ask ('👍', 'ok', 'sounds good', 'thanks!', 'perfect'),",
-    "- a closeout that needs nothing ('no need, I already called', 'all set', 'I was just curious'),",
-    "- a first-person deferral ('I'll let you know', 'I'll reach out when I'm ready'),",
-    "- pure off-topic banter already handled.",
+    "Also assign a category:",
+    "- \"answer_needed\": the customer asked a question or made a request the dealership should answer/act",
+    "  on — price, availability, photos, financing, a time to come in, a callback, a specific question, a",
+    "  complaint, a problem. Staying silent on these is a miss. => should_respond=true.",
+    "- \"social_reciprocation\": a warm, relational closer where a brief human reply would be on-brand but",
+    "  is OPTIONAL — \"have a good weekend!\", \"thanks so much, you've been a huge help\", \"happy Friday\",",
+    "  \"hope you have a great day\". A friend would say \"you too!\" These are NOT a dropped ask — set",
+    "  should_respond=false (don't force it), but tag them so staff can decide whether to reciprocate.",
+    "- \"no_reply\": truly nothing is needed — an opt-out / STOP / 'wrong number'; a pure ack with no",
+    "  warmth or ask ('👍', 'ok', 'sounds good', 'perfect'); a closeout ('no need, I already called',",
+    "  'all set', 'I was just curious'); a first-person deferral ('I'll let you know'). => should_respond=false.",
     "",
     "Rules:",
+    "- should_respond is true ONLY for category answer_needed. social_reciprocation and no_reply are false.",
     "- Judge by the customer's message + recent thread. A bare 'ok' AFTER we asked a question may still",
     "  warrant a follow-up; a bare 'ok' as a closeout does not — use the thread.",
-    "- When genuinely unsure, prefer should_respond=false (don't manufacture a reply).",
+    "- When genuinely unsure, prefer no_reply / should_respond=false (don't manufacture a reply).",
     "- confidence is 0..1; use >= 0.8 only when clear.",
     "",
     "Examples:",
-    '- "What is the asking price?" -> {"should_respond":true,"confidence":0.95,"reason":"a direct price question went unanswered"}',
-    '- "can you send me a couple pics?" -> {"should_respond":true,"confidence":0.92,"reason":"a media request went unanswered"}',
-    '- "👍" -> {"should_respond":false,"confidence":0.95,"reason":"pure acknowledgement, no ask"}',
-    '- "thanks, I was just curious" -> {"should_respond":false,"confidence":0.92,"reason":"closeout, needs nothing"}',
-    '- "STOP" -> {"should_respond":false,"confidence":0.98,"reason":"opt-out"}',
-    '- "I\'ll let you know when I\'m ready" -> {"should_respond":false,"confidence":0.85,"reason":"first-person deferral"}',
+    '- "What is the asking price?" -> {"should_respond":true,"category":"answer_needed","confidence":0.95,"reason":"a direct price question went unanswered"}',
+    '- "can you send me a couple pics?" -> {"should_respond":true,"category":"answer_needed","confidence":0.92,"reason":"a media request went unanswered"}',
+    '- "have a good weekend!" -> {"should_respond":false,"category":"social_reciprocation","confidence":0.9,"reason":"warm closer; a brief \'you too\' would be on-brand"}',
+    '- "thanks so much, you have been a huge help" -> {"should_respond":false,"category":"social_reciprocation","confidence":0.88,"reason":"heartfelt thanks; a warm reply fits the friendly voice"}',
+    '- "👍" -> {"should_respond":false,"category":"no_reply","confidence":0.95,"reason":"pure acknowledgement, no ask"}',
+    '- "thanks, I was just curious" -> {"should_respond":false,"category":"no_reply","confidence":0.92,"reason":"closeout, needs nothing"}',
+    '- "STOP" -> {"should_respond":false,"category":"no_reply","confidence":0.98,"reason":"opt-out"}',
+    '- "I\'ll let you know when I\'m ready" -> {"should_respond":false,"category":"no_reply","confidence":0.85,"reason":"first-person deferral"}',
     "",
     history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
     `Customer message the agent stayed silent on: ${inbound}`
@@ -6320,8 +6332,13 @@ export async function judgeShouldRespondWithLLM(args: {
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
+  const catRaw = String(parsed.category ?? "").toLowerCase();
+  const category: ShouldRespondJudgeParse["category"] =
+    catRaw === "answer_needed" || catRaw === "social_reciprocation" ? catRaw : "no_reply";
   return {
-    shouldRespond: parsed.should_respond === true,
+    // should_respond is authoritative for answer_needed only; never force a reply on the others.
+    shouldRespond: parsed.should_respond === true && category === "answer_needed",
+    category,
     confidence,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined
   };

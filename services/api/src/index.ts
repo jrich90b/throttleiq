@@ -3689,15 +3689,24 @@ async function runNoResponseJudgeShadow(
     });
     if (!verdict) return;
     const decision = decideNoResponseJudge({ enabled: isNoResponseJudgeEnabled(), verdict });
-    if (decision.action !== "pass") {
+    // Log a wrongful silence (action != pass) OR a social-reciprocation opportunity (a warm closer
+    // the agent stayed silent on — surfaced separately so staff can decide whether to reciprocate).
+    const isSocialReciprocation = verdict.category === "social_reciprocation";
+    if (decision.action !== "pass" || isSocialReciprocation) {
       recordDecisionTrace({
         scope,
-        stage: decision.live ? "no_response.flag" : "no_response.shadow",
+        stage:
+          decision.action !== "pass"
+            ? decision.live
+              ? "no_response.flag"
+              : "no_response.shadow"
+            : "no_response.social_reciprocation",
         convId: conv.id,
         leadKey: conv.leadKey,
         detail: {
           action: decision.action,
           live: decision.live,
+          category: verdict.category,
           shouldRespond: verdict.shouldRespond,
           confidence: verdict.confidence ?? null,
           reason: String(verdict.reason ?? "").slice(0, 180),
