@@ -615,6 +615,56 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
+// --- Conversation closeout / sign-off (2026-06-19) -------------------------
+//
+// A warm closer ("have a good weekend!", "you guys are the best!", "thanks again,
+// take care") should END the thread gracefully — one brief reciprocation, then quiet
+// — not trigger another reply or a bike pivot. Joe's report: the agent "would not know
+// when to close out after a social reciprocation — it would keep going." The only
+// existing signal (isCloseoutSignoffNoResponseText) is a narrow keyword regex matching
+// "talk soon"/"see you soon", so warm closers fell through to the small-talk generator
+// (which is even told it MAY pivot back to bikes). This centralizes the parser-first
+// closeout decision; the parser signal + an actionable-signal guard are fed in.
+//
+// Two actions:
+//  - reciprocate_and_close: send ONE brief warm reply, then stop (no pivot, no question).
+//  - close_silent: no reply at all — a terminal echo where replying again is over-texting.
+//
+// FAIL DIRECTION: any uncertainty (no parser / low confidence / an actionable ask present)
+// resolves to "none" — the existing reply path runs. We only close out on a confident closer
+// with NO actionable signal, so the worst case is keeping the conversation going (the safe
+// direction), never going silent on a live ask. Scope is the IMMEDIATE exchange only — this
+// decision never touches the follow-up cadence (that stays with the disposition handlers).
+// ---------------------------------------------------------------------------
+export type ConversationCloseoutTurnKind = "reciprocate_and_close" | "close_silent" | "none";
+
+export type ConversationCloseoutTurnInput = {
+  parserAccepted: boolean;
+  kind?: ConversationCloseoutTurnKind | null; // parser's classification
+  confidence: number;
+  confidenceMin: number;
+  hasActionableSignal: boolean; // ? / pricing / scheduling / availability / trade / callback present
+};
+
+export type ConversationCloseoutTurnDecision = {
+  kind: ConversationCloseoutTurnKind;
+};
+
+export function decideConversationCloseoutTurn(
+  input: ConversationCloseoutTurnInput
+): ConversationCloseoutTurnDecision {
+  // Never close out a turn that contains a real ask — fail toward replying.
+  if (input.hasActionableSignal) return { kind: "none" };
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.kind !== "reciprocate_and_close" && input.kind !== "close_silent") {
+    return { kind: "none" };
+  }
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: input.kind };
+}
+
 // --- Appointment/stop-in invite A/B experiment (2026-06-14) ---------------
 // The appointment-invite cadence message is our lowest-replying touch with real
 // volume (5.9% reply vs ~30% for soft check-ins, 6/14 snapshot). We A/B the copy

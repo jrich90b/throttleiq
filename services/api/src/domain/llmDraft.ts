@@ -517,6 +517,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
   hasHumorHint?: boolean;
   allowBikePivotHint?: boolean;
   smallTalkStreakHint?: number | null;
+  // closingHint=true: this turn is a conversational CLOSER/sign-off. Produce a brief warm farewell
+  // and STOP — no bike pivot, no new question, no invitation to act. Forces allowBikePivot off.
+  closingHint?: boolean;
 }): Promise<{ reply: string; confidence?: number; source?: "structured" | "freeform" } | null> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
@@ -524,7 +527,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const hasHumorHint = !!args.hasHumorHint;
-  const allowBikePivotHint = args.allowBikePivotHint !== false;
+  const closingHint = !!args.closingHint;
+  // A closeout reply must never pivot back to bikes — keep it a clean, warm sign-off.
+  const allowBikePivotHint = closingHint ? false : args.allowBikePivotHint !== false;
   const smallTalkStreakHint =
     typeof args.smallTalkStreakHint === "number" && Number.isFinite(args.smallTalkStreakHint)
       ? Math.max(0, Math.trunc(args.smallTalkStreakHint))
@@ -544,6 +549,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "Return only JSON that matches the schema.",
     "",
     "Rules:",
+    closingHint
+      ? "- This is a friendly SIGN-OFF: the conversation is wrapping up. Reply with ONE brief, warm farewell that mirrors their note, then stop. Do NOT ask a question. Do NOT invite them to come in, call, book, or look at anything. Do NOT pivot to bikes/pricing/scheduling. Just warmly send them off."
+      : null,
     "- Keep it natural, friendly, and concise (1 sentence, max ~10 words).",
     "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
@@ -560,6 +568,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "- Do NOT use phrases like 'I'm here if you need anything' or 'Got it.' as the main reply.",
     "",
     "Good examples:",
+    closingHint ? "- input: \"have a good weekend!\" -> \"You too — enjoy the weekend!\"" : null,
+    closingHint ? "- input: \"you guys are the best, thank you!\" -> \"Appreciate that — ride safe!\"" : null,
+    closingHint ? "- input: \"thanks again, take care\" -> \"Anytime — take care!\"" : null,
     allowBikePivotHint
       ? "- \"Haha, fair one - if you want to jump back into bikes, I can help anytime.\""
       : "- \"Haha, fair one - that one had everyone talking.\"",
@@ -626,10 +637,14 @@ export async function generateSmallTalkReplyWithLLM(args: {
         model,
         instructions: [
           "Write one short, natural SMS reply (max 1 sentence, <= 20 words).",
-          "The customer sent off-topic small talk/chatter.",
-          allowBikePivotHint
-            ? "Acknowledge casually and you may lightly keep the door open for bike help."
-            : "Acknowledge casually without pivoting back to bikes.",
+          closingHint
+            ? "The customer is signing off / wrapping up. Reply with a brief warm farewell that mirrors their note, then stop — no question, no invitation to come in/call/book, no pivot to bikes."
+            : "The customer sent off-topic small talk/chatter.",
+          closingHint
+            ? "Acknowledge warmly and let it rest."
+            : allowBikePivotHint
+              ? "Acknowledge casually and you may lightly keep the door open for bike help."
+              : "Acknowledge casually without pivoting back to bikes.",
           "Do not mention emojis, reactions, or 'thumbs up'.",
           "Do not say you're checking anything.",
           "Do not use: 'I'm here if you need anything.'",
@@ -1857,6 +1872,20 @@ export type FinanceProcessQuestionParse = {
   confidence?: number;
 };
 
+export type ConversationCloseoutParse = {
+  // The customer's turn is a conversational CLOSER / sign-off and the right move is to let the
+  // thread rest — not keep selling or asking another question. Two flavors:
+  // - "reciprocate_and_close": a warm closer that deserves ONE brief, on-voice reply and then
+  //   silence ("have a good weekend!", "you guys are the best!", "thanks again, take care").
+  // - "close_silent": a terminal echo/acknowledgment where replying again would be over-texting —
+  //   especially when WE already signed off and they just echo ("you too!", "sounds good talk
+  //   soon", "👍 thanks"). The agent should not insist on the last word.
+  // - "none": still an active turn (a real question/request, ongoing chatter that isn't winding
+  //   down, or a concrete ask another handler owns). Fail here when unsure — keep replying.
+  kind: "reciprocate_and_close" | "close_silent" | "none";
+  confidence?: number;
+};
+
 export type DraftQualityJudgeParse = {
   // Per-axis pass flags for a customer-facing draft, judged against the customer's turn.
   intentOk: boolean; // does the draft actually ADDRESS what the customer asked?
@@ -2908,6 +2937,16 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   properties: {
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const CONVERSATION_CLOSEOUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "confidence"],
+  properties: {
+    kind: { type: "string", enum: ["reciprocate_and_close", "close_silent", "none"] },
     confidence: { type: "number" }
   }
 };
@@ -6153,6 +6192,105 @@ export async function parseDealStatusCheckWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+// Conversation closeout / sign-off (2026-06-19). Reads whether the inbound turn is a CLOSER and
+// the right move is to let the thread rest rather than keep selling / asking another question.
+// Joe's report: after a warm closer the agent "would not know when to close out — it would keep
+// going" (the narrow isCloseoutSignoffNoResponseText regex only matched "talk soon"/"see you
+// soon", so "have a good weekend!" fell through to the small-talk generator, which is even told it
+// MAY pivot back to bikes). Parser-first replacement: distinguish a closer that deserves ONE warm
+// reply ("reciprocate_and_close") from a terminal echo where any further reply is over-texting
+// ("close_silent"), vs. an active turn ("none"). Returns null when disabled/low-signal — callers
+// treat null as "not a closeout" and fall through to existing behavior (fail toward replying).
+export async function parseConversationCloseoutWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ConversationCloseoutParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CONVERSATION_CLOSEOUT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CONVERSATION_CLOSEOUT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer's latest",
+    "message is a CONVERSATIONAL CLOSER / sign-off — the thread is wrapping up and the agent should",
+    "let it rest, not keep selling or asking another question.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify kind:",
+    '- "reciprocate_and_close": a warm closer/sign-off that deserves ONE short, warm reply and then',
+    '  silence. The customer is being friendly as they wrap up: "have a good weekend!", "you guys are',
+    '  the best!", "thanks again, take care", "appreciate all your help!", "happy friday, talk soon".',
+    '- "close_silent": a terminal echo / bare acknowledgment where replying AGAIN would be over-texting',
+    "  — especially when OUR last message was already a warm sign-off and they just mirror it back:",
+    '  "you too!", "thanks 👍", "sounds good, talk soon", "ok have a good one". Nothing is owed; the',
+    "  agent should not insist on the last word.",
+    '- "none": still an ACTIVE turn — a real question or request, ongoing chatter that is not winding',
+    "  down, or a concrete ask another handler owns (price, payment, a day/time, availability, a trade",
+    "  value, a photo, hours/directions, a callback). When unsure, choose none.",
+    "",
+    "Hard rules (precision matters — a false closeout makes the agent go quiet on a live customer):",
+    "- If the message asks for ANYTHING (a question mark, a price/payment/availability/scheduling/trade/",
+    "  callback request), it is none — never a closeout.",
+    "- Use the recent messages: if OUR last outbound already warmly signed off and the customer just",
+    "  echoes a pleasantry, prefer close_silent; if they send a fresh warm closer we have not answered,",
+    "  prefer reciprocate_and_close.",
+    "- A deferral/disposition ('I'll pass', 'not now', 'keep my bike') is NOT this — that's handled",
+    "  elsewhere; return none.",
+    "- confidence is 0..1; use >= 0.7 only when the closer read is clear.",
+    "",
+    "Examples:",
+    '- "Have a great weekend!" -> {"kind":"reciprocate_and_close","confidence":0.9}',
+    '- "You guys are the best, thank you!" -> {"kind":"reciprocate_and_close","confidence":0.9}',
+    '- "Thanks again, take care!" -> {"kind":"reciprocate_and_close","confidence":0.88}',
+    '- (our last: "Have a great weekend!") "You too!" -> {"kind":"close_silent","confidence":0.9}',
+    '- "sounds good, talk soon 👍" -> {"kind":"close_silent","confidence":0.85}',
+    '- "Ok thanks" -> {"kind":"close_silent","confidence":0.78}',
+    '- "what\'s the out the door price?" -> {"kind":"none","confidence":0.95}',
+    '- "can I come by Saturday?" -> {"kind":"none","confidence":0.95}',
+    '- "did you watch the game last night?" -> {"kind":"none","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "conversation_closeout_parser",
+      schema: CONVERSATION_CLOSEOUT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-conversation-closeout-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.kind ?? "").toLowerCase();
+  const kind: ConversationCloseoutParse["kind"] =
+    raw === "reciprocate_and_close" || raw === "close_silent" ? raw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { kind, confidence };
 }
 
 // Finance-process / logistics handoff (2026-06-18, Adam +17166033199 via intent_handled_audit).
