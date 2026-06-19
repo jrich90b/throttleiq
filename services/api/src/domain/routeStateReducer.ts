@@ -571,6 +571,40 @@ export function decideDealStatusCheckTurn(
   return { kind: "answer_status" };
 }
 
+// --- Watch opt-out (2026-06-19) --------------------------------------------
+// A customer on an inventory WATCH says they want OFF the alerts. The side effect is to PAUSE the
+// watch so the watch-fire engine stops notifying them (avoid spamming). Centralized + pure; the
+// parser signal + a hasActiveWatch gate are fed in.
+//
+// FAIL DIRECTION: unsure => none (keep the watch). A wrongly-paused watch makes them miss a unit they
+// asked to be told about, so we only act on a confident, explicit opt-out. (Joe prioritizes not-
+// spamming, so the floor is moderate; the caller may also escalate a clearly-done customer to the
+// disposition closeout, which pauses the watch anyway.)
+// ---------------------------------------------------------------------------
+export type WatchOptOutTurnKind = "pause_watch" | "none";
+
+export type WatchOptOutTurnInput = {
+  hasActiveWatch: boolean;
+  parserAccepted: boolean;
+  intent?: string | null; // "watch_opt_out" | "none"
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type WatchOptOutTurnDecision = {
+  kind: WatchOptOutTurnKind;
+};
+
+export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutTurnDecision {
+  if (!input.hasActiveWatch) return { kind: "none" }; // nothing to remove
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "watch_opt_out") return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "pause_watch" };
+}
+
 // --- Finance-process / logistics handoff (2026-06-18) ----------------------
 //
 // A customer asking about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing

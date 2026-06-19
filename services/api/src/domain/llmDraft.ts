@@ -1869,6 +1869,15 @@ export type DealStatusCheckParse = {
   confidence?: number;
 };
 
+export type WatchOptOutParse = {
+  // "watch_opt_out": the customer (who is on an inventory watch) wants OFF the alerts — no longer
+  //   interested in being notified, bought one elsewhere, "take me off the list", "stop the alerts",
+  //   "I'm all set". The side effect is to pause their watch so the watch-fire engine stops notifying.
+  // "none": still interested / a concrete different ask / ambiguous.
+  intent: "watch_opt_out" | "none";
+  confidence?: number;
+};
+
 export type FinanceProcessQuestionParse = {
   // "finance_process_handoff": a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS
   //   of financing & its related steps (insurance timing, down-payment deadlines, order of
@@ -2953,6 +2962,16 @@ const DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     intent: { type: "string", enum: ["deal_status_check", "none"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const WATCH_OPT_OUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["watch_opt_out", "none"] },
     confidence: { type: "number" }
   }
 };
@@ -6334,6 +6353,93 @@ export async function parseConversationCloseoutWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { kind, confidence };
+}
+
+// Watch opt-out (2026-06-19). The customer is on an inventory WATCH (we proactively text them when a
+// matching unit comes in). Detects when they want OFF those alerts — no longer interested in being
+// notified, bought elsewhere, "take me off the list", "stop the alerts". The deterministic side effect
+// is to PAUSE the watch (the engine skips paused). Only called when the conversation has an ACTIVE
+// watch, so the parser just decides opt-out vs not. Returns null when disabled/low-signal => keep the
+// watch (fail toward NOT-removing on uncertainty: a wrongly-paused watch makes them miss a unit they
+// wanted; but Joe prioritizes not-spamming, so the floor is moderate, not high).
+export async function parseWatchOptOutWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<WatchOptOutParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WATCH_OPT_OUT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WATCH_OPT_OUT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WATCH_OPT_OUT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership thread. The customer is on an INVENTORY WATCH — we text them",
+    "proactively when a matching bike comes into stock. Decide whether THIS message means they want OFF",
+    "those alerts (we should stop notifying them and remove them from the watch).",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "watch_opt_out": they no longer want the alerts / are no longer interested in being notified /',
+    '  bought one elsewhere / are done looking: "take me off the list", "stop the alerts", "not',
+    '  interested anymore", "I already bought one", "I\'m all set", "no longer looking", "unsubscribe me',
+    '  from those", "you can stop letting me know".',
+    '- "none": still interested or engaging ("yes send details", "what\'s the price", "can I see it",',
+    '  "still looking" ), a concrete different ask, or ambiguous. When unsure, choose none.',
+    "",
+    "Hard rules:",
+    "- A question or any sign of continued interest => none.",
+    '- "not right now" / "maybe later" / "next month" is a DEFER, not an opt-out => none (they still',
+    "  want the watch).",
+    "- Only opt_out when they clearly want the ALERTS to stop or are clearly done looking.",
+    "- confidence 0..1; use >= 0.7 only when the opt-out is clear.",
+    "",
+    "Examples:",
+    '- "take me off the list please" -> {"intent":"watch_opt_out","confidence":0.95}',
+    '- "no thanks, I already bought one" -> {"intent":"watch_opt_out","confidence":0.93}',
+    '- "you can stop the alerts, not looking anymore" -> {"intent":"watch_opt_out","confidence":0.95}',
+    '- "I\'m all set, thanks" -> {"intent":"watch_opt_out","confidence":0.8}',
+    '- "yes! send me details" -> {"intent":"none","confidence":0.95}',
+    '- "what\'s the price?" -> {"intent":"none","confidence":0.95}',
+    '- "not right now, maybe next month" -> {"intent":"none","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "watch_opt_out_parser",
+      schema: WATCH_OPT_OUT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-watch-opt-out-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: WatchOptOutParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "watch_opt_out" ? "watch_opt_out" : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, confidence };
 }
 
 // Finance-process / logistics handoff (2026-06-18, Adam +17166033199 via intent_handled_audit).

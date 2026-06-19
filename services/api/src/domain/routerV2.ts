@@ -9,6 +9,7 @@ export {
   decideDealStatusCheckTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
+  decideWatchOptOutTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
