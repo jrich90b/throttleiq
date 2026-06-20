@@ -49,6 +49,10 @@ assert.ok(/adfDepartmentRoute\.kind === "service"/.test(sendgrid), "service over
 // Gated so it never runs on a clean bike lead the existing signals already handled.
 assert.ok(/isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue/.test(sendgrid),
   "parser must be gated to initial ADF + missed-signal + a catalog/placeholder cue");
+// The cue also fires on any terse inquiry, so a non-lexicon item with a concrete bike model in the
+// Vehicle field (e.g. "sunglasses" + "Street Glide") still gets the parser — closing the only gap.
+assert.ok(/adfDepartmentTerseInquiry/.test(sendgrid) && /adfDepartmentCue[\s\S]{0,160}adfDepartmentTerseInquiry/.test(sendgrid),
+  "the cue must also fire on a terse inquiry (belt-and-suspenders for non-lexicon items)");
 
 // --- 2) Decision-table coverage (pure). ---
 type Row = { id: string; input: Parameters<typeof decideAdfDepartmentRoute>[0]; kind: "apparel" | "parts" | "service" | "none" };
