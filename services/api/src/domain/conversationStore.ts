@@ -2324,7 +2324,7 @@ function pickLeadInVariant(text: string): string {
   if (/(i left|already left|left a deposit|just letting you know|update)/.test(t)) return "Thanks for the update.";
   if (/(can you|could you|would you|do you|is it possible)/.test(t)) return "Sure.";
   if (/(i want|i'd like|i would like|looking to|want to)/.test(t)) return "Absolutely.";
-  if (/[?]/.test(t)) return "Got it.";
+  if (/[?]/.test(t)) return "Happy to help.";
   // No filler agreement opener when nothing fits; callers drop the lead-in instead.
   return "";
 }
@@ -2346,8 +2346,10 @@ function normalizeGotItLeadIn(body: string, inboundText: string, provider: Messa
   if (!match) return body;
   const rest = trimmed.slice(match[0].length);
   if (!rest) {
+    // Bare ack with no contextual lead-in: never ship the curt "Got it." (Joe, 2026-06-20) —
+    // fall back to a warm "Sounds good." instead of echoing the original opener.
     const leadIn = pickLeadInVariant(inboundText);
-    return leadIn || trimmed;
+    return leadIn || "Sounds good.";
   }
   // Avoid stacked acknowledgments like "Thanks for sending that over. Thanks for the photo —".
   if (LEAD_IN_ACK_OPENER_RE.test(rest)) return capitalizeLeadInRest(rest);
