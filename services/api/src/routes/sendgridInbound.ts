@@ -5009,10 +5009,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     partsIntentFromText ||
     apparelIntentFromText ||
     serviceSupportIntentFromParser;
+  // A short, free-text inquiry is where a bare item NAME lives (a department item or a bike model).
+  // Run the parser on any terse inquiry too — that closes the only gap the catalog/placeholder cues
+  // leave: an item that's BOTH absent from the lexicon AND arrives with a concrete bike model in the
+  // Vehicle field (e.g. inquiry "sunglasses", vehicle "Street Glide"). The parser returns vehicle/none
+  // for real bike leads, so the worst case is a cheap first-touch call, never a misroute. Long detailed
+  // inquiries already carry their own vehicle signals and stay on the existing path.
+  const adfDepartmentInquiryWords = String(effectiveInquiry ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const adfDepartmentTerseInquiry =
+    adfDepartmentInquiryWords > 0 &&
+    adfDepartmentInquiryWords <= Number(process.env.ADF_DEPARTMENT_TERSE_INQUIRY_MAX_WORDS ?? 8);
   const adfDepartmentCue =
     catalogMatch.apparelTerms.length > 0 ||
     catalogMatch.partsTerms.length > 0 ||
-    isGenericLeadModel(adfDepartmentVehicleContext);
+    isGenericLeadModel(adfDepartmentVehicleContext) ||
+    adfDepartmentTerseInquiry;
   let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "none" } = { kind: "none" };
   if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
     const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
