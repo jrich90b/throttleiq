@@ -30,6 +30,7 @@ import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
 import { buildAgentIntro } from "./agentVoice.js";
+import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -1283,14 +1284,6 @@ function inferAppointmentType(
 }
 
 type HandoffReason = "pricing" | "payments" | "approval" | "manager" | "other";
-
-function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
-  const tf = timeframe ? timeframe.trim() : "a future";
-  if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just text me when the time is right.`;
-  }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just text me when the time is right.`;
-}
 
 function deriveModelFromDescription(desc?: string | null): string | null {
   if (!desc) return null;
@@ -4749,7 +4742,7 @@ export async function orchestrateInbound(
 
       const longTermMonths = lead.purchaseTimeframeMonthsStart;
       if (event.provider === "sendgrid_adf" && longTermMonths && longTermMonths >= 1) {
-        const msg = buildLongTermMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
+        const msg = buildLongTermTimelineMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
         return finalize({
           intent,
           stage: "ENGAGED",
