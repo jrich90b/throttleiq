@@ -141,8 +141,10 @@ import {
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
+  buildSweepstakesSignupReply,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
+  hasSweepstakesSignupAcknowledgement,
   isHiringManagerInquiryText,
   isInventoryOnlineCompletenessQuestionText,
   isTakeOffMilwaukeeEightEngineRequestText,
@@ -5662,6 +5664,35 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       note: "ride_challenge_signup_non_sales",
       draft: ack,
       rideChallengeReminderDueAt: dueAt
+    });
+  }
+
+  const isSweepstakesSignup =
+    event.provider === "sendgrid_adf" &&
+    inferredCta === "sweepstakes" &&
+    !hasSweepstakesSignupAcknowledgement(conv.messages);
+  if (isSweepstakesSignup) {
+    // National sweepstakes signup = a non-sales promo entry, NOT a bike inquiry. Congratulate +
+    // offer help, never pitch a unit or push a stop-in, and start NO follow-up cadence (mirrors the
+    // event_promo no-cadence rule via closeConversation). Without this, these leads fall through to
+    // the general reply path and get a wrong-frame reply (e.g. "Thanks for your inquiry about the
+    // 2026 Heritage Classic. If you'd like to stop in...").
+    const ack = buildSweepstakesSignupReply();
+    await publishEarlyAdfSmsDraft(ack);
+    closeConversation(conv, "sweepstakes_no_cadence");
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      bucket: inferredBucket,
+      cta: inferredCta,
+      channel,
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      note: "sweepstakes_signup_non_sales",
+      draft: ack
     });
   }
 

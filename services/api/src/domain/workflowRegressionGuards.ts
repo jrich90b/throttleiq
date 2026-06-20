@@ -758,6 +758,31 @@ export function buildRideChallengeSignupReply(args: {
   );
 }
 
+/** True if an outbound already acknowledged a sweepstakes signup (idempotency guard on replay/regenerate). */
+export function hasSweepstakesSignupAcknowledgement(
+  messages: Array<{ direction?: string | null; body?: string | null }> | null | undefined
+): boolean {
+  return (messages ?? []).some(m => {
+    if (String(m?.direction ?? "").toLowerCase() !== "out") return false;
+    const body = String(m?.body ?? "");
+    return /\b(?:entering|signing up for|signed up for)\b[\s\S]{0,60}\bsweepstakes\b/i.test(body);
+  });
+}
+
+/**
+ * Reply for a national-sweepstakes ADF signup (cta === "sweepstakes"): congratulate the entrant,
+ * offer help, and that's it — these are a non-sales promo entry, NOT a bike inquiry, so the agent
+ * must not pitch a unit or push a stop-in (and no follow-up cadence — see the handler). The softened
+ * agent greeting is prepended by applyInitialAdfPrefix, so this returns only the body. Charter-clean:
+ * no banned/computer-like phrases, one idea, low-pressure.
+ */
+export function buildSweepstakesSignupReply(): string {
+  return (
+    "Thanks for entering the national sweepstakes. Good luck! " +
+    "If I can help with anything in the meantime, just let me know."
+  );
+}
+
 export function isDemoDayEventQuestionText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "")
     .trim()
