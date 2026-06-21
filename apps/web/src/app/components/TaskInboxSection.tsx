@@ -10,6 +10,7 @@ import {
   taskEffectiveDueMs
 } from "../lib/taskTriage";
 import type { DueBucket } from "../lib/taskTriage";
+import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 
 // Snooze presets, computed in the user's local time. Each pushes the task's due
 // time to 9am on the target day so it resurfaces at the start of the workday.
@@ -252,6 +253,7 @@ export function TaskInboxSection(props: any) {
             tasks: any[];
             bucket: DueBucket;
             urgencyMs: number;
+            salesCritical: boolean;
           }> = [];
           for (const g of byConv.values()) {
             g.tasks.sort((a: any, b: any) => {
@@ -270,13 +272,16 @@ export function TaskInboxSection(props: any) {
               convId: g.convId,
               tasks: g.tasks,
               bucket: dueBucketFor(primary, nowMs),
-              urgencyMs: taskEffectiveDueMs(primary) ?? Number.POSITIVE_INFINITY
+              urgencyMs: taskEffectiveDueMs(primary) ?? Number.POSITIVE_INFINITY,
+              salesCritical: g.tasks.some((t: any) => salesCriticalKind(t) != null)
             });
           }
           groups.sort((a, b) => {
             const ra = dueBucketRank(a.bucket);
             const rb = dueBucketRank(b.bucket);
             if (ra !== rb) return ra - rb;
+            // Within a due bucket, the money tasks (pricing/financing/availability) rise.
+            if (a.salesCritical !== b.salesCritical) return a.salesCritical ? -1 : 1;
             return a.urgencyMs - b.urgencyMs;
           });
           const bucketCounts = new Map<DueBucket, number>();
@@ -300,8 +305,9 @@ export function TaskInboxSection(props: any) {
             );
             const isNewBucket =
               groupIdx === 0 || groups[groupIdx - 1].bucket !== group.bucket;
-            const cardUrgencyClass =
-              group.bucket === "overdue"
+            const cardUrgencyClass = group.salesCritical
+              ? " lr-task-card--priority"
+              : group.bucket === "overdue"
                 ? " lr-task-card--overdue"
                 : group.bucket === "today"
                   ? " lr-task-card--today"
@@ -421,6 +427,12 @@ export function TaskInboxSection(props: any) {
                             : "lr-task-card-pill--todo";
                     const pillIcon: SideNavIconName =
                       sectionType === "appointment" ? "calendar" : sectionType === "reminder" ? "clock" : "bell";
+                    // Money tasks (pricing/financing/availability) get a typed reason
+                    // badge + a Priority flag. For a generic "To Do", the reason badge
+                    // replaces the bland pill; for richer classes it sits alongside.
+                    const salesKind = salesCriticalKind(t);
+                    const reasonMeta = salesKind ? SALES_REASON_META[salesKind] : null;
+                    const showClassPill = !(reasonMeta && sectionType === "todo");
                     const taskBucket = dueBucketFor(t, nowMs);
                     const taskDueMs = taskEffectiveDueMs(t);
                     const taskIsUrgent = taskBucket === "overdue" || taskBucket === "today";
@@ -434,12 +446,30 @@ export function TaskInboxSection(props: any) {
                     return (
                       <div key={t.id} className="lr-task-card-task">
                         <div className="lr-task-card-pillrow">
-                          <span className={`lr-task-card-pill ${pillVariant}`}>
-                            <span aria-hidden className="inline-flex">
-                              <SideNavIcon name={pillIcon} className="w-3.5 h-3.5" />
+                          {showClassPill ? (
+                            <span className={`lr-task-card-pill ${pillVariant}`}>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name={pillIcon} className="w-3.5 h-3.5" />
+                              </span>
+                              {taskLabel}
                             </span>
-                            {taskLabel}
-                          </span>
+                          ) : null}
+                          {reasonMeta ? (
+                            <span className={`lr-task-card-pill lr-task-card-pill--${reasonMeta.variant}`}>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name={reasonMeta.icon as SideNavIconName} className="w-3.5 h-3.5" />
+                              </span>
+                              {reasonMeta.label}
+                            </span>
+                          ) : null}
+                          {reasonMeta ? (
+                            <span className="lr-task-prio-flag">
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name="flame" className="w-3 h-3" />
+                              </span>
+                              Priority
+                            </span>
+                          ) : null}
                           {dueChipLabel ? (
                             <span className={`lr-task-due-chip lr-task-due-chip--${taskBucket}`}>
                               <span aria-hidden className="inline-flex">

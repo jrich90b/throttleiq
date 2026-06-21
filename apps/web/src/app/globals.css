@@ -3976,6 +3976,18 @@ input[type="reset"],
   background: rgba(255, 255, 255, 0.06);
   color: #aebbd2;
 }
+.lr-inbox-task-chip--reason-pricing {
+  background: rgba(245, 158, 11, 0.22);
+  color: #f5c560;
+}
+.lr-inbox-task-chip--reason-financing {
+  background: rgba(167, 139, 250, 0.22);
+  color: #c4b5fd;
+}
+.lr-inbox-task-chip--reason-availability {
+  background: rgba(34, 211, 238, 0.2);
+  color: #67e8f9;
+}
 .lr-inbox-task-more {
   flex: 0 0 auto;
   font-size: 0.7rem;
@@ -6384,6 +6396,28 @@ input[type="reset"],
   background: rgba(59, 130, 246, 0.78);
   color: #f4f8ff;
 }
+.lr-task-card-pill--pricing {
+  background: rgba(245, 158, 11, 0.95);
+  color: #3a2606;
+}
+.lr-task-card-pill--financing {
+  background: rgba(167, 139, 250, 0.95);
+  color: #1e1640;
+}
+.lr-task-card-pill--availability {
+  background: rgba(34, 211, 238, 0.92);
+  color: #04303a;
+}
+.lr-task-prio-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #fca5a5;
+}
 .lr-task-card-name {
   margin-top: 0.65rem;
   font-size: 1.18rem;
@@ -6603,6 +6637,11 @@ input[type="reset"],
 }
 .lr-task-card--today {
   border-left: 3px solid rgba(234, 179, 8, 0.8);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.lr-task-card--priority {
+  border-left: 3px solid #e24b4a;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }
