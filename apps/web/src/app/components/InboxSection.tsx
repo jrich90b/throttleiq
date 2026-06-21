@@ -2,6 +2,7 @@ import React from "react";
 import Image from "next/image";
 import { SideNavIcon } from "./UiIcon";
 import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskTriage";
+import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 
 export function InboxSection(props: any) {
   const {
@@ -392,6 +393,17 @@ export function InboxSection(props: any) {
                           : chipRel
                             ? `${chipTitle} · ${chipRel}`
                             : chipTitle;
+                    // Money tasks (pricing/financing/availability) color the chip by
+                    // reason so the buy signal shows in the inbox, not just the due time.
+                    const chipSalesKind = chipTask ? salesCriticalKind(chipTask) : null;
+                    const chipReasonMeta = chipSalesKind ? SALES_REASON_META[chipSalesKind] : null;
+                    const chipVariant = chipReasonMeta
+                      ? `reason-${chipReasonMeta.variant}`
+                      : (chipBucket ?? "no_date");
+                    const chipIcon = chipReasonMeta ? chipReasonMeta.icon : "clock";
+                    const chipDisplay = chipReasonMeta
+                      ? `${chipBucket === "overdue" ? "Overdue: " : ""}${chipReasonMeta.label}${chipRel ? ` · ${chipRel}` : ""}`
+                      : chipText;
                     const dealerRideOutcomeNeeded = openTasks.some(
                       (t: any) => isDealerRideOutcomeTodo(t) && !String(t?.dealerRideOutcomeStatus ?? "").trim()
                     );
@@ -571,13 +583,11 @@ export function InboxSection(props: any) {
                                 .filter(Boolean)
                                 .join(" • ")}
                             >
-                              <span
-                                className={`lr-inbox-task-chip lr-inbox-task-chip--${chipBucket ?? "no_date"}`}
-                              >
+                              <span className={`lr-inbox-task-chip lr-inbox-task-chip--${chipVariant}`}>
                                 <span aria-hidden className="inline-flex">
-                                  <SideNavIcon name="clock" className="w-3 h-3" />
+                                  <SideNavIcon name={chipIcon as any} className="w-3 h-3" />
                                 </span>
-                                <span className="truncate">{chipText}</span>
+                                <span className="truncate">{chipDisplay}</span>
                               </span>
                               {openTasks.length > 1 ? (
                                 <span className="lr-inbox-task-more">+{openTasks.length - 1}</span>
