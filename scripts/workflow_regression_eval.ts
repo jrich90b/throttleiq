@@ -30,6 +30,7 @@ import {
   cleanCatalogModelNameForDisplay,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
+  hasPriorCustomerFacingOutbound,
   hasRideChallengeSignupAcknowledgement,
   hasInventoryWatchConfirmationText,
   hasPriorOutOfStockNoticeForModel,
@@ -889,6 +890,55 @@ const cases: Case[] = [
       dealerName: "American Harley-Davidson"
     }).includes("Thanks for signing up for this year's ride challenge."),
     expected: true
+  },
+  {
+    // First touch (no prior outbound) keeps the intro.
+    id: "ride_challenge_first_touch_includes_intro",
+    actual: buildRideChallengeSignupReply({
+      firstName: "Mike",
+      agentName: "Brooke",
+      dealerName: "American Harley-Davidson"
+    }).includes("this is Brooke at American Harley-Davidson"),
+    expected: true
+  },
+  {
+    // Established conversation (staff already engaged) — never re-introduce (persona_reintro miss).
+    id: "ride_challenge_established_omits_intro",
+    actual: /\bthis is\b/i.test(
+      buildRideChallengeSignupReply({
+        firstName: "Mike",
+        agentName: "Brooke",
+        dealerName: "American Harley-Davidson",
+        established: true
+      })
+    ),
+    expected: false
+  },
+  {
+    // ...but still acknowledges the signup when established.
+    id: "ride_challenge_established_still_acks",
+    actual: buildRideChallengeSignupReply({
+      firstName: "Mike",
+      agentName: "Brooke",
+      dealerName: "American Harley-Davidson",
+      established: true
+    }).startsWith("Thanks for signing up for this year's ride challenge."),
+    expected: true
+  },
+  {
+    id: "prior_outbound_detected_after_staff_send",
+    actual: hasPriorCustomerFacingOutbound([
+      { direction: "in", provider: "sendgrid_adf", body: "WEB LEAD (ADF)" },
+      { direction: "out", provider: "twilio", body: "Hey Jeff! Bike is set and ready to go." }
+    ]),
+    expected: true
+  },
+  {
+    id: "prior_outbound_false_on_inbound_only",
+    actual: hasPriorCustomerFacingOutbound([
+      { direction: "in", provider: "sendgrid_adf", body: "WEB LEAD (ADF) ride challenge signup" }
+    ]),
+    expected: false
   },
   {
     id: "demo_day_question_detected",

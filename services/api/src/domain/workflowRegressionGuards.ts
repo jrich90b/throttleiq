@@ -742,16 +742,41 @@ export function hasRideChallengeSignupAcknowledgement(
   });
 }
 
+// Has this conversation already produced a customer-facing outbound (agent draft or a
+// human/staff send)? If so, a new ADF lead-ref landing on it must NOT re-introduce the
+// agent — AGENTS.md "do not repeat introductions after the first outbound." Structured
+// check over message history (direction + provider), not comprehension.
+export function hasPriorCustomerFacingOutbound(
+  messages:
+    | Array<{ direction?: string | null; provider?: string | null; body?: string | null }>
+    | null
+    | undefined
+): boolean {
+  return (messages ?? []).some(m => {
+    if (String(m?.direction ?? "").toLowerCase() !== "out") return false;
+    const provider = String(m?.provider ?? "").toLowerCase();
+    if (provider !== "draft_ai" && provider !== "twilio" && provider !== "sendgrid" && provider !== "sendgrid_adf") {
+      return false;
+    }
+    return String(m?.body ?? "").trim().length > 0;
+  });
+}
+
 export function buildRideChallengeSignupReply(args: {
   firstName?: string | null;
   agentName?: string | null;
   dealerName?: string | null;
+  // True when the conversation already has prior customer-facing outbound (e.g. a salesperson
+  // is mid-deal and a Ride Challenge ADF arrives on the same thread). Drop the intro so the
+  // agent never re-introduces itself on an established conversation (persona_reintro charter miss).
+  established?: boolean;
 }): string {
   const firstName = String(args.firstName ?? "").trim() || "there";
   const agentName = String(args.agentName ?? "").trim() || "Alexandra";
   const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
+  const intro = args.established ? "" : `Hi ${firstName} — this is ${agentName} at ${dealerName}. `;
   return (
-    `Hi ${firstName} — this is ${agentName} at ${dealerName}. ` +
+    `${intro}` +
     "Thanks for signing up for this year's ride challenge. " +
     "Feel free to stop in and record your miles throughout the year. " +
     "Let us know if you need anything to keep your bike rolling through the challenge!"
