@@ -13076,7 +13076,9 @@ function normalizeDisplayModelForYear(model?: string | null, year?: string | num
 }
 
 function formatModelLabelForFollowUp(year?: string | null, model?: string | null): string {
-  if (!model || /full line/i.test(model)) return "the bike";
+  // Placeholder "models" (Full Line / Other / Harley-Davidson Other) are not real
+  // bikes — say "the bike" instead of "the Other" so follow-up text never names junk.
+  if (!model || /\b(full line|other)\b/i.test(model)) return "the bike";
   const base = normalizeDisplayModelForYear(model, year);
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }

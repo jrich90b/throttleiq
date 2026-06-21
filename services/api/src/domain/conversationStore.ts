@@ -3108,7 +3108,7 @@ function normalizeModelInterestText(value?: string | null): string {
     .trim();
 }
 
-function isGenericModelInterest(value?: string | null): boolean {
+export function isGenericModelInterest(value?: string | null): boolean {
   const raw = normalizeModelInterestText(value);
   if (!raw) return true;
   const normalized = raw
@@ -3183,6 +3183,11 @@ function latestModelInterestLabel(conv: Conversation): string | null {
 
   if (!isGenericModelInterest(leadDescription)) return leadDescription;
   if (!isGenericModelInterest(leadModel)) return leadModel;
+  // A placeholder vehicle ("Other" / "Full Line" / "Harley-Davidson Other" — common on
+  // Meta promo / prequal ADFs) is not a real bike. The lead is still active, so keep
+  // the card and show the model of interest as "N/A" instead of the junk placeholder
+  // (Joe, 2026-06-21). Truly empty leads (no vehicle at all) still show nothing.
+  if (leadDescription || leadModel) return "N/A";
   return null;
 }
 
