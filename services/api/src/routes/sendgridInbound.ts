@@ -143,6 +143,7 @@ import {
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
+  hasPriorCustomerFacingOutbound,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
@@ -5639,7 +5640,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Alexandra";
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const ack = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
+    const ack = buildRideChallengeSignupReply({
+      firstName,
+      agentName,
+      dealerName,
+      established: hasPriorCustomerFacingOutbound(conv.messages)
+    });
     const dueAt = await applyRideChallengeReminderCadence();
     await publishEarlyAdfSmsDraft(ack);
     return res.status(200).json({

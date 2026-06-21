@@ -537,6 +537,7 @@ import {
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildUnlistedInventoryHandoffReply,
+  hasPriorCustomerFacingOutbound,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
   getScheduleDayOptionsLabel,
@@ -48909,7 +48910,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const reply = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
+    const reply = buildRideChallengeSignupReply({
+      firstName,
+      agentName,
+      dealerName,
+      established: hasPriorCustomerFacingOutbound(conv.messages)
+    });
     recordRouteOutcome("regen", "ride_challenge_signup_ack", {
       convId: conv.id,
       leadKey: conv.leadKey
