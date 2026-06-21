@@ -95,6 +95,10 @@ restore_if_backup_exists() {
   echo "[feedback-hourly] step=voice_feedback_mine"
   VOICE_FEEDBACK_SINCE_HOURS="${FAST_LOOP_SINCE_HOURS}" npm run voice_feedback:mine -- --out-dir "$VOICE_FEEDBACK_OUT_DIR"
 
+  echo "[feedback-hourly] step=gold_examples_harvest"   # confirmed-correct replies -> approve-first promote candidates (deterministic, free)
+  mkdir -p "$REPORT_ROOT/gold_examples"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" MANUAL_REPLY_EXAMPLES_PATH="$MANUAL_REPLY_EXAMPLES_PATH" REPORT_ROOT="$REPORT_ROOT" npm run gold_examples:audit -- --since-hours=168 --limit=200 > /dev/null 2>&1 || true
+
   TONE_BACKUP_PATH="$BACKUP_DIR/deterministic_tone_rules.before.json"
   MANUAL_BACKUP_PATH="$BACKUP_DIR/manual_reply_examples.before.json"
   had_tone_backup=0
