@@ -1889,6 +1889,19 @@ export type FinanceProcessQuestionParse = {
   confidence?: number;
 };
 
+export type NonMotorcycleTradeParse = {
+  // The customer wants to trade in / put toward the deal an item that is NOT a motorcycle
+  // (a motorcycle camper/trailer, RV, car/truck, boat/jet ski, ATV/UTV, snowmobile, etc.).
+  // A Harley dealer's standard trade flow is for motorcycles; a non-motorcycle has to be
+  // assessed by a person (the dealer may or may not take it), so the agent must HAND OFF
+  // rather than quote a trade value as if it were a bike.
+  // "none": the trade item is a motorcycle (any brand/model), or no non-motorcycle trade this turn.
+  intent: "non_motorcycle_trade" | "none";
+  item?: string; // the non-motorcycle item in the customer's words, when stated
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type ConversationCloseoutParse = {
   // The customer's turn is a conversational CLOSER / sign-off and the right move is to let the
   // thread rest — not keep selling or asking another question. Two flavors:
@@ -3020,6 +3033,18 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   required: ["intent", "explicit_request", "confidence"],
   properties: {
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "item", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["non_motorcycle_trade", "none"] },
+    item: { type: ["string", "null"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
@@ -6708,6 +6733,92 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+// Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
+// the dealer has to assess it by hand, so the agent must hand off instead of quoting a
+// trade value as if it were a bike. Mirrors parseFinanceProcessQuestionWithLLM.
+export async function parseNonMotorcycleTradeWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<NonMotorcycleTradeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_NON_MOTORCYCLE_TRADE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_NON_MOTORCYCLE_TRADE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley-Davidson dealership sales thread. Decide whether the customer wants to",
+    "TRADE IN (or put the value of) an item that is NOT a motorcycle toward the deal.",
+    "A Harley dealer's standard trade flow is for MOTORCYCLES. A non-motorcycle trade (a motorcycle",
+    "camper/trailer, RV/motorhome, car/truck/SUV, boat/jet ski, ATV/UTV/side-by-side, snowmobile,",
+    "etc.) has to be assessed by a person — the dealer may or may not take it — so the agent must HAND",
+    "OFF, not quote a trade value. Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "non_motorcycle_trade": the customer references trading in / selling to us / applying the value',
+    "  of a NON-motorcycle item toward this deal. Set item to that item in their words.",
+    '- "none": the trade item is a motorcycle/bike (any make/model — Harley, Indian, Victory Vegas, a',
+    '  "sportster", "my bike"), OR there is no non-motorcycle trade this turn (normal bike trade, a',
+    "  number question, scheduling, etc.).",
+    "",
+    "Hard rules (precision matters):",
+    "- Any motorcycle, any brand/model, including just 'my bike' = none.",
+    "- camper / motorcycle camper / pull-behind or cargo trailer / RV / motorhome / car / truck / SUV /",
+    "  boat / jet ski / ATV / UTV / side by side / snowmobile = non_motorcycle_trade.",
+    "- Only when tied to trading/selling/putting toward THIS deal. Merely owning one = none.",
+    "- explicit_request=true when they clearly want it counted toward the deal.",
+    "- confidence 0..1; use >= 0.7 only when the non-motorcycle read is clear.",
+    "",
+    "Examples:",
+    '- "I wouldn\'t be able to make the deal happen unless I could also trade in my motorcycle camper" -> {"intent":"non_motorcycle_trade","item":"motorcycle camper","explicit_request":true,"confidence":0.93}',
+    '- "could I put my boat toward it?" -> {"intent":"non_motorcycle_trade","item":"boat","explicit_request":true,"confidence":0.9}',
+    '- "would you take my truck on trade?" -> {"intent":"non_motorcycle_trade","item":"truck","explicit_request":true,"confidence":0.9}',
+    '- "I want to trade in my 2019 Street Glide" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.95}',
+    '- "trading in my Vegas" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.9}',
+    '- "what would my bike be worth on trade?" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "non_motorcycle_trade_parser",
+      schema: NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-non-motorcycle-trade-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: NonMotorcycleTradeParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "non_motorcycle_trade" ? "non_motorcycle_trade" : "none";
+  const item = typeof parsed.item === "string" && parsed.item.trim() ? parsed.item.trim() : undefined;
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, item, explicitRequest, confidence };
 }
 
 // No-response judge (2026-06-19). The agent chose to STAY SILENT on a customer turn. This judges

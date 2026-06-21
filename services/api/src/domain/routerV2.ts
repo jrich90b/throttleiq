@@ -11,6 +11,7 @@ export {
   decideEventPromoTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
+  decideNonMotorcycleTradeTurn,
   decideWatchOptOutTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,

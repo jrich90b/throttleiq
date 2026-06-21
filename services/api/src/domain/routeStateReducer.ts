@@ -688,6 +688,45 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
+// --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
+//
+// A Harley dealer's standard trade flow is for MOTORCYCLES. Every so often a customer wants
+// to trade in something else — a motorcycle camper/trailer, RV, car, boat, ATV — which the
+// dealer has to assess by hand (they may or may not take it). Production miss (Jessica Ornce
+// +17167134728): "I wouldn't be able to make the deal happen unless I could also trade in my
+// motorcycle camper" got a standard trade-appraisal draft ("estimate based on the bike
+// details") as if the camper were a bike. The agent can't quote a value on a non-motorcycle,
+// so the safe, correct move is a staff handoff that acknowledges the specific item.
+//
+// Centralized + pure; the parser signal is fed in. FAIL DIRECTION: unsure => none, and the
+// normal trade handling runs. We only hand off on a confident, explicit non-motorcycle trade.
+// ---------------------------------------------------------------------------
+export type NonMotorcycleTradeTurnKind = "non_motorcycle_trade_handoff" | "none";
+
+export type NonMotorcycleTradeTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "non_motorcycle_trade" | "none"
+  explicitRequest: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type NonMotorcycleTradeTurnDecision = {
+  kind: NonMotorcycleTradeTurnKind;
+};
+
+export function decideNonMotorcycleTradeTurn(
+  input: NonMotorcycleTradeTurnInput
+): NonMotorcycleTradeTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "non_motorcycle_trade") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "non_motorcycle_trade_handoff" };
+}
+
 // --- Conversation closeout / sign-off (2026-06-19) -------------------------
 //
 // A warm closer ("have a good weekend!", "you guys are the best!", "thanks again,
