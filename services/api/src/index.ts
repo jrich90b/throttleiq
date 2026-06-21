@@ -16,6 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
+import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
@@ -27296,7 +27297,12 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
       conv?.lead?.vehicle?.year ?? null,
       conv?.lead?.vehicle?.model ?? null
     );
-    if (model) return withDue(`Call customer to follow up on ${model}.`);
+    // Only name the lead-attached vehicle when this lead is actually about it.
+    // ADF forms attach a bike even to Jumpstart / MSF rider-course leads where the
+    // model is noise — naming it ("follow up on the Breakout") is over-attachment.
+    if (model && leadVehicleRelevantToFollowUp(conv)) {
+      return withDue(`Call customer to follow up on ${model}.`);
+    }
     return withDue("Call customer and update status.");
   }
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
