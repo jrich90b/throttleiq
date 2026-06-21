@@ -8,6 +8,7 @@ import { TaskInboxSection } from "./components/TaskInboxSection";
 import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
+import { summarizeTriage } from "./lib/taskTriage";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -8776,6 +8777,10 @@ export default function Home() {
     return Array.from(byId.values()).sort((a, b) => todoTaskPriority(a) - todoTaskPriority(b));
   }, [openTasksByConv, selectedConv?.id, selectedConv?.leadKey]);
 
+  // Overdue / due-today counts drive the side-rail triage badge and the inbox
+  // "needs you today" strip — so the urgent number is what staff see, not a total.
+  const taskTriageCounts = useMemo(() => summarizeTriage(todos, Date.now()), [todos]);
+
   const {
     filteredTodos,
     groupedTodos,
@@ -10010,6 +10015,18 @@ export default function Home() {
         todoOutcomeLabel: todoOutcomePayload?.label || undefined,
         todoOutcomeNote: todoOutcomePayload?.note || undefined
       })
+    });
+    await load();
+    if (selectedConv?.id === todo.convId) {
+      await loadConversation(todo.convId);
+    }
+  }
+
+  async function snoozeTodoTask(todo: TodoItem, dueAtIso: string) {
+    await fetch("/api/todos/snooze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convId: todo.convId, todoId: todo.id, dueAt: dueAtIso })
     });
     await load();
     if (selectedConv?.id === todo.convId) {
@@ -13242,12 +13259,35 @@ export default function Home() {
         {(authUser?.role === "manager" || authUser?.role === "salesperson" || isDepartmentUser || authUser?.permissions?.canAccessTodos) ? (
           <button
             className={`relative ${sideNavButtonClass(section === "todos")}`}
-            title="To Dos"
+            title={
+              taskTriageCounts.attention > 0
+                ? `${taskTriageCounts.overdue} overdue · ${taskTriageCounts.today} due today (${todos.length} open)`
+                : `To Dos${todos.length > 0 ? ` (${todos.length} open)` : ""}`
+            }
             onClick={() => goToSection("todos")}
           >
             <SideNavIcon name="todos" />
-            {todos.length > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white">
+            {taskTriageCounts.overdue > 0 ? (
+              <span
+                className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center border border-white"
+                aria-label={`${taskTriageCounts.overdue} overdue`}
+              >
+                {taskTriageCounts.overdue > 99 ? "99+" : taskTriageCounts.overdue}
+              </span>
+            ) : null}
+            {taskTriageCounts.today > 0 ? (
+              <span
+                className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-[#1a1402] text-[10px] font-semibold flex items-center justify-center border border-white"
+                aria-label={`${taskTriageCounts.today} due today`}
+              >
+                {taskTriageCounts.today > 99 ? "99+" : taskTriageCounts.today}
+              </span>
+            ) : null}
+            {taskTriageCounts.attention === 0 && todos.length > 0 ? (
+              <span
+                className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-gray-500 text-white text-[10px] font-semibold flex items-center justify-center border border-white"
+                aria-label={`${todos.length} open tasks`}
+              >
                 {todos.length > 99 ? "99+" : todos.length}
               </span>
             ) : null}
@@ -14238,6 +14278,8 @@ export default function Home() {
 	            openTasksByConv={openTasksByConv}
 	            todoTaskTitle={todoTaskTitle}
 	            todoTaskOwnerLabel={todoTaskOwnerLabel}
+	            taskTriageCounts={taskTriageCounts}
+	            onOpenTaskInbox={() => goToSection("todos")}
 	            renderBookingLinkLine={renderBookingLinkLine}
 	            openOutcomeFromInbox={openOutcomeFromInbox}
 	            loading={loading}
@@ -14285,6 +14327,7 @@ export default function Home() {
             setAppointmentCloseNote={setAppointmentCloseNote}
             setAppointmentCloseOpen={setAppointmentCloseOpen}
             markTodoDone={markTodoDone}
+            snoozeTodo={snoozeTodoTask}
             reportTodoIssue={reportTodoIssue}
             renderDealTemperatureIcon={renderDealTemperatureIcon}
             getDealTemperature={getDealTemperature}
