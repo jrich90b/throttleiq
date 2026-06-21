@@ -3108,6 +3108,20 @@ function normalizeModelInterestText(value?: string | null): string {
     .trim();
 }
 
+// Strip the verbose inventory tail off a model name for DISPLAY. Feed/ADF models arrive
+// like "CVO Road Glide ST 2026 FLTRXSTSE C6-26 Citrus Heat Re-Entry"; staff just want
+// "CVO Road Glide ST". Cut at the first model-year token (19xx/20xx) — the year, stock
+// code, and color always trail it. Real numeric model suffixes (Iron 883, Sportster 1200,
+// Fat Bob 114, Road Glide 3, Pan America 1250) are NOT 19xx/20xx, so they survive.
+// Cosmetic / display-only — never used for matching or watch keys.
+export function cleanModelDisplayName(model?: string | null): string {
+  const raw = normalizeModelInterestText(model);
+  if (!raw) return raw;
+  const tokens = raw.split(" ");
+  const yearIdx = tokens.findIndex(t => /^(19|20)\d{2}$/.test(t));
+  return yearIdx > 0 ? tokens.slice(0, yearIdx).join(" ").trim() : raw;
+}
+
 export function isGenericModelInterest(value?: string | null): boolean {
   const raw = normalizeModelInterestText(value);
   if (!raw) return true;
@@ -3178,11 +3192,11 @@ function latestModelInterestLabel(conv: Conversation): string | null {
           conv.inventoryWatch?.condition
       ) ||
       toModelConditionLabel(conv.lead?.vehicle?.condition);
-    return `${conditionLabel ? `${conditionLabel} ` : ""}${model}`.trim();
+    return `${conditionLabel ? `${conditionLabel} ` : ""}${cleanModelDisplayName(model)}`.trim();
   }
 
-  if (!isGenericModelInterest(leadDescription)) return leadDescription;
-  if (!isGenericModelInterest(leadModel)) return leadModel;
+  if (!isGenericModelInterest(leadDescription)) return cleanModelDisplayName(leadDescription);
+  if (!isGenericModelInterest(leadModel)) return cleanModelDisplayName(leadModel);
   // A placeholder vehicle ("Other" / "Full Line" / "Harley-Davidson Other" — common on
   // Meta promo / prequal ADFs) is not a real bike. The lead is still active, so keep
   // the card and show the model of interest as "N/A" instead of the junk placeholder
