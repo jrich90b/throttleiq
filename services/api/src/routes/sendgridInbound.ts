@@ -46,6 +46,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildEventPromoAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { decideEventPromoTurn } from "../domain/routeStateReducer.js";
+import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
@@ -3003,14 +3004,6 @@ function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | 
     if (!Number.isNaN(a)) return { start: a };
   }
   return null;
-}
-
-function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
-  const tf = timeframe ? timeframe.trim() : "a future";
-  if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Just reach out when the time is right.`;
-  }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Just reach out when the time is right.`;
 }
 
 function isPricingPaymentInquiry(text?: string | null): boolean {
@@ -8936,7 +8929,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const due = new Date();
     due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
     due.setHours(10, 30, 0, 0);
-    const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+    const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
   }
   const shouldStartCadence =
@@ -8960,7 +8953,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const due = new Date();
       due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
       due.setHours(10, 30, 0, 0);
-      const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+      const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
       scheduleLongTermFollowUp(conv, due.toISOString(), msg);
     } else {
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
