@@ -44,7 +44,8 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { decideEventPromoTurn } from "../domain/routeStateReducer.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
@@ -8847,6 +8848,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     draft = withInitialAvailabilityLine(draft);
   }
   draft = await withInitialOffersLine(draft);
+
+  // Non-sales marketing lead (sweepstakes / event RSVP / bare event_promo): a friendly
+  // acknowledgement, never the sales-inquiry / "stop in and check it out" draft this would
+  // otherwise be (2026-06-20 context-fidelity audit). Overrides the finalized sales draft so
+  // the customer-facing reply matches the lead type. Demo-ride events keep their own handling
+  // (decideEventPromoTurn excludes cta=demo_ride_event).
+  if (
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind === "event_promo_ack"
+  ) {
+    const epAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+  }
 
   const emailTo = lead.email?.trim();
   const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;

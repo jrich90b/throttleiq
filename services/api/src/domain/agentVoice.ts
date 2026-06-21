@@ -37,6 +37,25 @@ export function buildAgentIntroPhrase(agentName: string, dealerName: string): st
 }
 
 /**
+ * Approved acknowledgement for a NON-SALES marketing lead (sweepstakes entry, event RSVP,
+ * bare event_promo). Used when `decideEventPromoTurn` returns `event_promo_ack` so the lead
+ * gets a warm, low-pressure thank-you instead of a sales/availability/stop-in/model-fact
+ * answer it never asked for. Deliberately contains NO availability claim, stop-in push,
+ * appointment offer, or vehicle-fact assertion (those are the out-of-context failure modes
+ * this replaces). Pinned by `event_promo_ack:eval`.
+ */
+export function buildEventPromoAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string
+): string {
+  return (
+    `${buildAgentIntro(firstName, agentName, dealerName)}` +
+    "Thanks for entering — good luck! If you ever want to talk bikes, I'm here."
+  );
+}
+
+/**
  * Strip a leading agent greeting/intro (old "Hi {name} — …" or new "Hey {name}, …") from a
  * body before re-prefixing, so we never double up. Initial-ADF use only.
  */

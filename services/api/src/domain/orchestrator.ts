@@ -29,7 +29,8 @@ import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro } from "./agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck } from "./agentVoice.js";
+import { decideEventPromoTurn } from "./routeStateReducer.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -2408,6 +2409,27 @@ export async function orchestrateInbound(
       draft,
       handoff: { required: true, reason: "approval", ack: draft }
       });
+  }
+
+  // Non-sales marketing lead (sweepstakes / event RSVP / bare event_promo) arriving as an ADF:
+  // acknowledge warmly, never run the sales/availability/stock logic below (which produced the
+  // out-of-context "That stock number is still available, what day works to stop in?" drafts on
+  // sweepstakes entries — 2026-06-20 context-fidelity audit). Scoped to the ADF turn so a genuine
+  // SMS question from such a lead still gets a real answer. Demo-ride events are handled separately.
+  const isNonSalesEventPromoAdf =
+    decideEventPromoTurn({ classificationBucket: ctx?.bucket, classificationCta: ctx?.cta }).kind ===
+      "event_promo_ack" && event.provider === "sendgrid_adf";
+  if (isNonSalesEventPromoAdf) {
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const leadFirst = ctx?.lead?.firstName?.trim() || null;
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: buildEventPromoAck(leadFirst, agentName, dealerName)
+    });
   }
 
   const isDemoRideEventLead = ctx?.bucket === "event_promo" && ctx?.cta === "demo_ride_event";

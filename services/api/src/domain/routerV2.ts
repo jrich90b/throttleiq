@@ -8,6 +8,7 @@ export {
   decideConversationCloseoutTurn,
   decideDraftModelArm,
   decideDealStatusCheckTurn,
+  decideEventPromoTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideWatchOptOutTurn,
