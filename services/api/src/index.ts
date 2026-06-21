@@ -655,6 +655,7 @@ import {
   markQuestionDone,
   markTodoDone,
   snoozeTodo,
+  cleanModelDisplayName,
   markTodoEscalated,
   markTodoReminderSent,
   markOpenCallTodosDoneForCompletedVoiceAttempt,
@@ -13061,7 +13062,7 @@ function isGenericMetaOfferModel(model?: string | null): boolean {
 }
 
 function normalizeDisplayModelForYear(model?: string | null, year?: string | number | null): string {
-  const base = normalizeDisplayCase(model);
+  const base = normalizeDisplayCase(cleanModelDisplayName(model));
   const yearNum = Number(year);
   if (
     base &&
