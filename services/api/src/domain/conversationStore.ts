@@ -5032,6 +5032,24 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   return task;
 }
 
+// Push an open task's due time forward (staff "snooze"). Keeps the reminder lead
+// consistent and re-arms the reminder so it fires again before the new due time.
+export function snoozeTodo(convId: string, todoId: string, dueAtIso: string): TodoTask | null {
+  const task = todos.find(t => t.id === todoId && t.convId === convId && t.status === "open");
+  if (!task) return null;
+  const at = new Date(String(dueAtIso ?? "").trim());
+  if (Number.isNaN(at.getTime())) return null;
+  task.dueAt = at.toISOString();
+  const lead =
+    Number.isFinite(task.reminderLeadMinutes) && (task.reminderLeadMinutes as number) > 0
+      ? (task.reminderLeadMinutes as number)
+      : 30;
+  task.reminderAt = new Date(at.getTime() - lead * 60 * 1000).toISOString();
+  task.reminderSentAt = undefined;
+  scheduleSave();
+  return task;
+}
+
 export function markOpenCallTodosDoneForCompletedVoiceAttempt(convId: string): number {
   let count = 0;
   const doneAt = nowIso();

@@ -1,5 +1,7 @@
 import React from "react";
 import Image from "next/image";
+import { SideNavIcon } from "./UiIcon";
+import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskTriage";
 
 export function InboxSection(props: any) {
   const {
@@ -71,10 +73,18 @@ export function InboxSection(props: any) {
     openTasksByConv,
     todoTaskTitle,
     todoTaskOwnerLabel,
+    taskTriageCounts,
+    onOpenTaskInbox,
     renderBookingLinkLine,
     openOutcomeFromInbox,
     loading
   } = props;
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const triage = taskTriageCounts ?? { overdue: 0, today: 0, attention: 0 };
 
   const isSoldConversation = (conversation: any) => {
     const status = String(conversation?.status ?? "").trim().toLowerCase();
@@ -285,6 +295,30 @@ export function InboxSection(props: any) {
         ))}
       </div>
 
+      {view === "inbox" && triage.attention > 0 ? (
+        <button
+          type="button"
+          className="lr-inbox-today-strip"
+          onClick={() => onOpenTaskInbox?.()}
+          title="Open the Task Inbox"
+        >
+          <span className="lr-inbox-today-strip-main">
+            <span aria-hidden className="inline-flex">
+              <SideNavIcon name="bell" className="w-4 h-4" />
+            </span>
+            <span className="lr-inbox-today-strip-count">
+              {triage.attention} {triage.attention === 1 ? "task needs" : "tasks need"} you today
+            </span>
+            <span className="lr-inbox-today-strip-detail">
+              {triage.overdue > 0 ? `${triage.overdue} overdue` : ""}
+              {triage.overdue > 0 && triage.today > 0 ? " · " : ""}
+              {triage.today > 0 ? `${triage.today} due today` : ""}
+            </span>
+          </span>
+          <span className="lr-inbox-today-strip-cta">Review →</span>
+        </button>
+      ) : null}
+
       <div className="mt-3 space-y-3">
         {groupedConversations.map((group: any) => {
           const expanded = group.isCampaignGroup ? (campaignInboxExpanded[group.key] ?? true) : true;
@@ -327,6 +361,37 @@ export function InboxSection(props: any) {
                     const openTaskOwner = primaryOpenTask
                       ? (todoTaskOwnerLabel?.(primaryOpenTask) ?? "")
                       : "";
+                    // The most time-urgent task drives the row's due chip (color +
+                    // relative time), so overdue work is obvious from the list.
+                    const chipTask = (() => {
+                      let best: any = null;
+                      let bestRank = 99;
+                      let bestMs = Number.POSITIVE_INFINITY;
+                      for (const t of openTasks) {
+                        const b = dueBucketFor(t, nowMs);
+                        const rank =
+                          b === "overdue" ? 0 : b === "today" ? 1 : b === "this_week" ? 2 : b === "later" ? 3 : 4;
+                        const ms = taskEffectiveDueMs(t) ?? Number.POSITIVE_INFINITY;
+                        if (rank < bestRank || (rank === bestRank && ms < bestMs)) {
+                          best = t;
+                          bestRank = rank;
+                          bestMs = ms;
+                        }
+                      }
+                      return best;
+                    })();
+                    const chipBucket = chipTask ? dueBucketFor(chipTask, nowMs) : null;
+                    const chipDueMs = chipTask ? taskEffectiveDueMs(chipTask) : null;
+                    const chipRel = chipDueMs != null ? relativeDueLabel(chipDueMs, nowMs) : null;
+                    const chipTitle = chipTask ? (todoTaskTitle?.(chipTask) ?? "Open task") : "";
+                    const chipText =
+                      chipBucket === "overdue"
+                        ? `Overdue: ${chipTitle}${chipRel ? ` · ${chipRel}` : ""}`
+                        : chipBucket === "today"
+                          ? `${chipTitle}${chipRel ? ` · ${chipRel}` : ""}`
+                          : chipRel
+                            ? `${chipTitle} · ${chipRel}`
+                            : chipTitle;
                     const dealerRideOutcomeNeeded = openTasks.some(
                       (t: any) => isDealerRideOutcomeTodo(t) && !String(t?.dealerRideOutcomeStatus ?? "").trim()
                     );
@@ -506,10 +571,17 @@ export function InboxSection(props: any) {
                                 .filter(Boolean)
                                 .join(" • ")}
                             >
-                              <span className="lr-inbox-task-dot" />
-                              <span className="truncate">
-                                {openTasks.length === 1 ? openTaskTitle : `${openTasks.length} open tasks`}
+                              <span
+                                className={`lr-inbox-task-chip lr-inbox-task-chip--${chipBucket ?? "no_date"}`}
+                              >
+                                <span aria-hidden className="inline-flex">
+                                  <SideNavIcon name="clock" className="w-3 h-3" />
+                                </span>
+                                <span className="truncate">{chipText}</span>
                               </span>
+                              {openTasks.length > 1 ? (
+                                <span className="lr-inbox-task-more">+{openTasks.length - 1}</span>
+                              ) : null}
                             </div>
                           ) : null}
 

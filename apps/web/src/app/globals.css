@@ -3943,6 +3943,87 @@ input[type="reset"],
   box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.14);
 }
 
+.lr-inbox-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.lr-inbox-task-chip .truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lr-inbox-task-chip--overdue {
+  background: rgba(226, 75, 74, 0.18);
+  color: #fca5a5;
+}
+.lr-inbox-task-chip--today {
+  background: rgba(234, 179, 8, 0.18);
+  color: #f5d57a;
+}
+.lr-inbox-task-chip--this_week,
+.lr-inbox-task-chip--later {
+  background: rgba(125, 211, 252, 0.12);
+  color: #bcd9f5;
+}
+.lr-inbox-task-chip--no_date {
+  background: rgba(255, 255, 255, 0.06);
+  color: #aebbd2;
+}
+.lr-inbox-task-more {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #8d9bb5;
+}
+
+.lr-inbox-today-strip {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.7rem;
+  text-align: left;
+  cursor: pointer;
+  background: rgba(226, 75, 74, 0.12);
+  border: 1px solid rgba(226, 75, 74, 0.32);
+  transition: background 150ms ease;
+}
+.lr-inbox-today-strip:hover {
+  background: rgba(226, 75, 74, 0.18);
+}
+.lr-inbox-today-strip-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.lr-inbox-today-strip-count {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #f6dede;
+}
+.lr-inbox-today-strip-detail {
+  font-size: 0.72rem;
+  color: #d29c9c;
+}
+.lr-inbox-today-strip-cta {
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #f0a0a0;
+}
+
 .lr-inbox-card-footer {
   display: flex;
   flex-wrap: wrap;
@@ -6476,6 +6557,100 @@ input[type="reset"],
 }
 .lr-task-section-body {
   padding: 0.75rem;
+}
+
+/* Due-time triage: bucket headers, urgency accents, per-task due chips, snooze. */
+.lr-task-bucket-h {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 1.1rem 0 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #9fb0cc;
+}
+.lr-task-bucket-h:first-child {
+  margin-top: 0.2rem;
+}
+.lr-task-bucket-h--overdue {
+  color: #f0595a;
+}
+.lr-task-bucket-h--today {
+  color: #eab308;
+}
+.lr-task-bucket-count {
+  font-size: 0.66rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: #aebbd2;
+}
+.lr-task-bucket-h--overdue .lr-task-bucket-count {
+  background: rgba(226, 75, 74, 0.2);
+  color: #f0a0a0;
+}
+.lr-task-bucket-h--today .lr-task-bucket-count {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eecb5a;
+}
+.lr-task-card--overdue {
+  border-left: 3px solid #e24b4a;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.lr-task-card--today {
+  border-left: 3px solid rgba(234, 179, 8, 0.8);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.lr-task-due-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  padding: 0.16rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.lr-task-due-chip--overdue {
+  background: rgba(226, 75, 74, 0.92);
+  color: #2a0606;
+}
+.lr-task-due-chip--today {
+  background: rgba(234, 179, 8, 0.9);
+  color: #1a1402;
+}
+.lr-task-snooze {
+  position: relative;
+  display: inline-flex;
+}
+.lr-task-snooze-menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 8.5rem;
+  padding: 0.25rem;
+  border-radius: 0.55rem;
+  background: var(--lr-app-surface-2, #141f32);
+  border: 1px solid var(--lr-app-border, rgba(255, 255, 255, 0.14));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.lr-task-snooze-opt {
+  text-align: left;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--lr-app-text, #e7edf8);
+}
+.lr-task-snooze-opt:hover {
+  background: rgba(251, 127, 4, 0.16);
+  color: #fb9d3d;
 }
 
 /* Pipeline pane composer — slim inbox-style sender with a "+" overflow menu. */

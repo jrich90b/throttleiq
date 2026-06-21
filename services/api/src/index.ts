@@ -653,6 +653,7 @@ import {
   listOpenQuestions,
   markQuestionDone,
   markTodoDone,
+  snoozeTodo,
   markTodoEscalated,
   markTodoReminderSent,
   markOpenCallTodosDoneForCompletedVoiceAttempt,
@@ -36914,6 +36915,34 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   res.json({ ok: true, todo: task });
 });
 
+// Snooze: push an open task's due time forward. Staff "I'll deal with it later"
+// without losing the task — it drops out of Overdue/Today and resurfaces later.
+app.post("/todos/:convId/:todoId/snooze", requirePermission("canAccessTodos"), (req, res) => {
+  const { convId, todoId } = req.params;
+  const user = (req as any).user ?? null;
+  const convForAccess = getConversation(convId);
+  if (convForAccess && !canUserAccessConversation(user, convForAccess)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
+  if (existingTask) {
+    const taskDepartment = inferTodoDepartment(existingTask, convForAccess ?? getConversation(convId));
+    if (!canUserAccessTodoTask(user, existingTask, convForAccess ?? getConversation(convId), taskDepartment)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+  }
+  const dueAtRaw = String(req.body?.dueAt ?? "").trim();
+  const at = new Date(dueAtRaw);
+  if (!dueAtRaw || Number.isNaN(at.getTime())) {
+    return res.status(400).json({ ok: false, error: "invalid_due_at" });
+  }
+  const task = snoozeTodo(convId, todoId, at.toISOString());
+  if (!task) return res.status(404).json({ ok: false, error: "Todo not found" });
+  const conv = getConversation(convId);
+  if (conv) saveConversation(conv);
+  return res.json({ ok: true, todo: task });
+});
+
 function opsAnomalyDefaultTitle(type: OpsAnomalyType): string {
   switch (type) {
     case "routing":
@@ -62570,6 +62599,7 @@ const server = app.listen(port, () => {
   console.log("   - GET    /todos");
   console.log("   - POST   /todos");
   console.log("   - POST   /todos/:convId/:todoId/done");
+  console.log("   - POST   /todos/:convId/:todoId/snooze");
   console.log("   - GET    /suppressions");
   console.log("   - POST   /suppressions");
   console.log("   - DELETE /suppressions/:phone");
