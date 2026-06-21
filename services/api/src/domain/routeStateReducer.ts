@@ -1146,3 +1146,34 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
     reasons
   };
 }
+
+// ── Event-promo / sweepstakes turn ──────────────────────────────────────────
+// A non-sales marketing lead (sweepstakes entry, event RSVP, bare event_promo) must
+// NEVER receive a sales/availability/stop-in/model-fact reply — it isn't shopping for a
+// bike, so "That stock number is still available, what day works to stop in?" / "Thanks
+// for your inquiry about the 2026 X..." / a bare "It's a 2026 Road Glide." are all
+// answering out of context (2026-06-20 context-fidelity audit: 5/6 out-of-context drafts
+// were exactly this). The correct reply is one friendly, non-pushy acknowledgement.
+//
+// Pure + structured: keyed ONLY on the system's own classification (bucket/cta) — already
+// assigned deterministically from the ADF source — so this is structured routing, not
+// free-text comprehension. Applied at every reply chokepoint in BOTH paths (live publisher,
+// regenerate publisher, initial-ADF draft). Demo-ride events (cta=demo_ride_event) are
+// EXCLUDED — they keep their dedicated dealer-ride handling.
+export type EventPromoTurnKind = "event_promo_ack" | "none";
+
+export type EventPromoTurnInput = {
+  classificationBucket?: string | null;
+  classificationCta?: string | null;
+};
+
+export type EventPromoTurnDecision = { kind: EventPromoTurnKind };
+
+export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurnDecision {
+  const bucket = String(input.classificationBucket ?? "").toLowerCase();
+  const cta = String(input.classificationCta ?? "").toLowerCase();
+  if (bucket === "event_promo" && cta !== "demo_ride_event") {
+    return { kind: "event_promo_ack" };
+  }
+  return { kind: "none" };
+}

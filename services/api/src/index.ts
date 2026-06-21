@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import {
   buildCustomerPhotoShareTodoSummary,
@@ -477,6 +477,7 @@ import {
   decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
+  decideEventPromoTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideSchedulingTurn,
@@ -7865,6 +7866,26 @@ async function buildVehicleFactQuestionReply(args: {
   };
 }
 
+// Approved acknowledgement for a non-sales event_promo / sweepstakes turn
+// (decideEventPromoTurn). Returns the ack text when this lead must NOT receive a
+// sales / availability / vehicle-fact answer, else null. Shared by every reply
+// chokepoint so live + regenerate stay in sync.
+async function maybeEventPromoAckReply(conv: Conversation): Promise<string | null> {
+  if (
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack"
+  ) {
+    return null;
+  }
+  const profile = await getDealerProfileHot();
+  const agentName = String((profile as any)?.agentName ?? "").trim() || "Sales Team";
+  const dealerName = String((profile as any)?.dealerName ?? "").trim() || "American Harley-Davidson";
+  const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+  return buildEventPromoAck(firstName, agentName, dealerName);
+}
+
 async function applyVehicleFactQuestionDecision(args: {
   conv: Conversation;
   text: string | null | undefined;
@@ -7873,6 +7894,10 @@ async function applyVehicleFactQuestionDecision(args: {
   decision: VehicleFactQuestionDecision;
   scope: "live" | "regen";
 }): Promise<string> {
+  // A sweepstakes/event_promo lead never asked a vehicle-fact question — answering one
+  // ("It's a 2026 Road Glide.") is out of context. Acknowledge instead. (Both paths.)
+  const eventPromoAck = await maybeEventPromoAckReply(args.conv);
+  if (eventPromoAck) return eventPromoAck;
   const result = await buildVehicleFactQuestionReply({
     conv: args.conv,
     decision: args.decision,
