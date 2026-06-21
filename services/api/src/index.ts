@@ -272,6 +272,7 @@ import {
   parseConversationCloseoutWithLLM,
   parseWatchOptOutWithLLM,
   parseFinanceProcessQuestionWithLLM,
+  parseNonMotorcycleTradeWithLLM,
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
   judgeShouldRespondWithLLM,
@@ -481,6 +482,7 @@ import {
   decideEventPromoTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
+  decideNonMotorcycleTradeTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   resolveFinanceFollowUpContinuation,
@@ -2378,6 +2380,70 @@ async function resolveFinanceProcessHandoffReply(
   stopRelatedCadences(conv, "finance_process_question", { setMode: "manual_handoff" });
   recordRouteOutcome(scope, "finance_process_handoff", { convId: conv.id, leadKey: conv.leadKey });
   return buildFinanceProcessHandoffReply();
+}
+
+function nonMotorcycleTradeConfidenceMin(): number {
+  const v = Number(process.env.NON_MOTORCYCLE_TRADE_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
+// Cheap pre-filter so we only spend an LLM call on plausible non-motorcycle trades;
+// a miss => existing trade handling runs (fail-safe). Needs a non-bike noun AND a
+// trade/sell/apply verb.
+function nonMotorcycleTradeHint(text: string): boolean {
+  const t = String(text ?? "");
+  const item =
+    /\b(camper|trailer|rv|motorhome|cars?|trucks?|suv|boats?|jet ?ski|atv|utv|side[- ]by[- ]side|snowmobile|sled)\b/i.test(
+      t
+    );
+  const verb = /\b(trade|trade[- ]?in|put toward|apply|applied|sell|take|swap)\b/i.test(t);
+  return item && verb;
+}
+
+function buildNonMotorcycleTradeHandoffReply(item?: string | null): string {
+  const thing = String(item ?? "").trim() || "that";
+  return `Good question — let me have our team take a look at the ${thing} specifically, since that's outside our usual motorcycle trades. They'll follow up with you on it.`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// a staff-handoff reply (and sets manual handoff + an owner todo + stops cadence) ONLY when a
+// confident, explicit NON-motorcycle trade is detected; otherwise null so the normal trade
+// handling runs. Mirrors resolveFinanceProcessHandoffReply.
+async function resolveNonMotorcycleTradeHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!nonMotorcycleTradeHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("non_motorcycle_trade_parser", () =>
+    parseNonMotorcycleTradeWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-non-motorcycle-trade-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideNonMotorcycleTradeTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: nonMotorcycleTradeConfidenceMin()
+  });
+  if (decision.kind !== "non_motorcycle_trade_handoff") return null;
+  const itemNote = parse?.item ? ` (${parse.item})` : "";
+  addTodo(
+    conv,
+    "manager",
+    `Non-motorcycle trade${itemNote} — owner to assess whether we take it. Customer: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setFollowUpMode(conv, "manual_handoff", "non_motorcycle_trade");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "non_motorcycle_trade", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "non_motorcycle_trade_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildNonMotorcycleTradeHandoffReply(parse?.item);
 }
 
 function buildActionableStylePreferenceReply(args: {
@@ -48627,6 +48693,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  // Non-motorcycle trade handoff (parity with live /webhooks/twilio).
+  {
+    const regenNonMotoTradeReply = await resolveNonMotorcycleTradeHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenNonMotoTradeReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenNonMotoTradeReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenNonMotoTradeReply);
+    }
+  }
+
   const cadenceRegenContextParserEligible =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
@@ -54524,6 +54606,22 @@ if (authToken && signature) {
         turnFinanceIntent: true,
         financeContextIntent: true
       });
+    }
+  }
+
+  // Non-motorcycle trade handoff: a customer wanting to trade something other than a
+  // motorcycle (camper, trailer, RV, car, boat...) needs a person to assess it, not a
+  // trade-value draft. Parser-first + fail-safe (null => normal trade handling). Same
+  // resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const nonMotoTradeReply = await resolveNonMotorcycleTradeHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (nonMotoTradeReply) {
+      return publishLiveTwilioReply(nonMotoTradeReply);
     }
   }
 
