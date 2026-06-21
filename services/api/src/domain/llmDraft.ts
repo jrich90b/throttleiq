@@ -1916,6 +1916,31 @@ export type DraftQualityJudgeParse = {
   steering?: string; // hint to steer a re-draft when overall !== "good"
 };
 
+export type ContextFidelityScoreParse = {
+  // "Answering out of context" detector. Judges whether a reply is faithful to THIS turn — i.e.
+  // it addresses what the customer actually said and only asserts entities they referenced (or the
+  // established thread subject), rather than a stale/over-attached/fabricated/wrong-lead-type frame.
+  // Anchor-aware: the scorer is given the persisted model-of-record / lead-type / appointment /
+  // dialogState (more than the generator's window) so it can catch anchor-drop + over-attachment.
+  addressesThisTurn: boolean; // does the reply respond to what the customer said/asked this turn?
+  referencedEntitiesPresent: boolean; // every model/unit the reply asserts was referenced this turn
+  //                                     OR is the established thread subject (over-attachment guard)
+  frame:
+    | "matches"
+    | "over_attached_model" // pitches a model the customer didn't reference this turn
+    | "stale_intent" // answers a prior turn's intent, not this one
+    | "wrong_lead_type" // sales/bike frame on a non-sales lead (e.g. a sweepstakes signup)
+    | "fabricated" // invents a frame the turn doesn't warrant
+    | "dropped_anchor" // forgot the established subject (the model/appt fell out of context)
+    | "other";
+  unsupportedAssertion?: string; // the specific out-of-context claim, if any
+  verdict: "faithful" | "out_of_context";
+  severity: "minor" | "major";
+  confidence?: number;
+  reason?: string;
+  steering?: string; // one instruction to re-draft faithfully (feeds self-heal when enforced)
+};
+
 export type CadenceQualityJudgeParse = {
   // Judges a PROACTIVE follow-up cadence message (one WE initiate, no inbound to answer) against
   // the conversation state. Distinct axes from the inbound draft judge — "does it address the ask"
@@ -3043,6 +3068,36 @@ const CADENCE_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
     tone_ok: { type: "boolean" },
     disposition_ok: { type: "boolean" },
     overall: { type: "string", enum: ["good", "needs_regenerate", "suppress", "hold"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
+  }
+};
+
+const CONTEXT_FIDELITY_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "addresses_this_turn",
+    "referenced_entities_present",
+    "frame",
+    "unsupported_assertion",
+    "verdict",
+    "severity",
+    "confidence",
+    "reason",
+    "steering"
+  ],
+  properties: {
+    addresses_this_turn: { type: "boolean" },
+    referenced_entities_present: { type: "boolean" },
+    frame: {
+      type: "string",
+      enum: ["matches", "over_attached_model", "stale_intent", "wrong_lead_type", "fabricated", "dropped_anchor", "other"]
+    },
+    unsupported_assertion: { type: "string" },
+    verdict: { type: "string", enum: ["faithful", "out_of_context"] },
+    severity: { type: "string", enum: ["minor", "major"] },
     confidence: { type: "number" },
     reason: { type: "string" },
     steering: { type: "string" }
@@ -6755,6 +6810,155 @@ export async function judgeShouldRespondWithLLM(args: {
 
 // Multi-dimensional pre-send draft-quality judge (2026-06-19). Reads a customer-facing draft
 // against the customer's turn and scores it on intent / tone / disposition / safety, returning
+/**
+ * Context-fidelity scorer — the "answering out of context" detector (v1: offline/audit only; the
+ * runtime hold+self-heal integration is a separate approve-first cutover). Given the customer's
+ * latest turn, the recent thread, the DRAFT, and the persisted ANCHOR (model of record, lead-type,
+ * appointment, dialogState — deliberately MORE than the generator's window), it judges whether the
+ * reply is faithful to this turn or adopts a stale / over-attached / fabricated / wrong-lead-type
+ * frame. Returns null when disabled/low-signal (callers treat null as "faithful" — never flag what
+ * we can't judge). See docs/context_fidelity_spec.md.
+ */
+export async function scoreContextFidelityWithLLM(args: {
+  draft: string;
+  inbound: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  anchor?: {
+    modelOfRecord?: string | null; // the model under discussion this thread (resolved, persisted)
+    leadType?: string | null; // classification bucket/cta, e.g. "event_promo/sweepstakes"
+    appointmentBooked?: boolean;
+    dialogState?: string | null;
+  };
+  channel?: "sms" | "email";
+}): Promise<ContextFidelityScoreParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONTEXT_FIDELITY_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CONTEXT_FIDELITY_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CONTEXT_FIDELITY_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CONTEXT_FIDELITY_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const draft = String(args.draft ?? "").trim();
+  const inbound = String(args.inbound ?? "").trim();
+  if (!draft || !inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const anchor = args.anchor ?? {};
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. You decide whether the",
+    "agent's DRAFT reply is FAITHFUL TO THIS TURN — i.e. it answers what the customer actually said",
+    "and only brings up a bike/model/appointment the customer referenced this turn OR that is the",
+    "established subject of the thread (the ANCHOR). A reply that is fluent but talks about the wrong",
+    "thing is the failure we are hunting. Return only JSON matching the schema.",
+    "",
+    "You are given the ANCHOR (the persisted truth of this conversation) ON PURPOSE — use it:",
+    "- model_of_record: the bike actually under discussion. If the draft pitches a DIFFERENT model the",
+    "  customer didn't reference this turn -> frame=over_attached_model.",
+    "- lead_type: how this lead came in. If it's a non-sales promo (e.g. a sweepstakes/event signup)",
+    "  and the draft replies with a sales/bike-inquiry/stop-in frame -> frame=wrong_lead_type.",
+    "- appointment/dialog_state: if the draft re-asks or re-answers something the turn already settled",
+    "  (e.g. re-asks a day the customer just named) -> frame=stale_intent.",
+    "If the draft forgot the established subject entirely -> frame=dropped_anchor. If it invents a",
+    "frame the turn doesn't warrant -> frame=fabricated. If it's on-target -> frame=matches.",
+    "",
+    "Fields:",
+    "- addresses_this_turn: does the reply respond to what the customer said/asked THIS turn?",
+    "- referenced_entities_present: is every model/unit the reply names one the customer referenced",
+    "  this turn OR the anchor's model_of_record? (false = it pulled in an unreferenced model)",
+    "- frame: one of the values above.",
+    "- unsupported_assertion: the specific out-of-context claim, if any (else empty).",
+    '- verdict: "out_of_context" if the reply adopts a frame this turn doesn\'t warrant, else "faithful".',
+    '- severity: "major" if a customer would notice it answers the wrong thing; else "minor".',
+    "- confidence 0..1 (>= 0.8 only when clear). steering: one instruction to re-draft faithfully.",
+    "Be fair: do NOT flag a reply that genuinely addresses the turn. When unsure, prefer faithful.",
+    "",
+    "Examples:",
+    '- anchor lead_type "event_promo/sweepstakes" | customer: "(National sweepstakes signup)" | draft:',
+    '  "Thanks for your inquiry about the 2026 Heritage Classic. If you\'d like to stop in, let me know." ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":false,"frame":"wrong_lead_type",',
+    '   "unsupported_assertion":"treats a sweepstakes entry as a bike inquiry and pushes a stop-in",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.95,"reason":"sales frame on a non-sales sweepstakes signup","steering":"congratulate the sweepstakes entry and offer help; no bike pitch or stop-in"}',
+    '- anchor model_of_record "Road Glide" | customer: "as long as it\'s a road glide I can see how they handle" |',
+    '  draft: "We have 2 Ultra Limited units in stock right now. Top options: ..." ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":false,"frame":"over_attached_model",',
+    '   "unsupported_assertion":"offers Ultra Limited; the customer referenced a Road Glide",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.9,"reason":"pitches a model the customer did not reference","steering":"talk about the Road Glide the customer named"}',
+    '- customer: "I\'ll see you Monday!" | draft: "Absolutely — what day and time works for you?" ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":true,"frame":"stale_intent",',
+    '   "unsupported_assertion":"re-asks the day the customer already gave (Monday)",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.9,"reason":"re-asks a day already named","steering":"confirm Monday instead of re-asking"}',
+    '- anchor model_of_record "Street Glide" | customer: "what\'s the price on the street glide?" | draft:',
+    '  "I\'ll grab the exact out-the-door price on the Street Glide and text it over." ->',
+    '  {"addresses_this_turn":true,"referenced_entities_present":true,"frame":"matches",',
+    '   "unsupported_assertion":"","verdict":"faithful","severity":"minor","confidence":0.92,"reason":"answers the price ask on the referenced model","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Anchor: ${JSON.stringify({
+      model_of_record: anchor.modelOfRecord ?? null,
+      lead_type: anchor.leadType ?? null,
+      appointment_booked: anchor.appointmentBooked ?? false,
+      dialog_state: anchor.dialogState ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${inbound}`,
+    `DRAFT reply to judge: ${draft}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "context_fidelity",
+      schema: CONTEXT_FIDELITY_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-context-fidelity",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const frameRaw = String(parsed.frame ?? "").toLowerCase();
+  const allowedFrames = [
+    "matches",
+    "over_attached_model",
+    "stale_intent",
+    "wrong_lead_type",
+    "fabricated",
+    "dropped_anchor",
+    "other"
+  ];
+  const frame = (allowedFrames.includes(frameRaw) ? frameRaw : "other") as ContextFidelityScoreParse["frame"];
+  const verdict: ContextFidelityScoreParse["verdict"] =
+    String(parsed.verdict ?? "").toLowerCase() === "out_of_context" ? "out_of_context" : "faithful";
+  const severity: ContextFidelityScoreParse["severity"] =
+    String(parsed.severity ?? "").toLowerCase() === "major" ? "major" : "minor";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    addressesThisTurn: parsed.addresses_this_turn !== false,
+    referencedEntitiesPresent: parsed.referenced_entities_present !== false,
+    frame,
+    unsupportedAssertion:
+      typeof parsed.unsupported_assertion === "string" ? parsed.unsupported_assertion.slice(0, 240) : undefined,
+    verdict,
+    severity,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
 // an overall verdict + a steering hint for a re-draft. Used by the (dark) draft-quality gate to
 // shadow-log what it WOULD regenerate/hold before any live cutover. Returns null when
 // disabled/low-signal — callers treat null as "pass" (don't block a draft we can't judge).

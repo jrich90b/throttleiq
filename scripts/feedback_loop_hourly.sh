@@ -160,6 +160,14 @@ restore_if_backup_exists() {
     echo "[feedback-hourly] step=intent_handled_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
   fi
 
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=context_fidelity_audit"          # answering out of context (over-attach/stale/wrong-lead-type) — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    mkdir -p "$REPORT_ROOT/context_fidelity"
+    LLM_ENABLED=1 CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" REPORT_ROOT="$REPORT_ROOT" npx tsx scripts/context_fidelity_audit.ts --since-hours="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" > /dev/null 2>&1 || true
+  else
+    echo "[feedback-hourly] step=context_fidelity_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
+
   echo "[feedback-hourly] step=compliance_send_audit"             # opt-out / STOP footer
   npm run compliance:audit || true
 
