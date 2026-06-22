@@ -181,10 +181,24 @@ export const CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT =
 const MAX_VISION_IMAGE_BYTES = 6 * 1024 * 1024;
 
 /**
+ * Reply when vision recognized the shared image is NOT a motorcycle (a fish, a pet, a meme,
+ * a screenshot). Never claim to "match it against inventory" — that's the embarrassing miss
+ * (a customer's fish photo answered with "let me match it against what we've got in stock").
+ * A light, fail-safe clarification: acknowledge, and invite the bike photo. Pinned by
+ * customer_photo_share:eval.
+ */
+export function buildNonMotorcyclePhotoShareReply(firstName?: string | null): string {
+  const name = String(firstName ?? "").trim();
+  const greeting = name ? `Thanks ${name}! ` : "Thanks! ";
+  return `${greeting}I'm not seeing a motorcycle in that one — did you mean to send a photo of a bike you're interested in? Send it over and I'll match it up.`;
+}
+
+/**
  * Full photo-share reply: resolve the customer's image, identify the model
  * family with vision (confidence-gated), match against the live inventory
  * feed, and answer with real units. Falls back to the match-commit reply on
- * any miss — never guesses a model to a rider.
+ * any miss — never guesses a model to a rider. When vision recognizes the
+ * image is NOT a motorcycle, diverts to a clarification (never the match reply).
  */
 export async function buildPhotoShareReplyWithVision(args: {
   conv: { messages?: any[]; lead?: any };
@@ -215,6 +229,18 @@ export async function buildPhotoShareReplyWithVision(args: {
       mimeType: mime,
       contextText: args.contextText
     });
+    // Vision SUCCESSFULLY recognized the image is not a motorcycle (a fish, a pet, a meme,
+    // a screenshot) — divert to a clarification instead of the "match it against stock"
+    // reply. Fail-safe: only fires on an explicit is_motorcycle=false; a vision error/null
+    // (the catch / a missing description) still falls through to the existing bike-match fallback.
+    if (description && description.isMotorcycle === false) {
+      const who = String(args.firstName ?? "").trim() || "Customer";
+      return {
+        reply: buildNonMotorcyclePhotoShareReply(args.firstName),
+        identifiedFamily: null,
+        todoSummary: `${who} sent a photo that doesn't look like a motorcycle — take a look in the thread and clarify what they're after.`
+      };
+    }
     if (!shouldUseVisionIdentification(description)) return fallback;
     const candidates = visionFamilyCandidates(description!.modelFamily);
     if (!candidates.length) return fallback;

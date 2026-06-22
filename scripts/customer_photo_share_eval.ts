@@ -16,6 +16,7 @@ const {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
   buildIdentifiedPhotoShareReply,
+  buildNonMotorcyclePhotoShareReply,
   detectCustomerVehiclePhotoShareText,
   findNearestInboundImageUrls,
   isSalesPhotoShareContext,
@@ -234,6 +235,30 @@ assert.match(
   llmSource,
   /Here is a photo of the HD I like\./,
   "parser few-shots must include the Mustafa production fixture"
+);
+
+// Non-motorcycle photo (a fish, a pet, a meme): NEVER claim to match it against inventory.
+const nonMotoReply = buildNonMotorcyclePhotoShareReply("Bobby");
+assert.match(nonMotoReply, /Bobby/, "non-motorcycle reply greets by name");
+assert.match(
+  nonMotoReply,
+  /\b(motorcycle|bike)\b/i,
+  "non-motorcycle reply clarifies whether they meant to send a bike photo"
+);
+for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i, /find what i find/i]) {
+  assert.ok(!banned.test(nonMotoReply), `non-motorcycle reply must not claim to match inventory (${banned})`);
+}
+
+// Source guard: the vision flow diverts an is_motorcycle=false image to the clarification,
+// before the bike-match fallback — and only on an explicit false (fail-safe).
+const photoShareSource = await fs.readFile(
+  path.resolve("services/api/src/domain/customerPhotoShare.ts"),
+  "utf8"
+);
+assert.match(
+  photoShareSource,
+  /description\.isMotorcycle === false[\s\S]{0,200}buildNonMotorcyclePhotoShareReply/,
+  "buildPhotoShareReplyWithVision must divert an is_motorcycle=false image to the clarification reply"
 );
 
 console.log("PASS customer photo share eval");
