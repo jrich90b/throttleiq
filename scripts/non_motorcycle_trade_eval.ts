@@ -38,6 +38,11 @@ const wirings = idx.match(/resolveNonMotorcycleTradeHandoffReply\(/g) ?? [];
 // one definition + one live call + one regen call
 assert.ok(wirings.length >= 3, `expected the resolver defined + called in both paths, saw ${wirings.length}`);
 assert.ok(/"live"/.test(idx) && /"regen"/.test(idx), "resolver must run in live and regen scopes");
+// sticky continuation: bypass the pre-filter once already handed off
+assert.ok(
+  /alreadyHandoff/.test(idx) && /!alreadyHandoff && !nonMotorcycleTradeHint/.test(idx),
+  "resolver must keep parsing follow-up turns while already in the non-moto handoff"
+);
 
 // --- Parser coverage (only when the LLM is enabled, e.g. in ci:eval) ---
 const llmOn = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
@@ -57,6 +62,25 @@ if (llmOn) {
   await expectKind("I want to trade in my 2019 Street Glide", "none");
   await expectKind("trading in my Vegas", "none");
   await expectKind("what would my bike be worth on trade?", "none");
+
+  // Sticky continuation: with handoff history, a details reply stays non_motorcycle_trade;
+  // a pivot to the bike breaks out to none.
+  const camperHistory = [
+    { direction: "in" as const, body: "I'd also need to trade in my motorcycle camper" },
+    { direction: "out" as const, body: "let me have our team take a look at the motorcycle camper specifically — they'll follow up" }
+  ];
+  const cont = await parseNonMotorcycleTradeWithLLM({
+    text: "it's a 2023 Forest River, 18ft, brand new never used",
+    history: camperHistory
+  });
+  assert.ok(cont, "continuation parse returned null");
+  assert.equal(cont!.intent, "non_motorcycle_trade", "details follow-up about the camper stays a non-moto trade");
+  const pivot = await parseNonMotorcycleTradeWithLLM({
+    text: "actually never mind that — what's the monthly payment on the Street Glide?",
+    history: camperHistory
+  });
+  assert.ok(pivot, "pivot parse returned null");
+  assert.equal(pivot!.intent, "none", "a pivot to the bike breaks out of the handoff");
 } else {
   console.log("(LLM disabled — skipped parser coverage; decision-table + source guards ran)");
 }

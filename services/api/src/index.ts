@@ -2405,6 +2405,13 @@ function buildNonMotorcycleTradeHandoffReply(item?: string | null): string {
   return `Good question — let me have our team take a look at the ${thing} specifically, since that's outside our usual motorcycle trades. They'll follow up with you on it.`;
 }
 
+// Lighter ack once we've already handed the non-motorcycle item to the team and the customer
+// keeps sending details — acknowledge receipt, don't re-pitch the handoff.
+function buildNonMotorcycleTradeContinuationReply(item?: string | null): string {
+  const thing = String(item ?? "").trim() || "that";
+  return `Thanks — I'll get those details on the ${thing} over to our team and they'll follow up with you.`;
+}
+
 // Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
 // a staff-handoff reply (and sets manual handoff + an owner todo + stops cadence) ONLY when a
 // confident, explicit NON-motorcycle trade is detected; otherwise null so the normal trade
@@ -2417,12 +2424,18 @@ async function resolveNonMotorcycleTradeHandoffReply(
 ): Promise<string | null> {
   const text = String(inboundText ?? "").trim();
   if (!text || !conv) return null;
-  if (!nonMotorcycleTradeHint(text)) return null; // pre-filter; miss => existing behavior
+  // Sticky continuation: once a conversation is in the non-motorcycle-trade handoff, keep
+  // consulting the parser on follow-up turns (camper details have no "trade" verb, so the
+  // cheap pre-filter would miss them) — that keeps the thread with the team instead of
+  // running camper specs through the bike pipeline. A real pivot => parser none => break out.
+  const alreadyHandoff =
+    conv.followUp?.mode === "manual_handoff" && conv.followUp?.reason === "non_motorcycle_trade";
+  if (!alreadyHandoff && !nonMotorcycleTradeHint(text)) return null; // pre-filter; miss => existing behavior
   const parse = await safeLlmParse("non_motorcycle_trade_parser", () =>
     parseNonMotorcycleTradeWithLLM({ text, history: buildHistory(conv, 8) })
   );
   if (process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_DEBUG === "1" && parse) {
-    console.log("[llm-non-motorcycle-trade-parse]", { convId: conv.id, ...parse });
+    console.log("[llm-non-motorcycle-trade-parse]", { convId: conv.id, alreadyHandoff, ...parse });
   }
   const decision = decideNonMotorcycleTradeTurn({
     parserAccepted: !!parse,
@@ -2433,6 +2446,8 @@ async function resolveNonMotorcycleTradeHandoffReply(
   });
   if (decision.kind !== "non_motorcycle_trade_handoff") return null;
   const itemNote = parse?.item ? ` (${parse.item})` : "";
+  // addTodo merges into the existing open manager todo, so a continuation appends the new
+  // details for the owner rather than spawning duplicates.
   addTodo(
     conv,
     "manager",
@@ -2442,8 +2457,13 @@ async function resolveNonMotorcycleTradeHandoffReply(
   setFollowUpMode(conv, "manual_handoff", "non_motorcycle_trade");
   stopFollowUpCadence(conv, "manual_handoff");
   stopRelatedCadences(conv, "non_motorcycle_trade", { setMode: "manual_handoff" });
-  recordRouteOutcome(scope, "non_motorcycle_trade_handoff", { convId: conv.id, leadKey: conv.leadKey });
-  return buildNonMotorcycleTradeHandoffReply(parse?.item);
+  recordRouteOutcome(scope, alreadyHandoff ? "non_motorcycle_trade_continuation" : "non_motorcycle_trade_handoff", {
+    convId: conv.id,
+    leadKey: conv.leadKey
+  });
+  return alreadyHandoff
+    ? buildNonMotorcycleTradeContinuationReply(parse?.item)
+    : buildNonMotorcycleTradeHandoffReply(parse?.item);
 }
 
 function buildActionableStylePreferenceReply(args: {
