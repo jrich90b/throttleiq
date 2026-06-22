@@ -180,17 +180,41 @@ export const CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT =
 
 const MAX_VISION_IMAGE_BYTES = 6 * 1024 * 1024;
 
+// A vision-composed social one-liner is customer-facing, so it passes a deterministic guard:
+// brief, no question, and NO sales/inventory/bike-pivot language (in case vision ignores the
+// prompt). Anything that fails the guard is dropped to the neutral acknowledgement.
+export function sanitizeSocialPhotoReply(text?: string | null): string {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!t || t.length > 90) return "";
+  if (/\?/.test(t)) return ""; // a social ack reciprocates; it does not interrogate
+  if (
+    /\b(bike|motorcycle|model|stock|inventory|match|price|pricing|payment|finance|test ride|stop in|schedule|appointment|deal|coming in|in stock)\b/i.test(
+      t
+    )
+  ) {
+    return "";
+  }
+  return t;
+}
+
 /**
- * Reply when vision recognized the shared image is NOT a motorcycle (a fish, a pet, a meme,
- * a screenshot). Never claim to "match it against inventory" — that's the embarrassing miss
- * (a customer's fish photo answered with "let me match it against what we've got in stock").
- * A light, fail-safe clarification: acknowledge, and invite the bike photo. Pinned by
- * customer_photo_share:eval.
+ * Reply when vision recognized the shared image is NOT a motorcycle. Never claim to "match it
+ * against inventory" — that's the embarrassing miss (a customer's fish photo answered with "let
+ * me match it against what we've got in stock"). Two cases:
+ *  - friendly chatter (a fish someone caught, a pet, scenery): vision composed a warm one-liner
+ *    ("Haha, nice catch!") — reciprocate like a real salesperson would (guarded; see sanitizer).
+ *  - a document / screenshot / unclear image (no safe social line): a neutral acknowledgement,
+ *    NOT a gushing one and NOT a sales pivot.
+ * Pinned by customer_photo_share:eval.
  */
-export function buildNonMotorcyclePhotoShareReply(firstName?: string | null): string {
+export function buildNonMotorcyclePhotoShareReply(
+  firstName?: string | null,
+  visionSocialReply?: string | null
+): string {
+  const social = sanitizeSocialPhotoReply(visionSocialReply);
+  if (social) return social;
   const name = String(firstName ?? "").trim();
-  const greeting = name ? `Thanks ${name}! ` : "Thanks! ";
-  return `${greeting}I'm not seeing a motorcycle in that one — did you mean to send a photo of a bike you're interested in? Send it over and I'll match it up.`;
+  return name ? `Thanks for sending that over, ${name}!` : "Thanks for sending that over!";
 }
 
 /**
@@ -235,10 +259,13 @@ export async function buildPhotoShareReplyWithVision(args: {
     // (the catch / a missing description) still falls through to the existing bike-match fallback.
     if (description && description.isMotorcycle === false) {
       const who = String(args.firstName ?? "").trim() || "Customer";
+      const isChatter = !!sanitizeSocialPhotoReply(description.socialReply);
       return {
-        reply: buildNonMotorcyclePhotoShareReply(args.firstName),
+        reply: buildNonMotorcyclePhotoShareReply(args.firstName, description.socialReply),
         identifiedFamily: null,
-        todoSummary: `${who} sent a photo that doesn't look like a motorcycle — take a look in the thread and clarify what they're after.`
+        todoSummary: isChatter
+          ? `${who} shared a friendly non-motorcycle photo (chatter) — the agent acknowledged it socially. No bike action needed.`
+          : `${who} sent a non-motorcycle photo (document/unclear) — take a look in the thread and follow up if needed.`
       };
     }
     if (!shouldUseVisionIdentification(description)) return fallback;

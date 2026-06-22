@@ -17,6 +17,7 @@ const {
   buildCustomerVehiclePhotoShareReply,
   buildIdentifiedPhotoShareReply,
   buildNonMotorcyclePhotoShareReply,
+  sanitizeSocialPhotoReply,
   detectCustomerVehiclePhotoShareText,
   findNearestInboundImageUrls,
   isSalesPhotoShareContext,
@@ -237,28 +238,41 @@ assert.match(
   "parser few-shots must include the Mustafa production fixture"
 );
 
-// Non-motorcycle photo (a fish, a pet, a meme): NEVER claim to match it against inventory.
-const nonMotoReply = buildNonMotorcyclePhotoShareReply("Bobby");
-assert.match(nonMotoReply, /Bobby/, "non-motorcycle reply greets by name");
-assert.match(
-  nonMotoReply,
-  /\b(motorcycle|bike)\b/i,
-  "non-motorcycle reply clarifies whether they meant to send a bike photo"
+// Non-motorcycle photo: NEVER claim to match it against inventory; respond like a human.
+// (a) True chatter — vision composed a warm one-liner ("Haha, nice catch!") -> reciprocate it.
+const chatterReply = buildNonMotorcyclePhotoShareReply("Bobby", "Haha, nice catch!");
+assert.match(chatterReply, /nice catch/i, "a friendly fish/pet photo gets the warm vision ack, not a sales pivot");
+// (b) Document / unclear image — no safe social line -> a neutral acknowledgement (not gushing, not sales).
+const neutralReply = buildNonMotorcyclePhotoShareReply("Bobby");
+assert.match(neutralReply, /Bobby/, "neutral non-motorcycle reply greets by name");
+assert.match(neutralReply, /thanks for sending/i, "neutral reply just acknowledges");
+// (c) The guard drops a vision line that pivots to sales/bikes or asks a question.
+assert.equal(sanitizeSocialPhotoReply("Haha, nice catch!"), "Haha, nice catch!", "a clean social ack passes");
+assert.equal(sanitizeSocialPhotoReply("Let me match it against what we've got in stock"), "", "sales pivot is dropped");
+assert.equal(sanitizeSocialPhotoReply("Is that a bike you're interested in?"), "", "a bike question is dropped");
+assert.equal(sanitizeSocialPhotoReply(""), "", "empty stays empty");
+assert.equal(
+  buildNonMotorcyclePhotoShareReply("Bobby", "Let me match it against stock"),
+  "Thanks for sending that over, Bobby!",
+  "an unsafe vision line falls back to the neutral acknowledgement"
 );
-for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i, /find what i find/i]) {
-  assert.ok(!banned.test(nonMotoReply), `non-motorcycle reply must not claim to match inventory (${banned})`);
+// No non-motorcycle reply ever claims to match inventory.
+for (const reply of [chatterReply, neutralReply]) {
+  for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i]) {
+    assert.ok(!banned.test(reply), `non-motorcycle reply must not claim to match inventory (${banned})`);
+  }
 }
 
-// Source guard: the vision flow diverts an is_motorcycle=false image to the clarification,
-// before the bike-match fallback — and only on an explicit false (fail-safe).
+// Source guard: the vision flow diverts an is_motorcycle=false image away from the bike-match
+// reply (only on an explicit false — fail-safe), passing the vision social line through.
 const photoShareSource = await fs.readFile(
   path.resolve("services/api/src/domain/customerPhotoShare.ts"),
   "utf8"
 );
 assert.match(
   photoShareSource,
-  /description\.isMotorcycle === false[\s\S]{0,200}buildNonMotorcyclePhotoShareReply/,
-  "buildPhotoShareReplyWithVision must divert an is_motorcycle=false image to the clarification reply"
+  /description\.isMotorcycle === false[\s\S]{0,260}buildNonMotorcyclePhotoShareReply\(args\.firstName, description\.socialReply\)/,
+  "buildPhotoShareReplyWithVision must divert an is_motorcycle=false image to the social/neutral reply with the vision line"
 );
 
 console.log("PASS customer photo share eval");
