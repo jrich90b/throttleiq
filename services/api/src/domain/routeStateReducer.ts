@@ -1216,3 +1216,29 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
   }
   return { kind: "none" };
 }
+
+// ── Trade-qualifier turn (centralizes the trade cluster's route decision) ─────
+// After we asked "do you have a trade?", the customer's reply is classified by the typed
+// parser `parseTradeQualifierResponseWithLLM` (hasTrade = affirmed / declined / unclear).
+// This pure decision maps that to the route kind so BOTH /webhooks/twilio AND
+// /conversations/:id/regenerate switch on the SAME result (route-parity law) — it closes the
+// prior gap where regen handled ONLY the decline branch and an affirm fell through to the
+// orchestrator. Arm bodies (set trade state + ask miles/payoff; clear trade + finance reply)
+// stay in index.ts. Fail-safe: an `unclear`/null parse or a turn where we didn't ask returns
+// `none` and falls through (no silent regex miss). Pinned by `trade_qualifier_turn:eval`.
+export type TradeQualifierTurnKind = "trade_affirm" | "trade_decline" | "none";
+
+export type TradeQualifierTurnInput = {
+  askedTradeQualifier: boolean;
+  hasTrade?: string | null;
+};
+
+export type TradeQualifierTurnDecision = { kind: TradeQualifierTurnKind };
+
+export function decideTradeQualifierTurn(input: TradeQualifierTurnInput): TradeQualifierTurnDecision {
+  if (!input.askedTradeQualifier) return { kind: "none" };
+  const hasTrade = String(input.hasTrade ?? "").toLowerCase();
+  if (hasTrade === "affirmed") return { kind: "trade_affirm" };
+  if (hasTrade === "declined") return { kind: "trade_decline" };
+  return { kind: "none" };
+}
