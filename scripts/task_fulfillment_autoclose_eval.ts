@@ -17,39 +17,33 @@ import {
   TASK_AUTO_CLOSE_MIN_CONFIDENCE
 } from "../services/api/src/domain/taskFulfillmentAutoClose.ts";
 
-// --- Eligibility: OPEN call + follow-up + pricing/payments (answerable-by-text money
-// questions). Department/credit-app WORK stays excluded. ---
-assert.equal(isAutoCloseEligibleTask({ status: "open", reason: "call" }), true, "open call task eligible");
-assert.equal(
-  isAutoCloseEligibleTask({ status: "open", reason: "other", taskClass: "followup" }),
-  true,
-  "open follow-up task eligible regardless of reason"
-);
-assert.equal(
-  isAutoCloseEligibleTask({ status: "open", reason: "pricing", taskClass: "todo" }),
-  true,
-  "a pricing task is eligible — a texted price answer fulfills it"
-);
-assert.equal(
-  isAutoCloseEligibleTask({ status: "open", reason: "payments", taskClass: "todo" }),
-  true,
-  "a payment-info task is eligible — a texted payment answer fulfills it"
-);
-// Department / credit-app work must NOT auto-close (answering a text != doing the work).
-for (const workReason of ["approval", "manager", "service", "parts", "apparel"]) {
+// --- Eligibility: the 0.85 classifier decides for ANY customer-facing task. Only structurally
+// non-fulfillable types are excluded: internal `note` + `appointment` taskClass (outcome flow).
+// (Paul Foley 6/22: a parts AVAILABILITY question answered by text must be closeable.) ---
+for (const reason of ["call", "pricing", "payments", "parts", "service", "apparel", "approval", "manager", "other"]) {
   assert.equal(
-    isAutoCloseEligibleTask({ status: "open", reason: workReason, taskClass: "todo" }),
-    false,
-    `a ${workReason} task (real department/credit work) is not auto-closeable`
+    isAutoCloseEligibleTask({ status: "open", reason, taskClass: "todo" }),
+    true,
+    `open ${reason} task is eligible — the classifier judges whether the objective was accomplished`
   );
 }
 assert.equal(
-  isAutoCloseEligibleTask({ status: "open", reason: "service", taskClass: "appointment" }),
+  isAutoCloseEligibleTask({ status: "open", reason: "other", taskClass: "followup" }),
+  true,
+  "open follow-up task eligible"
+);
+// Structural exclusions:
+assert.equal(
+  isAutoCloseEligibleTask({ status: "open", reason: "note", taskClass: "todo" }),
   false,
-  "an appointment/service task is not eligible"
+  "an internal note is not a customer task — not auto-closeable"
+);
+assert.equal(
+  isAutoCloseEligibleTask({ status: "open", reason: "call", taskClass: "appointment" }),
+  false,
+  "an appointment task closes via its outcome flow, not fulfillment"
 );
 assert.equal(isAutoCloseEligibleTask({ status: "done", reason: "call" }), false, "a done task is never eligible");
-assert.equal(isAutoCloseEligibleTask({ status: "open", reason: "other" }), false, "open 'other' with no follow-up class not eligible");
 
 // --- Gate: only enabled + eligible + fulfilled + confident closes ---
 const fulfilledHigh = { taskId: "t1", fulfilled: true, confidence: 0.95, evidence: "x" };
