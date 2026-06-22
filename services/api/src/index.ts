@@ -5866,6 +5866,39 @@ app.post("/public/widget/text-us", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", `${todoReason}_request`);
       if (todoReason === "service") setDialogState(conv, "service_handoff");
       stopFollowUpCadence(conv, "manual_handoff");
+      // Non-sales web-widget leads must not get silence either (Paul Foley +19054842961,
+      // 2026-06-22: a parts widget question got a department task but no reply). Mirror the
+      // sales "never go silent" rule with a handoff ACK — route to the department, never
+      // fabricate parts/service/apparel availability. Suggest mode keeps it a staff-approved
+      // draft; the customer gave phone + text consent so it delivers by SMS.
+      const deptLabel = webTextWidgetDepartmentLabel(department);
+      const deptAck = `Hi ${firstName || "there"} — thanks for reaching out to our ${deptLabel} team. I've passed your message along and they'll text you right back.`;
+      const evaluateDeptAckInvariant = (
+        text: string,
+        invariantHints?: CustomerReplyDraftInvariantHints
+      ) =>
+        applyDraftStateInvariants({
+          inboundText: message,
+          draftText: text,
+          followUpMode: conv.followUp?.mode ?? null,
+          followUpReason: conv.followUp?.reason ?? null,
+          dialogState: getDialogState(conv),
+          classificationBucket: conv.classification?.bucket ?? null,
+          classificationCta: conv.classification?.cta ?? null,
+          ...(invariantHints ?? {})
+        });
+      await publishCustomerReplyDraft({
+        conv,
+        channel: "sms",
+        text: deptAck,
+        evaluateInvariant: evaluateDeptAckInvariant,
+        from: "salesperson",
+        to: phone,
+        discardPendingDraftsBeforePublish: true,
+        routeScope: "live",
+        routeOutcome: `web_text_widget_${todoReason}_ack_draft_created`,
+        routeDetail: { department }
+      });
     }
     upsertContact({
       leadKey: phone,

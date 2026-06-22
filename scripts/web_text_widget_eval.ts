@@ -367,6 +367,18 @@ cases.push(
   }
 );
 
+cases.push({
+  // Paul Foley +19054842961 (2026-06-22): a parts web-widget question got a department
+  // task but no customer reply. Non-sales widgets (parts/service/apparel) must also
+  // acknowledge — a handoff ack, never dead air.
+  id: "nonsales_widget_publishes_department_handoff_ack",
+  actual:
+    apiSource.includes("evaluateDeptAckInvariant") &&
+    apiSource.includes("they'll text you right back") &&
+    apiSource.includes("_ack_draft_created"),
+  expected: true
+});
+
 let passed = 0;
 for (const c of cases) {
   const actual = JSON.stringify(c.actual);
