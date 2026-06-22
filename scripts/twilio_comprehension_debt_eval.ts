@@ -25,7 +25,7 @@ import path from "node:path";
 // and removed the already-inert (regexIntentFallbackEnabled=false) finance follow-up
 // prompt/affirmation regex backstop. Continuation is parser-led (llmPaymentsIntent +
 // stored payment-budget context). Migration #3 (finance/pricing cluster).
-const BASELINE = 36;
+const BASELINE = 35;
 
 // Pure no-reply / safety / compliance gates — allowed to read customer text
 // (they suppress or hand off; they do not compose a comprehension reply).
@@ -47,7 +47,15 @@ for (let i = start + 1; i < src.length; i += 1) {
 }
 const handler = src.slice(start, end).join("\n");
 
-const guards = [...new Set([...handler.matchAll(/\bis[A-Z][A-Za-z]+Text\b/g)].map(m => m[0]))]
+// Count only ACTIVE code references. A guard token that survives solely in a comment
+// (e.g. a "...replaces isNoTradeResponseText" note left after the regex was migrated out
+// to a parser) is a GHOST, not live debt — strip comments so the ratchet measures the
+// real tangle, not historical breadcrumbs.
+const handlerCode = handler
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+const guards = [...new Set([...handlerCode.matchAll(/\bis[A-Z][A-Za-z]+Text\b/g)].map(m => m[0]))]
   .filter(g => !SAFETY_ALLOWLIST.has(g))
   .sort();
 
