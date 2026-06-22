@@ -588,6 +588,21 @@ export function TaskInboxSection(props: any) {
                             <div className="lr-task-card-box-value">{actionDisplay}</div>
                           </div>
                         </div>
+                        {t.autoCloseCheck && t.autoCloseCheck.decision !== "closed" ? (
+                          <div
+                            className="lr-task-autoclose-check"
+                            title="Why this task hasn't auto-closed yet"
+                          >
+                            <span aria-hidden className="inline-flex">
+                              <SideNavIcon name="bolt" className="w-3 h-3" />
+                            </span>
+                            Auto-close: held
+                            {typeof t.autoCloseCheck.confidence === "number"
+                              ? ` · ${Math.round(t.autoCloseCheck.confidence * 100)}%`
+                              : ""}
+                            {t.autoCloseCheck.evidence ? ` — ${t.autoCloseCheck.evidence}` : ""}
+                          </div>
+                        ) : null}
                         {!summaryDuplicatesAction || showRequestedCallTime || appointmentOutcomeLabel ? (
                           <div className="lr-task-card-summary">
                             <div className="flex items-center justify-between gap-2">

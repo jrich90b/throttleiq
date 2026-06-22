@@ -334,6 +334,15 @@ export type TodoTask = {
   reminderSentAt?: string;
   escalatedAt?: string;
   taskClass?: TodoTaskClass;
+  // Last task-fulfillment auto-close check (visibility into WHY a task did/didn't close).
+  autoCloseCheck?: {
+    at: string;
+    fulfilled: boolean;
+    confidence: number | null;
+    evidence?: string;
+    decision: string; // e.g. "closed" | "shadow_would_close" | "below_confidence" | "not_fulfilled"
+    channel: string;
+  };
 };
 
 export type TodoTaskClass = "followup" | "appointment" | "todo" | "reminder";
@@ -5063,6 +5072,19 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   task.doneAt = nowIso();
   scheduleSave();
   return task;
+}
+
+// Persist the latest task-fulfillment auto-close verdict on a task, so staff can see
+// WHY it did / didn't auto-close (confidence + evidence + decision).
+export function setTodoAutoCloseCheck(
+  convId: string,
+  todoId: string,
+  check: NonNullable<TodoTask["autoCloseCheck"]>
+): void {
+  const task = todos.find(t => t.id === todoId && t.convId === convId);
+  if (!task) return;
+  task.autoCloseCheck = check;
+  scheduleSave();
 }
 
 // Push an open task's due time forward (staff "snooze"). Keeps the reminder lead
