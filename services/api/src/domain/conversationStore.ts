@@ -4667,6 +4667,13 @@ export function setFollowUpMode(
 ) {
   conv.followUp = { mode, reason, updatedAt: nowIso() };
   conv.updatedAt = nowIso();
+  // Invariant: a handed-off lead must not keep an ACTIVE customer cadence — otherwise it
+  // can auto-text the customer mid-handoff (audited contradiction class). Enforce it on the
+  // mode-setter so EVERY handoff path is covered, not just the ones that remember to call
+  // stopFollowUpCadence. stopFollowUpCadence preserves post_sale/long_term internally.
+  if (mode === "manual_handoff" && conv.followUpCadence?.status === "active") {
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
   scheduleSave();
 }
 
@@ -4912,11 +4919,18 @@ export function shouldNudgeStaleHandoffLead(
   conv: Conversation,
   hasOpenTodo: boolean,
   now: Date = new Date(),
-  opts?: { minIdleDays?: number; maxIdleDays?: number }
+  opts?: { minIdleDays?: number; maxIdleDays?: number; reNudgeDays?: number }
 ): boolean {
   if (!conv || hasOpenTodo) return false;
   if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
-  if (conv.staleHandoffNudgedAt) return false;
+  // Dedup, but not forever: a lead nudged once whose to-do was later closed while it's STILL
+  // handed off + idle is a permanent orphan. Re-surface it after reNudgeDays (default 14) so
+  // it never falls through the cracks. The per-tick cap still prevents any flood.
+  if (conv.staleHandoffNudgedAt) {
+    const nudgedMs = Date.parse(conv.staleHandoffNudgedAt);
+    const reNudgeMs = (opts?.reNudgeDays ?? 14) * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(nudgedMs) || now.getTime() - nudgedMs < reNudgeMs) return false;
+  }
   if (conv.followUp?.mode !== "manual_handoff") return false;
   if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
   const messages = Array.isArray(conv.messages) ? conv.messages : [];

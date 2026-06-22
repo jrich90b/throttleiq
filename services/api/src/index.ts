@@ -27471,6 +27471,31 @@ async function processDueFollowUpsUnlocked() {
       .filter(shouldTodoHoldCustomerCadence)
       .map(t => t.convId)
   );
+  // State-invariant reconciler: a handed-off lead must never carry an ACTIVE customer
+  // cadence (it could auto-text mid-handoff). The write-time guard in setFollowUpMode
+  // prevents new ones; this heals any that slipped through before it existed.
+  // stopFollowUpCadence preserves post_sale/long_term, so those keep running by design.
+  let cadenceHandoffHealed = 0;
+  for (const conv of convs) {
+    if (conv.followUp?.mode !== "manual_handoff") continue;
+    const cad = conv.followUpCadence;
+    if (cad?.status !== "active") continue;
+    // post_sale / long_term cadences are intentionally kept through a handoff (matches
+    // stopFollowUpCadence's own carve-out) — so only count/record the ones we actually stop.
+    const preserved = cad.kind === "post_sale" || cad.kind === "long_term";
+    stopFollowUpCadence(conv, "manual_handoff");
+    if (preserved) continue;
+    saveConversation(conv);
+    cadenceHandoffHealed += 1;
+    recordRouteOutcome("manual", "cadence_handoff_invariant_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reason: String(conv.followUp?.reason ?? "")
+    });
+  }
+  if (cadenceHandoffHealed > 0) {
+    console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
+  }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it
   // doesn't die silently (Mike +17163686204). Capped per tick + deduped via
