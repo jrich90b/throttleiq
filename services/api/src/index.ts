@@ -54618,13 +54618,14 @@ if (authToken && signature) {
     });
   }
 
-  // Deterministic COMPREHENSION reply-router — MIGRATE candidate (AGENTS.md "comprehend,
-  // never regex" + Migrate-vs-Keep). This reads the customer's affordability / ride-
-  // confidence objection with a regex and composes a reply. Fail direction if retired =
-  // a less-precise generic orchestrator reply (fail-SAFE), the same class as the already-
-  // migrated location/callback routers — so this is comprehension debt to move to a typed
-  // parser + replay fixture, NOT a deterministic gate to keep. Not yet migrated (needs
-  // parser coverage); do not delete without a parser replacement.
+  // Deterministic detector — KEEP (re-classified 2026-06-22 by the de-tangle fail-direction
+  // test; corrects the earlier "MIGRATE candidate" label, which only looked at this reply site).
+  // At THIS site it reads the affordability / ride-confidence objection and composes a reply
+  // (fail-SAFE in isolation). BUT the SAME detector is also a fail-UNSAFE invariant guard in
+  // shouldSuppressDispositionCloseout (transitionSafety.ts) — there, a false negative lets the
+  // agent prematurely CLOSE a live, engaged lead. A detector that feeds a fail-unsafe
+  // close-suppression guard can't be deleted/parsered away (the disabled-LLM fallback would fail
+  // toward a wrongful close), so it stays deterministic. It is part of the ratchet's KEEP-floor.
   if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
