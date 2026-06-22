@@ -27626,6 +27626,52 @@ async function processDueFollowUpsUnlocked() {
     }
   }
 
+  // Task-fulfillment auto-close BACKFILL: re-check open eligible tasks against their conversation
+  // window and close the ones already fulfilled — catches tasks resolved with NO trailing trigger
+  // (Paul Foley 6/22: a parts question answered, customer thanked, then quiet, so neither the send
+  // nor a later inbound re-fired the check). Throttled hard so it never floods or over-spends:
+  // only tasks not checked in the last 12h (autoCloseCheck.at is the marker), only convs with a
+  // prior dealer outbound, capped per tick. The 0.85 classifier still owns every close.
+  if (isTaskFulfillmentAutoCloseEnabled()) {
+    const AUTOCLOSE_BACKFILL_PER_TICK = 10;
+    const AUTOCLOSE_BACKFILL_RECHECK_MS = 12 * 60 * 60 * 1000;
+    let autoCloseBackfillRan = 0;
+    for (const conv of convs) {
+      if (autoCloseBackfillRan >= AUTOCLOSE_BACKFILL_PER_TICK) break;
+      const eligible = openTodos.filter(
+        t =>
+          t.convId === conv.id &&
+          isAutoCloseEligibleTask({
+            status: t.status,
+            reason: t.reason,
+            taskClass: t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)
+          })
+      );
+      if (!eligible.length) continue;
+      // Skip when every eligible task was already re-checked recently (throttle).
+      const due = eligible.some(t => {
+        const at = Date.parse(String((t as any).autoCloseCheck?.at ?? ""));
+        return !Number.isFinite(at) || now.getTime() - at > AUTOCLOSE_BACKFILL_RECHECK_MS;
+      });
+      if (!due) continue;
+      // Need a prior dealer outbound that could have fulfilled the objective.
+      const hasDealerOutbound = (conv.messages ?? []).some(
+        (m: any) => m?.direction === "out" && String(m?.body ?? "").trim()
+      );
+      if (!hasDealerOutbound) continue;
+      autoCloseBackfillRan += 1;
+      // direction "in" => re-evaluate the existing window without appending a synthetic action.
+      await runTaskFulfillmentAutoClose(conv, {
+        channel: "sms",
+        text: "(auto-close backfill re-check)",
+        direction: "in"
+      });
+    }
+    if (autoCloseBackfillRan > 0) {
+      console.log(`[autoclose-backfill] re-checked ${autoCloseBackfillRan} conversation(s) with eligible open tasks`);
+    }
+  }
+
   // Soft-visit outcome backstop: a customer who committed to coming in on a day/event
   // ("I'll be there Saturday") needs an OUTCOME once the visit day passes — did they make it
   // in? Booked appointments + dealer rides have this; soft visits didn't, so the agent kept
