@@ -33,16 +33,25 @@ mode** (staff approve every draft).
 ## Current direction — the de-tangle program
 Goal: untangle inline `parser||regex` in `index.ts` and shrink the ~10 LLM
 round-trips/turn. Per cluster, in order: **centralize the route decision → burn down
-fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 36) →
+fail-safe regex fallbacks (ratchet `twilio_comprehension_debt:eval`, currently 35) →
 consolidate parsers (shadow-compared)**. Endgame = one `TurnUnderstanding` pass — see
 `docs/comprehension_consolidation_plan.md`. Done: scheduling cluster; finance/pricing
 pricing-continuation centralized (`decideFinancePricingTurn`, both paths), early-return
 guards annotated by fail-direction, AND the regen follow-up trigger aligned to the parser
 signal (`resolveFinanceFollowUpContinuation`, both paths, `3332efe8`) — finance/pricing
 burn-down candidates were adversarially reclassified KEEP (6/17 architecture map), so the
-cluster is effectively de-tangled. Next actionable: migrate `isNoTradeResponseText` (the one
-fail-direction-cleared comprehension regex, trade cluster) and the parser-consolidation
-round-trip win (collapse `parseUnifiedSemanticSlotsWithLLM`'s sub-calls; shadow-compared).
+cluster is effectively de-tangled. **De-tangle status (6/22 loop):** `isNoTradeResponseText`
+is already migrated to the trade-qualifier parser (the ratchet was over-counting it via a
+stale comment — now comment-aware, 36→35); `isAffordabilityRideConfidenceObjectionText` was
+adversarially re-classified **KEEP** (it feeds the fail-unsafe `shouldSuppressDispositionCloseout`
+guard — a parsered false negative would wrongfully close a live lead). The cheap fail-safe-regex
+burndown is now exhausted: the ratchet sits at/near its **KEEP-floor (35)**. Most of the 35 are
+load-bearing KEEPs (safety/side-effect/state gates) or structured-extraction helpers (e.g.
+`isTouringRequestText` = model detection feeding a payment calc), which AGENTS.md allows as
+deterministic. Further ratchet reduction now requires real **approve-first** work, NOT auto-merge
+regex-picking: the ~4 "needs-fixtures" MIGRATE candidates (6/17 map) as typed parsers + replay
+fixtures, the parser-consolidation round-trip win (collapse `parseUnifiedSemanticSlotsWithLLM`'s
+sub-calls; shadow-compared), and trade-cluster route-decision centralization in `routeStateReducer`.
 
 **Consolidation is evidence-scoped, NOT a big-bang rewrite (880-turn judged backfill).**
 The consolidated pass's gross disagreement (~25%) is ~80% LLM *over-attachment* (a thread
