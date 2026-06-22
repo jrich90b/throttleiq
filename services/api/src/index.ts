@@ -277,7 +277,8 @@ import {
   judgeDraftQualityWithLLM,
   judgeShouldRespondWithLLM,
   judgeCadenceQualityWithLLM,
-  getCachedSelfHealVerdict
+  getCachedSelfHealVerdict,
+  scoreContextFidelityWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -291,6 +292,10 @@ import {
   isCadenceQualityJudgeEnabled,
   cadenceQualityJudgeShadowEnabled
 } from "./domain/draftQualityGate.js";
+import {
+  decideContextFidelityHold,
+  contextFidelityHoldShadowEnabled
+} from "./domain/contextFidelityHold.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -4057,6 +4062,58 @@ async function gateDraftBeforePublish(
   return { held: false };
 }
 
+// Context-fidelity SHADOW hook — score the about-to-publish reply draft for "answering out of
+// context" and log would-holds. Shadow-only (CONTEXT_FIDELITY_HOLD_SHADOW; OFF by default since it's
+// a NET-NEW LLM call): NEVER holds, never mutates the conversation — it only records what the
+// (future, approve-first) enforce-flip WOULD hold. The hold slice lives in decideContextFidelityHold
+// (hold-class + major + conf>=0.8 + turn-judged frame). Called from publishCustomerReplyDraft, so it
+// covers BOTH the live webhook and regenerate paths.
+async function shadowContextFidelityHold(
+  conv: Conversation,
+  candidate: string,
+  channel: "sms" | "email",
+  scope: "live" | "regen" | "manual"
+): Promise<void> {
+  if (!contextFidelityHoldShadowEnabled()) return; // dark: no scorer call, no latency
+  try {
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    const draft = String(candidate ?? "").trim();
+    if (!inbound || !draft) return; // cadence/proactive draft has no inbound — out of scope here
+    const anchor = {
+      modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
+      leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
+      appointmentBooked: !!conv?.appointment?.bookedEventId,
+      dialogState: conv?.dialogState?.name ?? null
+    };
+    const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
+    // enabled:false — shadow only this step; the enforce-flip threads the flag + wires the actual hold.
+    const decision = decideContextFidelityHold({ enabled: false, score: sc });
+    if (decision.action !== "hold") return;
+    console.warn(
+      `[context-fidelity-hold-shadow] conv=${conv.id} scope=${scope} frame=${decision.frame} conf=${sc?.confidence ?? "-"} reason="${String(sc?.reason ?? "").slice(0, 160)}"`
+    );
+    recordDecisionTrace({
+      scope,
+      stage: "context_fidelity.hold_shadow",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        frame: decision.frame ?? null,
+        confidence: sc?.confidence ?? null,
+        severity: sc?.severity ?? null,
+        reason: String(sc?.reason ?? "").slice(0, 180),
+        steering: String(sc?.steering ?? "").slice(0, 180),
+        unsupportedAssertion: String(sc?.unsupportedAssertion ?? "").slice(0, 180),
+        inboundPreview: inbound.slice(0, 160),
+        draftPreview: draft.slice(0, 200),
+        channel
+      }
+    });
+  } catch {
+    // Best-effort shadow — never block or fail a publish.
+  }
+}
+
 async function publishCustomerReplyDraft(args: {
   conv: Conversation;
   channel: "sms" | "email";
@@ -4107,6 +4164,10 @@ async function publishCustomerReplyDraft(args: {
   }
   // A passing draft supersedes any prior held state on this conversation.
   if (args.conv.draftHeld) args.conv.draftHeld = null;
+
+  // Context-fidelity shadow: score the draft that's about to be published (no behavior change; logs
+  // would-holds when CONTEXT_FIDELITY_HOLD_SHADOW is on). Same chokepoint = both paths covered.
+  await shadowContextFidelityHold(args.conv, invariant.draftText, args.channel, args.routeScope ?? "live");
 
   const shouldDiscardPendingDrafts =
     args.discardPendingDraftsBeforePublish ?? (args.channel === "sms");
