@@ -30,7 +30,13 @@ export function isAutoCloseEligibleTask(task: {
   taskClass?: string | null;
 }): boolean {
   if (String(task?.status ?? "") !== "open") return false;
-  if (String(task?.reason ?? "") === "call") return true;
+  const reason = String(task?.reason ?? "");
+  // call + the pricing / payment-info money questions are fully answerable (and thus
+  // closeable) by a texted answer — "it's $399", "your estimated payment is ~$280/mo". So
+  // when staff answer the customer's pricing/availability question, the task can close.
+  // Department / credit-app WORK (approval, manager, service, parts, apparel) is intentionally
+  // NOT auto-closeable: answering a customer text doesn't mean the work was actually done.
+  if (reason === "call" || reason === "pricing" || reason === "payments") return true;
   if (String(task?.taskClass ?? "") === "followup") return true;
   return false;
 }
