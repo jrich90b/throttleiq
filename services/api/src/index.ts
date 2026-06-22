@@ -11013,6 +11013,31 @@ function taskAutoCloseInboundClosureHint(text: string): boolean {
   return TASK_AUTOCLOSE_INBOUND_CLOSURE_RE.test(t);
 }
 
+// Broadened inbound auto-close gate: run the (0.85-gated, accomplished-not-promised)
+// fulfillment classifier on a customer reply whenever the conversation has an ELIGIBLE open
+// task AND a prior dealer outbound that could have fulfilled it — not only on an explicit
+// closure phrase. This is the "close the task by PARSING the SMS conversation" path: the
+// customer asked pricing/availability, staff answered, and the next turn closes the task even
+// without "I'm all set". The classifier still owns the verdict (a miss just leaves it open),
+// so this only widens WHEN we look, not the bar. Bounded to convs with an eligible open task
+// + a recent dealer reply to cap LLM calls.
+function hasEligibleAutoCloseInboundContext(conv: any): boolean {
+  if (!conv?.id) return false;
+  const hasEligible = listOpenTodos().some(
+    (t: any) =>
+      t.convId === conv.id &&
+      isAutoCloseEligibleTask({
+        status: t.status,
+        reason: t.reason,
+        taskClass: t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)
+      })
+  );
+  if (!hasEligible) return false;
+  return (conv.messages ?? [])
+    .slice(-8)
+    .some((m: any) => m?.direction === "out" && String(m?.body ?? "").trim());
+}
+
 async function runTaskFulfillmentAutoClose(
   conv: any,
   action: { channel: "sms" | "email" | "call"; text: string; direction?: "out" | "in" }
@@ -52894,11 +52919,16 @@ if (authToken && signature) {
   // Phase 1 shadow: compare the Turn Understanding pass against the
   // deterministic extractors. Fire-and-forget; never blocks the reply.
   shadowCompareTurnUnderstanding(conv, event.body ?? "", buildHistory(conv, 10));
-  // Inbound-closure task auto-close: when the customer signals they're done ("I'm all set",
-  // "just curious"), re-check whether a staff follow-up already fulfilled an open call/follow-up
-  // task and close it — so customer-resolved tasks close even with no trailing staff send.
-  // Fire-and-forget; gated by a cheap closure hint; the parser-first classifier owns the verdict.
-  if (taskAutoCloseInboundClosureHint(event.body ?? "")) {
+  // Inbound task auto-close: re-check whether a staff follow-up already fulfilled an open
+  // call/follow-up task and close it — on an explicit closure phrase ("I'm all set") OR, more
+  // broadly, on any customer reply when the conversation has an eligible open task + a prior
+  // dealer answer (the "close by parsing the SMS conversation" path: they asked pricing/
+  // availability, staff answered). Fire-and-forget; the parser-first classifier owns the
+  // verdict, so widening WHEN we look never lowers the bar — a miss leaves the task open.
+  if (
+    taskAutoCloseInboundClosureHint(event.body ?? "") ||
+    hasEligibleAutoCloseInboundContext(conv)
+  ) {
     void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: event.body ?? "", direction: "in" });
   }
   const liveManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);

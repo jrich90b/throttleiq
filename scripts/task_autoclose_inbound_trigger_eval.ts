@@ -40,6 +40,20 @@ assert.ok(
   "the inbound trigger must be wired into the twilio inbound path"
 );
 
+// --- Broadened gate: also re-check on a substantive reply when an eligible open task + a
+// prior dealer outbound exist (close-by-parsing-the-conversation), not only a closure phrase.
+// The 0.85 classifier still owns the verdict, so this widens WHEN we look, not the bar. ---
+assert.ok(
+  /function hasEligibleAutoCloseInboundContext/.test(index) && /isAutoCloseEligibleTask\(/.test(index),
+  "the broadened inbound context gate must exist and key on autoclose-eligible tasks"
+);
+assert.ok(
+  /taskAutoCloseInboundClosureHint\(event\.body \?\? ""\) \|\| hasEligibleAutoCloseInboundContext\(conv\)/.test(
+    index.replace(/\s+/g, " ")
+  ),
+  "the twilio inbound trigger must also fire on an eligible-task context, not only a closure phrase"
+);
+
 // --- Closure-hint coverage. Kept in sync with TASK_AUTOCLOSE_INBOUND_CLOSURE_RE in index.ts. ---
 const RE =
   /\b(all set|i'?m good|we'?re good|no need|no thanks|that'?s all|that'?s it|just curious|never\s?mind|got (?:it|what i needed|everything i needed)|all good|appreciate it|thanks,?\s*(?:that'?s|i'?m|just|no)\b)/i;
@@ -63,7 +77,12 @@ const nonClosures = [
   "can I come by Saturday?",
   "yes let's do it",
   "how much is it out the door?",
-  "do you have it in black?"
+  "do you have it in black?",
+  // Substantive resolutions that are NOT closure phrases: these rely on the broadened
+  // context gate (eligible task + prior dealer answer) to re-check, not the closure regex.
+  "sounds good, see you Saturday",
+  "ok I'll take it",
+  "perfect, thanks for the price"
 ];
 for (const n of nonClosures) {
   assert.ok(!RE.test(n), `non-closure must NOT match: "${n}"`);

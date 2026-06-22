@@ -17,7 +17,8 @@ import {
   TASK_AUTO_CLOSE_MIN_CONFIDENCE
 } from "../services/api/src/domain/taskFulfillmentAutoClose.ts";
 
-// --- Eligibility: all OPEN call + follow-up tasks ---
+// --- Eligibility: OPEN call + follow-up + pricing/payments (answerable-by-text money
+// questions). Department/credit-app WORK stays excluded. ---
 assert.equal(isAutoCloseEligibleTask({ status: "open", reason: "call" }), true, "open call task eligible");
 assert.equal(
   isAutoCloseEligibleTask({ status: "open", reason: "other", taskClass: "followup" }),
@@ -26,13 +27,26 @@ assert.equal(
 );
 assert.equal(
   isAutoCloseEligibleTask({ status: "open", reason: "pricing", taskClass: "todo" }),
-  false,
-  "a plain todo (not call, not follow-up) is not eligible"
+  true,
+  "a pricing task is eligible — a texted price answer fulfills it"
 );
+assert.equal(
+  isAutoCloseEligibleTask({ status: "open", reason: "payments", taskClass: "todo" }),
+  true,
+  "a payment-info task is eligible — a texted payment answer fulfills it"
+);
+// Department / credit-app work must NOT auto-close (answering a text != doing the work).
+for (const workReason of ["approval", "manager", "service", "parts", "apparel"]) {
+  assert.equal(
+    isAutoCloseEligibleTask({ status: "open", reason: workReason, taskClass: "todo" }),
+    false,
+    `a ${workReason} task (real department/credit work) is not auto-closeable`
+  );
+}
 assert.equal(
   isAutoCloseEligibleTask({ status: "open", reason: "service", taskClass: "appointment" }),
   false,
-  "an appointment task is not eligible"
+  "an appointment/service task is not eligible"
 );
 assert.equal(isAutoCloseEligibleTask({ status: "done", reason: "call" }), false, "a done task is never eligible");
 assert.equal(isAutoCloseEligibleTask({ status: "open", reason: "other" }), false, "open 'other' with no follow-up class not eligible");
