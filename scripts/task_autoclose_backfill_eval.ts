@@ -31,6 +31,10 @@ assert.ok(
   "backfill must require a prior dealer outbound before re-checking"
 );
 assert.ok(
+  /backfillOrder/.test(tick) && /lastMsgMs\(b\) - lastMsgMs\(a\)/.test(tick),
+  "backfill must sweep FRESHEST-first (recently-answered tasks shouldn't wait behind old leads)"
+);
+assert.ok(
   /runTaskFulfillmentAutoClose\(conv, \{\s*channel: "sms",\s*text: "\(auto-close backfill re-check\)",\s*direction: "in"/.test(
     tick.replace(/\s+/g, " ")
   ) || /\(auto-close backfill re-check\)/.test(tick),

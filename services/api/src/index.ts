@@ -27636,7 +27636,20 @@ async function processDueFollowUpsUnlocked() {
     const AUTOCLOSE_BACKFILL_PER_TICK = 10;
     const AUTOCLOSE_BACKFILL_RECHECK_MS = 12 * 60 * 60 * 1000;
     let autoCloseBackfillRan = 0;
-    for (const conv of convs) {
+    // Sweep FRESHEST-first: a task fulfilled-but-still-open is by definition recently active
+    // (just answered), so the most-recently-touched conversations are the likeliest closes —
+    // and they shouldn't wait behind the long tail of old leads. (Paul Foley sat unreached
+    // because the old default iterated oldest-first and he's a same-day lead.)
+    const lastMsgMs = (c: any): number => {
+      let m = 0;
+      for (const msg of c?.messages ?? []) {
+        const t = Date.parse(String(msg?.at ?? ""));
+        if (Number.isFinite(t) && t > m) m = t;
+      }
+      return m;
+    };
+    const backfillOrder = [...convs].sort((a, b) => lastMsgMs(b) - lastMsgMs(a));
+    for (const conv of backfillOrder) {
       if (autoCloseBackfillRan >= AUTOCLOSE_BACKFILL_PER_TICK) break;
       const eligible = openTodos.filter(
         t =>
