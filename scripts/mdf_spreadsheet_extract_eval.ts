@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { spreadsheetFileToText } from "../services/api/src/domain/mdfAssistant.ts";
+import { spreadsheetFileToText, sumInvoiceSpend } from "../services/api/src/domain/mdfAssistant.ts";
 
 // Pin the upload whitelist (buildMdfPacketFromUploads in index.ts) so the xlsx/csv
 // mime types + the .csv/.xlsx extension fallback can't be narrowed back out — that
@@ -72,6 +72,26 @@ assert.equal(
   ),
   null,
   "corrupt xlsx degrades to null instead of throwing"
+);
+
+// --- Multi-invoice claim total: headline spend = SUM of all invoices, not the primary
+// (Taste of Country 6/22: two invoices $2446.88 + $61.40 mirrored only $2446.88). ---
+assert.equal(
+  sumInvoiceSpend([{ amount: "2446.88" }, { amount: "61.40" }]),
+  "2508.28",
+  "two invoices sum to the full claim total"
+);
+assert.equal(
+  sumInvoiceSpend([{ amount: "$2,446.88" }, { amount: "$61.40" }]),
+  "2508.28",
+  "amounts with $ and commas still sum"
+);
+assert.equal(sumInvoiceSpend([{ amount: "2446.88" }]), null, "single invoice keeps the extracted value (no override)");
+assert.equal(sumInvoiceSpend([]), null, "no invoices => no override");
+assert.equal(
+  sumInvoiceSpend([{ amount: "100.00" }, { amount: "" }]),
+  null,
+  "only one parseable amount => no override (don't fabricate a partial total)"
 );
 
 console.log("PASS mdf spreadsheet extract eval");

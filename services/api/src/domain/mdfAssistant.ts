@@ -371,6 +371,19 @@ function sanitizeMdfSubmissionText(value: unknown): string {
   return text.trim();
 }
 
+// extractedFields.spend mirrors only the PRIMARY invoice (back-compat). For a multi-invoice
+// claim that under-reports the total — Taste of Country showed $2446.88 (IBBQ) and dropped the
+// $61.40 Consumer's Beverages invoice. The claim's headline/submission spend must be the SUM of
+// every extracted invoice. Deterministic aggregation; returns null for <2 amounts so a
+// single-invoice claim keeps the extracted value verbatim.
+export function sumInvoiceSpend(invoices: Array<{ amount?: string }>): string | null {
+  const amounts = (invoices ?? [])
+    .map(inv => parseFloat(String(inv?.amount ?? "").replace(/[^0-9.]/g, "")))
+    .filter(n => Number.isFinite(n) && n > 0);
+  if (amounts.length < 2) return null;
+  return amounts.reduce((sum, n) => sum + n, 0).toFixed(2);
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
@@ -418,6 +431,9 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
       description: "Primary invoice"
     });
   }
+  // Multi-invoice claim: the headline spend is the SUM of all invoices, not the primary.
+  const summedSpend = sumInvoiceSpend(invoices);
+  if (summedSpend) extractedFields.spend = summedSpend;
   return {
     claimType: ["media", "event", "map_only", "unknown"].includes(packet.claimType) ? packet.claimType : fallback.claimType,
     activityType: String(packet.activityType ?? ""),
