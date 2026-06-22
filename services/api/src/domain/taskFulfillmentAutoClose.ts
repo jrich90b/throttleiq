@@ -31,14 +31,19 @@ export function isAutoCloseEligibleTask(task: {
 }): boolean {
   if (String(task?.status ?? "") !== "open") return false;
   const reason = String(task?.reason ?? "");
-  // call + the pricing / payment-info money questions are fully answerable (and thus
-  // closeable) by a texted answer — "it's $399", "your estimated payment is ~$280/mo". So
-  // when staff answer the customer's pricing/availability question, the task can close.
-  // Department / credit-app WORK (approval, manager, service, parts, apparel) is intentionally
-  // NOT auto-closeable: answering a customer text doesn't mean the work was actually done.
-  if (reason === "call" || reason === "pricing" || reason === "payments") return true;
-  if (String(task?.taskClass ?? "") === "followup") return true;
-  return false;
+  const taskClass = String(task?.taskClass ?? "");
+  // Let the parser-first fulfillment classifier (0.85, accomplished-not-promised) decide for
+  // ANY customer-facing task. A blunt reason allowlist was making the comprehension call and
+  // wrongly KEEPING answered questions open — Paul Foley (6/22): a parts AVAILABILITY question
+  // ("do you have a Saddlemen Road Sofa seat?") answered "ya we have some" stayed open because
+  // reason=parts was excluded. The classifier already separates an answered question (close)
+  // from a promise / work-not-done ("we'll order it" => stays open), so eligibility should not
+  // pre-judge by reason. Only exclude structurally non-fulfillable types: an internal `note`,
+  // and `appointment` tasks (which close via the appointment OUTCOME flow — showed/no-show/
+  // sold — not via fulfillment).
+  if (reason === "note") return false;
+  if (taskClass === "appointment") return false;
+  return true;
 }
 
 export type TaskFulfillmentVerdict = {
