@@ -384,6 +384,19 @@ export function sumInvoiceSpend(invoices: Array<{ amount?: string }>): string | 
   return amounts.reduce((sum, n) => sum + n, 0).toFixed(2);
 }
 
+// Files that could each be a distinct invoice/receipt: an image or PDF that isn't tagged as
+// creative / proof / support-only. Used to drive PER-FILE invoice extraction so two invoices
+// for the same event can never be merged into one (root cause of "two invoices, only one
+// parsed" — the single-call extractor non-deterministically collapsed two same-event images).
+export function invoiceCandidateFiles(files: MdfUploadedFile[]): MdfUploadedFile[] {
+  return (files ?? []).filter(file => {
+    const role = file.providedRole || inferRoleFromName(file.name);
+    if (role === "creative" || role === "proof_of_performance" || role === "supporting_only") return false;
+    const mime = file.mimeType || "";
+    return mime.startsWith("image/") || mime === "application/pdf";
+  });
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
@@ -609,6 +622,47 @@ async function createMdfJsonResponse(
   });
 }
 
+// Extract invoices ONE FILE AT A TIME so two distinct invoices can never be merged. Each call
+// sees a single file and returns at most one invoice (or none if it isn't an invoice). Only used
+// when there are 2+ candidate files; a single-file claim is handled by the main pass.
+async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): Promise<MdfInvoicePacket[]> {
+  const candidates = invoiceCandidateFiles(files);
+  if (candidates.length < 2) return [];
+  const out: MdfInvoicePacket[] = [];
+  for (const file of candidates) {
+    const inputs = await fileContentInputs([file]);
+    if (!inputs.length) continue;
+    const prompt = [
+      "Extract the SINGLE invoice or receipt contained in THIS one file.",
+      "Return the MDF claim packet schema. invoices[] must contain AT MOST ONE entry — for this file only.",
+      "Fill vendorName, invoiceDate, invoiceNumber, amount for that one invoice.",
+      "If this file is NOT an invoice or receipt (e.g. a flyer, creative, screenshot, proof, or photo), return invoices: [] and leave the invoice fields blank.",
+      "Do not invent values; leave unknown fields blank.",
+      `This file: ${file.name}.`
+    ].join("\n");
+    const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 1200).catch(() => null);
+    if (!resp) continue;
+    recordOpenAIUsage(resp, {
+      feature: "mdf_assistant",
+      operation: "extract_invoice_per_file",
+      requestKind: "responses.create",
+      model
+    });
+    const raw = parsedResponsePayload(resp);
+    const rawInvoices = Array.isArray(raw?.invoices) ? raw.invoices : [];
+    const first = rawInvoices[0];
+    if (!first) continue;
+    const vendorName = String(first.vendorName ?? first.vendor ?? "").trim();
+    const amount = String(first.amount ?? first.spend ?? first.invoiceAmount ?? "").trim();
+    const invoiceNumber = String(first.invoiceNumber ?? first.invoice_number ?? "").trim();
+    const invoiceDate = String(first.invoiceDate ?? first.invoice_date ?? "").trim();
+    if (vendorName || invoiceNumber || amount) {
+      out.push({ vendorName, invoiceDate, invoiceNumber, amount, fileNames: [file.name], description: String(first.description ?? "").trim() });
+    }
+  }
+  return out;
+}
+
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
   if (!files.length) return fallbackPacket(files, "Upload at least one invoice, receipt, creative, or proof file.");
   const supportedInputs = await fileContentInputs(files);
@@ -655,6 +709,20 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       metadata: { fileCount: files.length }
     });
     const packet = normalizePacket(parsedResponsePayload(resp), files);
+    // Per-file invoice extraction guarantees one invoice per file (no cross-file merge). Prefer
+    // it when it finds MORE distinct invoices than the single-call main pass — that's the
+    // multi-invoice case the main pass collapses ("two invoices, only one parsed").
+    const perFileInvoices = await extractInvoicesPerFile(files, model).catch(() => []);
+    if (perFileInvoices.length >= 2 && perFileInvoices.length > packet.invoices.length) {
+      packet.invoices = perFileInvoices;
+      const summed = sumInvoiceSpend(perFileInvoices);
+      if (summed) packet.extractedFields.spend = summed;
+      const primary = perFileInvoices[0];
+      if (primary?.vendorName && !packet.extractedFields.vendorName) packet.extractedFields.vendorName = primary.vendorName;
+      if (primary?.invoiceNumber && !packet.extractedFields.invoiceNumber) packet.extractedFields.invoiceNumber = primary.invoiceNumber;
+      if (primary?.invoiceDate && !packet.extractedFields.invoiceDate) packet.extractedFields.invoiceDate = primary.invoiceDate;
+      return packet;
+    }
     const invoicePacket = shouldRunInvoiceOnlyPass(packet, files)
       ? await extractInvoiceFields(files, model).catch(() => null)
       : null;

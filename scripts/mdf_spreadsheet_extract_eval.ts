@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { spreadsheetFileToText, sumInvoiceSpend } from "../services/api/src/domain/mdfAssistant.ts";
+import { spreadsheetFileToText, sumInvoiceSpend, invoiceCandidateFiles } from "../services/api/src/domain/mdfAssistant.ts";
 
 // Pin the upload whitelist (buildMdfPacketFromUploads in index.ts) so the xlsx/csv
 // mime types + the .csv/.xlsx extension fallback can't be narrowed back out — that
@@ -92,6 +92,36 @@ assert.equal(
   sumInvoiceSpend([{ amount: "100.00" }, { amount: "" }]),
   null,
   "only one parseable amount => no override (don't fabricate a partial total)"
+);
+
+// --- Multi-invoice EXTRACTION: per-file so two same-event invoices never merge into one
+// (Taste of Country: two jpeg invoices intermittently extracted as one). ---
+const mkFile = (name: string, mimeType: string, providedRole?: string): any => ({
+  name,
+  mimeType,
+  providedRole,
+  buffer: Buffer.from(""),
+  size: 0
+});
+assert.equal(
+  invoiceCandidateFiles([mkFile("IMG_1479.jpeg", "image/jpeg"), mkFile("IMG_1484.jpeg", "image/jpeg")]).length,
+  2,
+  "two untagged invoice images are both per-file candidates"
+);
+assert.equal(invoiceCandidateFiles([mkFile("inv.pdf", "application/pdf")]).length, 1, "a pdf is a candidate");
+assert.equal(invoiceCandidateFiles([mkFile("flyer.jpg", "image/jpeg")]).length, 0, "a creative/flyer image is not an invoice candidate");
+assert.equal(
+  invoiceCandidateFiles([mkFile("photo.png", "image/png", "proof_of_performance")]).length,
+  0,
+  "a proof file is excluded from invoice candidates"
+);
+assert.equal(invoiceCandidateFiles([mkFile("data.csv", "text/csv")]).length, 0, "a spreadsheet is not a per-file invoice image");
+
+const mdfSrc = fs.readFileSync("services/api/src/domain/mdfAssistant.ts", "utf8");
+assert.ok(/async function extractInvoicesPerFile/.test(mdfSrc), "the per-file invoice extractor must exist");
+assert.ok(
+  /perFileInvoices\.length >= 2 && perFileInvoices\.length > packet\.invoices\.length/.test(mdfSrc),
+  "extraction must prefer per-file invoices when it finds more than the single-call pass"
 );
 
 console.log("PASS mdf spreadsheet extract eval");
