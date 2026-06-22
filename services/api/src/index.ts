@@ -657,6 +657,7 @@ import {
   markQuestionDone,
   markTodoDone,
   snoozeTodo,
+  setTodoAutoCloseCheck,
   cleanModelDisplayName,
   markTodoEscalated,
   markTodoReminderSent,
@@ -11086,6 +11087,17 @@ async function runTaskFulfillmentAutoClose(
     for (const task of eligible) {
       const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
       const decision = decideTaskAutoClose({ enabled, eligible: true, verdict });
+      // Persist the verdict on the task so staff can see WHY it did/didn't auto-close.
+      if (verdict) {
+        setTodoAutoCloseCheck(conv.id, task.id, {
+          at: new Date().toISOString(),
+          fulfilled: !!verdict.fulfilled,
+          confidence: typeof verdict.confidence === "number" ? verdict.confidence : null,
+          evidence: String(verdict.evidence ?? "").slice(0, 200) || undefined,
+          decision: decision.reason,
+          channel: action.channel
+        });
+      }
       if (verdict?.fulfilled || decision.close) {
         recordDecisionTrace({
           scope: "live",

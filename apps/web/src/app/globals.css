@@ -6418,6 +6418,14 @@ input[type="reset"],
   text-transform: uppercase;
   color: #fca5a5;
 }
+.lr-task-autoclose-check {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+  font-size: 0.72rem;
+  color: var(--lr-app-muted-soft, #aebbd2);
+}
 .lr-task-card-name {
   margin-top: 0.65rem;
   font-size: 1.18rem;

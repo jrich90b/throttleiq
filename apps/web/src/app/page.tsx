@@ -1264,6 +1264,14 @@ type TodoItem = {
   convId: string;
   leadKey: string;
   taskClass?: "followup" | "appointment" | "todo" | "reminder" | null;
+  autoCloseCheck?: {
+    at: string;
+    fulfilled: boolean;
+    confidence: number | null;
+    evidence?: string;
+    decision: string;
+    channel: string;
+  } | null;
   leadName?: string | null;
   ownerName?: string | null;
   ownerDisplayName?: string | null;
