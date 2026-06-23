@@ -4,6 +4,7 @@ import twilio from "twilio";
 import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
+import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
@@ -1616,9 +1617,17 @@ function buildDealerLeadAppPostRideReply(args: {
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
     ) || "that bike";
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one actually
+  // happened; otherwise an initial-touch intro. Mirror of the index.ts twin (route-parity).
+  const visited = customerVisitConfirmed(args.conv);
+  const useVisitFraming = !phantomVisitGuardEnabled() || visited;
+  const intro = useVisitFraming
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
+    return useVisitFraming
+      ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
+      : `${intro} It's in stock — want to set up a time to come ride it? Any questions, just text me anytime.`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;

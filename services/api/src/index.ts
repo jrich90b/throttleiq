@@ -298,6 +298,7 @@ import {
   isContextFidelityHoldEnabled,
   CONTEXT_FIDELITY_HANDOFF_ACK
 } from "./domain/contextFidelityHold.js";
+import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
 import { isSpecificModel } from "./domain/modelDeflection.js";
 import type {
   AffectParse,
@@ -13034,9 +13035,18 @@ function buildDealerLeadAppPostRideReply(args: {
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
     ) || "that bike";
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one
+  // actually happened; otherwise an initial-touch intro. Assuming a visit that didn't happen is the
+  // single biggest out-of-context miss in production (the Knighton/Krugov class).
+  const visited = customerVisitConfirmed(args.conv);
+  const useVisitFraming = !phantomVisitGuardEnabled() || visited;
+  const intro = useVisitFraming
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
+    return useVisitFraming
+      ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
+      : `${intro} It's in stock — want to set up a time to come ride it? Any questions, just text me anytime.`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
@@ -13166,7 +13176,15 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     "Alexandra";
   const senderFirst = normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
   const modelLabel = getDealerRideOutcomeModelLabel(args.conv, args.unit);
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark): a recorded ride outcome (sold/hold/showed) implies they came in, so the
+  // recap intro is correct then; for did_not_show/cancelled it would fabricate a visit.
+  const rideVisited =
+    !phantomVisitGuardEnabled() ||
+    rideOutcomeImpliesVisit(args.primaryStatus, args.secondaryStatus, args.outcome) ||
+    customerVisitConfirmed(args.conv);
+  const intro = rideVisited
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
 
   if (args.secondaryStatus === "sold" || args.outcome === "sold") {
     return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;
@@ -28562,8 +28580,13 @@ async function processDueFollowUpsUnlocked() {
       // "enjoying it / anything you need" check-in. Fails safe to pre-owned when the
       // purchase condition is unknown. (postSaleCadence.ts)
       const isNewBike = postSaleVehicleIsNew(conv);
+      // Phantom-visit guard (dark): "coming to see us" assumes a physical visit — but a sale can be an
+      // online/HDFS deal with no visit (the Knighton class). Fall back to a visit-neutral congrats.
+      const postSaleVisited = !phantomVisitGuardEnabled() || customerVisitConfirmed(conv);
       const smsTemplates = [
-        `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`,
+        postSaleVisited
+          ? `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`
+          : `Hi ${firstName} — this is ${repName} at ${dealerName}. Congrats on your ${bikeModel}! If you need anything, just let me know.`,
         postSaleAccessoryOrEnjoyMessage({ firstName, repName, dealerName, bikeModel, isNewBike }),
         `Hi ${firstName} — ${repName} at ${dealerName}. Happy 1-year anniversary with your ${bikeModel}. If you’re ever thinking about trading in, let me know.`,
         `Hi ${firstName} — ${repName} at ${dealerName}. Just checking in. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
