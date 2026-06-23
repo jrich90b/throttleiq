@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { parseHdModelsFromNextData, parseHdCatalog, extractNextData, extractModelYear, findModelInHdCatalog, type HdCatalogModel } from "../services/api/src/domain/hdCatalog.ts";
+import { parseHdModelsFromNextData, parseHdCatalog, extractNextData, extractModelYear, findModelInHdCatalog, findBestCatalogModel, parseHdDetailFinish, parseHdDetailFinishFromNextData, type HdCatalogModel } from "../services/api/src/domain/hdCatalog.ts";
 
 // Fixture shaped like the real __NEXT_DATA__ (model objects nested arbitrarily; Fat Bob NOT present).
 const nextData = {
@@ -67,4 +67,62 @@ const rks = findModelInHdCatalog(cat, "Road King Special");
 assert.ok(rks.matched && rks.year === 2025, "prior-year (2025) model matched -> NOT flagged discontinued");
 assert.equal(findModelInHdCatalog([], "Street Bob").matched, false, "empty catalog -> no match (caller falls back to MSRP file)");
 
-console.log(`PASS hd-catalog parser — ${models.length} models from fixture (strip/price/dedup/noise/sort + HTML extraction + discontinuation absence).`);
+// --- findBestCatalogModel: returns the full model object (so the pricing seam can read its finish) ---
+const yearedCat: HdCatalogModel[] = [
+  { name: "Street Bob", modelCode: "FXBB", year: 2026, priceFormatted: "$14,999", price: 14999, monthlyPriceFormatted: null, urlPath: null },
+  { name: "Street Bob", modelCode: "FXBB", year: 2025, priceFormatted: "$14,499", price: 14499, monthlyPriceFormatted: null, urlPath: null }
+];
+assert.equal(findBestCatalogModel(yearedCat, "Street Bob", { year: 2025 })?.price, 14499, "year-specific match prefers that year");
+assert.equal(findBestCatalogModel(yearedCat, "Street Bob")?.year, 2026, "no year -> current year wins (index-first order)");
+assert.equal(findBestCatalogModel(yearedCat, "Fat Bob"), null, "no match -> null");
+assert.equal(findBestCatalogModel(yearedCat, "Street Bob", { year: 2099 })?.year, 2026, "absent year -> falls back to best across years");
+
+// --- parseHdDetailFinish: per-color adders from a model's DETAIL page configurator ---
+// Shaped like the real bikeProductDetails: colorOptions repeat a paint name across color codes; the
+// related-bike products nest colors under colorOptionsCollection (different key) and must NOT be picked.
+const detailNextData = {
+  props: { pageProps: { initialState: {
+    bikeProductDetails: {
+      formattedName: "Street Bob<sup>®</sup>",
+      modelName: "street-bob",
+      modelFamily: "SOFTAIL",
+      modelCode: "FXBB",
+      modelYear: 2026,
+      priceFormatted: "$14,999",
+      monthlyPriceFormatted: "$231",
+      colorOptions: [
+        { optionName: "Dark Billiard Gray", colorCode: "m85s", additionalPrice: 0, additionalPriceFormatted: "+ $0" },
+        { optionName: "Dark Billiard Gray", colorCode: "m85", additionalPrice: 0, additionalPriceFormatted: "+ $0" }, // dup name -> deduped
+        { optionName: "Vivid Black", colorCode: "m04", additionalPrice: 300, additionalPriceFormatted: "+ $300" },
+        { optionName: "Brilliant Red", colorCode: "m44", additionalPrice: 650, additionalPriceFormatted: "+ $650" },
+        { optionName: "Olive Steel Metallic<sup>®</sup>", colorCode: "m73", additionalPriceFormatted: "+ $650" /* no numeric -> parsed from formatted */ }
+      ],
+      trimOptions: [{ optionName: "Chrome Two-Up", additionalPrice: 1000 }], // seat accessory -> NOT folded into finish
+      wheelOptions: [{ optionName: "Laced", additionalPrice: 850 }]
+    },
+    bikePDPSections: { list: [{ category: { productsCollection: { items: [
+      { modelCode: "FLHX", priceFormatted: "$24,999", colorOptionsCollection: { items: [{ optionName: "Other Bike Color", additionalPrice: 9999 }] } }
+    ] } } }] }
+  } } }
+};
+const fin = parseHdDetailFinishFromNextData(detailNextData)!;
+assert.ok(fin, "detail finish parsed");
+assert.equal(fin.modelCode, "FXBB", "right product picked (not the related-bike FLHX)");
+assert.equal(fin.name, "Street Bob", "® decoration stripped from detail name");
+assert.equal(fin.year, 2026, "model year carried");
+assert.equal(fin.finish.baseMsrp, 14999, "base MSRP parsed from priceFormatted");
+assert.equal(fin.finish.colors.length, 4, "4 distinct colors (duplicate name deduped)");
+assert.deepEqual(fin.finish.colors.map(c => c.adder), [0, 300, 650, 650], "colors sorted by adder ascending");
+const vivid = fin.finish.colors.find(c => c.name === "Vivid Black")!;
+assert.equal(vivid.adder, 300, "color adder = additionalPrice");
+const olive = fin.finish.colors.find(c => /Olive Steel/.test(c.name))!;
+assert.equal(olive.adder, 650, "adder parsed from '+ $650' when numeric additionalPrice absent");
+assert.equal(olive.name, "Olive Steel Metallic", "® stripped from color name");
+
+// HTML -> finish, and graceful null when there's no configurator
+const detailHtml = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(detailNextData)}</script></html>`;
+assert.equal(parseHdDetailFinish(detailHtml)?.finish.baseMsrp, 14999, "parseHdDetailFinish works from raw HTML");
+assert.equal(parseHdDetailFinish("<html>no next data</html>"), null, "no __NEXT_DATA__ -> null finish");
+assert.equal(parseHdDetailFinishFromNextData({ props: {} }), null, "no bikeProductDetails -> null finish");
+
+console.log(`PASS hd-catalog parser — ${models.length} models from fixture (strip/price/dedup/noise/sort + HTML extraction + discontinuation absence + detail finish pricing + year-aware model match).`);
