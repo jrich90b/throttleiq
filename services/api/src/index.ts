@@ -654,6 +654,8 @@ import {
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
+  upsertPendingIncomingInventoryNotifyTodo,
+  healPendingIncomingNotifyTodoDuplicates,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -716,6 +718,7 @@ import {
   buildPendingIncomingInventoryTaskSummary,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
+  isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
@@ -26762,17 +26765,19 @@ function applyPendingIncomingInventoryState(
   setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
   stopFollowUpCadence(conv, "pending_incoming_inventory");
   stopRelatedCadences(conv, "pending_incoming_inventory", { setMode: "manual_handoff" });
-  addTodo(
+  // Per-conversation SINGLETON upsert (class-agnostic). A bare addTodo here dedups by taskClass,
+  // but the identical "Notify when the trade arrives" objective lands in different class buckets
+  // ("followup" passed here vs "todo" from inferTodoTaskClass), so copies piled up (Nicholas
+  // Braun, 2026-06-23). The upsert collapses any duplicates and keeps one. Covers BOTH paths —
+  // live + regenerate both call applyPendingIncomingInventoryState.
+  upsertPendingIncomingInventoryNotifyTodo(
     conv,
-    "call",
     buildPendingIncomingInventoryTaskSummary({
       pending,
       customerName: customerNameForPendingIncomingInventory(conv)
     }),
     opts?.sourceMessageId ?? undefined,
-    conv.leadOwner,
-    undefined,
-    "followup"
+    conv.leadOwner
   );
   return true;
 }
@@ -27709,6 +27714,35 @@ async function processDueFollowUpsUnlocked() {
   }
   if (cadenceHandoffHealed > 0) {
     console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
+  }
+  // Pending-incoming notify-todo dedup heal: the singleton "Notify when the trade arrives" task
+  // historically duplicated because addTodo dedups by taskClass and the same objective split
+  // across class buckets (Nicholas Braun: 4 open copies, 2026-06-23). The upsert at write-time
+  // prevents new ones; this collapses any that already piled up. Class-agnostic, idempotent.
+  const notifyDupConvIds = new Map<string, number>();
+  for (const t of openTodos) {
+    if (!isPendingIncomingInventoryNotifyTodoSummary(t.summary)) continue;
+    notifyDupConvIds.set(t.convId, (notifyDupConvIds.get(t.convId) ?? 0) + 1);
+  }
+  let pendingNotifyDupsHealed = 0;
+  for (const [convId, count] of notifyDupConvIds) {
+    if (count < 2) continue;
+    const conv = convById.get(convId);
+    if (!conv) continue;
+    const retired = healPendingIncomingNotifyTodoDuplicates(conv);
+    if (retired <= 0) continue;
+    saveConversation(conv);
+    pendingNotifyDupsHealed += retired;
+    recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      retired
+    });
+  }
+  if (pendingNotifyDupsHealed > 0) {
+    console.log(
+      `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
+    );
   }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it

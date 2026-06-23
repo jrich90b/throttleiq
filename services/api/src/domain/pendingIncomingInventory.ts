@@ -151,3 +151,36 @@ export function buildPendingIncomingInventoryTaskSummary(args: {
   const customer = compact(args.customerName) || "customer";
   return `Notify ${customer} when the ${label} trade arrives or is ready to show.`;
 }
+
+/**
+ * Identify our OWN "Notify … when the … trade arrives or is ready to show" task by its
+ * fixed template tail. This is a SINGLETON objective per conversation, but it historically
+ * piled up (Nicholas Braun: 4 open copies, 2026-06-23): the producer
+ * (applyPendingIncomingInventoryState) tags the task `taskClass: "followup"` while
+ * inferTodoTaskClass classifies the same summary as "todo" — so addTodo's class-keyed merge
+ * split identical objectives across buckets and never collapsed them. Matching on the template
+ * lets us dedup CLASS-AGNOSTICALLY. This recognizes a system-generated task summary for
+ * side-effect/state housekeeping — NOT customer comprehension — which AGENTS.md allows.
+ */
+export function isPendingIncomingInventoryNotifyTodoSummary(summary: string | null | undefined): boolean {
+  const text = lower(summary);
+  if (!text) return false;
+  return text.includes("trade arrives or is ready to show");
+}
+
+/**
+ * Pure dedup planner for the pending-incoming notify task. Given a conversation's OPEN todos,
+ * pick the single survivor (the richest copy — longest summary, so any appended ask like a
+ * parts/color question isn't lost; ties keep the first) and list the redundant copies to retire.
+ * No matches → nothing to do.
+ */
+export function planPendingIncomingNotifyDedup(
+  openTodos: { id: string; summary?: string | null }[]
+): { keepId: string | null; retireIds: string[] } {
+  const matches = (openTodos ?? []).filter(t => isPendingIncomingInventoryNotifyTodoSummary(t?.summary));
+  if (matches.length === 0) return { keepId: null, retireIds: [] };
+  const keep = matches.reduce((best, t) =>
+    String(t?.summary ?? "").length > String(best?.summary ?? "").length ? t : best
+  );
+  return { keepId: keep.id, retireIds: matches.filter(t => t.id !== keep.id).map(t => t.id) };
+}

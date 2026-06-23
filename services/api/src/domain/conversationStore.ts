@@ -27,6 +27,10 @@ import {
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
+import {
+  isPendingIncomingInventoryNotifyTodoSummary,
+  planPendingIncomingNotifyDedup
+} from "./pendingIncomingInventory.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -4912,6 +4916,70 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
   // Upsert cadence follow-up tasks so we never create duplicates while still
   // keeping the open follow-up aligned to the latest cadence step.
   return addTodo(conv, "call", summary, undefined, undefined, undefined, "followup");
+}
+
+/**
+ * Collapse duplicate pending-incoming "Notify when the trade arrives" tasks on a conversation
+ * to a single survivor. These piled up because addTodo dedups by taskClass, but the identical
+ * objective lands in different class buckets ("followup" from the producer vs "todo" from
+ * inferTodoTaskClass) and so never merged (Nicholas Braun: 4 open copies, 2026-06-23). Class-
+ * agnostic by template match. Returns the number of redundant copies retired. Idempotent: a
+ * conversation with 0 or 1 such task is left untouched.
+ */
+export function healPendingIncomingNotifyTodoDuplicates(conv: Conversation): number {
+  const open = todos.filter(t => t.convId === conv.id && t.status === "open");
+  const plan = planPendingIncomingNotifyDedup(open);
+  if (!plan.retireIds.length) return 0;
+  const retire = new Set(plan.retireIds);
+  const doneAt = nowIso();
+  let retired = 0;
+  for (const t of todos) {
+    if (!retire.has(t.id)) continue;
+    t.status = "done";
+    t.doneAt = doneAt;
+    retired += 1;
+  }
+  if (retired) {
+    conv.updatedAt = nowIso();
+    scheduleSave();
+  }
+  return retired;
+}
+
+/**
+ * Upsert the pending-incoming "Notify when the trade arrives" task as a per-conversation
+ * SINGLETON, independent of taskClass. Used by applyPendingIncomingInventoryState in BOTH the
+ * live and regenerate paths (they funnel through that one producer). Replaces a bare addTodo,
+ * whose class-keyed merge let the same objective duplicate across class buckets. First collapses
+ * any prior duplicates, then refreshes the survivor (preserving its richest summary so an
+ * appended ask isn't dropped) or creates one if none exists.
+ */
+export function upsertPendingIncomingInventoryNotifyTodo(
+  conv: Conversation,
+  summary: string,
+  sourceMessageId?: string,
+  owner?: { id?: string | null; name?: string | null }
+): TodoTask | null {
+  healPendingIncomingNotifyTodoDuplicates(conv);
+  const survivor = todos.find(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      isPendingIncomingInventoryNotifyTodoSummary(t.summary)
+  );
+  if (survivor) {
+    survivor.reason = "call";
+    survivor.taskClass = "followup";
+    if (sourceMessageId) survivor.sourceMessageId = sourceMessageId;
+    const ownerId = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
+    const ownerName = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
+    if (ownerId) survivor.ownerId = ownerId;
+    if (ownerName) survivor.ownerName = ownerName;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return survivor;
+  }
+  return addTodo(conv, "call", summary, sourceMessageId, owner, undefined, "followup");
 }
 
 /**
