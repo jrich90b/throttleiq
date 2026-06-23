@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { scoreContextFidelityWithLLM } from "../services/api/src/domain/llmDraft.ts";
-import { pairKey, splitFor, shouldHarvestPair, scrubText } from "../services/api/src/domain/goldCorpusHarvest.ts";
+import { pairKey, splitFor, shouldHarvestPair, scrubText, jaccard, isSubstantiveEdit } from "../services/api/src/domain/goldCorpusHarvest.ts";
 
 const INIT = process.argv.includes("--init");
 const PATH = process.env.CONVERSATIONS_DB_PATH || "data/conversations.json";
@@ -23,31 +23,41 @@ const CAP = Number(process.env.HARVEST_CAP || 50);
 const SEEN_CAP = 20000;
 const CONCURRENCY = 6;
 
-type Msg = { direction?: string; body?: string; provider?: string; at?: string; createdAt?: string };
+type Msg = { direction?: string; body?: string; provider?: string; originalDraftBody?: string; at?: string; createdAt?: string };
 function load(p: string): any[] { const raw = JSON.parse(fs.readFileSync(p, "utf8")); return Array.isArray(raw) ? raw : raw?.conversations ?? Object.values(raw); }
-const normJ = (s: string) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
-function jac(a: string, b: string): number { const na = normJ(a), nb = normJ(b); if (!na || !nb) return 0; if (na === nb) return 1; const sa = new Set(na.split(" ")), sb = new Set(nb.split(" ")); let x = 0; for (const w of sa) if (sb.has(w)) x++; return x / (sa.size + sb.size - x); }
 const isSent = (m: Msg) => m.direction === "out" && (m.provider === "human" || m.provider === "twilio" || m.provider === "sendgrid");
 
-type Cand = { convId: string; key: string; inbound: string; draft: string; human: string; anchorModel: string; anchor: any; history: any[]; channel: "sms" | "email" };
+type Cand = { convId: string; key: string; inbound: string; draft: string; human: string; anchorModel: string; anchor: any; history: any[]; channel: "sms" | "email"; source: "takeover" | "edit" };
 const cands: Cand[] = [];
 for (const conv of load(PATH)) {
   const convId = String(conv?.id ?? conv?.leadKey ?? "");
-  const msgs = (conv.messages ?? []).filter((m: Msg) => m && (m.direction === "in" || m.direction === "out"));
+  const msgs: Msg[] = (conv.messages ?? []).filter((m: Msg) => m && (m.direction === "in" || m.direction === "out"));
+  const anchorModel = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "").trim();
+  const anchor = { modelOfRecord: anchorModel || null, leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null, appointmentBooked: !!conv?.appointment?.bookedEventId, dialogState: conv?.dialogState?.name ?? null };
+  const channel: "sms" | "email" = conv?.channel === "email" ? "email" : "sms";
+  const inboundBefore = (idx: number): string => { for (let p = idx - 1; p >= 0; p--) { if (msgs[p].direction === "in" && String(msgs[p].body ?? "").trim()) return String(msgs[p].body).trim(); } return ""; };
+  const historyBefore = (idx: number) => msgs.slice(Math.max(0, idx - 8), idx).map(h => ({ direction: h.direction, body: String(h.body ?? "") })).filter(h => h.body.trim());
+  const add = (idx: number, agentWrong: string, humanRight: string, source: "takeover" | "edit") => {
+    const inbound = inboundBefore(idx);
+    if (!inbound) return;
+    cands.push({ convId, key: pairKey(convId, agentWrong), inbound, draft: agentWrong, human: humanRight, anchorModel, anchor, history: historyBefore(idx), channel, source });
+  };
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];
-    if (m.provider !== "draft_ai" || m.direction !== "out") continue;
-    const draft = String(m.body ?? "").trim(); if (!draft) continue;
-    let sent: string | null = null;
-    for (let k = i + 1; k < msgs.length; k++) { if (msgs[k].direction === "in") break; if (isSent(msgs[k])) { sent = String(msgs[k].body ?? "").trim(); break; } }
-    if (sent === null || jac(draft, sent) >= 0.3) continue; // takeover only
-    let inbound = "";
-    for (let p = i - 1; p >= 0; p--) { if (msgs[p].direction === "in" && String(msgs[p].body ?? "").trim()) { inbound = String(msgs[p].body).trim(); break; } }
-    if (!inbound) continue;
-    const anchorModel = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "").trim();
-    const anchor = { modelOfRecord: anchorModel || null, leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null, appointmentBooked: !!conv?.appointment?.bookedEventId, dialogState: conv?.dialogState?.name ?? null };
-    const history = msgs.slice(Math.max(0, i - 8), i).map((h: Msg) => ({ direction: h.direction, body: String(h.body ?? "") })).filter((h: any) => h.body.trim());
-    cands.push({ convId, key: pairKey(convId, draft), inbound, draft, human: sent, anchorModel, anchor, history, channel: conv?.channel === "email" ? "email" : "sms" });
+    // TAKEOVER: an AI draft followed by a substantially-different human send (no inline edit recorded).
+    if (m.provider === "draft_ai" && m.direction === "out") {
+      const draft = String(m.body ?? "").trim();
+      if (draft) {
+        let sent: string | null = null;
+        for (let k = i + 1; k < msgs.length; k++) { if (msgs[k].direction === "in") break; if (isSent(msgs[k])) { sent = String(msgs[k].body ?? "").trim(); break; } }
+        if (sent !== null && jaccard(draft, sent) < 0.3) add(i, draft, sent, "takeover");
+      }
+    }
+    // EDIT: a sent outbound carrying originalDraftBody = a staff correction of the AI draft (the
+    // primary console correction path — the takeover heuristic misses these, so harvest them directly).
+    const orig = String(m.originalDraftBody ?? "").trim();
+    const body = String(m.body ?? "").trim();
+    if (m.direction === "out" && orig && body && isSubstantiveEdit(orig, body)) add(i, orig, body, "edit");
   }
 }
 
@@ -65,7 +75,8 @@ function writeState(extraKeys: string[]) {
 if (INIT) {
   // Watermark only: mark everything present now as seen, emit nothing (the past lives in the 219 corpus).
   writeState(cands.map(c => c.key));
-  console.log(`gold_corpus harvest --init: watermarked ${cands.length} existing takeovers as seen (no pairs emitted). State -> ${STATE}`);
+  const nTake = cands.filter(c => c.source === "takeover").length;
+  console.log(`gold_corpus harvest --init: watermarked ${cands.length} existing candidates (${nTake} takeover, ${cands.length - nTake} edit) as seen (no pairs emitted). State -> ${STATE}`);
   process.exit(0);
 }
 
@@ -85,7 +96,7 @@ batch.forEach((c, k) => {
   const r = scores[k];
   if (!shouldHarvestPair(r)) return;
   records.push(JSON.stringify({
-    id: c.key, harvestedAt: now, split: splitFor(c.key), frame: r!.frame, severity: r!.severity, confidence: r!.confidence ?? null,
+    id: c.key, harvestedAt: now, source: c.source, split: splitFor(c.key), frame: r!.frame, severity: r!.severity, confidence: r!.confidence ?? null,
     anchorModel: scrubText(c.anchorModel), customer: scrubText(c.inbound).slice(0, 400), agentWrong: scrubText(c.draft).slice(0, 400), humanRight: scrubText(c.human).slice(0, 400), steering: r!.steering ?? null
   }));
 });

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { hashString, pairKey, splitFor, shouldHarvestPair, scrubText } from "../services/api/src/domain/goldCorpusHarvest.ts";
+import { hashString, pairKey, splitFor, shouldHarvestPair, scrubText, jaccard, isSubstantiveEdit } from "../services/api/src/domain/goldCorpusHarvest.ts";
 
 // --- hash + key stability / dedup ---
 assert.equal(hashString("abc"), hashString("abc"), "hash deterministic");
@@ -37,10 +37,20 @@ assert.ok(/this is \[NAME\]/.test(scrubText("this is Alexandra at American")), "
 const kept = scrubText("Yes — the 2025 Road Glide is here. Saturday at 2pm? It's $24,999.");
 assert.ok(/Road Glide/.test(kept) && /Saturday/.test(kept) && /\$24,999/.test(kept), "models/days/prices preserved");
 
-// --- source guard: runner is gitignored-store + no-commit by construction ---
+// --- edit signal: jaccard + isSubstantiveEdit (the console-correction path the takeover heuristic misses) ---
+assert.equal(jaccard("a b c", "a b c"), 1, "identical → 1");
+assert.equal(jaccard("a b c", "x y z"), 0, "disjoint → 0");
+assert.ok(jaccard("the fat bob price", "the fat bob numbers") > 0.4 && jaccard("the fat bob price", "the fat bob numbers") < 1, "partial overlap in (0,1)");
+assert.equal(isSubstantiveEdit("Which model are you interested in?", "Which model are you interested in?"), false, "identical edit is not substantive");
+assert.equal(isSubstantiveEdit("Here is the credit app link: x", "Here is the credit app link: x please"), false, "light touch-up is not substantive");
+assert.equal(isSubstantiveEdit("Here is the credit app link.", "We don't carry the Fat Bob anymore — want numbers on a Low Rider S instead?"), true, "a real correction is substantive");
+
+// --- source guard: runner is gitignored-store + no-commit + harvests BOTH takeover AND edit signals ---
 const runner = fs.readFileSync("scripts/gold_corpus_harvest_incremental.ts", "utf8");
 assert.ok(/data\/gold_corpus/.test(runner), "runner default store path under data/gold_corpus (gitignored)");
 assert.ok(/--init/.test(runner) && /watermark/i.test(runner), "runner supports --init watermark bootstrap");
+assert.ok(/originalDraftBody/.test(runner) && /isSubstantiveEdit/.test(runner), "runner must harvest the EDIT signal (originalDraftBody corrections), not just takeovers");
+assert.ok(/"takeover"/.test(runner) && /"edit"/.test(runner), "runner must tag each pair with its source (takeover|edit)");
 const gitignore = fs.readFileSync(".gitignore", "utf8");
 assert.ok(/gold_corpus/.test(gitignore), ".gitignore must exclude the harvest store (never auto-commit customer data)");
 
