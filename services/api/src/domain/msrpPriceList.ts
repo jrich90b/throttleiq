@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadHdCatalog, findModelInHdCatalog } from "./hdCatalog.js";
+import { loadHdCatalog, findModelInHdCatalog, findBestCatalogModel } from "./hdCatalog.js";
+
+/** Dark flag: source exact per-color finish pricing from the scraped HD detail-page catalog (instead of
+ *  the hand-maintained MSRP sheet). Off by default — this is a customer-facing pricing change. */
+function hdCatalogFinishPricingEnabled(): boolean {
+  return process.env.HD_CATALOG_FINISH_PRICING === "1";
+}
 
 type MsrpTrim = {
   spec?: string;
@@ -117,6 +123,18 @@ export async function getMsrpColorNames(): Promise<string[]> {
       if (key && !seen.has(key)) seen.set(key, name);
     }
   }
+  // Catalog-first (dark flag): also surface colors the scraped catalog carries but the static sheet
+  // doesn't, so customer color mentions on those models are detected.
+  if (hdCatalogFinishPricingEnabled()) {
+    for (const m of await loadHdCatalog()) {
+      for (const c of m.finish?.colors ?? []) {
+        const name = c?.name ? String(c.name).trim() : "";
+        if (!name) continue;
+        const key = normalizeToken(name);
+        if (key && !seen.has(key)) seen.set(key, name);
+      }
+    }
+  }
   const list = [...seen.values()].filter(Boolean);
   colorCache = { items: list, loadedAt: now };
   return list;
@@ -182,11 +200,37 @@ function isSupportedYear(year?: string | null): boolean {
   return numeric >= 2026;
 }
 
-export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResult | null> {
-  if (!isSupportedYear(opts.year)) return null;
-  const items = await loadMsrpList();
-  if (!items.length) return null;
-  const entry = matchModel(items, opts.model);
+/**
+ * Build an MsrpEntry from the scraped HD catalog's per-color finish data (detail-page configurator), so
+ * `findMsrpPricing` can answer finish-specific pricing exactly (e.g. "Street Bob in Billiard Gray"). The
+ * configurator's seat/wheel options are accessories, NOT finish, so we intentionally leave `trims` empty
+ * — that keeps a color-only query resolvable to an exact number (base + color adder) instead of a range.
+ * Returns null when the model isn't in the catalog or has no finish data (caller falls back to the sheet).
+ */
+async function findFinishEntryInHdCatalog(opts: { model?: string | null; year?: string | null }): Promise<MsrpEntry | null> {
+  if (!opts.model) return null;
+  const yearNum = opts.year != null && Number.isFinite(Number(opts.year)) ? Number(opts.year) : null;
+  const match = findBestCatalogModel(await loadHdCatalog(), opts.model, { year: yearNum });
+  const finish = match?.finish;
+  if (!match || !finish) return null;
+  const base = finish.baseMsrp ?? match.price ?? null;
+  if (!base) return null;
+  const colors: MsrpColor[] = (finish.colors ?? []).map(c => ({ name: c.name, adder: c.adder }));
+  const maxColorAdder = colors.reduce((m, c) => Math.max(m, c.adder ?? 0), 0);
+  return {
+    model_code: match.modelCode,
+    model_name: match.name,
+    base_msrp: base,
+    colors,
+    trims: [],
+    msrp_range: { min: base, max: base + maxColorAdder },
+    max_color_adder: maxColorAdder,
+    max_trim_adder: 0
+  };
+}
+
+/** The trim/color match + range/exact math, shared by the catalog-finish and static-sheet paths. */
+function computeMsrpResult(entry: MsrpEntry, opts: MsrpLookup): MsrpLookupResult | null {
   if (!entry || !entry.base_msrp) return null;
 
   const trim = matchTrim(entry, opts.trimText);
@@ -233,6 +277,24 @@ export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResul
     trim,
     color
   };
+}
+
+export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResult | null> {
+  // Catalog-first (dark flag): exact per-color finish pricing sourced from the scraped HD detail pages.
+  // The static MSRP sheet is the fallback when the catalog lacks the model or its finish data.
+  if (hdCatalogFinishPricingEnabled()) {
+    const catEntry = await findFinishEntryInHdCatalog({ model: opts.model, year: opts.year });
+    if (catEntry) {
+      const result = computeMsrpResult(catEntry, opts);
+      if (result) return result;
+    }
+  }
+  if (!isSupportedYear(opts.year)) return null;
+  const items = await loadMsrpList();
+  if (!items.length) return null;
+  const entry = matchModel(items, opts.model);
+  if (!entry) return null;
+  return computeMsrpResult(entry, opts);
 }
 
 /**

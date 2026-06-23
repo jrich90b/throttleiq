@@ -10,6 +10,20 @@
  * models out) so it's eval-tested against a fixture without hitting the network.
  */
 
+/** A per-color (paint/finish) price adder, relative to the model's base MSRP. */
+export type HdFinishOption = {
+  name: string; // "Vivid Black"
+  adder: number; // 300 (added on top of baseMsrp)
+};
+
+/** Per-color finish pricing parsed from a model's DETAIL page configurator (the auto-source for exact
+ *  finish-specific quotes, e.g. "how much for the Street Bob in Billiard Gray?"). Colors only — seat/
+ *  wheel options are accessories, not "finish", and folding them in would block an exact color answer. */
+export type HdModelFinish = {
+  baseMsrp: number | null; // starting MSRP (the +$0 color, before any adder)
+  colors: HdFinishOption[]; // deduped by name; adder relative to baseMsrp
+};
+
 export type HdCatalogModel = {
   name: string; // "Street Bob" (decorations stripped)
   modelCode: string; // "FXBB" — aligns with the MSRP sheet's model_code
@@ -18,6 +32,7 @@ export type HdCatalogModel = {
   price: number | null; // 14999
   monthlyPriceFormatted: string | null; // "$231"
   urlPath: string | null; // "/motorcycles/street-bob.html"
+  finish?: HdModelFinish | null; // per-color adders from the detail page (best-effort; absent => range fallback)
 };
 
 /** Extract the __NEXT_DATA__ JSON object from the raw page HTML, or null. */
@@ -98,6 +113,83 @@ export function parseHdCatalog(html: string, opts?: { year?: number | null }): H
   return data ? parseHdModelsFromNextData(data, opts) : [];
 }
 
+// --- Detail-page finish pricing (per-color adders from the configurator) ---
+
+/** Resolve a color option's adder: prefer the numeric `additionalPrice`, fall back to parsing the
+ *  formatted "+ $300" string. Missing/unparseable -> 0 (the base color). */
+function parseAdder(opt: any): number {
+  if (typeof opt?.additionalPrice === "number" && Number.isFinite(opt.additionalPrice)) {
+    return Math.max(0, opt.additionalPrice);
+  }
+  const n = Number(String(opt?.additionalPriceFormatted ?? "").replace(/[^0-9]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Find the `bikeProductDetails` object in a detail page's __NEXT_DATA__ by SHAPE (string modelCode +
+ *  string priceFormatted + an Array colorOptions). Robust to layout/key-path changes; the related-bike
+ *  products in bikePDPSections use `colorOptionsCollection` (different key) so they don't match. */
+function findBikeProductDetails(o: any): any | null {
+  if (!o || typeof o !== "object") return null;
+  if (Array.isArray(o)) {
+    for (const x of o) {
+      const hit = findBikeProductDetails(x);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (
+    typeof o.modelCode === "string" &&
+    typeof o.priceFormatted === "string" &&
+    Array.isArray(o.colorOptions)
+  ) {
+    return o;
+  }
+  for (const k of Object.keys(o)) {
+    const hit = findBikeProductDetails(o[k]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export type HdDetailFinish = {
+  modelCode: string;
+  name: string; // cleaned (e.g. "Street Bob")
+  year: number | null;
+  finish: HdModelFinish;
+};
+
+/** Parse a model DETAIL page's __NEXT_DATA__ into its per-color finish pricing. Colors are deduped by
+ *  name (keeping the lowest adder) since HD lists multiple color codes per paint name. Pure; returns
+ *  null if no configurator data is present. */
+export function parseHdDetailFinishFromNextData(nextData: any): HdDetailFinish | null {
+  const bpd = findBikeProductDetails(nextData);
+  if (!bpd) return null;
+  const baseMsrp = parsePrice(bpd.priceFormatted);
+  const byName = new Map<string, HdFinishOption>();
+  for (const c of bpd.colorOptions as any[]) {
+    const name = cleanName(c?.optionName ?? "");
+    if (!name) continue;
+    const adder = parseAdder(c);
+    const key = name.toLowerCase();
+    const existing = byName.get(key);
+    if (!existing || adder < existing.adder) byName.set(key, { name, adder });
+  }
+  const colors = [...byName.values()].sort((a, b) => a.adder - b.adder);
+  if (!colors.length && baseMsrp == null) return null;
+  return {
+    modelCode: String(bpd.modelCode).trim(),
+    name: cleanName(bpd.formattedName ?? bpd.modelName ?? ""),
+    year: typeof bpd.modelYear === "number" ? bpd.modelYear : null,
+    finish: { baseMsrp, colors }
+  };
+}
+
+/** Convenience: raw detail-page HTML -> finish. */
+export function parseHdDetailFinish(html: string): HdDetailFinish | null {
+  const data = extractNextData(html);
+  return data ? parseHdDetailFinishFromNextData(data) : null;
+}
+
 // --- Runtime: read the scraped catalog + match a model against it (the discontinuation seam) ---
 
 const normTok = (s: string): string => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -124,6 +216,33 @@ export function findModelInHdCatalog(
     if (s > bestScore) { bestScore = s; best = m; }
   }
   return { matched: bestScore >= 60, score: bestScore, year: best?.year ?? null, name: best?.name ?? null };
+}
+
+/** Best full catalog model object for a query (so callers can read its `finish`), with the same 60+
+ *  threshold. When a year is given, prefer a same-year match; otherwise (or if that year isn't in the
+ *  catalog) fall back to the best match across all years. Pure. */
+export function findBestCatalogModel(
+  models: HdCatalogModel[] | null | undefined,
+  query: string,
+  opts?: { year?: number | null }
+): HdCatalogModel | null {
+  const q = normTok(query);
+  if (!q || !models?.length) return null;
+  const pick = (pool: HdCatalogModel[]): HdCatalogModel | null => {
+    let best: HdCatalogModel | null = null;
+    let bestScore = 0;
+    for (const m of pool) {
+      const s = Math.max(scoreMatch(q, normTok(m.name)), scoreMatch(q, normTok(m.modelCode)));
+      if (s > bestScore) { bestScore = s; best = m; }
+    }
+    return bestScore >= 60 ? best : null;
+  };
+  const year = opts?.year ?? null;
+  if (year != null) {
+    const sameYear = pick(models.filter(m => m.year === year));
+    if (sameYear) return sameYear;
+  }
+  return pick(models);
 }
 
 let catalogCache: { models: HdCatalogModel[]; loadedAt: number } | null = null;
