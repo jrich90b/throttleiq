@@ -22,6 +22,7 @@ import {
   buildCustomerVehiclePhotoShareReply,
   buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
+  CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
   isSalesPhotoShareConversation
 } from "./domain/customerPhotoShare.js";
@@ -8970,6 +8971,10 @@ async function maybeHandleInventoryStatusParserRoute(args: {
         undefined,
         "followup"
       );
+      if (photoShare.kind === "part") {
+        // A part photo isn't a bike to match — re-point the next turn to parts/service.
+        setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
+      }
       const reply = photoShare.reply;
       recordRouteOutcome(args.scope, "customer_shared_vehicle_photo", {
         convId: args.conv.id,
@@ -50261,6 +50266,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       contextText: event.body ?? ""
     });
     addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    if (photoShare.kind === "part") {
+      // A part photo isn't a bike to match — re-point the next turn to parts/service.
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
+    }
     const reply = photoShare.reply;
     recordRouteOutcome("regen", "customer_shared_vehicle_photo", {
       convId: conv.id,
@@ -53561,6 +53570,10 @@ if (authToken && signature) {
       contextText: event.body ?? ""
     });
     addTodo(conv, "note", photoShare.todoSummary, event.providerMessageId, undefined, undefined, "followup");
+    if (photoShare.kind === "part") {
+      // A part photo isn't a bike to match — re-point the next turn to parts/service.
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT, mode: "persistent" });
+    }
     const reply = photoShare.reply;
     recordRouteOutcome("live", "customer_shared_vehicle_photo", {
       convId: conv.id,
