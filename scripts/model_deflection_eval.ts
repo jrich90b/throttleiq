@@ -17,12 +17,24 @@
  * Run: npx tsx scripts/model_deflection_eval.ts
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
   decideModelDeflection,
   isPlaceholderModel,
   resolveSpecificModelForDeflection
 } from "../services/api/src/domain/modelDeflection.ts";
+
+// --- Source guard: the dominant deflection site (ensureUniqueDraft's uniqueness fallback in
+//     index.ts) must be anchor-aware — reference the known model instead of asking "which model?". ---
+const indexSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.ok(
+  /from "\.\/domain\/modelDeflection\.js"/.test(indexSrc) && /isSpecificModel/.test(indexSrc),
+  "index.ts must import the centralized model-deflection primitive"
+);
+assert.ok(/function pickSpecificAnchorModel/.test(indexSrc), "index.ts must derive the SPECIFIC anchor model for the fallback");
+assert.ok(/pricing on the \$\{anchoredModel\}/.test(indexSrc), "the uniqueness fallback must reference the known model when specific");
+assert.ok(/Which model are you leaning toward/.test(indexSrc), "the generic ask must remain for the placeholder/absent-anchor path (pillar 1)");
 
 type Case = {
   pillar: 1 | 2 | 3 | 4;
