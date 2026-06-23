@@ -50,6 +50,9 @@ export type MsrpLookupResult = {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_PATH = resolve(__dirname, "../../data/price_list_msrp_2026.json");
+/** The model year this MSRP sheet represents. Used by the discontinuation heuristic's staleness guard.
+ *  When the sheet is swapped (file -> API, or a new model year), update this. */
+export const MSRP_SHEET_MODEL_YEAR = 2026;
 
 let cache: { items: MsrpEntry[]; loadedAt: number } | null = null;
 let colorCache: { items: string[]; loadedAt: number } | null = null;
@@ -228,6 +231,34 @@ export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResul
     trim,
     color
   };
+}
+
+/**
+ * Is a model present in the CURRENT model catalog (the MSRP sheet), and how strong is the match?
+ * This is the single data-source seam for the discontinuation heuristic: today it reads the static
+ * sheet; swapping to a live catalog API later is a change to THIS function only. Matches at family /
+ * model_name / model_code granularity (so engine/trim iterations like "Fat Bob 114" resolve to the
+ * "Fat Bob" family). Returns the best score so the caller can apply a confidence threshold.
+ */
+export async function findModelInMsrp(model?: string | null): Promise<{ matched: boolean; score: number; family: string | null; modelName: string | null }> {
+  const items = await loadMsrpList();
+  let query = normalizeToken(model);
+  if (!query || !items.length) return { matched: false, score: 0, family: null, modelName: null };
+  if (/\broad glide 3\b/.test(query) || /\brg3\b/.test(query) || /\bfltrt\b/.test(query)) query = "road glide trike";
+  let best: MsrpEntry | null = null;
+  let bestScore = 0;
+  for (const entry of items) {
+    const score = Math.max(
+      scoreMatch(query, normalizeToken(entry.model_name)),
+      scoreMatch(query, normalizeToken(entry.model_code)),
+      scoreMatch(query, normalizeToken(entry.family))
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      best = entry;
+    }
+  }
+  return { matched: bestScore >= 60, score: bestScore, family: best?.family ?? null, modelName: best?.model_name ?? null };
 }
 
 export async function modelHasFinishOptions(opts: {
