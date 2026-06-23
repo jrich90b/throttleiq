@@ -296,6 +296,7 @@ import {
   decideContextFidelityHold,
   contextFidelityHoldShadowEnabled
 } from "./domain/contextFidelityHold.js";
+import { isSpecificModel } from "./domain/modelDeflection.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -19816,23 +19817,47 @@ function ensureUniqueDraft(
       .filter((m: any) => m.direction === "out")
       .map((m: any) => normalizeOutboundText(m.body))
   );
+  // answer-don't-deflect: when we're forced to a generic uniqueness fallback AND the customer's model
+  // is already on record (a SPECIFIC model, not a placeholder), the fallback must NOT ask "which model
+  // are you leaning toward?" about a bike we already know — it references the known model instead. This
+  // is the dominant model-deflection miss in prod (impact: ~21/40 model-asks have a specific anchor).
+  // Fail-direction safe: a placeholder/absent anchor keeps the original generic ask.
+  const anchoredModel = pickSpecificAnchorModel(conv);
   let candidate = stripIntroIfRepeated(draft, conv, dealerName, agentName);
   if (!candidate) {
-    candidate = "Got it — happy to help with pricing or a model comparison.";
+    candidate = anchoredModel
+      ? `Got it — happy to help with pricing on the ${anchoredModel} or anything else you’re weighing.`
+      : "Got it — happy to help with pricing or a model comparison.";
   }
   if (!used.has(normalizeOutboundText(candidate))) return candidate;
-  const fallbacks = [
-    "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
-    "Thanks for the update — I can help with pricing or compare models if that’s useful.",
-    "Understood. If you want pricing details or a quick model comparison, just say the word."
-  ];
+  const fallbacks = anchoredModel
+    ? [
+        `Happy to help with the ${anchoredModel} — pricing, a quick comparison, or whatever you’re weighing.`,
+        `Want me to pull together pricing on the ${anchoredModel}, or compare it with a couple options?`,
+        `Glad to help on the ${anchoredModel} — just say what would be most useful.`
+      ]
+    : [
+        "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
+        "Thanks for the update — I can help with pricing or compare models if that’s useful.",
+        "Understood. If you want pricing details or a quick model comparison, just say the word."
+      ];
   for (const fb of fallbacks) {
     if (!used.has(normalizeOutboundText(fb))) return fb;
   }
-  const suffix = " Let me know what you’re leaning toward.";
+  const suffix = anchoredModel
+    ? ` Just let me know what you’d like to know about the ${anchoredModel}.`
+    : " Let me know what you’re leaning toward.";
   return used.has(normalizeOutboundText(candidate + suffix))
     ? `${candidate} Thanks for the update.`
     : candidate + suffix;
+}
+
+// The SPECIFIC model on record for this conversation (cleaned of make prefix), or null when the anchor
+// is a placeholder ("Other"/"Full Line"/bare make) or absent — in which case asking is correct.
+function pickSpecificAnchorModel(conv: any): string | null {
+  const raw = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "").trim();
+  if (!isSpecificModel(raw)) return null;
+  return raw.replace(/^harley[-\s]?davidson\s+/i, "").trim() || raw;
 }
 
 function ensureUniqueDispositionReply(reply: string, conv: any): string {
