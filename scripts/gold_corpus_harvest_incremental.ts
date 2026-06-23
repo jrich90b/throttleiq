@@ -94,10 +94,15 @@ const now = new Date().toISOString();
 const records: string[] = [];
 batch.forEach((c, k) => {
   const r = scores[k];
-  if (!shouldHarvestPair(r)) return;
+  const scorerAgreed = shouldHarvestPair(r);
+  // EDIT = a deliberate human correction (high-precision ground truth — you don't rewrite a draft you
+  // like) -> ALWAYS harvest; the scorer verdict is recorded as metadata, not a gate. TAKEOVER = noisy
+  // (out-of-band knowledge / rep voice; only ~43% real) -> require the scorer intersection.
+  if (c.source === "takeover" && !scorerAgreed) return;
   records.push(JSON.stringify({
-    id: c.key, harvestedAt: now, source: c.source, split: splitFor(c.key), frame: r!.frame, severity: r!.severity, confidence: r!.confidence ?? null,
-    anchorModel: scrubText(c.anchorModel), customer: scrubText(c.inbound).slice(0, 400), agentWrong: scrubText(c.draft).slice(0, 400), humanRight: scrubText(c.human).slice(0, 400), steering: r!.steering ?? null
+    id: c.key, harvestedAt: now, source: c.source, scorerAgreed, split: splitFor(c.key),
+    frame: r?.frame ?? null, severity: r?.severity ?? null, confidence: r?.confidence ?? null,
+    anchorModel: scrubText(c.anchorModel), customer: scrubText(c.inbound).slice(0, 400), agentWrong: scrubText(c.draft).slice(0, 400), humanRight: scrubText(c.human).slice(0, 400), steering: r?.steering ?? null
   }));
 });
 
@@ -106,4 +111,4 @@ if (records.length) {
   fs.appendFileSync(STORE, records.join("\n") + "\n");
 }
 writeState(batch.map(c => c.key)); // mark ALL scored (even non-errors) as seen so we never re-score them
-console.log(`gold_corpus harvest: appended ${records.length} new confirmed pairs (of ${batch.length} scored) -> ${STORE}`);
+console.log(`gold_corpus harvest: appended ${records.length} pairs (of ${batch.length} scored; edits always, takeovers scorer-confirmed) -> ${STORE}`);
