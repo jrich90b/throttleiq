@@ -655,6 +655,8 @@ import {
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
+  upsertPendingIncomingInventoryNotifyTodo,
+  healPendingIncomingNotifyTodoDuplicates,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -717,6 +719,9 @@ import {
   buildPendingIncomingInventoryTaskSummary,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
+  hasPartsInquirySignal,
+  partsTurnPrecedenceEnabled,
+  isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
@@ -26780,17 +26785,19 @@ function applyPendingIncomingInventoryState(
   setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
   stopFollowUpCadence(conv, "pending_incoming_inventory");
   stopRelatedCadences(conv, "pending_incoming_inventory", { setMode: "manual_handoff" });
-  addTodo(
+  // Per-conversation SINGLETON upsert (class-agnostic). A bare addTodo here dedups by taskClass,
+  // but the identical "Notify when the trade arrives" objective lands in different class buckets
+  // ("followup" passed here vs "todo" from inferTodoTaskClass), so copies piled up (Nicholas
+  // Braun, 2026-06-23). The upsert collapses any duplicates and keeps one. Covers BOTH paths —
+  // live + regenerate both call applyPendingIncomingInventoryState.
+  upsertPendingIncomingInventoryNotifyTodo(
     conv,
-    "call",
     buildPendingIncomingInventoryTaskSummary({
       pending,
       customerName: customerNameForPendingIncomingInventory(conv)
     }),
     opts?.sourceMessageId ?? undefined,
-    conv.leadOwner,
-    undefined,
-    "followup"
+    conv.leadOwner
   );
   return true;
 }
@@ -27727,6 +27734,35 @@ async function processDueFollowUpsUnlocked() {
   }
   if (cadenceHandoffHealed > 0) {
     console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
+  }
+  // Pending-incoming notify-todo dedup heal: the singleton "Notify when the trade arrives" task
+  // historically duplicated because addTodo dedups by taskClass and the same objective split
+  // across class buckets (Nicholas Braun: 4 open copies, 2026-06-23). The upsert at write-time
+  // prevents new ones; this collapses any that already piled up. Class-agnostic, idempotent.
+  const notifyDupConvIds = new Map<string, number>();
+  for (const t of openTodos) {
+    if (!isPendingIncomingInventoryNotifyTodoSummary(t.summary)) continue;
+    notifyDupConvIds.set(t.convId, (notifyDupConvIds.get(t.convId) ?? 0) + 1);
+  }
+  let pendingNotifyDupsHealed = 0;
+  for (const [convId, count] of notifyDupConvIds) {
+    if (count < 2) continue;
+    const conv = convById.get(convId);
+    if (!conv) continue;
+    const retired = healPendingIncomingNotifyTodoDuplicates(conv);
+    if (retired <= 0) continue;
+    saveConversation(conv);
+    pendingNotifyDupsHealed += retired;
+    recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      retired
+    });
+  }
+  if (pendingNotifyDupsHealed > 0) {
+    console.log(
+      `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
+    );
   }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it
@@ -48848,7 +48884,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
+  if (
+    event.provider === "twilio" &&
+    (hasAccessoryRequestParserHint(event.body ?? "") ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "")))
+  ) {
     const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: event.body ?? "",
@@ -50258,9 +50298,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
+  // Parts/accessory inquiry defers the incoming-inventory recital (dark behind PARTS_TURN_PRECEDENCE_ENABLED).
+  // Mirror of the live path (route-parity).
+  const regenPartsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const regenPendingIncomingAcknowledgement =
     event.provider === "twilio" &&
     channel === "sms" &&
+    !regenPartsTurnDefer &&
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
@@ -50269,7 +50313,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: regenLastOutboundForActionText
+          lastOutboundText: regenLastOutboundForActionText,
+          partsInquiry: regenPartsTurnDefer
         })));
   if (regenPendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -53562,8 +53607,13 @@ if (authToken && signature) {
       .filter(m => m.direction === "out" && m.body)
       .slice(-1)[0]?.body ?? ""
   );
+  // Parts/accessory inquiries must not be answered with the incoming-inventory recital — defer so the
+  // accessory decision owns the turn (dark behind PARTS_TURN_PRECEDENCE_ENABLED). The signal is a
+  // SPECIFIC parts prefilter; a bare "let me know when it's here" ack never matches.
+  const partsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const pendingIncomingAcknowledgement =
     event.provider === "twilio" &&
+    !partsTurnDefer &&
     !inboundParserLocationQuestion &&
     !inboundParserExplicitCallbackRequest &&
     !inboundParserScheduleStatusUpdate &&
@@ -53572,7 +53622,8 @@ if (authToken && signature) {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: pendingIncomingLastOutboundText
+          lastOutboundText: pendingIncomingLastOutboundText,
+          partsInquiry: partsTurnDefer
         })));
   if (pendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -54982,7 +55033,12 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && !semanticShortAck && hasAccessoryRequestParserHint(semanticInboundText)) {
+  if (
+    event.provider === "twilio" &&
+    !semanticShortAck &&
+    (hasAccessoryRequestParserHint(semanticInboundText) ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(semanticInboundText)))
+  ) {
     const accessoryRequestParse = await safeLlmParse("accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: semanticInboundText,
