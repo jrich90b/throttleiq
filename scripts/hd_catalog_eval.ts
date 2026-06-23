@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { parseHdModelsFromNextData, parseHdCatalog, extractNextData } from "../services/api/src/domain/hdCatalog.ts";
+import { parseHdModelsFromNextData, parseHdCatalog, extractNextData, extractModelYear } from "../services/api/src/domain/hdCatalog.ts";
 
 // Fixture shaped like the real __NEXT_DATA__ (model objects nested arbitrarily; Fat Bob NOT present).
 const nextData = {
@@ -27,8 +27,9 @@ const nextData = {
   }
 };
 
-const models = parseHdModelsFromNextData(nextData);
+const models = parseHdModelsFromNextData(nextData, { year: 2026 });
 assert.equal(models.length, 3, `3 unique models (dup deduped, noise skipped), got ${models.length}`);
+assert.ok(models.every(m => m.year === 2026), "models tagged with the page's model year");
 
 const sb = models.find(m => m.modelCode === "FXBB")!;
 assert.equal(sb.name, "Street Bob", "® decoration stripped");
@@ -46,6 +47,11 @@ assert.deepEqual(models.map(m => m.modelCode), ["FXBB", "FXLRS", "FLHX"], "sorte
 const html = `<html><head></head><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script></body></html>`;
 assert.equal(parseHdCatalog(html).length, 3, "parseHdCatalog extracts from raw HTML");
 assert.ok(extractNextData("<html>no next data</html>") === null, "missing __NEXT_DATA__ -> null");
+
+// self-reported model year: the most frequent "year":NNNN in the data
+const yearHtml = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ a: { year: 2025 }, b: { year: 2025 }, c: { year: 2024 } })}</script></html>`;
+assert.equal(extractModelYear(yearHtml), 2025, "extractModelYear picks the dominant year");
+assert.equal(extractModelYear("<html>nope</html>"), null, "no data -> null year");
 
 // discontinuation tie-in: a discontinued model (Fat Bob) is simply ABSENT from the live catalog
 assert.ok(!parseHdCatalog(html).some(m => /fat bob/i.test(m.name)), "Fat Bob absent (discontinued)");
