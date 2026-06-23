@@ -23,7 +23,8 @@ import {
   buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
-  isSalesPhotoShareConversation
+  isSalesPhotoShareConversation,
+  isTradePhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { buildReservationHandoffReply, detectReservationRequestText } from "./domain/reservationIntent.js";
 import {
@@ -8996,8 +8997,14 @@ async function maybeHandleInventoryStatusParserRoute(args: {
       !imageMentionedModel &&
       isSalesPhotoShareConversation(args.conv)
     ) {
-      setDialogState(args.conv, "inventory_init");
-      setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      // A trade-in photo gets the trade frame (handled inside buildPhotoShareReplyWithVision); it
+      // must NOT inherit the inventory-match dialog state or the "match it against inventory"
+      // persistent agent context, which would mis-route future turns (Jessica Ornce, 2026-06-23).
+      const tradePhotoContext = isTradePhotoShareConversation(args.conv);
+      if (!tradePhotoContext) {
+        setDialogState(args.conv, "inventory_init");
+        setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      }
       const photoShare = await buildPhotoShareReplyWithVision({
         conv: args.conv,
         firstName: normalizeDisplayCase(args.conv.lead?.firstName),
@@ -9020,6 +9027,7 @@ async function maybeHandleInventoryStatusParserRoute(args: {
         leadKey: args.conv.leadKey,
         parserAction: "image_availability_check",
         parserConfidence: args.parsedStatus?.confidence ?? null,
+        tradeContext: tradePhotoContext,
         fallback: false
       });
       return { kind: "reply", reply };
@@ -50356,8 +50364,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
         })));
   if (regenCustomerPhotoShare) {
-    setDialogState(conv, "inventory_init");
-    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    // Trade-in photos take the trade frame; skip the inventory dialog/agent context (see live path).
+    const regenTradePhotoContext = isTradePhotoShareConversation(conv);
+    if (!regenTradePhotoContext) {
+      setDialogState(conv, "inventory_init");
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    }
     const photoShare = await buildPhotoShareReplyWithVision({
       conv,
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -50373,6 +50385,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       leadKey: conv.leadKey,
       parserAction: regenInboundReplyActionParse?.action ?? null,
       parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      tradeContext: regenTradePhotoContext,
       fallback: !regenParserCustomerPhotoShare
     });
     return respondWithSmsRegeneratedDraft(reply, undefined, {
@@ -53662,8 +53675,12 @@ if (authToken && signature) {
           hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
         })));
   if (customerPhotoShareAccepted) {
-    setDialogState(conv, "inventory_init");
-    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    // Trade-in photos take the trade frame; skip the inventory dialog/agent context (see resolver path).
+    const liveTradePhotoContext = isTradePhotoShareConversation(conv);
+    if (!liveTradePhotoContext) {
+      setDialogState(conv, "inventory_init");
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    }
     const photoShare = await buildPhotoShareReplyWithVision({
       conv,
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -53679,6 +53696,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      tradeContext: liveTradePhotoContext,
       fallback: !inboundParserCustomerPhotoShare
     });
     return publishLiveTwilioReply(
