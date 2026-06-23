@@ -51,6 +51,10 @@ assert.ok(/data\/gold_corpus/.test(runner), "runner default store path under dat
 assert.ok(/--init/.test(runner) && /watermark/i.test(runner), "runner supports --init watermark bootstrap");
 assert.ok(/originalDraftBody/.test(runner) && /isSubstantiveEdit/.test(runner), "runner must harvest the EDIT signal (originalDraftBody corrections), not just takeovers");
 assert.ok(/"takeover"/.test(runner) && /"edit"/.test(runner), "runner must tag each pair with its source (takeover|edit)");
+// edits are a deliberate human correction -> harvested WITHOUT the scorer gate (which misses subtle
+// misses); only takeovers require scorer agreement. The verdict is recorded (scorerAgreed) not gated.
+assert.ok(/c\.source === "takeover" && !scorerAgreed/.test(runner), "only TAKEOVERS require scorer agreement; edits harvest on the human signal");
+assert.ok(/scorerAgreed/.test(runner), "the scorer verdict must be recorded as metadata on each pair");
 const gitignore = fs.readFileSync(".gitignore", "utf8");
 assert.ok(/gold_corpus/.test(gitignore), ".gitignore must exclude the harvest store (never auto-commit customer data)");
 
