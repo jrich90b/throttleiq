@@ -21,6 +21,25 @@ export function hashString(s: string): string {
 
 const norm = (x: string) => String(x ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
+/** Word-set Jaccard similarity (0..1). */
+export function jaccard(a: string, b: string): number {
+  const na = norm(a).replace(/[^\w\s]/g, ""), nb = norm(b).replace(/[^\w\s]/g, "");
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const sa = new Set(na.split(" ")), sb = new Set(nb.split(" "));
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  return inter / (sa.size + sb.size - inter);
+}
+
+/** A staff EDIT (originalDraftBody -> sent body) is a CORRECTION worth harvesting only when the human
+ *  meaningfully changed the answer — not a light touch-up. Below maxJac = the substance changed. */
+export function isSubstantiveEdit(originalDraft: string, sent: string, maxJac = 0.6): boolean {
+  const o = norm(originalDraft), s = norm(sent);
+  if (!o || !s || o === s) return false;
+  return jaccard(o, s) < maxJac;
+}
+
 /** Stable identity for a (conversation, draft) pair — survives re-runs so we never re-harvest one. */
 export function pairKey(convId: string, draftBody: string): string {
   return hashString(`${norm(convId)}|${norm(draftBody)}`);
