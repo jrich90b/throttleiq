@@ -24,6 +24,9 @@ coverage/
 # local persisted dev data (conversation store)
 data/
 
+# gold-corpus incremental harvest (customer-derived; NEVER auto-commit — promotion is approve-first)
+data/gold_corpus/
+
 # production/runtime state
 services/api/data/scheduler_config.json
 services/api/data/google_tokens.json
