@@ -19,6 +19,9 @@
  * This is exactly where a live catalog API would later replace the static sheet.
  */
 
+import { findModelInMsrp, MSRP_SHEET_MODEL_YEAR } from "./msrpPriceList.js";
+import { hasInventoryForModelYear } from "./inventoryFeed.js";
+
 export type DiscontinuationStatus = "available" | "current" | "discontinued" | "unknown";
 
 /** scoreMatch returns 60+ for a real substring family/name match; below that is no confident match. */
@@ -52,3 +55,33 @@ export function decideModelDiscontinuation(input: {
 
 /** Convenience: only "discontinued" is safe to state as fact to the customer. */
 export const isConfidentlyDiscontinued = (d: DiscontinuationDecision): boolean => d.status === "discontinued";
+
+/**
+ * Async wrapper: resolve a model's status from the current MSRP catalog + live inventory. This is the
+ * I/O composition over the pure decision; the catalog lookup (findModelInMsrp) is the file->API seam.
+ */
+export async function resolveModelDiscontinuation(model: string, opts?: { currentYear?: number }): Promise<DiscontinuationDecision> {
+  const m = String(model ?? "").trim();
+  if (!m) return { status: "unknown", reason: "no_model" };
+  const [msrp, inInventory] = await Promise.all([findModelInMsrp(m), hasInventoryForModelYear({ model: m })]);
+  const currentYear = opts?.currentYear ?? new Date().getFullYear();
+  return decideModelDiscontinuation({
+    inInventory,
+    msrpMatchScore: msrp.score,
+    sheetModelYear: MSRP_SHEET_MODEL_YEAR,
+    currentYear
+  });
+}
+
+/** The customer-facing reply for a confidently-discontinued model: acknowledge honestly, don't fabricate
+ *  availability, and offer real numbers on current alternatives (the customer's actual ask). */
+export function buildDiscontinuedModelReply(model: string): string {
+  const clean = String(model ?? "").replace(/^harley[-\s]?davidson\s+/i, "").trim() || "that model";
+  return `Heads up — looks like we're not carrying the ${clean} anymore. I can still pull real numbers on the closest current models we've got — want me to send a couple options that fit what you're after?`;
+}
+
+/** Reads MODEL_DISCONTINUATION_REPLY_ENABLED. Default OFF (dark) — the live cutover is approve-first. */
+export function modelDiscontinuationReplyEnabled(): boolean {
+  const raw = String(process.env.MODEL_DISCONTINUATION_REPLY_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}

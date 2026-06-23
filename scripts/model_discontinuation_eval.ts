@@ -4,8 +4,14 @@
  * Run: npx tsx scripts/model_discontinuation_eval.ts
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
-import { decideModelDiscontinuation, MSRP_MATCH_MIN_SCORE } from "../services/api/src/domain/modelDiscontinuation.ts";
+import {
+  decideModelDiscontinuation,
+  MSRP_MATCH_MIN_SCORE,
+  buildDiscontinuedModelReply,
+  modelDiscontinuationReplyEnabled
+} from "../services/api/src/domain/modelDiscontinuation.ts";
 import { findModelInMsrp, MSRP_SHEET_MODEL_YEAR } from "../services/api/src/domain/msrpPriceList.ts";
 
 const YEAR = MSRP_SHEET_MODEL_YEAR; // fresh sheet
@@ -42,4 +48,22 @@ assert.equal(lowRider.matched, true, `Low Rider must MATCH a current iteration (
 assert.equal(decideModelDiscontinuation({ inInventory: false, msrpMatchScore: fatBob.score, sheetModelYear: YEAR, currentYear: YEAR }).status, "discontinued", "Fat Bob resolves to discontinued");
 assert.equal(decideModelDiscontinuation({ inInventory: false, msrpMatchScore: lowRider.score, sheetModelYear: YEAR, currentYear: YEAR }).status, "current", "Low Rider resolves to current (iteration safe)");
 
-console.log(`PASS model-discontinuation — ${cases.length} decision cases (4 pillars: ${byPillar[1]}/${byPillar[2]}/${byPillar[3]}/${byPillar[4]}) + real-sheet validation (Fat Bob absent→discontinued, Low Rider matched→current).`);
+// --- reply builder: acknowledges, names the model, offers numbers/alternatives, no fabricated availability ---
+const reply = buildDiscontinuedModelReply("Harley-Davidson Fat Bob");
+assert.ok(/Fat Bob/.test(reply) && !/Harley-Davidson Fat Bob/.test(reply), "names the model, make-prefix stripped");
+assert.ok(/not carrying/i.test(reply), "acknowledges discontinuation honestly");
+assert.ok(/numbers|options/i.test(reply) && /\?$/.test(reply.trim()), "offers numbers/alternatives + a question");
+assert.ok(!/in stock|still available|available right now/i.test(reply), "must NOT fabricate availability");
+
+// --- dark by default ---
+delete process.env.MODEL_DISCONTINUATION_REPLY_ENABLED;
+assert.equal(modelDiscontinuationReplyEnabled(), false, "ships DARK — flag off by default");
+
+// --- source guard: orchestrateInbound wires the precedence behind the flag, both paths ---
+const orch = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
+assert.ok(/from "\.\/modelDiscontinuation\.js"/.test(orch), "orchestrator imports the discontinuation module");
+assert.ok(/modelDiscontinuationReplyEnabled\(\)/.test(orch), "the guard is gated by the flag (dark by default)");
+assert.ok(/resolveModelDiscontinuation\(/.test(orch) && /buildDiscontinuedModelReply\(/.test(orch), "orchestrator resolves status + builds the reply");
+assert.ok(/disc\.status === "discontinued"/.test(orch), "only a confident 'discontinued' triggers the reply");
+
+console.log(`PASS model-discontinuation — ${cases.length} decision cases (4 pillars: ${byPillar[1]}/${byPillar[2]}/${byPillar[3]}/${byPillar[4]}) + real-sheet validation + reply builder + dark-flag + orchestrator source guard.`);

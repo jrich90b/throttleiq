@@ -26,6 +26,11 @@ import {
 } from "./inventoryFeed.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "./inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.js";
+import {
+  resolveModelDiscontinuation,
+  buildDiscontinuedModelReply,
+  modelDiscontinuationReplyEnabled
+} from "./modelDiscontinuation.js";
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
@@ -2231,6 +2236,32 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft
     });
+  }
+
+  // Model-discontinuation precedence (DARK unless MODEL_DISCONTINUATION_REPLY_ENABLED). When the
+  // customer wants numbers/availability on a SPECIFIC model the dealer no longer carries, don't
+  // fabricate availability/pricing or punt to a credit app — say it's discontinued and offer current
+  // alternatives. Conservative: only on a confident "discontinued" (resolveModelDiscontinuation reads
+  // the MSRP catalog + live inventory; stale-sheet/borderline => unknown, never a false claim). Early
+  // guard => preempts the pricing/financing/availability handlers in BOTH paths (orchestrateInbound is
+  // shared by /webhooks/twilio and /conversations/:id/regenerate).
+  if (modelDiscontinuationReplyEnabled()) {
+    const refModel = String(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "").trim();
+    const wantsNumbers =
+      !!(ctx?.pricingIntentHint || ctx?.financeIntentHint || ctx?.availabilityIntentHint) ||
+      detectFinanceRequest(event.body) ||
+      detectPricingOrPayment(event.body);
+    if (refModel && !isUnknownModel(refModel) && wantsNumbers) {
+      const disc = await resolveModelDiscontinuation(refModel);
+      if (disc.status === "discontinued") {
+        return finalize({
+          intent: "AVAILABILITY",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: buildDiscontinuedModelReply(refModel)
+        });
+      }
+    }
   }
 
   const canSmallTalk =
