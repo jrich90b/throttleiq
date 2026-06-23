@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 
-import { parseHdModelsFromNextData, parseHdCatalog, extractNextData, extractModelYear } from "../services/api/src/domain/hdCatalog.ts";
+import { parseHdModelsFromNextData, parseHdCatalog, extractNextData, extractModelYear, findModelInHdCatalog, type HdCatalogModel } from "../services/api/src/domain/hdCatalog.ts";
 
 // Fixture shaped like the real __NEXT_DATA__ (model objects nested arbitrarily; Fat Bob NOT present).
 const nextData = {
@@ -55,5 +55,16 @@ assert.equal(extractModelYear("<html>nope</html>"), null, "no data -> null year"
 
 // discontinuation tie-in: a discontinued model (Fat Bob) is simply ABSENT from the live catalog
 assert.ok(!parseHdCatalog(html).some(m => /fat bob/i.test(m.name)), "Fat Bob absent (discontinued)");
+
+// --- the SEAM matcher: findModelInHdCatalog (what the discontinuation resolver consults) ---
+const cat: HdCatalogModel[] = [
+  { name: "Street Bob", modelCode: "FXBB", year: 2026, priceFormatted: "$14,999", price: 14999, monthlyPriceFormatted: null, urlPath: null },
+  { name: "Road King Special", modelCode: "FLHRXS", year: 2025, priceFormatted: "$24,999", price: 24999, monthlyPriceFormatted: null, urlPath: null }
+];
+assert.equal(findModelInHdCatalog(cat, "Fat Bob").matched, false, "Fat Bob not in catalog -> not matched (discontinued)");
+assert.equal(findModelInHdCatalog(cat, "Street Bob").matched, true, "current model matched");
+const rks = findModelInHdCatalog(cat, "Road King Special");
+assert.ok(rks.matched && rks.year === 2025, "prior-year (2025) model matched -> NOT flagged discontinued");
+assert.equal(findModelInHdCatalog([], "Street Bob").matched, false, "empty catalog -> no match (caller falls back to MSRP file)");
 
 console.log(`PASS hd-catalog parser — ${models.length} models from fixture (strip/price/dedup/noise/sort + HTML extraction + discontinuation absence).`);
