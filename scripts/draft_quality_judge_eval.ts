@@ -95,11 +95,17 @@ const cases: Case[] = [
     wantGood: true // addresses the ask, no fabricated number, warm
   },
   {
-    id: "good_availability_invite",
+    id: "good_availability_confirm",
     inbound: "is it still available?",
-    // Clean fixture: confirm availability + invite, with no over-commitment ("hold it for you"
-    // is an unconfirmable promise the judge rightly questions — keep the good case unambiguous).
-    draft: "It is! Want to swing by this week to take a look?",
+    // False-positive guard: a genuinely-good availability reply must NOT be flagged. The previous
+    // fixture ("It is! Want to swing by this week?") was the flaky case — it has TWO borderlines the
+    // judge legitimately questions, so it scored good only ~7/8: affirming "It is!" as fact reads as
+    // a fabricated availability confirmation (safety axis), and pushing a visit on a bare availability
+    // question reads as too-forward (disposition axis). Pinning a hard "good" on a draft the judge
+    // treats as borderline IS the nondeterminism. The stable, unambiguously-good shape removes both:
+    // address the ask by promising to CONFIRM and report back (mirrors `good_price_handoff`), no bare
+    // affirmation, no immediate visit push. Probed 8/8 "good"; the runtime draft is unchanged.
+    draft: "Let me make sure it's still on the floor and I'll text you right back!",
     wantGood: true
   }
 ];
