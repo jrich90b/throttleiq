@@ -8438,7 +8438,16 @@ inbound: "Do you have any Street Bob coming in?"
 output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`,
     `EXAMPLE H
 inbound: "Tuesday around 11am would work great"
-output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`
+output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`,
+    `EXAMPLE I
+inbound: "Looking for the mustache engine guard #49000140, or the normal guard #49000148 in chrome"
+output: {"action":"pricing_request","explicit_request":true,"item":"engine guard","has_humor":false,"confidence":0.95}`,
+    `EXAMPLE J
+inbound: "Swing arm saddle bag part # 90201568 in the authentic brown"
+output: {"action":"pricing_request","explicit_request":true,"item":"saddlebag","has_humor":false,"confidence":0.95}`,
+    `EXAMPLE K
+inbound: "And then a chrome sissy bar with the back rack that attaches"
+output: {"action":"pricing_request","explicit_request":true,"item":"sissy bar and rack","has_humor":false,"confidence":0.94}`
   ];
   const prompt = [
     "You are a strict parser for Harley-Davidson dealership accessory/customization requests.",
@@ -8457,6 +8466,7 @@ output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"c
     "- item should be the normalized accessory noun phrase, such as handlebars, heated grips, seat, stereo, speakers, pipes, exhaust.",
     "- has_humor=true if the message contains an obvious joke/lol/jk, even when action is none.",
     "- Do not classify motorcycle model availability questions as accessory requests.",
+    "- A specific accessory/part the customer wants to order/price/check stock on — often named with a part number (e.g. #49000140 or 'part # 57001615') — is a pricing_request (explicit_request=true), even mid-conversation about an incoming/ordered bike. It is NOT a 'let me know when the bike arrives' acknowledgement.",
     "- confidence is 0..1.",
     "",
     ...examples,
