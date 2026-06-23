@@ -27,6 +27,7 @@ import {
   decideContextFidelityHold,
   CONTEXT_FIDELITY_HOLD_FRAMES,
   CONTEXT_FIDELITY_HOLD_MIN_CONFIDENCE,
+  CONTEXT_FIDELITY_HANDOFF_ACK,
   type ContextFidelityScoreLike
 } from "../services/api/src/domain/contextFidelityHold.ts";
 
@@ -47,6 +48,30 @@ assert.ok(
 assert.ok(
   /contextFidelityHoldShadowEnabled/.test(index),
   "the shadow hook must be gated by contextFidelityHoldShadowEnabled()"
+);
+
+// --- 1b) Enforcement wiring (the live enforce-flip, DARK behind CONTEXT_FIDELITY_HOLD_ENABLED). ---
+assert.ok(
+  /isContextFidelityHoldEnabled/.test(index),
+  "the enforcement must be gated by isContextFidelityHoldEnabled() (dark by default)"
+);
+assert.ok(
+  /CONTEXT_FIDELITY_HANDOFF_ACK/.test(index),
+  "the enforcement must substitute the safe handoff ack for the out-of-context draft"
+);
+assert.ok(
+  /context_fidelity\.held/.test(index),
+  "the enforcement must record the context_fidelity.held decision trace (action taken)"
+);
+assert.ok(
+  /Out-of-context catch/.test(index),
+  "the enforcement must create a staff follow-up task to handle the held turn"
+);
+// The canonical handoff ack is a real handoff (no fabricated answer/availability) and ends naturally.
+assert.ok(/right person/i.test(CONTEXT_FIDELITY_HANDOFF_ACK), "handoff ack hands off to a person");
+assert.ok(
+  !/(in stock|available|price|\$\d|MSRP)/i.test(CONTEXT_FIDELITY_HANDOFF_ACK),
+  "handoff ack must not fabricate availability/pricing"
 );
 
 // --- 2) Decision table (pure). ---

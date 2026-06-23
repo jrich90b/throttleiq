@@ -294,7 +294,9 @@ import {
 } from "./domain/draftQualityGate.js";
 import {
   decideContextFidelityHold,
-  contextFidelityHoldShadowEnabled
+  contextFidelityHoldShadowEnabled,
+  isContextFidelityHoldEnabled,
+  CONTEXT_FIDELITY_HANDOFF_ACK
 } from "./domain/contextFidelityHold.js";
 import { isSpecificModel } from "./domain/modelDeflection.js";
 import type {
@@ -4063,23 +4065,24 @@ async function gateDraftBeforePublish(
   return { held: false };
 }
 
-// Context-fidelity SHADOW hook — score the about-to-publish reply draft for "answering out of
-// context" and log would-holds. Shadow-only (CONTEXT_FIDELITY_HOLD_SHADOW; OFF by default since it's
-// a NET-NEW LLM call): NEVER holds, never mutates the conversation — it only records what the
-// (future, approve-first) enforce-flip WOULD hold. The hold slice lives in decideContextFidelityHold
-// (hold-class + major + conf>=0.8 + turn-judged frame). Called from publishCustomerReplyDraft, so it
-// covers BOTH the live webhook and regenerate paths.
-async function shadowContextFidelityHold(
+// Context-fidelity hold — score the about-to-publish reply draft for "answering out of context" and
+// decide whether to hold. Runs when the SHADOW (CONTEXT_FIDELITY_HOLD_SHADOW) OR the LIVE enforce flag
+// (CONTEXT_FIDELITY_HOLD_ENABLED) is on (a NET-NEW LLM call, so off by default). The pure hold slice
+// lives in decideContextFidelityHold (hold-class + major + conf>=0.8 + turn-judged frame). This logs
+// the would-hold and returns the decision; the caller (publishCustomerReplyDraft, the shared chokepoint
+// for the live webhook AND regenerate) performs the actual enforcement when `live`. Never throws.
+async function evaluateContextFidelityHold(
   conv: Conversation,
   candidate: string,
   channel: "sms" | "email",
   scope: "live" | "regen" | "manual"
-): Promise<void> {
-  if (!contextFidelityHoldShadowEnabled()) return; // dark: no scorer call, no latency
+): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string } | null> {
+  const live = isContextFidelityHoldEnabled();
+  if (!contextFidelityHoldShadowEnabled() && !live) return null; // dark: no scorer call, no latency
   try {
     const inbound = String(getLastInboundBody(conv) ?? "").trim();
     const draft = String(candidate ?? "").trim();
-    if (!inbound || !draft) return; // cadence/proactive draft has no inbound — out of scope here
+    if (!inbound || !draft) return null; // cadence/proactive draft has no inbound — out of scope here
     const anchor = {
       modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
       leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
@@ -4087,31 +4090,37 @@ async function shadowContextFidelityHold(
       dialogState: conv?.dialogState?.name ?? null
     };
     const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
-    // enabled:false — shadow only this step; the enforce-flip threads the flag + wires the actual hold.
-    const decision = decideContextFidelityHold({ enabled: false, score: sc });
-    if (decision.action !== "hold") return;
+    const decision = decideContextFidelityHold({ enabled: live, score: sc });
+    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason };
+    // Keep both literal markers so the shadow measurement string survives and the enforce path is greppable.
+    const marker = live ? "[context-fidelity-hold-enforce]" : "[context-fidelity-hold-shadow]";
     console.warn(
-      `[context-fidelity-hold-shadow] conv=${conv.id} scope=${scope} frame=${decision.frame} conf=${sc?.confidence ?? "-"} reason="${String(sc?.reason ?? "").slice(0, 160)}"`
+      `${marker} conv=${conv.id} scope=${scope} frame=${decision.frame} conf=${sc?.confidence ?? "-"} reason="${String(sc?.reason ?? "").slice(0, 160)}"`
     );
-    recordDecisionTrace({
-      scope,
-      stage: "context_fidelity.hold_shadow",
-      convId: conv.id,
-      leadKey: conv.leadKey,
-      detail: {
-        frame: decision.frame ?? null,
-        confidence: sc?.confidence ?? null,
-        severity: sc?.severity ?? null,
-        reason: String(sc?.reason ?? "").slice(0, 180),
-        steering: String(sc?.steering ?? "").slice(0, 180),
-        unsupportedAssertion: String(sc?.unsupportedAssertion ?? "").slice(0, 180),
-        inboundPreview: inbound.slice(0, 160),
-        draftPreview: draft.slice(0, 200),
-        channel
-      }
-    });
+    // Shadow-only trace here; the enforce path records context_fidelity.held with the action it took.
+    if (!live) {
+      recordDecisionTrace({
+        scope,
+        stage: "context_fidelity.hold_shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          frame: decision.frame ?? null,
+          confidence: sc?.confidence ?? null,
+          severity: sc?.severity ?? null,
+          reason: String(sc?.reason ?? "").slice(0, 180),
+          steering: String(sc?.steering ?? "").slice(0, 180),
+          unsupportedAssertion: String(sc?.unsupportedAssertion ?? "").slice(0, 180),
+          inboundPreview: inbound.slice(0, 160),
+          draftPreview: draft.slice(0, 200),
+          channel
+        }
+      });
+    }
+    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason };
   } catch {
-    // Best-effort shadow — never block or fail a publish.
+    // Best-effort — never block or fail a publish.
+    return null;
   }
 }
 
@@ -4166,9 +4175,38 @@ async function publishCustomerReplyDraft(args: {
   // A passing draft supersedes any prior held state on this conversation.
   if (args.conv.draftHeld) args.conv.draftHeld = null;
 
-  // Context-fidelity shadow: score the draft that's about to be published (no behavior change; logs
-  // would-holds when CONTEXT_FIDELITY_HOLD_SHADOW is on). Same chokepoint = both paths covered.
-  await shadowContextFidelityHold(args.conv, invariant.draftText, args.channel, args.routeScope ?? "live");
+  // Context-fidelity hold: score the about-to-publish draft for "answering out of context". Shadow logs
+  // would-holds (CONTEXT_FIDELITY_HOLD_SHADOW). When CONTEXT_FIDELITY_HOLD_ENABLED is on, ENFORCE —
+  // substitute a safe handoff ack and create a staff follow-up task instead of letting the out-of-context
+  // draft through (AGENTS.md Fallback Policy: a held draft fails safe to a handoff + task). Same
+  // chokepoint = both the live webhook and regenerate are covered.
+  const cfHold = await evaluateContextFidelityHold(args.conv, invariant.draftText, args.channel, args.routeScope ?? "live");
+  const contextFidelityEnforced = !!(cfHold?.hold && cfHold.live);
+  const publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
+  if (contextFidelityEnforced) {
+    addTodo(
+      args.conv,
+      "other",
+      `Out-of-context catch: the AI reply didn't answer what the customer asked (${cfHold?.frame ?? "context"}). Review the thread and reply.`,
+      undefined,
+      undefined,
+      undefined,
+      "followup"
+    );
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "context_fidelity.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        frame: cfHold?.frame ?? null,
+        reason: cfHold?.reason ?? null,
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 160),
+        heldDraftPreview: String(invariant.draftText ?? "").slice(0, 200)
+      }
+    });
+  }
 
   const shouldDiscardPendingDrafts =
     args.discardPendingDraftsBeforePublish ?? (args.channel === "sms");
@@ -4178,7 +4216,7 @@ async function publishCustomerReplyDraft(args: {
 
   let draft: string;
   if (args.channel === "email") {
-    draft = formatEmailBodyForConversation(invariant.draftText, args.conv);
+    draft = formatEmailBodyForConversation(publishText, args.conv);
     args.conv.emailDraft = draft;
   } else {
     const from = String(args.from ?? "dealership").trim() || "dealership";
@@ -4189,14 +4227,14 @@ async function publishCustomerReplyDraft(args: {
       args.conv,
       from,
       to,
-      invariant.draftText,
+      publishText,
       "draft_ai",
       undefined,
-      args.mediaUrls,
+      contextFidelityEnforced ? undefined : args.mediaUrls,
       undefined,
-      args.invariantHints
+      contextFidelityEnforced ? undefined : args.invariantHints
     );
-    draft = message?.body ?? invariant.draftText;
+    draft = message?.body ?? publishText;
   }
 
   saveConversation(args.conv);

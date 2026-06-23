@@ -47,6 +47,12 @@ export type ContextFidelityScoreLike = {
 /** Frames judged from THIS turn (not the anchor) — the only frames the hold acts on. */
 export const CONTEXT_FIDELITY_HOLD_FRAMES = ["stale_intent", "over_attached_model", "dropped_anchor"] as const;
 
+/** The safe customer-facing reply when the enforce-flip holds a draft for answering out of context:
+ *  hand off rather than send the wrong answer. Paired with a staff follow-up task so the turn is
+ *  actually handled (AGENTS.md Fallback Policy — a held draft fails safe to a handoff + task). */
+export const CONTEXT_FIDELITY_HANDOFF_ACK =
+  "Let me get the right person to make sure I get you the right info — I’ll follow up shortly.";
+
 /** Minimum confidence to hold. Matches the draft-quality gate's bar — high, biased toward pass. */
 export const CONTEXT_FIDELITY_HOLD_MIN_CONFIDENCE = 0.8;
 
