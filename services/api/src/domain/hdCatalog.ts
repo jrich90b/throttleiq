@@ -97,3 +97,56 @@ export function parseHdCatalog(html: string, opts?: { year?: number | null }): H
   const data = extractNextData(html);
   return data ? parseHdModelsFromNextData(data, opts) : [];
 }
+
+// --- Runtime: read the scraped catalog + match a model against it (the discontinuation seam) ---
+
+const normTok = (s: string): string => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function scoreMatch(query: string, candidate: string): number {
+  if (!query || !candidate) return 0;
+  if (query === candidate) return 100 + candidate.length;
+  if (query.includes(candidate)) return 80 + candidate.length;
+  if (candidate.includes(query)) return 60 + query.length;
+  return 0;
+}
+
+/** Best match of a model string against the scraped catalog (name/modelCode), with the same 60+ score
+ *  threshold as the MSRP matcher. Pure. */
+export function findModelInHdCatalog(
+  models: HdCatalogModel[] | null | undefined,
+  query: string
+): { matched: boolean; score: number; year: number | null; name: string | null } {
+  const q = normTok(query);
+  if (!q || !models?.length) return { matched: false, score: 0, year: null, name: null };
+  let best: HdCatalogModel | null = null;
+  let bestScore = 0;
+  for (const m of models) {
+    const s = Math.max(scoreMatch(q, normTok(m.name)), scoreMatch(q, normTok(m.modelCode)));
+    if (s > bestScore) { bestScore = s; best = m; }
+  }
+  return { matched: bestScore >= 60, score: bestScore, year: best?.year ?? null, name: best?.name ?? null };
+}
+
+let catalogCache: { models: HdCatalogModel[]; loadedAt: number } | null = null;
+const CATALOG_TTL_MS = 10 * 60 * 1000;
+
+/** Load the scraped HD catalog from the runtime store. Returns [] if it hasn't been scraped yet (so
+ *  callers gracefully fall back to the static MSRP sheet). Cached. */
+export async function loadHdCatalog(filePath?: string): Promise<HdCatalogModel[]> {
+  const now = Date.now();
+  if (catalogCache && now - catalogCache.loadedAt < CATALOG_TTL_MS) return catalogCache.models;
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const file =
+    filePath ||
+    process.env.HD_CATALOG_OUT ||
+    path.join(process.env.REPORT_ROOT || "data/hd_catalog", "hd_current_catalog.json");
+  try {
+    const data = JSON.parse(await readFile(file, "utf8"));
+    const models: HdCatalogModel[] = Array.isArray(data?.models) ? data.models : Array.isArray(data) ? data : [];
+    catalogCache = { models, loadedAt: now };
+    return models;
+  } catch {
+    catalogCache = { models: [], loadedAt: now };
+    return [];
+  }
+}

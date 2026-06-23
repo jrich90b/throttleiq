@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadHdCatalog, findModelInHdCatalog } from "./hdCatalog.js";
+
 type MsrpTrim = {
   spec?: string;
   type?: string;
@@ -241,24 +243,34 @@ export async function findMsrpPricing(opts: MsrpLookup): Promise<MsrpLookupResul
  * "Fat Bob" family). Returns the best score so the caller can apply a confidence threshold.
  */
 export async function findModelInMsrp(model?: string | null): Promise<{ matched: boolean; score: number; family: string | null; modelName: string | null }> {
+  // SEAM: prefer the auto-sourced HD catalog (current + prior model year, complete + fresh); fall back
+  // to the static MSRP sheet when the catalog hasn't been scraped yet (loadHdCatalog returns []). Return
+  // the stronger of the two matches — so "is this a current/recent model" reflects HD's real lineup.
+  const catMatch = findModelInHdCatalog(await loadHdCatalog(), model ?? "");
+
   const items = await loadMsrpList();
   let query = normalizeToken(model);
-  if (!query || !items.length) return { matched: false, score: 0, family: null, modelName: null };
-  if (/\broad glide 3\b/.test(query) || /\brg3\b/.test(query) || /\bfltrt\b/.test(query)) query = "road glide trike";
-  let best: MsrpEntry | null = null;
-  let bestScore = 0;
-  for (const entry of items) {
-    const score = Math.max(
-      scoreMatch(query, normalizeToken(entry.model_name)),
-      scoreMatch(query, normalizeToken(entry.model_code)),
-      scoreMatch(query, normalizeToken(entry.family))
-    );
-    if (score > bestScore) {
-      bestScore = score;
-      best = entry;
+  let fileScore = 0;
+  let fileBest: MsrpEntry | null = null;
+  if (query && items.length) {
+    if (/\broad glide 3\b/.test(query) || /\brg3\b/.test(query) || /\bfltrt\b/.test(query)) query = "road glide trike";
+    for (const entry of items) {
+      const score = Math.max(
+        scoreMatch(query, normalizeToken(entry.model_name)),
+        scoreMatch(query, normalizeToken(entry.model_code)),
+        scoreMatch(query, normalizeToken(entry.family))
+      );
+      if (score > fileScore) {
+        fileScore = score;
+        fileBest = entry;
+      }
     }
   }
-  return { matched: bestScore >= 60, score: bestScore, family: best?.family ?? null, modelName: best?.model_name ?? null };
+
+  if (catMatch.score >= fileScore) {
+    return { matched: catMatch.matched, score: catMatch.score, family: null, modelName: catMatch.name };
+  }
+  return { matched: fileScore >= 60, score: fileScore, family: fileBest?.family ?? null, modelName: fileBest?.model_name ?? null };
 }
 
 export async function modelHasFinishOptions(opts: {
