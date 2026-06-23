@@ -718,6 +718,8 @@ import {
   buildPendingIncomingInventoryTaskSummary,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
+  hasPartsInquirySignal,
+  partsTurnPrecedenceEnabled,
   isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
@@ -48859,7 +48861,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
+  if (
+    event.provider === "twilio" &&
+    (hasAccessoryRequestParserHint(event.body ?? "") ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "")))
+  ) {
     const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: event.body ?? "",
@@ -50269,9 +50275,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
+  // Parts/accessory inquiry defers the incoming-inventory recital (dark behind PARTS_TURN_PRECEDENCE_ENABLED).
+  // Mirror of the live path (route-parity).
+  const regenPartsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const regenPendingIncomingAcknowledgement =
     event.provider === "twilio" &&
     channel === "sms" &&
+    !regenPartsTurnDefer &&
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
@@ -50280,7 +50290,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: regenLastOutboundForActionText
+          lastOutboundText: regenLastOutboundForActionText,
+          partsInquiry: regenPartsTurnDefer
         })));
   if (regenPendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -53573,8 +53584,13 @@ if (authToken && signature) {
       .filter(m => m.direction === "out" && m.body)
       .slice(-1)[0]?.body ?? ""
   );
+  // Parts/accessory inquiries must not be answered with the incoming-inventory recital — defer so the
+  // accessory decision owns the turn (dark behind PARTS_TURN_PRECEDENCE_ENABLED). The signal is a
+  // SPECIFIC parts prefilter; a bare "let me know when it's here" ack never matches.
+  const partsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const pendingIncomingAcknowledgement =
     event.provider === "twilio" &&
+    !partsTurnDefer &&
     !inboundParserLocationQuestion &&
     !inboundParserExplicitCallbackRequest &&
     !inboundParserScheduleStatusUpdate &&
@@ -53583,7 +53599,8 @@ if (authToken && signature) {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: pendingIncomingLastOutboundText
+          lastOutboundText: pendingIncomingLastOutboundText,
+          partsInquiry: partsTurnDefer
         })));
   if (pendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -54993,7 +55010,12 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && !semanticShortAck && hasAccessoryRequestParserHint(semanticInboundText)) {
+  if (
+    event.provider === "twilio" &&
+    !semanticShortAck &&
+    (hasAccessoryRequestParserHint(semanticInboundText) ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(semanticInboundText)))
+  ) {
     const accessoryRequestParse = await safeLlmParse("accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: semanticInboundText,

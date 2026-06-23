@@ -51,6 +51,30 @@ export function hasPendingIncomingInventoryContext(
   return String(conv?.pendingIncomingInventory?.status ?? "").toLowerCase() === "pending";
 }
 
+// A SPECIFIC parts/accessory-inquiry prefilter: a part number, OR an accessory noun paired with an
+// intent verb. Deliberately specific so a bare incoming-inventory ack ("ok, let me know when it's
+// here") never matches — only a real parts ask does. Used to DEFER the pending-incoming handler to the
+// parts/accessory parser (a prefilter that gates to the LLM, not an answer gate). Pure.
+const PARTS_ACCESSORY_NOUN =
+  /\b(handle ?bars?|grips?|\bseat\b|exhaust|\bpipes?\b|slip-?on|windshield|windscreen|backrest|sissy ?bar|tour ?pak|luggage|fairing|saddle ?bags?|engine guard|\bguard\b|\brack\b|fender|floorboard|highway peg|crash bar|derby|air cleaner|stage \d|\bmirror|hard ?bags?)\b/i;
+const PARTS_INTENT_VERB =
+  /\b(looking for|want|need|do you (have|carry|stock)|in stock|order|can you (get|order)|could (you )?get|add|install|put on|price|pricing|how much|fit|fitment)\b/i;
+const PART_NUMBER = /\bpart\s*(?:#|no\.?|number)\s*#?\s*\d{3,}|#\s*\d{4,}/i;
+
+export function hasPartsInquirySignal(textRaw: string | null | undefined): boolean {
+  const text = lower(textRaw);
+  if (!text) return false;
+  if (PART_NUMBER.test(text)) return true;
+  return PARTS_ACCESSORY_NOUN.test(text) && PARTS_INTENT_VERB.test(text);
+}
+
+/** Reads PARTS_TURN_PRECEDENCE_ENABLED. Default OFF (dark) — when off, a parts turn does NOT defer the
+ *  pending-incoming handler and the accessory decision is not force-run (byte-identical to today). */
+export function partsTurnPrecedenceEnabled(): boolean {
+  const raw = String(process.env.PARTS_TURN_PRECEDENCE_ENABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 export function isPendingIncomingInventoryAcknowledgementText(textRaw: string | null | undefined): boolean {
   const text = lower(textRaw);
   if (!text) return false;
@@ -66,8 +90,12 @@ export function shouldHandlePendingIncomingInventoryTurn(args: {
   conv: Pick<Conversation, "pendingIncomingInventory"> | null | undefined;
   inboundText: string | null | undefined;
   lastOutboundText?: string | null;
+  partsInquiry?: boolean;
 }): boolean {
   if (!hasPendingIncomingInventoryContext(args.conv)) return false;
+  // A parts/accessory inquiry is not an incoming-inventory acknowledgement — defer so the parts handler
+  // owns the turn (the customer asked about parts, not "let me know when the bike arrives").
+  if (args.partsInquiry) return false;
   if (isPendingIncomingInventoryAcknowledgementText(args.inboundText)) return true;
   const combined = `${compact(args.lastOutboundText)} ${compact(args.inboundText)}`;
   return hasPendingIncomingInventorySignal(combined) && isPendingIncomingInventoryAcknowledgementText(combined);
