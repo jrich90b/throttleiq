@@ -664,6 +664,7 @@ import {
   finalizeDraftAsSent,
   discardPendingDrafts,
   discardAllDrafts,
+  saveOperatorDraft,
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
@@ -47772,6 +47773,38 @@ app.post("/conversations/:id/send", async (req, res) => {
       conversation: conv
     });
   }
+});
+
+// Operator-authored DRAFT save (NEVER sends). Powers the customer-reply operator skill: a human
+// (or Claude acting as one) composes a reply for ONE hard case and drops it into the SAME console
+// approval box the LLM pipeline uses. A human still hits Send — this endpoint only stores a pending
+// draft (supersedes any prior one). The actual send is the separate POST /conversations/:id/send.
+app.post("/conversations/:id/draft", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  const text = String(req.body?.body ?? "").trim();
+  if (!text) return res.status(400).json({ ok: false, error: "Missing body" });
+  const channelRaw = String(req.body?.channel ?? "").trim().toLowerCase();
+  const channel: "sms" | "email" = channelRaw === "email" ? "email" : "sms";
+  const mediaUrls = Array.isArray(req.body?.mediaUrls)
+    ? req.body.mediaUrls.map((u: unknown) => String(u ?? "").trim()).filter((u: string) => /^https?:\/\//i.test(u))
+    : undefined;
+  const actor = {
+    userId: String(user?.id ?? "").trim() || undefined,
+    userName: String(user?.name ?? user?.email ?? "operator").trim() || "operator"
+  };
+  // Email bodies get the same formatting the pipeline applies before storing emailDraft.
+  const body = channel === "email" ? formatEmailBodyForConversation(text, conv) : text;
+  const result = saveOperatorDraft(conv, { body, channel, mediaUrls, actor });
+  saveConversation(conv);
+  recordRouteOutcome("manual", "operator_draft_saved", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    channel,
+    by: actor.userName
+  });
+  return res.json({ ok: true, draft: result.draft, channel });
 });
 
 app.post("/conversations/:id/draft/clear", async (req, res) => {

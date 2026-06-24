@@ -2648,6 +2648,48 @@ export function discardAllDrafts(conv: Conversation, reason?: string) {
   scheduleSave();
 }
 
+/**
+ * Save an operator-authored reply as a reviewable DRAFT in the same console approval box the LLM
+ * pipeline uses (the customer-reply operator skill: a human handling ONE hard case). It supersedes
+ * any prior pending draft and shows as the pending draft — a human still hits Send in the console.
+ *
+ * This NEVER sends: it only marks prior drafts stale and appends a draft_ai pending message (SMS)
+ * or sets conv.emailDraft (email). It is the verbatim text the operator authored — no draft-quality
+ * / context-fidelity gate or substitution runs here (that's for the autonomous pipeline; this text
+ * was authored and will be reviewed by staff). The send path is the separate /conversations/:id/send.
+ */
+export function saveOperatorDraft(
+  conv: Conversation,
+  args: {
+    body: string;
+    channel: "sms" | "email";
+    mediaUrls?: string[];
+    actor?: { userId?: string | null; userName?: string | null };
+  }
+): { draft: string; channel: "sms" | "email" } {
+  const body = String(args.body ?? "").trim();
+  discardPendingDrafts(conv, "operator_draft_replaced");
+  if (args.channel === "email") {
+    conv.emailDraft = body;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return { draft: body, channel: "email" };
+  }
+  const to = String(conv.leadKey ?? "").trim();
+  const media = args.mediaUrls?.filter(u => /^https?:\/\//i.test(String(u))) ?? [];
+  const msg = appendOutbound(
+    conv,
+    "salesperson",
+    to,
+    body,
+    "draft_ai",
+    undefined,
+    media.length ? media : undefined,
+    args.actor
+  );
+  return { draft: msg?.body ?? body, channel: "sms" };
+}
+
 function normalizePostSaleCloseoutText(text: string): string {
   return String(text ?? "")
     .toLowerCase()
