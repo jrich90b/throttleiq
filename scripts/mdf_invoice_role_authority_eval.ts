@@ -108,6 +108,10 @@ assert.ok(
   /without an amount/i.test(auditMdfExtraction({ invoices: [{ vendorName: "X", amount: "", fileNames: ["scan.jpg"] }] } as any, candFiles).join(" ")),
   "watchdog flags an invoice extracted without an amount"
 );
+assert.ok(
+  /without a vendor/i.test(auditMdfExtraction({ invoices: [{ vendorName: "", amount: "$50", fileNames: ["scan.jpg"] }] } as any, candFiles).join(" ")),
+  "watchdog flags an invoice extracted without a vendor"
+);
 assert.deepEqual(
   auditMdfExtraction({ invoices: [] } as any, [f("flyer.png", "image/png", "creative")]),
   [],
@@ -121,6 +125,7 @@ assert.ok(
   "a per-file miss must fall back to role-filtered main-pass invoices (don't silently blank an uploaded invoice)"
 );
 assert.ok(/auditMdfExtraction\(packet, files\)/.test(src) && /mdf-extract-watchdog/.test(src), "the packet watchdog must run + log");
+assert.ok(/never 'American Harley-Davidson'|NOT 'American Harley-Davidson'/.test(src), "the extractor prompt must clarify vendorName is the seller/supplier, not the dealer itself");
 assert.ok(/"mdf_invoice_fields", 3000/.test(src), "the per-file call must have enough token headroom (3000) to avoid truncation");
 assert.ok(
   /const perFile = await extractInvoicesPerFile\(files, model\)/.test(src),

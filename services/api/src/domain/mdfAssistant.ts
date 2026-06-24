@@ -638,6 +638,10 @@ export function auditMdfExtraction(packet: MdfClaimPacket, files: MdfUploadedFil
   if (missingAmount) {
     warnings.push(`${missingAmount} invoice${missingAmount === 1 ? "" : "s"} extracted without an amount — confirm the spend.`);
   }
+  const missingVendor = invoices.filter(inv => !String(inv?.vendorName ?? "").trim()).length;
+  if (missingVendor) {
+    warnings.push(`${missingVendor} invoice${missingVendor === 1 ? "" : "s"} extracted without a vendor — add the vendor name.`);
+  }
   return warnings;
 }
 
@@ -684,6 +688,7 @@ async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): 
       "Extract the SINGLE invoice or receipt contained in THIS one file.",
       "Return the MDF claim packet schema. invoices[] must contain AT MOST ONE entry — for this file only.",
       "Fill vendorName, invoiceDate, invoiceNumber, amount for that one invoice.",
+      "vendorName is the business that ISSUED the invoice to the dealership (the seller/supplier doing the billing — usually the letterhead / 'from' / 'remit to'), NOT 'American Harley-Davidson' or the dealership's own name, which is the buyer / 'bill to'.",
       "If this file is NOT an invoice or receipt (e.g. a flyer, creative, screenshot, proof, or photo), return invoices: [] and leave the invoice fields blank.",
       "Do not invent values; leave unknown fields blank.",
       `This file: ${file.name}.`
@@ -745,6 +750,7 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "Use this file manifest and respect the user-selected roles:",
     fileManifest(files),
     "- Extract vendor, invoice date, invoice number, and spend only from files marked invoice or receipt.",
+    "- vendorName is the SELLER/supplier that billed the dealership (the 'from' / 'remit to' party) — never 'American Harley-Davidson' or the dealer's own name, which is the buyer / 'bill to'.",
     "- Create one invoices[] entry for every distinct invoice or receipt. Multiple invoices for the same claim are allowed and should stay separate.",
     "- For each invoices[] entry, include the invoice/receipt file names that support that invoice. Do not assign proof, creative, tear sheet, or support-only files to invoices[].",
     "- Mirror the first/primary invoice into extractedFields.vendorName, extractedFields.invoiceDate, extractedFields.invoiceNumber, and extractedFields.spend so older draft views still show a summary.",
