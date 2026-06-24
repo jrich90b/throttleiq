@@ -544,6 +544,48 @@ export function syncExtractedInvoiceFields(packet: MdfClaimPacket): void {
   packet.extractedFields.spend = sumInvoiceSpend(invoices) ?? (primary.amount || "");
 }
 
+// Fallback when the per-file pass comes back empty: keep the main-pass invoices that are supported by at
+// least one invoice-eligible file, dropping any sourced SOLELY from creative/proof/support-only files (so
+// a creative still can't leak in). Unattributed invoices (no fileNames) are kept — can't prove they're
+// creative-sourced, and dropping a real invoice is the worse failure. Pure.
+export function invoicesFromInvoiceRoleFiles(
+  invoices: MdfInvoicePacket[] | undefined,
+  files: MdfUploadedFile[]
+): MdfInvoicePacket[] {
+  const nonInvoice = new Set(
+    (files ?? [])
+      .filter(file => {
+        const role = file.providedRole || inferRoleFromName(file.name);
+        return role === "creative" || role === "proof_of_performance" || role === "supporting_only";
+      })
+      .map(file => file.name)
+  );
+  return (invoices ?? []).filter(inv => {
+    const names = (inv.fileNames ?? []).filter(Boolean);
+    if (!names.length) return true;
+    return names.some(name => !nonInvoice.has(name)); // drop only if EVERY supporting file is non-invoice
+  });
+}
+
+// Watchdog on packet generation: structural anomalies worth surfacing to the rep (and logging) rather
+// than failing silently. The main one: invoice-eligible files were uploaded but no invoice came out
+// (extraction miss). Pure — returns human-readable warnings.
+export function auditMdfExtraction(packet: MdfClaimPacket, files: MdfUploadedFile[]): string[] {
+  const warnings: string[] = [];
+  const candidates = invoiceCandidateFiles(files);
+  const invoices = packet.invoices ?? [];
+  if (candidates.length && !invoices.length) {
+    warnings.push(
+      `Couldn't read invoice details from ${candidates.length} uploaded file${candidates.length === 1 ? "" : "s"} — please review or re-upload the invoice.`
+    );
+  }
+  const missingAmount = invoices.filter(inv => !String(inv?.amount ?? "").trim()).length;
+  if (missingAmount) {
+    warnings.push(`${missingAmount} invoice${missingAmount === 1 ? "" : "s"} extracted without an amount — confirm the spend.`);
+  }
+  return warnings;
+}
+
 async function createMdfJsonResponse(
   model: string,
   prompt: string,
@@ -591,7 +633,10 @@ async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): 
       "Do not invent values; leave unknown fields blank.",
       `This file: ${file.name}.`
     ].join("\n");
-    const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 1200).catch(() => null);
+    // The per-file call returns the FULL (strict) MDF_SCHEMA, so it needs real headroom or the JSON
+    // truncates and the invoice is silently lost — the truncation class that blanked invoices once this
+    // pass became authoritative. 3000 leaves room for the whole packet shape.
+    const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 3000).catch(() => null);
     if (!resp) continue;
     recordOpenAIUsage(resp, {
       feature: "mdf_assistant",
@@ -660,15 +705,32 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       metadata: { fileCount: files.length }
     });
     const packet = normalizePacket(parsedResponsePayload(resp), files);
-    // INVOICES ARE THE PER-FILE PASS'S AUTHORITY. The main pass above still supplies everything else
-    // (claim/activity/event details, eligibility, description draft, proof, required docs) from ALL files
-    // INCLUDING creative — but creative only informs those details, never an invoice line. invoices[] is
-    // replaced wholesale by extractInvoicesPerFile over invoiceCandidateFiles (creative/proof/support-only
-    // excluded), one isolated call per file: a creative can't become an invoice or inflate spend, and two
-    // invoices never merge. No invoice-eligible files (e.g. only creative) -> no invoices, blank spend.
+    // INVOICES: per-file (role-respecting) extraction is the authority — it excludes creative/proof so a
+    // creative can't become an invoice, and reads each file alone so two invoices never merge. BUT a
+    // per-file miss (truncation / transient error) must NOT silently blank an invoice the customer
+    // uploaded: if per-file comes back empty while invoice-eligible files exist, fall back to the main
+    // pass's invoices filtered to role-eligible files (creative still excluded). No invoice-eligible files
+    // (e.g. only creative) -> no invoices, blank spend.
     const candidates = invoiceCandidateFiles(files);
-    packet.invoices = candidates.length ? await extractInvoicesPerFile(files, model).catch(() => []) : [];
+    if (candidates.length) {
+      const perFile = await extractInvoicesPerFile(files, model).catch(() => []);
+      packet.invoices = perFile.length ? perFile : invoicesFromInvoiceRoleFiles(packet.invoices, files);
+    } else {
+      packet.invoices = [];
+    }
     syncExtractedInvoiceFields(packet);
+    // WATCHDOG: surface (don't fail silently) when packet generation produced no/incomplete invoices
+    // despite invoice-eligible uploads. Logged + added as a visible eligibility concern so the UI flags it.
+    const watch = auditMdfExtraction(packet, files);
+    if (watch.length) {
+      packet.eligibility.concerns = [...watch, ...packet.eligibility.concerns].slice(0, 10);
+      console.warn("[mdf-extract-watchdog]", {
+        files: files.length,
+        invoiceCandidates: candidates.length,
+        invoices: packet.invoices.length,
+        warnings: watch
+      });
+    }
     return packet;
   } catch (err: any) {
     return fallbackPacket(files, err?.message ? `Extractor failed: ${err.message}` : "Extractor failed.");

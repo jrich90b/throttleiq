@@ -19,7 +19,13 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { invoiceCandidateFiles, syncExtractedInvoiceFields, sumInvoiceSpend } from "../services/api/src/domain/mdfAssistant.ts";
+import {
+  invoiceCandidateFiles,
+  syncExtractedInvoiceFields,
+  sumInvoiceSpend,
+  invoicesFromInvoiceRoleFiles,
+  auditMdfExtraction
+} from "../services/api/src/domain/mdfAssistant.ts";
 
 // --- 1) invoiceCandidateFiles: role-respecting, image/PDF only. ---
 const f = (name: string, mimeType: string, providedRole?: string) => ({ name, mimeType, size: 1000, providedRole } as any);
@@ -74,10 +80,50 @@ assert.equal(two.extractedFields.vendorName, "IBBQ", "headline vendor = primary 
 assert.equal(two.extractedFields.spend, "2508.28", "headline spend = SUM of all invoices");
 assert.equal(sumInvoiceSpend(two.invoices), "2508.28");
 
+// --- 2b) Fallback: keep main-pass invoices supported by an invoice file; drop creative-only ones. ---
+const roleFiles = [f("inv.pdf", "application/pdf", "invoice"), f("flyer.png", "image/png", "creative")];
+const filtered = invoicesFromInvoiceRoleFiles(
+  [
+    { vendorName: "Real", amount: "$50", fileNames: ["inv.pdf"] } as any,        // keep (invoice file)
+    { vendorName: "Flyer$", amount: "$99", fileNames: ["flyer.png"] } as any,    // drop (creative only)
+    { vendorName: "Mixed", amount: "$10", fileNames: ["flyer.png", "inv.pdf"] } as any, // keep (has invoice file)
+    { vendorName: "Unattributed", amount: "$5", fileNames: [] } as any           // keep (can't prove creative)
+  ],
+  roleFiles
+).map((i: any) => i.vendorName).sort();
+assert.deepEqual(filtered, ["Mixed", "Real", "Unattributed"].sort(), "fallback drops only invoices sourced solely from creative/proof");
+
+// --- 2c) Watchdog: surface a no-invoice extraction despite invoice-eligible uploads. ---
+const candFiles = [f("scan.jpg", "image/jpeg", "invoice")];
+assert.ok(
+  /Couldn't read invoice details/i.test(auditMdfExtraction({ invoices: [], eligibility: { concerns: [] } } as any, candFiles).join(" ")),
+  "watchdog flags invoice-eligible files that produced no invoices"
+);
+assert.deepEqual(
+  auditMdfExtraction({ invoices: [{ vendorName: "X", amount: "$50", fileNames: ["scan.jpg"] }], eligibility: { concerns: [] } } as any, candFiles),
+  [],
+  "a clean single-invoice extraction raises no warnings"
+);
+assert.ok(
+  /without an amount/i.test(auditMdfExtraction({ invoices: [{ vendorName: "X", amount: "", fileNames: ["scan.jpg"] }] } as any, candFiles).join(" ")),
+  "watchdog flags an invoice extracted without an amount"
+);
+assert.deepEqual(
+  auditMdfExtraction({ invoices: [] } as any, [f("flyer.png", "image/png", "creative")]),
+  [],
+  "creative-only upload (no invoice candidates) is not flagged"
+);
+
 // --- 3) Source guards. ---
 const src = fs.readFileSync("services/api/src/domain/mdfAssistant.ts", "utf8");
 assert.ok(
-  /packet\.invoices = candidates\.length \? await extractInvoicesPerFile\(files, model\)/.test(src),
+  /perFile\.length \? perFile : invoicesFromInvoiceRoleFiles\(packet\.invoices, files\)/.test(src),
+  "a per-file miss must fall back to role-filtered main-pass invoices (don't silently blank an uploaded invoice)"
+);
+assert.ok(/auditMdfExtraction\(packet, files\)/.test(src) && /mdf-extract-watchdog/.test(src), "the packet watchdog must run + log");
+assert.ok(/"mdf_invoice_fields", 3000/.test(src), "the per-file call must have enough token headroom (3000) to avoid truncation");
+assert.ok(
+  /const perFile = await extractInvoicesPerFile\(files, model\)/.test(src),
   "extractMdfClaimPacket must make the per-file pass the AUTHORITY for invoices[]"
 );
 assert.ok(/const candidates = invoiceCandidateFiles\(files\);/.test(src), "the main flow must gate on invoiceCandidateFiles");
