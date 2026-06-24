@@ -8,7 +8,7 @@ import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
-import { decideDraftModelArm } from "./routeStateReducer.js";
+import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -20,11 +20,80 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 function draftModelControl(): string {
   return process.env.OPENAI_MODEL || "gpt-5-mini";
 }
-function resolveDraftModelForLead(leadKey?: string | null): { model: string; arm: "control" | "challenger" } {
-  if (process.env.DRAFT_MODEL_AB_ENABLED === "0") return { model: draftModelControl(), arm: "control" };
-  const challenger = process.env.OPENAI_DRAFT_MODEL_CHALLENGER || "gpt-5";
+function resolveDraftModelForLead(
+  leadKey?: string | null
+): { model: string; arm: DraftModelArm; provider: "openai" | "anthropic" } {
+  if (process.env.DRAFT_MODEL_AB_ENABLED === "0") {
+    return { model: draftModelControl(), arm: "control", provider: "openai" };
+  }
   const arm = decideDraftModelArm(String(leadKey ?? ""));
-  return { model: arm === "challenger" ? challenger : draftModelControl(), arm };
+  if (arm === "anthropic") {
+    // Sonnet canary stays DARK until ANTHROPIC_API_KEY is set on the box — fall back to
+    // control so no lead's draft is dropped before the key exists.
+    if (!String(process.env.ANTHROPIC_API_KEY ?? "").trim()) {
+      return { model: draftModelControl(), arm: "control", provider: "openai" };
+    }
+    return {
+      model: process.env.ANTHROPIC_DRAFT_MODEL || "claude-sonnet-4-6",
+      arm: "anthropic",
+      provider: "anthropic"
+    };
+  }
+  const challenger = process.env.OPENAI_DRAFT_MODEL_CHALLENGER || "gpt-5";
+  return { model: arm === "challenger" ? challenger : draftModelControl(), arm, provider: "openai" };
+}
+
+// Customer reply draft via Anthropic (Claude). Raw fetch to keep provider-consistent with
+// claudeAgent.ts and avoid adding the Anthropic SDK to the prod service. Short SMS/email drafts,
+// so no extended thinking (omitted = off) and a bounded max_tokens keep it fast and non-streaming.
+// Throws on any failure; the caller falls back to the OpenAI control model so a draft is never dropped.
+async function generateDraftViaAnthropic(args: {
+  model: string;
+  instructions: string;
+  input: string;
+}): Promise<string> {
+  const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if (!apiKey) throw new Error("anthropic: no API key");
+  const maxTokens = Number(process.env.ANTHROPIC_DRAFT_MAX_TOKENS) || 1024;
+  const tempRaw = Number(process.env.ANTHROPIC_DRAFT_TEMPERATURE);
+  const temperature = Number.isFinite(tempRaw) ? tempRaw : 0.6;
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    Number(process.env.ANTHROPIC_DRAFT_TIMEOUT_MS) || 20000
+  );
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: args.model,
+        max_tokens: maxTokens,
+        temperature,
+        system: args.instructions,
+        messages: [{ role: "user", content: args.input }]
+      }),
+      signal: controller.signal
+    });
+    if (!resp.ok) throw new Error(`anthropic: HTTP ${resp.status}`);
+    const data: any = await resp.json();
+    if (data?.stop_reason === "refusal") throw new Error("anthropic: refusal");
+    const text = Array.isArray(data?.content)
+      ? data.content
+          .filter((b: any) => b?.type === "text")
+          .map((b: any) => String(b?.text ?? ""))
+          .join("")
+          .trim()
+      : "";
+    if (!text) throw new Error("anthropic: empty draft");
+    return text;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type ManualReplyExample = {
@@ -11159,9 +11228,9 @@ export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   // Draft-model A/B: the customer-facing reply composer runs on the lead's arm
   // (gpt-5 challenger vs gpt-5-mini control). Shared by live + regenerate via the
   // orchestrator, so both paths get the same per-lead model.
-  const { model, arm: draftModelArm } = resolveDraftModelForLead(ctx.leadKey);
+  const { model, arm: draftModelArm, provider: draftProvider } = resolveDraftModelForLead(ctx.leadKey);
   if (process.env.OPENAI_DRAFT_MODEL_DEBUG === "1") {
-    console.log("[draft-model-ab]", { leadKey: ctx.leadKey, arm: draftModelArm, model });
+    console.log("[draft-model-ab]", { leadKey: ctx.leadKey, arm: draftModelArm, model, provider: draftProvider });
   }
   const manualIntentHint = inferManualIntentHintFromDraftContext(ctx);
   const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
@@ -11586,28 +11655,45 @@ Recent history:
 ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
 `.trim();
 
-  const response = await client.responses.create({
-    model,
-    instructions,
-    input,
-    ...optionalCreateTextConfig(model)
-  });
-  recordOpenAIUsage(response, {
-    feature: "llm_draft",
-    operation: "generate_customer_draft",
-    requestKind: "responses.create",
-    model,
-    conversationId: ctx.leadKey,
-    leadRef: ctx.lead?.leadRef ?? null,
-    metadata: {
-      channel: ctx.channel,
-      bucket: ctx.bucket ?? null,
-      cta: ctx.cta ?? null,
-      leadSource: ctx.leadSource ?? null
-    }
-  });
+  const generateViaOpenAI = async (openAiModel: string): Promise<string> => {
+    const response = await client.responses.create({
+      model: openAiModel,
+      instructions,
+      input,
+      ...optionalCreateTextConfig(openAiModel)
+    });
+    recordOpenAIUsage(response, {
+      feature: "llm_draft",
+      operation: "generate_customer_draft",
+      requestKind: "responses.create",
+      model: openAiModel,
+      conversationId: ctx.leadKey,
+      leadRef: ctx.lead?.leadRef ?? null,
+      metadata: {
+        channel: ctx.channel,
+        bucket: ctx.bucket ?? null,
+        cta: ctx.cta ?? null,
+        leadSource: ctx.leadSource ?? null
+      }
+    });
+    return (response.output_text || "").trim();
+  };
 
-  let draft = (response.output_text || "").trim();
+  let draft: string;
+  if (draftProvider === "anthropic") {
+    try {
+      draft = await generateDraftViaAnthropic({ model, instructions, input });
+    } catch (e) {
+      // Sonnet canary failed (key/HTTP/refusal/timeout) — never drop the draft; fall back to
+      // the OpenAI control model so the customer still gets a reply.
+      if (process.env.OPENAI_DRAFT_MODEL_DEBUG === "1") {
+        console.warn("[draft-model-ab] anthropic arm fell back to control:", String((e as any)?.message ?? e));
+      }
+      draft = await generateViaOpenAI(draftModelControl());
+    }
+  } else {
+    draft = await generateViaOpenAI(model);
+  }
   if (ctx.channel === "sms") {
     draft = sanitizeSmsDraftNoEmail(draft, userAskedForEmail(ctx));
   }

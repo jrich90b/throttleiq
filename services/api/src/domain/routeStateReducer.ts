@@ -853,7 +853,7 @@ export function decideCadenceInviteArm(conversationId: string): CadenceInviteArm
 // intentionally NOT on this arm, so the experiment isolates the draft model and
 // can't perturb route decisions (or the measurement). Uses a distinct salt from
 // the cadence arm so the two experiments don't correlate.
-export type DraftModelArm = "control" | "challenger";
+export type DraftModelArm = "control" | "challenger" | "anthropic";
 
 export function decideDraftModelArm(leadKey: string): DraftModelArm {
   if (!String(leadKey ?? "")) return "control";
@@ -863,11 +863,15 @@ export function decideDraftModelArm(leadKey: string): DraftModelArm {
     h ^= key.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  // Use a well-mixed range (NOT the low bit): FNV-1a's `% 2` depends only on the
-  // XOR of byte low bits, which a fixed salt can't decorrelate from the cadence
-  // arm and buckets weakly. `% 100` uses well-mixed bits — a fair 50/50 split
-  // that's independent of decideCadenceInviteArm's low-bit split.
-  return (h >>> 0) % 100 < 50 ? "control" : "challenger";
+  // Well-mixed range (NOT the low bit): FNV-1a's `% 2` depends only on the XOR of
+  // byte low bits, which a fixed salt can't decorrelate from the cadence arm and
+  // buckets weakly. `% 100` uses well-mixed bits, independent of decideCadenceInviteArm.
+  // 3-way (2026-06-24): a ~15% Sonnet canary (anthropic) takes the first slice; the
+  // remaining ~85% keeps the gpt-5-mini (control) vs gpt-5 (challenger) split roughly
+  // even. The anthropic arm resolves to control when ANTHROPIC_API_KEY is unset (dark).
+  const bucket = (h >>> 0) % 100;
+  if (bucket < 15) return "anthropic";
+  return bucket < 57 ? "control" : "challenger";
 }
 
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
