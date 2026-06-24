@@ -9,6 +9,7 @@ import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
 import { summarizeTriage } from "./lib/taskTriage";
+import { resizeImageForUpload } from "./lib/imageResize";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -8428,7 +8429,7 @@ export default function Home() {
     });
   }
 
-  function readFileBase64(file: File): Promise<string> {
+  function readFileBase64(file: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -8458,13 +8459,17 @@ export default function Home() {
     setMdfError(null);
     try {
       const files = await Promise.all(
-        mdfFiles.map(async (entry, index) => ({
-          name: safeMdfUploadName(entry.file.name || `mdf-upload-${index + 1}`, entry.file.type),
-          mimeType: entry.file.type || "application/octet-stream",
-          size: entry.file.size,
-          role: entry.role,
-          dataBase64: await readFileBase64(entry.file)
-        }))
+        mdfFiles.map(async (entry, index) => {
+          // Downscale large images client-side so uploads are fast; PDFs/spreadsheets pass through.
+          const blob = await resizeImageForUpload(entry.file);
+          return {
+            name: safeMdfUploadName(entry.file.name || `mdf-upload-${index + 1}`, entry.file.type),
+            mimeType: blob.type || entry.file.type || "application/octet-stream",
+            size: blob.size,
+            role: entry.role,
+            dataBase64: await readFileBase64(blob)
+          };
+        })
       );
       const tokenResp = await fetch("/api/mdf/upload-token", {
         method: "POST",
