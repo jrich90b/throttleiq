@@ -919,7 +919,9 @@ type ConversationListItem = {
   lastMessage?: { direction: "in" | "out"; body: string; provider?: string } | null;
   pendingDraft?: boolean;
   pendingDraftPreview?: string | null;
-  draftHeld?: boolean | null;
+  // The API returns the full draftHeld object; heldKind="context_fidelity" drives the reason-aware
+  // inbox-card tag + banner ("Needs your reply" vs the draft-quality "being fixed").
+  draftHeld?: boolean | { heldKind?: string | null; reason?: string } | null;
 };
 
 type Message = {

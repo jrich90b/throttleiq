@@ -546,9 +546,13 @@ export function InboxSection(props: any) {
                                 <span
                                   className="lr-inbox-meta-pill"
                                   style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}
-                                  title="Draft held by the quality check — being fixed"
+                                  title={
+                                    c.draftHeld?.heldKind === "context_fidelity"
+                                      ? "The AI couldn't answer this in context — needs your reply"
+                                      : "Draft held by the quality check — being fixed"
+                                  }
                                 >
-                                  Held
+                                  {c.draftHeld?.heldKind === "context_fidelity" ? "Needs reply" : "Held"}
                                 </span>
                               ) : c.pendingDraft ? (
                                 <span className="lr-inbox-meta-pill">Draft</span>
@@ -565,7 +569,11 @@ export function InboxSection(props: any) {
 
                           <div className="text-sm text-gray-700 mt-2 line-clamp-2">
                             {c.draftHeld ? (
-                              <span style={{ color: "#92400e" }}>Draft held — being fixed (nothing to send)</span>
+                              <span style={{ color: "#92400e" }}>
+                                {c.draftHeld?.heldKind === "context_fidelity"
+                                  ? "Needs your reply — the AI couldn't answer this in context"
+                                  : "Draft held — being fixed (nothing to send)"}
+                              </span>
                             ) : c.pendingDraftPreview ? (
                               <>Draft: {renderBookingLinkLine(c.pendingDraftPreview)}</>
                             ) : (
