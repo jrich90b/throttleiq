@@ -1427,7 +1427,10 @@ export async function classifyTaskFulfillmentWithLLM(args: {
       prompt,
       schemaName: "task_fulfillment_parser",
       schema: TASK_FULFILLMENT_PARSER_JSON_SCHEMA,
-      maxOutputTokens: 60 + tasks.length * 60,
+      // Headroom for the full verdict shape per task: a long evidence string + engaged_pending_customer
+      // + defer_until. The prior 60+60 truncated the JSON mid-string ("Unterminated string") once the two
+      // soft-close fields were added — leave generous room so the structured response always closes.
+      maxOutputTokens: 200 + tasks.length * 160,
       debugTag: "llm-task-fulfillment-parser",
       debug
     });
