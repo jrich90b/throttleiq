@@ -565,6 +565,44 @@ export function decideVehicleRecommendationTurn(
   return { kind: "recommend" };
 }
 
+// --- Feedback-driven redraft (2026-06-24) -----------------------------------
+// Phase 1 of the closed-loop feedback system: a staff thumbs-DOWN on a still-PENDING AI draft
+// triggers an immediate steered re-draft into the same console box (suggest mode — a human still
+// hits Send). The rep's thumbs-down reason becomes generator STEERING. This is the generation/voice
+// layer (LLM, allowed by the de-tangle program), NOT a routing change — code-level misses are the
+// approve-first parser-first fix path (Phases 2-3), never patched from a single thumbs-down.
+//
+// FAIL DIRECTION: anything other than "down on a live draft" → record_only (today's behavior). We
+// only redraft what can still be edited; a thumbs-down on an already-SENT message is feedback only.
+export type FeedbackRedraftTurnInput = {
+  enabled: boolean; // the FEEDBACK_DOWN_REDRAFT_ENABLED kill switch
+  rating: string; // "up" | "down"
+  ratedIsPendingDraft: boolean; // the rated message is a non-stale draft_ai (still editable)
+  reason?: string | null;
+  note?: string | null;
+};
+
+export type FeedbackRedraftTurnDecision = { kind: "redraft" | "record_only"; steering?: string };
+
+export function buildFeedbackRedraftSteering(reason?: string | null, note?: string | null): string {
+  const detail = [reason, note]
+    .map(s => String(s ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" — ");
+  return (
+    `A staff reviewer gave the previous draft a thumbs-down${detail ? `: ${detail}` : ""}. ` +
+    `Revise the reply to fix that specific issue. Keep it on-voice (like texting a friend), answer ` +
+    `what the customer actually asked, and never fabricate a price, availability, stock, or appointment.`
+  );
+}
+
+export function decideFeedbackRedraftTurn(input: FeedbackRedraftTurnInput): FeedbackRedraftTurnDecision {
+  if (!input.enabled) return { kind: "record_only" };
+  if (String(input.rating ?? "").trim().toLowerCase() !== "down") return { kind: "record_only" };
+  if (!input.ratedIsPendingDraft) return { kind: "record_only" }; // can't redraft an already-sent message
+  return { kind: "redraft", steering: buildFeedbackRedraftSteering(input.reason, input.note) };
+}
+
 // --- Deal/progress status check (2026-06-18) -------------------------------
 //
 // A customer asking an OPEN status question about their deal/order/bike — "how are

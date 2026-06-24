@@ -270,6 +270,7 @@ import {
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
   parseVehicleRecommendationRequestWithLLM,
+  generateDraftWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
   parseWatchOptOutWithLLM,
@@ -504,6 +505,7 @@ import {
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
@@ -35517,7 +35519,66 @@ app.get("/conversations/:id", async (req, res) => {
   });
 });
 
-app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
+function feedbackDownRedraftEnabled(): boolean {
+  return String(process.env.FEEDBACK_DOWN_REDRAFT_ENABLED ?? "1") !== "0";
+}
+
+// Phase 1 of the closed-loop feedback system (2026-06-24): on a thumbs-DOWN of a still-pending AI
+// draft, re-generate the reply with the rep's reason as STEERING and publish it as a fresh pending
+// draft (supersedes the down-rated one). Suggest mode → a human still reviews + Sends. Generation/
+// voice layer only (no routing change); code-level misses are the approve-first parser-first fix
+// path (Phases 2-3). Fail-safe: any miss/error leaves the original draft untouched.
+async function maybeRedraftOnNegativeFeedback(args: {
+  conv: Conversation;
+  ratedMsg: any;
+  reason?: string;
+  note?: string;
+  actor?: { userId?: string; userName?: string };
+}): Promise<{ redrafted: boolean; draft?: string; reason?: string }> {
+  const { conv, ratedMsg } = args;
+  const ratedIsPendingDraft =
+    ratedMsg?.direction === "out" && ratedMsg?.provider === "draft_ai" && ratedMsg?.draftStatus !== "stale";
+  const decision = decideFeedbackRedraftTurn({
+    enabled: feedbackDownRedraftEnabled(),
+    rating: "down",
+    ratedIsPendingDraft: !!ratedIsPendingDraft,
+    reason: args.reason,
+    note: args.note
+  });
+  if (decision.kind !== "redraft") return { redrafted: false, reason: "record_only" };
+  const inbound = String(getLastInboundBody(conv) ?? "").trim();
+  if (!inbound) return { redrafted: false, reason: "no_inbound" };
+  try {
+    const dealerProfile = await getDealerProfileHot();
+    const lead = conv.lead ?? {};
+    const redraft = String(
+      (await generateDraftWithLLM({
+        channel: "sms",
+        leadKey: conv.leadKey,
+        lead,
+        leadSource: (lead as any)?.source ?? null,
+        bucket: (conv as any)?.classification?.bucket ?? null,
+        cta: (conv as any)?.classification?.cta ?? null,
+        inquiry: inbound,
+        history: buildHistory(conv, 10),
+        dealerProfile,
+        steering: decision.steering ?? null
+      })) ?? ""
+    ).trim();
+    if (!redraft) return { redrafted: false, reason: "empty_redraft" };
+    saveOperatorDraft(conv, { body: redraft, channel: "sms", actor: { userName: "Auto-redraft (thumbs-down)" } });
+    recordRouteOutcome("manual", "feedback_down_redraft", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      hadReason: !!args.reason
+    });
+    return { redrafted: true, draft: redraft };
+  } catch {
+    return { redrafted: false, reason: "error" };
+  }
+}
+
+app.post("/conversations/:id/messages/:messageId/feedback", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const user = (req as any).user ?? null;
@@ -35559,8 +35620,24 @@ app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
     at: new Date().toISOString()
   });
   if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
+  // Phase 1 closed-loop feedback: a thumbs-DOWN on a still-pending AI draft triggers a steered
+  // re-draft into the same console box (suggest mode — a human still hits Send). Up / sent-message /
+  // disabled all fall through to record-only (decideFeedbackRedraftTurn owns that gate).
+  let redraft: { redrafted: boolean; draft?: string; reason?: string } = { redrafted: false };
+  if (rating === "down") {
+    redraft = await maybeRedraftOnNegativeFeedback({
+      conv,
+      ratedMsg: msg,
+      reason,
+      note,
+      actor: {
+        userId: String(user?.id ?? "").trim() || undefined,
+        userName: String(user?.name ?? user?.email ?? "").trim() || undefined
+      }
+    });
+  }
   saveConversation(conv);
-  return res.json({ ok: true, conversation: conv, message: msg });
+  return res.json({ ok: true, conversation: conv, message: msg, redraft });
 });
 
 app.get("/conversations/:id/messages/:messageId/media/:mediaIndex", async (req, res) => {
