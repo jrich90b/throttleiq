@@ -16270,6 +16270,7 @@ export default function Home() {
                     {mdfPacket ? "Add files to this claim" : "Upload MDF files"}
                   </span>
                   <span className="mt-1 text-xs text-gray-500">PDF, PNG, JPG, WebP, Excel (.xlsx), or CSV</span>
+                  <span className="mt-1 text-[11px] text-gray-400">Large photos are resized automatically for fast upload • add more invoices anytime</span>
                   <input
                     className="hidden"
                     type="file"
@@ -16324,6 +16325,11 @@ export default function Home() {
                             <option value="unknown">Not sure</option>
                           </select>
                         </label>
+                        {entry.role === "invoice" || entry.role === "receipt" ? (
+                          <div className="mt-1 text-[11px] font-medium text-emerald-700">Counts toward claim spend.</div>
+                        ) : entry.role === "creative" || entry.role === "proof_of_performance" || entry.role === "supporting_only" ? (
+                          <div className="mt-1 text-[11px] text-gray-500">Used for event details &amp; proof — not counted as an invoice.</div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -16430,56 +16436,73 @@ export default function Home() {
                     ) : null}
 
                     <div className="rounded-lg border p-3">
-                      <div className="text-sm font-semibold">Extracted fields</div>
+                      <div className="text-sm font-semibold">Claim &amp; campaign details</div>
+                      <p className="mt-1 text-[11px] text-gray-500">Vendor, invoice #, date, and spend live in the Invoices section above.</p>
                       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                        {Object.entries(mdfPacket.extractedFields).map(([key, value]) => (
-                          <label key={key} className="rounded border bg-gray-50 px-3 py-2">
-                            <div className="text-[11px] uppercase tracking-wide text-gray-500">{key.replace(/([A-Z])/g, " $1")}</div>
-                            <input
-                              className="mt-1 w-full rounded border bg-white px-2 py-1.5 text-sm text-gray-900"
-                              value={value || ""}
-                              onChange={event =>
-                                updateMdfExtractedField(key as keyof MdfClaimPacket["extractedFields"], event.target.value)
-                              }
-                              placeholder="—"
-                            />
-                          </label>
-                        ))}
+                        {Object.entries(mdfPacket.extractedFields)
+                          .filter(([key]) => !["vendorName", "invoiceDate", "invoiceNumber", "spend"].includes(key))
+                          .map(([key, value]) => (
+                            <label key={key} className="rounded border bg-gray-50 px-3 py-2">
+                              <div className="text-[11px] uppercase tracking-wide text-gray-500">{key.replace(/([A-Z])/g, " $1")}</div>
+                              <input
+                                className="mt-1 w-full rounded border bg-white px-2 py-1.5 text-sm text-gray-900"
+                                value={value || ""}
+                                onChange={event =>
+                                  updateMdfExtractedField(key as keyof MdfClaimPacket["extractedFields"], event.target.value)
+                                }
+                                placeholder="—"
+                              />
+                            </label>
+                          ))}
                       </div>
                     </div>
 
-                    {(mdfPacket.invoices ?? []).length ? (
-                      <div className="rounded-lg border p-3">
+                    <div className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-3">
                         <div className="text-sm font-semibold">Invoices</div>
+                        {(mdfPacket.invoices ?? []).length ? (
+                          <div className="text-right">
+                            <div className="text-xl font-semibold leading-tight text-gray-900">
+                              {mdfPacket.extractedFields.spend || "—"}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              total spend • {(mdfPacket.invoices ?? []).length} invoice
+                              {(mdfPacket.invoices ?? []).length === 1 ? "" : "s"}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                      {(mdfPacket.invoices ?? []).length ? (
                         <div className="mt-3 space-y-2">
                           {(mdfPacket.invoices ?? []).map((invoice, index) => (
                             <div
                               key={`${invoice.invoiceNumber || index}-${invoice.amount || ""}`}
-                              className="rounded border bg-gray-50 px-3 py-2 text-sm"
+                              className="rounded-lg border bg-gray-50 px-3 py-2 text-sm"
                             >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="font-semibold text-gray-800">
-                                    Invoice {index + 1}: {invoice.vendorName || "Vendor missing"}
-                                  </div>
-                                  <div className="mt-1 text-xs text-gray-500">
-                                    {[invoice.invoiceDate, invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : "", invoice.amount]
-                                      .filter(Boolean)
-                                      .join(" • ") || "Needs review"}
-                                  </div>
-                                </div>
-                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
-                                  {(invoice.fileNames ?? []).length} file{(invoice.fileNames ?? []).length === 1 ? "" : "s"}
-                                </span>
+                              <div className="flex items-baseline justify-between gap-3">
+                                <span className="font-semibold text-gray-800">{invoice.vendorName || "Vendor missing"}</span>
+                                <span className="font-semibold text-gray-900">{invoice.amount || "—"}</span>
+                              </div>
+                              <div className="mt-1 text-xs text-gray-500">
+                                {[invoice.invoiceDate, invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : ""]
+                                  .filter(Boolean)
+                                  .join(" • ") || "Date / number needs review"}
                               </div>
                               {invoice.fileNames?.length ? (
-                                <div className="mt-2 text-xs text-gray-600">{invoice.fileNames.join(", ")}</div>
+                                <div className="mt-1 text-xs text-gray-500">From: {invoice.fileNames.join(", ")}</div>
                               ) : null}
                             </div>
                           ))}
+                          <div className="text-[11px] text-gray-500">
+                            Each invoice is read on its own — add another and it appears here, never merged.
+                          </div>
                         </div>
-                      </div>
-                    ) : null}
+                      ) : (
+                        <p className="mt-2 text-sm text-gray-500">
+                          No invoices yet. Upload an invoice or receipt — creative and proof files feed event details only.
+                        </p>
+                      )}
+                    </div>
 
                     <div className="rounded-lg border p-3">
                       <div className="text-sm font-semibold">Saved files</div>
@@ -16514,34 +16537,46 @@ export default function Home() {
                       </p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="rounded-lg border p-3">
-                        <div className="text-sm font-semibold">Missing fields</div>
-                        {mdfPacket.missingFields.length ? (
-                          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-700">
+                    <div className="rounded-lg border p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-semibold">Documentation &amp; eligibility</div>
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
+                            mdfPacket.eligibility.status === "likely_eligible"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : mdfPacket.eligibility.status === "likely_ineligible"
+                                ? "bg-red-100 text-red-800"
+                                : "bg-amber-100 text-amber-800"
+                          }`}
+                        >
+                          {mdfPacket.eligibility.status.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      {mdfPacket.missingFields.length ? (
+                        <div className="mt-3">
+                          <div className="text-xs font-semibold text-gray-600">Still needed</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-red-700">
                             {mdfPacket.missingFields.map(item => <li key={item}>{item}</li>)}
                           </ul>
-                        ) : (
-                          <p className="mt-2 text-sm text-emerald-700">No required fields flagged.</p>
-                        )}
-                      </div>
-                      <div className="rounded-lg border p-3">
-                        <div className="text-sm font-semibold">Required documentation</div>
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
-                          {mdfPacket.requiredDocumentation.map(item => <li key={item}>{item}</li>)}
-                        </ul>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border p-3">
-                      <div className="text-sm font-semibold">Eligibility review</div>
-                      <div className="mt-2 inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 capitalize">
-                        {mdfPacket.eligibility.status.replace(/_/g, " ")}
-                      </div>
+                        </div>
+                      ) : (
+                        <p className="mt-3 text-sm text-emerald-700">Nothing flagged as missing.</p>
+                      )}
+                      {mdfPacket.requiredDocumentation.length ? (
+                        <div className="mt-3">
+                          <div className="text-xs font-semibold text-gray-600">Required for this claim</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                            {mdfPacket.requiredDocumentation.map(item => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                      ) : null}
                       {mdfPacket.eligibility.concerns.length ? (
-                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-700">
-                          {mdfPacket.eligibility.concerns.map(item => <li key={item}>{item}</li>)}
-                        </ul>
+                        <div className="mt-3">
+                          <div className="text-xs font-semibold text-gray-600">Eligibility concerns</div>
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-gray-700">
+                            {mdfPacket.eligibility.concerns.map(item => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
                       ) : null}
                     </div>
 
