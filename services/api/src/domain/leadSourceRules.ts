@@ -483,6 +483,20 @@ export function resolveLeadRule(leadSource?: string, sourceId?: number | null): 
     return { bucket: rule.bucket, cta: rule.cta, tone: rule.tone, ruleName: rule.name };
   }
 
+  // Source-NAME inference for marketing sources that aren't in the catalog/rules and would otherwise
+  // default to a (sales-framed) general inquiry. Event sweepstakes / RSVP / ride-challenge leads are
+  // NON-SALES promos — they must route to the event-promo ack, never a "that stock number is still
+  // available, what day to stop in?" sales pitch. This was the TOP out-of-context class
+  // (`wrong_lead_type`): "National Event Dealer Sweeps" / "Room58 - National Event RSVP" leads getting
+  // stock-number sales drafts because they fell through to general_inquiry.
+  const name = (leadSource ?? "").toLowerCase();
+  if (/\bsweeps(takes)?\b/.test(name)) {
+    return { bucket: "event_promo", cta: "sweepstakes", tone: "short_conversational", ruleName: "name_infer_sweepstakes" };
+  }
+  if (/\brsvp\b|ride challenge|national event/.test(name)) {
+    return { bucket: "event_promo", cta: "event_rsvp", tone: "short_conversational", ruleName: "name_infer_event_rsvp" };
+  }
+
   return {
     bucket: "general_inquiry",
     cta: "unknown",
