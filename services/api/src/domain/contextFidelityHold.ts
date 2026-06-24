@@ -107,6 +107,18 @@ export function isContextFidelityHoldEnabled(): boolean {
 }
 
 /**
+ * Reads CONTEXT_FIDELITY_HELD_SURFACING. Default OFF. When on (suggest-mode "don't let a rep miss it"),
+ * an enforced hold stores NO draft and sets a reason-tagged held marker (inbox card tag + banner +
+ * deduped task, cleared when a human replies) instead of substituting the legacy safe-handoff ack — so
+ * a rep can't rubber-stamp a generic ack over an unanswered turn. The legacy ack is reserved for future
+ * autopilot (no human in the loop). Dark by default so the held-no-draft cutover is approve-first.
+ */
+export function contextFidelityHeldSurfacingEnabled(): boolean {
+  const raw = String(process.env.CONTEXT_FIDELITY_HELD_SURFACING ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
  * Reads CONTEXT_FIDELITY_HOLD_SHADOW. Default OFF — unlike the other shadows this adds a NET-NEW LLM
  * call per published reply draft, so it stays off until we deliberately turn it on for the
  * measurement window. Set to 1 to start logging [context-fidelity-hold-shadow] would-holds.
