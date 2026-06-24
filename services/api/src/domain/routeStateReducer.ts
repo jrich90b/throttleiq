@@ -603,6 +603,38 @@ export function decideFeedbackRedraftTurn(input: FeedbackRedraftTurnInput): Feed
   return { kind: "redraft", steering: buildFeedbackRedraftSteering(input.reason, input.note) };
 }
 
+// --- Feedback diagnosis action (closed-loop Phase 2, 2026-06-24) -------------
+// Maps a classified thumbs-down (parseFeedbackFailureModeWithLLM) onto the action its LAYER warrants,
+// honoring the de-tangle split: VOICE issues are refined at the generation layer (never a routing
+// change); COMPREHENSION issues become parser-first fix candidates (Phase 3 turns a recurring class
+// into an approve-first PR — never auto-merged); SAFETY is already owned by the held/draft-quality
+// gate. Pure + eval'd so the report (Phase 2) and any future auto-PR step (Phase 3) share one policy.
+//
+// FAIL DIRECTION: unsure / low-confidence / non-systemic → record_only. We only escalate a confident,
+// SYSTEMIC comprehension miss to a fix candidate, so a one-off rep preference never proposes code.
+export type FeedbackDiagnosisAction =
+  | "voice_refinement"
+  | "parser_fix_candidate"
+  | "already_gated"
+  | "record_only";
+
+export type FeedbackDiagnosisActionInput = {
+  parserAccepted: boolean;
+  layer?: "voice" | "comprehension" | "safety" | "none" | null;
+  systemic: boolean;
+  confidence: number;
+  confidenceMin: number; // default 0.7 at the call site
+};
+
+export function decideFeedbackDiagnosisAction(input: FeedbackDiagnosisActionInput): FeedbackDiagnosisAction {
+  if (!input.parserAccepted) return "record_only";
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return "record_only";
+  if (input.layer === "safety") return "already_gated"; // the held/draft-quality gate owns fabrication
+  if (input.layer === "voice") return "voice_refinement"; // generation layer; never a routing change
+  if (input.layer === "comprehension" && input.systemic) return "parser_fix_candidate";
+  return "record_only";
+}
+
 // --- Deal/progress status check (2026-06-18) -------------------------------
 //
 // A customer asking an OPEN status question about their deal/order/bike — "how are

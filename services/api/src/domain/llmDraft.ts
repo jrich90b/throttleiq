@@ -6400,6 +6400,157 @@ export async function parseVehicleChoiceConfidenceWithLLM(args: {
   return { stance, confidence };
 }
 
+// Feedback failure-mode classifier (closed-loop Phase 2, 2026-06-24). Reads a staff thumbs-DOWN
+// (their reason/note + the inbound it replied to + the down-rated draft) and classifies the FAILURE
+// MODE + which LAYER owns the fix. This is the comprehension step of the diagnosis pipeline — rep
+// reasons are free text, so they're read by a typed LLM parser, never regex. The pure action gate
+// lives in decideFeedbackDiagnosisAction; the offline report (feedback_diagnosis_report.ts) is the
+// only consumer for now (Phase 2 is report-only — no auto-PRs).
+export type FeedbackFailureModeParse = {
+  // verbosity_tone = too long / pushy / off-voice (a VOICE fix, never a routing change).
+  // wrong_unit_or_model | out_of_context | state_or_lifecycle_miss | parser_or_routing = COMPREHENSION.
+  // fabrication_unsafe = a SAFETY miss (the held/draft-quality gate owns it).
+  failureMode:
+    | "verbosity_tone"
+    | "wrong_unit_or_model"
+    | "out_of_context"
+    | "state_or_lifecycle_miss"
+    | "parser_or_routing"
+    | "fabrication_unsafe"
+    | "other";
+  layer: "voice" | "comprehension" | "safety" | "none";
+  systemic: boolean; // a recurring/system issue (vs a one-off rep preference)
+  rationale: string;
+  confidence: number;
+};
+
+const FEEDBACK_FAILURE_MODE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["failure_mode", "layer", "systemic", "rationale", "confidence"],
+  properties: {
+    failure_mode: {
+      type: "string",
+      enum: [
+        "verbosity_tone",
+        "wrong_unit_or_model",
+        "out_of_context",
+        "state_or_lifecycle_miss",
+        "parser_or_routing",
+        "fabrication_unsafe",
+        "other"
+      ]
+    },
+    layer: { type: "string", enum: ["voice", "comprehension", "safety", "none"] },
+    systemic: { type: "boolean" },
+    rationale: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseFeedbackFailureModeWithLLM(args: {
+  reason?: string | null;
+  note?: string | null;
+  inbound?: string | null;
+  draft?: string | null;
+  bucket?: string | null;
+  cta?: string | null;
+}): Promise<FeedbackFailureModeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FEEDBACK_FAILURE_MODE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FEEDBACK_FAILURE_MODE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FEEDBACK_FAILURE_MODE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FEEDBACK_FAILURE_MODE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const reason = [args.reason, args.note].map(s => String(s ?? "").trim()).filter(Boolean).join(" — ");
+  if (!reason && !args.draft) return null;
+
+  const prompt = [
+    "A staff reviewer gave a Harley dealership AI reply a THUMBS-DOWN. Read their reason, the customer",
+    "message it replied to, and the down-rated draft, and classify the FAILURE MODE and which fix LAYER",
+    "owns it. Return only JSON matching the schema.",
+    "",
+    "failure_mode:",
+    "- verbosity_tone: too long, pushy, off-voice, robotic, included things it shouldn't have.",
+    "- wrong_unit_or_model: referenced the wrong bike / model / stock unit.",
+    "- out_of_context: answered the wrong thing / ignored what the customer actually asked.",
+    "- state_or_lifecycle_miss: ignored known state (already test-rode, already bought, handed off, used vs new).",
+    "- parser_or_routing: the lead/intent was parsed or routed wrong (e.g. ADF mis-parse, wrong department).",
+    "- fabrication_unsafe: invented a price/stock/availability/appointment, or a compliance problem.",
+    "- other: anything else / unclear.",
+    "",
+    "layer (who fixes it):",
+    "- voice: a tone/length/phrasing fix (the generation layer). verbosity_tone => voice.",
+    "- comprehension: a parser/route/state fix (wrong_unit_or_model, out_of_context, state_or_lifecycle_miss, parser_or_routing).",
+    "- safety: fabrication_unsafe (a guard/hold owns it).",
+    "- none: not actionable / unclear.",
+    "",
+    "systemic = true when this looks like a repeatable system flaw (would recur on similar leads), false",
+    "for a one-off rep preference or a situational nit. confidence 0..1; >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- reason:"Way too much should not be in the message" -> {"failure_mode":"verbosity_tone","layer":"voice","systemic":true,"rationale":"reply was overloaded","confidence":0.85}',
+    '- reason:"Wrong unit" -> {"failure_mode":"wrong_unit_or_model","layer":"comprehension","systemic":true,"rationale":"referenced the wrong bike","confidence":0.8}',
+    '- reason:"Wrong context" -> {"failure_mode":"out_of_context","layer":"comprehension","systemic":true,"rationale":"answered the wrong thing","confidence":0.8}',
+    '- reason:"Already took a test ride as a passenger" -> {"failure_mode":"state_or_lifecycle_miss","layer":"comprehension","systemic":true,"rationale":"ignored known ride state","confidence":0.8}',
+    '- reason:"check how this web lead adf is getting parsed" -> {"failure_mode":"parser_or_routing","layer":"comprehension","systemic":true,"rationale":"ADF parse suspected wrong","confidence":0.82}',
+    "",
+    `Lead bucket: ${String(args.bucket ?? "unknown")}   cta: ${String(args.cta ?? "unknown")}`,
+    `Customer message: ${String(args.inbound ?? "(unknown)").slice(0, 400)}`,
+    `Down-rated draft: ${String(args.draft ?? "(unknown)").slice(0, 400)}`,
+    `Staff reason: ${reason || "(none given)"}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "feedback_failure_mode_parser",
+      schema: FEEDBACK_FAILURE_MODE_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-feedback-failure-mode-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const failureModes = new Set([
+    "verbosity_tone",
+    "wrong_unit_or_model",
+    "out_of_context",
+    "state_or_lifecycle_miss",
+    "parser_or_routing",
+    "fabrication_unsafe",
+    "other"
+  ]);
+  const layers = new Set(["voice", "comprehension", "safety", "none"]);
+  const failureMode = failureModes.has(String(parsed.failure_mode))
+    ? (parsed.failure_mode as FeedbackFailureModeParse["failureMode"])
+    : "other";
+  const layer = layers.has(String(parsed.layer))
+    ? (parsed.layer as FeedbackFailureModeParse["layer"])
+    : "none";
+  return {
+    failureMode,
+    layer,
+    systemic: parsed.systemic === true,
+    rationale: typeof parsed.rationale === "string" ? parsed.rationale.slice(0, 200) : "",
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0
+  };
+}
+
 // Vehicle recommendation request parser (2026-06-24). Reads whether the customer is asking US to
 // suggest/pick bikes (no specific model named) and extracts budget + condition + style filters, so
 // the agent can answer with real inventory instead of looping "which bike are you looking at?"
