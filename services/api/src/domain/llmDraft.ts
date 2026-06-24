@@ -11375,6 +11375,25 @@ export async function selfHealDraftWithLLM(args: {
   }
 }
 
+// Deterministic SMS brevity budget (closed-loop voice fix, 2026-06-24). "Reply says too much" is the
+// #1 staff thumbs-down reason (Phase 2 report: 40%). The prompt does the real shortening; this gives
+// a measurable shadow signal. Conservative — only flags genuinely overloaded SMS drafts. The trailing
+// "Reply STOP to opt out" compliance footer is excluded so it never counts against brevity.
+export function exceedsSmsBrevityBudget(
+  text: string,
+  opts?: { maxSentences?: number; maxChars?: number }
+): boolean {
+  const maxSentences = opts?.maxSentences ?? 4;
+  const maxChars = opts?.maxChars ?? 480;
+  const body = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*reply stop to opt ?out\.?\s*$/i, "")
+    .trim();
+  if (!body) return false;
+  const sentences = (body.match(/[.!?]+(?=\s|$)/g) ?? []).length || 1;
+  return body.length > maxChars || sentences > maxSentences;
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   // Draft-model A/B: the customer-facing reply composer runs on the lead's arm
   // (gpt-5 challenger vs gpt-5-mini control). Shared by live + regenerate via the
@@ -11398,7 +11417,10 @@ EMAIL RULES (strict):
 `
     : `
 SMS RULES (strict):
-- 1–3 short paragraphs (1–5 sentences). Natural SMS tone.
+- BE BRIEF. Default to 1–2 short sentences; 3 only if truly needed. Answer ONLY what the customer
+  asked THIS turn — do not pile on extra options, facts, offers, or multiple questions they didn't
+  ask for. At most ONE question per message. If you have more to say, save it for their reply.
+  (Staff's #1 complaint is replies that say too much — when in doubt, cut it.)
 - No signatures.
 - If not first outbound, do NOT repeat the intro.
 - Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
@@ -11847,6 +11869,11 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
   }
   if (ctx.channel === "sms") {
     draft = sanitizeSmsDraftNoEmail(draft, userAskedForEmail(ctx));
+    // Brevity shadow signal: measure how often drafts still run long after the prompt tightening
+    // (the #1 thumbs-down class). Logging only — never trims/blocks. Kill with DRAFT_BREVITY_SHADOW=0.
+    if (String(process.env.DRAFT_BREVITY_SHADOW ?? "1") !== "0" && exceedsSmsBrevityBudget(draft)) {
+      console.warn("[draft-brevity-shadow]", { leadKey: ctx.leadKey, chars: draft.replace(/\s+/g, " ").trim().length });
+    }
   }
   draft = sanitizePhotoAsk(draft);
   return draft;
