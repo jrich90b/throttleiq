@@ -1880,6 +1880,21 @@ export type VehicleChoiceConfidenceParse = {
   confidence?: number;
 };
 
+export type VehicleRecommendationParse = {
+  // The customer is asking US to suggest/pick bikes for them (they did NOT name a specific model
+  // to price): "give me some options", "what do you have", "what would you recommend", "suggest a
+  // few". FALSE when they named/are pricing a specific bike, or the turn is something else.
+  wantsRecommendation: boolean;
+  // Monthly payment target if stated ("around $200/mo") — else null.
+  monthlyBudget: number | null;
+  // "new" | "used" | "both" | null. "both" when they say new and used / either.
+  condition: "new" | "used" | "both" | null;
+  // Style segments to EXCLUDE / require, from the customer's words ("not cruisers" => ["cruiser"]).
+  excludeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  includeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  confidence?: number;
+};
+
 export type DealStatusCheckParse = {
   // "deal_status_check": the customer is asking for the status/progress of THEIR deal,
   //   order, or bike with us ("how are we looking", "any update?", "where are we at?",
@@ -3023,6 +3038,33 @@ const VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } =
   required: ["stance", "confidence"],
   properties: {
     stance: { type: "string", enum: ["committed", "open_to_alternatives", "unclear"] },
+    confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "wants_recommendation",
+    "monthly_budget",
+    "condition",
+    "exclude_segments",
+    "include_segments",
+    "confidence"
+  ],
+  properties: {
+    wants_recommendation: { type: "boolean" },
+    monthly_budget: { type: ["number", "null"] },
+    condition: { type: ["string", "null"], enum: ["new", "used", "both", null] },
+    exclude_segments: {
+      type: "array",
+      items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
+    },
+    include_segments: {
+      type: "array",
+      items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
+    },
     confidence: { type: "number" }
   }
 };
@@ -6287,6 +6329,106 @@ export async function parseVehicleChoiceConfidenceWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { stance, confidence };
+}
+
+// Vehicle recommendation request parser (2026-06-24). Reads whether the customer is asking US to
+// suggest/pick bikes (no specific model named) and extracts budget + condition + style filters, so
+// the agent can answer with real inventory instead of looping "which bike are you looking at?"
+// (s R Gurajala +17167506588). Returns null when disabled/low-signal — callers treat null as
+// "fall through to existing behavior". The route gate lives in decideVehicleRecommendationTurn.
+export async function parseVehicleRecommendationRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<VehicleRecommendationParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_RECOMMENDATION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_RECOMMENDATION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read an SMS thread with a Harley dealership and decide whether the customer is asking the",
+    "dealer to SUGGEST/PICK some bikes for them (they have NOT named a specific model to price), and",
+    "extract any budget and style preferences. Return only JSON matching the provided schema.",
+    "",
+    "wants_recommendation = true when the customer wants us to propose options: \"give me some options\",",
+    "\"what do you have\", \"what would you recommend\", \"suggest a few\", \"show me some bikes\", \"any",
+    "options around $200/mo\", \"what can I get for X\". It is FALSE when they named a specific bike or",
+    "are pricing one (\"price on the Street Glide?\", \"payment on that one\"), or the turn is a different",
+    "topic (scheduling, trade, hours, a bare thanks).",
+    "",
+    "Also extract:",
+    "- monthly_budget: a stated monthly payment target as a number (\"around $200/mo\" => 200). null if none.",
+    "- condition: \"new\", \"used\", \"both\" (new AND used / either), or null if unstated.",
+    "- exclude_segments / include_segments: style segments the customer named. Segments:",
+    "  cruiser (Softail/Dyna/V-Rod: Fat Boy, Low Rider, Heritage, Breakout, Street Bob, Softail),",
+    "  touring (Street Glide, Road Glide, Road King, Electra Glide, Ultra),",
+    "  sport (Sportster, Iron 883, Nightster, Forty-Eight, Street 500/750, LiveWire),",
+    "  adventure (Pan America), trike (Tri Glide, Freewheeler).",
+    "  \"not cruisers\" => exclude_segments:[\"cruiser\"]; \"something sporty\" => include_segments:[\"sport\"].",
+    "  Leave arrays empty when no style is named.",
+    "- confidence 0..1; use >= 0.8 only when wants_recommendation is clear.",
+    "",
+    "Examples:",
+    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
+    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"confidence":0.95}',
+    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.88}',
+    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.93}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_recommendation_parser",
+      schema: VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-vehicle-recommendation-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const allowedSegments = new Set(["cruiser", "touring", "sport", "adventure", "trike"]);
+  const normalizeSegments = (value: unknown): VehicleRecommendationParse["excludeSegments"] =>
+    Array.isArray(value)
+      ? (Array.from(
+          new Set(value.map(v => String(v ?? "").trim().toLowerCase()).filter(v => allowedSegments.has(v)))
+        ) as VehicleRecommendationParse["excludeSegments"])
+      : [];
+  const conditionRaw = String(parsed.condition ?? "").toLowerCase();
+  const condition: VehicleRecommendationParse["condition"] =
+    conditionRaw === "new" || conditionRaw === "used" || conditionRaw === "both" ? conditionRaw : null;
+  const monthlyBudgetNum = Number(parsed.monthly_budget);
+  return {
+    wantsRecommendation: parsed.wants_recommendation === true,
+    monthlyBudget: Number.isFinite(monthlyBudgetNum) && monthlyBudgetNum > 0 ? monthlyBudgetNum : null,
+    condition,
+    excludeSegments: normalizeSegments(parsed.exclude_segments),
+    includeSegments: normalizeSegments(parsed.include_segments),
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined
+  };
 }
 
 // Deal/progress status check (2026-06-18). Distinguishes an open status question about the

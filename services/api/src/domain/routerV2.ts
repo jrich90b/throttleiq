@@ -15,6 +15,7 @@ export {
   decideWatchOptOutTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
+  decideVehicleRecommendationTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,

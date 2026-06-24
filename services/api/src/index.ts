@@ -269,6 +269,7 @@ import {
   parseTradePayoffWithLLM,
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
+  parseVehicleRecommendationRequestWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
   parseWatchOptOutWithLLM,
@@ -450,6 +451,12 @@ import {
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import {
+  recommendInventory,
+  buildVehicleRecommendationReply,
+  buildVehicleRecommendationFollowupReply,
+  buildVehicleRecommendationTodoSummary
+} from "./domain/inventoryRecommender.js";
+import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
 } from "./domain/inventoryFactAnswers.js";
@@ -496,6 +503,7 @@ import {
   decideNonMotorcycleTradeTurn,
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
+  decideVehicleRecommendationTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
@@ -2135,6 +2143,90 @@ async function resolveVehicleChoiceAlternativesReply(
   markPendingShortListPrompt(conv, "vehicle_choice_open_to_alternatives");
   const label = formatModelToken(referencedModel) || referencedModel;
   return buildVehicleChoiceAlternativesReply(conv, text, label);
+}
+
+// Vehicle recommendation: confidence floor to act on a "pick some for me" request (default 0.7).
+function vehicleRecommendationConfidenceMin(): number {
+  const raw = Number(process.env.LLM_VEHICLE_RECOMMENDATION_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the recommendation parser only runs on suggestion-ish turns. A hint MISS
+// falls through to existing behavior (fail-safe); the parser — not this regex — owns the decision.
+const VEHICLE_RECOMMENDATION_HINT_RE =
+  /\b(option|options|suggest|suggestion|recommend|recommendation|some (?:bikes?|ideas?)|show me|give me (?:some|a few|options)|what (?:do|have) you (?:have|got|carry)|what (?:can|could) i get|what would you|help me (?:find|pick)|looking for (?:something|a bike))\b/i;
+
+function vehicleRecommendationParserHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return VEHICLE_RECOMMENDATION_HINT_RE.test(t);
+}
+
+// Shared by BOTH the live and regenerate paths (route-parity law). When the customer asks us to
+// SUGGEST bikes (no specific model in play) — "give me some options", "~$200/mo", "not cruisers" —
+// answer with real inventory instead of looping "which bike are you looking at?" (s R Gurajala
+// +17167506588, 2026-06-24). Returns null on any miss so the existing finance/pricing flow runs.
+async function resolveVehicleRecommendationReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  // Recommendation is the "no model yet" case. A customer pricing a known bike is NOT asking for
+  // suggestions — let the finance/pricing flow handle that.
+  if (!isModelUnknownForPayments(conv)) return null;
+  if (findMentionedModel(text.toLowerCase())) return null; // named a model this turn => not "pick for me"
+  // The ask often spans two quick texts ("Can you give me some options" + "I'm not looking for
+  // cruisers"); use the recent inbound cluster so the hint + parser see the whole request.
+  const recentInbound = (conv.messages ?? [])
+    .filter((m: any) => m?.direction === "in")
+    .slice(-3)
+    .map((m: any) => String(m?.body ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const askText = recentInbound || text;
+  if (!vehicleRecommendationParserHint(askText)) return null;
+  const parse = await safeLlmParse("vehicle_recommendation_parser", () =>
+    parseVehicleRecommendationRequestWithLLM({ text: askText, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-vehicle-recommendation-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideVehicleRecommendationTurn({
+    parserAccepted: !!parse,
+    wantsRecommendation: !!parse?.wantsRecommendation,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleRecommendationConfidenceMin(),
+    modelUnknown: true
+  });
+  if (decision.kind !== "recommend") return null;
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  let matches: InventoryFeedItem[] = [];
+  try {
+    const items = await getInventoryFeed();
+    matches = recommendInventory(items, {
+      condition: parse?.condition ?? null,
+      excludeSegments: parse?.excludeSegments ?? [],
+      includeSegments: parse?.includeSegments ?? []
+    });
+  } catch {
+    matches = [];
+  }
+  recordRouteOutcome(scope, "vehicle_recommendation", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    matches: matches.length,
+    monthlyBudget: parse?.monthlyBudget ?? null
+  });
+  if (!matches.length) {
+    // Confidently a suggestion request, but no priced match to send — commit to follow up + owner
+    // todo rather than re-asking "which bike?".
+    addTodo(conv, "call", buildVehicleRecommendationTodoSummary(firstName), providerMessageId ?? undefined);
+    return buildVehicleRecommendationFollowupReply(firstName);
+  }
+  return buildVehicleRecommendationReply({ firstName, matches, monthlyBudget: parse?.monthlyBudget ?? null });
 }
 
 // Deal/progress status check: confidence floor to rescue a status check from the small-talk
@@ -51207,6 +51299,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       return respondWithSmsRegeneratedDraft(reply);
     }
+    // Vehicle recommendation (parity with live /webhooks/twilio): suggest real inventory when the
+    // customer asks for options with no model in play, instead of looping "which bike?".
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenRecommendationReply = await resolveVehicleRecommendationReply(
+        conv,
+        String(event.body ?? ""),
+        event.providerMessageId,
+        "regen"
+      );
+      if (regenRecommendationReply) {
+        return respondWithSmsRegeneratedDraft(regenRecommendationReply);
+      }
+    }
     // Vehicle-choice confidence / open-to-alternatives (parity with live /webhooks/twilio).
     // Same shared resolver, same fail-toward-silence gate; SMS-only + no explicit routing
     // override (mirrors the live twilio-only + parserPrecheckBlocksDeterministicShortcut gate).
@@ -56424,6 +56529,20 @@ if (authToken && signature) {
         turnFinanceIntent: true,
         financeContextIntent: true
       });
+    }
+  }
+  // Vehicle recommendation: the customer asked us to SUGGEST bikes (no model in play) — answer with
+  // real inventory instead of looping "which bike are you looking at?" (s R Gurajala, 2026-06-24).
+  // Runs before the finance/pricing "which bike?" continuation; same resolver runs in regenerate.
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const recommendationReply = await resolveVehicleRecommendationReply(
+      conv,
+      inboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (recommendationReply) {
+      return publishLiveTwilioReply(recommendationReply, undefined, { draftOnly: true });
     }
   }
   // Vehicle-choice confidence / open-to-alternatives. When the customer is lukewarm about a

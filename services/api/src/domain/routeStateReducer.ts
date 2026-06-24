@@ -521,6 +521,50 @@ export function decideVehicleChoiceConfidenceTurn(
   return { kind: "offer_alternatives" };
 }
 
+// --- Vehicle recommendation by budget/style (2026-06-24) -------------------
+//
+// When a customer asks us to PICK bikes for them ("give me some options", "~$200/mo",
+// "not cruisers") with NO specific model in play, answer with real inventory suggestions instead
+// of looping "which bike are you looking at so I can run it correctly?" (s R Gurajala
+// +17167506588). The parser signal (parseVehicleRecommendationRequestWithLLM) is computed at the
+// call site and fed in; this owns ONLY the precedence. The reply (and inventory query) stay in
+// index.ts / inventoryRecommender.
+//
+// FAIL DIRECTION = `none`: any miss falls through to the existing finance/pricing "which bike?"
+// behavior. We only recommend on a confident, explicit request AND when no specific model is
+// already in play (a customer pricing a known bike is NOT asking for suggestions).
+// ---------------------------------------------------------------------------
+export type VehicleRecommendationTurnKind = "recommend" | "none";
+
+export type VehicleRecommendationTurnInput = {
+  // The parser returned a non-null result (LLM enabled + usable parse).
+  parserAccepted: boolean;
+  // Parser: the customer wants us to suggest/pick bikes.
+  wantsRecommendation: boolean;
+  // Parser confidence 0..1 (0 when no parse).
+  confidence: number;
+  // Confidence floor to act on (default 0.7).
+  confidenceMin: number;
+  // No specific model is in play this turn/context (recommendation is for the "no model yet" case).
+  modelUnknown: boolean;
+};
+
+export type VehicleRecommendationTurnDecision = {
+  kind: VehicleRecommendationTurnKind;
+};
+
+export function decideVehicleRecommendationTurn(
+  input: VehicleRecommendationTurnInput
+): VehicleRecommendationTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!input.wantsRecommendation) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  if (!input.modelUnknown) return { kind: "none" }; // they're on a specific bike => let pricing handle it
+  return { kind: "recommend" };
+}
+
 // --- Deal/progress status check (2026-06-18) -------------------------------
 //
 // A customer asking an OPEN status question about their deal/order/bike — "how are
