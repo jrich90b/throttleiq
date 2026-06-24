@@ -3273,10 +3273,11 @@ export function listConversations() {
         status: c.status ?? "open",
         closedAt: c.closedAt ?? null,
         closedReason: c.closedReason ?? null,
-        // STEP 2: the agent's draft was held by the quality gate (being fixed) — surfaced as a flag
-        // so the inbox can show a "Held" state instead of an empty/no-draft row. Boolean only (the
-        // held reason stays server-side).
-        draftHeld: c.draftHeld ? true : null,
+        // STEP 2: the agent's draft was held — surfaced so the inbox shows a held state instead of an
+        // empty row. Carry heldKind so the card tag can be reason-aware ("Needs reply" for a
+        // context-fidelity hold vs the draft-quality "being fixed"); the rest of the reason stays
+        // server-side. (Truthy object => existing "held" checks still fire.)
+        draftHeld: c.draftHeld ? { heldKind: (c.draftHeld as any).heldKind ?? null } : null,
         createdAt: c.createdAt,
         updatedAt,
         lastMessage: lastNonCall,

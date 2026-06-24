@@ -93,6 +93,12 @@ assert.ok(
   "appendOutbound must clear draftHeld + close the marked held task on a human reply (clear-on-reply)"
 );
 assert.ok(/couldn't answer this in context/i.test(CONTEXT_FIDELITY_HELD_TODO_MARKER), "held-task marker names the out-of-context cause");
+// The INBOX SUMMARY must carry heldKind to the card (not coerce draftHeld to a bare boolean) — otherwise
+// the reason-aware "Needs reply" tag can never render. (Regression guard: the summary stripped it before.)
+assert.ok(
+  /draftHeld:\s*c\.draftHeld\s*\?\s*\{\s*heldKind/.test(store),
+  "the inbox summary must surface draftHeld.heldKind (not draftHeld ? true) so the card tag is reason-aware"
+);
 // The canonical handoff ack is a real handoff (no fabricated answer/availability) and ends naturally.
 assert.ok(/right person/i.test(CONTEXT_FIDELITY_HANDOFF_ACK), "handoff ack hands off to a person");
 assert.ok(
