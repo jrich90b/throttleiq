@@ -10840,7 +10840,16 @@ export default function Home() {
           )
         );
       }
-      setSaveToast(shouldClear ? "Feedback removed." : rating === "up" ? "Marked helpful." : "Marked needs work.");
+      const redrafted = !!data?.redraft?.redrafted;
+      setSaveToast(
+        shouldClear
+          ? "Feedback removed."
+          : rating === "up"
+            ? "Marked helpful."
+            : redrafted
+              ? "Marked needs work — redrafted. Review the new draft below and send."
+              : "Marked needs work."
+      );
     } catch {
       window.alert("Failed to save feedback");
     } finally {
