@@ -1988,6 +1988,10 @@ export function isDuplicateInboundEvent(
   return nowMs - atMs <= windowMs;
 }
 
+/** Marker substring in the context-fidelity "needs your reply" held task — lets the producer (index.ts)
+ *  dedup it and the clear-on-reply hook below recognize + close it class-agnostically. */
+export const CONTEXT_FIDELITY_HELD_TODO_MARKER = "AI couldn't answer this in context";
+
 export function appendOutbound(
   conv: Conversation,
   from: string,
@@ -2000,6 +2004,18 @@ export function appendOutbound(
   invariantHints?: DraftInvariantHints
 ) {
   const providerKey = String(provider ?? "").trim().toLowerCase();
+  // Clear-on-reply: a human reply means the turn is handled — clear the context-fidelity held marker (so
+  // the inbox card tag + banner vanish) and close the "needs your reply" task. Scoped to the
+  // context_fidelity held kind so this is a strict no-op unless the held-surfacing path produced it
+  // (draft_ai publishes never clear it; only a real human reply does).
+  if (providerKey === "human" && (conv.draftHeld as any)?.heldKind === "context_fidelity") {
+    conv.draftHeld = null;
+    for (const t of listOpenTodos()) {
+      if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+        markTodoDone(conv.id, t.id);
+      }
+    }
+  }
   const customerFacingProvider =
     providerKey === "human" || providerKey === "draft_ai" || providerKey === "twilio" || providerKey === "sendgrid";
   if (

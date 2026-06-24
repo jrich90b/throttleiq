@@ -28,8 +28,10 @@ import {
   CONTEXT_FIDELITY_HOLD_FRAMES,
   CONTEXT_FIDELITY_HOLD_MIN_CONFIDENCE,
   CONTEXT_FIDELITY_HANDOFF_ACK,
+  contextFidelityHeldSurfacingEnabled,
   type ContextFidelityScoreLike
 } from "../services/api/src/domain/contextFidelityHold.ts";
+import { CONTEXT_FIDELITY_HELD_TODO_MARKER } from "../services/api/src/domain/conversationStore.ts";
 
 // --- 1) Source guard: index.ts must wire the shadow (import + use + log marker). ---
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
@@ -67,6 +69,30 @@ assert.ok(
   /Out-of-context catch/.test(index),
   "the enforcement must create a staff follow-up task to handle the held turn"
 );
+
+// --- 1c) Held-surfacing wiring (DARK behind CONTEXT_FIDELITY_HELD_SURFACING): held-no-draft + card
+//         tag/banner marker + deduped task + clear-on-reply. The "don't let a rep miss it" path. ---
+const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+assert.equal(contextFidelityHeldSurfacingEnabled(), false, "held-surfacing ships DARK — flag off by default");
+assert.ok(/contextFidelityHeldSurfacingEnabled\(\)/.test(index), "the held-surfacing path is gated by the flag");
+assert.ok(
+  /heldKind:\s*"context_fidelity"/.test(index),
+  "a context-fidelity held sets draftHeld.heldKind so the inbox card tag + banner can be reason-aware"
+);
+assert.ok(
+  /context_fidelity_held/.test(index),
+  "the held-surfacing path returns held (no rubber-stampable draft)"
+);
+assert.ok(
+  /upsertContextFidelityHeldTodo/.test(index) && /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(index),
+  "the held task is created via a deduped helper keyed on the shared marker"
+);
+// Clear-on-reply lives in the universal outbound sink: a human reply clears the held marker + closes the task.
+assert.ok(
+  /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(store) && /providerKey === "human"/.test(store) && /conv\.draftHeld = null/.test(store) && /markTodoDone/.test(store),
+  "appendOutbound must clear draftHeld + close the marked held task on a human reply (clear-on-reply)"
+);
+assert.ok(/couldn't answer this in context/i.test(CONTEXT_FIDELITY_HELD_TODO_MARKER), "held-task marker names the out-of-context cause");
 // The canonical handoff ack is a real handoff (no fabricated answer/availability) and ends naturally.
 assert.ok(/right person/i.test(CONTEXT_FIDELITY_HANDOFF_ACK), "handoff ack hands off to a person");
 assert.ok(

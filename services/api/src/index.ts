@@ -297,6 +297,7 @@ import {
   decideContextFidelityHold,
   contextFidelityHoldShadowEnabled,
   isContextFidelityHoldEnabled,
+  contextFidelityHeldSurfacingEnabled,
   CONTEXT_FIDELITY_HANDOFF_ACK
 } from "./domain/contextFidelityHold.js";
 import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
@@ -661,6 +662,7 @@ import {
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
+  CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
@@ -4078,12 +4080,31 @@ async function gateDraftBeforePublish(
 // lives in decideContextFidelityHold (hold-class + major + conf>=0.8 + turn-judged frame). This logs
 // the would-hold and returns the decision; the caller (publishCustomerReplyDraft, the shared chokepoint
 // for the live webhook AND regenerate) performs the actual enforcement when `live`. Never throws.
+// One open "needs your reply" task per conversation for a context-fidelity hold (deduped on the shared
+// marker). appendOutbound closes it when the rep replies. Owner defaults to the lead owner via addTodo —
+// this NEVER changes conv.leadOwner (Joe's constraint).
+function upsertContextFidelityHeldTodo(conv: Conversation, frame: string | null): void {
+  const alreadyOpen = listOpenTodos().some(
+    t => t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)
+  );
+  if (alreadyOpen) return;
+  addTodo(
+    conv,
+    "other",
+    `Needs your reply — the ${CONTEXT_FIDELITY_HELD_TODO_MARKER} (${frame ?? "context"}). Reply to the customer.`,
+    undefined,
+    undefined,
+    undefined,
+    "followup"
+  );
+}
+
 async function evaluateContextFidelityHold(
   conv: Conversation,
   candidate: string,
   channel: "sms" | "email",
   scope: "live" | "regen" | "manual"
-): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string } | null> {
+): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string; steering: string | null } | null> {
   const live = isContextFidelityHoldEnabled();
   if (!contextFidelityHoldShadowEnabled() && !live) return null; // dark: no scorer call, no latency
   try {
@@ -4098,7 +4119,7 @@ async function evaluateContextFidelityHold(
     };
     const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
     const decision = decideContextFidelityHold({ enabled: live, score: sc });
-    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason };
+    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason, steering: null };
     // Keep both literal markers so the shadow measurement string survives and the enforce path is greppable.
     const marker = live ? "[context-fidelity-hold-enforce]" : "[context-fidelity-hold-shadow]";
     console.warn(
@@ -4124,7 +4145,7 @@ async function evaluateContextFidelityHold(
         }
       });
     }
-    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason };
+    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason, steering: String(sc?.steering ?? "").slice(0, 240) || null };
   } catch {
     // Best-effort — never block or fail a publish.
     return null;
@@ -4189,8 +4210,43 @@ async function publishCustomerReplyDraft(args: {
   // chokepoint = both the live webhook and regenerate are covered.
   const cfHold = await evaluateContextFidelityHold(args.conv, invariant.draftText, args.channel, args.routeScope ?? "live");
   const contextFidelityEnforced = !!(cfHold?.hold && cfHold.live);
+  if (contextFidelityEnforced && contextFidelityHeldSurfacingEnabled()) {
+    // HELD-no-draft surfacing (suggest mode): mirror the draft-quality held block — store NO draft, set a
+    // reason-tagged held marker (drives the inbox card tag + banner) + ONE deduped staff task, so a rep
+    // can't rubber-stamp a generic ack over an unanswered turn. Cleared when a human replies (appendOutbound).
+    discardPendingDrafts(args.conv, "context_fidelity_held");
+    delete args.conv.emailDraft;
+    args.conv.draftHeld = {
+      at: new Date().toISOString(),
+      reason: "context_fidelity_out_of_context",
+      heldKind: "context_fidelity",
+      frame: cfHold?.frame ?? null,
+      steering: cfHold?.steering ?? null,
+      channel: args.channel,
+      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+    } as any;
+    upsertContextFidelityHeldTodo(args.conv, cfHold?.frame ?? null);
+    saveConversation(args.conv);
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "context_fidelity.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        frame: cfHold?.frame ?? null,
+        reason: cfHold?.reason ?? null,
+        surfacing: "held_no_draft",
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 160),
+        heldDraftPreview: String(invariant.draftText ?? "").slice(0, 200)
+      }
+    });
+    return { ok: false, reason: "context_fidelity_held", held: true };
+  }
   const publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
   if (contextFidelityEnforced) {
+    // Legacy enforcement (surfacing flag off / future autopilot): substitute the safe handoff ack + task.
     addTodo(
       args.conv,
       "other",
