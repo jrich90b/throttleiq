@@ -347,6 +347,11 @@ export type TodoTask = {
     decision: string; // e.g. "closed" | "shadow_would_close" | "below_confidence" | "not_fulfilled"
     channel: string;
   };
+  // Set ONCE when a department-handoff task soft-closes (dept responded, customer not booked): the task
+  // is snoozed to nudgeAt (dueAt) and re-surfaces then as a staff follow-up. Presence also guards
+  // against re-soft-closing on the re-surface. See domain/taskFulfillmentAutoClose.ts.
+  autoSoftCloseAt?: string;
+  autoSoftClose?: { at: string; nudgeAt: string; reason: string; evidence?: string };
 };
 
 export type TodoTaskClass = "followup" | "appointment" | "todo" | "reminder";
@@ -5175,6 +5180,21 @@ export function setTodoAutoCloseCheck(
   const task = todos.find(t => t.id === todoId && t.convId === convId);
   if (!task) return;
   task.autoCloseCheck = check;
+  scheduleSave();
+}
+
+// Mark a department-handoff task as soft-closed (records WHY + the nudge date). Set once; its presence
+// guards against re-soft-closing when the task re-surfaces. The actual soft-close (snooze to nudgeAt)
+// is applied by the caller via snoozeTodo.
+export function setTodoAutoSoftClose(
+  convId: string,
+  todoId: string,
+  info: NonNullable<TodoTask["autoSoftClose"]>
+): void {
+  const task = todos.find(t => t.id === todoId && t.convId === convId);
+  if (!task) return;
+  task.autoSoftClose = info;
+  task.autoSoftCloseAt = info.at;
   scheduleSave();
 }
 

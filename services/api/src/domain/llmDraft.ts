@@ -1293,12 +1293,17 @@ const TASK_FULFILLMENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["task_id", "fulfilled", "confidence", "evidence"],
+        required: ["task_id", "fulfilled", "confidence", "evidence", "engaged_pending_customer", "defer_until"],
         properties: {
           task_id: { type: "string" },
           fulfilled: { type: "boolean" },
           confidence: { type: "number" },
-          evidence: { type: "string" }
+          evidence: { type: "string" },
+          // Dealer engaged the objective but it now awaits the CUSTOMER (responded/quoted a wait, no
+          // booking yet). NOT fulfilled, but the dealer did their part. Drives soft-close + nudge.
+          engaged_pending_customer: { type: "boolean" },
+          // Best-effort ISO date (YYYY-MM-DD) the dealer's reply implies for the next touch, else "".
+          defer_until: { type: "string" }
         }
       }
     }
@@ -1310,6 +1315,10 @@ export type TaskFulfillmentVerdictParse = {
   fulfilled: boolean;
   confidence: number;
   evidence: string;
+  /** Dealer engaged the objective but it awaits the customer (responded/quoted a wait, no booking). */
+  engagedPendingCustomer: boolean;
+  /** Best-effort ISO date the dealer's reply implies for the next touch, or null when none named. */
+  deferUntil: string | null;
 };
 
 /**
@@ -1377,12 +1386,17 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     'dealer/sms: "Hey, just checking in - how is it going?" | task {"task_id":"t3","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}',
     'dealer/sms: "Hey Wayne, that 2013 Street Glide is here, welcome to stop by after 4." | task {"task_id":"t4","type":"call","objective":"Call the customer about the 2013 Street Glide."} -> {"task_id":"t4","fulfilled":true,"confidence":0.9,"evidence":"the objective (tell the customer about the Street Glide) was carried out by SMS; once the objective is accomplished the channel does not matter"}',
     'dealer/sms: "Hey Douglas, it is Joe in sales. That freewheeler is listed at $17,995. Let me know if you want to stop in." then customer: "Thanks. I was just curious." | task {"task_id":"t5","type":"call","objective":"Call customer to follow up on the 2016 Freewheeler pricing."} -> {"task_id":"t5","fulfilled":true,"confidence":0.9,"evidence":"the pricing objective was delivered by SMS and the customer acknowledged they are all set; the call task objective is accomplished even though it was handled by text"}',
-    'dealer/sms: "Shoot me a good time and I will call to go over your financing terms with you." | task {"task_id":"t6","type":"call","objective":"Call customer to verbally review and confirm their financing terms."} -> {"task_id":"t6","fulfilled":false,"confidence":0.9,"evidence":"objective inherently needs a live verbal review/confirmation; an SMS proposing to call later does not accomplish it"}'
+    'dealer/sms: "Shoot me a good time and I will call to go over your financing terms with you." | task {"task_id":"t6","type":"call","objective":"Call customer to verbally review and confirm their financing terms."} -> {"task_id":"t6","fulfilled":false,"confidence":0.9,"evidence":"objective inherently needs a live verbal review/confirmation; an SMS proposing to call later does not accomplish it","engaged_pending_customer":false,"defer_until":""}',
+    // engaged-but-pending-customer: the department responded but it now awaits the customer to book/decide.
+    'dealer/sms: "We would be happy to look at it but we are booking into the last week of July right now." then customer: "I understand." | task {"task_id":"t7","type":"service","objective":"Service website text: ...can you take a look at my 2001 Low Rider."} -> {"task_id":"t7","fulfilled":false,"confidence":0.9,"evidence":"offered service and gave a booking timeframe, but nothing is scheduled; awaits the customer to book","engaged_pending_customer":true,"defer_until":"2026-07-27"}',
+    'dealer/sms: "Yes we can order that seat for you, want me to put it on order?" then customer: "let me think about it" | task {"task_id":"t8","type":"parts","objective":"Customer asked about a Saddlemen seat."} -> {"task_id":"t8","fulfilled":false,"confidence":0.85,"evidence":"parts dept offered to order it; customer is deciding, no order placed yet","engaged_pending_customer":true,"defer_until":""}'
   ];
 
+  const today = new Date().toISOString().slice(0, 10);
   const prompt = [
     "You are a precision parser for a motorcycle dealership task tracker.",
     "Return only JSON matching the schema.",
+    `Today is ${today}.`,
     "",
     "Below is the dealer's recent follow-up activity in one conversation (dealer = our team's outbound SMS/email/call; customer = inbound), oldest to newest. For EACH task, decide whether the dealer's follow-up has already ACCOMPLISHED that task's objective ANYWHERE in this activity.",
     "",
@@ -1395,6 +1409,8 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     "- For follow-up tasks, any channel (SMS, email, or a reached call) can fulfill the objective.",
     "- A generic check-in that does not address the specific objective is NOT fulfilled.",
     "- Judge only the dealer's actions; customer messages are context. When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
+    "- engaged_pending_customer: set true when fulfilled=false BUT the dealer meaningfully ENGAGED the objective and it now awaits the CUSTOMER to act — e.g. the department responded/offered and quoted a wait time or asked the customer to book/decide, but nothing is scheduled yet. Set false when the dealer hasn't addressed the objective yet, or when fulfilled=true.",
+    "- defer_until: if the dealer's reply names a timeframe for the next step (e.g. 'booking into late July', 'call you next week', 'parts in about 10 days'), return the best-effort ISO date YYYY-MM-DD for it relative to today; otherwise return an empty string.",
     "- confidence is 0..1. Emit exactly one verdict per input task_id.",
     "",
     "Follow-up activity (oldest to newest):",
@@ -1430,7 +1446,9 @@ export async function classifyTaskFulfillmentWithLLM(args: {
       taskId: String(v?.task_id ?? "").trim(),
       fulfilled: !!v?.fulfilled,
       confidence: clamp01(v?.confidence),
-      evidence: cleanOptionalString(v?.evidence) ?? ""
+      evidence: cleanOptionalString(v?.evidence) ?? "",
+      engagedPendingCustomer: !!v?.engaged_pending_customer,
+      deferUntil: cleanOptionalString(v?.defer_until) ?? null
     }))
     .filter((v: TaskFulfillmentVerdictParse) => v.taskId);
 }

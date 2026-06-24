@@ -615,7 +615,9 @@ import {
   isAutoCloseEligibleTask,
   decideTaskAutoClose,
   isTaskFulfillmentAutoCloseEnabled,
-  taskFulfillmentAutoCloseShadowEnabled
+  taskFulfillmentAutoCloseShadowEnabled,
+  decideDepartmentTaskSoftClose,
+  isDepartmentTaskSoftCloseEnabled
 } from "./domain/taskFulfillmentAutoClose.js";
 import {
   resolveAuthoritativeModels,
@@ -672,6 +674,7 @@ import {
   markTodoDone,
   snoozeTodo,
   setTodoAutoCloseCheck,
+  setTodoAutoSoftClose,
   cleanModelDisplayName,
   markTodoEscalated,
   markTodoReminderSent,
@@ -11289,6 +11292,42 @@ async function runTaskFulfillmentAutoClose(
       }
       if (decision.close) {
         markTodoDone(conv.id, task.id);
+        continue;
+      }
+      // Not closing — for a DEPARTMENT handoff the dept engaged but the customer hasn't booked, soft-close
+      // (snooze out of the urgent view) + NUDGE: it re-surfaces as a staff follow-up at the nudge date if
+      // still un-booked. No customer message. Dark behind DEPARTMENT_TASK_SOFT_CLOSE_NUDGE.
+      const soft = decideDepartmentTaskSoftClose({
+        enabled: isDepartmentTaskSoftCloseEnabled(),
+        task: { status: task.status, reason: task.reason, autoSoftCloseAt: task.autoSoftCloseAt },
+        verdict,
+        appointmentBooked: !!conv?.appointment?.bookedEventId,
+        now: new Date()
+      });
+      if ((soft.softClose || soft.reason === "shadow_would_soft_close") && soft.nudgeAt) {
+        recordDecisionTrace({
+          scope: "live",
+          stage: soft.softClose ? "task_autoclose.soft_closed" : "task_autoclose.soft_close_shadow",
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          detail: {
+            taskId: task.id,
+            reason: task.reason,
+            summary: String(task.summary ?? "").slice(0, 140),
+            nudgeAt: soft.nudgeAt,
+            deferUntil: verdict?.deferUntil ?? null,
+            decision: soft.reason
+          }
+        });
+      }
+      if (soft.softClose && soft.nudgeAt) {
+        snoozeTodo(conv.id, task.id, soft.nudgeAt);
+        setTodoAutoSoftClose(conv.id, task.id, {
+          at: new Date().toISOString(),
+          nudgeAt: soft.nudgeAt,
+          reason: soft.reason,
+          evidence: String(verdict?.evidence ?? "").slice(0, 200) || undefined
+        });
       }
     }
   } catch {
