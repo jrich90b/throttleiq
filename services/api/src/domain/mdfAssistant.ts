@@ -397,14 +397,69 @@ export function invoiceCandidateFiles(files: MdfUploadedFile[]): MdfUploadedFile
   });
 }
 
+const MONTH_INDEX: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
+  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
+};
+
+// Parse month/day (and an optional 2- or 4-digit year) from the common invoice date formats: "6/15",
+// "6-15-26", "June 15", "Dec 20th, 2026", "15 June". Returns null for anything else (incl. ISO
+// yyyy-mm-dd, which already has a year and is left untouched). Deterministic structured-field parsing.
+function parseMonthDay(text: string): { month: number; day: number; year?: number } | null {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return null;
+  const valid = (mo: number, d: number) => mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+  const yr = (s?: string) => (s ? (s.length === 2 ? 2000 + Number(s) : Number(s)) : undefined);
+  let m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2}|\d{4}))?$/);
+  if (m) {
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    return valid(month, day) ? { month, day, year: yr(m[3]) } : null;
+  }
+  m = t.match(/^([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{2,4}))?$/);
+  if (m && MONTH_INDEX[m[1]]) {
+    const day = Number(m[2]);
+    return valid(MONTH_INDEX[m[1]], day) ? { month: MONTH_INDEX[m[1]], day, year: yr(m[3]) } : null;
+  }
+  m = t.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?(?:,?\s+(\d{2,4}))?$/);
+  if (m && MONTH_INDEX[m[2]]) {
+    const day = Number(m[1]);
+    return valid(MONTH_INDEX[m[2]], day) ? { month: MONTH_INDEX[m[2]], day, year: yr(m[3]) } : null;
+  }
+  return null;
+}
+
+// Normalize an extracted date string, inferring a MISSING year. Deterministic structured-field cleanup
+// (the LLM already identified this as a date) — NOT customer comprehension. Rule: if the date has no
+// year, pick the year that makes it the most recent date NOT in the future — so a Dec invoice processed
+// in January resolves to LAST year, while a current-month date stays this year (and a Jan date in January
+// is NOT wrongly pushed back). A date that already carries a year is normalized to MM/DD/YYYY; an
+// unparseable string (incl. ISO yyyy-mm-dd) is returned unchanged. Pure.
+export function inferDateYear(raw: string | null | undefined, now: Date): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const parsed = parseMonthDay(text);
+  if (!parsed) return text;
+  let year = parsed.year;
+  if (!year) {
+    const y = now.getUTCFullYear();
+    const candidateMs = Date.UTC(y, parsed.month - 1, parsed.day);
+    const graceMs = 2 * 86_400_000; // tolerate same-day / minor clock skew
+    year = candidateMs > now.getTime() + graceMs ? y - 1 : y;
+  }
+  return `${String(parsed.month).padStart(2, "0")}/${String(parsed.day).padStart(2, "0")}/${year}`;
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
+  const now = new Date();
   const invoices = Array.isArray(packet.invoices)
     ? packet.invoices
         .map((row: any) => ({
           vendorName: String(row?.vendorName ?? row?.vendor ?? "").trim(),
-          invoiceDate: String(row?.invoiceDate ?? row?.invoice_date ?? "").trim(),
+          invoiceDate: inferDateYear(String(row?.invoiceDate ?? row?.invoice_date ?? "").trim(), now),
           invoiceNumber: String(row?.invoiceNumber ?? row?.invoice_number ?? "").trim(),
           amount: String(row?.amount ?? row?.spend ?? row?.invoiceAmount ?? "").trim(),
           fileNames: Array.isArray(row?.fileNames)
@@ -419,11 +474,11 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
     campaignName: String(packet.extractedFields?.campaignName ?? ""),
     eventName: String(packet.extractedFields?.eventName ?? ""),
     vendorName: String(packet.extractedFields?.vendorName ?? ""),
-    invoiceDate: String(packet.extractedFields?.invoiceDate ?? ""),
+    invoiceDate: inferDateYear(String(packet.extractedFields?.invoiceDate ?? ""), now),
     invoiceNumber: String(packet.extractedFields?.invoiceNumber ?? ""),
     spend: String(packet.extractedFields?.spend ?? ""),
-    activityStartDate: String(packet.extractedFields?.activityStartDate ?? ""),
-    activityEndDate: String(packet.extractedFields?.activityEndDate ?? ""),
+    activityStartDate: inferDateYear(String(packet.extractedFields?.activityStartDate ?? ""), now),
+    activityEndDate: inferDateYear(String(packet.extractedFields?.activityEndDate ?? ""), now),
     totalLeads: String(packet.extractedFields?.totalLeads ?? ""),
     attendance: String(packet.extractedFields?.attendance ?? ""),
     motorcyclesSold: String(packet.extractedFields?.motorcyclesSold ?? ""),
@@ -653,7 +708,14 @@ async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): 
     const invoiceNumber = String(first.invoiceNumber ?? first.invoice_number ?? "").trim();
     const invoiceDate = String(first.invoiceDate ?? first.invoice_date ?? "").trim();
     if (vendorName || invoiceNumber || amount) {
-      out.push({ vendorName, invoiceDate, invoiceNumber, amount, fileNames: [file.name], description: String(first.description ?? "").trim() });
+      out.push({
+        vendorName,
+        invoiceDate: inferDateYear(invoiceDate, new Date()),
+        invoiceNumber,
+        amount,
+        fileNames: [file.name],
+        description: String(first.description ?? "").trim()
+      });
     }
   }
   return out;
@@ -688,6 +750,7 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "- Mirror the first/primary invoice into extractedFields.vendorName, extractedFields.invoiceDate, extractedFields.invoiceNumber, and extractedFields.spend so older draft views still show a summary.",
     "- Use files marked creative, proof_of_performance, or supporting_only only for campaign description, proof, eligibility, documentation, and concerns.",
     "- If a magazine cover, tear sheet, screenshot, artwork, or proof file contains unrelated dates/prices/numbers, do not treat those as invoice fields.",
+    `- Today is ${new Date().toISOString().slice(0, 10)}. If an invoice or activity date shows no year, infer the most recent PAST year (use the prior year if assuming this year would put the date in the future). Output dates as MM/DD/YYYY.`,
     "- If no invoice or receipt is provided, leave invoice/spend fields blank and list them as missing.",
     "- If evidence is missing or uncertain, do not guess. Put it in missingFields or eligibility.concerns.",
     "- Do not put missing fields, proof gaps, review notes, or internal concerns in descriptionDraft. descriptionDraft must contain only clean claim/activity description text that is safe to enter into the MDF portal.",
