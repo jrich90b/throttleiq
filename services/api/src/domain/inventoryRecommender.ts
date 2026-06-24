@@ -30,7 +30,9 @@ const SEGMENT_RULES: { segment: HarleySegment; re: RegExp }[] = [
   { segment: "adventure", re: /\b(pan[\s-]?america|pan[\s-]?am)\b/i },
   {
     segment: "touring",
-    re: /\b(street[\s-]?glide|road[\s-]?glide|road[\s-]?king|electra[\s-]?glide|ultra|tour|glide ?(?:special|ultra|limited)?)\b/i
+    // SPECIFIC touring glides only — a bare "glide" would wrongly grab Super/Wide/Sport Glide,
+    // which are Dyna/Softail CRUISERS (caught live, s R Gurajala 2026-06-24).
+    re: /\b(street[\s-]?glide|road[\s-]?glide|road[\s-]?king|electra[\s-]?glide|ultra|tour(?:ing)?)\b/i
   },
   {
     segment: "sport",
@@ -38,7 +40,9 @@ const SEGMENT_RULES: { segment: HarleySegment; re: RegExp }[] = [
   },
   {
     segment: "cruiser",
-    re: /\b(fat[\s-]?boy|fat[\s-]?bob|low[\s-]?rider|softail|heritage|breakout|street[\s-]?bob|sport[\s-]?glide|slim|deluxe|night[\s-]?train|wide[\s-]?glide|super[\s-]?glide|switchback|dyna|v[\s-]?rod|vrsc|standard)\b/i
+    // Includes the literal word "cruiser" — feeds carry units named e.g. "Twin Cruiser" that must
+    // be excluded when the customer says "not cruisers" (caught live, s R Gurajala 2026-06-24).
+    re: /\b(cruiser|fat[\s-]?boy|fat[\s-]?bob|low[\s-]?rider|softail|heritage|breakout|street[\s-]?bob|sport[\s-]?glide|slim|deluxe|night[\s-]?train|wide[\s-]?glide|super[\s-]?glide|switchback|dyna|v[\s-]?rod|vrsc|standard)\b/i
   }
 ];
 

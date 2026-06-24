@@ -39,9 +39,13 @@ const segmentCases: [string, string][] = [
   ["Road Glide Special", "touring"],
   ["Ultra Limited", "touring"],
   ["Fat Boy", "cruiser"],
+  ["Twin Cruiser", "cruiser"], // literal "cruiser" in a feed model name (caught live 2026-06-24)
   ["Low Rider S", "cruiser"],
   ["Heritage Classic", "cruiser"],
   ["Breakout", "cruiser"],
+  ["Super Glide Custom", "cruiser"], // a Dyna cruiser — must NOT read as touring (caught live)
+  ["Wide Glide", "cruiser"],
+  ["Sport Glide", "cruiser"],
   ["Iron 883", "sport"],
   ["Nightster", "sport"],
   ["Forty-Eight", "sport"],
@@ -57,6 +61,7 @@ for (const [model, expected] of segmentCases) {
 
 // --- 2) Recommender. ---
 const feed = [
+  { model: "Twin Cruiser", year: "2023", price: 3000, condition: "new" }, // cheapest, but a cruiser by name
   { model: "Fat Boy", year: "2022", price: 18000, condition: "new" },
   { model: "Iron 883", year: "2019", price: 7995, condition: "used" },
   { model: "Iron 883", year: "2018", price: 7200, condition: "used" }, // dup model, cheaper
@@ -74,7 +79,10 @@ assert.deepEqual(
   ["Street 750 6495", "Iron 883 7200", "Nightster 13500"],
   "excludes cruisers, ranks by price, one unit per model, drops priceless"
 );
-assert.ok(!noCruisers.some(i => i.model === "Fat Boy" || i.model === "Heritage Classic"), "no cruisers leak through");
+assert.ok(
+  !noCruisers.some(i => /cruiser|fat boy|heritage/i.test(String(i.model))),
+  "no cruisers leak through — incl. a cheapest-priced unit literally named 'Twin Cruiser'"
+);
 
 // Condition filter: used only.
 const usedOnly = recommendInventory(feed, { condition: "used", excludeSegments: ["cruiser"] }, 5);
