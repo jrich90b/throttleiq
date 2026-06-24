@@ -28,7 +28,40 @@ const cases: Array<[any, string | null]> = [
   [{ reason: "call", action: "Call customer to follow up on the Street Glide." }, null],
   [{ reason: "note", action: "Internal note (no customer follow-up)." }, null],
   [{ reason: "service", action: "Service department follow-up and scheduling." }, null],
-  [{ reason: "parts", action: "Parts department follow-up." }, null]
+  [{ reason: "parts", action: "Parts department follow-up." }, null],
+  // Internal review / held-draft tasks are NOT customer buy-signals — never badged, even when their
+  // summary/derived-action borrows inventory/pricing words from a guard name (Armando Cortes, 6/24).
+  [
+    {
+      reason: "other",
+      summary:
+        "Review dealer ride outcome customer follow-up before sending. Draft guard blocked it: unsupported_inventory_hold_promise_guard.",
+      action: "Verify inventory and follow up."
+    },
+    null
+  ],
+  [
+    {
+      reason: "other",
+      summary:
+        "Review customer follow-up before sending. Draft guard blocked it: unsupported_pricing_promise_guard.",
+      action: "Provide pricing or payment details."
+    },
+    null
+  ],
+  [
+    {
+      reason: "other",
+      summary: "Needs your reply — the AI couldn't answer this in context (stale_intent). Reply to the customer.",
+      action: "Follow up with the customer."
+    },
+    null
+  ],
+  // ...but a GENUINE customer availability task (ordinary summary, not a review template) still badges.
+  [
+    { reason: "call", summary: "Customer asked if the Street Glide is in stock.", action: "Verify inventory and follow up." },
+    "availability"
+  ]
 ];
 
 for (const [todo, expected] of cases) {
