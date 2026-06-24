@@ -87,10 +87,20 @@ assert.ok(
   /upsertContextFidelityHeldTodo/.test(index) && /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(index),
   "the held task is created via a deduped helper keyed on the shared marker"
 );
-// Clear-on-reply lives in the universal outbound sink: a human reply clears the held marker + closes the task.
+// Clear-on-reply lives in the universal outbound sink: ANY real reply to the customer clears the held
+// marker + closes the task. A reply is a console log ("human"), a live SMS ("twilio"), or an email
+// ("sendgrid") — but NOT a draft_ai re-publish. (Regression guard: only "human" used to clear it, so a
+// real Twilio reply left the flag stuck — Nicholas Braun, 2026-06-24.)
 assert.ok(
-  /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(store) && /providerKey === "human"/.test(store) && /conv\.draftHeld = null/.test(store) && /markTodoDone/.test(store),
-  "appendOutbound must clear draftHeld + close the marked held task on a human reply (clear-on-reply)"
+  /CONTEXT_FIDELITY_HELD_TODO_MARKER/.test(store) &&
+    /providerKey === "human" \|\| providerKey === "twilio" \|\| providerKey === "sendgrid"/.test(store) &&
+    /conv\.draftHeld = null/.test(store) &&
+    /markTodoDone/.test(store),
+  "appendOutbound must clear draftHeld + close the held task on ANY real customer reply (console human, live twilio SMS, or sendgrid email) — not just provider 'human'"
+);
+assert.ok(
+  !/providerKey === "draft_ai"[^|]*draftHeld = null/.test(store),
+  "a draft_ai re-publish must NOT clear the context-fidelity held flag"
 );
 assert.ok(/couldn't answer this in context/i.test(CONTEXT_FIDELITY_HELD_TODO_MARKER), "held-task marker names the out-of-context cause");
 // The INBOX SUMMARY must carry heldKind to the card (not coerce draftHeld to a bare boolean) — otherwise
