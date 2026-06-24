@@ -23,6 +23,7 @@ import fs from "node:fs";
 
 import { decideEventPromoTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { buildEventPromoAck } from "../services/api/src/domain/agentVoice.ts";
+import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 // --- 1) Decision table (pure). ---
 type Row = { id: string; bucket: string | null; cta: string | null; ack: boolean };
@@ -49,6 +50,22 @@ for (const r of rows) {
     `decideEventPromoTurn[${r.id}] expected ack=${r.ack}, got kind=${kind}`
   );
 }
+
+// --- 1b) Classification: the event-marketing SOURCES must resolve to event_promo so the ack even gets
+//         a chance to fire. ROOT CAUSE of the top wrong_lead_type misses (7-day audit): these sources
+//         aren't in the catalog, so resolveLeadRule fell through to general_inquiry -> a sales
+//         first-touch ("that stock number is still available, what day to stop in?"). ---
+for (const src of ["National Event Dealer Sweeps", "Room58 - National Event RSVP", "National Event RSVP", "Ride Challenge"]) {
+  const r = resolveLeadRule(src);
+  assert.equal(r.bucket, "event_promo", `source "${src}" must classify as event_promo, got ${r.bucket}/${r.cta}`);
+  assert.equal(
+    decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind,
+    "event_promo_ack",
+    `"${src}" must flow through to the event-promo ack`
+  );
+}
+// The name inference must NOT sweep a real sales source into event_promo.
+assert.notEqual(resolveLeadRule("Facebook - RAQ").bucket, "event_promo", "a sales source must stay out of event_promo");
 
 // --- 2) Ack safety (pure). ---
 const ack = buildEventPromoAck("Matthew", "Alexandra", "American Harley-Davidson");
