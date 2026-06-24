@@ -2004,18 +2004,6 @@ export function appendOutbound(
   invariantHints?: DraftInvariantHints
 ) {
   const providerKey = String(provider ?? "").trim().toLowerCase();
-  // Clear-on-reply: a human reply means the turn is handled — clear the context-fidelity held marker (so
-  // the inbox card tag + banner vanish) and close the "needs your reply" task. Scoped to the
-  // context_fidelity held kind so this is a strict no-op unless the held-surfacing path produced it
-  // (draft_ai publishes never clear it; only a real human reply does).
-  if (providerKey === "human" && (conv.draftHeld as any)?.heldKind === "context_fidelity") {
-    conv.draftHeld = null;
-    for (const t of listOpenTodos()) {
-      if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
-        markTodoDone(conv.id, t.id);
-      }
-    }
-  }
   const customerFacingProvider =
     providerKey === "human" || providerKey === "draft_ai" || providerKey === "twilio" || providerKey === "sendgrid";
   if (
@@ -2031,6 +2019,24 @@ export function appendOutbound(
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
+  }
+  // Clear-on-reply: a real reply to the customer means the held turn is handled — clear the
+  // context-fidelity held marker (so the inbox card tag + banner vanish) and close the "needs your
+  // reply" task. A reply counts whether it was logged in the console (provider "human"), sent as a live
+  // SMS ("twilio"), or emailed ("sendgrid") — but NOT a draft_ai re-publish (that's the same AI that
+  // couldn't answer; it must not self-clear the flag). Placed AFTER the internal-action-log guard so a
+  // blocked system/log entry never clears it. (Fix: a real Twilio reply — Nicholas Braun, 2026-06-24 —
+  // left the flag stuck because only provider "human" cleared it.)
+  if (
+    (providerKey === "human" || providerKey === "twilio" || providerKey === "sendgrid") &&
+    (conv.draftHeld as any)?.heldKind === "context_fidelity"
+  ) {
+    conv.draftHeld = null;
+    for (const t of listOpenTodos()) {
+      if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+        markTodoDone(conv.id, t.id);
+      }
+    }
   }
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
