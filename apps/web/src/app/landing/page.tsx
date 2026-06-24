@@ -1,11 +1,17 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import { Bricolage_Grotesque } from "next/font/google";
+import localFont from "next/font/local";
 
-const display = Bricolage_Grotesque({
-  subsets: ["latin"],
-  weight: ["500", "700", "800"],
+// Self-hosted (vendored woff2) instead of next/font/google: keeps the build HERMETIC so it never
+// fetches Google Fonts at build time. Next 16's default Turbopack builder fails that fetch on the
+// deploy host; a local font works in every bundler (Turbopack, webpack, Vercel). The variable file
+// covers the 500/700/800 weights this page uses (wght axis 200–800). (2026-06-24)
+const display = localFont({
+  src: "./fonts/bricolage-grotesque-variable.woff2",
+  weight: "200 800",
+  style: "normal",
+  display: "swap",
   variable: "--font-marketing"
 });
 

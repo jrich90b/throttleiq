@@ -57,11 +57,10 @@ echo "    local=$local_head  remote=$remote_head  box=$box_head  (fast-forward, 
 echo "==> Building web locally (artifact mode, no on-box build)"
 # Build with NEXT_PUBLIC_* left at their defaults to match how the box was built
 # (the client uses relative /api; server route handlers read runtime env).
-# Force the WEBPACK builder: Next 16 made `next build` default to Turbopack, whose build-time
-# Google-Fonts fetch (next/font/google "Bricolage Grotesque" on the landing page) fails on the
-# deploy host even though plain HTTPS to Google Fonts works. Webpack fetches it fine — this is the
-# pre-Next-16 behavior. (2026-06-24; see docs/closed_loop_feedback_spec.md neighbors / commit notes.)
-( cd apps/web && npm run build -- --webpack )
+# Uses the default (Turbopack) builder. The landing page font is self-hosted (next/font/local,
+# vendored woff2) so the build is HERMETIC — no Google-Fonts fetch — which is what let us drop the
+# earlier `--webpack` workaround (Next 16's Turbopack failed that fetch on the deploy host). (2026-06-24)
+( cd apps/web && npm run build )
 if [[ ! -f apps/web/.next/BUILD_ID ]]; then
   echo "  ! local build produced no apps/web/.next/BUILD_ID" >&2
   exit 1
