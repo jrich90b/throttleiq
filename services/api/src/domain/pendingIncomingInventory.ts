@@ -1,4 +1,5 @@
 import type { Conversation, PendingIncomingInventory } from "./conversationStore.js";
+import { isPlaceholderModel } from "./modelDeflection.js";
 
 function compact(text: string | null | undefined): string {
   return String(text ?? "").replace(/\s+/g, " ").trim();
@@ -157,43 +158,92 @@ export function formatPendingIncomingInventoryLabel(
   return compact(parts.join(" "));
 }
 
+/**
+ * The KIND of incoming unit — drives the customer/task copy. A NEW unit comes from the factory ON
+ * ORDER (a dealer doesn't take a brand-new bike "in on trade"); a used/pre-owned unit coming in is a
+ * trade (the historical framing). Keyed on the persisted `condition` (a structured field, not
+ * comprehension). FAIL DIRECTION: only an explicit `new` flips to "order" — unknown/used keeps the
+ * conservative trade framing, so we never wrongly tell a real trade-in customer their bike is "on order".
+ * (Fixes: a factory pre-order — Nicholas Braun, condition "new" — was being called a "trade".)
+ */
+type IncomingUnitKind = "order" | "trade";
+function incomingUnitKind(
+  pending: Pick<PendingIncomingInventory, "condition"> | null | undefined
+): IncomingUnitKind {
+  return lower(pending?.condition) === "new" ? "order" : "trade";
+}
+
+/**
+ * A clean "{year} {model}" descriptor for customer copy — or "" when the model is a placeholder
+ * ("Other" / "Full Line" / make-only), so a placeholder never leaks into a reply as "the 2026 Other …"
+ * (Nicholas Braun's stored label was literally "2026 Other"). The builders fall back to a neutral
+ * "the bike" when this is empty. Structured display of a known field, not comprehension.
+ */
+function cleanIncomingUnitLabel(
+  pending: Pick<PendingIncomingInventory, "label" | "year" | "model"> | null | undefined
+): string {
+  const explicit = compact(pending?.label);
+  if (explicit && !isPlaceholderModel(explicit)) return explicit;
+  if (isPlaceholderModel(pending?.model)) return "";
+  const model = cleanModel(pending?.model);
+  if (!model) return "";
+  const year = pending?.year ? String(pending.year) : "";
+  return compact([year, model].filter(Boolean).join(" "));
+}
+
 export function buildPendingIncomingInventoryCustomerAck(
   pending: PendingIncomingInventory | null | undefined
 ): string {
-  const label = formatPendingIncomingInventoryLabel(pending) || "that bike";
-  return `Ok, will do. I'll keep this tied to the ${label} trade and let you know as soon as it's here and ready to look at.`;
+  const unit = cleanIncomingUnitLabel(pending);
+  if (incomingUnitKind(pending) === "order") {
+    const subject = unit ? `the ${unit} you've got on order` : "the bike you've got on order";
+    return `Ok, will do. I'll keep an eye on ${subject} and let you know as soon as it's here and ready to look at.`;
+  }
+  const subject = unit ? `the ${unit} trade` : "the incoming trade";
+  return `Ok, will do. I'll keep this tied to ${subject} and let you know as soon as it's here and ready to look at.`;
 }
 
 export function buildPendingIncomingInventoryInitialAdfReply(
   pending: PendingIncomingInventory | null | undefined
 ): string {
-  const label = formatPendingIncomingInventoryLabel(pending) || "bike";
-  return `Thanks — I have you down for the ${label} we’re taking in on trade. We’ll let you know as soon as it’s here and ready to look at.`;
+  const unit = cleanIncomingUnitLabel(pending);
+  const subject = unit ? `the ${unit}` : "the bike";
+  if (incomingUnitKind(pending) === "order") {
+    return `Thanks — I have you down for ${subject} you've got on order. We'll let you know as soon as it's here and ready to look at.`;
+  }
+  return `Thanks — I have you down for ${subject} we're taking in on trade. We'll let you know as soon as it's here and ready to look at.`;
 }
 
 export function buildPendingIncomingInventoryTaskSummary(args: {
   pending: PendingIncomingInventory | null | undefined;
   customerName?: string | null;
 }): string {
-  const label = formatPendingIncomingInventoryLabel(args.pending) || "incoming trade";
+  const unit = cleanIncomingUnitLabel(args.pending);
   const customer = compact(args.customerName) || "customer";
-  return `Notify ${customer} when the ${label} trade arrives or is ready to show.`;
+  if (incomingUnitKind(args.pending) === "order") {
+    const subject = unit ? `the ${unit} (on order)` : "the ordered bike";
+    return `Notify ${customer} when ${subject} arrives or is ready to show.`;
+  }
+  const subject = unit ? `the ${unit} trade` : "the incoming trade";
+  return `Notify ${customer} when ${subject} arrives or is ready to show.`;
 }
 
 /**
- * Identify our OWN "Notify … when the … trade arrives or is ready to show" task by its
- * fixed template tail. This is a SINGLETON objective per conversation, but it historically
- * piled up (Nicholas Braun: 4 open copies, 2026-06-23): the producer
- * (applyPendingIncomingInventoryState) tags the task `taskClass: "followup"` while
- * inferTodoTaskClass classifies the same summary as "todo" — so addTodo's class-keyed merge
- * split identical objectives across buckets and never collapsed them. Matching on the template
- * lets us dedup CLASS-AGNOSTICALLY. This recognizes a system-generated task summary for
- * side-effect/state housekeeping — NOT customer comprehension — which AGENTS.md allows.
+ * Identify our OWN "Notify … when the … arrives or is ready to show" task by its fixed template
+ * tail. This is a SINGLETON objective per conversation, but it historically piled up (Nicholas
+ * Braun: 4 open copies, 2026-06-23): the producer (applyPendingIncomingInventoryState) tags the
+ * task `taskClass: "followup"` while inferTodoTaskClass classifies the same summary as "todo" — so
+ * addTodo's class-keyed merge split identical objectives across buckets and never collapsed them.
+ * Matching on the template lets us dedup CLASS-AGNOSTICALLY. We key on the stable tail "arrives or is
+ * ready to show" (NOT "trade arrives …") so it recognizes BOTH the legacy trade copy and the new
+ * kind-aware copy (on-order vs trade) after the trade/placeholder-label fix. This recognizes a
+ * system-generated task summary for side-effect/state housekeeping — NOT customer comprehension —
+ * which AGENTS.md allows.
  */
 export function isPendingIncomingInventoryNotifyTodoSummary(summary: string | null | undefined): boolean {
   const text = lower(summary);
   if (!text) return false;
-  return text.includes("trade arrives or is ready to show");
+  return text.includes("arrives or is ready to show");
 }
 
 /**
