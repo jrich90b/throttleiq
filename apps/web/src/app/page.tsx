@@ -8365,6 +8365,16 @@ export default function Home() {
         extractedFields[key] = value;
       }
     }
+    // Re-derive the invoice headline from the MERGED invoice set: the loop above only fills blanks, so it
+    // would keep a STALE total when invoices are added. The total + primary vendor/date/# must reflect
+    // every invoice now in the claim.
+    if (invoices.length) {
+      const primary = invoices[0];
+      extractedFields.vendorName = primary.vendorName || "";
+      extractedFields.invoiceDate = primary.invoiceDate || "";
+      extractedFields.invoiceNumber = primary.invoiceNumber || "";
+      extractedFields.spend = mdfSpendFromInvoices(invoices);
+    }
     return {
       ...existing,
       claimType: existing.claimType !== "unknown" ? existing.claimType : incoming.claimType,
@@ -8406,8 +8416,8 @@ export default function Home() {
 
   function inferMdfUploadRole(file: File): MdfUploadRole {
     const lower = `${file.name} ${file.type}`.toLowerCase();
-    if (/\binvoice|bill|statement\b/.test(lower)) return "invoice";
-    if (/\breceipt|paid|payment\b/.test(lower)) return "receipt";
+    // Invoice and receipt are extracted identically (both count toward spend) — one user-facing role.
+    if (/\binvoice|bill|statement|receipt|paid|payment\b/.test(lower)) return "invoice";
     if (/\bflyer|creative|artwork|ad|mailer|poster\b/.test(lower)) return "creative";
     if (/\bscreenshot|proof|live|tear|script|keyword|performance\b/.test(lower)) return "proof_of_performance";
     return "unknown";
@@ -8425,6 +8435,44 @@ export default function Home() {
           [key]: value
         },
         missingFields
+      };
+    });
+  }
+
+  // Total spend from an invoice set — mirrors the backend sumInvoiceSpend: blank for none, the verbatim
+  // amount for one, the summed total for 2+. Used so the headline total tracks the invoice list (incl.
+  // incremental adds + manual edits).
+  function mdfSpendFromInvoices(invoices: NonNullable<MdfClaimPacket["invoices"]>): string {
+    const amounts = invoices
+      .map(inv => parseFloat(String(inv.amount ?? "").replace(/[^0-9.]/g, "")))
+      .filter(n => Number.isFinite(n) && n > 0);
+    if (!amounts.length) return "";
+    if (amounts.length === 1) return invoices.find(inv => String(inv.amount ?? "").trim())?.amount ?? amounts[0].toFixed(2);
+    return amounts.reduce((sum, n) => sum + n, 0).toFixed(2);
+  }
+
+  // Edit a single invoice's field in place (vendor / date / number / amount). Re-derives the headline
+  // (vendor/date/#/spend) from the primary invoice + the re-summed total so a corrected amount updates
+  // the total. Lets staff fix a wrong/blank extracted vendor before saving.
+  function updateMdfInvoiceField(
+    index: number,
+    field: "vendorName" | "invoiceDate" | "invoiceNumber" | "amount",
+    value: string
+  ) {
+    setMdfPacket(prev => {
+      if (!prev) return prev;
+      const invoices = (prev.invoices ?? []).map((inv, i) => (i === index ? { ...inv, [field]: value } : inv));
+      const primary = invoices[0];
+      return {
+        ...prev,
+        invoices,
+        extractedFields: {
+          ...prev.extractedFields,
+          vendorName: primary?.vendorName ?? "",
+          invoiceDate: primary?.invoiceDate ?? "",
+          invoiceNumber: primary?.invoiceNumber ?? "",
+          spend: mdfSpendFromInvoices(invoices)
+        }
       };
     });
   }
@@ -16317,8 +16365,7 @@ export default function Home() {
                               setMdfFiles(prev => prev.map(file => (file.id === entry.id ? { ...file, role } : file)));
                             }}
                           >
-                            <option value="invoice">Invoice / bill</option>
-                            <option value="receipt">Receipt / proof paid</option>
+                            <option value="invoice">Invoice or receipt</option>
                             <option value="creative">Creative / artwork</option>
                             <option value="proof_of_performance">Proof / tear sheet / screenshot</option>
                             <option value="supporting_only">Supporting only, do not extract invoice fields</option>
@@ -16476,17 +16523,36 @@ export default function Home() {
                         <div className="mt-3 space-y-2">
                           {(mdfPacket.invoices ?? []).map((invoice, index) => (
                             <div
-                              key={`${invoice.invoiceNumber || index}-${invoice.amount || ""}`}
+                              key={invoice.fileNames?.[0] || `inv-${index}`}
                               className="rounded-lg border bg-gray-50 px-3 py-2 text-sm"
                             >
-                              <div className="flex items-baseline justify-between gap-3">
-                                <span className="font-semibold text-gray-800">{invoice.vendorName || "Vendor missing"}</span>
-                                <span className="font-semibold text-gray-900">{invoice.amount || "—"}</span>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className="flex-1 rounded border bg-white px-2 py-1 text-sm font-medium text-gray-900"
+                                  value={invoice.vendorName || ""}
+                                  onChange={e => updateMdfInvoiceField(index, "vendorName", e.target.value)}
+                                  placeholder="Vendor"
+                                />
+                                <input
+                                  className="w-28 rounded border bg-white px-2 py-1 text-right text-sm font-medium text-gray-900"
+                                  value={invoice.amount || ""}
+                                  onChange={e => updateMdfInvoiceField(index, "amount", e.target.value)}
+                                  placeholder="$0.00"
+                                />
                               </div>
-                              <div className="mt-1 text-xs text-gray-500">
-                                {[invoice.invoiceDate, invoice.invoiceNumber ? `#${invoice.invoiceNumber}` : ""]
-                                  .filter(Boolean)
-                                  .join(" • ") || "Date / number needs review"}
+                              <div className="mt-1 flex items-center gap-2">
+                                <input
+                                  className="flex-1 rounded border bg-white px-2 py-1 text-xs text-gray-700"
+                                  value={invoice.invoiceDate || ""}
+                                  onChange={e => updateMdfInvoiceField(index, "invoiceDate", e.target.value)}
+                                  placeholder="Date (MM/DD/YYYY)"
+                                />
+                                <input
+                                  className="flex-1 rounded border bg-white px-2 py-1 text-xs text-gray-700"
+                                  value={invoice.invoiceNumber || ""}
+                                  onChange={e => updateMdfInvoiceField(index, "invoiceNumber", e.target.value)}
+                                  placeholder="Invoice #"
+                                />
                               </div>
                               {invoice.fileNames?.length ? (
                                 <div className="mt-1 text-xs text-gray-500">From: {invoice.fileNames.join(", ")}</div>
