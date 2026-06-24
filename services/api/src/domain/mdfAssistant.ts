@@ -523,76 +523,25 @@ function parsedResponsePayload(resp: any): any | null {
   return parseJsonObject(resp?.output_text);
 }
 
-function mergeInvoiceFields(packet: MdfClaimPacket, invoicePacket: MdfClaimPacket): MdfClaimPacket {
-  const invoiceKeys: Array<keyof MdfClaimPacket["extractedFields"]> = [
-    "vendorName",
-    "invoiceDate",
-    "invoiceNumber",
-    "spend"
-  ];
-  const extractedFields = { ...packet.extractedFields };
-  for (const key of invoiceKeys) {
-    const value = String(invoicePacket.extractedFields[key] ?? "").trim();
-    if (value) extractedFields[key] = value;
+// Mirror the headline extractedFields (vendor / date / number / spend) from the AUTHORITATIVE invoice
+// set: the primary invoice's vendor/date/number and the SUM of all invoice amounts. Blank them when
+// there are no invoices yet (e.g. only creative uploaded so far) so a creative/proof file's numbers
+// can never surface as invoice facts or spend. Pure. (Replaces the old single-call invoice-only
+// fallback + merge path — invoices are now always extracted per-file by extractInvoicesPerFile.)
+export function syncExtractedInvoiceFields(packet: MdfClaimPacket): void {
+  const invoices = packet.invoices ?? [];
+  if (!invoices.length) {
+    packet.extractedFields.vendorName = "";
+    packet.extractedFields.invoiceDate = "";
+    packet.extractedFields.invoiceNumber = "";
+    packet.extractedFields.spend = "";
+    return;
   }
-  const missingFields = packet.missingFields.filter(field => {
-    const normalized = field.toLowerCase();
-    if (extractedFields.vendorName && normalized.includes("vendor")) return false;
-    if (extractedFields.invoiceDate && normalized.includes("invoice date")) return false;
-    if (extractedFields.invoiceNumber && normalized.includes("invoice number")) return false;
-    if (extractedFields.spend && normalized.includes("spend")) return false;
-    return true;
-  });
-  return {
-    ...packet,
-    confidence: Math.max(packet.confidence || 0, invoicePacket.confidence || 0),
-    extractedFields,
-    invoices: invoicePacket.invoices.length ? invoicePacket.invoices : packet.invoices,
-    missingFields
-  };
-}
-
-async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Promise<MdfClaimPacket | null> {
-  const invoiceFiles = files.filter(file => {
-    const role = file.providedRole || inferRoleFromName(file.name);
-    return role === "invoice" || role === "receipt";
-  });
-  if (!invoiceFiles.length) return null;
-  const inputs = await fileContentInputs(invoiceFiles);
-  if (!inputs.length) return null;
-  const prompt = [
-    "Extract ONLY invoice/payment fields from these MDF invoice or receipt files.",
-    "Return the same MDF claim packet schema.",
-    "Create one invoices[] item for every distinct invoice or receipt. Do not merge multiple invoices into one invoice.",
-    "Fill each invoice item with vendorName, invoiceDate, invoiceNumber, amount, and the matching uploaded file name(s).",
-    "Also mirror the first/primary invoice into extractedFields.vendorName, invoiceDate, invoiceNumber, and spend for backwards compatibility.",
-    "Do not use artwork, tear sheets, magazine cover dates, or proof screenshots as invoice facts.",
-    "Leave unknown fields blank and list missing invoice fields in missingFields.",
-    "Set uploadedFiles roles to invoice or receipt based on the provided role."
-  ].join("\n");
-  const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 2400);
-  recordOpenAIUsage(resp, {
-    feature: "mdf_assistant",
-    operation: "extract_invoice_fields",
-    requestKind: "responses.create",
-    model,
-    metadata: { fileCount: invoiceFiles.length }
-  });
-  return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
-}
-
-function shouldRunInvoiceOnlyPass(packet: MdfClaimPacket, files: MdfUploadedFile[]): boolean {
-  const hasInvoiceFiles = files.some(file => {
-    const role = file.providedRole || inferRoleFromName(file.name);
-    return role === "invoice" || role === "receipt";
-  });
-  if (!hasInvoiceFiles) return false;
-  if (!packet.invoices.length) return true;
-  const anyIncompleteInvoice = packet.invoices.some(invoice => {
-    return !invoice.vendorName || !invoice.invoiceDate || !invoice.invoiceNumber || !invoice.amount;
-  });
-  if (anyIncompleteInvoice) return true;
-  return !packet.extractedFields.vendorName || !packet.extractedFields.invoiceDate || !packet.extractedFields.invoiceNumber || !packet.extractedFields.spend;
+  const primary = invoices[0];
+  packet.extractedFields.vendorName = primary.vendorName || "";
+  packet.extractedFields.invoiceDate = primary.invoiceDate || "";
+  packet.extractedFields.invoiceNumber = primary.invoiceNumber || "";
+  packet.extractedFields.spend = sumInvoiceSpend(invoices) ?? (primary.amount || "");
 }
 
 async function createMdfJsonResponse(
@@ -622,12 +571,14 @@ async function createMdfJsonResponse(
   });
 }
 
-// Extract invoices ONE FILE AT A TIME so two distinct invoices can never be merged. Each call
-// sees a single file and returns at most one invoice (or none if it isn't an invoice). Only used
-// when there are 2+ candidate files; a single-file claim is handled by the main pass.
+// Extract invoices ONE FILE AT A TIME — the AUTHORITY for invoices[]. Each call sees a single
+// invoice-candidate file (invoiceCandidateFiles already excludes creative/proof/support-only) and
+// returns at most one invoice, or none if THAT file isn't actually an invoice/receipt. This is what
+// guarantees (a) a creative/flyer can never become an invoice or inflate spend, and (b) two distinct
+// invoices never collapse into one. Runs for ANY invoice-candidate file (1+), not just 2+.
 async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): Promise<MdfInvoicePacket[]> {
   const candidates = invoiceCandidateFiles(files);
-  if (candidates.length < 2) return [];
+  if (!candidates.length) return [];
   const out: MdfInvoicePacket[] = [];
   for (const file of candidates) {
     const inputs = await fileContentInputs([file]);
@@ -709,24 +660,16 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       metadata: { fileCount: files.length }
     });
     const packet = normalizePacket(parsedResponsePayload(resp), files);
-    // Per-file invoice extraction guarantees one invoice per file (no cross-file merge). Prefer
-    // it when it finds MORE distinct invoices than the single-call main pass — that's the
-    // multi-invoice case the main pass collapses ("two invoices, only one parsed").
-    const perFileInvoices = await extractInvoicesPerFile(files, model).catch(() => []);
-    if (perFileInvoices.length >= 2 && perFileInvoices.length > packet.invoices.length) {
-      packet.invoices = perFileInvoices;
-      const summed = sumInvoiceSpend(perFileInvoices);
-      if (summed) packet.extractedFields.spend = summed;
-      const primary = perFileInvoices[0];
-      if (primary?.vendorName && !packet.extractedFields.vendorName) packet.extractedFields.vendorName = primary.vendorName;
-      if (primary?.invoiceNumber && !packet.extractedFields.invoiceNumber) packet.extractedFields.invoiceNumber = primary.invoiceNumber;
-      if (primary?.invoiceDate && !packet.extractedFields.invoiceDate) packet.extractedFields.invoiceDate = primary.invoiceDate;
-      return packet;
-    }
-    const invoicePacket = shouldRunInvoiceOnlyPass(packet, files)
-      ? await extractInvoiceFields(files, model).catch(() => null)
-      : null;
-    return invoicePacket ? mergeInvoiceFields(packet, invoicePacket) : packet;
+    // INVOICES ARE THE PER-FILE PASS'S AUTHORITY. The main pass above still supplies everything else
+    // (claim/activity/event details, eligibility, description draft, proof, required docs) from ALL files
+    // INCLUDING creative — but creative only informs those details, never an invoice line. invoices[] is
+    // replaced wholesale by extractInvoicesPerFile over invoiceCandidateFiles (creative/proof/support-only
+    // excluded), one isolated call per file: a creative can't become an invoice or inflate spend, and two
+    // invoices never merge. No invoice-eligible files (e.g. only creative) -> no invoices, blank spend.
+    const candidates = invoiceCandidateFiles(files);
+    packet.invoices = candidates.length ? await extractInvoicesPerFile(files, model).catch(() => []) : [];
+    syncExtractedInvoiceFields(packet);
+    return packet;
   } catch (err: any) {
     return fallbackPacket(files, err?.message ? `Extractor failed: ${err.message}` : "Extractor failed.");
   }

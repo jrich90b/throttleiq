@@ -120,8 +120,8 @@ assert.equal(invoiceCandidateFiles([mkFile("data.csv", "text/csv")]).length, 0, 
 const mdfSrc = fs.readFileSync("services/api/src/domain/mdfAssistant.ts", "utf8");
 assert.ok(/async function extractInvoicesPerFile/.test(mdfSrc), "the per-file invoice extractor must exist");
 assert.ok(
-  /perFileInvoices\.length >= 2 && perFileInvoices\.length > packet\.invoices\.length/.test(mdfSrc),
-  "extraction must prefer per-file invoices when it finds more than the single-call pass"
+  /packet\.invoices = candidates\.length \? await extractInvoicesPerFile\(files, model\)/.test(mdfSrc),
+  "invoices must come authoritatively from the per-file (role-respecting) pass, not a count-gated fallback"
 );
 
 console.log("PASS mdf spreadsheet extract eval");
