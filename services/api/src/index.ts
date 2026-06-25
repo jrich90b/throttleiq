@@ -680,6 +680,7 @@ import {
   healPendingIncomingNotifyTodoDuplicates,
   healStaleHeldFlag,
   isSchedulingLeakConversation,
+  realignMisdeferredLongTermCadence,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -28317,6 +28318,26 @@ async function processDueFollowUpsUnlocked() {
   }
   if (staleHeldFlagsHealed > 0) {
     console.log(`[state-reconcile] cleared ${staleHeldFlagsHealed} stale "needs reply" flag(s) after a reply went out`);
+  }
+  // Cadence re-align: a lead wrongly deferred to a long_term (months-out) first touch when its
+  // structured purchase timeframe actually resolves to the STANDARD day-1 ramp (Richard Tait, 6/25:
+  // a "3-12 Months" marketplace lead pushed ~3 months out by the old inline threshold). Heal the
+  // never-contacted ones so their initial nurture fires now, not in 3 months. Capped per tick.
+  let cadenceRealigned = 0;
+  for (const conv of convs) {
+    if (cadenceRealigned >= 25) break;
+    if (realignMisdeferredLongTermCadence(conv, cfg.timezone, now)) {
+      saveConversation(conv);
+      cadenceRealigned += 1;
+      recordRouteOutcome("manual", "long_term_cadence_realigned_to_standard", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        purchaseTimeframe: conv.lead?.purchaseTimeframe ?? null
+      });
+    }
+  }
+  if (cadenceRealigned > 0) {
+    console.log(`[state-reconcile] re-aligned ${cadenceRealigned} mis-deferred long_term cadence(s) to standard`);
   }
   // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd

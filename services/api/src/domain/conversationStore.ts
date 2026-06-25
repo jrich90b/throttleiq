@@ -4068,6 +4068,52 @@ export function applyMetaPromoInitialCadence(conv: Conversation, timeZone: strin
   }
 }
 
+// Re-align a cadence that was wrongly deferred to long_term when the lead's STRUCTURED purchase
+// timeframe actually resolves to the STANDARD day-1 ramp (resolveInitialAdfCadencePlan). Heals leads
+// that came in before the ADF intake was unified onto the centralized policy — e.g. Richard Tait
+// (+17162893849, 6/25): a "3-12 Months" (start=3) marketplace lead pushed ~3 months out by a divergent
+// inline `monthsStart >= 1` gate. Tight gate so it can only ever fire on the genuine mis-deferral:
+// an ACTIVE long_term cadence, on an OPEN, never-contacted, non-handoff/-watch/-booked lead, whose
+// timeframe is standard. Fail direction is safe — it only ever moves the next touch SOONER. Returns
+// true if it re-anchored. (Same hold conditions modeled as the sendgrid initial-ADF shouldStartCadence
+// gate, per the [[conversation-state-invariants]] reconcile-heal pattern.)
+export function realignMisdeferredLongTermCadence(
+  conv: Conversation,
+  timeZone: string,
+  now: Date = new Date()
+): boolean {
+  const cad = conv?.followUpCadence;
+  if (!cad || cad.status !== "active" || cad.kind !== "long_term") return false;
+  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
+  if (conv.appointment?.bookedEventId) return false;
+  const mode = String(conv.followUp?.mode ?? "");
+  if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
+  if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
+  // Never contacted: no real customer-facing outbound yet (a pending draft / ADF echo doesn't count).
+  const contacted = (conv.messages ?? []).some(
+    m => m?.direction === "out" && (m.provider === "twilio" || m.provider === "sendgrid")
+  );
+  if (contacted) return false;
+  const plan = resolveInitialAdfCadencePlan({
+    purchaseTimeframe: conv.lead?.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+  });
+  if (plan !== "standard") return false; // genuinely far-out (4+/multi-year) — leave it deferred
+  const anchorAtIso = now.toISOString();
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: anchorAtIso,
+    nextDueAt: computeFollowUpDueAt(anchorAtIso, FOLLOW_UP_DAY_OFFSETS[0], timeZone),
+    stepIndex: 0,
+    kind: "standard",
+    scheduleInviteCount: 0,
+    scheduleMuted: false
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
+}
+
 // Soft-visit OUTCOME: a customer who committed to coming in on a day/event ("I'll be there
 // Saturday") needs a showed-up/no-show outcome once the visit day passes — booked appointments
 // + dealer rides have this, soft visits didn't. Pure decision (nowMs passed in) so it's

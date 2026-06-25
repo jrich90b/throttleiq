@@ -18,6 +18,7 @@ import {
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
   applyMetaPromoInitialCadence,
+  resolveInitialAdfCadencePlan,
   isNearTermMetaTimeframe,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
@@ -8914,7 +8915,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
     ? storedMonthsStart
     : Number(parsedTimeframe?.start ?? NaN);
-  const hasLongTermTimeframe = Number.isFinite(monthsStart) && monthsStart >= 1;
+  // Centralized policy (resolveInitialAdfCadencePlan, pinned by initial_adf_cadence_timeframe:eval):
+  // 0-3mo / unsure / unparseable => STANDARD day-1 ramp; 4+mo or multi-year => gentle long_term
+  // nurture. Replaces a divergent inline `monthsStart >= 1` gate that pushed even a 3-12mo
+  // marketplace lead's FIRST touch ~3 months out (Richard Tait, +17162893849, 6/25) — the centralized
+  // rule already powered the Meta path, so this just unifies all ADF sources onto one policy.
+  const cadencePlan = resolveInitialAdfCadencePlan({
+    purchaseTimeframe: conv.lead?.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null
+  });
+  const hasLongTermTimeframe = cadencePlan === "long_term";
+  // Horizon for the deferred long-term nurture message: the lead's own start-month when known,
+  // else a sensible default (e.g. a bare "year"/multi-year label parses to no monthsStart).
+  const longTermDeferMonths = Number.isFinite(monthsStart) ? Math.max(1, Math.round(monthsStart)) : 6;
   const hasExistingCadence =
     conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped";
   const existingCadenceKind = String(conv.followUpCadence?.kind ?? "").toLowerCase();
@@ -8942,7 +8955,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !shouldForceRideChallengeCadence;
   if (canRealignExistingCadenceToLongTerm && hasLongTermTimeframe) {
     const due = new Date();
-    due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
+    due.setMonth(due.getMonth() + longTermDeferMonths);
     due.setHours(10, 30, 0, 0);
     const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
@@ -8966,7 +8979,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const cfg = await getSchedulerConfig();
     if (hasLongTermTimeframe) {
       const due = new Date();
-      due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
+      due.setMonth(due.getMonth() + longTermDeferMonths);
       due.setHours(10, 30, 0, 0);
       const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
       scheduleLongTermFollowUp(conv, due.toISOString(), msg);
