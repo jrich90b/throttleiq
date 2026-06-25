@@ -690,6 +690,7 @@ import {
   shouldNudgeStaleHandoffLead,
   shouldSurfaceUnsentFirstTouch,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
+  collectInventoryWatches,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
   addInternalQuestion,
@@ -5423,18 +5424,18 @@ async function processInventoryWatchlist(targetConvId?: string) {
 }
 
 // Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
+// Unions the single `inventoryWatch` AND the `inventoryWatches` array (collectInventoryWatches) — they
+// can coexist, so the old array-if-present-else-single check missed an active single watch.
 function hasActiveInventoryWatch(conv: any): boolean {
-  const watches = conv?.inventoryWatches?.length ? conv.inventoryWatches : conv?.inventoryWatch ? [conv.inventoryWatch] : [];
-  return watches.some((w: any) => w && w.status !== "paused");
+  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
 }
 
 // Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
 // engine skips paused watches — 4834/4945). Reversible — keeps the record so they can be re-added if
-// they ask. Returns how many were paused.
+// they ask. Returns how many were paused. Unions single + array so neither is left active.
 function pauseInventoryWatches(conv: any): number {
-  const watches = conv?.inventoryWatches?.length ? conv.inventoryWatches : conv?.inventoryWatch ? [conv.inventoryWatch] : [];
   let paused = 0;
-  for (const w of watches) {
+  for (const w of collectInventoryWatches(conv)) {
     if (w && w.status !== "paused") {
       w.status = "paused";
       paused++;

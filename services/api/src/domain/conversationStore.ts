@@ -4306,6 +4306,17 @@ export function registerScheduleInviteSent(conv: Conversation, threshold = 3) {
   scheduleSave();
 }
 
+// All inventory watches on a conversation, unioning the legacy single `inventoryWatch` AND the newer
+// `inventoryWatches` array (deduped). They are NOT mutually exclusive — a conv can carry an active single
+// watch alongside a paused array, so "array-if-present-else-single" silently ignored the active single
+// (the watch_active_on_closed leak the outcome auditor surfaced, 6/25). One source of truth so the heal,
+// the close guard, and the detector all enumerate watches the same way.
+export function collectInventoryWatches(conv: any): InventoryWatch[] {
+  const arr: InventoryWatch[] = Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [];
+  const single: InventoryWatch | undefined = conv?.inventoryWatch ?? undefined;
+  return single && !arr.includes(single) ? [...arr, single] : arr;
+}
+
 export function closeConversation(conv: Conversation, reason?: string) {
   conv.status = "closed";
   conv.closedAt = nowIso();
@@ -4320,12 +4331,7 @@ export function closeConversation(conv: Conversation, reason?: string) {
   // "it's available again!" to a customer who already closed/bought. Pause every active watch
   // (reversible; the watch-fire engine skips paused). Write-time guard; the reconcile tick is the
   // catch-all for close paths that don't route through here (e.g. applyOutcomeSold).
-  const watches = conv.inventoryWatches?.length
-    ? conv.inventoryWatches
-    : conv.inventoryWatch
-      ? [conv.inventoryWatch]
-      : [];
-  for (const w of watches) {
+  for (const w of collectInventoryWatches(conv)) {
     if (w && w.status !== "paused") w.status = "paused";
   }
   conv.updatedAt = nowIso();

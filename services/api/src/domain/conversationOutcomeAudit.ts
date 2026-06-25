@@ -17,7 +17,7 @@
  * Deterministic invariant detection (AGENTS.md allows deterministic for invariant guards); never reads
  * customer intent. No mutations.
  */
-import { REAL_OUTBOUND_CONTACT_PROVIDERS } from "./conversationStore.js";
+import { REAL_OUTBOUND_CONTACT_PROVIDERS, collectInventoryWatches } from "./conversationStore.js";
 
 export type OutcomeSeverity = "P1" | "P2" | "P3";
 
@@ -70,8 +70,9 @@ function isClosed(conv: AuditableConv): boolean {
 }
 
 function hasActiveWatch(conv: AuditableConv): boolean {
-  if (String(conv.inventoryWatch?.status ?? "").toLowerCase() === "active") return true;
-  return (conv.inventoryWatches ?? []).some(w => String(w?.status ?? "").toLowerCase() === "active");
+  // Union single + array (collectInventoryWatches) and use the SAME "active" definition as the heal
+  // (!== paused) so "detector flags it" ⟺ "heal would pause it" — no perpetual false-positives.
+  return collectInventoryWatches(conv).some(w => w && String(w?.status ?? "").toLowerCase() !== "paused");
 }
 
 // Pure, read-only. Returns the state-contradiction anomalies for ONE conversation (empty when healthy).
@@ -99,7 +100,7 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   // 2. Inventory watch still ACTIVE on a closed/sold conversation — a reopen can refire "it's available
   //    again!" to a customer who already bought/closed. Net-new (only the opt-out path pauses today).
   if (closed && hasActiveWatch(conv)) {
-    out.push({ ...base, dimension: "watch_active_on_closed", severity: "P2", healed: false, detail: "inventoryWatch active on a closed/sold conversation" });
+    out.push({ ...base, dimension: "watch_active_on_closed", severity: "P2", healed: true, detail: "inventoryWatch active on a closed/sold conversation" });
   }
 
   // 3. Follow-up cadence ACTIVE on a closed/sold conv (post_sale is legitimate). Should be 0

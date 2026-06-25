@@ -38,6 +38,14 @@ c2.inventoryWatches = [{ status: "active", model: "A" }, { status: "paused", mod
 closeConversation(c2, "sold");
 ok(c2.inventoryWatches.every((w: any) => w.status === "paused"), "all watches paused on close (array form)");
 
+// --- the bug the outcome auditor found: an ACTIVE single watch alongside a PRESENT (paused) array.
+//     "array-if-present-else-single" ignored the single; collectInventoryWatches unions both. ---
+const cBoth: any = upsertConversationByLeadKey("+15559000005", "suggest");
+cBoth.inventoryWatch = { status: "active", model: "Pan America" }; // legacy single, still active
+cBoth.inventoryWatches = [{ status: "paused", model: "old" }]; // array present + paused
+closeConversation(cBoth, "opt_out");
+ok(cBoth.inventoryWatch.status === "paused", "active SINGLE watch is paused even when a (paused) array is present");
+
 // --- a conv with no watch closes fine (no throw). ---
 const c3: any = upsertConversationByLeadKey("+15559000003", "suggest");
 closeConversation(c3, "wrong_number");
@@ -59,6 +67,9 @@ assert.match(api, /closed_watch_paused/, "route outcome recorded");
 // And the write-time guard lives in closeConversation.
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(store, /export function closeConversation[\s\S]*?if \(w && w\.status !== "paused"\) w\.status = "paused";/, "closeConversation pauses active watches");
-n += 4;
+// Union both watch fields (the single + the array) — one source of truth so the heal/close/detector agree.
+assert.match(store, /export function collectInventoryWatches/, "collectInventoryWatches unions single + array");
+assert.match(store, /export function closeConversation[\s\S]*?for \(const w of collectInventoryWatches\(conv\)\)/, "closeConversation enumerates via collectInventoryWatches");
+n += 5;
 
 console.log(`PASS closed-conversation watch-pause eval (${n} assertions)`);

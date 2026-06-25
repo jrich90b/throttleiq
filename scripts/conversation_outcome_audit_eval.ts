@@ -32,6 +32,8 @@ eq(dims({ id: "c1b", appointment: { status: "confirmed", bookedEventId: "evt1", 
 eq(dims({ id: "c2", closedReason: "sold", inventoryWatch: { status: "active" } }), ["watch_active_on_closed"], "active watch on closed => anomaly");
 eq(dims({ id: "c2b", inventoryWatch: { status: "active" } }), [], "active watch on OPEN conv => clean");
 eq(dims({ id: "c2c", closedReason: "sold", inventoryWatches: [{ status: "active" }] }), ["watch_active_on_closed"], "active watch (array form) on closed => anomaly");
+eq(dims({ id: "c2d", closedReason: "other", inventoryWatch: { status: "active" }, inventoryWatches: [{ status: "paused" }] }), ["watch_active_on_closed"], "active SINGLE + paused array on closed => flagged (union, the 6/25 leak)");
+eq(dims({ id: "c2e", closedReason: "other", inventoryWatch: { status: "paused" }, inventoryWatches: [{ status: "paused" }] }), [], "all watches paused on closed => clean (heal succeeded)");
 
 // --- 3. cadence active on a closed conv (post_sale is legit). ---
 eq(dims({ id: "c3", closedReason: "not_interested", followUpCadence: { status: "active", kind: "standard" } }), ["cadence_active_on_closed"], "active standard cadence on closed => anomaly");
