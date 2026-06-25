@@ -679,6 +679,7 @@ import {
   upsertPendingIncomingInventoryNotifyTodo,
   healPendingIncomingNotifyTodoDuplicates,
   healStaleHeldFlag,
+  isSchedulingLeakConversation,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -28100,6 +28101,40 @@ async function processDueFollowUpsUnlocked() {
   }
   if (staleHeldFlagsHealed > 0) {
     console.log(`[state-reconcile] cleared ${staleHeldFlagsHealed} stale "needs reply" flag(s) after a reply went out`);
+  }
+  // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
+  // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
+  // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
+  // Deduped via schedulingLeakFlaggedAt (re-flag after 3d) + only when there's no open todo; capped.
+  const SCHEDULING_LEAK_TODOS_PER_TICK = 15;
+  const SCHEDULING_LEAK_RENUDGE_MS = 3 * 24 * 60 * 60 * 1000;
+  const convIdsWithOpenTodoForLeak = new Set(openTodos.map(t => t.convId));
+  let schedulingLeaksFlagged = 0;
+  for (const conv of convs) {
+    if (schedulingLeaksFlagged >= SCHEDULING_LEAK_TODOS_PER_TICK) break;
+    if (convIdsWithOpenTodoForLeak.has(conv.id)) continue; // already has a task — don't stack
+    if (!isSchedulingLeakConversation(conv, now)) continue;
+    const flaggedMs = conv.schedulingLeakFlaggedAt ? Date.parse(conv.schedulingLeakFlaggedAt) : NaN;
+    if (Number.isFinite(flaggedMs) && now.getTime() - flaggedMs < SCHEDULING_LEAK_RENUDGE_MS) continue;
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const todo = addTodo(
+      conv,
+      "call",
+      `Schedule the visit for ${who} — a time was discussed but nothing is booked. Confirm a time (check availability) and put it on the calendar.`,
+      undefined,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    if (todo) {
+      conv.schedulingLeakFlaggedAt = now.toISOString();
+      saveConversation(conv);
+      schedulingLeaksFlagged += 1;
+      recordRouteOutcome("manual", "scheduling_leak_flagged", { convId: conv.id, leadKey: conv.leadKey });
+    }
+  }
+  if (schedulingLeaksFlagged > 0) {
+    console.log(`[state-reconcile] flagged ${schedulingLeaksFlagged} scheduling leak(s) (time discussed, nothing booked)`);
   }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it

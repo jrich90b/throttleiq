@@ -801,6 +801,9 @@ export type Conversation = {
   // Offer-once marker: when we sent the finance pre-qual/credit-app + visit offer to a payment-
   // focused lead (after they engaged with numbers), so we don't repeat it (2026-06-24).
   financeAppInviteSentAt?: string;
+  // Dedup marker: when the maintenance reconcile last flagged a scheduling LEAK (a visit time discussed
+  // but never booked) so a rep gets ONE "book this" todo, not a flood; re-flags after a window (6/25).
+  schedulingLeakFlaggedAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;
@@ -2837,6 +2840,41 @@ export function isUnansweredInboundConversation(
   }
   if (!last || last.direction !== "in") return false; // the customer must have spoken last
   return !getLatestPendingDraft(conv as Conversation); // nothing waiting for the rep => silence
+}
+
+// Scheduling-leak detector (2026-06-25): a visit/time was being arranged but no appointment ever got
+// booked, and it went idle. Catches the agent failing to offer times / confirm / book (Nicholas Braun
+// +17166286477: said he'd come ~10 in the morning, Joe confirmed, but dialogState stuck at
+// schedule_request with appointment status never "confirmed"). Deterministic: a scheduling-pending
+// dialog state + appointment not confirmed + idle + not closed. Conservative idle gate so an in-
+// progress back-and-forth (e.g. mid-offer) isn't flagged.
+const SCHEDULING_PENDING_STATES = new Set(["schedule_soft", "schedule_request", "schedule_offer_sent"]);
+
+export function isSchedulingLeakConversation(
+  conv:
+    | (Pick<Conversation, "messages" | "closedAt" | "closedReason" | "dialogState" | "appointment"> & {
+        sale?: { soldAt?: string | null } | null;
+      })
+    | null
+    | undefined,
+  now: Date = new Date(),
+  opts?: { minIdleHours?: number }
+): boolean {
+  if (!conv) return false;
+  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
+  const state = String(conv.dialogState?.name ?? "").trim().toLowerCase();
+  if (!SCHEDULING_PENDING_STATES.has(state)) return false; // mid-scheduling only (not booked / other)
+  if (String(conv.appointment?.status ?? "none").trim().toLowerCase() === "confirmed") return false; // already booked
+  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  if (!msgs.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  let lastMs = 0;
+  for (const m of msgs) {
+    const t = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(t) && t > lastMs) lastMs = t;
+  }
+  if (!lastMs) return false;
+  const idleHours = (now.getTime() - lastMs) / 3_600_000;
+  return idleHours >= (opts?.minIdleHours ?? 2);
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;
