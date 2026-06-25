@@ -64,6 +64,19 @@ ok(
   shouldSurfaceUnsentFirstTouch(mk({ messages: [inbound(daysAgo(5)), { direction: "out", provider: "sendgrid", body: "sent!", at: daysAgo(4) }] }), false, NOW) === false,
   "already contacted (real sendgrid outbound) => not surfaced"
 );
+// Contacted by PHONE (voice_*) counts too — a lead worked by phone is not awaiting a first touch
+// (Cody/Ron: Scott called them; their draft_ai opener was superseded by the call).
+ok(
+  shouldSurfaceUnsentFirstTouch(
+    mk({
+      lead: { preferredContactMethod: "phone", phone: "+17165551212", firstName: "Ron" },
+      messages: [inbound(daysAgo(5)), { direction: "out", provider: "voice_transcript", body: "Scott: Hi Ron...", at: daysAgo(4) }]
+    }),
+    false,
+    NOW
+  ) === false,
+  "already contacted by phone (voice_transcript) => not surfaced"
+);
 ok(shouldSurfaceUnsentFirstTouch(mk({ emailDraft: "" }), false, NOW) === false, "no pending draft => not surfaced");
 ok(shouldSurfaceUnsentFirstTouch(mk({ followUpCadence: { status: "active", kind: "standard" } }), false, NOW) === false, "active cadence already nudges => skip");
 ok(shouldSurfaceUnsentFirstTouch(mk({ followUp: { mode: "paused_indefinite" } }), false, NOW) === false, "paused_indefinite (deliberate not-now) => skip");
@@ -81,6 +94,9 @@ assert.match(api, /shouldSurfaceUnsentFirstTouch\(conv, convIdsWithOpenTodoNow\.
 assert.match(api, /unsent_first_touch_surfaced/, "route outcome recorded");
 assert.match(api, /Call \$\{who\} — they prefer a call/, "phone-preferred => a call todo");
 assert.match(api, /Send the first reply to \$\{who\}/, "else => a send-the-drafted-reply todo");
-n += 4;
+// The auto-close backfill only runs on a REAL prior outbound (not an unsent draft_ai), so it can't
+// silently close a never-contacted lead's fresh first-touch todo.
+assert.match(api, /REAL_OUTBOUND_CONTACT_PROVIDERS\.has\(String\(m\?\.provider \?\? ""\)\)/, "auto-close backfill gates on a REAL outbound, not a draft");
+n += 5;
 
 console.log(`PASS unsent first-touch eval (${n} assertions)`);

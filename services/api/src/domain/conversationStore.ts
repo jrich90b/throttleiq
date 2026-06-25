@@ -5284,6 +5284,17 @@ export function shouldNudgeStaleHandoffLead(
 // customer never heard from us at all, so it should be surfaced regardless of age (NO max-idle cap).
 // Returns true iff a deduped staff todo should be created. Fail direction is safe — it only ever asks a
 // human to send a drafted reply / make a call.
+// A REAL customer-facing outreach actually reached (or was placed to) the customer — a sent text/email
+// or a phone call. Excludes draft_ai (unsent) and inbound/internal logs. Used to tell "we've made
+// contact" from "drafted but never sent" for the unsent-first-touch net AND the auto-close backfill.
+export const REAL_OUTBOUND_CONTACT_PROVIDERS = new Set([
+  "twilio",
+  "sendgrid",
+  "voice_call",
+  "voice_summary",
+  "voice_transcript"
+]);
+
 export function shouldSurfaceUnsentFirstTouch(
   conv: Conversation,
   hasOpenTodo: boolean,
@@ -5292,10 +5303,12 @@ export function shouldSurfaceUnsentFirstTouch(
 ): boolean {
   if (!conv || hasOpenTodo) return false;
   if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
-  // Never contacted: no real customer-facing outbound EVER (a pending draft / inbound ADF echo doesn't count).
+  // Never contacted: no real customer-facing outreach EVER on ANY channel — a sent text/email
+  // (twilio/sendgrid) OR a phone call (voice_*). A pending draft / inbound ADF echo doesn't count. A
+  // lead already worked by phone is NOT awaiting a first touch (Cody/Ron were called by Scott).
   const messages = Array.isArray(conv.messages) ? conv.messages : [];
   const contacted = messages.some(
-    m => m?.direction === "out" && (m.provider === "twilio" || m.provider === "sendgrid")
+    m => m?.direction === "out" && REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))
   );
   if (contacted) return false;
   // Must have a pending first-touch we'd want a human to send: an email draft, or a non-stale draft_ai.

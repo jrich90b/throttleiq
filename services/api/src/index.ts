@@ -687,6 +687,7 @@ import {
   CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
   shouldSurfaceUnsentFirstTouch,
+  REAL_OUTBOUND_CONTACT_PROVIDERS,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
   addInternalQuestion,
@@ -28511,9 +28512,14 @@ async function processDueFollowUpsUnlocked() {
         return !Number.isFinite(at) || now.getTime() - at > AUTOCLOSE_BACKFILL_RECHECK_MS;
       });
       if (!due) continue;
-      // Need a prior dealer outbound that could have fulfilled the objective.
+      // Need a prior REAL dealer outbound (sent text/email or a call) that could have fulfilled the
+      // objective — an unsent draft_ai is NOT a communication, so a never-contacted lead's task can't
+      // be "fulfilled" and must not be auto-closed (would silently kill an unsent first-touch todo).
       const hasDealerOutbound = (conv.messages ?? []).some(
-        (m: any) => m?.direction === "out" && String(m?.body ?? "").trim()
+        (m: any) =>
+          m?.direction === "out" &&
+          REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? "")) &&
+          String(m?.body ?? "").trim()
       );
       if (!hasDealerOutbound) continue;
       autoCloseBackfillRan += 1;
