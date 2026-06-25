@@ -62,6 +62,31 @@ eq(dims({ ...held, messages: [{ direction: "out", provider: "draft_ai", at: "202
   eq(a[0].severity, "P1", "held_draft_unresolved is P1");
 }
 
+// --- 5b. context-fidelity SHADOW unresolved (Net 1): the scorer flagged out-of-context, shadow let it
+//         publish, and NO corrective reply followed. A DIFFERENT reply after the flag = resolved. ---
+const cfs = {
+  id: "c5b",
+  contextFidelityShadow: {
+    at: "2026-06-25T01:00:00.000Z",
+    severity: "major",
+    frame: "wrong_lead_type",
+    reason: "non-buyer survey got a sales pitch",
+    draftPreview: "Which bike are you asking about?"
+  }
+};
+{
+  const a = auditConversationOutcome({ ...cfs, messages: [] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["context_fidelity_shadow_unresolved"], "shadow major + no corrective reply => unresolved comprehension miss");
+  eq(a[0].category, "comprehension", "context_fidelity_shadow_unresolved is category=comprehension");
+  eq(a[0].severity, "P2", "context_fidelity_shadow_unresolved is P2");
+}
+// The out-of-context draft sent AS-IS (same body after the flag) is NOT a correction => still fires.
+eq(dims({ ...cfs, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:00:05.000Z", body: "Which bike are you asking about?" }] }), ["context_fidelity_shadow_unresolved"], "same draft sent as-is after the flag => still unresolved");
+// A DIFFERENT reply after the flag (edited/regenerated/human) => corrected => resolved (no fire).
+eq(dims({ ...cfs, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:05:00.000Z", body: "Thanks for reaching out — no pressure at all." }] }), [], "a different reply after the flag => corrected, resolved");
+// MINOR severity is not actionable => never fires.
+eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", severity: "minor", frame: "dropped_anchor", draftPreview: "x" } }), [], "minor shadow flag => not surfaced");
+
 // --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
@@ -101,6 +126,26 @@ assert.match(sweep, /outcome_audit/, "sweep writes the outcome_audit feed");
 const mod = fs.readFileSync("services/api/src/domain/conversationOutcomeAudit.ts", "utf8");
 assert.match(mod, /export function auditConversationOutcome/, "per-conv detector exported");
 assert.match(mod, /export function auditConversationStore/, "store auditor exported");
+
+// --- Net 1 wiring: the publish path PERSISTS the shadow verdict; a correction sink CLEARS it. ---
+const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.match(idx, /\(args\.conv as any\)\.contextFidelityShadow = \{/, "publishCustomerReplyDraft persists the shadow verdict (Net 1)");
+assert.match(idx, /String\(cfHold\.severity \?\? ""\)\.toLowerCase\(\) === "major"/, "only MAJOR would-holds are persisted (actionable subset)");
+const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an operator/passing draft clears the shadow flag (correction sink)");
+// The classifier routes it by category (comprehension → parser_fix_candidate, Tier 1, notify) with no
+// dimension whitelist — so the new dimension flows through automatically.
+{
+  const { classifyOutcomeAnomaly } = await import("../services/api/src/domain/anomalyClassifier.ts");
+  const c = classifyOutcomeAnomaly(
+    { category: "comprehension", dimension: "context_fidelity_shadow_unresolved", healed: false, severity: "P2" },
+    {}
+  );
+  eq(c.action, "parser_fix_candidate", "shadow comprehension anomaly classifies as parser_fix_candidate");
+  eq(c.tier, 1, "parser_fix_candidate is Tier 1");
+  eq(c.notify, true, "comprehension fix candidate notifies Joe");
+  eq(c.autoMergeEligible, false, "starts non-graduated (PR + notify, no auto-merge)");
+}
 n += 4;
 
 console.log(`PASS conversation outcome-audit eval (${n} assertions)`);

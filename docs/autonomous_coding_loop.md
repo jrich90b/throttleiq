@@ -186,6 +186,31 @@ thing?" verdict, logged as an anomaly when not (shadow; never blocks a turn):
 This feed replaces Joe watching. It unifies the scattered nightly audits + the agent-watch sweep + the
 closed-loop 👎 feed into ONE anomaly store the loop consumes.
 
+**Why Joe was still catching gaps, and the fix (three nets).** A gap is auto-catchable ONLY if something
+emits a machine-readable "this was wrong" signal. There are exactly three sources: (a) the model
+critiquing itself (LLM judges), (b) a human acting (👎 / edit / takeover), (c) a deterministic invariant.
+The feed already wired (c) and the 👎 half of (b). The Elizabeth Klapa ADF misroute slipped through
+because her bad draft wasn't *held* and Joe corrected it *manually* (no 👎). The two highest-value unwired
+signals already EXIST as computed-but-unfed data — so we wire them:
+- **Net 1 (DONE) — proactive: context-fidelity SHADOW verdict → feed.** The scorer already runs on every
+  reply draft in shadow and knows when it's out of context (wrong_lead_type / over_attached_model /
+  stale_intent / dropped_anchor). That verdict went only to the in-memory decision trace (ephemeral). Now
+  `publishCustomerReplyDraft` PERSISTS a MAJOR would-hold on the conversation (`conv.contextFidelityShadow`),
+  and `auditConversationOutcome` emits `context_fidelity_shadow_unresolved` (comprehension, P2) when no
+  corrective reply followed. Catches the out-of-context class AT DRAFT TIME, before a human sees it.
+  Detection only — the draft still publishes exactly as before. A passing/operator draft clears it; the
+  detector treats a DIFFERENT reply after the flag as resolved. Pinned by `conversation_outcome_audit:eval`.
+- **Net 2 (NEXT) — backstop: human edit-corrections → feed.** The edit miner already captures
+  generated→sent pairs (report-only). Add an LLM diff-judge (material vs cosmetic) so a MATERIAL correction
+  becomes a comprehension anomaly — and a material correction the scorer DIDN'T flag is itself a signal to
+  add a context-fidelity fixture (Net 2 self-improves Net 1).
+- **Net 3 (LATER) — unknown-unknowns: open-ended critic.** Broaden `answer_correctness` from enumerated
+  categories to "anything off for THIS lead's type/context?" → feed, notify-only. The only net that finds
+  brand-new gap classes; each one found becomes a fixture so Net 1 catches it next time.
+
+Honest limit: a residual (a novel class the model can't flag AND no human touches) never fully reaches
+zero, but Net 3 shrinks it and each instance permanently teaches the loop instead of relying on Joe.
+
 ### Layer 2 — DECIDE: the auto-patch tier contract (graduated)
 For each confirmed, de-duplicated gap the loop routes by tier (the AGENTS.md "Autonomous Self-Healing
 Loop" law is the binding short form; this is the working detail):

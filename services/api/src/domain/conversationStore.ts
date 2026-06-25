@@ -871,6 +871,23 @@ export type Conversation = {
     inboundPreview?: string;
     draftPreview?: string;
   } | null;
+  // Context-fidelity SHADOW marker (Net 1 of the gap-detection loop): the scorer runs on every draft
+  // and, in SHADOW mode, does not hold — but a MAJOR would-hold means this draft answered out of
+  // context. The in-memory decision trace is ephemeral, so we persist the verdict here for the
+  // read-only outcome-audit sweep to surface to the self-healing loop (so a human doesn't have to
+  // catch it). Detection only — no reply behavior changes. A passing/operator draft clears it; the
+  // audit detector treats a DIFFERENT reply going out after as resolved (corrected).
+  contextFidelityShadow?: {
+    at: string;
+    frame?: string | null;
+    severity?: string | null;
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    inboundPreview?: string;
+    draftPreview?: string;
+  } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   financeOutcome?: {
@@ -2736,6 +2753,7 @@ export function saveOperatorDraft(
   // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
   // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
   if ((conv as any).draftHeld) (conv as any).draftHeld = null;
+  if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
   if (args.channel === "email") {
     conv.emailDraft = body;
     conv.updatedAt = nowIso();

@@ -4310,7 +4310,7 @@ async function evaluateContextFidelityHold(
   candidate: string,
   channel: "sms" | "email",
   scope: "live" | "regen" | "manual"
-): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string; steering: string | null } | null> {
+): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string; steering: string | null; severity: string | null; confidence: number | null } | null> {
   const live = isContextFidelityHoldEnabled();
   if (!contextFidelityHoldShadowEnabled() && !live) return null; // dark: no scorer call, no latency
   try {
@@ -4325,7 +4325,7 @@ async function evaluateContextFidelityHold(
     };
     const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
     const decision = decideContextFidelityHold({ enabled: live, score: sc });
-    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason, steering: null };
+    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason, steering: null, severity: sc?.severity ?? null, confidence: sc?.confidence ?? null };
     // Keep both literal markers so the shadow measurement string survives and the enforce path is greppable.
     const marker = live ? "[context-fidelity-hold-enforce]" : "[context-fidelity-hold-shadow]";
     console.warn(
@@ -4351,7 +4351,7 @@ async function evaluateContextFidelityHold(
         }
       });
     }
-    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason, steering: String(sc?.steering ?? "").slice(0, 240) || null };
+    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason, steering: String(sc?.steering ?? "").slice(0, 240) || null, severity: sc?.severity ?? null, confidence: sc?.confidence ?? null };
   } catch {
     // Best-effort — never block or fail a publish.
     return null;
@@ -4449,6 +4449,30 @@ async function publishCustomerReplyDraft(args: {
       }
     });
     return { ok: false, reason: "context_fidelity_held", held: true };
+  }
+  // Context-fidelity SHADOW feed (Net 1 of the gap-detection loop): when the scorer is NOT enforcing,
+  // a MAJOR would-hold means this published draft answers out of context. Persist the verdict on the
+  // conversation so the daily read-only outcome-audit sweep surfaces the comprehension gap to the
+  // self-healing loop WITHOUT a human having to catch it (the decision trace is in-memory/ephemeral).
+  // Detection only — the draft still publishes exactly as before. A passing draft (here) or an
+  // operator draft clears it; the audit detector treats a DIFFERENT reply going out after as resolved.
+  if (cfHold && !cfHold.live) {
+    if (cfHold.hold && String(cfHold.severity ?? "").toLowerCase() === "major") {
+      (args.conv as any).contextFidelityShadow = {
+        at: new Date().toISOString(),
+        frame: cfHold.frame ?? null,
+        severity: cfHold.severity ?? null,
+        confidence: cfHold.confidence ?? null,
+        reason: String(cfHold.reason ?? "").slice(0, 240),
+        steering: cfHold.steering ? String(cfHold.steering).slice(0, 240) : null,
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+        draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+      };
+    } else if (!cfHold.hold && (args.conv as any).contextFidelityShadow) {
+      // A later draft passed the scorer — supersede the prior shadow flag.
+      (args.conv as any).contextFidelityShadow = null;
+    }
   }
   const publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
   if (contextFidelityEnforced) {

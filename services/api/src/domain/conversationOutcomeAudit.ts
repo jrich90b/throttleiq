@@ -44,6 +44,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   stale_held_flag: "state",
   orphan_todo: "state",
   held_draft_unresolved: "comprehension",
+  context_fidelity_shadow_unresolved: "comprehension",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
@@ -62,6 +63,7 @@ type AuditableConv = {
   inventoryWatch?: { status?: string | null } | null;
   inventoryWatches?: Array<{ status?: string | null }> | null;
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
+  contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
@@ -146,6 +148,36 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
         severity: "P1",
         healed: false,
         detail: `held (${conv.draftHeld?.heldKind ?? conv.draftHeld?.reason ?? "?"}${conv.draftHeld?.frame ? `/${conv.draftHeld.frame}` : ""}) and unresolved — no reply sent`
+      });
+    }
+  }
+
+  // 5b. Context-fidelity SHADOW flag unresolved (Net 1): the scorer flagged this draft as answering out
+  //     of context (MAJOR), the gate is in SHADOW so it published anyway, and NO corrective reply went
+  //     out after — i.e. an out-of-context reply that NO human caught. This is the proactive net for
+  //     the "answering out of context" class: the model's OWN self-critique, surfaced to the loop
+  //     without waiting for a 👎 or a manual correction. A DIFFERENT outbound after the flag = corrected
+  //     (resolved); the same draft sent as-is (or still pending) = unresolved. Comprehension P2 — the
+  //     loop's parser-first fix input is frame + the persisted reason.
+  const cfs = conv.contextFidelityShadow;
+  const cfsAtMs = Date.parse(String(cfs?.at ?? ""));
+  if (cfs && Number.isFinite(cfsAtMs) && String(cfs.severity ?? "").toLowerCase() === "major") {
+    const norm = (s: any) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 200);
+    const flagged = norm(cfs.draftPreview);
+    const correctiveReplyAfter = (conv.messages ?? []).some(m => {
+      if (m?.direction !== "out" || !REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))) return false;
+      const t = Date.parse(String(m?.at ?? ""));
+      if (!Number.isFinite(t) || t <= cfsAtMs) return false;
+      const body = norm(m?.body);
+      return !!body && body !== flagged; // a DIFFERENT reply went out after the flag = corrected
+    });
+    if (!correctiveReplyAfter) {
+      out.push({
+        ...base,
+        dimension: "context_fidelity_shadow_unresolved",
+        severity: "P2",
+        healed: false,
+        detail: `context-fidelity shadow flagged out-of-context (${cfs.frame ?? "?"}) and no corrective reply followed${cfs.reason ? ` — ${String(cfs.reason).slice(0, 120)}` : ""}`
       });
     }
   }
