@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import {
@@ -504,6 +504,7 @@ import {
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
   decideEventPromoTurn,
+  decideNonBuyerSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
@@ -49976,6 +49977,41 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return respondWithSmsRegeneratedDraft(regenAppointmentOutcomeRescheduleReply, undefined, {
       turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25) — regen twin of the live
+  // ADF intake override. A Dealer Lead App survey whose STRUCTURED purchase-timeframe says the
+  // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") must
+  // not be re-pitched on the FIRST touch ("Which bike are you asking about?" / photos+pricing).
+  // Gated to the initial ADF first-touch (the regen target is the ADF submission AND no customer
+  // SMS reply exists yet) so a later genuine sales question still routes normally. Placed before
+  // the sales-oriented ADF branches so it short-circuits them. event_promo keeps its own handling.
+  const regenIsAdfFirstTouchNonBuyer =
+    event.provider === "sendgrid_adf" &&
+    !(Array.isArray(conv.messages) &&
+      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
+      "non_buyer_survey_ack";
+  if (regenIsAdfFirstTouchNonBuyer) {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
+    const reply = buildNonBuyerSurveyAck(firstName, agentName, dealerName);
+    recordRouteOutcome("regen", "non_buyer_survey_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
       turnAvailabilityIntent: false,
       turnFinanceIntent: false
     });

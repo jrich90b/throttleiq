@@ -1409,3 +1409,35 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
   }
   return { kind: "none" };
 }
+
+// Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
+// App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
+// person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was
+// answered as if it were a sales inquiry — "Which bike are you asking about?" / "want me to
+// send photos or price and payment numbers?". That's out of context: they told us up front
+// they don't want to buy. Like decideEventPromoTurn, this keys ONLY on a fixed ADF/lead-gen
+// enum field (purchaseTimeframe), so it is structured routing, NOT free-text comprehension.
+// The SAME signal already drives resolveInitialAdfCadencePlan -> "suppress" (no nagging
+// follow-ups); this is its reply-side twin so the FIRST touch is a warm, no-pressure
+// acknowledgement instead of a pitch. Applied at the INITIAL ADF draft only (both paths) —
+// once the customer engages with a real sales question, normal routing answers it.
+// Fail-direction: a false positive merely under-sells one opener (the customer can still
+// reply and gets routed normally); the current bug pitches a self-declared non-buyer.
+export type NonBuyerSurveyTurnKind = "non_buyer_survey_ack" | "none";
+
+export type NonBuyerSurveyTurnInput = {
+  purchaseTimeframe?: string | null;
+};
+
+export type NonBuyerSurveyTurnDecision = { kind: NonBuyerSurveyTurnKind };
+
+export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuyerSurveyTurnDecision {
+  const timeframe = String(input.purchaseTimeframe ?? "").toLowerCase();
+  // Mirrors resolveInitialAdfCadencePlan's "suppress" trigger (one source of truth for the
+  // "explicit non-buyer" signal). Kept inline (no cross-module import) to match the other
+  // self-contained reducers here.
+  if (timeframe.includes("not interested")) {
+    return { kind: "non_buyer_survey_ack" };
+  }
+  return { kind: "none" };
+}

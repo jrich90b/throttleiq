@@ -56,6 +56,29 @@ export function buildEventPromoAck(
 }
 
 /**
+ * Approved acknowledgement for a NON-BUYER / passenger survey lead (Elizabeth Klapa class,
+ * 2026-06-25) — a Dealer Lead App survey whose structured purchase-timeframe says the person
+ * is explicitly NOT a buyer ("I am not interested in purchasing at this time"). Used when
+ * `decideNonBuyerSurveyTurn` returns `non_buyer_survey_ack` so the FIRST touch is a warm,
+ * no-pressure acknowledgement instead of the sales pitch ("Which bike are you asking about?"
+ * / "want me to send photos or price and payment numbers?") it was getting. Deliberately
+ * contains NO availability claim, model-fact assertion, "which bike?" ask, photo/price offer,
+ * or stop-in/appointment push — those are exactly the out-of-context failure modes for a
+ * self-declared non-buyer. Leaves the door open without pressure. Pinned by
+ * `non_buyer_survey_ack:eval`.
+ */
+export function buildNonBuyerSurveyAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string
+): string {
+  return (
+    `${buildAgentIntro(firstName, agentName, dealerName)}` +
+    "Thanks for reaching out — no pressure at all. If you ever decide you'd like a bike of your own down the road, I'm here whenever you're ready."
+  );
+}
+
+/**
  * Strip a leading agent greeting/intro (old "Hi {name} — …" or new "Hey {name}, …") from a
  * body before re-prefixing, so we never double up. Initial-ADF use only.
  */

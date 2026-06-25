@@ -46,8 +46,8 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildEventPromoAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
-import { decideEventPromoTurn } from "../domain/routeStateReducer.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
@@ -8873,6 +8873,29 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
     const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
     draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+  }
+
+  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
+  // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
+  // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
+  // asking about?" / "want me to send photos or price and payment numbers?") on the first
+  // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
+  // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
+  // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
+  // routing answers it. event_promo wins if both somehow match (handled above first).
+  if (
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
+      "non_buyer_survey_ack"
+  ) {
+    const nbAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const nbDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const nbFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    draft = buildNonBuyerSurveyAck(nbFirstName, nbAgentName, nbDealerName);
   }
 
   const emailTo = lead.email?.trim();
