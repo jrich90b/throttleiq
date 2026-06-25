@@ -130,3 +130,70 @@ access live only on the box — so the loop runs in two complementary halves:
 
 The common case is a no-op (sweep → `stop:true`), so the runner only does real
 work when a genuinely new, unguarded, concrete regression appears.
+
+---
+
+## The self-healing program (Joe, 2026-06-25): detect every aspect, auto-patch the safe tier, escalate the rest
+
+Goal: Joe stops being the monitor. The system watches itself across **every aspect of a turn**, diagnoses
+gaps, and either auto-patches them (gated) or hands Joe a ready decision — while pushing de-tangle and
+commercial-grade reliability. Autonomy is **graduated/earned**, not day-one full-auto (graduated posture
+chosen 2026-06-25). Build order chosen: **law first, then detection, then close the loop.**
+
+### Layer 1 — per-turn OUTCOME auditor (the detection feed)
+Today the live judges only grade the *reply* (draft-quality / no-response / context-fidelity / cadence-
+quality). Extend that to **every side-effect of every turn**, each as a structured "did we do the right
+thing?" verdict, logged as an anomaly when not (shadow; never blocks a turn):
+- reply correctness + tone (in-charter) + fabrication/safety
+- task: created when it should be, NOT created when it shouldn't, closed correctly
+- inventory watch: created/triggered/opted-out correctly
+- follow-up cadence: right kind (standard/long_term/post_sale/engaged) + right timing + not running while held/handed-off
+- ADF/email intake: routed to the right department/bucket; initial first-touch fired (right channel)
+- appointment: booked vs deflected correctly; confirmed only with a real `bookedEventId`
+- sticky/held state: still valid for this turn (no stale service/handoff/closed contradictions)
+- live/regen parity: the two paths agree
+This feed replaces Joe watching. It unifies the scattered nightly audits + the agent-watch sweep + the
+closed-loop 👎 feed into ONE anomaly store the loop consumes.
+
+### Layer 2 — DECIDE: the auto-patch tier contract (graduated)
+For each confirmed, de-duplicated gap the loop routes by tier (the AGENTS.md "Autonomous Self-Healing
+Loop" law is the binding short form; this is the working detail):
+
+- **Tier 0 — deterministic invariant** → already auto-healed by the 60s reconcile tick. The loop only
+  ADDS a new heal (that addition is itself Tier 1).
+- **Tier 1 — SAFE AUTO-PATCH** (eligible for auto-merge+deploy once the category has graduated):
+  - additive parser few-shot / replay fixture — must NOT change an already-accepted case (verified by
+    re-running the parser eval on the prior fixtures: all still pass).
+  - a new reconcile heal whose fail-direction is safe (only ever moves toward contacting / not-closing /
+    repairing an invariant), tightly gated against the engine's hold conditions.
+  - a fail-safe gate-window tightening (e.g. a max-idle bound) that only narrows over-firing.
+  - a behavior-PRESERVING de-tangle extraction/centralization, proven equivalent by ci:eval.
+  - test / eval / doc-only changes.
+  Gate (all required): tsc + `ci:eval` green + a NEW deterministic eval pinning the repro + (parser/reply)
+  a shadow replay over recent live traffic showing no net regression.
+- **Tier 2 — ESCALATE (open a PR + notify Joe), never auto-merge:**
+  new customer-facing behavior, a routing cutover, a new reply class, a flag shadow→enforce flip, ANY
+  change to an already-accepted parser/decision case, or any "what should it say / do" judgment call.
+  **Conservative default: unsure ⇒ Tier 2.** The PR carries the repro + shadow data + before/after.
+- **De-tangle is an optimization constraint, not just a hope:** a patch that would add an inline
+  `parser || regex` precedence gate is Tier 2 by construction; the loop prefers extending a `decide*Turn`
+  reducer or a typed parser. Source-string `assert.match` guards are a smell — prefer a behavioral eval on
+  an extracted pure decision (the 2026-06-25 confirm-booking extraction is the template).
+
+### Graduated-autonomy ladder (how a category EARNS auto-merge)
+Each Tier-1 **category** (e.g. "additive scheduling-parser fixture", "new state-invariant reconcile heal")
+climbs:
+1. **Shadow/PR** — loop writes the patch, runs all gates, opens a PR, notifies. Human merges. (default for
+   a new category.)
+2. **Auto-merge** — after ≥5 consecutive clean human-approved merges in that category with zero
+   post-deploy rollbacks, the loop may auto-merge+deploy that category on a green gate. Track the per-
+   category record in `reports/auto_loop/category_ledger.json`.
+A post-deploy rollback in any category demotes it to step 1. `ci:eval` green is non-negotiable at every step.
+
+### Consolidation — one loop, one skill (the endgame)
+The pieces exist but are fragmented: the reconcile tick (Tier 0), the live reply judges (partial Layer 1),
+the nightly comprehension audits, the `agent-watch` skill (Tier-2 PRs), and the closed-loop feedback
+(👎→fix). Unify them: ONE skill owns DETECT(all aspects)→CLASSIFY(tier)→ACT(auto-patch | PR+notify),
+reusing the existing detection audits + the gate. The `agent-watch` and `customer-reply`/feedback skills
+become callers of this contract, not separate policies. Notifications to Joe fire ONLY on Tier 2 (a
+behavioral decision) or a hard-stop halt.

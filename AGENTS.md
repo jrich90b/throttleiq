@@ -49,6 +49,31 @@ A turn's route among competing intents in a cluster (e.g. scheduling: arrival-ac
 - Pin every centralized decision with a deterministic decision-table eval in `scripts/` (e.g. `scheduling_turn_decision_eval.ts`) wired into `ci:eval`.
 - A new cluster arm = extend the reducer function + its decision table; do not add a new inline precedence gate.
 
+## Autonomous Self-Healing Loop: auto-patch vs escalate (Joe, 2026-06-25; graduated autonomy)
+The self-healing loop (`docs/autonomous_coding_loop.md`) DETECTs gaps across every aspect of a turn —
+reply correctness, task create/close, watch create/trigger, cadence kind+timing, ADF/email intake routing,
+appointment booking, sticky/held state, tone — and DECIDES per gap whether it may auto-patch or must
+escalate. The contract (full version in the loop doc):
+- **Tier 0 — deterministic invariant** → the 60s reconcile tick auto-heals it. No PR. (e.g. cadence-active-
+  while-handoff, mis-deferred cadence.)
+- **Tier 1 — safe auto-patch** (may auto-merge + deploy ONLY after the CATEGORY has graduated — see ladder):
+  an ADDITIVE parser few-shot/replay fixture (no change to an already-accepted case), a NEW reconcile heal
+  in the fail-safe direction, a fail-safe gate-window tightening, a behavior-PRESERVING de-tangle
+  extraction/centralization (eval-proven equivalent), or test/eval/doc-only changes. Required before any
+  merge: `tsc` + `ci:eval` green + a NEW deterministic eval pinning the case (+ a shadow replay for
+  parser/reply changes showing no net regression).
+- **Tier 2 — escalate (PR + notify Joe), NEVER auto-merge**: new customer-facing behavior, a routing
+  cutover, a new reply class, a flag shadow→enforce flip, ANY change to an already-accepted parser/decision
+  case, or anything where "correct" is a judgment call. **Conservative default: when unsure, Tier 2.**
+- **De-tangle constraint (hard):** a patch that would ADD an inline `parser || regex` precedence gate is
+  Tier 2 by definition. Prefer extending a `decide*Turn` reducer / a typed parser over a new inline gate;
+  centralization-preserving refactors are favored Tier-1 work.
+- **Graduated-autonomy ladder:** every Tier-1 CATEGORY starts at "auto-write + run gates + open PR +
+  notify" (human merges). A category graduates to true auto-merge+deploy only after a clean track record
+  (≥5 consecutive human-approved merges in that category, zero post-deploy rollbacks). New/unproven
+  categories never auto-merge. The `ci:eval` green gate is non-negotiable for every tier.
+- Behavioral changes always notify Joe; he is involved ONLY for Tier 2.
+
 ## Fallback Policy
 - Low-confidence parser, disabled LLM, or orchestrator failure must not fall back to regex-written semantic customer-facing answers.
 - Allowed fallbacks: suppress/no-response, create a todo/manual handoff, ask a narrow clarification, or use an approved known template.
