@@ -21,14 +21,34 @@ import { REAL_OUTBOUND_CONTACT_PROVIDERS } from "./conversationStore.js";
 
 export type OutcomeSeverity = "P1" | "P2" | "P3";
 
+// The "one feed": deterministic STATE contradictions + the COMPREHENSION/feedback verdicts the system
+// already computed and persisted on the conversation (draftHeld, 👎). Category lets the loop route by
+// kind (state → reconcile/invariant fix; comprehension → parser-first fix; feedback → redraft/diagnose).
+export type OutcomeCategory = "state" | "comprehension" | "feedback";
+
 export type OutcomeAnomaly = {
   convId: string;
   leadKey: string;
   dimension: string;
+  category: OutcomeCategory;
   severity: OutcomeSeverity;
   healed: boolean; // a reconcile heal exists for this class → a hit means the heal lagged/missed (regression)
   detail: string;
 };
+
+const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
+  appointment_confirmed_no_event: "state",
+  watch_active_on_closed: "state",
+  cadence_active_on_closed: "state",
+  cadence_active_while_handoff: "state",
+  stale_held_flag: "state",
+  orphan_todo: "state",
+  held_draft_unresolved: "comprehension",
+  negative_feedback: "feedback"
+};
+const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
+
+type RawAnomaly = Omit<OutcomeAnomaly, "category">;
 
 type AuditableConv = {
   id?: string;
@@ -41,8 +61,8 @@ type AuditableConv = {
   followUp?: { mode?: string | null } | null;
   inventoryWatch?: { status?: string | null } | null;
   inventoryWatches?: Array<{ status?: string | null }> | null;
-  draftHeld?: { at?: string | null } | null;
-  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null }> | null;
+  draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
+  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
 function isClosed(conv: AuditableConv): boolean {
@@ -56,8 +76,8 @@ function hasActiveWatch(conv: AuditableConv): boolean {
 
 // Pure, read-only. Returns the state-contradiction anomalies for ONE conversation (empty when healthy).
 export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date } = {}): OutcomeAnomaly[] {
-  const out: OutcomeAnomaly[] = [];
-  if (!conv) return out;
+  const out: RawAnomaly[] = [];
+  if (!conv) return [];
   const base = { convId: String(conv.id ?? ""), leadKey: String(conv.leadKey ?? "") };
   const closed = isClosed(conv);
   const cad = conv.followUpCadence;
@@ -113,17 +133,37 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
       return Number.isFinite(t) && t > heldAtMs;
     });
     if (repliedAfter) {
+      // STATE cleanup: a real reply went out after the hold → the flag should have cleared (heal regression).
       out.push({ ...base, dimension: "stale_held_flag", severity: "P2", healed: true, detail: "draftHeld set but a real reply went out after the hold" });
+    } else {
+      // COMPREHENSION miss: the draft judge HELD this reply (out-of-context / fabrication / unsafe) and
+      // no real reply has gone out — the agent couldn't answer this turn correctly. The system already
+      // diagnosed it (frame + steering), which is exactly the loop's parser-first fix input.
+      out.push({
+        ...base,
+        dimension: "held_draft_unresolved",
+        severity: "P1",
+        healed: false,
+        detail: `held (${conv.draftHeld?.heldKind ?? conv.draftHeld?.reason ?? "?"}${conv.draftHeld?.frame ? `/${conv.draftHeld.frame}` : ""}) and unresolved — no reply sent`
+      });
     }
   }
 
-  return out;
+  // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep and nothing better followed (the
+  //    closed-loop redraft would append a newer outbound). The system's own "this reply was wrong" signal.
+  const lastOut = [...(conv.messages ?? [])].reverse().find(m => m?.direction === "out");
+  if (String(lastOut?.feedback?.rating ?? "").toLowerCase() === "down") {
+    out.push({ ...base, dimension: "negative_feedback", severity: "P2", healed: false, detail: "the latest outbound was thumbed-down and not yet improved" });
+  }
+
+  return out.map(a => ({ ...a, category: categoryFor(a.dimension) }));
 }
 
 export type OutcomeAuditSummary = {
   conversationsScanned: number;
   totalAnomalies: number;
   byDimension: Record<string, number>;
+  byCategory: Record<OutcomeCategory, number>;
   bySeverity: Record<OutcomeSeverity, number>;
   regressionAnomalies: number; // hits on a `healed` dimension — a reconcile heal lagged/missed
 };
@@ -146,20 +186,22 @@ export function auditConversationStore(input: {
     if (String(t?.status ?? "") !== "open") continue;
     const cid = String(t?.convId ?? "");
     if (cid && !convIds.has(cid)) {
-      anomalies.push({ convId: cid, leadKey: "", dimension: "orphan_todo", severity: "P2", healed: false, detail: `open todo on a conversation not in the store: ${String(t?.summary ?? "").slice(0, 60)}` });
+      anomalies.push({ convId: cid, leadKey: "", dimension: "orphan_todo", category: categoryFor("orphan_todo"), severity: "P2", healed: false, detail: `open todo on a conversation not in the store: ${String(t?.summary ?? "").slice(0, 60)}` });
     }
   }
 
   const byDimension: Record<string, number> = {};
+  const byCategory: OutcomeAuditSummary["byCategory"] = { state: 0, comprehension: 0, feedback: 0 };
   const bySeverity: OutcomeAuditSummary["bySeverity"] = { P1: 0, P2: 0, P3: 0 };
   let regressionAnomalies = 0;
   for (const a of anomalies) {
     byDimension[a.dimension] = (byDimension[a.dimension] ?? 0) + 1;
+    byCategory[a.category] += 1;
     bySeverity[a.severity] += 1;
     if (a.healed) regressionAnomalies += 1;
   }
   return {
     anomalies,
-    summary: { conversationsScanned: convs.length, totalAnomalies: anomalies.length, byDimension, bySeverity, regressionAnomalies }
+    summary: { conversationsScanned: convs.length, totalAnomalies: anomalies.length, byDimension, byCategory, bySeverity, regressionAnomalies }
   };
 }

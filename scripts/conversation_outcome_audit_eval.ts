@@ -48,11 +48,26 @@ eq(dims({ id: "c3b", sale: { soldAt: "2026-06-20T00:00:00Z" }, closedReason: "so
 eq(dims({ id: "c4b", followUpCadence: { status: "active", kind: "long_term" }, followUp: { mode: "manual_handoff" } }), [], "long_term cadence on handoff is kept => NOT flagged");
 eq(dims({ id: "c4c", followUpCadence: { status: "active", kind: "post_sale" }, followUp: { mode: "manual_handoff" } }), [], "post_sale cadence on handoff is kept => NOT flagged");
 
-// --- 5. stale held flag (real reply after the hold; draft_ai does NOT count). ---
-const held = { id: "c5", draftHeld: { at: "2026-06-25T01:00:00.000Z" } };
-eq(dims({ ...held, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:05:00.000Z", body: "hi" }] }), ["stale_held_flag"], "real reply after the hold => anomaly");
-eq(dims({ ...held, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T00:30:00.000Z", body: "hi" }] }), [], "reply BEFORE the hold => clean (fresh hold)");
-eq(dims({ ...held, messages: [{ direction: "out", provider: "draft_ai", at: "2026-06-25T01:05:00.000Z", body: "draft" }] }), [], "a draft_ai after the hold is NOT a real reply => clean");
+// --- 5. held draft: STATE-cleanup (reply after) vs COMPREHENSION-miss (still blocking) — exclusive. ---
+const held = { id: "c5", draftHeld: { at: "2026-06-25T01:00:00.000Z", heldKind: "context_fidelity", frame: "stale_intent" } };
+eq(dims({ ...held, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:05:00.000Z", body: "hi" }] }), ["stale_held_flag"], "real reply AFTER the hold => stale_held_flag (state cleanup)");
+eq(dims({ ...held, messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T00:30:00.000Z", body: "hi" }] }), ["held_draft_unresolved"], "reply BEFORE the hold, still blocking => held_draft_unresolved (comprehension)");
+eq(dims({ ...held, messages: [{ direction: "out", provider: "draft_ai", at: "2026-06-25T01:05:00.000Z", body: "draft" }] }), ["held_draft_unresolved"], "only a draft_ai after the hold (not a real reply) => still unresolved");
+{
+  const a = auditConversationOutcome({ ...held, messages: [] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["held_draft_unresolved"], "held + no messages => unresolved comprehension miss");
+  eq(a[0].category, "comprehension", "held_draft_unresolved is category=comprehension");
+  eq(a[0].severity, "P1", "held_draft_unresolved is P1");
+}
+
+// --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
+{
+  const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["negative_feedback"], "latest outbound thumbed-down => negative_feedback");
+  eq(a[0].category, "feedback", "negative_feedback is category=feedback");
+}
+eq(dims({ id: "c6b", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "bad", feedback: { rating: "down" } }, { direction: "out", provider: "draft_ai", at: "t2", body: "redraft" }] }), [], "a newer outbound after the 👎 => addressed, clean");
+eq(dims({ id: "c6c", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "good", feedback: { rating: "up" } }] }), [], "thumbs-UP => not an anomaly");
 
 // --- A fully healthy conv trips nothing. ---
 eq(dims({ id: "ok", appointment: { status: "confirmed", bookedEventId: "e", whenText: "x" }, followUpCadence: { status: "active", kind: "standard" }, followUp: { mode: "active" } }), [], "healthy conv => zero anomalies");
@@ -72,6 +87,7 @@ const store = auditConversationStore({
 });
 eq(store.summary.totalAnomalies, 3, "2 conv anomalies + 1 orphan todo");
 eq(store.summary.byDimension["orphan_todo"], 1, "one orphan todo");
+eq(store.summary.byCategory.state, 3, "all 3 here are state-category");
 eq(store.summary.bySeverity.P1, 2, "two P1 (confirmed-no-event + cadence-while-handoff)");
 eq(store.summary.regressionAnomalies, 1, "one regression (the healed cadence_active_while_handoff)");
 eq(store.summary.conversationsScanned, 2, "scanned count");
