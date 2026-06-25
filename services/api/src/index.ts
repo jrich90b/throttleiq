@@ -461,6 +461,7 @@ import {
   buildRecommendedUnitsMediaReply
 } from "./domain/inventoryRecommender.js";
 import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
+import { buildRecommendedUnitsPaymentEstimateReply } from "./domain/paymentEstimate.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -2292,6 +2293,42 @@ function vehicleMediaRequestParserHint(text: string): boolean {
   return /\b(pic|pics|picture|pictures|photo|photos|image|images|see (?:it|them|the bike)|look like|color|colors|colour|colours|link|links|url)\b/i.test(
     String(text ?? "")
   );
+}
+
+// Disclaimed payment estimate (Joe, 2026-06-24): once a payment-focused lead gives a down payment and
+// we have recommended units with prices, share a ROUGH monthly RANGE for them (the disclaimed math
+// Joe was doing by hand) instead of punting "I'll have someone run numbers." Deterministic + always
+// disclaimed; never a single fabricated figure. Centralized so live + regenerate match.
+function resolveRecommendedUnitsPaymentEstimateReply(
+  conv: Conversation | null | undefined,
+  scope: "live" | "regen"
+): string | null {
+  if (!conv) return null;
+  const units = (Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : []).filter(
+    u => Number.isFinite(Number(u?.price)) && Number(u?.price) > 0
+  );
+  if (!units.length) return null; // no priced units to estimate => let the finance route handle it
+  const ctx = findRecentInboundPaymentBudgetContext(conv);
+  const downPayment = ctx.downPayment;
+  if (downPayment == null) return null; // only estimate once they've given a down payment
+  // Offer once PER down-payment value — so we don't re-fire on later "ok"/"thanks" turns, but DO
+  // re-estimate if they change the down payment ("actually $1000 down").
+  if (conv.paymentEstimateSentForDown === downPayment) return null;
+  const reply = buildRecommendedUnitsPaymentEstimateReply({
+    firstName: normalizeDisplayCase(conv.lead?.firstName),
+    units,
+    downPayment,
+    termMonths: ctx.termMonths
+  });
+  if (!reply) return null;
+  conv.paymentEstimateSentForDown = downPayment;
+  recordRouteOutcome(scope, "recommended_units_payment_estimate", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    units: units.length,
+    downPayment
+  });
+  return reply;
 }
 
 // Deal/progress status check: confidence floor to rescue a status check from the small-talk
@@ -51497,6 +51534,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // Recommended-unit media follow-up (parity with live): "show me pics/colors/links" of the bikes
     // we suggested → real listing links from the persisted units, not a punt.
     if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenEstimateReply = resolveRecommendedUnitsPaymentEstimateReply(conv, "regen");
+      if (regenEstimateReply) {
+        return respondWithSmsRegeneratedDraft(regenEstimateReply, undefined, {
+          turnFinanceIntent: true,
+          financeContextIntent: true
+        });
+      }
+    }
+    if (channel === "sms" && !regenRoutingIntentOverride) {
       const regenMediaReply = await resolveRecommendedUnitsMediaReply(conv, String(event.body ?? ""), "regen");
       if (regenMediaReply) {
         return respondWithSmsRegeneratedDraft(
@@ -56740,6 +56786,14 @@ if (authToken && signature) {
   // Recommended-unit media follow-up: after we suggested bikes, the customer asks to SEE them
   // (pics/colors/links) — answer with the REAL listing links instead of punting (s R Gurajala,
   // 2026-06-24). Runs before the recommender (this is a follow-up to one); same resolver in regenerate.
+  // Disclaimed payment estimate: a down payment + priced recommended units → rough monthly ranges
+  // (before the finance route's "run numbers" punt). Same resolver in regenerate.
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const estimateReply = resolveRecommendedUnitsPaymentEstimateReply(conv, "live");
+    if (estimateReply) {
+      return publishLiveTwilioReply(estimateReply, { turnFinanceIntent: true, financeContextIntent: true }, { draftOnly: true });
+    }
+  }
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
     const mediaReply = await resolveRecommendedUnitsMediaReply(conv, inboundText, "live");
     if (mediaReply) {

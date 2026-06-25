@@ -795,6 +795,9 @@ export type Conversation = {
     images?: string[];
   }[];
   recommendedUnitsAt?: string;
+  // Offer-once-per-value marker: the down payment we last sent a disclaimed payment ESTIMATE for, so
+  // we don't re-fire on later "ok"/"thanks" turns but DO re-estimate if they change it (2026-06-24).
+  paymentEstimateSentForDown?: number;
   // Offer-once marker: when we sent the finance pre-qual/credit-app + visit offer to a payment-
   // focused lead (after they engaged with numbers), so we don't repeat it (2026-06-24).
   financeAppInviteSentAt?: string;
