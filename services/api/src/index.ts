@@ -282,7 +282,8 @@ import {
   judgeShouldRespondWithLLM,
   judgeCadenceQualityWithLLM,
   getCachedSelfHealVerdict,
-  scoreContextFidelityWithLLM
+  scoreContextFidelityWithLLM,
+  classifyDraftEditWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -4356,6 +4357,77 @@ async function evaluateContextFidelityHold(
     // Best-effort — never block or fail a publish.
     return null;
   }
+}
+
+// Net 2 of the gap-detection loop: when staff EDIT the AI's draft before sending, the generated→sent
+// diff is the strongest "the agent was wrong here" signal — a labeled human correction. Judge whether
+// the edit was MATERIAL (substance changed — a comprehension miss the loop should fix) vs COSMETIC
+// (voice/length only); persist only material ones on conv.humanCorrection so the read-only outcome-audit
+// sweep turns them into comprehension anomalies. Fire-and-forget (never blocks the send); best-effort.
+async function recordDraftEditCorrection(
+  conv: Conversation,
+  args: { generated: string; sent: string; channel: "sms" | "email"; messageId?: string | null }
+): Promise<void> {
+  try {
+    const generated = String(args.generated ?? "").trim();
+    const sent = String(args.sent ?? "").trim();
+    if (!generated || !sent || generated === sent) return;
+    const verdict = await classifyDraftEditWithLLM({
+      generated,
+      sent,
+      inbound: String(getLastInboundBody(conv) ?? ""),
+      history: buildHistory(conv, 8),
+      anchor: {
+        modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
+        leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
+        dialogState: conv?.dialogState?.name ?? null
+      },
+      channel: args.channel
+    });
+    if (!verdict || !verdict.isMaterial) return; // cosmetic edits are NOT a comprehension gap
+    if (typeof verdict.confidence === "number" && verdict.confidence < 0.6) return; // low-signal
+    (conv as any).humanCorrection = {
+      at: new Date().toISOString(),
+      category: verdict.category ?? null,
+      confidence: verdict.confidence ?? null,
+      reason: verdict.reason ?? null,
+      steering: verdict.steering ?? null,
+      channel: args.channel,
+      messageId: args.messageId ?? null,
+      generatedPreview: generated.slice(0, 240),
+      sentPreview: sent.slice(0, 240)
+    };
+    saveConversation(conv);
+    recordDecisionTrace({
+      scope: "manual",
+      stage: "human_correction.material",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        category: verdict.category ?? null,
+        confidence: verdict.confidence ?? null,
+        reason: String(verdict.reason ?? "").slice(0, 160),
+        channel: args.channel
+      }
+    });
+  } catch {
+    // Best-effort detection — never disrupt the send path.
+  }
+}
+
+// Detect a staff edit (the sent body differs from the AI draft we consumed) and, when so, fire the
+// fire-and-forget material-correction judge. Called at the SUCCESSFUL send sites only (email + twilio).
+function maybeRecordDraftEditCorrection(
+  conv: Conversation,
+  fin: { usedDraft: boolean; originalDraftBody?: string },
+  sent: string,
+  channel: "sms" | "email",
+  messageId?: string | null
+): void {
+  if (!fin?.usedDraft) return;
+  const generated = String(fin.originalDraftBody ?? "");
+  if (!generated.trim() || generated.trim() === String(sent ?? "").trim()) return; // no edit
+  void recordDraftEditCorrection(conv, { generated, sent: String(sent ?? ""), channel, messageId });
 }
 
 async function publishCustomerReplyDraft(args: {
@@ -48248,6 +48320,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider, undefined, undefined, actorForOutbound(emailBody));
       }
+      maybeRecordDraftEditCorrection(conv, fin, signed, "email", draftId);
       applyManualOutboundStateHints(emailBody, { channel: "email" });
       await reconcileManualOutboundState(emailBody, { channel: "email", delivered: true });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
@@ -48358,6 +48431,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     queueTlpLog();
     // Shadow auto-close: did this SMS fulfill an open call/follow-up task? (fire-and-forget)
     void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: smsBody });
+    // Net 2: a staff edit to the AI draft is a labeled correction → judge material-vs-cosmetic (fire-and-forget).
+    maybeRecordDraftEditCorrection(conv, fin, smsBody, "sms", draftId);
 
     return res.json({
       ok: true,

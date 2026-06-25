@@ -200,10 +200,16 @@ signals already EXIST as computed-but-unfed data — so we wire them:
   corrective reply followed. Catches the out-of-context class AT DRAFT TIME, before a human sees it.
   Detection only — the draft still publishes exactly as before. A passing/operator draft clears it; the
   detector treats a DIFFERENT reply after the flag as resolved. Pinned by `conversation_outcome_audit:eval`.
-- **Net 2 (NEXT) — backstop: human edit-corrections → feed.** The edit miner already captures
-  generated→sent pairs (report-only). Add an LLM diff-judge (material vs cosmetic) so a MATERIAL correction
-  becomes a comprehension anomaly — and a material correction the scorer DIDN'T flag is itself a signal to
-  add a context-fidelity fixture (Net 2 self-improves Net 1).
+- **Net 2 (DONE) — backstop: human edit-corrections → feed.** When staff EDIT the AI draft before sending
+  (`finalizeDraftAsSent` records `originalDraftBody` ≠ sent), the send path fires a fire-and-forget typed
+  LLM diff-judge (`classifyDraftEditWithLLM`, material vs cosmetic — comprehend, not the old regex
+  edit-labeler). A MATERIAL correction (intent / facts / lead-type / context changed, conf ≥ 0.6) is
+  persisted on `conv.humanCorrection`; cosmetic edits (voice/length/formatting) are dropped. The read-only
+  sweep emits `human_correction_material` (comprehension P2, recent ≤ 21d) → parser_fix_candidate (Tier 1,
+  notify). The strongest "the agent was wrong here" signal — a human already corrected it — turned into the
+  loop's parser-fix input. Wired at both successful send sites (email + twilio); never blocks a send. Pinned
+  by `conversation_outcome_audit:eval`. (Follow-on: a material correction the scorer DIDN'T flag is also a
+  signal to add a context-fidelity fixture — Net 2 self-improves Net 1.)
 - **Net 3 (LATER) — unknown-unknowns: open-ended critic.** Broaden `answer_correctness` from enumerated
   categories to "anything off for THIS lead's type/context?" → feed, notify-only. The only net that finds
   brand-new gap classes; each one found becomes a fixture so Net 1 catches it next time.

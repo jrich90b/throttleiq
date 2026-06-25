@@ -45,6 +45,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   orphan_todo: "state",
   held_draft_unresolved: "comprehension",
   context_fidelity_shadow_unresolved: "comprehension",
+  human_correction_material: "comprehension",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
@@ -64,6 +65,7 @@ type AuditableConv = {
   inventoryWatches?: Array<{ status?: string | null }> | null;
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
+  humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
@@ -81,6 +83,7 @@ function hasActiveWatch(conv: AuditableConv): boolean {
 export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date } = {}): OutcomeAnomaly[] {
   const out: RawAnomaly[] = [];
   if (!conv) return [];
+  const now = opts.now ?? new Date();
   const base = { convId: String(conv.id ?? ""), leadKey: String(conv.leadKey ?? "") };
   const closed = isClosed(conv);
   const cad = conv.followUpCadence;
@@ -178,6 +181,27 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
         severity: "P2",
         healed: false,
         detail: `context-fidelity shadow flagged out-of-context (${cfs.frame ?? "?"}) and no corrective reply followed${cfs.reason ? ` — ${String(cfs.reason).slice(0, 120)}` : ""}`
+      });
+    }
+  }
+
+  // 5c. Material HUMAN CORRECTION (Net 2): staff EDITED the AI draft before sending and the diff-judge
+  //     found the change MATERIAL (the human fixed WHAT the reply said — intent / facts / lead-type /
+  //     context, not just voice/length). This is the strongest "the agent was wrong here" signal — a
+  //     human already corrected it — and the very class Joe kept catching by hand. Surface it so the
+  //     loop turns the correction into a parser-first fix (frame + steering are the inputs). Recent only
+  //     (a fresh signal; old ones age out — the loop's dedup prevents re-work). Comprehension P2.
+  const hc = conv.humanCorrection;
+  const hcAtMs = Date.parse(String(hc?.at ?? ""));
+  if (hc && Number.isFinite(hcAtMs)) {
+    const ageDays = (now.getTime() - hcAtMs) / (1000 * 60 * 60 * 24);
+    if (ageDays >= 0 && ageDays <= 21) {
+      out.push({
+        ...base,
+        dimension: "human_correction_material",
+        severity: "P2",
+        healed: false,
+        detail: `staff materially corrected the AI draft (${hc.category ?? "?"})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`
       });
     }
   }

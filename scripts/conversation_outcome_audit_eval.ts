@@ -87,6 +87,20 @@ eq(dims({ ...cfs, messages: [{ direction: "out", provider: "twilio", at: "2026-0
 // MINOR severity is not actionable => never fires.
 eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", severity: "minor", frame: "dropped_anchor", draftPreview: "x" } }), [], "minor shadow flag => not surfaced");
 
+// --- 5c. material HUMAN CORRECTION (Net 2): a staff edit the diff-judge found material → surfaced
+//         (recent only); cosmetic edits are never recorded so they never reach this detector. ---
+{
+  const a = auditConversationOutcome(
+    { id: "c5d", humanCorrection: { at: "2026-06-25T01:00:00.000Z", category: "wrong_lead_type", reason: "pitched a non-buyer" } },
+    { now: NOW }
+  );
+  eq(a.map(x => x.dimension), ["human_correction_material"], "recent material correction => surfaced");
+  eq(a[0].category, "comprehension", "human_correction_material is category=comprehension");
+  eq(a[0].severity, "P2", "human_correction_material is P2");
+}
+// Older than the 21-day window => aged out (the loop already had its chance; dedup handles recurrence).
+eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category: "wrong_fact" } }), [], "material correction older than 21d => not surfaced");
+
 // --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
@@ -133,6 +147,15 @@ assert.match(idx, /\(args\.conv as any\)\.contextFidelityShadow = \{/, "publishC
 assert.match(idx, /String\(cfHold\.severity \?\? ""\)\.toLowerCase\(\) === "major"/, "only MAJOR would-holds are persisted (actionable subset)");
 const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an operator/passing draft clears the shadow flag (correction sink)");
+
+// --- Net 2 wiring: a typed LLM diff-judge + the send-path recorder that persists material corrections. ---
+const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+assert.match(llm, /export async function classifyDraftEditWithLLM/, "the material-vs-cosmetic diff-judge exists (LLM, not regex)");
+assert.match(llm, /DRAFT_EDIT_JUDGE_JSON_SCHEMA/, "the diff-judge uses a typed structured-output schema");
+assert.match(idx, /maybeRecordDraftEditCorrection\(conv, fin/, "the send path records a staff edit (both email + sms sites)");
+assert.match(idx, /\(conv as any\)\.humanCorrection = \{/, "a MATERIAL correction is persisted on the conversation");
+assert.match(idx, /if \(!verdict \|\| !verdict\.isMaterial\) return/, "cosmetic edits are NOT recorded (material only)");
+assert.ok((idx.match(/maybeRecordDraftEditCorrection\(conv, fin/g) ?? []).length >= 2, "wired at both successful send sites (email + twilio)");
 // The classifier routes it by category (comprehension → parser_fix_candidate, Tier 1, notify) with no
 // dimension whitelist — so the new dimension flows through automatically.
 {
@@ -145,6 +168,12 @@ assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an oper
   eq(c.tier, 1, "parser_fix_candidate is Tier 1");
   eq(c.notify, true, "comprehension fix candidate notifies Joe");
   eq(c.autoMergeEligible, false, "starts non-graduated (PR + notify, no auto-merge)");
+  const hcCls = classifyOutcomeAnomaly(
+    { category: "comprehension", dimension: "human_correction_material", healed: false, severity: "P2" },
+    {}
+  );
+  eq(hcCls.action, "parser_fix_candidate", "human_correction_material → parser_fix_candidate (Net 2)");
+  eq(hcCls.notify, true, "a human correction notifies Joe");
 }
 n += 4;
 

@@ -2060,6 +2060,29 @@ export type ContextFidelityScoreParse = {
   steering?: string; // one instruction to re-draft faithfully (feeds self-heal when enforced)
 };
 
+export type DraftEditJudgeParse = {
+  // Net 2 of the gap-detection loop: when staff EDIT the AI's draft before sending, the diff between
+  // the generated draft and the sent reply is the strongest "the agent was wrong HERE" signal we have —
+  // a labeled correction. This judge decides whether that correction was MATERIAL (the human changed
+  // WHAT the reply communicates: intent / facts / lead-type / context — a comprehension miss the loop
+  // should fix at the parser) vs COSMETIC (only HOW it reads: voice, length, formatting, greeting — not
+  // a comprehension bug). Only material corrections feed the self-healing loop.
+  isMaterial: boolean;
+  category:
+    | "wrong_intent" // the draft answered a different question than the customer asked
+    | "out_of_context" // fluent but about the wrong thing (the context-fidelity failure class)
+    | "wrong_lead_type" // sales/bike frame on a non-sales lead (the Elizabeth class)
+    | "wrong_fact" // a factual/policy/price/availability claim the human corrected
+    | "missing_info" // the draft omitted something the customer needed; the human added it
+    | "voice_tone" // cosmetic: phrasing/voice/personalization only
+    | "length_brevity" // cosmetic: shortened/expanded, same meaning
+    | "formatting" // cosmetic: punctuation/format/greeting only
+    | "other";
+  confidence?: number;
+  reason?: string; // what changed and why it's material (the loop's diagnosis input)
+  steering?: string; // one instruction so a future draft gets it right (the parser-fix input)
+};
+
 export type CadenceQualityJudgeParse = {
   // Judges a PROACTIVE follow-up cadence message (one WE initiate, no inbound to answer) against
   // the conversation state. Distinct axes from the inbound draft judge — "does it address the ask"
@@ -3256,6 +3279,32 @@ const CONTEXT_FIDELITY_JSON_SCHEMA: { [key: string]: unknown } = {
     unsupported_assertion: { type: "string" },
     verdict: { type: "string", enum: ["faithful", "out_of_context"] },
     severity: { type: "string", enum: ["minor", "major"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
+  }
+};
+
+const DRAFT_EDIT_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_material", "category", "confidence", "reason", "steering"],
+  properties: {
+    is_material: { type: "boolean" },
+    category: {
+      type: "string",
+      enum: [
+        "wrong_intent",
+        "out_of_context",
+        "wrong_lead_type",
+        "wrong_fact",
+        "missing_info",
+        "voice_tone",
+        "length_brevity",
+        "formatting",
+        "other"
+      ]
+    },
     confidence: { type: "number" },
     reason: { type: "string" },
     steering: { type: "string" }
@@ -7544,6 +7593,120 @@ export async function scoreContextFidelityWithLLM(args: {
       typeof parsed.unsupported_assertion === "string" ? parsed.unsupported_assertion.slice(0, 240) : undefined,
     verdict,
     severity,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+/**
+ * Net 2 — the human-correction diff-judge. Given the AI's GENERATED draft and the body a human actually
+ * SENT (a staff edit), decide whether the correction was MATERIAL (the human changed WHAT the reply
+ * communicates — intent / facts / lead-type / context = a comprehension miss the loop should fix) vs
+ * COSMETIC (only HOW it reads — voice / length / formatting). The customer's latest message + anchor are
+ * provided so the judge can tell "answered the wrong thing" from "same answer, nicer words". Returns null
+ * when disabled/low-signal (caller treats null as "no material correction"). Comprehend, not regex.
+ */
+export async function classifyDraftEditWithLLM(args: {
+  generated: string; // the AI's original draft (originalDraftBody)
+  sent: string; // the body the human actually sent
+  inbound: string; // the customer's latest message the draft was replying to
+  history?: { direction: "in" | "out"; body: string }[];
+  anchor?: { modelOfRecord?: string | null; leadType?: string | null; dialogState?: string | null };
+  channel?: "sms" | "email";
+}): Promise<DraftEditJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DRAFT_EDIT_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DRAFT_EDIT_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DRAFT_EDIT_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DRAFT_EDIT_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const generated = String(args.generated ?? "").trim();
+  const sent = String(args.sent ?? "").trim();
+  if (!generated || !sent || generated === sent) return null; // no edit to judge
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const anchor = args.anchor ?? {};
+  const prompt = [
+    "You are a QA reviewer for a Harley dealership's AI sales agent. A staff rep edited the agent's",
+    "DRAFT reply before sending it. Compare the GENERATED draft to the SENT reply and decide whether the",
+    "edit was MATERIAL — the rep changed WHAT the reply communicates (answered a different question,",
+    "fixed a wrong/added a missing fact, changed the lead framing, or fixed an out-of-context reply) —",
+    "or COSMETIC — the rep only changed HOW it reads (voice, wording, length, formatting, greeting) while",
+    "the meaning stayed the same. A MATERIAL edit means the agent got the substance wrong and is a bug to",
+    "fix; a cosmetic edit is just style. Return only JSON matching the schema.",
+    "",
+    "Fields:",
+    "- is_material: true ONLY if the substance/meaning changed (not mere rewording).",
+    "- category: wrong_intent (answered a different question) | out_of_context (fluent but wrong subject) |",
+    "  wrong_lead_type (sales frame on a non-sales lead) | wrong_fact (corrected a fact/price/availability/",
+    "  policy) | missing_info (rep added needed info the draft omitted) | voice_tone | length_brevity |",
+    "  formatting | other. Use a cosmetic category (voice_tone/length_brevity/formatting) when is_material=false.",
+    "- confidence 0..1 (>= 0.8 only when clear). reason: what changed. steering: one instruction so the",
+    "  next draft gets it right (only meaningful when is_material).",
+    "Be conservative: when the meaning is the same, is_material=false. When unsure, prefer cosmetic.",
+    "",
+    "Examples:",
+    '- customer: "(Dealer Lead App survey: not interested in purchasing)" | generated: "Which bike are you',
+    '  asking about?" | sent: "Thanks for reaching out — no pressure at all, I\'m here if you ever want a bike." ->',
+    '  {"is_material":true,"category":"wrong_lead_type","confidence":0.95,"reason":"pitched a self-declared non-buyer","steering":"acknowledge a non-buyer survey warmly; no sales pitch"}',
+    '- customer: "what\'s the price on the street glide?" | generated: "It\'s $28,999." | sent: "The Street',
+    '  Glide is $26,499 — want the out-the-door?" -> {"is_material":true,"category":"wrong_fact","confidence":0.9,',
+    '   "reason":"corrected the price","steering":"quote the correct price for the Street Glide"}',
+    '- generated: "Hi there — yes that\'s in stock, want to come see it?" | sent: "Hey John, good news —',
+    '  it\'s in stock! Want to swing by?" -> {"is_material":false,"category":"voice_tone","confidence":0.9,',
+    '   "reason":"same message, friendlier wording + name","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Anchor: ${JSON.stringify({ model_of_record: anchor.modelOfRecord ?? null, lead_type: anchor.leadType ?? null, dialog_state: anchor.dialogState ?? null })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${args.inbound ?? ""}`,
+    `GENERATED draft: ${generated}`,
+    `SENT reply: ${sent}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "draft_edit_judge",
+      schema: DRAFT_EDIT_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-draft-edit-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const allowedCategories = [
+    "wrong_intent",
+    "out_of_context",
+    "wrong_lead_type",
+    "wrong_fact",
+    "missing_info",
+    "voice_tone",
+    "length_brevity",
+    "formatting",
+    "other"
+  ];
+  const categoryRaw = String(parsed.category ?? "").toLowerCase();
+  const category = (allowedCategories.includes(categoryRaw) ? categoryRaw : "other") as DraftEditJudgeParse["category"];
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    isMaterial: parsed.is_material === true,
+    category,
     confidence,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
     steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined

@@ -888,6 +888,24 @@ export type Conversation = {
     inboundPreview?: string;
     draftPreview?: string;
   } | null;
+  // Human-correction marker (Net 2 of the gap-detection loop): when staff EDIT the AI's draft before
+  // sending and the diff-judge (classifyDraftEditWithLLM) finds the change MATERIAL (the human fixed
+  // WHAT the reply said — intent / facts / lead-type / context, not just voice/length), we persist the
+  // labeled correction here so the read-only outcome-audit sweep turns it into a comprehension anomaly
+  // the loop fixes at the parser. The strongest "the agent was wrong here" signal — a human already
+  // corrected it. Cosmetic edits are NOT recorded. Recorded async (never blocks a send); recent ones
+  // surface, then age out by the detector's window.
+  humanCorrection?: {
+    at: string;
+    category?: string | null;
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    messageId?: string | null;
+    generatedPreview?: string;
+    sentPreview?: string;
+  } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   financeOutcome?: {
