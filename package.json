@@ -79,6 +79,7 @@
     "long_term_cadence_realign:eval": "npx tsx scripts/long_term_cadence_realign_eval.ts",
     "resume_followup_cadence:eval": "npx tsx scripts/resume_followup_cadence_eval.ts",
     "conversation_outcome_audit": "npx tsx scripts/conversation_outcome_audit.ts",
+    "open_critic_sweep": "npx tsx scripts/open_critic_sweep.ts",
     "conversation_outcome_audit:eval": "npx tsx scripts/conversation_outcome_audit_eval.ts",
     "anomaly_loop_detect": "npx tsx scripts/anomaly_loop_detect.ts",
     "anomaly_classifier:eval": "npx tsx scripts/anomaly_classifier_eval.ts",

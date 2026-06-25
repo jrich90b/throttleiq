@@ -30,6 +30,22 @@ if (!fs.existsSync(feedPath)) {
 const feed = JSON.parse(fs.readFileSync(feedPath, "utf8"));
 const anomalies: any[] = Array.isArray(feed?.anomalies) ? feed.anomalies : [];
 
+// Merge the Net 3 open-critic feed (reports/open_critic/latest.json) when present — the open-ended
+// critic writes the SAME OutcomeAnomaly shape (category="discovery") into a sibling file so the
+// deterministic sweep stays pure. Optional: absent on a deterministic-only run.
+const openCriticPath = path.join(reportRoot, "open_critic", "latest.json");
+if (fs.existsSync(openCriticPath)) {
+  try {
+    const oc = JSON.parse(fs.readFileSync(openCriticPath, "utf8"));
+    if (Array.isArray(oc?.anomalies)) {
+      anomalies.push(...oc.anomalies);
+      console.log(`Merged ${oc.anomalies.length} open-critic (discovery) finding(s) from ${openCriticPath}`);
+    }
+  } catch {
+    /* a malformed sibling feed must never break the deterministic loop */
+  }
+}
+
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;

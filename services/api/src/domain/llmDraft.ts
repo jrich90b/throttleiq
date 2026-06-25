@@ -2083,6 +2083,21 @@ export type DraftEditJudgeParse = {
   steering?: string; // one instruction so a future draft gets it right (the parser-fix input)
 };
 
+export type OpenCriticParse = {
+  // Net 3 of the gap-detection loop: an OPEN-ENDED critic over a recent conversation. Nets 1-2 only
+  // catch what our existing judges/categories recognize (context-fidelity frames, material edits). This
+  // one hunts UNKNOWN-unknowns: it reads the thread with no fixed checklist and decides whether the
+  // agent mishandled THIS lead in ANY way — and NAMES the issue class itself (issueClass is free-form),
+  // which is how a brand-new gap class gets discovered. Conservative by design (most replies are fine);
+  // findings are escalated to Joe (Tier 2, never auto-merged) because the class is unconfirmed.
+  hasIssue: boolean;
+  severity: "minor" | "major";
+  issueClass?: string; // a short, model-proposed label for the problem (the candidate new gap class)
+  reason?: string; // what the agent got wrong about THIS lead/turn
+  evidence?: string; // the specific reply text / quote that's the problem
+  confidence?: number;
+};
+
 export type CadenceQualityJudgeParse = {
   // Judges a PROACTIVE follow-up cadence message (one WE initiate, no inbound to answer) against
   // the conversation state. Distinct axes from the inbound draft judge — "does it address the ask"
@@ -3308,6 +3323,20 @@ const DRAFT_EDIT_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
     confidence: { type: "number" },
     reason: { type: "string" },
     steering: { type: "string" }
+  }
+};
+
+const OPEN_CRITIC_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["has_issue", "severity", "issue_class", "reason", "evidence", "confidence"],
+  properties: {
+    has_issue: { type: "boolean" },
+    severity: { type: "string", enum: ["minor", "major"] },
+    issue_class: { type: "string" }, // free-form: the model NAMES the gap class (unknown-unknowns)
+    reason: { type: "string" },
+    evidence: { type: "string" },
+    confidence: { type: "number" }
   }
 };
 
@@ -7710,6 +7739,89 @@ export async function classifyDraftEditWithLLM(args: {
     confidence,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
     steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+/**
+ * Net 3 — the OPEN-ENDED critic. Reads a recent conversation with NO fixed checklist and decides whether
+ * the agent mishandled this lead in ANY way, NAMING the issue class itself (the candidate new gap class).
+ * This is the only net that finds unknown-unknowns — gap classes we have no detector for yet. Deliberately
+ * conservative (most replies are fine); a flagged finding is ESCALATED to Joe (Tier 2), never auto-patched,
+ * because the class is unconfirmed. Returns null when disabled/low-signal. Comprehend, not regex.
+ */
+export async function critiqueConversationHandlingWithLLM(args: {
+  thread: { direction: "in" | "out"; body: string }[];
+  lastAgentReply: string; // the reply most worth critiquing
+  lead?: { source?: string | null; bucket?: string | null; cta?: string | null; vehicle?: string | null };
+  channel?: "sms" | "email";
+}): Promise<OpenCriticParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_OPEN_CRITIC_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_OPEN_CRITIC_DEBUG === "1";
+  const primaryModel = process.env.OPENAI_OPEN_CRITIC_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_OPEN_CRITIC_MODEL_FALLBACK || (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const lastReply = String(args.lastAgentReply ?? "").trim();
+  if (!lastReply) return null;
+
+  const thread = (args.thread ?? []).slice(-12).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are an experienced Harley dealership sales manager reviewing how the dealership's AI agent",
+    "handled a lead. Read the WHOLE thread and judge whether the agent handled the latest exchange",
+    "appropriately FOR THIS LEAD'S TYPE AND CONTEXT. You are hunting for ANY mishandling — do NOT limit",
+    "yourself to a fixed checklist. Examples of problems (non-exhaustive): treated a non-buyer/parts/",
+    "service/event lead as a bike sale, ignored or didn't answer what the customer actually asked, used",
+    "the wrong tone for the situation (e.g. salesy on a complaint), stated something not supported,",
+    "ignored a constraint the customer gave, re-asked something already answered, addressed the wrong",
+    "person/vehicle. If something is off in a way none of these name, FLAG IT ANYWAY and name the class",
+    "yourself in issue_class. Return only JSON matching the schema.",
+    "",
+    "Be conservative and fair: the MAJORITY of replies are fine. Only flag a CLEAR problem a customer or",
+    "a manager would actually notice. If the handling is reasonable, has_issue=false.",
+    "Fields: has_issue; severity (major if a customer would notice/it costs us the lead, else minor);",
+    "issue_class (a short snake_case label YOU choose for the problem, e.g. \"ignored_stated_constraint\");",
+    "reason (what's wrong); evidence (the exact reply text); confidence 0..1 (>= 0.8 only when clear).",
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Lead: ${JSON.stringify({ source: lead.source ?? null, bucket: lead.bucket ?? null, cta: lead.cta ?? null, vehicle: lead.vehicle ?? null })}`,
+    thread.length ? `Thread:\n${thread.join("\n")}` : "Thread: (none)",
+    `The agent reply to scrutinize most: ${lastReply}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "open_critic",
+      schema: OPEN_CRITIC_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-open-critic",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const severity: OpenCriticParse["severity"] =
+    String(parsed.severity ?? "").toLowerCase() === "major" ? "major" : "minor";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    hasIssue: parsed.has_issue === true,
+    severity,
+    issueClass: typeof parsed.issue_class === "string" ? parsed.issue_class.slice(0, 80) : undefined,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    evidence: typeof parsed.evidence === "string" ? parsed.evidence.slice(0, 240) : undefined,
+    confidence
   };
 }
 

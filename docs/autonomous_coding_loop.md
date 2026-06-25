@@ -122,9 +122,23 @@ and the per-dimension `healed` flag let DETECT route each by tier. The cron repo
 `deploy:api` (or a manual `git pull --ff-only`) so it always runs the latest detectors. For dealer #2,
 point the same cron at that dealer's runtime store.
 
+### Open-critic sweep cron (Net 3, unknown-unknowns) — runs BETWEEN the feed and DETECT
+The open-ended critic (Net 3) refreshes its sibling feed `reports/open_critic/latest.json` a couple of
+minutes after the deterministic feed and BEFORE DETECT, so DETECT merges it. UNLIKE the deterministic
+sweep, this one is LLM-backed, so its cron MUST load the OpenAI key (source the runtime env file):
+
+```
+# 8:52 AM ET — open-ended critic over recent convs → discovery findings (needs OPENAI_API_KEY)
+52 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run open_critic_sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/open_critic_cron.log 2>&1"
+```
+
+Conservative + capped (OPEN_CRITIC_MAX, OPEN_CRITIC_WINDOW_DAYS); kill with LLM_OPEN_CRITIC_ENABLED=0.
+Findings are category=`discovery` → DETECT escalates them (Tier 2, notify, never auto-merge).
+
 ### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
 Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
-next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). Read-only; nothing auto-merges —
+next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). It also MERGES the Net 3
+`reports/open_critic/latest.json` sibling feed when present. Read-only; nothing auto-merges —
 graduated autonomy starts every work order at PR + (when behavioral) notify.
 
 ```
@@ -210,9 +224,17 @@ signals already EXIST as computed-but-unfed data — so we wire them:
   loop's parser-fix input. Wired at both successful send sites (email + twilio); never blocks a send. Pinned
   by `conversation_outcome_audit:eval`. (Follow-on: a material correction the scorer DIDN'T flag is also a
   signal to add a context-fidelity fixture — Net 2 self-improves Net 1.)
-- **Net 3 (LATER) — unknown-unknowns: open-ended critic.** Broaden `answer_correctness` from enumerated
-  categories to "anything off for THIS lead's type/context?" → feed, notify-only. The only net that finds
-  brand-new gap classes; each one found becomes a fixture so Net 1 catches it next time.
+- **Net 3 (DONE) — unknown-unknowns: open-ended critic.** `critiqueConversationHandlingWithLLM` reads a
+  recent conversation with NO fixed checklist and decides whether the agent mishandled the lead in ANY way,
+  NAMING the issue class itself (`issue_class` is free-form) — that's how a brand-new gap class surfaces.
+  `scripts/open_critic_sweep.ts` runs it over RECENT convs (deterministic prefilter: open, ≤ OPEN_CRITIC_
+  WINDOW_DAYS=2 days, has a customer msg + a real reply; capped at OPEN_CRITIC_MAX=40), keeps only CLEAR
+  MAJOR conf≥0.8 findings (`decideOpenCriticAnomaly`), and writes `reports/open_critic/latest.json` in the
+  OutcomeAnomaly shape (category=`discovery`). `anomaly_loop_detect` MERGES that sibling feed; the
+  classifier ALWAYS escalates `discovery` (Tier 2, notify, never auto-merge — the class is unconfirmed).
+  A confirmed discovery then earns a real detector + eval (and, if it's an out-of-context type, a
+  context-fidelity fixture — so Net 3 feeds Nets 1-2). Conservative + capped (the noisiest net). Pinned by
+  `conversation_outcome_audit:eval` + `anomaly_classifier:eval`. Kill: LLM_OPEN_CRITIC_ENABLED=0.
 
 Honest limit: a residual (a novel class the model can't flag AND no human touches) never fully reaches
 zero, but Net 3 shrinks it and each instance permanently teaches the loop instead of relying on Joe.

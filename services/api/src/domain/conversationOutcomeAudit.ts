@@ -24,7 +24,7 @@ export type OutcomeSeverity = "P1" | "P2" | "P3";
 // The "one feed": deterministic STATE contradictions + the COMPREHENSION/feedback verdicts the system
 // already computed and persisted on the conversation (draftHeld, 👎). Category lets the loop route by
 // kind (state → reconcile/invariant fix; comprehension → parser-first fix; feedback → redraft/diagnose).
-export type OutcomeCategory = "state" | "comprehension" | "feedback";
+export type OutcomeCategory = "state" | "comprehension" | "feedback" | "discovery";
 
 export type OutcomeAnomaly = {
   convId: string;
@@ -46,6 +46,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   held_draft_unresolved: "comprehension",
   context_fidelity_shadow_unresolved: "comprehension",
   human_correction_material: "comprehension",
+  open_critic_finding: "discovery",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
@@ -248,7 +249,7 @@ export function auditConversationStore(input: {
   }
 
   const byDimension: Record<string, number> = {};
-  const byCategory: OutcomeAuditSummary["byCategory"] = { state: 0, comprehension: 0, feedback: 0 };
+  const byCategory: OutcomeAuditSummary["byCategory"] = { state: 0, comprehension: 0, feedback: 0, discovery: 0 };
   const bySeverity: OutcomeAuditSummary["bySeverity"] = { P1: 0, P2: 0, P3: 0 };
   let regressionAnomalies = 0;
   for (const a of anomalies) {
@@ -260,5 +261,38 @@ export function auditConversationStore(input: {
   return {
     anomalies,
     summary: { conversationsScanned: convs.length, totalAnomalies: anomalies.length, byDimension, byCategory, bySeverity, regressionAnomalies }
+  };
+}
+
+// Net 3 — turn an OPEN-ENDED critic verdict (critiqueConversationHandlingWithLLM) into a feed anomaly.
+// Pure + deterministic so it's eval-pinned (the LLM call lives in the sweep; this decides what's worth
+// surfacing). Conservative: only a CLEAR, MAJOR, high-confidence mishandling escalates — the critic is
+// the noisiest net, and a discovery is an UNCONFIRMED new class (Tier 2 escalate, never auto-patched).
+// The model-proposed issueClass rides along in the detail = the candidate new gap class for Joe to review.
+export type OpenCriticFinding = {
+  hasIssue?: boolean;
+  severity?: string | null;
+  issueClass?: string | null;
+  reason?: string | null;
+  confidence?: number | null;
+};
+
+export function decideOpenCriticAnomaly(
+  finding: OpenCriticFinding,
+  base: { convId: string; leadKey?: string | null }
+): OutcomeAnomaly | null {
+  if (!finding?.hasIssue) return null;
+  if (String(finding.severity ?? "").toLowerCase() !== "major") return null;
+  const conf = typeof finding.confidence === "number" ? finding.confidence : 1;
+  if (!(conf >= 0.8)) return null;
+  const issueClass = String(finding.issueClass ?? "").trim() || "unspecified";
+  return {
+    convId: String(base.convId ?? ""),
+    leadKey: String(base.leadKey ?? ""),
+    dimension: "open_critic_finding",
+    category: categoryFor("open_critic_finding"),
+    severity: "P2",
+    healed: false,
+    detail: `open-critic: ${issueClass}${finding.reason ? ` — ${String(finding.reason).slice(0, 140)}` : ""}`
   };
 }

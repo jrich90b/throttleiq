@@ -36,7 +36,7 @@ fs.writeFileSync(path.join(outDir, "latest.json"), JSON.stringify(payload, null,
 
 console.log(`Conversation outcome audit — scanned ${summary.conversationsScanned} conversations`);
 console.log(`Anomalies: ${summary.totalAnomalies} (P1 ${summary.bySeverity.P1} / P2 ${summary.bySeverity.P2} / P3 ${summary.bySeverity.P3}); regressions (healed-dimension hits): ${summary.regressionAnomalies}`);
-console.log(`By category: state ${summary.byCategory.state} / comprehension ${summary.byCategory.comprehension} / feedback ${summary.byCategory.feedback}`);
+console.log(`By category: state ${summary.byCategory.state} / comprehension ${summary.byCategory.comprehension} / feedback ${summary.byCategory.feedback} / discovery ${summary.byCategory.discovery}`);
 const dims = Object.entries(summary.byDimension).sort((a, b) => b[1] - a[1]);
 for (const [dim, n] of dims) console.log(`  ${String(n).padStart(4)}  ${dim}`);
 for (const a of anomalies.slice(0, 25)) console.log(`   - [${a.severity}${a.healed ? "/regression" : ""}] ${a.dimension} ${a.convId} | ${a.detail}`);

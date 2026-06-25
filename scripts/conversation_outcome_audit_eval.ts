@@ -15,7 +15,7 @@ import path from "node:path";
 
 process.env.CONVERSATIONS_DB_PATH =
   process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `outcome-audit-eval-${Date.now()}.json`);
-const { auditConversationOutcome, auditConversationStore } = await import(
+const { auditConversationOutcome, auditConversationStore, decideOpenCriticAnomaly } = await import(
   "../services/api/src/domain/conversationOutcomeAudit.ts"
 );
 
@@ -101,6 +101,19 @@ eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", se
 // Older than the 21-day window => aged out (the loop already had its chance; dedup handles recurrence).
 eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category: "wrong_fact" } }), [], "material correction older than 21d => not surfaced");
 
+// --- 5d. Net 3 open-critic decision: only a CLEAR, MAJOR, high-confidence mishandling escalates. ---
+{
+  const base = { convId: "c5f", leadKey: "+1" };
+  const a = decideOpenCriticAnomaly({ hasIssue: true, severity: "major", issueClass: "ignored_stated_constraint", reason: "booked a time the customer said they can't do", confidence: 0.9 }, base);
+  eq(a?.dimension, "open_critic_finding", "major + confident issue => open_critic_finding anomaly");
+  eq(a?.category, "discovery", "open_critic_finding is category=discovery (escalate, never auto-merge)");
+  eq(a?.severity, "P2", "open_critic_finding is P2");
+  eq(/ignored_stated_constraint/.test(String(a?.detail)), true, "the model-proposed class rides in the detail");
+}
+eq(decideOpenCriticAnomaly({ hasIssue: false, severity: "major", confidence: 0.9 }, { convId: "c", leadKey: "" }), null, "no issue => no anomaly");
+eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "minor", confidence: 0.9 }, { convId: "c", leadKey: "" }), null, "minor issue => not escalated (conservative)");
+eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 }, { convId: "c", leadKey: "" }), null, "low-confidence issue => not escalated");
+
 // --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
@@ -156,6 +169,16 @@ assert.match(idx, /maybeRecordDraftEditCorrection\(conv, fin/, "the send path re
 assert.match(idx, /\(conv as any\)\.humanCorrection = \{/, "a MATERIAL correction is persisted on the conversation");
 assert.match(idx, /if \(!verdict \|\| !verdict\.isMaterial\) return/, "cosmetic edits are NOT recorded (material only)");
 assert.ok((idx.match(/maybeRecordDraftEditCorrection\(conv, fin/g) ?? []).length >= 2, "wired at both successful send sites (email + twilio)");
+
+// --- Net 3 wiring: the open-ended critic (LLM) + the sweep that emits discovery anomalies + the merge. ---
+assert.match(llm, /export async function critiqueConversationHandlingWithLLM/, "the open-ended critic exists (LLM, model NAMES the class)");
+assert.match(llm, /OPEN_CRITIC_JSON_SCHEMA/, "the critic uses a typed structured-output schema");
+const sweep3 = fs.readFileSync("scripts/open_critic_sweep.ts", "utf8");
+assert.match(sweep3, /critiqueConversationHandlingWithLLM/, "the open-critic sweep runs the critic over recent convs");
+assert.match(sweep3, /decideOpenCriticAnomaly/, "the sweep emits anomalies via the pure decision");
+assert.match(sweep3, /open_critic", "latest\.json"|"open_critic"/, "the sweep writes the open_critic feed");
+const det = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
+assert.match(det, /open_critic", "latest\.json"/, "DETECT merges the open-critic (discovery) feed");
 // The classifier routes it by category (comprehension → parser_fix_candidate, Tier 1, notify) with no
 // dimension whitelist — so the new dimension flows through automatically.
 {

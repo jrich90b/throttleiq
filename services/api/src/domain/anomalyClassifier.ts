@@ -93,6 +93,18 @@ export function classifyOutcomeAnomaly(
         notify: true,
         rationale: `${anomaly.dimension} → redraft + diagnose; if the class recurs, a parser-first fix`
       };
+    case "discovery":
+      // Net 3 open-critic finding — a model-proposed gap class we have NO detector for yet. It is
+      // UNCONFIRMED by construction, so ALWAYS escalate (Tier 2, notify, never auto-merge): Joe confirms
+      // the class, then it earns a real detector + eval. This is how unknown-unknowns enter the loop.
+      return {
+        tier: 2,
+        action: "escalate",
+        workOrder: true,
+        autoMergeEligible: false,
+        notify: true,
+        rationale: `${anomaly.dimension} → open-critic discovery (unconfirmed new class) → escalate for review, then turn into a detector + eval`
+      };
     default:
       // Unknown shape → the conservative default is Tier 2 (escalate). Never auto-act on something we
       // can't classify.

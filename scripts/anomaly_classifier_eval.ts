@@ -42,6 +42,14 @@ check(classifyOutcomeAnomaly(A({ category: "comprehension", healed: false, dimen
 check(classifyOutcomeAnomaly(A({ category: "feedback", healed: false, dimension: "negative_feedback" })),
   { tier: 1, action: "redraft_or_diagnose", workOrder: true, notify: true }, "feedback => redraft/diagnose + notify");
 
+// --- Net 3 discovery (open-critic): an unconfirmed model-proposed class => ALWAYS Tier 2 escalate. ---
+check(classifyOutcomeAnomaly(A({ category: "discovery", healed: false, dimension: "open_critic_finding" })),
+  { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "discovery => escalate (unconfirmed new class)");
+// Even if its dimension somehow graduated, a discovery never auto-merges (it's unconfirmed by construction).
+check(classifyOutcomeAnomaly(A({ category: "discovery", healed: false, dimension: "open_critic_finding" }),
+  { graduatedCategories: new Set(["open_critic_finding"]) } as any),
+  { tier: 2, action: "escalate", autoMergeEligible: false }, "discovery never auto-merges even if graduated");
+
 // --- conservative default: an unknown category => Tier 2 escalate. ---
 check(classifyOutcomeAnomaly(A({ category: "mystery", healed: false } as any)),
   { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "unknown category => escalate");
