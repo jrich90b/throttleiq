@@ -794,6 +794,9 @@ export type Conversation = {
     url?: string | null;
   }[];
   recommendedUnitsAt?: string;
+  // Offer-once marker: when we sent the finance pre-qual/credit-app + visit offer to a payment-
+  // focused lead (after they engaged with numbers), so we don't repeat it (2026-06-24).
+  financeAppInviteSentAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;

@@ -460,6 +460,7 @@ import {
   toRecommendedUnits,
   buildRecommendedUnitsMediaReply
 } from "./domain/inventoryRecommender.js";
+import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -25567,6 +25568,29 @@ function shouldHandleManualQuoteDetailsReceived(args: {
 
 function buildManualQuoteDetailsReceivedReply(): string {
   return "Thanks — those quote details help. I’ll have the team use them and follow up with the numbers.";
+}
+
+// Funnel progression (Joe, 2026-06-24): once a payment-focused lead engages with numbers (the
+// manual-quote-details moment), move them toward getting pre-approved — append the credit-app link +
+// a soft visit invite, ONCE. Deterministic link (never fabricated); no-op if there's no credit-app
+// URL or we already offered. Same helper in both the live and regenerate paths.
+async function buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv: Conversation): Promise<string> {
+  let reply = buildManualQuoteDetailsReceivedReply();
+  if (conv.financeAppInviteSentAt) return reply;
+  try {
+    const dp = await getDealerProfileHot();
+    const line = buildFinanceAppInviteLine({
+      creditAppUrl: (dp as any)?.creditAppUrl,
+      bookingUrl: (dp as any)?.bookingUrl
+    });
+    if (line) {
+      reply = `${reply} ${line}`;
+      conv.financeAppInviteSentAt = new Date().toISOString();
+    }
+  } catch {
+    // best-effort — the base reply stands without the offer
+  }
+  return reply;
 }
 
 function applyManualQuoteDetailsReceivedState(
@@ -52352,7 +52376,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey
       });
       return respondWithSmsRegeneratedDraft(
-        buildManualQuoteDetailsReceivedReply(),
+        await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv),
         undefined,
         {
           turnFinanceIntent: true,
@@ -56652,7 +56676,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parserIntentOverride: routingParserIntentOverridePrecheck
     });
-    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+    return publishLiveTwilioReply(await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv), {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
@@ -59175,7 +59199,7 @@ if (authToken && signature) {
     logRouteOutcome("manual_quote_details_received", {
       turnPrimaryIntent: routeExecutionIntent
     });
-    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+    return publishLiveTwilioReply(await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv), {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
