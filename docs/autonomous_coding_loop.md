@@ -224,10 +224,17 @@ signals already EXIST as computed-but-unfed data — so we wire them:
   loop's parser-fix input. Wired at both successful send sites (email + twilio); never blocks a send. Pinned
   by `conversation_outcome_audit:eval`. (Follow-on: a material correction the scorer DIDN'T flag is also a
   signal to add a context-fidelity fixture — Net 2 self-improves Net 1.)
-- **Net 3 (DONE) — unknown-unknowns: open-ended critic (CROSS-MODEL).** `critiqueConversationHandlingWithLLM`
+- **Net 3 (DONE) — unknown-unknowns: open-ended TURN critic (CROSS-MODEL).** `critiqueConversationHandlingWithLLM`
   reads a recent conversation with NO fixed checklist and decides whether the agent mishandled the lead in
   ANY way, NAMING the issue class itself (`issue_class` is free-form) — that's how a brand-new gap class
-  surfaces. The critic runs on **Claude (a different model lineage than the OpenAI generator)** by default,
+  surfaces. It judges the agent's **ACTIONS**, not just the reply text: `summarizeTurnActions(conv, todos)`
+  hands the critic the turn's side-effects (the route/classification chosen, the parsed lead fields, the
+  cadence kind, active inventory watches, open tasks, the handoff mode, the appointment), so a wrong
+  parse / watch-for-the-wrong-model / mis-route / wrong-cadence / deflected-booking / missing-task is
+  caught even when the reply reads fine — covering watches, ADF parse, cadence, routing, handoffs,
+  scheduling, and tasks in one critic instead of a per-dimension checklist. (Inventory/policy enrichment —
+  feeding the dealer's stock + rules so it can catch "promised a bike we don't have" — is a clean
+  follow-on.) The critic runs on **Claude (a different model lineage than the OpenAI generator)** by default,
   because a model is systematically blind to errors rooted in its own understanding — a cross-model judge
   catches what OpenAI misses. Claude via raw fetch + tool-use (`requestStructuredJsonAnthropic`, no SDK);
   auto-falls back to OpenAI when `ANTHROPIC_API_KEY` is unset or `LLM_OPEN_CRITIC_PROVIDER=openai`, and on

@@ -277,6 +277,50 @@ export type OpenCriticFinding = {
   confidence?: number | null;
 };
 
+// Turn-action summary for the cross-model TURN critic (Net 3, broadened from reply-only). The conversation
+// object already records what the agent DID this turn — the parsed lead fields, the route it chose, the
+// cadence kind, active watches, open tasks, the handoff mode, the appointment. Surfacing that to the critic
+// lets it judge the agent's ACTIONS (reply + side-effects), not just the reply text — so a wrong parse /
+// wrong watch model / mis-route / wrong cadence / deflected booking / missing task is caught even when the
+// reply reads fine. Pure + read-only. (Inventory/policy enrichment is a separate, optional follow-on.)
+export function summarizeTurnActions(
+  conv: any,
+  openTodos?: Array<{ reason?: string | null; summary?: string | null }>
+): {
+  leadSource: string | null;
+  parsedVehicle: string | null;
+  tradeVehicle: string | null;
+  purchaseTimeframe: string | null;
+  route: { bucket: string | null; cta: string | null };
+  dialogState: string | null;
+  handoffMode: string | null;
+  cadence: { kind: string | null; status: string | null };
+  activeWatches: Array<{ model: string | null; year: number | null; condition: string | null }>;
+  openTasks: Array<{ reason: string | null; summary: string | null }>;
+  appointment: { status: string | null; booked: boolean; whenText: string | null };
+} {
+  const fmtVeh = (x: any) => {
+    const s = [x?.year, x?.model ?? x?.description].filter(Boolean).join(" ").trim();
+    return s || null;
+  };
+  const watches = collectInventoryWatches(conv)
+    .filter((w: any) => w && String(w?.status ?? "active").toLowerCase() !== "paused")
+    .map((w: any) => ({ model: w?.model ?? null, year: typeof w?.year === "number" ? w.year : null, condition: w?.condition ?? null }));
+  return {
+    leadSource: conv?.lead?.source ?? null,
+    parsedVehicle: fmtVeh(conv?.lead?.vehicle ?? {}),
+    tradeVehicle: fmtVeh(conv?.lead?.tradeVehicle ?? {}),
+    purchaseTimeframe: conv?.lead?.purchaseTimeframe ?? null,
+    route: { bucket: conv?.classification?.bucket ?? null, cta: conv?.classification?.cta ?? null },
+    dialogState: conv?.dialogState?.name ?? null,
+    handoffMode: conv?.followUp?.mode ?? null,
+    cadence: { kind: conv?.followUpCadence?.kind ?? null, status: conv?.followUpCadence?.status ?? null },
+    activeWatches: watches,
+    openTasks: (openTodos ?? []).map(t => ({ reason: t?.reason ?? null, summary: String(t?.summary ?? "").slice(0, 120) || null })),
+    appointment: { status: conv?.appointment?.status ?? null, booked: !!conv?.appointment?.bookedEventId, whenText: conv?.appointment?.whenText ?? null }
+  };
+}
+
 export function decideOpenCriticAnomaly(
   finding: OpenCriticFinding,
   base: { convId: string; leadKey?: string | null }

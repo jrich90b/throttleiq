@@ -7810,22 +7810,27 @@ export async function classifyDraftEditWithLLM(args: {
 }
 
 /**
- * Net 3 — the OPEN-ENDED critic. Reads a recent conversation with NO fixed checklist and decides whether
- * the agent mishandled this lead in ANY way, NAMING the issue class itself (the candidate new gap class).
- * This is the only net that finds unknown-unknowns — gap classes we have no detector for yet. Deliberately
- * conservative (most replies are fine); a flagged finding is ESCALATED to Joe (Tier 2), never auto-patched,
- * because the class is unconfirmed. Returns null when disabled/low-signal. Comprehend, not regex.
+ * Net 3 — the OPEN-ENDED TURN critic. Reads a recent conversation with NO fixed checklist and decides
+ * whether the agent mishandled this lead in ANY way, NAMING the issue class itself (the candidate new gap
+ * class). It judges the agent's ACTIONS this turn — the reply AND the side-effects (`actions`: the route it
+ * chose, the parsed lead fields, the cadence kind, active watches, open tasks, the handoff mode, the
+ * appointment) — so a wrong parse / wrong watch model / mis-route / wrong cadence / deflected booking /
+ * missing task is caught even when the reply text reads fine, not just bad prose. The only net that finds
+ * unknown-unknowns. Conservative (most turns are fine); a flagged finding is ESCALATED (Tier 2), never
+ * auto-patched, because the class is unconfirmed. Returns null when disabled/low-signal. Comprehend, not regex.
  */
 export async function critiqueConversationHandlingWithLLM(args: {
   thread: { direction: "in" | "out"; body: string }[];
   lastAgentReply: string; // the reply most worth critiquing
   lead?: { source?: string | null; bucket?: string | null; cta?: string | null; vehicle?: string | null };
+  actions?: Record<string, unknown> | null; // the turn's side-effects (summarizeTurnActions): route/parse/cadence/watch/task/handoff/appt
   channel?: "sms" | "email";
 }): Promise<OpenCriticParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_OPEN_CRITIC_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY;
+    // EITHER provider is enough — the critic runs cross-model (Claude) by default, OpenAI as fallback.
+    !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
   if (!useLLM) return null;
 
   const debug = process.env.LLM_OPEN_CRITIC_DEBUG === "1";
@@ -7848,23 +7853,31 @@ export async function critiqueConversationHandlingWithLLM(args: {
   const lead = args.lead ?? {};
   const prompt = [
     "You are an experienced Harley dealership sales manager reviewing how the dealership's AI agent",
-    "handled a lead. Read the WHOLE thread and judge whether the agent handled the latest exchange",
-    "appropriately FOR THIS LEAD'S TYPE AND CONTEXT. You are hunting for ANY mishandling — do NOT limit",
-    "yourself to a fixed checklist. Examples of problems (non-exhaustive): treated a non-buyer/parts/",
-    "service/event lead as a bike sale, ignored or didn't answer what the customer actually asked, used",
-    "the wrong tone for the situation (e.g. salesy on a complaint), stated something not supported,",
-    "ignored a constraint the customer gave, re-asked something already answered, addressed the wrong",
-    "person/vehicle. If something is off in a way none of these name, FLAG IT ANYWAY and name the class",
+    "handled a lead. Read the WHOLE thread and judge whether the agent handled this turn appropriately",
+    "FOR THIS LEAD'S TYPE AND CONTEXT. Judge the agent's ACTIONS, not just its words: you are given the",
+    "side-effects the agent took this turn (AGENT ACTIONS) — the route/classification it chose, the lead",
+    "fields it parsed, the follow-up cadence, any inventory watch it set, any task it created, the handoff",
+    "mode, and the appointment. A reply can read fine while the underlying action is wrong. Hunt for ANY",
+    "mishandling of EITHER the reply OR an action — do NOT limit yourself to a fixed checklist.",
+    "Examples (non-exhaustive): treated a non-buyer/parts/service/event lead as a bike sale; ignored or",
+    "didn't answer what the customer asked; wrong tone for the situation; stated something unsupported;",
+    "ignored a constraint the customer gave; re-asked something already answered; PARSED the wrong vehicle/",
+    "timeframe/department; set an inventory WATCH for a model the customer didn't ask about; ROUTED a",
+    "service/parts/finance turn as a sales inquiry; picked the wrong CADENCE kind; left a cadence running",
+    "after a handoff; DEFLECTED a concrete appointment time instead of booking; failed to create a TASK for",
+    "a promise/commitment. If something is off in a way none of these name, FLAG IT and name the class",
     "yourself in issue_class. Return only JSON matching the schema.",
     "",
-    "Be conservative and fair: the MAJORITY of replies are fine. Only flag a CLEAR problem a customer or",
-    "a manager would actually notice. If the handling is reasonable, has_issue=false.",
+    "Be conservative and fair: the MAJORITY of turns are fine. Only flag a CLEAR problem a customer or a",
+    "manager would actually notice. If the handling is reasonable, has_issue=false.",
     "Fields: has_issue; severity (major if a customer would notice/it costs us the lead, else minor);",
-    "issue_class (a short snake_case label YOU choose for the problem, e.g. \"ignored_stated_constraint\");",
-    "reason (what's wrong); evidence (the exact reply text); confidence 0..1 (>= 0.8 only when clear).",
+    "issue_class (a short snake_case label YOU choose, e.g. \"watch_set_for_wrong_model\" or",
+    "\"deflected_instead_of_booking\"); reason (what's wrong); evidence (the exact reply text OR the wrong",
+    "action); confidence 0..1 (>= 0.8 only when clear).",
     "",
     `Channel: ${args.channel ?? "sms"}`,
     `Lead: ${JSON.stringify({ source: lead.source ?? null, bucket: lead.bucket ?? null, cta: lead.cta ?? null, vehicle: lead.vehicle ?? null })}`,
+    args.actions ? `AGENT ACTIONS this turn: ${JSON.stringify(args.actions)}` : "AGENT ACTIONS this turn: (not provided)",
     thread.length ? `Thread:\n${thread.join("\n")}` : "Thread: (none)",
     `The agent reply to scrutinize most: ${lastReply}`
   ].join("\n");

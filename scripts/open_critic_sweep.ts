@@ -25,6 +25,7 @@ import path from "node:path";
 const dbPath = path.resolve(process.env.CONVERSATIONS_DB_PATH || "data/conversations.json");
 const raw = JSON.parse(fs.readFileSync(dbPath, "utf8"));
 const convs: any[] = Array.isArray(raw?.conversations) ? raw.conversations : [];
+const openTodos: any[] = (Array.isArray(raw?.todos) ? raw.todos : []).filter((t: any) => t?.status === "open");
 
 const MAX = Number(process.env.OPEN_CRITIC_MAX ?? 40);
 const WINDOW_DAYS = Number(process.env.OPEN_CRITIC_WINDOW_DAYS ?? 2);
@@ -54,7 +55,7 @@ const candidates = convs
   .slice(0, MAX);
 
 const { critiqueConversationHandlingWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
-const { decideOpenCriticAnomaly } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
+const { decideOpenCriticAnomaly, summarizeTurnActions } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
 
 const anomalies: any[] = [];
 let judged = 0;
@@ -70,6 +71,7 @@ for (const c of candidates) {
     .find((m: any) => m?.direction === "out" && REAL_OUT.has(String(m?.provider ?? "")) && String(m?.body ?? "").trim());
   if (!lastReply) continue;
   const channel = String(lastReply?.from ?? "").includes("@") ? "email" : "sms";
+  const convTodos = openTodos.filter((t: any) => String(t?.convId ?? "") === String(c?.id ?? ""));
   let finding: any = null;
   try {
     finding = await critiqueConversationHandlingWithLLM({
@@ -81,6 +83,7 @@ for (const c of candidates) {
         cta: c?.classification?.cta ?? null,
         vehicle: c?.lead?.vehicle?.model ?? c?.lead?.vehicle?.description ?? null
       },
+      actions: summarizeTurnActions(c, convTodos),
       channel: channel as "sms" | "email"
     });
   } catch {

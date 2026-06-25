@@ -15,7 +15,7 @@ import path from "node:path";
 
 process.env.CONVERSATIONS_DB_PATH =
   process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `outcome-audit-eval-${Date.now()}.json`);
-const { auditConversationOutcome, auditConversationStore, decideOpenCriticAnomaly } = await import(
+const { auditConversationOutcome, auditConversationStore, decideOpenCriticAnomaly, summarizeTurnActions } = await import(
   "../services/api/src/domain/conversationOutcomeAudit.ts"
 );
 
@@ -114,6 +114,28 @@ eq(decideOpenCriticAnomaly({ hasIssue: false, severity: "major", confidence: 0.9
 eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "minor", confidence: 0.9 }, { convId: "c", leadKey: "" }), null, "minor issue => not escalated (conservative)");
 eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 }, { convId: "c", leadKey: "" }), null, "low-confidence issue => not escalated");
 
+// --- 5e. turn-action summary (Net 3 turn-critic): the agent's side-effects, extracted for the critic. ---
+{
+  const sample = {
+    lead: { source: "Dealer Lead App", vehicle: { year: 2026, model: "Street Glide" }, tradeVehicle: { model: "Sportster" }, purchaseTimeframe: "0-3 months" },
+    classification: { bucket: "inventory_interest", cta: "check_availability" },
+    dialogState: { name: "pricing_init" },
+    followUp: { mode: "manual_handoff" },
+    followUpCadence: { kind: "standard", status: "active" },
+    inventoryWatches: [{ model: "Road Glide", year: 2025, status: "active" }, { model: "Old", status: "paused" }],
+    appointment: { status: "confirmed", bookedEventId: "evt1", whenText: "Sat 1pm" }
+  };
+  const a = summarizeTurnActions(sample, [{ reason: "pricing", summary: "Confirm OTD price" }]);
+  eq(a.parsedVehicle, "2026 Street Glide", "parsed vehicle summarized");
+  eq(a.tradeVehicle, "Sportster", "trade vehicle summarized");
+  eq(a.route, { bucket: "inventory_interest", cta: "check_availability" }, "route captured");
+  eq(a.handoffMode, "manual_handoff", "handoff mode captured");
+  eq(a.cadence, { kind: "standard", status: "active" }, "cadence captured");
+  eq(a.activeWatches, [{ model: "Road Glide", year: 2025, condition: null }], "only ACTIVE watches (paused excluded), with model");
+  eq(a.appointment, { status: "confirmed", booked: true, whenText: "Sat 1pm" }, "appointment captured (booked=true)");
+  eq(a.openTasks, [{ reason: "pricing", summary: "Confirm OTD price" }], "open tasks captured");
+}
+
 // --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
@@ -185,6 +207,12 @@ const sweep3 = fs.readFileSync("scripts/open_critic_sweep.ts", "utf8");
 assert.match(sweep3, /critiqueConversationHandlingWithLLM/, "the open-critic sweep runs the critic over recent convs");
 assert.match(sweep3, /decideOpenCriticAnomaly/, "the sweep emits anomalies via the pure decision");
 assert.match(sweep3, /open_critic", "latest\.json"|"open_critic"/, "the sweep writes the open_critic feed");
+// Turn-critic: the critic judges side-effects (actions), not just the reply.
+assert.match(mod, /export function summarizeTurnActions/, "summarizeTurnActions is exported from the feed module");
+assert.match(llm, /AGENT ACTIONS this turn/, "the critic prompt includes the turn's side-effects");
+assert.match(llm, /actions\?: Record<string, unknown>/, "the critic accepts the turn's actions");
+assert.match(sweep3, /summarizeTurnActions\(c, convTodos\)/, "the sweep passes the turn's actions to the critic");
+assert.match(sweep3, /raw\?\.todos/, "the sweep reads open todos for the action summary");
 const det = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
 assert.match(det, /open_critic", "latest\.json"/, "DETECT merges the open-critic (discovery) feed");
 // The classifier routes it by category (comprehension → parser_fix_candidate, Tier 1, notify) with no
