@@ -28289,6 +28289,24 @@ async function processDueFollowUpsUnlocked() {
       reason: String(conv.followUp?.reason ?? "")
     });
   }
+  // State-invariant: a CLOSED/SOLD conversation must not keep an ACTIVE inventory watch — a reopen
+  // could refire "it's available again!" to a customer who already closed/bought. The write-time guard
+  // in closeConversation covers most close paths; this heals sold-via-applyOutcomeSold + any backlog
+  // (the outcome auditor found 15 on 6/25). Reversible (paused, not deleted); fail-direction safe.
+  let closedWatchesPaused = 0;
+  for (const conv of convs) {
+    const closed = !!(conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt);
+    if (!closed || !hasActiveInventoryWatch(conv)) continue;
+    const n = pauseInventoryWatches(conv);
+    if (n > 0) {
+      saveConversation(conv);
+      closedWatchesPaused += n;
+      recordRouteOutcome("manual", "closed_watch_paused", { convId: conv.id, leadKey: conv.leadKey, paused: n });
+    }
+  }
+  if (closedWatchesPaused > 0) {
+    console.log(`[state-reconcile] paused ${closedWatchesPaused} inventory watch(es) on closed/sold conversations`);
+  }
   if (cadenceHandoffHealed > 0) {
     console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
   }

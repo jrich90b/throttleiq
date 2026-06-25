@@ -4316,6 +4316,18 @@ export function closeConversation(conv: Conversation, reason?: string) {
     conv.followUpCadence.stopReason = reason ?? "closed";
     conv.followUpCadence.nextDueAt = undefined;
   }
+  // A closed conversation must not keep an ACTIVE inventory watch — a reopen could refire
+  // "it's available again!" to a customer who already closed/bought. Pause every active watch
+  // (reversible; the watch-fire engine skips paused). Write-time guard; the reconcile tick is the
+  // catch-all for close paths that don't route through here (e.g. applyOutcomeSold).
+  const watches = conv.inventoryWatches?.length
+    ? conv.inventoryWatches
+    : conv.inventoryWatch
+      ? [conv.inventoryWatch]
+      : [];
+  for (const w of watches) {
+    if (w && w.status !== "paused") w.status = "paused";
+  }
   conv.updatedAt = nowIso();
   scheduleSave();
 }

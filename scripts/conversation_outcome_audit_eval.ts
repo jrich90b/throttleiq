@@ -40,9 +40,13 @@ eq(dims({ id: "c3b", sale: { soldAt: "2026-06-20T00:00:00Z" }, closedReason: "so
 // --- 4. cadence active while handed off (regression — a heal exists). ---
 {
   const a = auditConversationOutcome({ id: "c4", followUpCadence: { status: "active", kind: "standard" }, followUp: { mode: "manual_handoff" } }, { now: NOW });
-  eq(a.map(x => x.dimension), ["cadence_active_while_handoff"], "active cadence + manual_handoff => anomaly");
+  eq(a.map(x => x.dimension), ["cadence_active_while_handoff"], "active standard cadence + manual_handoff => anomaly");
   eq(a[0].healed, true, "cadence_active_while_handoff is flagged as a heal-regression");
 }
+// CARVE-OUT: long_term / post_sale cadences are INTENTIONALLY kept through a handoff (match the heal) —
+// flagging them would be a false positive (model the engine's hold conditions).
+eq(dims({ id: "c4b", followUpCadence: { status: "active", kind: "long_term" }, followUp: { mode: "manual_handoff" } }), [], "long_term cadence on handoff is kept => NOT flagged");
+eq(dims({ id: "c4c", followUpCadence: { status: "active", kind: "post_sale" }, followUp: { mode: "manual_handoff" } }), [], "post_sale cadence on handoff is kept => NOT flagged");
 
 // --- 5. stale held flag (real reply after the hold; draft_ai does NOT count). ---
 const held = { id: "c5", draftHeld: { at: "2026-06-25T01:00:00.000Z" } };

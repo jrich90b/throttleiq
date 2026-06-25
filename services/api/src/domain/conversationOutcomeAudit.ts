@@ -89,9 +89,17 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   }
 
   // 4. Cadence ACTIVE while handed off to a human — could auto-text mid-handoff. A reconcile heal pauses
-  //    this, so a hit is a regression (a handoff path that bypassed setFollowUpMode's guard).
-  if (!closed && cadActive && conv.followUp?.mode === "manual_handoff") {
-    out.push({ ...base, dimension: "cadence_active_while_handoff", severity: "P1", healed: true, detail: "followUpCadence active while followUp.mode=manual_handoff" });
+  //    this, so a hit is a regression (a handoff path that bypassed setFollowUpMode's guard). CARVE-OUT:
+  //    long_term / post_sale cadences are INTENTIONALLY kept through a handoff (matches the heal's own
+  //    carve-out + stopFollowUpCadence) — flagging them is a false positive (model the hold conditions).
+  if (
+    !closed &&
+    cadActive &&
+    conv.followUp?.mode === "manual_handoff" &&
+    cad?.kind !== "long_term" &&
+    cad?.kind !== "post_sale"
+  ) {
+    out.push({ ...base, dimension: "cadence_active_while_handoff", severity: "P1", healed: true, detail: `followUpCadence active (kind=${cad?.kind ?? "?"}) while followUp.mode=manual_handoff` });
   }
 
   // 5. A held "needs reply" flag that a REAL reply already cleared — the inbox shows "needs reply"
