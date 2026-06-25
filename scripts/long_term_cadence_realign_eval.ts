@@ -64,15 +64,23 @@ assert.equal(
   false,
   "multi-year stays deferred"
 );
+// The initial opener is SEPARATE from the cadence — a lead whose opener was sent but whose long_term
+// nurture (stepIndex 0) hasn't fired is still re-aligned (the Richard case once his email went out).
+const contactedRichard = mk("+15550000004", {
+  messages: [
+    { direction: "in", provider: "sendgrid_adf", body: "WEB LEAD", at: "2026-06-24T23:13:00.000Z" },
+    { direction: "out", provider: "sendgrid", body: "Hi richard, thanks for your inquiry...", at: "2026-06-25T11:34:00.000Z" }
+  ]
+});
+assert.equal(realignMisdeferredLongTermCadence(contactedRichard, TZ, NOW), true, "opener sent but nurture not started (stepIndex 0) => still re-aligned");
+assert.equal(contactedRichard.followUpCadence.kind, "standard", "contacted-but-unnurtured lead flips to standard");
+// But a cadence already mid-nurture (a long_term step fired) is left alone — re-anchoring is disruptive.
 assert.equal(
-  realignMisdeferredLongTermCadence(
-    mk("+15550000004", { messages: [{ direction: "out", provider: "twilio", body: "Hi!", at: "2026-06-24T23:20:00.000Z" }] }),
-    TZ,
-    NOW
-  ),
+  realignMisdeferredLongTermCadence(mk("+15550000009", { followUpCadence: { stepIndex: 1 } }), TZ, NOW),
   false,
-  "already contacted (real outbound) => not re-aligned"
+  "long_term cadence already mid-nurture (stepIndex>0) => left alone"
 );
+n += 1;
 assert.equal(
   realignMisdeferredLongTermCadence(mk("+15550000005", { conv: { closedReason: "sold" } }), TZ, NOW),
   false,

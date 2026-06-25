@@ -4084,16 +4084,16 @@ export function realignMisdeferredLongTermCadence(
 ): boolean {
   const cad = conv?.followUpCadence;
   if (!cad || cad.status !== "active" || cad.kind !== "long_term") return false;
+  // Only BEFORE any long_term nurture step has fired (stepIndex 0) — re-anchoring a cadence that's
+  // already mid-nurture would be disruptive. The INITIAL first touch is SEPARATE from the cadence, so
+  // a lead can have been contacted (opener sent) while its deferred nurture hasn't started yet — that's
+  // exactly the Richard Tait case (email opener sent, but the long_term nurture still pinned 3mo out).
+  if (Number(cad.stepIndex ?? 0) !== 0) return false;
   if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
   if (conv.appointment?.bookedEventId) return false;
   const mode = String(conv.followUp?.mode ?? "");
   if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
   if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
-  // Never contacted: no real customer-facing outbound yet (a pending draft / ADF echo doesn't count).
-  const contacted = (conv.messages ?? []).some(
-    m => m?.direction === "out" && (m.provider === "twilio" || m.provider === "sendgrid")
-  );
-  if (contacted) return false;
   const plan = resolveInitialAdfCadencePlan({
     purchaseTimeframe: conv.lead?.purchaseTimeframe,
     purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
