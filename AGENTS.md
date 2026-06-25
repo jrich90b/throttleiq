@@ -73,6 +73,11 @@ escalate. The contract (full version in the loop doc):
   (≥5 consecutive human-approved merges in that category, zero post-deploy rollbacks). New/unproven
   categories never auto-merge. The `ci:eval` green gate is non-negotiable for every tier.
 - Behavioral changes always notify Joe; he is involved ONLY for Tier 2.
+- **Re-read this law every iteration (mandatory):** the loop's PLAN step MUST re-read `CLAUDE.md` +
+  `AGENTS.md` before proposing any patch — but reading is necessary, not sufficient. The load-bearing
+  rules are ENFORCED by gates that run regardless (the comprehension-debt ratchet, `eval_suite_manifest`,
+  decision-table + parity evals, `tsc` + `ci:eval`). The .md is the spec; the gate is the enforcement —
+  a patch that violates an encoded rule cannot merge even if the agent misread the prose.
 
 ## Fallback Policy
 - Low-confidence parser, disabled LLM, or orchestrator failure must not fall back to regex-written semantic customer-facing answers.

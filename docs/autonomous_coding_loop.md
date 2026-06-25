@@ -190,6 +190,24 @@ climbs:
    category record in `reports/auto_loop/category_ledger.json`.
 A post-deploy rollback in any category demotes it to step 1. `ci:eval` green is non-negotiable at every step.
 
+### Law compliance — re-read every iteration AND encode it as gates
+Two layers; the second is the real guarantee:
+1. **Mandatory re-read (intent):** every loop iteration MUST re-read `CLAUDE.md` + `AGENTS.md` (and the
+   section nearest the gap) in its PLAN block before proposing a patch — non-skippable. This carries the
+   JUDGMENT rules that can't be unit-tested: the de-tangle direction, the fail-direction test, "prefer a
+   `decide*Turn` reducer/parser over a new inline gate", the tier classification itself. (In supervised
+   sessions a `UserPromptSubmit` hook already injects Rule 0 every turn.)
+2. **Deterministic gates (enforcement):** an LLM can re-read the law and still misjudge, so the load-
+   bearing rules are encoded as checks that run REGARDLESS of what the agent understood, and a violating
+   patch cannot merge: the `twilio_comprehension_debt` ratchet (no new comprehension regex), the
+   `eval_suite_manifest` guard (every behavior change has an eval), the decision-table + parity evals
+   (centralized, both paths), and the non-negotiable `tsc` + `ci:eval`. **The .md is the spec; the gate is
+   the enforcement.**
+   - Hardening backlog (convert prose law → gate, so autonomy doesn't rely on the model obeying prose):
+     extend the comprehension-debt ratchet beyond the twilio handler (orchestrator + sendgrid), a
+     structural lint for "no new inline `parser||regex` precedence gate", a both-paths-parity lint, and a
+     pre-commit check for staged-paths-only + the commit trailer. Each converted rule is itself Tier-1 work.
+
 ### Consolidation — one loop, one skill (the endgame)
 The pieces exist but are fragmented: the reconcile tick (Tier 0), the live reply judges (partial Layer 1),
 the nightly comprehension audits, the `agent-watch` skill (Tier-2 PRs), and the closed-loop feedback
