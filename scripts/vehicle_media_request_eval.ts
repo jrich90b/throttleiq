@@ -33,28 +33,42 @@ const rows: Row[] = [
 for (const r of rows) {
   assert.equal(decideVehicleMediaRequestTurn(r.input).kind, r.kind, `decide[${r.id}] expected ${r.kind}`);
 }
-// Fail-safe: never fire without real links to send (that's what prevents a fabricated/punt reply).
+// Fail-safe: never fire without something real to send.
 assert.equal(decideVehicleMediaRequestTurn({ ...base, hasUnitsWithUrl: false }).kind, "none");
 
-// --- 2) Deterministic reply builder (exact URLs). ---
+// --- 2) Deterministic reply: PREFER photos (MMS), link the rest, exact URLs only. ---
 const units = toRecommendedUnits([
-  { year: "2026", model: "Nightster", color: "Vivid Black", price: 10299, stockId: "X4-26", url: "https://d.com/inventory/995742/nightster" } as any,
-  { year: "2022", model: "Forty-Eight", color: "Vivid Black", price: 8995, stockId: "U121-22", url: "https://d.com/inventory/979150/forty-eight" } as any,
-  { year: "2013", model: "1200 Custom", color: "Vivid Black", price: 6995, stockId: "U119-13", url: "" } as any // no url
+  // has a jpg photo => attach it (not the link)
+  { year: "2022", model: "Forty-Eight", color: "Vivid Black", stockId: "U121-22", url: "https://d.com/inventory/979150/forty-eight", images: ["https://cdn.x/a.jpg", "https://cdn.x/b.jpg"] } as any,
+  // only a webp (MMS-unfriendly) => fall back to its link
+  { year: "2026", model: "Nightster", color: "Vivid Black", stockId: "X4-26", url: "https://d.com/inventory/995742/nightster", images: ["https://cdn.x/c.webp"] } as any,
+  // no photo, no url => omitted entirely (never fabricated)
+  { year: "2013", model: "1200 Custom", color: "Vivid Black", stockId: "U119-13", url: "", images: [] } as any
 ]);
-assert.equal(units.length, 3, "toRecommendedUnits maps each match");
-const reply = buildRecommendedUnitsMediaReply({ firstName: "s R", units })!;
-assert.ok(reply, "a reply is built when units have urls");
-assert.match(reply, /2026 Nightster \(Vivid Black\): https:\/\/d\.com\/inventory\/995742\/nightster/, "exact Nightster url + color");
-assert.match(reply, /2022 Forty-Eight \(Vivid Black\): https:\/\/d\.com\/inventory\/979150\/forty-eight/, "exact Forty-Eight url");
-assert.ok(!reply.includes("1200 Custom"), "a unit with no url is omitted (never a fabricated link)");
-assert.match(reply, /run numbers on one of these\?/, "offers the next step");
-// No units with a url => null (caller falls back to commit-to-follow-up, not a punt).
+assert.equal(units.length, 3, "toRecommendedUnits maps each match (incl. images)");
+const built = buildRecommendedUnitsMediaReply({ firstName: "s R", units })!;
+assert.ok(built, "a result is built");
+assert.deepEqual(built.mediaUrls, ["https://cdn.x/a.jpg"], "attaches the jpg photo (one per unit), skips webp");
+assert.match(built.reply, /2026 Nightster \(Vivid Black\): https:\/\/d\.com\/inventory\/995742\/nightster/, "webp-only unit falls back to its exact link");
+assert.ok(!built.reply.includes("Forty-Eight"), "the photographed unit is sent as a photo, not also linked");
+assert.ok(!built.reply.includes("1200 Custom"), "a unit with no photo and no url is omitted (never fabricated)");
+assert.match(built.reply, /run numbers on one of these\?/, "offers the next step");
+// Photos attached but no links needed => still a valid reply (the MMS carries the content).
+const photoOnly = buildRecommendedUnitsMediaReply({
+  firstName: "x",
+  units: toRecommendedUnits([{ model: "Forty-Eight", url: "", images: ["https://cdn.x/a.jpg"] } as any])
+})!;
+assert.deepEqual(photoOnly.mediaUrls, ["https://cdn.x/a.jpg"]);
+assert.ok(!/•/.test(photoOnly.reply), "no link lines when the photo carries it");
+// Nothing real to send (no photo, no url) => null.
 assert.equal(
-  buildRecommendedUnitsMediaReply({ firstName: "x", units: toRecommendedUnits([{ model: "Nightster", url: "" } as any]) }),
+  buildRecommendedUnitsMediaReply({ firstName: "x", units: toRecommendedUnits([{ model: "Nightster", url: "", images: ["x.webp"] } as any]) }),
   null,
-  "no usable links => null"
+  "no usable photo and no url => null"
 );
+// MMS cap: at most 3 photos even with many units.
+const many = toRecommendedUnits(Array.from({ length: 6 }, (_, i) => ({ model: `M${i}`, images: [`https://cdn.x/${i}.jpg`] } as any)));
+assert.equal(buildRecommendedUnitsMediaReply({ units: many })!.mediaUrls.length, 3, "MMS photo count is capped");
 
 // --- 3) Parser contract. ---
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");

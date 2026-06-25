@@ -792,6 +792,7 @@ export type Conversation = {
     price?: number | null;
     stockId?: string | null;
     url?: string | null;
+    images?: string[];
   }[];
   recommendedUnitsAt?: string;
   // Offer-once marker: when we sent the finance pre-qual/credit-app + visit offer to a payment-

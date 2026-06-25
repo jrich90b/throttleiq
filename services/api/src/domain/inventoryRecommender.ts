@@ -171,6 +171,7 @@ export type RecommendedUnit = {
   price?: number | null;
   stockId?: string | null;
   url?: string | null;
+  images?: string[];
 };
 
 export function toRecommendedUnits(matches: InventoryFeedItem[]): RecommendedUnit[] {
@@ -180,7 +181,8 @@ export function toRecommendedUnits(matches: InventoryFeedItem[]): RecommendedUni
     color: m.color ?? null,
     price: m.price ?? null,
     stockId: m.stockId ?? null,
-    url: m.url ?? null
+    url: m.url ?? null,
+    images: Array.isArray(m.images) ? m.images.slice(0, 4) : []
   }));
 }
 
@@ -188,25 +190,42 @@ function unitDisplayName(u: RecommendedUnit): string {
   return [String(u.year ?? "").trim(), String(u.model ?? "").trim()].filter(Boolean).join(" ").trim() || "that one";
 }
 
+// MMS-reliable image formats only — carriers handle jpg/png well but choke on webp/avif (the dealer
+// feed mixes them). A unit whose only images are webp falls back to its listing link.
+const MMS_IMAGE_RE = /\.(jpe?g|png)(\?|$)/i;
+// Keep MMS small/deliverable — a few photos, spread one-per-unit, never the whole gallery.
+const MAX_MMS_PHOTOS = 3;
+
 /**
- * Deterministic reply to "show me pics/links/colors" of the units we already suggested. Lists each
- * unit's color + listing URL (the page has the photos). Only includes units that actually have a url
- * (never fabricate a link); if none have one, returns null so the caller falls back to a commit-to-
- * follow-up reply instead of a bare punt.
+ * Deterministic reply to "show me pics/colors/links" of the units we already suggested. Prefers
+ * actually ATTACHING photos over links (links break / get blocked — s R Gurajala, 2026-06-24): up to
+ * MAX_MMS_PHOTOS MMS-friendly images, one per unit. Any unit we couldn't attach a photo for but that
+ * has a listing url is LINKED instead. Returns { reply, mediaUrls }; null when there's nothing real to
+ * send (no photo and no url for any unit) so the caller doesn't punt or fabricate a link.
  */
 export function buildRecommendedUnitsMediaReply(args: {
   firstName?: string | null;
   units: RecommendedUnit[];
-}): string | null {
-  const withUrl = (args.units ?? []).filter(u => /^https?:\/\//i.test(String(u.url ?? "")));
-  if (!withUrl.length) return null;
+}): { reply: string; mediaUrls: string[] } | null {
+  const units = args.units ?? [];
+  const mediaUrls: string[] = [];
+  const photographed = new Set<RecommendedUnit>();
+  for (const u of units) {
+    if (mediaUrls.length >= MAX_MMS_PHOTOS) break;
+    const img = (Array.isArray(u.images) ? u.images : []).find(x => MMS_IMAGE_RE.test(String(x ?? "")));
+    if (img) {
+      mediaUrls.push(String(img).trim());
+      photographed.add(u);
+    }
+  }
+  const linkLines = units
+    .filter(u => !photographed.has(u) && /^https?:\/\//i.test(String(u.url ?? "")))
+    .map(u => `• ${unitDisplayName(u)}${u.color ? ` (${String(u.color).trim()})` : ""}: ${String(u.url).trim()}`);
+  if (!mediaUrls.length && !linkLines.length) return null;
   const name = String(args.firstName ?? "").trim();
   const opener = name ? `Here you go, ${name}!` : "Here you go!";
-  const lines = withUrl
-    .map(u => {
-      const color = String(u.color ?? "").trim();
-      return `• ${unitDisplayName(u)}${color ? ` (${color})` : ""}: ${String(u.url).trim()}`;
-    })
-    .join("\n");
-  return `${opener}\n${lines}\nWant me to run numbers on one of these?`;
+  const parts = [opener];
+  if (linkLines.length) parts.push(linkLines.join("\n"));
+  parts.push("Want me to run numbers on one of these?");
+  return { reply: parts.join("\n"), mediaUrls };
 }

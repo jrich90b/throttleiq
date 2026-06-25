@@ -2249,12 +2249,17 @@ async function resolveRecommendedUnitsMediaReply(
   conv: Conversation | null | undefined,
   inboundText: string,
   scope: "live" | "regen"
-): Promise<string | null> {
+): Promise<{ reply: string; mediaUrls: string[] } | null> {
   const text = String(inboundText ?? "").trim();
   if (!conv || !text) return null;
   const units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
-  const hasUnitsWithUrl = units.some(u => /^https?:\/\//i.test(String(u?.url ?? "")));
-  if (!hasUnitsWithUrl) return null; // nothing real to send => let normal handling run
+  // We can answer if any unit has a usable photo OR a listing url.
+  const hasSomethingToSend = units.some(
+    u =>
+      /^https?:\/\//i.test(String(u?.url ?? "")) ||
+      (Array.isArray(u?.images) && u.images.some(x => /\.(jpe?g|png)(\?|$)/i.test(String(x ?? ""))))
+  );
+  if (!hasSomethingToSend) return null; // nothing real to send => let normal handling run
   if (!vehicleMediaRequestParserHint(text)) return null;
   const parse = await safeLlmParse("vehicle_media_request_parser", () =>
     parseVehicleMediaRequestWithLLM({ text, history: buildHistory(conv, 8) })
@@ -2264,21 +2269,21 @@ async function resolveRecommendedUnitsMediaReply(
     wantsMedia: !!parse?.wantsMedia,
     confidence: parse?.confidence ?? 0,
     confidenceMin: vehicleRecommendationConfidenceMin(),
-    hasUnitsWithUrl
+    hasUnitsWithUrl: hasSomethingToSend
   });
   if (decision.kind !== "send_media") return null;
-  const reply = buildRecommendedUnitsMediaReply({
+  const built = buildRecommendedUnitsMediaReply({
     firstName: normalizeDisplayCase(conv.lead?.firstName),
     units
   });
-  if (!reply) return null;
+  if (!built) return null;
   recordRouteOutcome(scope, "vehicle_media_request", {
     convId: conv.id,
     leadKey: conv.leadKey,
-    units: units.filter(u => /^https?:\/\//i.test(String(u?.url ?? ""))).length,
+    photos: built.mediaUrls.length,
     focus: parse?.focus ?? null
   });
-  return reply;
+  return built;
 }
 
 // Cheap pre-filter: only run the media-request parser on photo/link/color-ish turns. A hint MISS
@@ -51494,7 +51499,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     if (channel === "sms" && !regenRoutingIntentOverride) {
       const regenMediaReply = await resolveRecommendedUnitsMediaReply(conv, String(event.body ?? ""), "regen");
       if (regenMediaReply) {
-        return respondWithSmsRegeneratedDraft(regenMediaReply);
+        return respondWithSmsRegeneratedDraft(
+          regenMediaReply.reply,
+          regenMediaReply.mediaUrls.length ? regenMediaReply.mediaUrls : undefined
+        );
       }
     }
     // Vehicle recommendation (parity with live /webhooks/twilio): suggest real inventory when the
@@ -56735,7 +56743,10 @@ if (authToken && signature) {
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
     const mediaReply = await resolveRecommendedUnitsMediaReply(conv, inboundText, "live");
     if (mediaReply) {
-      return publishLiveTwilioReply(mediaReply, undefined, { draftOnly: true });
+      return publishLiveTwilioReply(mediaReply.reply, undefined, {
+        draftOnly: true,
+        mediaUrls: mediaReply.mediaUrls.length ? mediaReply.mediaUrls : undefined
+      });
     }
   }
   // Vehicle recommendation: the customer asked us to SUGGEST bikes (no model in play) — answer with
