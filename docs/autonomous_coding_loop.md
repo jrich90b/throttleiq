@@ -122,6 +122,23 @@ and the per-dimension `healed` flag let DETECT route each by tier. The cron repo
 `deploy:api` (or a manual `git pull --ff-only`) so it always runs the latest detectors. For dealer #2,
 point the same cron at that dealer's runtime store.
 
+### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
+Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
+next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). Read-only; nothing auto-merges —
+graduated autonomy starts every work order at PR + (when behavioral) notify.
+
+```
+# 8:55 AM ET — classify the feed into a tier-tagged work order (DETECT → CLASSIFY)
+55 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run anomaly_loop_detect >> /home/ubuntu/leadrider-runtime/americanharley/reports/anomaly_loop_cron.log 2>&1"
+```
+
+`next.json` carries `stop:true` when healthy, else the ranked work orders (Tier 2 first), each with its
+action (parser_fix_candidate / add_invariant_or_heal / redraft_or_diagnose / heal_regression / escalate),
+`notify`, and `autoMergeEligible` (from the category ledger). **ACT** = the orchestrator/runner (the
+"Unattended operation" section) consumes `next.json`, runs PLAN→BUILD→VERIFY, and opens a PR — auto-merging
+only categories the ledger has graduated; everything behavioral notifies Joe. Wiring the scheduled runner
+to read `next.json` (alongside `auto_loop/next_task.json`) is the remaining ACT integration.
+
 The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
 means nothing new to code; otherwise it carries the next task + a production
 repro. For dealer #2, point the same cron at that dealer's runtime store.
