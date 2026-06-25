@@ -173,6 +173,14 @@ assert.ok((idx.match(/maybeRecordDraftEditCorrection\(conv, fin/g) ?? []).length
 // --- Net 3 wiring: the open-ended critic (LLM) + the sweep that emits discovery anomalies + the merge. ---
 assert.match(llm, /export async function critiqueConversationHandlingWithLLM/, "the open-ended critic exists (LLM, model NAMES the class)");
 assert.match(llm, /OPEN_CRITIC_JSON_SCHEMA/, "the critic uses a typed structured-output schema");
+// Cross-model: the critic prefers Claude (a different lineage than the OpenAI generator) and falls back
+// to OpenAI when no Anthropic key / forced. Claude via raw fetch + tool-use (no SDK dependency).
+assert.match(llm, /async function requestStructuredJsonAnthropic/, "a Claude structured-output helper exists (cross-model judging)");
+assert.match(llm, /api\.anthropic\.com\/v1\/messages/, "the Claude helper calls the Anthropic API directly (no SDK dep)");
+assert.match(llm, /tool_choice: \{ type: "tool", name: args\.schemaName \}/, "Claude structured output uses forced tool-use");
+assert.match(llm, /const useClaude =/, "the critic selects a provider (cross-model by default)");
+assert.match(llm, /requestStructuredJsonAnthropic\(\{[\s\S]*?schemaName: "open_critic"/, "the critic routes to Claude for the open-critic judgment");
+assert.match(llm, /OpenAI fallback: the no-Claude-key path AND resilience/, "the critic falls back to OpenAI (safe before the key lands / on a Claude outage)");
 const sweep3 = fs.readFileSync("scripts/open_critic_sweep.ts", "utf8");
 assert.match(sweep3, /critiqueConversationHandlingWithLLM/, "the open-critic sweep runs the critic over recent convs");
 assert.match(sweep3, /decideOpenCriticAnomaly/, "the sweep emits anomalies via the pure decision");

@@ -4067,6 +4067,73 @@ async function requestStructuredJson(args: {
   return null;
 }
 
+// Anthropic (Claude) structured-output sibling of requestStructuredJson — used for CROSS-MODEL judging
+// (Net 3's open critic). A model is systematically blind to errors rooted in its own understanding, so a
+// judge from a DIFFERENT lineage than the generator (OpenAI) catches the failure modes OpenAI misses.
+// Uses Claude tool-use (a forced tool call whose input_schema = our JSON schema) for guaranteed structured
+// JSON. Raw fetch (mirrors claudeAgent.ts) — no SDK dependency. Returns the parsed object or null.
+async function requestStructuredJsonAnthropic(args: {
+  model: string;
+  prompt: string;
+  schemaName: string;
+  schema: { [key: string]: unknown };
+  maxOutputTokens?: number;
+  debugTag?: string;
+  debug?: boolean;
+}): Promise<any | null> {
+  const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: args.model,
+        max_tokens: args.maxOutputTokens ?? 400,
+        temperature: 0,
+        tool_choice: { type: "tool", name: args.schemaName },
+        tools: [
+          {
+            name: args.schemaName,
+            description: "Return the structured result for this judgment.",
+            input_schema: args.schema
+          }
+        ],
+        messages: [{ role: "user", content: args.prompt }]
+      })
+    });
+    const data: any = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      if (args.debug) {
+        console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request failed`, {
+          model: args.model,
+          status: resp.status,
+          error: String(data?.error?.message ?? data?.message ?? "")
+        });
+      }
+      return null;
+    }
+    const block = Array.isArray(data?.content)
+      ? data.content.find((b: any) => b?.type === "tool_use" && b?.name === args.schemaName)
+      : null;
+    const input = block?.input;
+    if (input && typeof input === "object") return input;
+    if (args.debug) {
+      console.warn(`[${args.debugTag ?? "llm-json-anthropic"}] no tool_use block`, { model: args.model });
+    }
+  } catch (error) {
+    if (args.debug) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request threw`, { model: args.model, error: message });
+    }
+  }
+  return null;
+}
+
 export async function parseBookingIntentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -7762,9 +7829,18 @@ export async function critiqueConversationHandlingWithLLM(args: {
   if (!useLLM) return null;
 
   const debug = process.env.LLM_OPEN_CRITIC_DEBUG === "1";
-  const primaryModel = process.env.OPENAI_OPEN_CRITIC_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
-  const fallbackModel =
-    process.env.OPENAI_OPEN_CRITIC_MODEL_FALLBACK || (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  // CROSS-MODEL by default (the recommended setup): the generator is OpenAI, so a Claude critic from a
+  // DIFFERENT model lineage catches the failure modes OpenAI is systematically blind to (a model can't
+  // reliably flag errors rooted in its own understanding). Auto-falls back to OpenAI when no Anthropic
+  // key is set OR when forced via LLM_OPEN_CRITIC_PROVIDER=openai — so it's safe to ship before the key
+  // lands on the box, and a Claude outage never blinds Net 3.
+  const useClaude =
+    String(process.env.LLM_OPEN_CRITIC_PROVIDER ?? "").toLowerCase() !== "openai" &&
+    !!String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  const claudeModel = process.env.ANTHROPIC_OPEN_CRITIC_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+  const openaiPrimary = process.env.OPENAI_OPEN_CRITIC_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const openaiFallback =
+    process.env.OPENAI_OPEN_CRITIC_MODEL_FALLBACK || (openaiPrimary === "gpt-5-mini" ? "gpt-4o-mini" : "");
   const lastReply = String(args.lastAgentReply ?? "").trim();
   if (!lastReply) return null;
 
@@ -7793,7 +7869,7 @@ export async function critiqueConversationHandlingWithLLM(args: {
     `The agent reply to scrutinize most: ${lastReply}`
   ].join("\n");
 
-  const runParse = async (model: string): Promise<any | null> =>
+  const runOpenAI = async (model: string): Promise<any | null> =>
     requestStructuredJson({
       model,
       prompt,
@@ -7804,9 +7880,24 @@ export async function critiqueConversationHandlingWithLLM(args: {
       debug
     });
 
-  const parsedPrimary = await runParse(primaryModel);
-  const parsed =
-    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  let parsed: any = null;
+  if (useClaude) {
+    parsed = await requestStructuredJsonAnthropic({
+      model: claudeModel,
+      prompt,
+      schemaName: "open_critic",
+      schema: OPEN_CRITIC_JSON_SCHEMA,
+      maxOutputTokens: 400,
+      debugTag: "llm-open-critic-claude",
+      debug
+    });
+  }
+  if (!parsed) {
+    // OpenAI fallback: the no-Claude-key path AND resilience if the Claude call fails/returns null.
+    parsed =
+      (await runOpenAI(openaiPrimary)) ??
+      (openaiFallback && openaiFallback !== openaiPrimary ? await runOpenAI(openaiFallback) : null);
+  }
   if (!parsed) return null;
 
   const severity: OpenCriticParse["severity"] =

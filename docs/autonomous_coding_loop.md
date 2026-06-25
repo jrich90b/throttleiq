@@ -224,9 +224,16 @@ signals already EXIST as computed-but-unfed data — so we wire them:
   loop's parser-fix input. Wired at both successful send sites (email + twilio); never blocks a send. Pinned
   by `conversation_outcome_audit:eval`. (Follow-on: a material correction the scorer DIDN'T flag is also a
   signal to add a context-fidelity fixture — Net 2 self-improves Net 1.)
-- **Net 3 (DONE) — unknown-unknowns: open-ended critic.** `critiqueConversationHandlingWithLLM` reads a
-  recent conversation with NO fixed checklist and decides whether the agent mishandled the lead in ANY way,
-  NAMING the issue class itself (`issue_class` is free-form) — that's how a brand-new gap class surfaces.
+- **Net 3 (DONE) — unknown-unknowns: open-ended critic (CROSS-MODEL).** `critiqueConversationHandlingWithLLM`
+  reads a recent conversation with NO fixed checklist and decides whether the agent mishandled the lead in
+  ANY way, NAMING the issue class itself (`issue_class` is free-form) — that's how a brand-new gap class
+  surfaces. The critic runs on **Claude (a different model lineage than the OpenAI generator)** by default,
+  because a model is systematically blind to errors rooted in its own understanding — a cross-model judge
+  catches what OpenAI misses. Claude via raw fetch + tool-use (`requestStructuredJsonAnthropic`, no SDK);
+  auto-falls back to OpenAI when `ANTHROPIC_API_KEY` is unset or `LLM_OPEN_CRITIC_PROVIDER=openai`, and on
+  any Claude error (so it's safe to ship before the key lands and a Claude outage never blinds Net 3). The
+  open-critic cron must therefore have `ANTHROPIC_API_KEY` in the env it sources (the runtime api.env).
+  Model: `ANTHROPIC_OPEN_CRITIC_MODEL || ANTHROPIC_MODEL || claude-sonnet-4-6`.
   `scripts/open_critic_sweep.ts` runs it over RECENT convs (deterministic prefilter: open, ≤ OPEN_CRITIC_
   WINDOW_DAYS=2 days, has a customer msg + a real reply; capped at OPEN_CRITIC_MAX=40), keeps only CLEAR
   MAJOR conf≥0.8 findings (`decideOpenCriticAnomaly`), and writes `reports/open_critic/latest.json` in the
