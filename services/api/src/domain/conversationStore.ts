@@ -2858,7 +2858,7 @@ export function isSchedulingLeakConversation(
     | null
     | undefined,
   now: Date = new Date(),
-  opts?: { minIdleHours?: number }
+  opts?: { minIdleHours?: number; maxIdleHours?: number }
 ): boolean {
   if (!conv) return false;
   if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
@@ -2874,7 +2874,14 @@ export function isSchedulingLeakConversation(
   }
   if (!lastMs) return false;
   const idleHours = (now.getTime() - lastMs) / 3_600_000;
-  return idleHours >= (opts?.minIdleHours ?? 2);
+  // Window: idle enough that it's STALLED (not mid-exchange), but RECENT enough to still be worth
+  // chasing. A scheduling thread idle for weeks is a cold/dead lead, NOT an actionable "agreed but
+  // never booked" leak — most candidates skew old (age-distribution sweep 6/25: 26 of 34 were 7+
+  // days idle), so flagging them all floods the task inbox. Mirrors the stale-handoff min/max
+  // windowing; same state-invariants lesson (model the engine's hold conditions, not just "past due").
+  const minIdle = opts?.minIdleHours ?? 2;
+  const maxIdle = opts?.maxIdleHours ?? 24 * 7; // 7 days
+  return idleHours >= minIdle && idleHours <= maxIdle;
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;

@@ -28106,6 +28106,28 @@ async function processDueFollowUpsUnlocked() {
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
   // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
   // Deduped via schedulingLeakFlaggedAt (re-flag after 3d) + only when there's no open todo; capped.
+  const SCHEDULING_LEAK_TODO_MARKER = "a time was discussed but nothing is booked";
+  // Retire scheduling-leak todos that are no longer current leaks (booked, closed, or aged out of the
+  // actionable window) — self-cleans the over-broad first batch and keeps the inbox accurate going
+  // forward (e.g. once the visit is on the calendar, or the lead goes cold past the max-idle window).
+  let schedulingLeakTodosRetired = 0;
+  {
+    const convByIdForLeak = new Map(convs.map(c => [c.id, c]));
+    for (const t of openTodos) {
+      if (!String(t.summary ?? "").includes(SCHEDULING_LEAK_TODO_MARKER)) continue;
+      const conv = convByIdForLeak.get(t.convId);
+      if (!conv) continue;
+      if (isSchedulingLeakConversation(conv, now)) continue; // still a live leak — keep the todo
+      if (markTodoDone(conv.id, t.id)) {
+        conv.schedulingLeakFlaggedAt = undefined;
+        saveConversation(conv);
+        schedulingLeakTodosRetired += 1;
+      }
+    }
+  }
+  if (schedulingLeakTodosRetired > 0) {
+    console.log(`[state-reconcile] retired ${schedulingLeakTodosRetired} stale scheduling-leak todo(s) (booked/closed/aged out)`);
+  }
   const SCHEDULING_LEAK_TODOS_PER_TICK = 15;
   const SCHEDULING_LEAK_RENUDGE_MS = 3 * 24 * 60 * 60 * 1000;
   const convIdsWithOpenTodoForLeak = new Set(openTodos.map(t => t.convId));
