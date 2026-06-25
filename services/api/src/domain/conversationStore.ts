@@ -783,6 +783,17 @@ export type Conversation = {
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
   pendingIncomingInventory?: PendingIncomingInventory;
+  // Units the recommender last suggested (with listing url + color), so a "show me pics/links/colors"
+  // follow-up can answer with the REAL links instead of punting (2026-06-24).
+  recommendedUnits?: {
+    year?: string | null;
+    model?: string | null;
+    color?: string | null;
+    price?: number | null;
+    stockId?: string | null;
+    url?: string | null;
+  }[];
+  recommendedUnitsAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;

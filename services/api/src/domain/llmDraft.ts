@@ -6551,6 +6551,94 @@ export async function parseFeedbackFailureModeWithLLM(args: {
   };
 }
 
+// Vehicle media request parser (2026-06-24). After we suggest units, reads whether the customer is
+// asking to SEE them — photos, colors, or listing links of bikes we already discussed ("can I see
+// the pictures and color?", "send me the links", "what colors do they come in?"). FALSE when they're
+// sharing their own photo, asking specs/compare, pricing, or scheduling. The deterministic reply
+// (real listing URLs from the persisted recommended units) lives in buildRecommendedUnitsMediaReply;
+// the route gate is decideVehicleMediaRequestTurn. Returns null when disabled/low-signal.
+export type VehicleMediaRequestParse = {
+  wantsMedia: boolean;
+  focus: "photos" | "colors" | "links" | "any";
+  confidence: number;
+};
+
+const VEHICLE_MEDIA_REQUEST_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["wants_media", "focus", "confidence"],
+  properties: {
+    wants_media: { type: "boolean" },
+    focus: { type: "string", enum: ["photos", "colors", "links", "any"] },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseVehicleMediaRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<VehicleMediaRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_MEDIA_REQUEST_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const debug = process.env.LLM_VEHICLE_MEDIA_REQUEST_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_MEDIA_REQUEST_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_MEDIA_REQUEST_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "In an SMS thread where the dealer already SUGGESTED some bikes, decide whether the customer is now",
+    "asking to SEE those bikes — their photos, colors, or listing links. Return only JSON for the schema.",
+    "",
+    "wants_media = true for: \"can I see the pictures?\", \"send me photos\", \"what do they look like\",",
+    "\"what colors do they come in\", \"send the links\", \"got a link?\". focus = photos | colors | links | any.",
+    "wants_media = FALSE when they: share their OWN photo, ask specs/compare (engine, weight), ask price,",
+    "ask to schedule, or it's a bare reply (\"ok\", \"thanks\").",
+    "confidence 0..1; >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- "Can I see the pictures and color of the bikes?" -> {"wants_media":true,"focus":"any","confidence":0.95}',
+    '- "send me the links" -> {"wants_media":true,"focus":"links","confidence":0.9}',
+    '- "what colors does the nightster come in" -> {"wants_media":true,"focus":"colors","confidence":0.88}',
+    '- "what\'s the out the door price" -> {"wants_media":false,"focus":"any","confidence":0.9}',
+    '- "ok sure" -> {"wants_media":false,"focus":"any","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_media_request_parser",
+      schema: VEHICLE_MEDIA_REQUEST_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-vehicle-media-request-parser",
+      debug
+    });
+  const parsed =
+    (await runParse(primaryModel)) ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+  const focusRaw = String(parsed.focus ?? "any").toLowerCase();
+  const focus: VehicleMediaRequestParse["focus"] =
+    focusRaw === "photos" || focusRaw === "colors" || focusRaw === "links" ? focusRaw : "any";
+  return {
+    wantsMedia: parsed.wants_media === true,
+    focus,
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0
+  };
+}
+
 // Vehicle recommendation request parser (2026-06-24). Reads whether the customer is asking US to
 // suggest/pick bikes (no specific model named) and extracts budget + condition + style filters, so
 // the agent can answer with real inventory instead of looping "which bike are you looking at?"

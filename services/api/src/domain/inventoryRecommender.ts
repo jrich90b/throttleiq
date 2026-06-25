@@ -156,3 +156,57 @@ export function buildVehicleRecommendationTodoSummary(firstName?: string | null)
   const who = String(firstName ?? "").trim() || "Customer";
   return `${who} asked for bike suggestions by budget/style but we had no priced match to send. Pull a few options that fit and follow up.`;
 }
+
+// --- Recommended-unit media (photos/links/colors) follow-up (2026-06-24) --------------------------
+// After we suggest units, the customer often asks "can I see the pictures and color?" — and the agent
+// punted ("I don't have the links yet") even though the feed carries each unit's listing url + color
+// (s R Gurajala +17167506588). We PERSIST the suggested units (incl. url) on the conversation so a
+// follow-up can answer with the REAL links. The links are assembled deterministically — a customer-
+// facing URL must be exact, so we never let the LLM compose it (AGENTS.md: structured output is
+// deterministic).
+export type RecommendedUnit = {
+  year?: string | null;
+  model?: string | null;
+  color?: string | null;
+  price?: number | null;
+  stockId?: string | null;
+  url?: string | null;
+};
+
+export function toRecommendedUnits(matches: InventoryFeedItem[]): RecommendedUnit[] {
+  return (matches ?? []).slice(0, 6).map(m => ({
+    year: m.year ?? null,
+    model: m.model ?? null,
+    color: m.color ?? null,
+    price: m.price ?? null,
+    stockId: m.stockId ?? null,
+    url: m.url ?? null
+  }));
+}
+
+function unitDisplayName(u: RecommendedUnit): string {
+  return [String(u.year ?? "").trim(), String(u.model ?? "").trim()].filter(Boolean).join(" ").trim() || "that one";
+}
+
+/**
+ * Deterministic reply to "show me pics/links/colors" of the units we already suggested. Lists each
+ * unit's color + listing URL (the page has the photos). Only includes units that actually have a url
+ * (never fabricate a link); if none have one, returns null so the caller falls back to a commit-to-
+ * follow-up reply instead of a bare punt.
+ */
+export function buildRecommendedUnitsMediaReply(args: {
+  firstName?: string | null;
+  units: RecommendedUnit[];
+}): string | null {
+  const withUrl = (args.units ?? []).filter(u => /^https?:\/\//i.test(String(u.url ?? "")));
+  if (!withUrl.length) return null;
+  const name = String(args.firstName ?? "").trim();
+  const opener = name ? `Here you go, ${name}!` : "Here you go!";
+  const lines = withUrl
+    .map(u => {
+      const color = String(u.color ?? "").trim();
+      return `• ${unitDisplayName(u)}${color ? ` (${color})` : ""}: ${String(u.url).trim()}`;
+    })
+    .join("\n");
+  return `${opener}\n${lines}\nWant me to run numbers on one of these?`;
+}

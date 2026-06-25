@@ -565,6 +565,28 @@ export function decideVehicleRecommendationTurn(
   return { kind: "recommend" };
 }
 
+// --- Vehicle media request (photos/links/colors of suggested units, 2026-06-24) ----------------
+// After the recommender suggests units, the customer asks to SEE them. Fire ONLY when the parser is
+// confident AND we actually have persisted units that carry a listing URL — otherwise fall through
+// (the deterministic reply needs real links; never fabricate one). FAIL DIRECTION: none => existing
+// behavior (commit-to-follow-up), never a made-up link.
+export type VehicleMediaRequestTurnInput = {
+  parserAccepted: boolean;
+  wantsMedia: boolean;
+  confidence: number;
+  confidenceMin: number;
+  hasUnitsWithUrl: boolean;
+};
+export type VehicleMediaRequestTurnDecision = { kind: "send_media" | "none" };
+
+export function decideVehicleMediaRequestTurn(input: VehicleMediaRequestTurnInput): VehicleMediaRequestTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!input.wantsMedia) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return { kind: "none" };
+  if (!input.hasUnitsWithUrl) return { kind: "none" }; // nothing real to send => existing handling
+  return { kind: "send_media" };
+}
+
 // --- Feedback-driven redraft (2026-06-24) -----------------------------------
 // Phase 1 of the closed-loop feedback system: a staff thumbs-DOWN on a still-PENDING AI draft
 // triggers an immediate steered re-draft into the same console box (suggest mode — a human still

@@ -270,6 +270,7 @@ import {
   parseTradeQualifierResponseWithLLM,
   parseVehicleChoiceConfidenceWithLLM,
   parseVehicleRecommendationRequestWithLLM,
+  parseVehicleMediaRequestWithLLM,
   generateDraftWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
@@ -455,7 +456,9 @@ import {
   recommendInventory,
   buildVehicleRecommendationReply,
   buildVehicleRecommendationFollowupReply,
-  buildVehicleRecommendationTodoSummary
+  buildVehicleRecommendationTodoSummary,
+  toRecommendedUnits,
+  buildRecommendedUnitsMediaReply
 } from "./domain/inventoryRecommender.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
@@ -505,6 +508,7 @@ import {
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideVehicleMediaRequestTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
@@ -2229,7 +2233,59 @@ async function resolveVehicleRecommendationReply(
     addTodo(conv, "call", buildVehicleRecommendationTodoSummary(firstName), providerMessageId ?? undefined);
     return buildVehicleRecommendationFollowupReply(firstName);
   }
+  // Persist the suggested units (with listing url + color) so a "show me pics/links/colors" follow-up
+  // can answer with the REAL links instead of punting (s R Gurajala, 2026-06-24).
+  conv.recommendedUnits = toRecommendedUnits(matches);
+  conv.recommendedUnitsAt = new Date().toISOString();
   return buildVehicleRecommendationReply({ firstName, matches, monthlyBudget: parse?.monthlyBudget ?? null });
+}
+
+// Follow-up to a recommendation: the customer asks to SEE the suggested bikes (photos/colors/links).
+// Parser-first; answers with the REAL listing URLs from the persisted recommended units (deterministic
+// — never a fabricated link). Returns null to fall through when it's not a media ask or we have no
+// units with a usable url. Centralized so live + regenerate stay in sync.
+async function resolveRecommendedUnitsMediaReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!conv || !text) return null;
+  const units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
+  const hasUnitsWithUrl = units.some(u => /^https?:\/\//i.test(String(u?.url ?? "")));
+  if (!hasUnitsWithUrl) return null; // nothing real to send => let normal handling run
+  if (!vehicleMediaRequestParserHint(text)) return null;
+  const parse = await safeLlmParse("vehicle_media_request_parser", () =>
+    parseVehicleMediaRequestWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  const decision = decideVehicleMediaRequestTurn({
+    parserAccepted: !!parse,
+    wantsMedia: !!parse?.wantsMedia,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleRecommendationConfidenceMin(),
+    hasUnitsWithUrl
+  });
+  if (decision.kind !== "send_media") return null;
+  const reply = buildRecommendedUnitsMediaReply({
+    firstName: normalizeDisplayCase(conv.lead?.firstName),
+    units
+  });
+  if (!reply) return null;
+  recordRouteOutcome(scope, "vehicle_media_request", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    units: units.filter(u => /^https?:\/\//i.test(String(u?.url ?? ""))).length,
+    focus: parse?.focus ?? null
+  });
+  return reply;
+}
+
+// Cheap pre-filter: only run the media-request parser on photo/link/color-ish turns. A hint MISS
+// falls through to existing behavior (fail-safe); the parser — not this regex — owns the decision.
+function vehicleMediaRequestParserHint(text: string): boolean {
+  return /\b(pic|pics|picture|pictures|photo|photos|image|images|see (?:it|them|the bike)|look like|color|colors|colour|colours|link|links|url)\b/i.test(
+    String(text ?? "")
+  );
 }
 
 // Deal/progress status check: confidence floor to rescue a status check from the small-talk
@@ -51409,6 +51465,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       return respondWithSmsRegeneratedDraft(reply);
     }
+    // Recommended-unit media follow-up (parity with live): "show me pics/colors/links" of the bikes
+    // we suggested → real listing links from the persisted units, not a punt.
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenMediaReply = await resolveRecommendedUnitsMediaReply(conv, String(event.body ?? ""), "regen");
+      if (regenMediaReply) {
+        return respondWithSmsRegeneratedDraft(regenMediaReply);
+      }
+    }
     // Vehicle recommendation (parity with live /webhooks/twilio): suggest real inventory when the
     // customer asks for options with no model in play, instead of looping "which bike?".
     if (channel === "sms" && !regenRoutingIntentOverride) {
@@ -56639,6 +56703,15 @@ if (authToken && signature) {
         turnFinanceIntent: true,
         financeContextIntent: true
       });
+    }
+  }
+  // Recommended-unit media follow-up: after we suggested bikes, the customer asks to SEE them
+  // (pics/colors/links) — answer with the REAL listing links instead of punting (s R Gurajala,
+  // 2026-06-24). Runs before the recommender (this is a follow-up to one); same resolver in regenerate.
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const mediaReply = await resolveRecommendedUnitsMediaReply(conv, inboundText, "live");
+    if (mediaReply) {
+      return publishLiveTwilioReply(mediaReply, undefined, { draftOnly: true });
     }
   }
   // Vehicle recommendation: the customer asked us to SUGGEST bikes (no model in play) — answer with

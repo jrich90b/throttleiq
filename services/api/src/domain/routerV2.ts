@@ -16,6 +16,7 @@ export {
   decideSchedulingTurn,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  decideVehicleMediaRequestTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
