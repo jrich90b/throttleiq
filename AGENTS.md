@@ -306,6 +306,17 @@ Env vars:
 - Use suggested slots only if customer asked to schedule.
 - Do not confirm unless booked.
 - Avoid offering times if “holding_inventory” or “manual_handoff”.
+- **Auto-book on a concrete confirm (live).** When the customer confirms/proposes a concrete day+time
+  the agent did NOT pre-offer ("Ya 10 will work", "Around 1pm", "Is 10:45 good?"), do NOT deflect with
+  "I'll check that time and follow up." The route decision `decideSchedulingTurn` → `confirm_appointment`
+  (gated on `CustomerAckActionParse.shouldBook`, suppressed by pricing/payments) drives
+  `resolveCustomerAckConfirmBooking` in BOTH paths: check that exact time against the calendar and, if
+  free, ACTUALLY book it (`bookConfirmedAppointmentSlot` creates the event, sets `bookedEventId` +
+  `confirmedBy:customer`; the staff-notify sweep texts the rep) then confirm "you're all set for X"; if
+  taken, offer the nearest alternatives. Never fabricate a confirm — if no concrete time resolves or the
+  calendar can't be reached, fall back to a lock-in ask. The calendar WRITE is live-only: regenerate
+  (`book:false`) availability-checks and drafts but never writes (reflects an already-booked slot). This
+  honors "do not confirm unless booked" (the confirm follows a real `bookedEventId`).
 - Test-ride scheduling weather gate:
   - Pass dealer weather status into orchestrator for ADF/email inbound paths.
   - Treat sustained rain as bad weather (in addition to snow/cold) for test-ride slot gating.

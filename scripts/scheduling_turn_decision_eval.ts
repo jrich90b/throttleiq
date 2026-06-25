@@ -53,10 +53,20 @@ const rows: Row[] = [
   { id: "ack_immediate", input: { ...base, customerAckActionAccepted: true, customerAckAction: "immediate_arrival_request" }, kind: "immediate_arrival" },
   { id: "ack_purchase_delivery", input: { ...base, customerAckActionAccepted: true, customerAckAction: "purchase_delivery_update" }, kind: "purchase_delivery" },
 
+  // --- confirm_proposed_appointment: a concrete confirm the agent didn't pre-offer ---
+  // shouldBook cleared by the parser => route to the auto-book arm.
+  { id: "ack_confirm_books", input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true }, kind: "confirm_appointment" },
+  // shouldBook NOT set => never auto-book on a vague signal; falls through (none here).
+  { id: "ack_confirm_no_book_falls_through", input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: false }, kind: "none" },
+  // confirm-to-book outranks a competing appointment-timing read (A over B).
+  { id: "confirm_beats_appt_timing", input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true, appointmentTimingAccepted: true, appointmentTimingIntent: "decline_time" }, kind: "confirm_appointment" },
+  // pricing/payments suppresses the confirm-to-book arm (Block A is gated on !pricing).
+  { id: "confirm_book_suppressed_by_pricing", input: { ...base, pricingOrPaymentsIntent: true, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true }, kind: "none" },
+
   // --- A precedence over B ---
   { id: "ack_beats_appt_timing", input: { ...base, customerAckActionAccepted: true, customerAckAction: "accept_tentative_appointment", appointmentTimingAccepted: true, appointmentTimingIntent: "decline_time" }, kind: "accept_tentative" },
 
-  // --- non-cluster ack action falls through to B ---
+  // --- confirm_proposed_appointment WITHOUT shouldBook falls through to B ---
   { id: "noncluster_ack_falls_to_timing", input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", appointmentTimingAccepted: true, appointmentTimingIntent: "tentative_time_window" }, kind: "tentative_window" },
 
   // --- Block B: appointment-timing intents ---

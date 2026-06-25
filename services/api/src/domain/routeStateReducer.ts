@@ -272,6 +272,7 @@ export function buildRouteDecisionSnapshot(input: {
 // ---------------------------------------------------------------------------
 
 export type SchedulingTurnKind =
+  | "confirm_appointment"
   | "accept_tentative"
   | "ask_available_times"
   | "appointment_status_question"
@@ -288,6 +289,9 @@ export type SchedulingTurnInput = {
   // Block A — customer-ack parser (action string + whether the parse was accepted).
   customerAckActionAccepted: boolean;
   customerAckAction?: string | null;
+  // The customer confirmed a CONCRETE proposed time and the parser cleared it to book
+  // (CustomerAckActionParse.shouldBook). Only then does a confirm route to the auto-book arm.
+  customerAckShouldBook?: boolean;
   // Block B — appointment-timing parser (intent string + whether accepted).
   appointmentTimingAccepted: boolean;
   appointmentTimingIntent?: string | null;
@@ -317,6 +321,13 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
   // for these actions and (once entered) always returns, so it has top precedence.
   if (input.customerAckActionAccepted && !input.pricingOrPaymentsIntent) {
     switch (input.customerAckAction) {
+      case "confirm_proposed_appointment":
+        // Customer confirmed a concrete time the agent didn't pre-offer ("Ya 10 will work",
+        // "Around 1pm"). Only route to the auto-book arm when the parser cleared it to book;
+        // otherwise fall through (the appointment-timing / lock-in arms handle the soft cases),
+        // so we never auto-book on a vague signal.
+        if (input.customerAckShouldBook) return { kind: "confirm_appointment", visitCommitment };
+        break;
       case "accept_tentative_appointment":
         return { kind: "accept_tentative", visitCommitment };
       case "ask_for_available_times":

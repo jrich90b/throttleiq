@@ -9073,6 +9073,222 @@ async function buildAppointmentTimingArrivalReplyWithCalendarCheck(args: {
   });
 }
 
+// Create (or rebook) a real calendar event for an already-matched available slot and persist the
+// confirmed appointment on the conversation. Mirrors the voice-transcript booking tail
+// (applyPostCallSummaryActions) so SMS confirm-turns and voice bookings share one code path. The
+// staff "New appointment booked" SMS fires on its own from the appointment-notify sweep once
+// bookedEventId is set. Returns booked=false (no fabricated confirm) if the calendar write fails.
+async function bookConfirmedAppointmentSlot(args: {
+  conv: any;
+  slot: any; // exactSlot shape from findRequestedAppointmentSlotAvailability
+  cfg: any;
+  sourceMessageId?: string | null;
+}): Promise<{ booked: boolean; whenText: string; repName: string | null }> {
+  const { conv, slot, cfg } = args;
+  const appointmentType =
+    String(slot?.appointmentType ?? "").trim() || inferAppointmentTypeFromConv(conv) || "inventory_visit";
+  const stockId = conv.lead?.vehicle?.stockId ?? null;
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  const lastName = conv.lead?.lastName ?? "";
+  const leadName =
+    conv.lead?.name?.trim() || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+  const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+  const description = [
+    `LeadKey: ${conv.leadKey ?? ""}`,
+    `Phone: ${conv.lead?.phone ?? conv.leadKey ?? ""}`,
+    `Email: ${conv.lead?.email ?? ""}`,
+    `FirstName: ${firstName ?? ""}`,
+    `LastName: ${lastName ?? ""}`,
+    `Stock: ${stockId ?? ""}`,
+    `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+    `Source: ${conv.lead?.source ?? ""}`,
+    `VisitType: ${appointmentType}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const colorId = getAppointmentTypeColorId(cfg, appointmentType);
+  const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
+  const existingCalendarId = String(conv.appointment?.bookedCalendarId ?? "").trim();
+  let eventIdToPersist: string | null = existingEventId || null;
+  let eventLinkToPersist: string | null = conv.appointment?.bookedEventLink ?? null;
+  try {
+    const cal = await getAuthedCalendarClient();
+    const isSameCalendarRebook =
+      !!existingEventId && !!existingCalendarId && existingCalendarId === slot.calendarId;
+    if (isSameCalendarRebook && existingEventId) {
+      const updated = await updateEventDetails(cal, slot.calendarId, existingEventId, cfg.timezone, {
+        startIso: slot.start,
+        endIso: slot.end,
+        summary,
+        description,
+        colorId
+      });
+      eventIdToPersist = updated?.id ?? existingEventId;
+      eventLinkToPersist = updated?.htmlLink ?? eventLinkToPersist;
+    } else {
+      if (existingEventId && existingCalendarId) {
+        try {
+          await updateEventDetails(cal, existingCalendarId, existingEventId, cfg.timezone, { status: "cancelled" });
+        } catch (cancelErr: any) {
+          console.warn("[confirm-book] cancel prior event failed:", cancelErr?.message ?? cancelErr);
+        }
+      }
+      const created = await insertEvent(
+        cal,
+        slot.calendarId,
+        cfg.timezone,
+        summary,
+        description,
+        slot.start,
+        slot.end,
+        colorId
+      );
+      eventIdToPersist = created?.id ?? eventIdToPersist;
+      eventLinkToPersist = created?.htmlLink ?? eventLinkToPersist;
+    }
+  } catch (e: any) {
+    console.log("[confirm-book] calendar write failed:", e?.message ?? e);
+    return { booked: false, whenText: "", repName: null };
+  }
+  if (!eventIdToPersist) return { booked: false, whenText: "", repName: null };
+  const repName =
+    String(slot.salespersonName ?? "").trim() ||
+    (cfg.salespeople ?? []).find((p: any) => p.id === slot.salespersonId)?.name ||
+    null;
+  const whenText = formatSlotLocal(slot.start, cfg.timezone);
+  conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+  conv.appointment.status = "confirmed";
+  conv.appointment.bookedEventId = eventIdToPersist;
+  conv.appointment.bookedEventLink = eventLinkToPersist;
+  conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+  conv.appointment.bookedSalespersonName = repName ?? undefined;
+  conv.appointment.bookedCalendarId = slot.calendarId ?? null;
+  conv.appointment.whenIso = slot.start;
+  conv.appointment.whenText = whenText;
+  conv.appointment.whenLocal = whenText;
+  conv.appointment.appointmentType = appointmentType;
+  conv.appointment.confirmedBy = "customer";
+  conv.appointment.acknowledged = true;
+  conv.appointment.reschedulePending = false;
+  conv.appointment.matchedSlot = {
+    salespersonId: slot.salespersonId,
+    salespersonName: slot.salespersonName ?? repName ?? undefined,
+    calendarId: slot.calendarId,
+    start: slot.start,
+    end: slot.end,
+    startLocal: whenText,
+    endLocal: formatSlotLocal(slot.end, cfg.timezone),
+    appointmentType
+  };
+  conv.appointment.updatedAt = new Date().toISOString();
+  setAppointmentBookedBy(conv, {
+    actor: "ai",
+    channel: "sms",
+    sourceMessageId: args.sourceMessageId ? String(args.sourceMessageId) : undefined
+  });
+  const sp = (cfg.salespeople ?? []).find((p: any) => p.id === slot.salespersonId);
+  if (sp) setPreferredSalespersonForConv(conv, sp, "customer_confirm_booking");
+  onAppointmentBooked(conv);
+  return { booked: true, whenText, repName };
+}
+
+// Customer confirmed a CONCRETE day+time the agent didn't pre-offer ("Ya 10 will work",
+// "Around 1pm", "Is 10:45 good?"). Instead of deflecting ("I'll check that time and follow up"),
+// check that exact time against the calendar and ACTUALLY book it (live) — or offer the nearest
+// alternatives if it's taken. Never fabricates a confirmation: returns null when no concrete time
+// can be resolved or the calendar can't be reached, so the caller falls back to a lock-in ask.
+//   - `book: true`  (live inbound): create the calendar event on a free slot.
+//   - `book: false` (regenerate draft): availability-check only, NO calendar write (the live turn
+//     already booked); reflects the booked state if present, else drafts a lock-in confirmation.
+// Both paths route here from decideSchedulingTurn `confirm_appointment`, keeping live/regen in sync.
+async function resolveCustomerAckConfirmBooking(args: {
+  conv: any;
+  parsed: CustomerAckActionParse | null;
+  rawText: string | null | undefined;
+  book: boolean;
+  sourceMessageId?: string | null;
+}): Promise<{ reply: string; booked: boolean; alternatives: any[]; checkedCalendar: boolean } | null> {
+  const conv = args.conv;
+  // A service-department scheduling ask must not book a sales inventory_visit.
+  if (isServiceDepartmentSchedulingRequest(conv, args.rawText)) return null;
+  const cfg = await getSchedulerConfigHot().catch(() => null);
+  if (!cfg) return null;
+  const timeZone = cfg.timezone || "America/New_York";
+
+  // Already booked at a concrete time (e.g. the live turn booked; staff is regenerating) → reflect it.
+  const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
+  const existingWhenText = String(conv.appointment?.whenText ?? conv.appointment?.whenLocal ?? "").trim();
+  if (existingEventId && existingWhenText) {
+    const repName = appointmentStatusStaffName(conv, cfg);
+    const repSuffix = repName ? ` with ${repName}` : "";
+    setDialogState(conv, "schedule_booked");
+    return {
+      reply: `Perfect — you’re all set for ${existingWhenText}${repSuffix}. See you then.`,
+      booked: true,
+      alternatives: [],
+      checkedCalendar: false
+    };
+  }
+
+  const requested = resolveCustomerAckRequestedDayTime({
+    conv,
+    parsed: args.parsed,
+    rawText: args.rawText,
+    timeZone
+  });
+  if (!requested) return null; // no concrete day+time → caller asks to lock in
+  const appointmentType = inferAppointmentTypeFromConv(conv);
+  const availability = await findRequestedAppointmentSlotAvailability({ conv, requested, appointmentType }).catch(
+    e => {
+      console.log("[confirm-book] availability check failed:", e?.message ?? e);
+      return null;
+    }
+  );
+  if (!availability) return null; // no primary calendar / lookup failed → caller asks to lock in
+
+  if (availability.available && availability.exactSlot) {
+    if (!args.book) {
+      // Regenerate draft: don't write the calendar — produce an honest lock-in confirmation.
+      setDialogState(conv, "schedule_request");
+      return {
+        reply: `Perfect — ${normalizeDisplayCase(availability.requestedLabel)} works. I’ll get you locked in and confirm.`,
+        booked: false,
+        alternatives: [],
+        checkedCalendar: true
+      };
+    }
+    const result = await bookConfirmedAppointmentSlot({
+      conv,
+      slot: availability.exactSlot,
+      cfg,
+      sourceMessageId: args.sourceMessageId
+    });
+    if (!result.booked) return null; // booking failed → caller asks to lock in (no false confirm)
+    const repSuffix = result.repName ? ` with ${result.repName}` : "";
+    setDialogState(conv, "schedule_booked");
+    return {
+      reply: `Perfect — you’re all set for ${result.whenText}${repSuffix}. See you then.`,
+      booked: true,
+      alternatives: [],
+      checkedCalendar: true
+    };
+  }
+
+  // Requested time is taken → offer the nearest alternatives (never a fabricated confirm).
+  if (availability.alternatives.length) {
+    setLastSuggestedSlots(conv, availability.alternatives);
+    setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+  } else {
+    setDialogState(conv, "schedule_request");
+  }
+  return {
+    reply: buildRequestedSlotUnavailableReply(availability.requestedLabel, availability.alternatives),
+    booked: false,
+    alternatives: availability.alternatives,
+    checkedCalendar: true
+  };
+}
+
 function customerWillProvideScheduleTimeText(text: string | null | undefined): boolean {
   const t = String(text ?? "").trim().toLowerCase();
   if (!t) return false;
@@ -49086,6 +49302,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
     if (action === "confirm_proposed_appointment" && regenCustomerAckActionParse?.shouldBook) {
+      // Regenerate is a DRAFT preview — availability-check only, never a calendar write (book:false).
+      // If the live turn already booked, this reflects "you're all set"; otherwise it drafts an honest
+      // lock-in confirmation or offers alternatives. Same route helper as the live path (in sync).
+      const result = await resolveCustomerAckConfirmBooking({
+        conv,
+        parsed: regenCustomerAckActionParse,
+        rawText: event.body,
+        book: false,
+        sourceMessageId: (inbound as any)?.providerMessageId
+      });
+      if (result) {
+        recordRouteOutcome(
+          "regen",
+          `customer_ack_confirm_${result.booked ? "booked" : result.alternatives.length ? "offered_alts" : "lockin"}`,
+          {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            confidence: regenCustomerAckActionParse?.confidence ?? null,
+            booked: result.booked,
+            alternativeCount: result.alternatives.length
+          }
+        );
+        return respondWithSmsRegeneratedDraft(result.reply, undefined, {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        });
+      }
       setDialogState(conv, "schedule_request");
       recordRouteOutcome("regen", "customer_ack_confirm_proposed_appointment", {
         convId: conv.id,
@@ -58274,6 +58518,7 @@ if (authToken && signature) {
   const sched = decideSchedulingTurn({
     customerAckActionAccepted,
     customerAckAction: customerAckActionParse?.action,
+    customerAckShouldBook: customerAckActionParse?.shouldBook ?? false,
     appointmentTimingAccepted,
     appointmentTimingIntent,
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
@@ -58283,7 +58528,8 @@ if (authToken && signature) {
   });
   if (
     event.provider === "twilio" &&
-    (sched.kind === "accept_tentative" ||
+    (sched.kind === "confirm_appointment" ||
+      sched.kind === "accept_tentative" ||
       sched.kind === "ask_available_times" ||
       sched.kind === "appointment_status_question" ||
       sched.kind === "arrival_window" ||
@@ -58293,6 +58539,42 @@ if (authToken && signature) {
     // sched.kind being a customer-ack kind implies customerAckActionAccepted, i.e. a
     // non-null parse (the old `?.action ===` outer gate used to narrow this).
     const action = customerAckActionParse!.action;
+    if (sched.kind === "confirm_appointment") {
+      // Customer confirmed a concrete time the agent didn't pre-offer ("Ya 10 will work",
+      // "Around 1pm"). Check the calendar and ACTUALLY book it (live), or offer alternatives —
+      // instead of the old "I'll check that time and follow up" deflection.
+      const result = await resolveCustomerAckConfirmBooking({
+        conv,
+        parsed: customerAckActionParse,
+        rawText: event.body,
+        book: true,
+        sourceMessageId: event.providerMessageId
+      });
+      if (result) {
+        recordRouteOutcome(
+          "live",
+          `customer_ack_confirm_${result.booked ? "auto_booked" : result.alternatives.length ? "offered_alts" : "unavailable"}`,
+          {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            confidence: customerAckActionParse?.confidence ?? null,
+            booked: result.booked,
+            alternativeCount: result.alternatives.length
+          }
+        );
+        return publishLiveTwilioReply(result.reply, { turnSchedulingIntent: true });
+      }
+      // No concrete time / calendar unreachable / booking failed → lock-in ask (no false confirm).
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("live", "customer_ack_confirm_lockin_fallback", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null
+      });
+      return publishLiveTwilioReply(buildCustomerAckConfirmationReply(customerAckActionParse), {
+        turnSchedulingIntent: true
+      });
+    }
     if (action === "immediate_arrival_request") {
       discardPendingDrafts(conv, "immediate_arrival_request");
       delete conv.emailDraft;
