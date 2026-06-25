@@ -30,7 +30,14 @@ hardcoded localhost. Debt is **concentrated and structural**, in five convergent
 
 ## P0 — act first
 
-### P0.1 Auto-book calendar write is source-guard-only (no behavioral eval)
+### P0.1 ✅ DONE (a23df5a3) — Auto-book calendar write is source-guard-only (no behavioral eval)
+RESOLVED 6/25: extracted the confirm-booking BRANCHING into the pure `decideCustomerAckConfirmBooking`
+(routeStateReducer); IO (config/availability/insertEvent) stays in index.ts and feeds it. New
+`confirm_booking_decision:eval` pins the write-failure→no-false-confirm, taken→alternatives,
+regen→no-write, service→defer, and precedence branches — without booting the server or mocking Calendar.
+Behavior-preserving; deployed. Original finding below.
+
+
 `bookConfirmedAppointmentSlot` / `resolveCustomerAckConfirmBooking` (index.ts) call `insertEvent` (real
 Google Calendar write + `bookedEventId` + "you're all set" SMS). `scheduling_auto_book_on_confirm_eval.ts`
 runs only the route decision; the booking helper is pinned by ~18 `assert.match` source guards ("can't run
@@ -183,6 +190,13 @@ availability/callback dispatch is genuinely reducer-driven and live/regen-parall
 uses pure `canApplyDispositionCloseout` in both paths. Reconcile suite is mature and well-gated against
 over-fire (every nudge models the engine's hold conditions). No tracked secrets, XSS, or hardcoded hosts.
 Compliance/safety/disposition KEEP-regex (STOP, opt-out, affordability-objection close-guard) correctly KEEP.
+
+## Progress (6/25)
+- ✅ **P0.1 DONE** (a23df5a3) — auto-book branching extracted to a pure decision + `confirm_booking_decision:eval`.
+- ✅ **P1.4 DONE** (e05694a7) — `resume_followup_cadence:eval` added.
+- ⚠️ **P0.2** — `customer_ack_action:eval` flakes in the hot gate; kept out, belongs on the nightly loop (TODO).
+- ✅ side-guard rot demonstrated + fixed in `scheduling_auto_book_on_confirm:eval` (now delegates to the behavioral eval).
+- Next: **P1.1 service-vs-scheduling fold** (the #1 structural target), then the trade reducer / parity gaps.
 
 ## Recommended sequence
 1. **Cheap, eval-only, no approval needed:** P0.1 + P0.2 + P1.4 + upgrade the 3 source-guard side-effect
