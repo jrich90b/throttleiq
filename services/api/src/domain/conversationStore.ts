@@ -2463,12 +2463,51 @@ export function finalizeDraftAsSent(
     trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
     trackTradePayoffFromOutbound(conv, stateSignalBody);
     lockPersonaToStaffSender(conv, actor, tonedFinalBody);
+    // A sent reply handles the held turn — clear the "needs reply" flag + its todo. The console "Send"
+    // of a pending draft comes through HERE (not appendOutbound), so the clear must live here too,
+    // else the flag stays stuck after a real reply (s R Gurajala, 2026-06-25).
+    if ((conv as any).draftHeld) {
+      (conv as any).draftHeld = null;
+      for (const t of listOpenTodos()) {
+        if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+          markTodoDone(conv.id, t.id);
+        }
+      }
+    }
   }
 
   conv.updatedAt = new Date().toISOString();
   scheduleSave();
 
   return { usedDraft: true, originalDraftBody: original };
+}
+
+/**
+ * Reconcile a stale held / "needs reply" flag (closed-loop cron check, 2026-06-25): if a real reply
+ * (human/twilio/sendgrid) was sent AFTER the hold, the turn was handled — clear conv.draftHeld and
+ * close its "needs reply" todo. Deterministic safety net for any flag that slipped past the clear-on-
+ * reply at the send chokepoints (e.g. a send path that bypassed it). Returns true if it healed one.
+ */
+export function healStaleHeldFlag(conv: Conversation): boolean {
+  const held: any = (conv as any).draftHeld;
+  const heldMs = held?.at ? Date.parse(String(held.at)) : NaN;
+  if (!Number.isFinite(heldMs)) return false;
+  const repliedAfter = (conv.messages ?? []).some(m => {
+    if (m.direction !== "out") return false;
+    if (m.provider !== "human" && m.provider !== "twilio" && m.provider !== "sendgrid") return false;
+    const at = Date.parse(String(m.at ?? ""));
+    return Number.isFinite(at) && at > heldMs;
+  });
+  if (!repliedAfter) return false;
+  (conv as any).draftHeld = null;
+  for (const t of listOpenTodos()) {
+    if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+      markTodoDone(conv.id, t.id);
+    }
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
 }
 
 export function setMessageFeedback(

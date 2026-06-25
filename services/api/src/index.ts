@@ -678,6 +678,7 @@ import {
   addCallTodoIfMissing,
   upsertPendingIncomingInventoryNotifyTodo,
   healPendingIncomingNotifyTodoDuplicates,
+  healStaleHeldFlag,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -28083,6 +28084,22 @@ async function processDueFollowUpsUnlocked() {
     console.log(
       `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
     );
+  }
+  // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in
+  // context" whose held marker outlived a real reply (a reply went out after the hold) should drop the
+  // flag + close its todo (s R Gurajala, 2026-06-25 — a sent draft cleared via finalizeDraftAsSent but
+  // older stragglers persisted). Deterministic; this is the cron auto-checking flags for accuracy.
+  let staleHeldFlagsHealed = 0;
+  for (const conv of convs) {
+    if (!conv.draftHeld) continue;
+    if (healStaleHeldFlag(conv)) {
+      saveConversation(conv);
+      staleHeldFlagsHealed += 1;
+      recordRouteOutcome("manual", "stale_held_flag_heal", { convId: conv.id, leadKey: conv.leadKey });
+    }
+  }
+  if (staleHeldFlagsHealed > 0) {
+    console.log(`[state-reconcile] cleared ${staleHeldFlagsHealed} stale "needs reply" flag(s) after a reply went out`);
   }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it
