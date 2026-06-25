@@ -2669,6 +2669,10 @@ export function saveOperatorDraft(
 ): { draft: string; channel: "sms" | "email" } {
   const body = String(args.body ?? "").trim();
   discardPendingDrafts(conv, "operator_draft_replaced");
+  // An operator-authored draft resolves any prior held state (draft-quality / context-fidelity) —
+  // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
+  // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
+  if ((conv as any).draftHeld) (conv as any).draftHeld = null;
   if (args.channel === "email") {
     conv.emailDraft = body;
     conv.updatedAt = nowIso();
@@ -2749,6 +2753,33 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
 
   if (lastDraftIdx > lastSentIdx) return conv.messages[lastDraftIdx] ?? null;
   return null;
+}
+
+/**
+ * Closed-loop "no reply" detector (Phase 2.5, 2026-06-24). The customer spoke LAST and there's
+ * nothing for the rep to act on — no pending draft and no held marker. This is wrongful silence the
+ * thumbs-down loop is blind to (there's no draft to rate). Held drafts (conv.draftHeld) are a SEPARATE
+ * category (the agent tried but a gate blocked it) — excluded here so the two are counted distinctly.
+ * Pure + conservative: skips closed/sold conversations (no reply expected there).
+ * (Live example: s R Gurajala said "Ok sure" to running numbers and got no draft, 2026-06-24.)
+ */
+export function isUnansweredInboundConversation(
+  conv: Pick<Conversation, "messages" | "closedAt" | "closedReason"> & { sale?: { soldAt?: string | null } | null; draftHeld?: unknown }
+): boolean {
+  if (!conv) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  if ((conv as any).draftHeld) return false; // held is its own bucket
+  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  let last: any = null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (String(m?.body ?? "").trim() || (Array.isArray(m?.mediaUrls) && m.mediaUrls.length)) {
+      last = m;
+      break;
+    }
+  }
+  if (!last || last.direction !== "in") return false; // the customer must have spoken last
+  return !getLatestPendingDraft(conv as Conversation); // nothing waiting for the rep => silence
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;

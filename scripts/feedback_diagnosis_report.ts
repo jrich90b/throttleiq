@@ -16,11 +16,11 @@
  *        (defaults to ./data/conversations.json; point it at a pulled box store to see prod 👎)
  */
 import fs from "node:fs";
-import {
-  parseFeedbackFailureModeWithLLM,
-  type FeedbackFailureModeParse
-} from "../services/api/src/domain/llmDraft.ts";
+// Type-only import (erased) so the deterministic SILENCE section runs without OPENAI_API_KEY — the
+// parser (which builds an OpenAI client at module load) is dynamically imported only when LLM is on.
+import type { FeedbackFailureModeParse } from "../services/api/src/domain/llmDraft.ts";
 import { decideFeedbackDiagnosisAction } from "../services/api/src/domain/routeStateReducer.ts";
+import { isUnansweredInboundConversation } from "../services/api/src/domain/conversationStore.ts";
 
 const CLUSTER_THRESHOLD = Number(process.env.FEEDBACK_DIAGNOSIS_CLUSTER_MIN ?? 3);
 const CONFIDENCE_MIN = Number(process.env.FEEDBACK_DIAGNOSIS_CONFIDENCE_MIN ?? 0.7);
@@ -54,16 +54,42 @@ for (const c of convs) {
   }
 }
 
+// Silence / no-reply: the failure mode the thumbs-down loop is blind to (no draft to rate).
+// Deterministic — runs even when the LLM is off. Two buckets: HELD (agent drafted, a gate blocked it
+// → conv.draftHeld) and UNANSWERED (customer spoke last, nothing waiting for the rep).
+const held: { convId: string; reason: string }[] = [];
+const unanswered: string[] = [];
+for (const c of convs) {
+  if (c?.draftHeld) {
+    held.push({ convId: c.id, reason: String(c.draftHeld?.reason ?? c.draftHeld?.heldKind ?? "held") });
+  } else if (isUnansweredInboundConversation(c)) {
+    unanswered.push(c.id);
+  }
+}
+
 console.log(`store: ${storePath}`);
+console.log("=== SILENCE / NO-REPLY (no draft to thumbs-down — the loop's blind spot) ===");
+console.log(`  held drafts (agent drafted, a gate blocked it): ${held.length}`);
+const heldByReason = new Map<string, number>();
+for (const h of held) heldByReason.set(h.reason, (heldByReason.get(h.reason) ?? 0) + 1);
+for (const [r, n] of [...heldByReason.entries()].sort((a, b) => b[1] - a[1])) console.log(`    - ${r}: ${n}`);
+console.log(`  unanswered inbound (customer spoke last, nothing waiting): ${unanswered.length}`);
+for (const id of unanswered.slice(0, 10)) console.log(`    - ${id}`);
+if (unanswered.length > 10) console.log(`    … and ${unanswered.length - 10} more`);
+console.log("");
 console.log(`thumbs-down found: ${downs.length}`);
 if (!downs.length) {
   console.log("Nothing to classify.");
   process.exit(0);
 }
 if (process.env.LLM_ENABLED !== "1") {
-  console.log("LLM_ENABLED != 1 — classification skipped (report needs the failure-mode parser). Re-run with LLM_ENABLED=1.");
+  console.log("LLM_ENABLED != 1 — thumbs-down classification skipped (the silence section above still ran). Re-run with LLM_ENABLED=1.");
   process.exit(0);
 }
+
+// Lazy-load the parser only now (its module builds an OpenAI client) so the silence section above
+// never needs the key.
+const { parseFeedbackFailureModeWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
 
 const byMode = new Map<string, number>();
 const byLayer = new Map<string, number>();

@@ -14,7 +14,14 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { decideFeedbackDiagnosisAction } from "../services/api/src/domain/routeStateReducer.ts";
+
+// conversationStore hydrates a store on import — point it at a temp dir so it never touches prod data.
+process.env.CONVERSATIONS_DB_PATH =
+  process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `feedback-diag-eval-${Date.now()}.json`);
+const { isUnansweredInboundConversation } = await import("../services/api/src/domain/conversationStore.ts");
 
 // --- 1) Pure decision table. ---
 type Row = { id: string; input: Parameters<typeof decideFeedbackDiagnosisAction>[0]; action: string };
@@ -62,4 +69,45 @@ assert.match(nightly, /feedback_diagnosis:report/, "the nightly feedback loop mu
 assert.match(nightly, /step=feedback_diagnosis_report/, "the nightly loop must log the diagnosis step");
 assert.match(nightly, /FEEDBACK_LOOP_API_ENV/, "the nightly loop must load OPENAI_API_KEY (LLM steps need it)");
 
-console.log("PASS feedback diagnosis eval (decision table + parser contract + report-only guard + nightly wiring)");
+// --- 5) Silence / no-reply detection (the thumbs-down blind spot). ---
+const mk = (msgs: any[], extra: any = {}) => ({ messages: msgs, ...extra });
+assert.equal(
+  isUnansweredInboundConversation(mk([{ direction: "out", provider: "twilio", body: "hi" }, { direction: "in", body: "Ok sure" }])),
+  true,
+  "customer spoke last with nothing waiting = unanswered"
+);
+assert.equal(
+  isUnansweredInboundConversation(mk([{ direction: "in", body: "Ok sure" }, { direction: "out", provider: "twilio", body: "great, what's your budget?" }])),
+  false,
+  "we replied last = answered"
+);
+assert.equal(
+  isUnansweredInboundConversation(mk([{ direction: "in", body: "Ok sure" }, { direction: "out", provider: "draft_ai", draftStatus: "pending", body: "draft waiting" }])),
+  false,
+  "a pending draft is waiting for the rep = not silence"
+);
+assert.equal(
+  isUnansweredInboundConversation(mk([{ direction: "in", body: "Ok sure" }], { draftHeld: { reason: "context_fidelity_out_of_context" } })),
+  false,
+  "a held draft is its OWN bucket, not 'unanswered'"
+);
+assert.equal(
+  isUnansweredInboundConversation(mk([{ direction: "in", body: "Ok sure" }], { closedReason: "sold" })),
+  false,
+  "closed/sold conversations expect no reply"
+);
+assert.equal(isUnansweredInboundConversation(mk([])), false, "no messages = not unanswered");
+
+// --- 6) Source guards: the report surfaces silence; an operator draft clears the held marker. ---
+assert.match(report, /isUnansweredInboundConversation/, "the report must surface unanswered-inbound silence");
+assert.match(report, /SILENCE \/ NO-REPLY/, "the report must have a silence section");
+assert.match(report, /held drafts/, "the report must count held drafts separately");
+const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
+assert.match(store, /export function isUnansweredInboundConversation/, "the silence predicate must be exported");
+assert.match(
+  store,
+  /if \(\(conv as any\)\.draftHeld\) \(conv as any\)\.draftHeld = null;/,
+  "saveOperatorDraft must clear a stale held marker"
+);
+
+console.log("PASS feedback diagnosis eval (decision table + parser contract + report-only + nightly + silence)");
