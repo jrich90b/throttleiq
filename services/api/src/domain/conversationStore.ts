@@ -804,6 +804,9 @@ export type Conversation = {
   // Dedup marker: when the maintenance reconcile last flagged a scheduling LEAK (a visit time discussed
   // but never booked) so a rep gets ONE "book this" todo, not a flood; re-flags after a window (6/25).
   schedulingLeakFlaggedAt?: string;
+  // Dedup marker: when the reconcile last surfaced a "first touch was drafted but never sent" staff
+  // todo for a NEVER-contacted lead (the email-first-touch silence pool, 6/25); re-nudges after a window.
+  firstTouchSurfacedAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;
@@ -5271,6 +5274,57 @@ export function shouldNudgeStaleHandoffLead(
   const minIdleMs = (opts?.minIdleDays ?? 3) * 24 * 60 * 60 * 1000;
   const maxIdleMs = (opts?.maxIdleDays ?? 21) * 24 * 60 * 60 * 1000;
   return idleMs >= minIdleMs && idleMs <= maxIdleMs;
+}
+
+// Unsent first-touch safety net (2026-06-25): a NEVER-contacted lead whose initial outreach was DRAFTED
+// but never sent (e.g. an email-preferred / email-only ADF lead whose `conv.emailDraft` sits in the
+// Email tab, in suggest mode, with no cadence and no todo — the silence pool of 8 old AutoDealers.Digital
+// inventory leads). DISTINCT from the stale-handoff nudge: that's for a lead we DID reply to then went
+// quiet (hence its 21-day max — don't chase a dead conversation), whereas a missed FIRST touch means the
+// customer never heard from us at all, so it should be surfaced regardless of age (NO max-idle cap).
+// Returns true iff a deduped staff todo should be created. Fail direction is safe — it only ever asks a
+// human to send a drafted reply / make a call.
+export function shouldSurfaceUnsentFirstTouch(
+  conv: Conversation,
+  hasOpenTodo: boolean,
+  now: Date = new Date(),
+  opts?: { minIdleHours?: number; reNudgeDays?: number }
+): boolean {
+  if (!conv || hasOpenTodo) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  // Never contacted: no real customer-facing outbound EVER (a pending draft / inbound ADF echo doesn't count).
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  const contacted = messages.some(
+    m => m?.direction === "out" && (m.provider === "twilio" || m.provider === "sendgrid")
+  );
+  if (contacted) return false;
+  // Must have a pending first-touch we'd want a human to send: an email draft, or a non-stale draft_ai.
+  const hasPendingDraft =
+    !!String(conv.emailDraft ?? "").trim() ||
+    messages.some(m => m?.direction === "out" && m.provider === "draft_ai" && (m as any).draftStatus !== "stale");
+  if (!hasPendingDraft) return false;
+  // A real inbound lead (not an internal/echo-only thread).
+  if (!messages.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  // Skip leads handled by other surfacing: an active cadence already nudges; paused_indefinite is a
+  // deliberate "not now"; event_promo gets a friendly ack, not a sales chase.
+  if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
+  if (conv.followUp?.mode === "paused_indefinite") return false;
+  if (conv.classification?.bucket === "event_promo") return false;
+  // Dedup with re-nudge so a persistent orphan re-surfaces but never floods.
+  if (conv.firstTouchSurfacedAt) {
+    const t = Date.parse(conv.firstTouchSurfacedAt);
+    const reNudgeMs = (opts?.reNudgeDays ?? 7) * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(t) || now.getTime() - t < reNudgeMs) return false;
+  }
+  // Idle a beat since the last message (don't fire instantly — let the normal flow / a human act first).
+  let lastMs = NaN;
+  for (const m of messages) {
+    const ms = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(ms) && (!Number.isFinite(lastMs) || ms > lastMs)) lastMs = ms;
+  }
+  if (!Number.isFinite(lastMs)) return false;
+  const minIdleMs = (opts?.minIdleHours ?? 4) * 60 * 60 * 1000;
+  return now.getTime() - lastMs >= minIdleMs; // NO max-idle: a missed first touch is always worth surfacing
 }
 
 function businessDaysBetween(fromMs: number, toMs: number): number {

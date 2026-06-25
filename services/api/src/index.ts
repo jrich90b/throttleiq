@@ -686,6 +686,7 @@ import {
   listOpenTodos,
   CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
+  shouldSurfaceUnsentFirstTouch,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
   addInternalQuestion,
@@ -28433,6 +28434,40 @@ async function processDueFollowUpsUnlocked() {
         idleDays
       });
     }
+  }
+
+  // Unsent first-touch safety net: a NEVER-contacted lead whose initial reply was DRAFTED but never sent
+  // — email-preferred / email-only ADF leads whose draft sits in the Email tab with no cadence and no
+  // todo, so they aged past the stale-handoff 21-day window into permanent silence (8 old
+  // AutoDealers.Digital inventory leads, 6/25). Surface ONE channel-aware staff todo so the first touch
+  // actually goes out. Fresh open-todo set so it never stacks on a todo another sweep just created;
+  // deduped via firstTouchSurfacedAt; capped per tick.
+  const FIRST_TOUCH_TODOS_PER_TICK = 15;
+  const convIdsWithOpenTodoNow = new Set(listOpenTodos().map(t => t.convId));
+  let firstTouchSurfaced = 0;
+  for (const conv of convs) {
+    if (firstTouchSurfaced >= FIRST_TOUCH_TODOS_PER_TICK) break;
+    if (!shouldSurfaceUnsentFirstTouch(conv, convIdsWithOpenTodoNow.has(conv.id), now)) continue;
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const prefersPhone =
+      String(conv.lead?.preferredContactMethod ?? "").toLowerCase() === "phone" &&
+      !!String(conv.lead?.phone ?? "").trim();
+    const todo = prefersPhone
+      ? addTodo(conv, "call", `Call ${who} — they prefer a call and no first contact has gone out yet.`, undefined, conv.leadOwner, undefined, "followup")
+      : addTodo(conv, "note", `Send the first reply to ${who} — a reply was drafted but never sent (check the Email tab).`, undefined, conv.leadOwner, undefined, "followup");
+    if (todo) {
+      conv.firstTouchSurfacedAt = now.toISOString();
+      saveConversation(conv);
+      firstTouchSurfaced += 1;
+      recordRouteOutcome("manual", "unsent_first_touch_surfaced", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        prefersPhone
+      });
+    }
+  }
+  if (firstTouchSurfaced > 0) {
+    console.log(`[state-reconcile] surfaced ${firstTouchSurfaced} unsent first-touch todo(s) (drafted, never sent)`);
   }
 
   // Task-fulfillment auto-close BACKFILL: re-check open eligible tasks against their conversation
