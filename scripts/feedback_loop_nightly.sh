@@ -43,6 +43,17 @@ if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   set +a
 fi
 
+# Loop-wide OPENAI_API_KEY: the loop's LLM steps (voice_charter_audit, tone_quality, feedback
+# diagnosis, …) need it, but it lives in the dealer api.env (next to the loop env), not the loop env —
+# so without this they hit "OpenAIError: Missing credentials". Pull JUST that one var (not a whole-file
+# source, which would clobber the loop's DATA_DIR/REPORT_ROOT) and export it. Override the source with
+# FEEDBACK_LOOP_API_ENV; if the key is already in the environment we keep it.
+FEEDBACK_LOOP_API_ENV="${FEEDBACK_LOOP_API_ENV:-$(dirname "$FEEDBACK_LOOP_ENV_PATH")/api.env}"
+if [[ -z "${OPENAI_API_KEY:-}" && -f "$FEEDBACK_LOOP_API_ENV" ]]; then
+  OPENAI_API_KEY="$(grep -E '^OPENAI_API_KEY=' "$FEEDBACK_LOOP_API_ENV" | head -1 | cut -d= -f2- | tr -d '\r')"
+  export OPENAI_API_KEY
+fi
+
 mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$OUTCOME_QA_OUT_DIR" "$VEHICLE_WATCH_QA_OUT_DIR" "$INBOUND_SHADOW_OUT_DIR" "$FEEDBACK_DIAGNOSIS_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$VOICE_CHARTER_OUT_DIR" "$RELEASE_GATE_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -187,12 +198,9 @@ trap 'record_closed_loop_run "$?"' EXIT
   # (|| true) so a transient LLM hiccup never breaks the nightly loop.
   echo "[feedback-loop] step=feedback_diagnosis_report -> $FEEDBACK_DIAGNOSIS_OUT_DIR"
   FEEDBACK_DIAGNOSIS_OUT="$FEEDBACK_DIAGNOSIS_OUT_DIR/feedback_diagnosis_$TS.txt"
-  # The failure-mode parser needs OPENAI_API_KEY, which lives in the dealer api.env (next to the
-  # loop env), NOT in the loop env. Pull just that one var (not whole-file source, so no other step's
-  # behavior changes) and pass it inline. Missing key => the report errors and the || branch logs it.
-  FEEDBACK_DIAGNOSIS_API_ENV="${FEEDBACK_DIAGNOSIS_API_ENV:-$(dirname "$FEEDBACK_LOOP_ENV_PATH")/api.env}"
-  DIAG_OPENAI_KEY="${OPENAI_API_KEY:-$(grep -E '^OPENAI_API_KEY=' "$FEEDBACK_DIAGNOSIS_API_ENV" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r')}"
-  if OPENAI_API_KEY="$DIAG_OPENAI_KEY" LLM_ENABLED=1 npm run -s feedback_diagnosis:report -- "$CONVERSATIONS_DB_PATH" > "$FEEDBACK_DIAGNOSIS_OUT" 2>&1; then
+  # OPENAI_API_KEY is loaded loop-wide above; the report just needs LLM_ENABLED=1. Non-fatal so a
+  # transient LLM hiccup never breaks the loop. REPORT-ONLY — never opens PRs.
+  if LLM_ENABLED=1 npm run -s feedback_diagnosis:report -- "$CONVERSATIONS_DB_PATH" > "$FEEDBACK_DIAGNOSIS_OUT" 2>&1; then
     cp -f "$FEEDBACK_DIAGNOSIS_OUT" "$FEEDBACK_DIAGNOSIS_OUT_DIR/latest.txt" 2>/dev/null || true
   else
     echo "[feedback-loop] feedback_diagnosis_report skipped/failed (non-fatal); see $FEEDBACK_DIAGNOSIS_OUT"

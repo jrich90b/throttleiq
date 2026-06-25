@@ -60,5 +60,6 @@ for (const sideEffect of [/writeFileSync|writeFile\(|appendFile/, /child_process
 const nightly = fs.readFileSync("scripts/feedback_loop_nightly.sh", "utf8");
 assert.match(nightly, /feedback_diagnosis:report/, "the nightly feedback loop must run the diagnosis report (auto-run)");
 assert.match(nightly, /step=feedback_diagnosis_report/, "the nightly loop must log the diagnosis step");
+assert.match(nightly, /FEEDBACK_LOOP_API_ENV/, "the nightly loop must load OPENAI_API_KEY (LLM steps need it)");
 
 console.log("PASS feedback diagnosis eval (decision table + parser contract + report-only guard + nightly wiring)");
