@@ -108,6 +108,20 @@ real regression surfaces within a day:
 45 8 * * * cd /home/ubuntu/leadrider-api/americanharley && CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports SWEEP_WINDOW_HOURS=48 npm run auto_loop:sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/auto_loop_sweep_cron.log 2>&1
 ```
 
+### Outcome-audit detection feed cron (Phase 2/2.5, LIVE on americanharley 2026-06-25)
+The unified anomaly feed (Layer 1) refreshes daily, read-only, into `reports/outcome_audit/latest.json`:
+
+```
+# 8:50 AM ET — unified outcome-audit detection feed (state + comprehension + feedback)
+50 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run conversation_outcome_audit >> /home/ubuntu/leadrider-runtime/americanharley/reports/outcome_audit_cron.log 2>&1"
+```
+
+It reads the store FILE directly (the store module hydrates async, so a sync accessor read would race
+it) and never mutates anything. A healthy store ⇒ 0 anomalies; `byCategory` (state/comprehension/feedback)
+and the per-dimension `healed` flag let DETECT route each by tier. The cron repo is kept at HEAD by
+`deploy:api` (or a manual `git pull --ff-only`) so it always runs the latest detectors. For dealer #2,
+point the same cron at that dealer's runtime store.
+
 The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
 means nothing new to code; otherwise it carries the next task + a production
 repro. For dealer #2, point the same cron at that dealer's runtime store.
