@@ -202,6 +202,7 @@
     "operator_draft_endpoint:eval": "npx tsx scripts/operator_draft_endpoint_eval.ts",
     "feedback_redraft:eval": "npx tsx scripts/feedback_redraft_eval.ts",
     "feedback_diagnosis:eval": "npx tsx scripts/feedback_diagnosis_eval.ts",
+    "feedback_diagnosis:report": "npx tsx scripts/feedback_diagnosis_report.ts",
     "draft_brevity:eval": "npx tsx scripts/draft_brevity_eval.ts",
     "voice_cadence_facts:eval": "npx tsx scripts/voice_cadence_facts_eval.ts",
     "disposition_close_guard:eval": "npx tsx scripts/disposition_close_guard_eval.ts",

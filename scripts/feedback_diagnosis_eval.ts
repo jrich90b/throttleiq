@@ -56,4 +56,9 @@ for (const sideEffect of [/writeFileSync|writeFile\(|appendFile/, /child_process
   assert.ok(!sideEffect.test(report), `the Phase 2 report must have NO side effects (${sideEffect})`);
 }
 
-console.log("PASS feedback diagnosis eval (decision table + parser contract + report-only guard)");
+// --- 4) Auto-run wiring: the nightly loop runs the report (so the digest is produced on a schedule). ---
+const nightly = fs.readFileSync("scripts/feedback_loop_nightly.sh", "utf8");
+assert.match(nightly, /feedback_diagnosis:report/, "the nightly feedback loop must run the diagnosis report (auto-run)");
+assert.match(nightly, /step=feedback_diagnosis_report/, "the nightly loop must log the diagnosis step");
+
+console.log("PASS feedback diagnosis eval (decision table + parser contract + report-only guard + nightly wiring)");
