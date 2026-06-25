@@ -508,6 +508,7 @@ import {
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
   decideSchedulingTurn,
+  decideCustomerAckConfirmBooking,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   decideVehicleMediaRequestTurn,
@@ -9213,84 +9214,91 @@ async function resolveCustomerAckConfirmBooking(args: {
   sourceMessageId?: string | null;
 }): Promise<{ reply: string; booked: boolean; alternatives: any[]; checkedCalendar: boolean } | null> {
   const conv = args.conv;
-  // A service-department scheduling ask must not book a sales inventory_visit.
-  if (isServiceDepartmentSchedulingRequest(conv, args.rawText)) return null;
-  const cfg = await getSchedulerConfigHot().catch(() => null);
-  if (!cfg) return null;
-  const timeZone = cfg.timezone || "America/New_York";
+  // --- IO (the parts that read config / calendar / write the event). The DECISION over these results
+  // is the pure decideCustomerAckConfirmBooking (routeStateReducer), pinned by an eval. ---
+  const serviceContext = isServiceDepartmentSchedulingRequest(conv, args.rawText);
+  const cfg = serviceContext ? null : await getSchedulerConfigHot().catch(() => null);
 
-  // Already booked at a concrete time (e.g. the live turn booked; staff is regenerating) → reflect it.
   const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
   const existingWhenText = String(conv.appointment?.whenText ?? conv.appointment?.whenLocal ?? "").trim();
-  if (existingEventId && existingWhenText) {
-    const repName = appointmentStatusStaffName(conv, cfg);
-    const repSuffix = repName ? ` with ${repName}` : "";
-    setDialogState(conv, "schedule_booked");
-    return {
-      reply: `Perfect — you’re all set for ${existingWhenText}${repSuffix}. See you then.`,
-      booked: true,
-      alternatives: [],
-      checkedCalendar: false
-    };
+  const hasExistingBooking = !!cfg && !!existingEventId && !!existingWhenText;
+
+  let requested: ReturnType<typeof resolveCustomerAckRequestedDayTime> = null;
+  let availability: Awaited<ReturnType<typeof findRequestedAppointmentSlotAvailability>> = null;
+  let bookResult: { booked: boolean; whenText: string; repName: string | null } | null = null;
+  let appointmentType = "";
+  if (cfg && !serviceContext && !hasExistingBooking) {
+    requested = resolveCustomerAckRequestedDayTime({
+      conv,
+      parsed: args.parsed,
+      rawText: args.rawText,
+      timeZone: cfg.timezone || "America/New_York"
+    });
+    if (requested) {
+      appointmentType = inferAppointmentTypeFromConv(conv);
+      availability = await findRequestedAppointmentSlotAvailability({ conv, requested, appointmentType }).catch(e => {
+        console.log("[confirm-book] availability check failed:", e?.message ?? e);
+        return null;
+      });
+      if (availability?.available && availability.exactSlot && args.book) {
+        bookResult = await bookConfirmedAppointmentSlot({
+          conv,
+          slot: availability.exactSlot,
+          cfg,
+          sourceMessageId: args.sourceMessageId
+        });
+      }
+    }
   }
 
-  const requested = resolveCustomerAckRequestedDayTime({
-    conv,
-    parsed: args.parsed,
-    rawText: args.rawText,
-    timeZone
+  const outcome = decideCustomerAckConfirmBooking({
+    serviceContext,
+    hasConfig: !!cfg,
+    hasExistingBooking,
+    requestedResolved: !!requested,
+    availabilityChecked: !!availability,
+    slotFree: !!(availability?.available && availability?.exactSlot),
+    book: args.book,
+    bookSucceeded: !!bookResult?.booked,
+    hasAlternatives: (availability?.alternatives?.length ?? 0) > 0
   });
-  if (!requested) return null; // no concrete day+time → caller asks to lock in
-  const appointmentType = inferAppointmentTypeFromConv(conv);
-  const availability = await findRequestedAppointmentSlotAvailability({ conv, requested, appointmentType }).catch(
-    e => {
-      console.log("[confirm-book] availability check failed:", e?.message ?? e);
-      return null;
-    }
-  );
-  if (!availability) return null; // no primary calendar / lookup failed → caller asks to lock in
 
-  if (availability.available && availability.exactSlot) {
-    if (!args.book) {
-      // Regenerate draft: don't write the calendar — produce an honest lock-in confirmation.
+  switch (outcome.kind) {
+    case "fall_back":
+      return null; // caller asks the customer to lock in — never a fabricated confirm
+    case "already_booked": {
+      const repName = appointmentStatusStaffName(conv, cfg ?? undefined);
+      const repSuffix = repName ? ` with ${repName}` : "";
+      setDialogState(conv, "schedule_booked");
+      return { reply: `Perfect — you’re all set for ${existingWhenText}${repSuffix}. See you then.`, booked: true, alternatives: [], checkedCalendar: false };
+    }
+    case "regen_lock_in": {
+      // Regenerate draft on a free slot: don't write the calendar — honest lock-in confirmation.
       setDialogState(conv, "schedule_request");
+      return { reply: `Perfect — ${normalizeDisplayCase(availability!.requestedLabel)} works. I’ll get you locked in and confirm.`, booked: false, alternatives: [], checkedCalendar: true };
+    }
+    case "booked": {
+      const repSuffix = bookResult!.repName ? ` with ${bookResult!.repName}` : "";
+      setDialogState(conv, "schedule_booked");
+      return { reply: `Perfect — you’re all set for ${bookResult!.whenText}${repSuffix}. See you then.`, booked: true, alternatives: [], checkedCalendar: true };
+    }
+    case "offer_alternatives": {
+      // Requested time is taken → offer the nearest alternatives (never a fabricated confirm).
+      if (outcome.hasAlternatives) {
+        setLastSuggestedSlots(conv, availability!.alternatives);
+        setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      } else {
+        setDialogState(conv, "schedule_request");
+      }
       return {
-        reply: `Perfect — ${normalizeDisplayCase(availability.requestedLabel)} works. I’ll get you locked in and confirm.`,
+        reply: buildRequestedSlotUnavailableReply(availability!.requestedLabel, availability!.alternatives),
         booked: false,
-        alternatives: [],
+        alternatives: availability!.alternatives,
         checkedCalendar: true
       };
     }
-    const result = await bookConfirmedAppointmentSlot({
-      conv,
-      slot: availability.exactSlot,
-      cfg,
-      sourceMessageId: args.sourceMessageId
-    });
-    if (!result.booked) return null; // booking failed → caller asks to lock in (no false confirm)
-    const repSuffix = result.repName ? ` with ${result.repName}` : "";
-    setDialogState(conv, "schedule_booked");
-    return {
-      reply: `Perfect — you’re all set for ${result.whenText}${repSuffix}. See you then.`,
-      booked: true,
-      alternatives: [],
-      checkedCalendar: true
-    };
   }
-
-  // Requested time is taken → offer the nearest alternatives (never a fabricated confirm).
-  if (availability.alternatives.length) {
-    setLastSuggestedSlots(conv, availability.alternatives);
-    setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
-  } else {
-    setDialogState(conv, "schedule_request");
-  }
-  return {
-    reply: buildRequestedSlotUnavailableReply(availability.requestedLabel, availability.alternatives),
-    booked: false,
-    alternatives: availability.alternatives,
-    checkedCalendar: true
-  };
+  return null; // unreachable (switch is exhaustive over ConfirmBookingOutcome) — satisfies the type checker
 }
 
 function customerWillProvideScheduleTimeText(text: string | null | undefined): boolean {

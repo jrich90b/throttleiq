@@ -383,6 +383,48 @@ export function isExplicitSchedulingAskIntent(intent?: string | null): boolean {
   return intent === "ask_for_times" || intent === "provide_new_time";
 }
 
+// The customer-ack CONFIRM-BOOKING outcome — the pure branching behind
+// resolveCustomerAckConfirmBooking (index.ts), which decides what happens when a customer confirms a
+// concrete time the agent didn't pre-offer ("Ya 10 will work"). The IO (service check, scheduler
+// config, day/time resolution, calendar availability + the actual insertEvent write) stays in
+// index.ts; this owns the DECISION given those resolved results. Extracted so the risk branches are
+// unit-testable WITHOUT booting index.ts or hitting Google Calendar — especially:
+//   - a calendar write that FAILED must NOT produce a "you're all set" confirm (booked=false => fall_back),
+//   - a TAKEN slot must offer alternatives, never a fabricated confirm,
+//   - the regen draft path (book=false) must never claim a booking.
+// `fall_back` => the caller returns null and asks the customer to lock in (no false confirm).
+export type ConfirmBookingDecisionInput = {
+  serviceContext: boolean; // a service-dept scheduling ask must not book a sales visit
+  hasConfig: boolean; // scheduler config resolved
+  hasExistingBooking: boolean; // appointment already has bookedEventId + whenText (reflect it)
+  requestedResolved: boolean; // a concrete day+time resolved from the turn
+  availabilityChecked: boolean; // the calendar availability lookup returned a result (not null)
+  slotFree: boolean; // availability.available AND an exact slot is open
+  book: boolean; // true = live (write the calendar); false = regenerate draft preview (no write)
+  bookSucceeded: boolean; // the insertEvent write succeeded (only meaningful when book && slotFree)
+  hasAlternatives: boolean; // alternative slots exist when the requested time is taken
+};
+
+export type ConfirmBookingOutcome =
+  | { kind: "fall_back" } // caller returns null → lock-in ask (no fabricated confirm)
+  | { kind: "already_booked" } // reflect the existing confirmed appointment
+  | { kind: "regen_lock_in" } // regen preview on a free slot — "I'll get you locked in" (no write)
+  | { kind: "booked" } // live write succeeded — "you're all set for X"
+  | { kind: "offer_alternatives"; hasAlternatives: boolean }; // requested time taken
+
+export function decideCustomerAckConfirmBooking(input: ConfirmBookingDecisionInput): ConfirmBookingOutcome {
+  if (input.serviceContext) return { kind: "fall_back" };
+  if (!input.hasConfig) return { kind: "fall_back" };
+  if (input.hasExistingBooking) return { kind: "already_booked" };
+  if (!input.requestedResolved) return { kind: "fall_back" };
+  if (!input.availabilityChecked) return { kind: "fall_back" };
+  if (input.slotFree) {
+    if (!input.book) return { kind: "regen_lock_in" };
+    return input.bookSucceeded ? { kind: "booked" } : { kind: "fall_back" }; // write failed => NO false confirm
+  }
+  return { kind: "offer_alternatives", hasAlternatives: input.hasAlternatives };
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the

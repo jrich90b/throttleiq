@@ -49,15 +49,18 @@ assert.match(api, /conv\.appointment\.confirmedBy = "customer";/, "the appointme
 assert.match(api, /onAppointmentBooked\(conv\);\n  return \{ booked: true/, "it finalizes via onAppointmentBooked");
 assert.match(api, /return \{ booked: false, whenText: "", repName: null \};/, "a failed calendar write => booked:false (no fabricated confirm)");
 
-// resolveCustomerAckConfirmBooking: availability-check, book or offer alternatives, fall back safely.
+// resolveCustomerAckConfirmBooking: does the IO (service check, config, day/time, availability, write)
+// then delegates the BRANCHING to the pure decideCustomerAckConfirmBooking (behaviorally pinned by
+// confirm_booking_decision_eval). The composed replies live here.
 assert.match(api, /async function resolveCustomerAckConfirmBooking\(/, "the confirm-booking resolver exists");
-assert.match(api, /if \(isServiceDepartmentSchedulingRequest\(conv, args\.rawText\)\) return null;/, "a service-dept ask never books a sales visit");
+assert.match(api, /const serviceContext = isServiceDepartmentSchedulingRequest\(conv, args\.rawText\);/, "a service-dept ask is detected (the decision defers it)");
 assert.match(api, /findRequestedAppointmentSlotAvailability\(\{ conv, requested, appointmentType \}\)/, "it checks calendar availability");
-assert.match(api, /you’re all set for \$\{result\.whenText\}/, "a booked slot => 'you're all set for <time>' confirm");
-assert.match(api, /buildRequestedSlotUnavailableReply\(availability\.requestedLabel, availability\.alternatives\)/, "a taken slot => offer alternatives");
-assert.match(api, /if \(!requested\) return null;/, "no concrete day\\+time => fall back (caller asks to lock in)");
-// Regen draft path must NOT write the calendar.
-assert.match(api, /if \(!args\.book\) \{[\s\S]*?I’ll get you locked in and confirm\./, "book:false (regen) does an honest lock-in draft, no calendar write");
+assert.match(api, /const outcome = decideCustomerAckConfirmBooking\(\{/, "branching is delegated to the pure decision");
+// Only writes the calendar on a live, free-slot turn (never on regen / taken / no-time).
+assert.match(api, /availability\?\.available && availability\.exactSlot && args\.book\) \{[\s\S]*?bookConfirmedAppointmentSlot\(\{/, "books ONLY when slot is free AND book:true (live)");
+assert.match(api, /you’re all set for \$\{bookResult!\.whenText\}/, "a booked slot => 'you're all set for <time>' confirm");
+assert.match(api, /buildRequestedSlotUnavailableReply\(availability!\.requestedLabel, availability!\.alternatives\)/, "a taken slot => offer alternatives");
+assert.match(api, /I’ll get you locked in and confirm\./, "regen (book:false) free slot => honest lock-in draft, no calendar write");
 
 // --- 3) Both paths route through the resolver (live books, regen draft-only) — in sync. ---
 // Live: gate includes confirm_appointment and calls the resolver with book:true.

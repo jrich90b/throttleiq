@@ -14,6 +14,7 @@ export {
   decideNonMotorcycleTradeTurn,
   decideWatchOptOutTurn,
   decideSchedulingTurn,
+  decideCustomerAckConfirmBooking,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   decideVehicleMediaRequestTurn,
