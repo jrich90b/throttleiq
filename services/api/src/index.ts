@@ -585,6 +585,7 @@ import {
   isFollowUpReminderOnlyText,
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
+  isDealerVisitTimeCheckInText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -26284,6 +26285,13 @@ function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | u
   if (!source) return false;
   if (!hasServiceDepartmentContext(conv)) return false;
   if (hasSalesSchedulingOverrideText(source)) return false;
+  // The customer is ANSWERING a dealer-initiated visit-time check-in ("what time are you coming in?")
+  // — that's a visit confirmation for the scheduling cluster, not a customer-initiated service request.
+  // Defer so a sticky service-classified lead doesn't get "I'll have SERVICE check availability" for a
+  // plain visit time (Bobby Kindred, 2026-06-25). Reads OUR last outbound (dealer framing). If that
+  // check-in was explicitly about SERVICE timing, keep service routing (don't defer).
+  const lastOutboundBody = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+  if (isDealerVisitTimeCheckInText(lastOutboundBody) && !/\bservice\b/i.test(lastOutboundBody)) return false;
   const signals = detectSchedulingSignals(source);
   return (
     signals.explicit ||

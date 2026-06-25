@@ -266,6 +266,28 @@ export function isServiceSchedulingAvailabilityRequestText(textRaw: string | nul
   );
 }
 
+// Did the DEALER proactively ask the customer WHEN they're coming in / arriving (a visit-time
+// check-in), e.g. Scott → Bobby: "what time you planned on coming in this afternoon?". When our own
+// last outbound is this, the customer's ensuing time answer ("1 or 2", "whatever works") is a VISIT
+// confirmation handled by the scheduling cluster — NOT a customer-initiated service request, so the
+// service-scheduling handoff must defer (else a sticky service-classified lead gets "I'll have SERVICE
+// check availability" for a plain visit time — Bobby Kindred, 2026-06-25). Reads OUR text (the dealer's
+// framing), not the customer's intent, so it's a deterministic context gate, not comprehension. Fail
+// direction safe: deferring routes a visit-time reply to the scheduling cluster (confirm/offer a time)
+// instead of the service deflection.
+export function isDealerVisitTimeCheckInText(textRaw: string | null | undefined): boolean {
+  const text = String(textRaw ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const arrival =
+    /\b(com(?:e|ing)\s+in|com(?:e|ing)\s+by|stop(?:ping)?\s+(?:in|by)|head(?:ing)?\s+(?:in|over)|swing(?:ing)?\s+by|get\s+here|be\s+(?:here|there|in)|plan(?:ned|ning)?\s+on)\b/;
+  return (
+    (/\bwhat time\b/.test(text) && (arrival.test(text) || /\bworks?\b/.test(text))) ||
+    (/\bwhen\b/.test(text) && arrival.test(text)) ||
+    /\bwhat time (?:are you|will you be|do you|did you|should we expect you|are we (?:looking|expecting))\b/.test(text) ||
+    /\bwhat time (?:works|is good|did you (?:want|have in mind))\b/.test(text)
+  );
+}
+
 export function isManualOutboundBookingConfirmationText(textRaw: string | null | undefined): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
