@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
+import { customerVisitConfirmed, phantomVisitGuardEnabled, stripPhantomVisitFraming } from "./visitFraming.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
@@ -11964,5 +11965,13 @@ ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
     }
   }
   draft = sanitizePhotoAsk(draft);
+  // Phantom-visit repair (PHANTOM_VISIT_GUARD): the deterministic builders guard at construction, but the
+  // LLM can still fabricate "thanks for coming in for the test ride / congrats on <bike>" on a lead that
+  // never visited (Tim Williams, 6/25 — held by the context-fidelity judge). Rewrite to visit-neutral when
+  // no visit is confirmed. Output guard on our own draft; fail-direction safe (a confirmed visit is kept).
+  if (phantomVisitGuardEnabled()) {
+    const visitConv = { appointment: ctx.appointment, lead: { source: ctx.leadSource }, messages: ctx.history };
+    if (!customerVisitConfirmed(visitConv)) draft = stripPhantomVisitFraming(draft, visitConv);
+  }
   return draft;
 }

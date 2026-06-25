@@ -57,3 +57,32 @@ export function phantomVisitGuardEnabled(): boolean {
   const raw = String(process.env.PHANTOM_VISIT_GUARD ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }
+
+/**
+ * Output repair for the LLM generator (the builders use customerVisitConfirmed at construction; the
+ * LLM-composed draft can still FABRICATE a visit — Tim Williams, 6/25: a fresh ADF lead got "thanks
+ * again for coming in for the test ride … congrats on the Street Glide 3 Limited", which the
+ * context-fidelity judge HELD). When the customer has NOT actually visited, rewrite a phantom
+ * "thanks for coming in / for the test ride" into a visit-neutral interest line and drop a fabricated
+ * purchase "congrats". Reads OUR OWN draft text (an output guard, not customer-intent comprehension) +
+ * the structured visit signal; fail-direction safe (when a visit IS confirmed, the text is untouched).
+ * Pure.
+ */
+export function stripPhantomVisitFraming(text: string, conv: any): string {
+  const src = String(text ?? "");
+  if (!src.trim() || customerVisitConfirmed(conv)) return src;
+  let out = src;
+  // "Thanks (again) for coming in for the test ride (on the <model>)." → "Thanks for your interest in the <model>."
+  out = out.replace(
+    /\bthank(?:s| you)(?: again)? for coming (?:in|by|down) for (?:the |a |another )?(?:test ride|ride|demo)(?:\s+on)?\s*(?:the |your )?([^.!?]*?)\s*([.!?])/gi,
+    (_m, model, end) => (model && model.trim() ? `Thanks for your interest in the ${model.trim()}${end}` : `Thanks for your interest${end}`)
+  );
+  // Generic phantom-visit thanks ("for coming in / stopping in / coming to see us …") → "Thanks for reaching out."
+  out = out.replace(
+    /\bthank(?:s| you)(?: again)? for (?:coming (?:in|by|down)|stopping (?:in|by)|coming to see us|making it in)\b[^.!?]*([.!?])/gi,
+    (_m, end) => `Thanks for reaching out${end}`
+  );
+  // Fabricated purchase congrats ("congrats on the/your/getting <X>.") — no confirmed sale → drop it.
+  out = out.replace(/\bcongrat(?:s|ulations)?\b[^.!?]*\bon\b[^.!?]*[.!?]\s*/gi, "");
+  return out.replace(/\s{2,}/g, " ").replace(/\s+([.!?])/g, "$1").trim();
+}

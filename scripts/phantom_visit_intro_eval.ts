@@ -21,7 +21,8 @@ import fs from "node:fs";
 import {
   customerVisitConfirmed,
   rideOutcomeImpliesVisit,
-  phantomVisitGuardEnabled
+  phantomVisitGuardEnabled,
+  stripPhantomVisitFraming
 } from "../services/api/src/domain/visitFraming.ts";
 
 // --- 1) customerVisitConfirmed decision table ---
@@ -67,4 +68,21 @@ for (const [label, src] of [["index.ts", index], ["sendgridInbound.ts", adf]] as
 assert.ok(/rideOutcomeImpliesVisit\(/.test(index), "index.ts outcome builder must gate on rideOutcomeImpliesVisit");
 assert.ok(/Congrats on your \$\{bikeModel\}/.test(index), "post-sale builder must have the visit-neutral congrats fallback");
 
-console.log("PASS phantom-visit guard — customerVisitConfirmed table (Knighton class: sold/booked/online ≠ visit), rideOutcomeImpliesVisit, dark-by-default, both-path source guard.");
+// --- 4) stripPhantomVisitFraming — OUTPUT repair for the LLM generator (the builders guard at
+//        construction, but the LLM can still fabricate a visit — Tim Williams, 6/25, held by the judge). ---
+const TIM = "Hi Tim — This is Giovanni at American Harley-Davidson. Thanks again for coming in for the test ride on the Street Glide 3 Limited. Congrats on the Street Glide 3 Limited. If you need anything, just let me know.";
+const noVisit = { messages: [], lead: {} };
+const repaired = stripPhantomVisitFraming(TIM, noVisit);
+assert.ok(/Thanks for your interest in the Street Glide 3 Limited/.test(repaired), "phantom 'coming in for the test ride' → 'interest in <model>'");
+assert.ok(!/coming in for the test ride/i.test(repaired), "the phantom visit clause is gone");
+assert.ok(!/congrats/i.test(repaired), "the fabricated purchase congrats is dropped");
+assert.equal(stripPhantomVisitFraming(TIM, { messages: [{ direction: "in", body: "I came in today" }] }), TIM, "a CONFIRMED visit leaves the draft untouched (fail-safe)");
+const clean = "Thanks for your interest in the Road Glide — want to set up a time to come ride it?";
+assert.equal(stripPhantomVisitFraming(clean, noVisit), clean, "a clean (non-phantom) draft is unchanged");
+
+// generateDraftWithLLM applies the repair (gated) on the LLM path.
+const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");
+assert.ok(/stripPhantomVisitFraming\(draft, visitConv\)/.test(llm), "generateDraftWithLLM repairs the LLM draft when no visit is confirmed");
+assert.ok(/if \(phantomVisitGuardEnabled\(\)\)/.test(llm), "the LLM repair is gated by PHANTOM_VISIT_GUARD");
+
+console.log("PASS phantom-visit guard — customerVisitConfirmed table, rideOutcomeImpliesVisit, dark-by-default, both-path source guard, + LLM-draft stripPhantomVisitFraming repair.");
