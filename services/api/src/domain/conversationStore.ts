@@ -564,6 +564,7 @@ export type InventoryWatch = {
   createdAt: string;
   lastNotifiedAt?: string;
   lastNotifiedStockId?: string;
+  lastNotifiedModel?: string; // the MODEL of the unit last notified — lets a read-only audit catch a watch that fired on the wrong model (watch_fired_wrong_model) without re-reading the inventory feed
 };
 
 export type InventoryWatchPending = {

@@ -35,6 +35,30 @@ eq(dims({ id: "c2c", closedReason: "sold", inventoryWatches: [{ status: "active"
 eq(dims({ id: "c2d", closedReason: "other", inventoryWatch: { status: "active" }, inventoryWatches: [{ status: "paused" }] }), ["watch_active_on_closed"], "active SINGLE + paused array on closed => flagged (union, the 6/25 leak)");
 eq(dims({ id: "c2e", closedReason: "other", inventoryWatch: { status: "paused" }, inventoryWatches: [{ status: "paused" }] }), [], "all watches paused on closed => clean (heal succeeded)");
 
+// --- 2b. watch FIRED on the wrong model: a trim-specific watch notified a less-specific (base) unit. ---
+const RECENT_FIRE = "2026-06-25T01:00:00.000Z"; // within the 14d window of NOW
+const STALE_FIRE = "2026-06-01T00:00:00.000Z"; // > 14d before NOW
+eq(dims({ id: "w1", inventoryWatch: { model: "Street Glide Special", lastNotifiedModel: "Street Glide", lastNotifiedAt: RECENT_FIRE } }), ["watch_fired_wrong_model"], "trim-specific watch notified a base unit (the Jason bug) => anomaly");
+eq(dims({ id: "w2", inventoryWatch: { model: "Street Glide", lastNotifiedModel: "Street Glide Special", lastNotifiedAt: RECENT_FIRE } }), [], "base watch notified a more-specific unit (directional-correct) => clean");
+eq(dims({ id: "w3", inventoryWatch: { model: "Breakout", lastNotifiedModel: "Breakout", lastNotifiedAt: RECENT_FIRE } }), [], "exact same model => clean");
+eq(dims({ id: "w4", inventoryWatch: { model: "Electra Glide Ultra Classic", lastNotifiedModel: "Ultra Limited", lastNotifiedAt: RECENT_FIRE } }), [], "different families (neither includes the other) => NOT this detector (scoped to the LLM open-critic, avoids family false-positives)");
+eq(dims({ id: "w5", inventoryWatch: { model: "CVO Street Glide", lastNotifiedModel: "Street Glide", lastNotifiedAt: RECENT_FIRE } }), ["watch_fired_wrong_model"], "CVO watch notified a non-CVO base unit => anomaly (CVO is strictly more specific)");
+eq(dims({ id: "w6", inventoryWatch: { model: "Street Glide Special", lastNotifiedModel: "Street Glide", lastNotifiedAt: STALE_FIRE } }), [], "wrong-model fire OUTSIDE the 14d window => aged out, clean (fresh signal only)");
+eq(dims({ id: "w7", inventoryWatch: { model: "Street Glide Special" } }), [], "watch never fired (no lastNotifiedModel) => clean");
+eq(dims({ id: "w8", inventoryWatches: [{ model: "Road Glide Limited", lastNotifiedModel: "Road Glide", lastNotifiedAt: RECENT_FIRE }] }), ["watch_fired_wrong_model"], "array-form watch fired on a base unit => anomaly");
+{
+  const a = auditConversationOutcome({ id: "w9", inventoryWatch: { model: "Street Glide Special", lastNotifiedModel: "Street Glide", lastNotifiedAt: RECENT_FIRE } }, { now: NOW });
+  eq(a[0].category, "state", "watch_fired_wrong_model is a STATE anomaly");
+  eq(a[0].healed, false, "watch_fired_wrong_model is net-new (no auto-heal; the fix is the matcher)");
+  assert.ok(a[0].detail.includes("Street Glide Special") && a[0].detail.includes("Street Glide"), "detail names both the watched + notified model"); n++;
+}
+// SOURCE GUARD: both watch-fire sites must stamp the UNIT's model (matchedItem.model), not the watch's.
+{
+  const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
+  const stamps = idx.match(/matchedWatch\.lastNotifiedModel = matchedItem\.model/g) || [];
+  assert.ok(stamps.length >= 2, `both watch-fire sites must stamp lastNotifiedModel from matchedItem.model (found ${stamps.length})`); n++;
+}
+
 // --- 3. cadence active on a closed conv (post_sale is legit). ---
 eq(dims({ id: "c3", closedReason: "not_interested", followUpCadence: { status: "active", kind: "standard" } }), ["cadence_active_on_closed"], "active standard cadence on closed => anomaly");
 eq(dims({ id: "c3b", sale: { soldAt: "2026-06-20T00:00:00Z" }, closedReason: "sold", followUpCadence: { status: "active", kind: "post_sale" } }), [], "post_sale cadence on a sold conv => legit, clean");

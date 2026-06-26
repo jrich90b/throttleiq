@@ -18,6 +18,7 @@
  * customer intent. No mutations.
  */
 import { REAL_OUTBOUND_CONTACT_PROVIDERS, collectInventoryWatches } from "./conversationStore.js";
+import { modelMatches } from "./inventoryFeed.js";
 
 export type OutcomeSeverity = "P1" | "P2" | "P3";
 
@@ -50,6 +51,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   open_critic_finding: "discovery",
   task_autoclose_regression: "state",
   watch_fire_miss: "state",
+  watch_fired_wrong_model: "state",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
@@ -111,6 +113,36 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   //    again!" to a customer who already bought/closed. Net-new (only the opt-out path pauses today).
   if (closed && hasActiveWatch(conv)) {
     out.push({ ...base, dimension: "watch_active_on_closed", severity: "P2", healed: true, detail: "inventoryWatch active on a closed/sold conversation" });
+  }
+
+  // 2b. A watch that NOTIFIED a unit LESS specific than the watched model — a trim-specific watch fired on
+  //     a base unit (Jason, 6/26: a "Street Glide Special" watch drafted a base "Street Glide"). At fire
+  //     time the engine stamps the NOTIFIED unit's model (lastNotifiedModel); if the WATCH model strictly
+  //     includes (is more specific than) that unit's model, the engine matched too loosely — the exact
+  //     inverse of the directional matcher (a more-specific watch must NEVER fire on a less-specific unit;
+  //     that direction is never legitimate). Independent of the engine's own match path, so it catches a
+  //     REGRESSION of the directional fix (index.ts inventoryItemMatchesWatch). Recent fires only (fresh
+  //     signal; the loop's dedup suppresses repeats). SCOPED to this high-confidence signature — the broader
+  //     "different family/catalog over-match" class stays with the LLM open-critic (wrong_watch_model) to
+  //     avoid false-positives on legitimate family watches (e.g. a "Sportster" watch on an "Iron 883").
+  //     Net-new (no auto-heal): the real fix is the matcher; a hit means it regressed or a new fire path bypassed it.
+  const WRONG_MODEL_FIRE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+  for (const w of collectInventoryWatches(conv as any)) {
+    const watchModel = String(w?.model ?? "").trim();
+    const notifiedModel = String(w?.lastNotifiedModel ?? "").trim();
+    if (!watchModel || !notifiedModel) continue;
+    const firedAtMs = Date.parse(String(w?.lastNotifiedAt ?? ""));
+    if (!Number.isFinite(firedAtMs) || now.getTime() - firedAtMs > WRONG_MODEL_FIRE_WINDOW_MS) continue;
+    // watch strictly MORE specific than the unit it notified (watch includes unit, unit does NOT include watch).
+    if (modelMatches(watchModel, notifiedModel) && !modelMatches(notifiedModel, watchModel)) {
+      out.push({
+        ...base,
+        dimension: "watch_fired_wrong_model",
+        severity: "P2",
+        healed: false,
+        detail: `inventory watch for "${watchModel}" notified a less-specific unit "${notifiedModel}" (trim-specific watch fired on a base unit — directional-matcher regression)`
+      });
+    }
   }
 
   // 3. Follow-up cadence ACTIVE on a closed/sold conv (post_sale is legitimate). Should be 0
