@@ -187,5 +187,87 @@ if (sub === "open-pr") {
   process.exit(0);
 }
 
-console.error("Usage: act_runner.ts <list | prep --id <key>|--top | open-pr --title <t> [--eval-verified]>");
+if (sub === "review") {
+  // Cross-model PRE-SHIP review: an INDEPENDENT model (Claude) reviews the branch diff against the finding
+  // + the law BEFORE it ships. With --ship: open a PR, and merge it ONLY if the review approves (clean +
+  // gates green); otherwise leave the PR open and ESCALATE. Without --ship: advisory (print the verdict).
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch === "main") {
+    console.error("Refusing to review/ship from main — work on a feature branch.");
+    process.exit(2);
+  }
+  const ahead = git(["rev-list", "--count", "main..HEAD"]);
+  if (Number(ahead) <= 0) {
+    console.error("No commits ahead of main — nothing to review.");
+    process.exit(2);
+  }
+  // Gates feed the gate decision (a review can't approve over red gates).
+  let evalsGreen = false;
+  try {
+    console.log("Running tsc…");
+    execFileSync("node", ["../../node_modules/typescript/bin/tsc", "-p", "tsconfig.json", "--noEmit"], { cwd: path.resolve("services/api"), stdio: "inherit" });
+    if (has("eval-verified")) {
+      console.log("ci:eval asserted green (--eval-verified).");
+      evalsGreen = true;
+    } else {
+      console.log("Running ci:eval…");
+      execFileSync("npm", ["run", "ci:eval"], { stdio: "inherit" });
+      evalsGreen = true;
+    }
+  } catch {
+    evalsGreen = false;
+  }
+
+  const diff = (() => {
+    try {
+      return execFileSync("git", ["diff", "main...HEAD"], { encoding: "utf8" });
+    } catch {
+      return "";
+    }
+  })();
+  const title = flag("title") || git(["log", "-1", "--pretty=%s"]);
+  const briefDir = path.join(reportRoot, "act");
+  const briefFile = fs.existsSync(briefDir) ? fs.readdirSync(briefDir).map(f => path.join(briefDir, f)).sort().pop() : undefined;
+  const finding = flag("finding") || (briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8").slice(0, 2000) : title);
+
+  const { reviewLoopFixWithLLM, decidePreShipGate } = await import("../services/api/src/domain/preShipReview.ts");
+  const review = await reviewLoopFixWithLLM({ title, finding, diff, evalsGreen });
+  const gate = decidePreShipGate(review, { evalsGreen });
+
+  console.log("\n=== CROSS-MODEL PRE-SHIP REVIEW ===");
+  if (review) {
+    console.log(`verdict=${review.verdict} risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk} blocking=${review.blocking} customerFacing=${review.customerFacing}`);
+    if (review.reasons) console.log(`reasons: ${review.reasons}`);
+    if (review.concerns) console.log(`concerns: ${review.concerns}`);
+  } else {
+    console.log("no independent review available (no ANTHROPIC_API_KEY / disabled)");
+  }
+  console.log(`\nGATE: ${gate.ship ? "SHIP" : gate.escalate ? "ESCALATE" : "BLOCKED"} — ${gate.reason}`);
+
+  if (!has("ship")) {
+    console.log("\n(advisory only — pass --ship to open a PR and merge on a clean approve)");
+    process.exit(gate.ship ? 0 : 1);
+  }
+
+  // --ship: always leave an auditable PR; merge only on a clean approve.
+  if (!flag("title")) {
+    console.error("--ship requires --title");
+    process.exit(2);
+  }
+  git(["push", "-u", "origin", branch]);
+  const body =
+    (briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8") : `Loop-driven fix: ${title}`) +
+    `\n\n## Cross-model pre-ship review\n${review ? `verdict=**${review.verdict}** risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk}\n${review.reasons ?? ""}${review.concerns ? `\nconcerns: ${review.concerns}` : ""}` : "no independent review available"}\n\nGate: **${gate.ship ? "SHIP" : "ESCALATE"}** — ${gate.reason}\n— self-healing loop ACT runner.\n`;
+  const url = execFileSync("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", String(title), "--body", body], { encoding: "utf8" }).trim();
+  console.log(`PR opened: ${url}`);
+  if (gate.ship) {
+    execFileSync("gh", ["pr", "merge", "--squash", "--delete-branch", url], { stdio: "inherit" });
+    console.log(`MERGED (squash). Deploy next to take it live.`);
+    process.exit(0);
+  }
+  console.log(`ESCALATED — PR left OPEN for a human: ${url}`);
+  process.exit(1);
+}
+
+console.error("Usage: act_runner.ts <list | prep --id <key>|--top | open-pr --title <t> [--eval-verified] | review [--ship --title <t>] [--eval-verified] [--finding <s>]>");
 process.exit(2);

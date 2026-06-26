@@ -163,10 +163,25 @@ integrations@leadrider.ai); kill with LOOP_DIGEST_ENABLED=0. Needs SENDGRID_API_
 56 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports DEALER_LABEL=americanharley npm run loop_digest >> /home/ubuntu/leadrider-runtime/americanharley/reports/loop_digest_cron.log 2>&1"
 ```
 
-**ACT** = the orchestrator/runner (the
-"Unattended operation" section) consumes `next.json`, runs PLAN→BUILD→VERIFY, and opens a PR — auto-merging
-only categories the ledger has graduated; everything behavioral notifies Joe. Wiring the scheduled runner
-to read `next.json` (alongside `auto_loop/next_task.json`) is the remaining ACT integration.
+**ACT** = `scripts/act_runner.ts` (PR-only): `list` work orders → `prep` a fix brief (finding + conv +
+turn-actions + the parser-first contract) → the coding agent writes the patch on a branch → `review`/`open-pr`.
+
+### Cross-model PRE-SHIP review gate (`act_runner review`) — the independent check before merge
+The safety premise of the loop applied to its OWN output: before a loop change merges, an INDEPENDENT model
+(Claude, a different lineage than the OpenAI generation runtime — `domain/preShipReview.ts`
+`reviewLoopFixWithLLM`) adversarially reviews the actual DIFF against the finding + the law (on_target,
+law_ok = parser-first/both-paths/eval, customer-facing risk, blocking defects). `decidePreShipGate` (pure)
+ships ONLY on a clean approve with green gates; **any** doubt — no review, hold, blocking, off-target, law
+violation, high risk, or red gates — does NOT ship. **Conservative default: no review available ⇒ escalate,
+never silently ship.** `act_runner review --ship`: runs the gates → the cross-model review → opens an
+auditable PR → MERGES it only when the gate says SHIP, else leaves the PR OPEN and escalates to a human.
+This replaces "a human eyeballs every change" with "a model that didn't write it checks every change"; only
+genuine disagreement / judgment calls reach a human. Pinned by `pre_ship_review:eval` + `act_runner:eval`.
+
+In a SUPERVISED session the merge/deploy is the operator's standing pre-authorization (eval-gated work) —
+so the loop owns detect→fix→eval→**review→merge→deploy**, escalating only what the cross-model gate holds.
+For the UNATTENDED box loop the same gate applies, plus the graduated ladder: fail-safe Tier-1 auto-merges
+once a category earns it; behavioral changes open a PR + notify (no human is in the session there at all).
 
 The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
 means nothing new to code; otherwise it carries the next task + a production
