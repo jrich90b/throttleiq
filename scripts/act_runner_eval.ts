@@ -15,9 +15,13 @@ import { execFileSync } from "node:child_process";
 const src = fs.readFileSync("scripts/act_runner.ts", "utf8");
 
 // --- Safety guarantees (source-level — these are the properties that keep ACT trustworthy). ---
-assert.ok(/gh", \[\s*"pr", "create"/.test(src.replace(/\s+/g, " ")) || /"pr", "create"/.test(src), "opens a PR via gh pr create");
-assert.ok(!/pr", "merge"|--merge\b|gh pr merge/.test(src), "NEVER merges (PR-only)");
-assert.match(src, /Refusing to open a PR from main/, "refuses to PR from main");
+assert.ok(/"pr", "create"/.test(src), "opens an auditable PR via gh pr create");
+// Merge is now GATED, not forbidden: the runner merges ONLY inside the `if (gate.ship)` block — i.e. only
+// on a clean cross-model pre-ship approve. open-pr stays PR-only; review escalates (leaves the PR open)
+// on anything short of approve.
+assert.ok(/if \(gate\.ship\) \{[\s\S]*?"pr", "merge"/.test(src), "merges ONLY on a clean cross-model approve (gate.ship)");
+assert.ok(/ESCALATED — PR left OPEN for a human/.test(src), "anything short of approve => PR left open + escalate (not merged)");
+assert.match(src, /Refusing to open a PR from main|Refusing to review\/ship from main/, "refuses to PR/ship from main");
 assert.match(src, /rev-list", "--count", "main\.\.HEAD"/, "requires commits ahead of main");
 assert.match(src, /Running tsc/, "enforces tsc before the PR");
 assert.match(src, /npm", \["run", "ci:eval"\]/, "runs ci:eval (unless --eval-verified)");
