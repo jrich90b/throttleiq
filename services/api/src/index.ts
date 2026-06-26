@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildWatchAvailableReply } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import {
@@ -5496,10 +5496,12 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       const matchedKey = inventoryKey(matchedItem);
       const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
       const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
-      const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
-      const baseReply = isNewArrival
-        ? `${opener} — we just got ${name}${colorText} in stock. Want details or a time to check it out?`
-        : `${opener} — we have ${name}${colorText} in stock right now. Want details or a time to check it out?`;
+      const baseReply = buildWatchAvailableReply({
+        firstName: leadFirstName || null,
+        bikeLabel: name,
+        colorText,
+        availability: isNewArrival ? "new" : "in_stock"
+      });
       const listingUrlRaw = String(matchedItem?.url ?? "").trim();
       const listingUrl =
         listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
@@ -5619,8 +5621,12 @@ async function notifyInventoryWatchersForAvailableItem(
     const name = [year, make, model, trim].filter(Boolean).join(" ");
     const colorText = color ? ` in ${color}` : "";
     const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
-    const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
-    const baseReply = `${opener} — ${name}${colorText} is available again. Want details or a time to check it out?\nNot looking anymore? Just say so and I'll stop these alerts.`;
+    const baseReply = buildWatchAvailableReply({
+      firstName: leadFirstName || null,
+      bikeLabel: name,
+      colorText,
+      availability: "again"
+    });
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();
     const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
     const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
