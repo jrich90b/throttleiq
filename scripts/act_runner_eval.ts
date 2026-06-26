@@ -21,6 +21,10 @@ assert.ok(/"pr", "create"/.test(src), "opens an auditable PR via gh pr create");
 // on anything short of approve.
 assert.ok(/if \(gate\.ship\) \{[\s\S]*?"pr", "merge"/.test(src), "merges ONLY on a clean cross-model approve (gate.ship)");
 assert.ok(/ESCALATED — PR left OPEN for a human/.test(src), "anything short of approve => PR left open + escalate (not merged)");
+// On escalation, the runner emails the operator IMMEDIATELY (not just the daily digest), best-effort.
+assert.ok(/a fix needs your review/.test(src), "escalation sends an immediate 'needs your review' email");
+assert.ok(/import\("\.\.\/services\/api\/src\/domain\/emailSender\.ts"\)/.test(src), "the escalation email reuses the existing sendEmail (no new infra)");
+assert.ok(/Escalation email failed \(non-fatal\)/.test(src), "a notification failure never changes the escalation outcome (best-effort)");
 assert.match(src, /Refusing to open a PR from main|Refusing to review\/ship from main/, "refuses to PR/ship from main");
 assert.match(src, /rev-list", "--count", "main\.\.HEAD"/, "requires commits ahead of main");
 assert.match(src, /Running tsc/, "enforces tsc before the PR");

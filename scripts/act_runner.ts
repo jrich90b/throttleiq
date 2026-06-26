@@ -265,6 +265,27 @@ if (sub === "review") {
     console.log(`MERGED (squash). Deploy next to take it live.`);
     process.exit(0);
   }
+  // Escalation: the gate held this for a human → email the operator IMMEDIATELY (not just the daily digest)
+  // with the PR + the reason. Best-effort: never let a notification failure change the escalation outcome.
+  try {
+    const apiKey = process.env.SENDGRID_API_KEY;
+    if (apiKey) {
+      const { sendEmail } = await import("../services/api/src/domain/emailSender.ts");
+      const to = (process.env.LOOP_DIGEST_EMAIL || "integrations@leadrider.ai").trim();
+      const from = (process.env.SENDGRID_FROM_EMAIL || "support@leadrider.ai").trim();
+      await sendEmail({
+        to,
+        from,
+        subject: `agent-watch: a fix needs your review — ${title}`,
+        text: `The self-healing loop opened a fix but the cross-model pre-ship gate did NOT auto-merge it — it needs your review.\n\nPR: ${url}\nGate: ${gate.reason}\n\nReview + merge to approve, or close to reject. (You're getting this immediately, on top of the daily digest.)`
+      });
+      console.log(`Emailed ${to} (immediate escalation notice).`);
+    } else {
+      console.log("SENDGRID_API_KEY not set — skipped the immediate escalation email (PR is still open).");
+    }
+  } catch (err: any) {
+    console.log(`Escalation email failed (non-fatal): ${err?.message ?? String(err)}`);
+  }
   console.log(`ESCALATED — PR left OPEN for a human: ${url}`);
   process.exit(1);
 }
