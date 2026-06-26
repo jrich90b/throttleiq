@@ -52,7 +52,7 @@ export async function reviewLoopFixWithLLM(args: {
   if (String(process.env.PRE_SHIP_REVIEW_ENABLED ?? "1").trim() === "0") return null;
 
   const model = process.env.ANTHROPIC_PRESHIP_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
-  const diff = String(args.diff ?? "").slice(0, 16000); // cap tokens; the shape is what matters
+  const diff = prepareDiffForReview(args.diff); // code-first, megalines collapsed, capped — never starve the source change out of the window (see prepareDiffForReview)
   const prompt = [
     "You are a senior engineer doing an INDEPENDENT pre-ship review of a code change for a Harley",
     "dealership's AI sales agent. You did NOT write this change. Be adversarial but fair: your job is to",
@@ -132,4 +132,70 @@ export function decidePreShipGate(
   }
   const why = review.concerns || review.reasons || "review withheld approval";
   return { ship: false, escalate: true, reason: `cross-model review HELD: ${why}` };
+}
+
+/**
+ * Prepare a raw `git diff main...HEAD` so the ACTUAL logic change is always inside the reviewed window.
+ * Two failure modes this fixes (Jason watch-matcher ship, 6/26 — PR #100 was wrongly ESCALATED):
+ *  (1) git lists files ALPHABETICALLY, so a config file (package.json) precedes source (services/...). With
+ *      a flat char cap, the source hunk can be truncated out entirely → the reviewer reports "no change to
+ *      <file>" and HOLDS a correct fix.
+ *  (2) a single line can be enormous — the one-line `ci:eval` chain in package.json is ~15KB — and on its
+ *      own blows the whole budget. Almost every loop fix wires in an eval (touching that exact line), so a
+ *      naive cap would mis-fire on nearly every change the loop ships.
+ * Fix: split per file, COLLAPSE any single +/- content line over `maxLineLen` to a short marker, ORDER
+ * source/code files before config/lock/generated files, then cap. Pure + deterministic so
+ * `pre_ship_review:eval` can pin the behavior without an LLM call.
+ */
+export function prepareDiffForReview(rawDiff: string, opts?: { cap?: number; maxLineLen?: number }): string {
+  const cap = opts?.cap ?? 24000;
+  const maxLineLen = opts?.maxLineLen ?? 500;
+  const raw = String(rawDiff ?? "");
+  if (!raw.trim()) return "";
+
+  const headerRe = /^diff --git a\/(\S+) b\/(\S+)$/gm;
+  const headers: { path: string; start: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = headerRe.exec(raw))) headers.push({ path: m[2] || m[1], start: m.index });
+  if (!headers.length) return capWithMarker(collapseLongDiffLines(raw, maxLineLen), cap); // not a recognizable git diff
+
+  const sections = headers.map((h, i) => ({
+    path: h.path,
+    text: collapseLongDiffLines(raw.slice(h.start, i + 1 < headers.length ? headers[i + 1].start : raw.length), maxLineLen)
+  }));
+  // Stable sort: non-config (source) keep their original alpha order and lead; config/lock/generated sink to
+  // the end. Node's Array.sort is stable, so equal-rank items preserve input order.
+  const ordered = sections
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => (isLowSignalPath(a.s.path) ? 1 : 0) - (isLowSignalPath(b.s.path) ? 1 : 0) || a.i - b.i)
+    .map(x => x.s);
+  return capWithMarker(ordered.map(s => s.text).join(""), cap);
+}
+
+/** Config / lock / generated files — real but low review-signal; sort them after source so source is never starved. */
+function isLowSignalPath(p: string): boolean {
+  return (
+    /(^|\/)package(-lock)?\.json$/.test(p) ||
+    /(^|\/)(yarn\.lock|pnpm-lock\.yaml|composer\.lock)$/.test(p) ||
+    /\.lock$/.test(p) ||
+    /\.(snap|map|min\.js|min\.css)$/.test(p)
+  );
+}
+
+/** Collapse any single +/- CONTENT line longer than maxLineLen to a marker; never touch diff/file/hunk headers. */
+function collapseLongDiffLines(text: string, maxLineLen: number): string {
+  return text
+    .split("\n")
+    .map(line => {
+      if (line.startsWith("+++ ") || line.startsWith("--- ")) return line; // file headers
+      if ((line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) && line.length > maxLineLen) {
+        return `${line[0]} [line collapsed: ${line.length} chars]`;
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+function capWithMarker(text: string, cap: number): string {
+  return text.length <= cap ? text : `${text.slice(0, cap)}\n…[diff truncated at ${cap} chars]`;
 }
