@@ -5314,7 +5314,13 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const watchIsStreetGlide3 = isStreetGlide3Variant(watchModel);
   const itemIsStreetGlide3 = isStreetGlide3Variant(itemModel);
   if (watchIsStreetGlide3 && !itemIsStreetGlide3) return false;
-  const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
+  // DIRECTIONAL: the in-stock UNIT's model must contain the WATCHED model — never the reverse. The old
+  // bidirectional `|| watchModel.includes(itemModel)` let a trim-specific watch fire on a base unit
+  // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra
+  // Classic" matched an "Ultra Limited"). A base/family watch still matches a specific unit (unit includes
+  // watch); a specific watch only matches a unit that includes that specificity. Family watches
+  // (e.g. "Sportster") are handled separately by familyMatch below. Mirrors modelMatches (inventoryFeed).
+  const directMatch = itemModel.includes(watchModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const familyMatch = (() => {
     if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
