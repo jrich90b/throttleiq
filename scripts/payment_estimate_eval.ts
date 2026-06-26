@@ -14,6 +14,7 @@ import fs from "node:fs";
 import {
   estimateMonthlyPaymentRange,
   buildRecommendedUnitsPaymentEstimateReply,
+  buildRecommendationWithEstimateReply,
   PAYMENT_ESTIMATE_DISCLAIMER
 } from "../services/api/src/domain/paymentEstimate.ts";
 
@@ -73,4 +74,48 @@ assert.equal(
   "wired in BOTH the live and regenerate paths"
 );
 
-console.log("PASS payment estimate eval (disclaimed ranges only + both-paths wiring)");
+// --- 4) Recommend AND quote in one reply (buildRecommendationWithEstimateReply) — the Tyrone fix. ---
+const matches = [
+  { year: "2019", model: "Road King", price: 18995 } as any,
+  { year: "2017", model: "Street Glide", price: 16995 } as any
+];
+const units = [
+  { year: "2019", model: "Road King", price: 18995 } as any,
+  { year: "2017", model: "Street Glide", price: 16995 } as any
+];
+{
+  // down payment given => recommend list + disclaimed estimate, in ONE reply, single CTA.
+  const out = buildRecommendationWithEstimateReply({ firstName: "Tyrone", matches, recommendedUnits: units, monthlyBudget: 550, downPayment: 2000, termMonths: 72 });
+  assert.equal(out.quoted, true, "down payment + priced units => quoted");
+  assert.match(out.reply, /Road King at \$18,995/, "reply lists the recommended unit + price");
+  assert.match(out.reply, /Road King: ~\$\d+–\d+\/mo/, "reply shows a disclaimed monthly RANGE for the unit");
+  assert.match(out.reply, new RegExp(PAYMENT_ESTIMATE_DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "estimate carries the disclaimer");
+  assert.ok(!out.reply.includes("Want me to run exact monthly numbers on any of these?"), "the recommendation CTA is suppressed when we quote (no double CTA)");
+  assert.equal((out.reply.match(/Want me to/g) ?? []).length, 1, "exactly one CTA in the combined reply");
+  assert.ok(!/Sure thing\.[\s\S]*Sure thing\./.test(out.reply), "no double opener");
+  const loneMonthly = out.reply.match(/(?<!–)\$\d+\/mo/g) ?? [];
+  assert.equal(loneMonthly.length, 0, "no single non-ranged $/mo figure in the combined reply");
+}
+{
+  // no down payment => just the recommendation list, with its own CTA.
+  const out = buildRecommendationWithEstimateReply({ firstName: "Tyrone", matches, recommendedUnits: units, monthlyBudget: 550 });
+  assert.equal(out.quoted, false, "no down payment => not quoted");
+  assert.match(out.reply, /Want me to run exact monthly numbers on any of these\?/, "recommendation CTA present when not quoting");
+  assert.ok(!out.reply.includes("/mo:"), "no estimate block when no down payment");
+}
+{
+  // down payment but NO priced units => not quoted (fall back to the plain recommendation list).
+  const out = buildRecommendationWithEstimateReply({ firstName: "T", matches, recommendedUnits: [{ model: "X", price: null } as any], downPayment: 2000 });
+  assert.equal(out.quoted, false, "down payment but no priced unit => not quoted");
+}
+// omitOpener / omitNumbersCta options behave.
+assert.ok(!buildRecommendedUnitsPaymentEstimateReply({ units, downPayment: 2000, omitOpener: true })!.startsWith("Sure thing"), "omitOpener drops the opener");
+
+// --- 5) Source guard: the recommend path triggers on a budget profile AND quotes inline. ---
+const api2 = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.match(api2, /const hasBudgetProfile = budgetCtx\.monthlyBudget != null \|\| budgetCtx\.downPayment != null;/, "recommend entry recognizes a budget profile (down/monthly), not just 'options' phrasing");
+assert.match(api2, /if \(!vehicleRecommendationParserHint\(askText\) && !hasBudgetProfile\) return null;/, "budget profile OR phrase hint lets the parser run (fail-safe)");
+assert.match(api2, /buildRecommendationWithEstimateReply\(\{/, "recommend path composes recommend-and-quote");
+assert.match(api2, /conv\.paymentEstimateSentForDown = budgetCtx\.downPayment;/, "marks the down payment as quoted so the standalone estimate path won't double-fire");
+
+console.log("PASS payment estimate eval (disclaimed ranges + recommend-and-quote + both-paths wiring)");

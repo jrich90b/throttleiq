@@ -129,6 +129,10 @@ export function buildVehicleRecommendationReply(args: {
   firstName?: string | null;
   matches: InventoryFeedItem[];
   monthlyBudget?: number | null;
+  // When the SAME reply will append a disclaimed payment estimate (recommend-and-quote in one turn),
+  // drop the trailing "Want me to run exact monthly numbers?" CTA — the estimate carries its own CTA,
+  // and asking to run numbers immediately before running them reads awkwardly.
+  omitNumbersCta?: boolean;
 }): string {
   const name = String(args.firstName ?? "").trim();
   const opener = name ? `Sure thing, ${name}.` : "Sure thing.";
@@ -138,7 +142,8 @@ export function buildVehicleRecommendationReply(args: {
     ? `Around $${Math.round(budget).toLocaleString("en-US")}/mo usually means used. Here are a few that could fit:`
     : "Here are a few that could fit:";
   const lines = args.matches.map(m => `• ${unitLabel(m)}`).join("\n");
-  return `${opener} ${intro}\n${lines}\nWant me to run exact monthly numbers on any of these?`;
+  const tail = args.omitNumbersCta ? "" : "\nWant me to run exact monthly numbers on any of these?";
+  return `${opener} ${intro}\n${lines}${tail}`;
 }
 
 /**

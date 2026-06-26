@@ -462,7 +462,7 @@ import {
   buildRecommendedUnitsMediaReply
 } from "./domain/inventoryRecommender.js";
 import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
-import { buildRecommendedUnitsPaymentEstimateReply } from "./domain/paymentEstimate.js";
+import { buildRecommendedUnitsPaymentEstimateReply, buildRecommendationWithEstimateReply } from "./domain/paymentEstimate.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -2206,7 +2206,15 @@ async function resolveVehicleRecommendationReply(
     .filter(Boolean)
     .join(" ");
   const askText = recentInbound || text;
-  if (!vehicleRecommendationParserHint(askText)) return null;
+  // Trigger the recommender on EITHER an explicit ask ("send me options") OR a budget profile — a
+  // monthly cap and/or a down payment with no model in play is a "pick one that fits my budget"
+  // request even when phrased as a plain statement ("I'd like a cruiser, ~$2k down, $450-550/mo")
+  // (Tyrone Woods, 6/26 — got another clarifying question instead). The caller already gated on
+  // model-unknown + no model named this turn, and the typed parser still owns wantsRecommendation, so
+  // this only LETS the parser run (fail-safe — a parser miss still returns null to the existing flow).
+  const budgetCtx = findRecentInboundPaymentBudgetContext(conv);
+  const hasBudgetProfile = budgetCtx.monthlyBudget != null || budgetCtx.downPayment != null;
+  if (!vehicleRecommendationParserHint(askText) && !hasBudgetProfile) return null;
   const parse = await safeLlmParse("vehicle_recommendation_parser", () =>
     parseVehicleRecommendationRequestWithLLM({ text: askText, history: buildHistory(conv, 8) })
   );
@@ -2249,7 +2257,29 @@ async function resolveVehicleRecommendationReply(
   // can answer with the REAL links instead of punting (s R Gurajala, 2026-06-24).
   conv.recommendedUnits = toRecommendedUnits(matches);
   conv.recommendedUnitsAt = new Date().toISOString();
-  return buildVehicleRecommendationReply({ firstName, matches, monthlyBudget: parse?.monthlyBudget ?? null });
+  // Recommend AND quote in one turn when they've already given a down payment — don't list bikes and
+  // make them ask "what's the payment?" a turn later (Tyrone Woods, 6/26). The composer appends the
+  // disclaimed monthly range for the priced units; `quoted` means we already estimated for this down
+  // payment, so we mark it and the standalone estimate path won't double-fire.
+  const composed = buildRecommendationWithEstimateReply({
+    firstName,
+    matches,
+    recommendedUnits: conv.recommendedUnits,
+    monthlyBudget: parse?.monthlyBudget ?? budgetCtx.monthlyBudget ?? null,
+    downPayment: budgetCtx.downPayment ?? null,
+    termMonths: budgetCtx.termMonths
+  });
+  if (composed.quoted && budgetCtx.downPayment != null) {
+    conv.paymentEstimateSentForDown = budgetCtx.downPayment;
+    recordRouteOutcome(scope, "recommended_units_payment_estimate", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      units: matches.length,
+      downPayment: budgetCtx.downPayment,
+      viaRecommendation: true
+    });
+  }
+  return composed.reply;
 }
 
 // Follow-up to a recommendation: the customer asks to SEE the suggested bikes (photos/colors/links).
