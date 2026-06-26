@@ -56,6 +56,30 @@ export function buildEventPromoAck(
 }
 
 /**
+ * Inventory-watch "your bike is in stock" notification (the watch-fire reply). Beyond announcing the unit,
+ * it (1) ASKS whether they're still looking, and (2) offers a clean opt-out — "if you're all set I'll take
+ * you off the list." A "no / all set / found one" reply is read by the watch-opt-out parser
+ * (decideWatchOptOutTurn) which PAUSES the watch, so the customer can remove themselves and we stop pinging
+ * a lead who has moved on (Joe, 2026-06-26). Pinned by watch_available_reply:eval.
+ */
+export function buildWatchAvailableReply(args: {
+  firstName?: string | null;
+  bikeLabel: string; // e.g. "2025 Harley-Davidson Breakout"
+  colorText?: string | null; // e.g. " in Billiard Gray" (already prefixed) or empty
+  availability?: "new" | "in_stock" | "again";
+}): string {
+  const opener = args.firstName ? `Hey ${args.firstName}, good news` : "Good news";
+  const bike = `${args.bikeLabel}${args.colorText ?? ""}`;
+  const arrival =
+    args.availability === "new" ? "just came in" : args.availability === "again" ? "is available again" : "is in stock now";
+  return (
+    `${opener} — a ${bike} you were watching for ${arrival}. ` +
+    "Are you still looking? If so I can send details or set up a time to come see it — " +
+    "and if you're all set, just let me know and I'll take you off the list."
+  );
+}
+
+/**
  * Approved acknowledgement for a NON-BUYER / passenger survey lead (Elizabeth Klapa class,
  * 2026-06-25) — a Dealer Lead App survey whose structured purchase-timeframe says the person
  * is explicitly NOT a buyer ("I am not interested in purchasing at this time"). Used when
