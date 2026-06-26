@@ -232,6 +232,18 @@ assert.match(sweep3, /summarizeTurnActions\(c, convTodos\)/, "the sweep passes t
 assert.match(sweep3, /raw\?\.todos/, "the sweep reads open todos for the action summary");
 const det = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
 assert.match(det, /open_critic", "latest\.json"/, "DETECT merges the open-critic (discovery) feed");
+// watch_fire_miss folds as a sibling sweep (needs the inventory snapshot): DETECT merges it + it's state-category.
+assert.match(det, /watch_fire_miss", "latest\.json"/, "DETECT merges the watch-fire-miss sibling feed");
+assert.match(mod, /watch_fire_miss: "state"/, "watch_fire_miss is a state-category dimension");
+const wfmSweep = fs.readFileSync("scripts/watch_fire_miss_sweep.ts", "utf8");
+assert.match(wfmSweep, /findWatchFireMisses/, "the watch-fire-miss sweep runs findWatchFireMisses");
+assert.match(wfmSweep, /inventory_snapshot\.json/, "the sweep reads the on-disk inventory snapshot (no network)");
+// Inventory enrichment: the critic gets the in-stock model list so it can catch fabricated availability.
+assert.match(llm, /inStockModels\?: string\[\]/, "the critic accepts the in-stock model list");
+assert.match(llm, /IN-STOCK MODELS \(current, by model\)/, "the critic prompt includes the in-stock list");
+assert.match(llm, /skip the inventory check/, "an empty in-stock list => the critic SKIPS the check (never assumes out-of-stock)");
+const ocSweep = fs.readFileSync("scripts/open_critic_sweep.ts", "utf8");
+assert.match(ocSweep, /inStockModels/, "the open-critic sweep loads + passes the in-stock list to the critic");
 // The classifier routes it by category (comprehension → parser_fix_candidate, Tier 1, notify) with no
 // dimension whitelist — so the new dimension flows through automatically.
 {

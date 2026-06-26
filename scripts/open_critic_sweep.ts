@@ -27,6 +27,24 @@ const raw = JSON.parse(fs.readFileSync(dbPath, "utf8"));
 const convs: any[] = Array.isArray(raw?.conversations) ? raw.conversations : [];
 const openTodos: any[] = (Array.isArray(raw?.todos) ? raw.todos : []).filter((t: any) => t?.status === "open");
 
+// Inventory enrichment: the dealer's current in-stock model list (from the on-disk snapshot beside the
+// store) so the critic can catch fabricated availability ("promised a bike we don't have"). Empty/missing
+// → the critic skips the inventory check (never assumes out-of-stock). Deduped, by model.
+const inStockModels: string[] = (() => {
+  try {
+    const snap = JSON.parse(fs.readFileSync(path.join(path.dirname(dbPath), "inventory_snapshot.json"), "utf8"));
+    const items: any[] = Array.isArray(snap?.items) ? snap.items : Array.isArray(snap) ? snap : [];
+    const set = new Set<string>();
+    for (const it of items) {
+      const label = [it?.year, it?.model ?? it?.description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      if (label) set.add(label);
+    }
+    return [...set];
+  } catch {
+    return [];
+  }
+})();
+
 const MAX = Number(process.env.OPEN_CRITIC_MAX ?? 40);
 const WINDOW_DAYS = Number(process.env.OPEN_CRITIC_WINDOW_DAYS ?? 2);
 const now = Date.now();
@@ -84,6 +102,7 @@ for (const c of candidates) {
         vehicle: c?.lead?.vehicle?.model ?? c?.lead?.vehicle?.description ?? null
       },
       actions: summarizeTurnActions(c, convTodos),
+      inStockModels,
       channel: channel as "sms" | "email"
     });
   } catch {

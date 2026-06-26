@@ -291,9 +291,13 @@ emit into the unified `auditConversationOutcome` feed so the loop sees them too:
 - `cadence_quality_suppressed` (comprehension) — a PROACTIVE follow-up message the cadence-quality judge
   flagged suppress/hold; persisted on `conv.cadenceQualityShadow` at the (shadow) judge call site (Net-1
   pattern), recency-gated in the detector.
-- **watch_fire_miss** (NEXT) — a watch that should have fired (matching unit in stock, never notified).
-  Needs the inventory feed, so it folds as a SIBLING sweep (like open_critic) reading the on-disk
-  `inventory_snapshot.json` + `findWatchFireMisses`, merged by DETECT — not a conv-only detector.
+- `watch_fire_miss` (state; DONE) — a watch that should have fired (matching unit in stock, never
+  notified). Needs the inventory feed, so it folds as a SIBLING sweep (`scripts/watch_fire_miss_sweep.ts`,
+  like open_critic) reading the on-disk `inventory_snapshot.json` + `findWatchFireMisses`, merged by DETECT.
+- **Inventory enrichment for the open critic (DONE)** — the open-critic sweep loads the in-stock model
+  list from `inventory_snapshot.json` and passes it to `critiqueConversationHandlingWithLLM`, so the critic
+  can catch fabricated availability ("promised a unit we don't have"). Empty/missing list ⇒ the critic
+  SKIPS the inventory check (never assumes out-of-stock).
 - **live/regen PARITY — deliberately NOT folded.** Parity is enforced at DEV time by the decision-table
   evals (every decide*Turn is pinned in both paths) + the shared-pure-function structure; there is no
   runtime signal to fold, and adding one would mean running both paths or storing a baseline decision per

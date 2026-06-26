@@ -7824,6 +7824,7 @@ export async function critiqueConversationHandlingWithLLM(args: {
   lastAgentReply: string; // the reply most worth critiquing
   lead?: { source?: string | null; bucket?: string | null; cta?: string | null; vehicle?: string | null };
   actions?: Record<string, unknown> | null; // the turn's side-effects (summarizeTurnActions): route/parse/cadence/watch/task/handoff/appt
+  inStockModels?: string[] | null; // dealer's current in-stock model list (inventory enrichment) — lets the critic catch fabricated availability ("promised a bike we don't have")
   channel?: "sms" | "email";
 }): Promise<OpenCriticParse | null> {
   const useLLM =
@@ -7868,6 +7869,12 @@ export async function critiqueConversationHandlingWithLLM(args: {
     "a promise/commitment. If something is off in a way none of these name, FLAG IT and name the class",
     "yourself in issue_class. Return only JSON matching the schema.",
     "",
+    "INVENTORY CHECK (when an IN-STOCK MODELS list is provided below): if the agent told the customer a",
+    "specific unit/model is available / in stock / 'we have it' but that model is NOT in the in-stock list,",
+    "that is a fabricated-availability miss (issue_class e.g. \"promised_unit_not_in_stock\"). Be careful:",
+    "the list is by MODEL — a reasonable 'we can get/order one' or a trade/used inquiry is NOT a miss, and",
+    "an empty/absent list means SKIP this check (don't assume out-of-stock).",
+    "",
     "Be conservative and fair: the MAJORITY of turns are fine. Only flag a CLEAR problem a customer or a",
     "manager would actually notice. If the handling is reasonable, has_issue=false.",
     "Fields: has_issue; severity (major if a customer would notice/it costs us the lead, else minor);",
@@ -7878,6 +7885,9 @@ export async function critiqueConversationHandlingWithLLM(args: {
     `Channel: ${args.channel ?? "sms"}`,
     `Lead: ${JSON.stringify({ source: lead.source ?? null, bucket: lead.bucket ?? null, cta: lead.cta ?? null, vehicle: lead.vehicle ?? null })}`,
     args.actions ? `AGENT ACTIONS this turn: ${JSON.stringify(args.actions)}` : "AGENT ACTIONS this turn: (not provided)",
+    Array.isArray(args.inStockModels) && args.inStockModels.length
+      ? `IN-STOCK MODELS (current, by model): ${args.inStockModels.slice(0, 80).join(", ")}`
+      : "IN-STOCK MODELS: (not provided — skip the inventory check)",
     thread.length ? `Thread:\n${thread.join("\n")}` : "Thread: (none)",
     `The agent reply to scrutinize most: ${lastReply}`
   ].join("\n");
