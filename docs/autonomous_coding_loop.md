@@ -148,7 +148,22 @@ graduated autonomy starts every work order at PR + (when behavioral) notify.
 
 `next.json` carries `stop:true` when healthy, else the ranked work orders (Tier 2 first), each with its
 action (parser_fix_candidate / add_invariant_or_heal / redraft_or_diagnose / heal_regression / escalate),
-`notify`, and `autoMergeEligible` (from the category ledger). **ACT** = the orchestrator/runner (the
+`notify`, and `autoMergeEligible` (from the category ledger).
+
+### Loop digest mailer (the SURFACE step) — runs after DETECT
+DETECT writes `next.json` but nothing read it; findings piled up unseen. The digest mailer formats the work
+order (`formatLoopDigest`, pure) and EMAILS the operator so findings actually reach a human — the precision
+review of the cross-model turn-critic + the graduation signal, until the autonomous ACT runner lands. Tier 2
+(needs review) is listed first. Only emails when there ARE findings (LOOP_DIGEST_FORCE=1 sends an all-clear
+too). Reuses the existing `sendEmail` (SendGrid) — no new infra. Recipient LOOP_DIGEST_EMAIL (default
+integrations@leadrider.ai); kill with LOOP_DIGEST_ENABLED=0. Needs SENDGRID_API_KEY (the cron sources api.env).
+
+```
+# 8:56 AM ET — email the operator the day's findings (the SURFACE step; needs SENDGRID_API_KEY)
+56 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports DEALER_LABEL=americanharley npm run loop_digest >> /home/ubuntu/leadrider-runtime/americanharley/reports/loop_digest_cron.log 2>&1"
+```
+
+**ACT** = the orchestrator/runner (the
 "Unattended operation" section) consumes `next.json`, runs PLAN→BUILD→VERIFY, and opens a PR — auto-merging
 only categories the ledger has graduated; everything behavioral notifies Joe. Wiring the scheduled runner
 to read `next.json` (alongside `auto_loop/next_task.json`) is the remaining ACT integration.
