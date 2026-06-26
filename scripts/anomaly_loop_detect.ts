@@ -33,13 +33,16 @@ const anomalies: any[] = Array.isArray(feed?.anomalies) ? feed.anomalies : [];
 // Merge the Net 3 open-critic feed (reports/open_critic/latest.json) when present — the open-ended
 // critic writes the SAME OutcomeAnomaly shape (category="discovery") into a sibling file so the
 // deterministic sweep stays pure. Optional: absent on a deterministic-only run.
-const openCriticPath = path.join(reportRoot, "open_critic", "latest.json");
-if (fs.existsSync(openCriticPath)) {
+for (const sib of [
+  { name: "open-critic (discovery)", file: path.join(reportRoot, "open_critic", "latest.json") },
+  { name: "watch-fire-miss", file: path.join(reportRoot, "watch_fire_miss", "latest.json") }
+]) {
+  if (!fs.existsSync(sib.file)) continue;
   try {
-    const oc = JSON.parse(fs.readFileSync(openCriticPath, "utf8"));
-    if (Array.isArray(oc?.anomalies)) {
-      anomalies.push(...oc.anomalies);
-      console.log(`Merged ${oc.anomalies.length} open-critic (discovery) finding(s) from ${openCriticPath}`);
+    const s = JSON.parse(fs.readFileSync(sib.file, "utf8"));
+    if (Array.isArray(s?.anomalies)) {
+      anomalies.push(...s.anomalies);
+      console.log(`Merged ${s.anomalies.length} ${sib.name} finding(s) from ${sib.file}`);
     }
   } catch {
     /* a malformed sibling feed must never break the deterministic loop */

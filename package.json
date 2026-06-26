@@ -80,6 +80,7 @@
     "resume_followup_cadence:eval": "npx tsx scripts/resume_followup_cadence_eval.ts",
     "conversation_outcome_audit": "npx tsx scripts/conversation_outcome_audit.ts",
     "open_critic_sweep": "npx tsx scripts/open_critic_sweep.ts",
+    "watch_fire_miss_sweep": "npx tsx scripts/watch_fire_miss_sweep.ts",
     "loop_digest": "npx tsx scripts/loop_digest.ts",
     "loop_digest:eval": "npx tsx scripts/loop_digest_eval.ts",
     "act_runner": "npx tsx scripts/act_runner.ts",

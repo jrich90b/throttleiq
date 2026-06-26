@@ -49,6 +49,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   cadence_quality_suppressed: "comprehension",
   open_critic_finding: "discovery",
   task_autoclose_regression: "state",
+  watch_fire_miss: "state",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
