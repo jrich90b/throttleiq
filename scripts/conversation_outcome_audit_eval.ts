@@ -238,6 +238,7 @@ assert.match(mod, /watch_fire_miss: "state"/, "watch_fire_miss is a state-catego
 const wfmSweep = fs.readFileSync("scripts/watch_fire_miss_sweep.ts", "utf8");
 assert.match(wfmSweep, /findWatchFireMisses/, "the watch-fire-miss sweep runs findWatchFireMisses");
 assert.match(wfmSweep, /inventory_snapshot\.json/, "the sweep reads the on-disk inventory snapshot (no network)");
+assert.match(wfmSweep, /byConv\.set|ONE anomaly per conversation/, "the sweep dedups to one anomaly per conversation (no digest flooding)");
 // Inventory enrichment: the critic gets the in-stock model list so it can catch fabricated availability.
 assert.match(llm, /inStockModels\?: string\[\]/, "the critic accepts the in-stock model list");
 assert.match(llm, /IN-STOCK MODELS \(current, by model\)/, "the critic prompt includes the in-stock list");
