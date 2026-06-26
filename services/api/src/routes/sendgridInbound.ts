@@ -47,6 +47,7 @@ import {
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
@@ -7427,9 +7428,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (marketplaceSellSignal || /sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
   if (isInitialAdf && isTradeAcceleratorLead && isSellLead) {
-    const profile = await getDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
     const tradeModel = normalizeVehicleModel(
       activeAdfLeadProfile?.tradeVehicle?.model ??
         activeAdfLeadProfile?.tradeVehicle?.description ??
@@ -7440,11 +7438,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const tradeYear = activeAdfLeadProfile?.tradeVehicle?.year ?? activeAdfLeadProfile?.vehicle?.year ?? null;
     const bikeLabel = [tradeYear, tradeModel].filter(Boolean).join(" ").trim() || "your bike";
-    let ack =
-      `Thanks — I got your trade-in request for ${bikeLabel}. ` +
-      `This is ${agentName} at ${dealerName}. ` +
-      "We can give you a firm number after a quick in-person appraisal. " +
-      "What day and time works best to stop in?";
+    // Trade-toward-buy: a Trade Accelerator lead that ALSO names a distinct purchase vehicle (the
+    // structured `vehicle` field) should have its ack acknowledge the bike they want, not just the trade
+    // (steven osipovitch, 2026-06-26). buildTradeAdfAck weaves it in only when distinct. Routing through
+    // the shared builder also centralizes this path with the orchestrator's (the inline "This is {agent}
+    // at {dealer}" was stripped by applyInitialAdfPrefix anyway — behavior-preserving).
+    const purchaseLabel = [activeAdfLeadProfile?.vehicle?.year, activeAdfLeadProfile?.vehicle?.model ?? activeAdfLeadProfile?.vehicle?.description]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    let ack = buildTradeAdfAck({ bikeLabel, purchaseLabel, midConversation: false });
     ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     if (

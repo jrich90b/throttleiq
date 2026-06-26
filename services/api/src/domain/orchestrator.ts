@@ -2657,9 +2657,11 @@ export async function orchestrateInbound(
     // asked (and, mid-conversation, ignores the live relationship). Acknowledge the form
     // instead; the "Totally fair question" framing stays for genuine customer-SMS trade
     // questions. See buildTradeAdfAck (tradeAdfReply.ts).
+    const pv = ctx?.lead?.vehicle ?? {};
+    const purchaseLabel = [pv?.year, pv?.model ?? pv?.description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     const draft =
       event.provider === "sendgrid_adf"
-        ? buildTradeAdfAck({ bikeLabel: tradeLabel, midConversation: hasPriorOutbound })
+        ? buildTradeAdfAck({ bikeLabel: tradeLabel, purchaseLabel, midConversation: hasPriorOutbound })
         : "Totally fair question. " +
           leadLine +
           mileageLine +
