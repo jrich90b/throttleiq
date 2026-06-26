@@ -4183,6 +4183,23 @@ async function runCadenceQualityJudgeShadow(
         }
       });
     }
+    // Fold the cadence-quality judge into the self-healing feed (like the context-fidelity shadow): when a
+    // PROACTIVE cadence message is judged suppress/hold (a bad message we'd send unprompted), persist the
+    // verdict so the read-only outcome-audit sweep surfaces it as a comprehension gap. Detection only — STEP
+    // 1 stays shadow (the draft is NOT altered here).
+    if (verdict.overall === "suppress" || verdict.overall === "hold") {
+      (conv as any).cadenceQualityShadow = {
+        at: new Date().toISOString(),
+        overall: verdict.overall,
+        confidence: verdict.confidence ?? null,
+        reason: String(verdict.reason ?? "").slice(0, 240),
+        steering: String(verdict.steering ?? "").slice(0, 240) || null,
+        channel,
+        cadenceKind: cadenceKind ?? null,
+        messagePreview: text.slice(0, 240)
+      };
+      saveConversation(conv);
+    }
     // STEP 1 is shadow-only: never suppress/alter the cadence draft here, even when decision.live is true.
   } catch {
     // Best-effort shadow tooling — never block or fail the cadence tick.
