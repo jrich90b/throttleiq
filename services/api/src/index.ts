@@ -5515,6 +5515,7 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, reply)) {
         matchedWatch.lastNotifiedAt = nowIso;
         matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+        matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
         conv.updatedAt = nowIso;
         saveConversation(conv);
         continue;
@@ -5527,6 +5528,7 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
       matchedWatch.lastNotifiedAt = nowIso;
       matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
+      matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
       setDialogState(conv, "inventory_watch_matched");
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
