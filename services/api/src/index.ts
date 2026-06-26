@@ -5398,7 +5398,7 @@ function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item
   return inventoryWatchGroupMatchesLastNotifiedStock(watches, item);
 }
 
-async function processInventoryWatchlist(targetConvId?: string) {
+async function processInventoryWatchlist(targetConvId?: string, opts?: { includeInStock?: boolean }) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
   try {
@@ -5427,7 +5427,12 @@ async function processInventoryWatchlist(targetConvId?: string) {
       console.warn("[inventory-watch] notifications skipped because snapshot save failed.");
       return;
     }
-    if (!scanPlan.allowNotifications) {
+    // Deliberate IN-STOCK REVIEW pass (admin-triggered, opts.includeInStock): draft for ALL available
+    // matching units, not just newly-arrived ones, and bypass the new-arrival bulk guard. This is for the
+    // watch-fire-miss backlog (a watcher whose bike is in stock but wasn't a fresh arrival, so the cron
+    // held off). It still only DRAFTS (draft_ai, suggest mode — staff approve), never sends. The regular
+    // cron (no opts) is UNCHANGED: new-arrival-only + the bulk guard.
+    if (!opts?.includeInStock && !scanPlan.allowNotifications) {
       console.warn(
         `[inventory-watch] notifications skipped: ${scanPlan.reason} ` +
           `(previous=${scanPlan.previousCount}, current=${scanPlan.currentCount}, new=${scanPlan.newCount}, ` +
@@ -5436,7 +5441,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       return;
     }
     const newItems = scanPlan.newItems;
-    const candidateItems = newItems.filter(i => isWatchCandidateAvailable(i));
+    const candidateItems = (opts?.includeInStock ? items : newItems).filter(i => isWatchCandidateAvailable(i));
     if (!candidateItems.length) return;
     const newItemKeys = new Set(newItems.map(i => inventoryKey(i)).filter(Boolean));
 
@@ -6634,6 +6639,20 @@ app.post("/debug/conversations/reload", async (_req, res) => {
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message ?? "Failed to reload conversation store" });
+  }
+});
+
+// Watch-fire-miss REVIEW pass: draft the "your watched bike is in stock" notification for watchers whose
+// matching unit is in stock but never got pinged (the cron only fires on NEW arrivals; this clears the
+// in-stock backlog). DRAFTS ONLY (draft_ai, suggest mode) — staff read each conversation in the console
+// and approve / edit / skip; nothing is auto-sent. Reuses the engine's message + every guard (closed /
+// suppressed / handoff / already-drafted). One-shot, operator-triggered.
+app.post("/debug/watch-fire-review", async (_req, res) => {
+  try {
+    await processInventoryWatchlist(undefined, { includeInStock: true });
+    res.json({ ok: true, note: "Drafted in-stock watch notifications for review — see the console (suggest mode; nothing sent)." });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "watch-fire review failed" });
   }
 });
 
