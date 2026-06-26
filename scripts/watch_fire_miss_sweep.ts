@@ -29,15 +29,29 @@ try {
 const { findWatchFireMisses } = await import("../services/api/src/domain/watchFireMiss.ts");
 const misses = feedItems.length ? findWatchFireMisses({ conversations, feedItems }) : [];
 
-const anomalies = misses.map((m: any) => ({
-  convId: String(m.convId ?? ""),
-  leadKey: String(m.leadKey ?? ""),
-  dimension: "watch_fire_miss",
-  category: "state" as const,
-  severity: m.confidence === "high" ? ("P1" as const) : ("P2" as const),
-  healed: false,
-  detail: `watch-fire miss (${m.confidence}): a matching ${m.matchedModel ?? m.model}${m.matchedStockId ? ` (stock ${m.matchedStockId})` : ""} is in stock but the customer was never notified — ${String(m.reason ?? "").slice(0, 120)}`
-}));
+// Dedup to ONE anomaly per conversation (a conv can yield several raw misses — multiple watches, or the
+// single+array watch union double-counting the same unit). Keep the highest-confidence one and roll up the
+// rest, so the feed/digest reflects "this customer has an un-fired watch" once, not N times. DETECT keys by
+// convId::dimension anyway, so per-conv is the meaningful unit.
+const byConv = new Map<string, any[]>();
+for (const m of misses) {
+  const k = String(m.convId ?? "");
+  if (!byConv.has(k)) byConv.set(k, []);
+  byConv.get(k)!.push(m);
+}
+const anomalies = [...byConv.entries()].map(([convId, group]) => {
+  const m = group.find((g: any) => g.confidence === "high") ?? group[0];
+  const others = group.length - 1;
+  return {
+    convId,
+    leadKey: String(m.leadKey ?? ""),
+    dimension: "watch_fire_miss",
+    category: "state" as const,
+    severity: m.confidence === "high" ? ("P1" as const) : ("P2" as const),
+    healed: false,
+    detail: `watch-fire miss (${m.confidence}): a matching ${m.matchedModel ?? m.model}${m.matchedStockId ? ` (stock ${m.matchedStockId})` : ""} is in stock but the customer was never notified${others > 0 ? ` (+${others} more matching unit${others > 1 ? "s" : ""})` : ""} — ${String(m.reason ?? "").slice(0, 120)}`
+  };
+});
 
 const reportRoot = process.env.REPORT_ROOT || path.resolve("reports");
 const outDir = path.join(reportRoot, "watch_fire_miss");
