@@ -906,6 +906,19 @@ export type Conversation = {
     generatedPreview?: string;
     sentPreview?: string;
   } | null;
+  // Cadence-quality SHADOW marker (folded from the cadence-quality judge): a PROACTIVE follow-up message
+  // judged suppress/hold (a bad unprompted send). Persisted so the read-only outcome-audit sweep surfaces
+  // it as a comprehension gap. Detection only — the draft is not altered (STEP 1 shadow).
+  cadenceQualityShadow?: {
+    at: string;
+    overall?: string | null; // "suppress" | "hold"
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    cadenceKind?: string | null;
+    messagePreview?: string;
+  } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
   financeOutcome?: {

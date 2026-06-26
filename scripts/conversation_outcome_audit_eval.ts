@@ -101,6 +101,15 @@ eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", se
 // Older than the 21-day window => aged out (the loop already had its chance; dedup handles recurrence).
 eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category: "wrong_fact" } }), [], "material correction older than 21d => not surfaced");
 
+// --- 5f. cadence-quality suppressed/held (folded from the cadence-quality judge) => comprehension. ---
+{
+  const a = auditConversationOutcome({ id: "c5g", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "suppress", reason: "nagging on a closed deal", cadenceKind: "standard" } }, { now: NOW });
+  eq(a.map(x => x.dimension), ["cadence_quality_suppressed"], "recent suppress/hold cadence verdict => surfaced");
+  eq(a[0].category, "comprehension", "cadence_quality_suppressed is comprehension");
+}
+eq(dims({ id: "c5h", cadenceQualityShadow: { at: "2026-06-25T01:00:00.000Z", overall: "good" } }), [], "a GOOD cadence verdict => not surfaced");
+eq(dims({ id: "c5i", cadenceQualityShadow: { at: "2026-05-01T00:00:00.000Z", overall: "hold" } }), [], "cadence verdict older than 21d => aged out");
+
 // --- 5d. Net 3 open-critic decision: only a CLEAR, MAJOR, high-confidence mishandling escalates. ---
 {
   const base = { convId: "c5f", leadKey: "+1" };
@@ -157,15 +166,18 @@ const store = auditConversationStore({
   todos: [
     { convId: "+1", status: "open", summary: "real todo" }, // conv exists => not orphan
     { convId: "+gone", status: "open", summary: "stale" }, // orphan (P2)
-    { convId: "+also_gone", status: "done", summary: "closed" } // done => ignored
+    { convId: "+also_gone", status: "done", summary: "closed" }, // done => ignored
+    { convId: "+1", status: "open", summary: "answered parts q", autoCloseCheck: { decision: "closed" } }, // folded: decided closed but still open => task_autoclose_regression (P2, healed)
+    { convId: "+1", status: "open", summary: "below floor", autoCloseCheck: { decision: "below_confidence" } } // correctly left open => NOT flagged
   ],
   now: NOW
 });
-eq(store.summary.totalAnomalies, 3, "2 conv anomalies + 1 orphan todo");
+eq(store.summary.totalAnomalies, 4, "2 conv anomalies + 1 orphan todo + 1 task-autoclose regression");
 eq(store.summary.byDimension["orphan_todo"], 1, "one orphan todo");
-eq(store.summary.byCategory.state, 3, "all 3 here are state-category");
+eq(store.summary.byDimension["task_autoclose_regression"], 1, "one task-autoclose regression (decision=closed but still open)");
+eq(store.summary.byCategory.state, 4, "all 4 here are state-category");
 eq(store.summary.bySeverity.P1, 2, "two P1 (confirmed-no-event + cadence-while-handoff)");
-eq(store.summary.regressionAnomalies, 1, "one regression (the healed cadence_active_while_handoff)");
+eq(store.summary.regressionAnomalies, 2, "two regressions (healed cadence_active_while_handoff + task_autoclose)");
 eq(store.summary.conversationsScanned, 2, "scanned count");
 
 // --- Source guards: the sweep writes the feed; the module exports the detectors. ---
@@ -182,6 +194,11 @@ assert.match(idx, /\(args\.conv as any\)\.contextFidelityShadow = \{/, "publishC
 assert.match(idx, /String\(cfHold\.severity \?\? ""\)\.toLowerCase\(\) === "major"/, "only MAJOR would-holds are persisted (actionable subset)");
 const storeSrc = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.match(storeSrc, /\(conv as any\)\.contextFidelityShadow = null/, "an operator/passing draft clears the shadow flag (correction sink)");
+// Folded detectors: cadence-quality judge persists its suppress/hold verdict; task-autoclose regression
+// reads the persisted autoCloseCheck.decision.
+assert.match(idx, /\(conv as any\)\.cadenceQualityShadow = \{/, "the cadence-quality judge persists a suppress/hold verdict for the feed");
+assert.match(mod, /task_autoclose_regression/, "the store auditor folds the task-autoclose regression");
+assert.match(mod, /autoCloseCheck\?\.decision \?\? ""\)\.toLowerCase\(\) === "closed"/, "task-autoclose regression keys on decision=closed but still open");
 
 // --- Net 2 wiring: a typed LLM diff-judge + the send-path recorder that persists material corrections. ---
 const llm = fs.readFileSync("services/api/src/domain/llmDraft.ts", "utf8");

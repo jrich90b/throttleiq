@@ -283,6 +283,22 @@ signals already EXIST as computed-but-unfed data — so we wire them:
 Honest limit: a residual (a novel class the model can't flag AND no human touches) never fully reaches
 zero, but Net 3 shrinks it and each instance permanently teaches the loop instead of relying on Joe.
 
+**Folded standalone detectors (into the one feed).** Beyond the nets, previously-standalone detectors now
+emit into the unified `auditConversationOutcome` feed so the loop sees them too:
+- `task_autoclose_regression` (state, healed) — an open task whose `autoCloseCheck.decision==="closed"` but
+  it's still open (the auto-close decided to close it and the close didn't apply). Deterministic; reads the
+  persisted task verdict.
+- `cadence_quality_suppressed` (comprehension) — a PROACTIVE follow-up message the cadence-quality judge
+  flagged suppress/hold; persisted on `conv.cadenceQualityShadow` at the (shadow) judge call site (Net-1
+  pattern), recency-gated in the detector.
+- **watch_fire_miss** (NEXT) — a watch that should have fired (matching unit in stock, never notified).
+  Needs the inventory feed, so it folds as a SIBLING sweep (like open_critic) reading the on-disk
+  `inventory_snapshot.json` + `findWatchFireMisses`, merged by DETECT — not a conv-only detector.
+- **live/regen PARITY — deliberately NOT folded.** Parity is enforced at DEV time by the decision-table
+  evals (every decide*Turn is pinned in both paths) + the shared-pure-function structure; there is no
+  runtime signal to fold, and adding one would mean running both paths or storing a baseline decision per
+  turn (expensive, net-new) for a property the eval net already guarantees. Keep it eval-time.
+
 ### Layer 2 — DECIDE: the auto-patch tier contract (graduated)
 For each confirmed, de-duplicated gap the loop routes by tier (the AGENTS.md "Autonomous Self-Healing
 Loop" law is the binding short form; this is the working detail):

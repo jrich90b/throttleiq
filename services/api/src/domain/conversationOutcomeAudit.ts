@@ -46,7 +46,9 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   held_draft_unresolved: "comprehension",
   context_fidelity_shadow_unresolved: "comprehension",
   human_correction_material: "comprehension",
+  cadence_quality_suppressed: "comprehension",
   open_critic_finding: "discovery",
+  task_autoclose_regression: "state",
   negative_feedback: "feedback"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
@@ -67,6 +69,7 @@ type AuditableConv = {
   draftHeld?: { at?: string | null; reason?: string | null; heldKind?: string | null; frame?: string | null } | null;
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
+  cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
@@ -207,6 +210,24 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
     }
   }
 
+  // 5e. Cadence-quality suppressed/held (folded from the cadence-quality judge): a PROACTIVE follow-up
+  //     message the judge flagged as suppress/hold (a bad unprompted send) — surfaced as a comprehension
+  //     gap (the proactive template/parser needs a fix). Recent only (≤21d; a past send, ages out).
+  const cqs = conv.cadenceQualityShadow;
+  const cqsAtMs = Date.parse(String(cqs?.at ?? ""));
+  if (cqs && Number.isFinite(cqsAtMs) && ["suppress", "hold"].includes(String(cqs.overall ?? "").toLowerCase())) {
+    const ageDays = (now.getTime() - cqsAtMs) / (1000 * 60 * 60 * 24);
+    if (ageDays >= 0 && ageDays <= 21) {
+      out.push({
+        ...base,
+        dimension: "cadence_quality_suppressed",
+        severity: "P2",
+        healed: false,
+        detail: `proactive cadence message judged ${cqs.overall} (${cqs.cadenceKind ?? "?"})${cqs.reason ? ` — ${String(cqs.reason).slice(0, 120)}` : ""}`
+      });
+    }
+  }
+
   // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep and nothing better followed (the
   //    closed-loop redraft would append a newer outbound). The system's own "this reply was wrong" signal.
   const lastOut = [...(conv.messages ?? [])].reverse().find(m => m?.direction === "out");
@@ -230,7 +251,7 @@ export type OutcomeAuditSummary = {
 // whose conversation no longer exists in the store). Pure, read-only.
 export function auditConversationStore(input: {
   conversations: AuditableConv[];
-  todos?: Array<{ convId?: string | null; status?: string | null; summary?: string | null }>;
+  todos?: Array<{ convId?: string | null; status?: string | null; summary?: string | null; autoCloseCheck?: { decision?: string | null } | null }>;
   now?: Date;
 }): { anomalies: OutcomeAnomaly[]; summary: OutcomeAuditSummary } {
   const convs = Array.isArray(input.conversations) ? input.conversations : [];
@@ -239,12 +260,19 @@ export function auditConversationStore(input: {
   for (const conv of convs) anomalies.push(...auditConversationOutcome(conv, { now }));
 
   // Orphan todos: an open todo pointing at a conversation that isn't in the store.
+  // PLUS task-fulfillment regression (folded from the task-autoclose detector): an OPEN task whose
+  // autoCloseCheck recorded decision="closed" — the auto-close DECIDED to close it but it's still open,
+  // so the close didn't apply (healed by the autoclose path → a lingering one is a regression). Reads the
+  // already-persisted task verdict; no LLM, no inventory.
   const convIds = new Set(convs.map(c => String(c.id ?? "")));
   for (const t of input.todos ?? []) {
     if (String(t?.status ?? "") !== "open") continue;
     const cid = String(t?.convId ?? "");
     if (cid && !convIds.has(cid)) {
       anomalies.push({ convId: cid, leadKey: "", dimension: "orphan_todo", category: categoryFor("orphan_todo"), severity: "P2", healed: false, detail: `open todo on a conversation not in the store: ${String(t?.summary ?? "").slice(0, 60)}` });
+    }
+    if (String(t?.autoCloseCheck?.decision ?? "").toLowerCase() === "closed") {
+      anomalies.push({ convId: cid, leadKey: "", dimension: "task_autoclose_regression", category: categoryFor("task_autoclose_regression"), severity: "P2", healed: true, detail: `task auto-close decided "closed" but the task is still open: ${String(t?.summary ?? "").slice(0, 60)}` });
     }
   }
 
