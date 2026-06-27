@@ -277,6 +277,7 @@ import {
   parseWatchOptOutWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseNonMotorcycleTradeWithLLM,
+  parseServiceAppointmentRequestWithLLM,
   summarizeVoiceTranscriptWithLLM,
   judgeDraftQualityWithLLM,
   judgeShouldRespondWithLLM,
@@ -509,6 +510,7 @@ import {
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
+  decideServiceAppointmentTurn,
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
   decideVehicleChoiceConfidenceTurn,
@@ -2719,6 +2721,99 @@ async function resolveNonMotorcycleTradeHandoffReply(
   return alreadyHandoff
     ? buildNonMotorcycleTradeContinuationReply(parse?.item)
     : buildNonMotorcycleTradeHandoffReply(parse?.item);
+}
+
+function serviceAppointmentRequestConfidenceMin(): number {
+  const v = Number(process.env.SERVICE_APPOINTMENT_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
+// Cheap pre-filter so we only spend an LLM call on a plausible service / parts-install appointment
+// request; a miss => existing handling runs (fail-safe). Needs a work/install noun AND a
+// bring-it-in / appointment signal. The typed parser owns the actual decision.
+function serviceAppointmentRequestHint(text: string): boolean {
+  const t = String(text ?? "");
+  const work =
+    /\b(service|oil change|tune|tuner|inspect|inspection|maintenance|repair|install|air ?cleaner|air ?intake|intake|exhaust|pipes?|stage ?\d|cam|seat|handlebars?|bars|lights?|tires?|brakes?|recall|screaming eagle)\b/i.test(
+      t
+    );
+  const bringIn =
+    /\b(appointment|appt|bring(?:ing)? (?:it|the bike|my bike|her|him) in|bring it in|drop(?:ping)? (?:it|the bike|her|him)? ?off|get it in|come in|schedule|book|set ?up a time|when can)\b/i.test(
+      t
+    );
+  return work && bringIn;
+}
+
+// Tier-2 service handoff reply: acknowledge the install/service, name it + the customer's window,
+// and tell them the service team will confirm a TIME. LeadRider has NO service-scheduler
+// integration, so this must NEVER quote or claim a slot (that would fabricate availability).
+function buildServiceAppointmentRequestReply(serviceItem?: string | null, timingText?: string | null): string {
+  const item = String(serviceItem ?? "").trim();
+  const timing = String(timingText ?? "").trim();
+  const forItem = item ? ` for the ${item}` : "";
+  const aroundWhen = timing ? ` around ${timing}` : "";
+  return `Got it — I'll have our service team get you scheduled${forItem} and confirm a time that works${aroundWhen}. They'll follow up shortly to lock it in.`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns a
+// service-department handoff reply (and sets the service classification + an owner todo + stops the
+// sales cadence) ONLY when a confident, explicit customer-initiated service/parts-install
+// appointment request is detected; otherwise null so existing handling runs. Mirrors
+// resolveNonMotorcycleTradeHandoffReply. Catches the gap where the keyword-gated
+// isServiceDepartmentSchedulingRequest missed a parts-install request on a non-service conv.
+async function resolveServiceAppointmentRequestReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  // If the conversation already has service-department context, the existing keyword-gated
+  // service-scheduling handoff owns the turn — don't double-handle.
+  if (hasServiceDepartmentContext(conv)) return null;
+  if (!serviceAppointmentRequestHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("service_appointment_request_parser", () =>
+    parseServiceAppointmentRequestWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_SERVICE_APPOINTMENT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-service-appointment-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideServiceAppointmentTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: serviceAppointmentRequestConfidenceMin()
+  });
+  if (decision.kind !== "service_appointment_handoff") return null;
+  await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+  const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+  const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+  if (!hasServiceTodo) {
+    const itemNote = parse?.serviceItem ? ` (${parse.serviceItem})` : "";
+    addTodo(
+      conv,
+      "service",
+      `Service appointment request${itemNote} — service to confirm a time. Customer: ${text}`,
+      providerMessageId ?? undefined,
+      serviceTodoOwner
+    );
+  }
+  conv.classification = {
+    ...(conv.classification ?? {}),
+    bucket: "service",
+    cta: "service_request"
+  };
+  setDialogState(conv, "service_handoff");
+  setFollowUpMode(conv, "manual_handoff", "service_request");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "service_appointment_handoff", {
+    convId: conv.id,
+    leadKey: conv.leadKey
+  });
+  return buildServiceAppointmentRequestReply(parse?.serviceItem, parse?.timingText);
 }
 
 function buildActionableStylePreferenceReply(args: {
@@ -50099,6 +50194,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
+  // Service / parts-install appointment handoff (parity with live /webhooks/twilio).
+  {
+    const regenServiceApptReply = await resolveServiceAppointmentRequestReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenServiceApptReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenServiceApptReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenServiceApptReply);
+    }
+  }
+
   const cadenceRegenContextParserEligible =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
@@ -56107,6 +56218,22 @@ if (authToken && signature) {
     );
     if (nonMotoTradeReply) {
       return publishLiveTwilioReply(nonMotoTradeReply);
+    }
+  }
+
+  // Service / parts-install appointment handoff: a customer wanting to bring the bike in for
+  // service or to install a part/accessory (no service-scheduler integration → intake + "service
+  // will confirm a time", never book a slot). Parser-first + fail-safe (null => normal handling).
+  // Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const serviceApptReply = await resolveServiceAppointmentRequestReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (serviceApptReply) {
+      return publishLiveTwilioReply(serviceApptReply);
     }
   }
 

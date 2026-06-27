@@ -13,6 +13,7 @@ export {
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
+  decideServiceAppointmentTurn,
   decideWatchOptOutTurn,
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
