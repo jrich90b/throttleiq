@@ -2008,6 +2008,21 @@ export type NonMotorcycleTradeParse = {
   confidence?: number;
 };
 
+export type ServiceAppointmentRequestParse = {
+  // The customer wants to bring their bike IN for SERVICE or a PARTS/ACCESSORY INSTALL and
+  // schedule an appointment (e.g. "bringing it in for the wedge air cleaner install next month,
+  // can I get an appointment?", "need to drop it off for an oil change", "want to put on a stage 1
+  // kit"). LeadRider has NO integration into the service department's scheduler, so the agent must
+  // NOT quote or book a slot — it hands off (intake + "service will confirm a time"). This is
+  // DISTINCT from: a sales test-ride/visit (none), inventory availability (none), a service-records
+  // history question (none), and dropping off leftover stock parts/keys (that's post_sale_item_pickup).
+  intent: "service_appointment_request" | "none";
+  serviceItem?: string; // the service or part/accessory to install, in the customer's words
+  timingText?: string; // the preferred window if stated ("mid next month", "Saturday morning")
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type ConversationCloseoutParse = {
   // The customer's turn is a conversational CLOSER / sign-off and the right move is to let the
   // thread rest — not keep selling or asking another question. Two flavors:
@@ -3216,6 +3231,19 @@ const NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     intent: { type: "string", enum: ["non_motorcycle_trade", "none"] },
     item: { type: ["string", "null"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const SERVICE_APPOINTMENT_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "service_item", "timing_text", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["service_appointment_request", "none"] },
+    service_item: { type: ["string", "null"] },
+    timing_text: { type: ["string", "null"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
@@ -7457,6 +7485,104 @@ export async function parseNonMotorcycleTradeWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, item, explicitRequest, confidence };
+}
+
+// Parser-first recognizer for a CUSTOMER-INITIATED service / parts-install APPOINTMENT request.
+// The dealer's service-scheduling handoff already exists (intake + "service will confirm a time"),
+// but its trigger (`hasServiceDepartmentContext`) only recognizes service via keywords
+// (service/repair/oil change/maintenance) — so a PARTS/ACCESSORY install ("bringing it in for the
+// wedge air cleaner", "putting on a stage 1 kit") on a NON-service-classified conversation (e.g. a
+// post-sale finance lead) fell through to a generic pleasantry (Don Cooper, +17162605144). Rather
+// than add more keywords (against the law), this typed parser comprehends the intent. Fail-direction:
+// unsure => none, the normal pipeline runs; we only hand off on a confident, explicit request.
+export async function parseServiceAppointmentRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ServiceAppointmentRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SERVICE_APPOINTMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SERVICE_APPOINTMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SERVICE_APPOINTMENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SERVICE_APPOINTMENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley-Davidson dealership thread. Decide whether the customer wants to bring",
+    "their motorcycle IN for SERVICE or a PARTS/ACCESSORY INSTALL and is asking to SCHEDULE an",
+    "appointment (or telling us a window they'll bring it in). The dealer's service department books",
+    "those — the agent must HAND OFF (intake + let them know service will confirm a time), never quote",
+    "or book a slot. Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "service_appointment_request": the customer wants to bring the bike in to have WORK done —',
+    "  service/maintenance (oil change, tires, brakes, inspection, repair, recall) OR installing a",
+    "  part/accessory (air cleaner/intake, exhaust/pipes, tuner, stage kit, seat, bars, lights) — AND",
+    "  is asking about an appointment / a time / when they can come in / giving a window to drop it off.",
+    '- "none": a sales test ride or a visit to look at/buy a bike; inventory availability; a question',
+    "  about PAST service history/records ('when were the tires last changed'); dropping off leftover",
+    "  stock parts/keys/personal items after a purchase; financing; or simply ANSWERING our own",
+    "  'what time are you coming in?' visit check-in.",
+    "",
+    "Hard rules (precision matters):",
+    "- It must be about getting WORK/INSTALL done on their bike, not seeing or buying a bike.",
+    "- explicit_request=true when they clearly ask for an appointment/time or state a drop-off window.",
+    "- service_item = the work or part in their words ('wedge air cleaner', 'oil change'); else null.",
+    "- timing_text = their preferred window if stated ('mid next month', 'Saturday morning'); else null.",
+    "- confidence 0..1; use >= 0.7 only when the service/install-appointment read is clear.",
+    "",
+    "Examples:",
+    '- "bringing it in for the wedge air cleaner mid next month, do you have an appointment?" -> {"intent":"service_appointment_request","service_item":"wedge air cleaner install","timing_text":"mid next month","explicit_request":true,"confidence":0.9}',
+    '- "need to get it in for an oil change, what days work?" -> {"intent":"service_appointment_request","service_item":"oil change","timing_text":null,"explicit_request":true,"confidence":0.92}',
+    '- "want to put a stage 1 kit on, can I drop it off Saturday?" -> {"intent":"service_appointment_request","service_item":"stage 1 kit install","timing_text":"Saturday","explicit_request":true,"confidence":0.9}',
+    '- "Can I come in Friday to test ride the Street Glide?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.95}',
+    '- "is the 2026 Road Glide still in stock?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.95}',
+    '- "when were the tires last changed on it?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.9}',
+    '- (history: "out: what time you planning on coming in today?") "1 or 2 works" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "service_appointment_request_parser",
+      schema: SERVICE_APPOINTMENT_REQUEST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 90,
+      debugTag: "llm-service-appointment-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: ServiceAppointmentRequestParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "service_appointment_request"
+      ? "service_appointment_request"
+      : "none";
+  const serviceItem =
+    typeof parsed.service_item === "string" && parsed.service_item.trim() ? parsed.service_item.trim() : undefined;
+  const timingText =
+    typeof parsed.timing_text === "string" && parsed.timing_text.trim() ? parsed.timing_text.trim() : undefined;
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, serviceItem, timingText, explicitRequest, confidence };
 }
 
 // No-response judge (2026-06-19). The agent chose to STAY SILENT on a customer turn. This judges

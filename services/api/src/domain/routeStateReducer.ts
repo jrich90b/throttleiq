@@ -921,6 +921,39 @@ export function decideNonMotorcycleTradeTurn(
   return { kind: "non_motorcycle_trade_handoff" };
 }
 
+// --- Service / parts-install appointment request (2026-06-27) ---------------
+// A customer wanting to bring their bike IN for service or a parts/accessory install + an
+// appointment needs the service-department HANDOFF (intake + "service will confirm a time"),
+// because LeadRider has no service-scheduler integration — never quote/book a slot. Centralized +
+// pure; the parser signal is fed in. FAIL DIRECTION: unsure => none, normal pipeline runs. We only
+// hand off on a confident, explicit service/install-appointment request.
+// ---------------------------------------------------------------------------
+export type ServiceAppointmentTurnKind = "service_appointment_handoff" | "none";
+
+export type ServiceAppointmentTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "service_appointment_request" | "none"
+  explicitRequest: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type ServiceAppointmentTurnDecision = {
+  kind: ServiceAppointmentTurnKind;
+};
+
+export function decideServiceAppointmentTurn(
+  input: ServiceAppointmentTurnInput
+): ServiceAppointmentTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "service_appointment_request") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "service_appointment_handoff" };
+}
+
 // --- Conversation closeout / sign-off (2026-06-19) -------------------------
 //
 // A warm closer ("have a good weekend!", "you guys are the best!", "thanks again,
