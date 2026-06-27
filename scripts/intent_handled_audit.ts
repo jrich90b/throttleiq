@@ -25,6 +25,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { isNonSalesConversation, isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
+import { decideIntentHandledAnomaly } from "../services/api/src/domain/conversationOutcomeAudit.ts";
 
 const CUSTOMER_IN = new Set(["twilio", "web_widget", "sendgrid"]);
 const SENT_OUT = new Set(["twilio", "sendgrid", "human"]);
@@ -415,6 +416,31 @@ async function main() {
     )
   ].join("\n");
   fs.writeFileSync(path.join(outDir, "intent_handled_report.md"), md + "\n");
+
+  // Feed the self-healing loop: emit each MAJOR miss as an OutcomeAnomaly into a sibling file
+  // (anomalies.json) that anomaly_loop_detect merges → CLASSIFY → parser-first fix PR. Mirrors
+  // open_critic_sweep so the semantic net stops being a report-only digest. report.findings is
+  // already the unaddressed slice; decideIntentHandledAnomaly keeps only severity=major. Kill:
+  // INTENT_HANDLED_ANOMALY_FEED=0 (still writes the digest, just not the loop feed).
+  if (process.env.INTENT_HANDLED_ANOMALY_FEED !== "0") {
+    const anomalies = report.findings
+      .map(f => decideIntentHandledAnomaly(f))
+      .filter((a): a is NonNullable<typeof a> => !!a);
+    fs.writeFileSync(
+      path.join(outDir, "anomalies.json"),
+      JSON.stringify(
+        {
+          generatedAt: report.generatedAt,
+          source: conversationsPath,
+          summary: { major: summary.major, emitted: anomalies.length },
+          anomalies
+        },
+        null,
+        2
+      )
+    );
+    console.log(`intent-handled anomaly feed: ${anomalies.length} major miss(es) → ${path.join(outDir, "anomalies.json")}`);
+  }
 
   console.log(
     `intent-handled audit: ${summary.unaddressed}/${summary.judged} unaddressed (${summary.major} major); report at ${outDir}`

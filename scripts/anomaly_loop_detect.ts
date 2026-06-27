@@ -35,7 +35,10 @@ const anomalies: any[] = Array.isArray(feed?.anomalies) ? feed.anomalies : [];
 // deterministic sweep stays pure. Optional: absent on a deterministic-only run.
 for (const sib of [
   { name: "open-critic (discovery)", file: path.join(reportRoot, "open_critic", "latest.json") },
-  { name: "watch-fire-miss", file: path.join(reportRoot, "watch_fire_miss", "latest.json") }
+  { name: "watch-fire-miss", file: path.join(reportRoot, "watch_fire_miss", "latest.json") },
+  // The intent-handled semantic net (fluent-but-wrong-intent misses the keyword scorers can't catch).
+  // Emits major misses as comprehension OutcomeAnomaly entries via decideIntentHandledAnomaly.
+  { name: "intent-handled (comprehension)", file: path.join(reportRoot, "intent_handled", "anomalies.json") }
 ]) {
   if (!fs.existsSync(sib.file)) continue;
   try {

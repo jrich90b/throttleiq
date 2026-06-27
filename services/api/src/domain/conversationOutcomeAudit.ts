@@ -49,6 +49,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   human_correction_material: "comprehension",
   cadence_quality_suppressed: "comprehension",
   open_critic_finding: "discovery",
+  intent_unaddressed: "comprehension",
   task_autoclose_regression: "state",
   watch_fire_miss: "state",
   watch_fired_wrong_model: "state",
@@ -399,5 +400,43 @@ export function decideOpenCriticAnomaly(
     severity: "P2",
     healed: false,
     detail: `open-critic: ${issueClass}${finding.reason ? ` — ${String(finding.reason).slice(0, 140)}` : ""}`
+  };
+}
+
+// Intent-handled audit finding (the report-finding shape `intent_handled_audit.ts` writes for an
+// UNADDRESSED turn). The semantic LLM judge that catches fluent-but-wrong-intent replies the keyword
+// scorers can't — a polite non-answer on a real ask ("what do I do to reserve one" → a notify-when-it-
+// arrives non-answer). Mapped into the unified feed below.
+export type IntentHandledFinding = {
+  convId?: string | null;
+  severity?: string | null; // "none" | "minor" | "major"
+  replyKind?: string | null; // "sent" | "draft"
+  customerAsk?: string | null;
+  why?: string | null;
+};
+
+// Maps a MAJOR intent-handled miss into the self-healing loop's OutcomeAnomaly feed so DETECT→CLASSIFY
+// turns it into a parser-first fix (comprehension → Tier 1 parser_fix_candidate, customer-facing → notify,
+// PR-first until the dimension graduates). Mirrors decideOpenCriticAnomaly. Noise floor: only `major` (a
+// clear high-intent ask that got a non-answer) crosses — minor/none never become work orders. fail-direction
+// none (a report-only feed; the loop is approve-first and the ci:eval gate is non-negotiable downstream).
+export function decideIntentHandledAnomaly(
+  finding: IntentHandledFinding,
+  base?: { leadKey?: string | null }
+): OutcomeAnomaly | null {
+  if (String(finding?.severity ?? "").toLowerCase() !== "major") return null;
+  const convId = String(finding?.convId ?? "").trim();
+  if (!convId) return null;
+  const ask = String(finding?.customerAsk ?? "").trim();
+  const why = String(finding?.why ?? "").trim();
+  const kind = finding?.replyKind === "draft" ? "draft" : "sent";
+  return {
+    convId,
+    leadKey: String(base?.leadKey ?? ""),
+    dimension: "intent_unaddressed",
+    category: categoryFor("intent_unaddressed"),
+    severity: "P2",
+    healed: false,
+    detail: `intent-unaddressed (${kind}): ${ask || "—"}${why ? ` — ${why.slice(0, 140)}` : ""}`
   };
 }
