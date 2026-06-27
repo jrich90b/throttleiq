@@ -8,6 +8,7 @@ import path from "node:path";
 
 import {
   isAutomatedSenderInbound,
+  isBareEmoticonReaction,
   isClosingAckNoAction,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
@@ -73,6 +74,31 @@ assert.equal(isClosingAckNoAction("thanks, is the street glide still available")
 assert.equal(isClosingAckNoAction("Thanks for the info, I'll stop by tomorrow"), false); // actionable cue
 assert.equal(isClosingAckNoAction("Cool 😎"), false); // bare reaction, no substantive closer
 assert.equal(isClosingAckNoAction(""), false);
+// A gratitude closer trailed by a familiar vocative is still a closer ("Thanks
+// battle budy" was a phantom missing_response 6/26 — typed sign-off, no ask).
+assert.equal(isClosingAckNoAction("Thanks battle budy"), true);
+assert.equal(isClosingAckNoAction("thanks man"), true);
+assert.equal(isClosingAckNoAction("appreciate it brother"), true);
+assert.equal(isClosingAckNoAction("thank you boss"), true);
+assert.equal(isClosingAckNoAction("thanks guys"), true);
+assert.equal(isClosingAckNoAction("thanks man, call me when you can"), false); // actionable cue survives the vocative
+assert.equal(isClosingAckNoAction("thanks man, when can I come in?"), false); // question survives the vocative
+
+// Bare ASCII-emoticon reactions — the typed twin of an emoji-only turn — are
+// no-reply-needed reactions, not missing responses (":)" was a phantom miss 6/26).
+assert.equal(isBareEmoticonReaction(":)"), true);
+assert.equal(isBareEmoticonReaction(":-)"), true);
+assert.equal(isBareEmoticonReaction(";)"), true);
+assert.equal(isBareEmoticonReaction(":D"), true);
+assert.equal(isBareEmoticonReaction("=)"), true);
+assert.equal(isBareEmoticonReaction("<3"), true);
+assert.equal(isBareEmoticonReaction("^_^"), true);
+assert.equal(isBareEmoticonReaction(":) :)"), true);
+// Fail-direction guards: anything with a real word/ask is NOT a bare reaction.
+assert.equal(isBareEmoticonReaction("8 bikes?"), false);
+assert.equal(isBareEmoticonReaction("ok"), false); // a word, not an emoticon
+assert.equal(isBareEmoticonReaction("can I come at 12"), false);
+assert.equal(isBareEmoticonReaction(""), false);
 
 // Justified long-term parks (the Courtney Ward / ride-challenge class) are
 // excluded from the far-future actions audit, but the rollover bug never is.

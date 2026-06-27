@@ -3,6 +3,7 @@ import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
 import {
   isAutomatedSenderInbound,
+  isBareEmoticonReaction,
   isClosingAckNoAction,
   isNonSalesConversation,
   isShadowReplayMessage
@@ -97,6 +98,7 @@ function isShortAckNoAction(text: string): boolean {
     .toLowerCase();
   if (!t) return false;
   if (/^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
+  if (isBareEmoticonReaction(t)) return true;
   return /^(ok|okay|k|kk|got it|sounds good|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do)[.!?\s]*$/i.test(
     t
   );
