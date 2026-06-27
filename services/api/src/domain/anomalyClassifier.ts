@@ -37,6 +37,22 @@ export function classifyOutcomeAnomaly(
 ): AnomalyClassification {
   const graduated = opts.graduatedCategories?.has(anomaly.dimension) ?? false;
 
+  // An OPERATOR-REPORTED issue (a rep clicked "Report issue" with a note) is an explicit human
+  // judgment call across ANY turn dimension (routing/cadence/appointment/task/handoff/other). It is
+  // the strongest "this was wrong + here's why" signal, but it's unconfirmed by construction and the
+  // fix could be behavioral — so it is ALWAYS Tier 2 (escalate, notify, never auto-merge): the loop
+  // drafts an approve-first PR using the operator's note as the fix steering, the operator merges.
+  if (anomaly.dimension === "reported_issue") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale: "operator-reported issue (carries the note) → diagnose + approve-first PR; never auto-merge"
+    };
+  }
+
   // A `healed` dimension that re-appears across runs means the reconcile heal isn't actually fixing it —
   // a gap in the heal logic (e.g. the single/array inventory-watch leak the loop caught 6/25). That's a
   // reviewed code fix, not a transient → escalate. Seen once, it's just the tick that hasn't run yet.

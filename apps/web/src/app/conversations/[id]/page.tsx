@@ -93,6 +93,12 @@ export default function ConversationPage() {
   const [closeReason, setCloseReason] = useState("sold");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportCategory, setReportCategory] = useState("routing");
+  const [reportNote, setReportNote] = useState("");
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportDone, setReportDone] = useState(false);
 
   const isHuman = conv?.mode === "human";
 
@@ -169,6 +175,32 @@ export default function ConversationPage() {
       await load();
     }
     setModeSaving(false);
+  }
+
+  async function reportIssue() {
+    if (!id) return;
+    const note = reportNote.trim();
+    if (!note) {
+      setReportError("Add a note describing what's wrong.");
+      return;
+    }
+    setReportSaving(true);
+    setReportError(null);
+    const resp = await fetch(`/api/conversations/${id}/report-issue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category: reportCategory, note })
+    });
+    const payload = await resp.json().catch(() => null);
+    setReportSaving(false);
+    if (!resp.ok || payload?.ok === false) {
+      setReportError(payload?.error ?? "Failed to report the issue.");
+      return;
+    }
+    setReportNote("");
+    setReportDone(true);
+    setReportOpen(false);
+    if (payload?.conversation) setConv(payload.conversation);
   }
 
   if (loading) {
@@ -307,6 +339,74 @@ export default function ConversationPage() {
           Closed {conv.closedAt ? `at ${new Date(conv.closedAt).toLocaleString()}` : ""}
         </div>
       )}
+
+      <div className="mt-4 border-t pt-4">
+        {!reportOpen ? (
+          <button
+            className="text-sm underline text-gray-600 hover:text-gray-900 cursor-pointer"
+            onClick={() => {
+              setReportOpen(true);
+              setReportDone(false);
+            }}
+          >
+            Report an issue with how the agent handled this
+          </button>
+        ) : (
+          <div className="border rounded-lg p-3 text-sm bg-gray-50 max-w-xl">
+            <div className="font-medium">Report an issue</div>
+            <div className="text-xs text-gray-600 mt-1">
+              Flag anything wrong — routing, cadence, an appointment, a task, a handoff. Your note is sent
+              to the self-healing loop, which drafts a fix for review.
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <label className="text-xs text-gray-600">What&apos;s wrong?</label>
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={reportCategory}
+                onChange={e => setReportCategory(e.target.value)}
+              >
+                <option value="routing">Routing / wrong answer</option>
+                <option value="cadence">Cadence / follow-up</option>
+                <option value="appointment">Appointment</option>
+                <option value="task">Task</option>
+                <option value="handoff">Handoff</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <textarea
+              className="mt-2 w-full border rounded px-2 py-1 text-sm"
+              rows={3}
+              placeholder="Describe what the agent got wrong and what it should have done…"
+              value={reportNote}
+              onChange={e => setReportNote(e.target.value)}
+            />
+            {reportError ? <div className="text-xs text-red-600 mt-1">{reportError}</div> : null}
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                className="px-3 py-1.5 border rounded text-sm bg-black text-white disabled:opacity-50"
+                onClick={reportIssue}
+                disabled={reportSaving}
+              >
+                {reportSaving ? "Sending…" : "Submit"}
+              </button>
+              <button
+                className="px-3 py-1.5 border rounded text-sm"
+                onClick={() => {
+                  setReportOpen(false);
+                  setReportError(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {reportDone ? (
+          <div className="text-xs text-emerald-700 mt-2">
+            Thanks — reported. The loop will pick this up and draft a fix for your review.
+          </div>
+        ) : null}
+      </div>
 
       <p className="mt-2 text-xs text-gray-500">
         Send is still log-only for now (no Twilio send yet). Autopilot mode affects inbound SMS auto-replies.

@@ -907,6 +907,25 @@ export type Conversation = {
     generatedPreview?: string;
     sentPreview?: string;
   } | null;
+  // Operator-reported issue feed (the explicit-human-flag net of the gap-detection loop): when a rep
+  // notices something wrong on a conversation — wrong routing/intent, bad cadence, a missed/wrong
+  // appointment, a missing/duplicate task, a botched handoff, etc. — and clicks "Report issue" with a
+  // note, we record it here. The read-only outcome-audit sweep turns each OPEN report into a
+  // `reported_issue` anomaly carrying the operator's note (the strongest, most explicit "this was
+  // wrong + here's why" signal — better than an inferred 👎 or an edit-diff), classified Tier 2
+  // (escalate, approve-first) so the loop drafts a fix PR the operator approves. Turn-WIDE, not
+  // message-bound. Resolved reports stay for history but stop feeding the loop.
+  reportedIssues?: Array<{
+    id: string;
+    at: string;
+    category?: string | null; // "routing" | "cadence" | "appointment" | "task" | "handoff" | "other"
+    note: string; // the operator's free-text — what's wrong, in their words
+    messageId?: string | null; // optional: a specific outbound the report is about
+    byUserId?: string | null;
+    byUserName?: string | null;
+    status: "open" | "resolved";
+    resolvedAt?: string | null;
+  }> | null;
   // Cadence-quality SHADOW marker (folded from the cadence-quality judge): a PROACTIVE follow-up message
   // judged suppress/hold (a bad unprompted send). Persisted so the read-only outcome-audit sweep surfaces
   // it as a comprehension gap. Detection only — the draft is not altered (STEP 1 shadow).
