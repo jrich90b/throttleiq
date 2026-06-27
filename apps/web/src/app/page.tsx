@@ -13182,14 +13182,20 @@ export default function Home() {
               value={reportIssueType}
               onChange={e => setReportIssueType(e.target.value)}
             >
-              <option value="routing">Routing</option>
-              <option value="task_inbox">Task inbox</option>
-              <option value="cadence">Cadence</option>
-              <option value="inventory">Inventory</option>
-              <option value="integration">Integration</option>
-              <option value="ui">UI</option>
-              <option value="tone">Tone</option>
-              <option value="other">Other</option>
+              <optgroup label="Agent behavior — reviewed by the daily fix loop">
+                <option value="routing">Routing / wrong answer</option>
+                <option value="cadence">Cadence / follow-up</option>
+                <option value="appointment">Appointment</option>
+                <option value="task_inbox">Task</option>
+                <option value="handoff">Handoff</option>
+                <option value="other">Other</option>
+              </optgroup>
+              <optgroup label="Support / infra — routed to a ticket">
+                <option value="tone">Tone / voice</option>
+                <option value="inventory">Inventory feed</option>
+                <option value="integration">Integration</option>
+                <option value="ui">UI / console</option>
+              </optgroup>
             </select>
             <label className="mt-3 block text-xs font-medium text-slate-300" htmlFor="report-issue-note">
               What went wrong?

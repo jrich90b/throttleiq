@@ -38,7 +38,10 @@ for (const sib of [
   { name: "watch-fire-miss", file: path.join(reportRoot, "watch_fire_miss", "latest.json") },
   // The intent-handled semantic net (fluent-but-wrong-intent misses the keyword scorers can't catch).
   // Emits major misses as comprehension OutcomeAnomaly entries via decideIntentHandledAnomaly.
-  { name: "intent-handled (comprehension)", file: path.join(reportRoot, "intent_handled", "anomalies.json") }
+  { name: "intent-handled (comprehension)", file: path.join(reportRoot, "intent_handled", "anomalies.json") },
+  // Operator "Report issue" reports (opsAnomalyStore) → reported_issue. The explicit-human-flag net:
+  // agent-behavior reports (routing/cadence/appointment/task/handoff/other) the operator filed by hand.
+  { name: "operator-reported (ops anomaly)", file: path.join(reportRoot, "ops_anomaly", "latest.json") }
 ]) {
   if (!fs.existsSync(sib.file)) continue;
   try {

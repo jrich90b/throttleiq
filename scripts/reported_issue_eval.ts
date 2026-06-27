@@ -2,75 +2,83 @@ import { strict as assert } from "node:assert";
 import fs from "node:fs";
 
 /**
- * Operator "Report issue" feed eval (2026-06-27).
+ * Operator "Report issue" → self-healing-loop feed eval (2026-06-27).
  *
- * The explicit-human-flag net of the self-healing loop: a rep clicks "Report issue" with a note when
- * they notice something wrong on a conversation — wrong routing/intent, bad cadence, a missed/wrong
- * appointment, a missing/duplicate task, a botched handoff, etc. (turn-WIDE, not message-bound). It's
- * the strongest "this was wrong + here's why" signal (better than an inferred 👎 or an edit diff).
+ * The existing dashboard "Report issue" button (opsAnomalyStore) is the explicit-human-flag net: a rep
+ * flags something wrong on a conversation with a note — the strongest "this was wrong + here's why"
+ * signal there is. This wires the AGENT-BEHAVIOR subset of those reports into the code loop (on top of
+ * the support-ticket flow they already trigger).
  *
- * Pins: (1) the audit emit (an OPEN recent reportedIssue → a `reported_issue` anomaly carrying the
- * note; resolved / stale / empty → none); (2) the classifier (reported_issue → Tier 2 escalate,
- * notify, never auto-merge — even if the category "graduated"); (3) the endpoint + feed wiring
- * (source guards). Pure where possible; no network.
+ * Pins: (1) decideOpsAnomalyReportedIssue — only agent-behavior types cross (routing/cadence/appointment/
+ * task_inbox/handoff/other); tone + infra (inventory/integration/ui) are dropped; closed/info/no-note/
+ * convId-less/stale are dropped; carries the note. (2) the classifier escalates reported_issue Tier 2
+ * (notify, never auto-merge, even if graduated). (3) the sweep + the detect-merge wiring (source guards).
  */
 
-const { auditConversationOutcome } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
+const { decideOpsAnomalyReportedIssue } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
 const { classifyOutcomeAnomaly } = await import("../services/api/src/domain/anomalyClassifier.ts");
 
 const NOW = new Date("2026-06-27T12:00:00.000Z");
 const ago = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+const report = (over: any = {}) => ({
+  id: "a1",
+  type: "cadence",
+  severity: "warning",
+  title: "Conversation issue",
+  note: "no follow-up cadence was scheduled after he asked us to check back",
+  status: "open",
+  createdAt: ago(1),
+  context: { convId: "+1555", leadKey: "+1555" },
+  ...over
+});
+const map = (over: any = {}) => decideOpsAnomalyReportedIssue(report(over), { now: NOW });
 
-const conv = (reportedIssues: any[]) => ({ id: "+1555", leadKey: "+1555", reportedIssues });
-const reportedDims = (c: any) =>
-  auditConversationOutcome(c, { now: NOW }).filter(a => a.dimension === "reported_issue");
-
-// 1. AUDIT EMIT — an open, recent report with a note surfaces, carrying category + note.
+// 1. MAPPING — an open, recent, agent-behavior report with a note + convId crosses, carrying the note.
 {
-  const got = reportedDims(
-    conv([{ id: "ri_1", at: ago(1), category: "cadence", note: "kept nudging after he said he bought elsewhere", status: "open" }])
-  );
-  assert.equal(got.length, 1, "one open recent report => one anomaly");
-  assert.equal(got[0].category, "feedback", "reported_issue maps to feedback category");
-  assert.equal(got[0].severity, "P2", "P2");
-  assert.ok(/cadence/.test(got[0].detail) && /nudging/.test(got[0].detail), "detail carries category + the note");
+  const a = map();
+  assert(a, "agent-behavior report => anomaly");
+  assert.equal(a!.dimension, "reported_issue", "dimension");
+  assert.equal(a!.category, "feedback", "reported_issue maps to feedback category");
+  assert.equal(a!.severity, "P2", "P2");
+  assert.equal(a!.convId, "+1555", "convId carried (loop needs it)");
+  assert.ok(/cadence/.test(a!.detail) && /follow-up cadence/.test(a!.detail), "detail carries type + note");
 }
 
-// Noise floor: resolved / stale (>21d) / empty-note never feed the loop.
-assert.equal(reportedDims(conv([{ id: "r", at: ago(1), note: "x", status: "resolved" }])).length, 0, "resolved => no anomaly");
-assert.equal(reportedDims(conv([{ id: "r", at: ago(40), note: "x", status: "open" }])).length, 0, "stale (>21d) => no anomaly");
-assert.equal(reportedDims(conv([{ id: "r", at: ago(1), note: "   ", status: "open" }])).length, 0, "empty note => no anomaly");
-assert.equal(reportedDims(conv([])).length, 0, "no reports => no anomaly");
-// Multiple open reports each surface.
-assert.equal(
-  reportedDims(conv([
-    { id: "a", at: ago(1), category: "task", note: "missing callback task", status: "open" },
-    { id: "b", at: ago(2), category: "handoff", note: "never handed to service", status: "open" }
-  ])).length,
-  2,
-  "two open reports => two anomalies"
-);
+// AGENT-BEHAVIOR types all cross.
+for (const type of ["routing", "cadence", "appointment", "task_inbox", "handoff", "other"]) {
+  assert(map({ type }), `${type} (agent behavior) => anomaly`);
+}
+// SUPPORT-only types are dropped (tone covered by 👎 + voice layer; infra can't be parser-fixed).
+for (const type of ["tone", "inventory", "integration", "ui"]) {
+  assert.equal(map({ type }), null, `${type} (support-only) => null`);
+}
+
+// NOISE FLOOR — closed / info / no-note / no-convId / stale all drop.
+assert.equal(map({ status: "closed" }), null, "closed => null");
+assert.equal(map({ severity: "info" }), null, "info severity => null");
+assert.equal(map({ note: "", title: "" }), null, "no note/title => null");
+assert.equal(map({ context: { convId: "" } }), null, "no convId => null (agent reports are conv-scoped)");
+assert.equal(map({ createdAt: ago(40) }), null, "stale (>21d) => null");
+// title is a fallback when note is blank.
+assert.ok(map({ note: "", title: "Conversation issue: agent mis-routed" }), "title is used when note is blank");
 
 // 2. CLASSIFICATION — always Tier 2 escalate, notify, never auto-merge (even if graduated).
-const anomaly = reportedDims(
-  conv([{ id: "ri", at: ago(1), category: "routing", note: "answered the wrong question", status: "open" }])
-)[0];
-const cls = classifyOutcomeAnomaly(anomaly, {});
+const cls = classifyOutcomeAnomaly(map()!, {});
 assert.equal(cls.tier, 2, "reported_issue => Tier 2");
 assert.equal(cls.action, "escalate", "escalate (approve-first)");
-assert.equal(cls.workOrder, true, "is a work order");
-assert.equal(cls.notify, true, "notify the operator");
+assert.equal(cls.notify, true, "notify");
 assert.equal(cls.autoMergeEligible, false, "never auto-merge");
-const gradCls = classifyOutcomeAnomaly(anomaly, { graduatedCategories: new Set(["reported_issue"]) });
-assert.equal(gradCls.autoMergeEligible, false, "stays approve-first even if the dimension 'graduates' (human judgment)");
+assert.equal(
+  classifyOutcomeAnomaly(map()!, { graduatedCategories: new Set(["reported_issue"]) }).autoMergeEligible,
+  false,
+  "stays approve-first even if the dimension graduates (human judgment)"
+);
 
-// 3. WIRING — the endpoint exists and the feed/classifier reference the dimension.
-const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
-assert.match(idx, /app\.post\("\/conversations\/:id\/report-issue"/, "report-issue endpoint exists");
-assert.match(idx, /note required/, "endpoint requires a note");
-const audit = fs.readFileSync("services/api/src/domain/conversationOutcomeAudit.ts", "utf8");
-assert.match(audit, /dimension: "reported_issue"/, "audit emits the reported_issue anomaly");
-const classifier = fs.readFileSync("services/api/src/domain/anomalyClassifier.ts", "utf8");
-assert.match(classifier, /anomaly\.dimension === "reported_issue"/, "classifier has the reported_issue escalate branch");
+// 3. WIRING — the sweep emits the sibling feed and anomaly_loop_detect merges it.
+const sweep = fs.readFileSync("scripts/ops_anomaly_loop_sweep.ts", "utf8");
+assert.match(sweep, /decideOpsAnomalyReportedIssue/, "sweep uses the mapper");
+assert.match(sweep, /ops_anomaly", "latest\.json"|ops_anomaly\/latest\.json/, "sweep writes the sibling feed");
+const det = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
+assert.match(det, /"ops_anomaly", "latest\.json"/, "anomaly_loop_detect merges the ops-anomaly feed");
 
 console.log("PASS reported_issue eval");

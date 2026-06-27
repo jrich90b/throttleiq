@@ -75,13 +75,6 @@ type AuditableConv = {
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
-  reportedIssues?: Array<{
-    id?: string | null;
-    at?: string | null;
-    category?: string | null;
-    note?: string | null;
-    status?: string | null;
-  }> | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
@@ -252,28 +245,6 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
     }
   }
 
-  // 5d. OPERATOR-REPORTED ISSUE: a rep clicked "Report issue" with a note (the explicit-human-flag
-  //     net). Turn-WIDE — routing/cadence/appointment/task/handoff/other — and the note is the
-  //     strongest, most explicit "this was wrong + here's why" signal we get (better than an inferred
-  //     👎 or an edit diff). One anomaly per OPEN report (resolved ones stop feeding the loop); recent
-  //     only (a fresh signal; the loop's dedup prevents re-work). The classifier escalates it Tier 2
-  //     (approve-first) with the note as the fix steering.
-  for (const ri of conv.reportedIssues ?? []) {
-    if (String(ri?.status ?? "open").toLowerCase() === "resolved") continue;
-    const note = String(ri?.note ?? "").trim();
-    if (!note) continue;
-    const riAtMs = Date.parse(String(ri?.at ?? ""));
-    if (!Number.isFinite(riAtMs)) continue;
-    const ageDays = (now.getTime() - riAtMs) / (1000 * 60 * 60 * 24);
-    if (ageDays < 0 || ageDays > 21) continue;
-    out.push({
-      ...base,
-      dimension: "reported_issue",
-      severity: "P2",
-      healed: false,
-      detail: `operator-reported (${ri?.category ?? "other"}): ${note.slice(0, 180)}`
-    });
-  }
 
   // 5e. Cadence-quality suppressed/held (folded from the cadence-quality judge): a PROACTIVE follow-up
   //     message the judge flagged as suppress/hold (a bad unprompted send) — surfaced as a comprehension
@@ -469,5 +440,48 @@ export function decideIntentHandledAnomaly(
     severity: "P2",
     healed: false,
     detail: `intent-unaddressed (${kind}): ${ask || "—"}${why ? ` — ${why.slice(0, 140)}` : ""}`
+  };
+}
+
+// Operator-reported ops anomaly (the existing dashboard "Report issue" feed, opsAnomalyStore). This maps
+// an OPS anomaly into the self-healing loop's OutcomeAnomaly feed so the button operators ALREADY use
+// drives parser-first fix PRs (on top of its existing support-ticket flow). Only the AGENT-BEHAVIOR types
+// cross — the loop's only tool is an agent-behavior code fix, so routing/cadence/appointment/task/handoff/
+// other feed it; tone (covered by 👎 + the voice layer) and the infra types (inventory/integration/ui)
+// stay support-only. Gated to a conversation-scoped, open, recent, non-info report with a note. The
+// classifier escalates `reported_issue` Tier 2 (approve-first), with the note as the fix steering.
+const OPS_ANOMALY_LOOP_TYPES = new Set(["routing", "cadence", "appointment", "task_inbox", "handoff", "other"]);
+export type OpsAnomalyReport = {
+  id?: string | null;
+  type?: string | null;
+  severity?: string | null;
+  title?: string | null;
+  note?: string | null;
+  status?: string | null;
+  createdAt?: string | null;
+  context?: { convId?: string | null; leadKey?: string | null } | null;
+};
+export function decideOpsAnomalyReportedIssue(a: OpsAnomalyReport, opts?: { now?: Date }): OutcomeAnomaly | null {
+  if (String(a?.status ?? "open").toLowerCase() === "closed") return null;
+  const type = String(a?.type ?? "").toLowerCase();
+  if (!OPS_ANOMALY_LOOP_TYPES.has(type)) return null; // support-only types skip the code loop
+  if (String(a?.severity ?? "warning").toLowerCase() === "info") return null; // low-signal FYI
+  const convId = String(a?.context?.convId ?? "").trim();
+  if (!convId) return null; // agent-behavior reports are conversation-scoped; the loop needs it for context
+  const note = String(a?.note || a?.title || "").trim();
+  if (!note) return null;
+  const atMs = Date.parse(String(a?.createdAt ?? ""));
+  if (Number.isFinite(atMs)) {
+    const ageDays = ((opts?.now ?? new Date()).getTime() - atMs) / (1000 * 60 * 60 * 24);
+    if (ageDays < 0 || ageDays > 21) return null;
+  }
+  return {
+    convId,
+    leadKey: String(a?.context?.leadKey ?? ""),
+    dimension: "reported_issue",
+    category: categoryFor("reported_issue"),
+    severity: "P2",
+    healed: false,
+    detail: `operator-reported (${type}): ${note.slice(0, 180)}`
   };
 }
