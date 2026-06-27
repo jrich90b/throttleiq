@@ -99,8 +99,10 @@ assert.ok(!passesModelRelevanceGuard("Road Glide", "Perfect. See you then."), "c
   const prev = process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY;
   process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY = "1";
   assert.equal(modelAuthorityEnabled(), true, "flag=1 enables");
+  delete process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY;
+  assert.equal(modelAuthorityEnabled(), true, "GRADUATED 2026-06-24: default-ON when the flag is unset");
   process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY = "0";
-  assert.equal(modelAuthorityEnabled(), false, "flag=0 disabled (ships dark)");
+  assert.equal(modelAuthorityEnabled(), false, "flag=0 is the kill-switch");
   if (prev === undefined) delete process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY;
   else process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY = prev;
 }

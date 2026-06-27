@@ -37,7 +37,11 @@ export type ModelAuthorityDecision = {
 };
 
 export function modelAuthorityEnabled(): boolean {
-  return process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY === "1";
+  // GRADUATED from canary to default-ON (2026-06-24): the model-resolution authority + relevance guard
+  // proved out — `owned_bike_offered` held at 0 across a 7-day answer_correctness sweep, and americanharley
+  // has run it live since 6/20. Now on by default (so dealer #2/#3 get it without an env flag). Kill-switch:
+  // TURN_UNDERSTANDING_MODEL_AUTHORITY=0.
+  return process.env.TURN_UNDERSTANDING_MODEL_AUTHORITY !== "0";
 }
 
 export function modelAuthorityConfidenceMin(): number {
