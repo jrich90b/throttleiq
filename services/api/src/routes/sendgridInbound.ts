@@ -5033,7 +5033,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     catalogMatch.partsTerms.length > 0 ||
     isGenericLeadModel(adfDepartmentVehicleContext) ||
     adfDepartmentTerseInquiry;
-  let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "none" } = { kind: "none" };
+  let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "riding_academy" | "none" } = { kind: "none" };
   if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
     const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
       inquiry: effectiveInquiry,
@@ -5090,7 +5090,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
-  if (initialAdfRiderCourseDecision) {
+  if (initialAdfRiderCourseDecision || adfDepartmentRoute.kind === "riding_academy") {
+    // Rider-education (Riding Academy / rider course / "get my license") is NOT a bike sale — keep it out
+    // of inventory_interest/test_ride so the lead isn't given a bike-sale task or pushed to test-ride
+    // before they're licensed. The deterministic detector handles explicit phrasings; the ADF department
+    // parser catches the terse ones it missed (Rafael Morales, "Your course and price" -> request_a_quote
+    // on a Street 750).
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
   } else if (adfDepartmentRoute.kind === "parts" || semanticPartsIntent || partsIntentFromText) {

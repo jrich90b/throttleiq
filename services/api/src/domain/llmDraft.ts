@@ -2603,7 +2603,7 @@ export type ConversationStateParse = {
 // "not in stock" reply + inventory watch on the "Full Line" placeholder vehicle). This focused parser
 // reads the terse Inquiry (+ the often-placeholder Vehicle field) and decides the department.
 export type AdfDepartmentInterestParse = {
-  department: "apparel" | "parts" | "service" | "vehicle" | "none";
+  department: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none";
   item: string | null;
   confidence: number;
 };
@@ -3236,7 +3236,7 @@ const ADF_DEPARTMENT_INTEREST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   additionalProperties: false,
   required: ["department", "item", "confidence"],
   properties: {
-    department: { type: "string", enum: ["apparel", "parts", "service", "vehicle", "none"] },
+    department: { type: "string", enum: ["apparel", "parts", "service", "vehicle", "riding_academy", "none"] },
     item: { type: ["string", "null"] },
     confidence: { type: "number" }
   }
@@ -7202,6 +7202,10 @@ export async function parseAdfDepartmentInterestWithLLM(args: {
     "- service: maintenance / repair / install labor / inspection / recalls / diagnostics.",
     "- vehicle: an actual MOTORCYCLE — a model, trim, inventory availability, test ride, price/payment",
     "  on a bike, trade-in. This is the default for bike shoppers.",
+    "- riding_academy: the dealer's rider-education program — the Riding Academy / rider course / MSF",
+    "  class, learning to ride, or getting a motorcycle license/endorsement. The customer wants to take a",
+    "  COURSE (and its price/schedule), NOT buy a bike. 'course and price' / 'course to get my license' /",
+    "  'a course motorcycle so I can get my license' = riding_academy, even if a bike model is attached.",
     "- none: a greeting, an unrelated topic, or no identifiable subject.",
     "",
     "Hard rules:",
@@ -7211,6 +7215,8 @@ export async function parseAdfDepartmentInterestWithLLM(args: {
     "  on non-bike inquiries — when the Inquiry names gear/parts/service, trust the Inquiry over Vehicle.",
     "- A specific motorcycle model, year, test ride, or bike-availability/price question is 'vehicle',",
     "  not a department, even if it mentions a color or size of the BIKE.",
+    "- A course/class/license/'learn to ride'/Riding Academy/MSF request is 'riding_academy', NOT",
+    "  'vehicle' — even when the Vehicle field names a bike. They want the COURSE, not to buy that bike.",
     "- 'item' is the short noun the customer named (e.g. 'leather vest', 'brake pads'), or null.",
     "- confidence 0..1; use >= 0.7 only when the department is clear.",
     "",
@@ -7223,6 +7229,9 @@ export async function parseAdfDepartmentInterestWithLLM(args: {
     '- Inquiry "5k service and oil change" -> {"department":"service","item":"oil change","confidence":0.96}',
     '- Inquiry "interested in a 2024 Street Glide" / Vehicle "Street Glide" -> {"department":"vehicle","item":"Street Glide","confidence":0.96}',
     '- Inquiry "do you have any Road Glides in stock in black" -> {"department":"vehicle","item":"Road Glide","confidence":0.95}',
+    '- Inquiry "Your course and price" / Vehicle "Street 750" -> {"department":"riding_academy","item":"Riding Academy course","confidence":0.9}',
+    '- Inquiry "looking for a course motorcycle so I can get my license" -> {"department":"riding_academy","item":"rider course","confidence":0.95}',
+    '- Inquiry "when is your next riding academy / do you offer the MSF class" -> {"department":"riding_academy","item":"riding academy","confidence":0.96}',
     '- Inquiry "Harley-Davidson Full Line" -> {"department":"none","item":null,"confidence":0.6}',
     '- Inquiry "hi just looking around" -> {"department":"none","item":null,"confidence":0.8}',
     "",
@@ -7250,7 +7259,11 @@ export async function parseAdfDepartmentInterestWithLLM(args: {
 
   const deptRaw = String(parsed.department ?? "").toLowerCase();
   const department: AdfDepartmentInterestParse["department"] =
-    deptRaw === "apparel" || deptRaw === "parts" || deptRaw === "service" || deptRaw === "vehicle"
+    deptRaw === "apparel" ||
+    deptRaw === "parts" ||
+    deptRaw === "service" ||
+    deptRaw === "vehicle" ||
+    deptRaw === "riding_academy"
       ? deptRaw
       : "none";
   const item = typeof parsed.item === "string" && parsed.item.trim() ? parsed.item.trim() : null;
