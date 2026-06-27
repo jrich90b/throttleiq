@@ -24,7 +24,7 @@ const liveDealerRideLeadStart = apiRoute.indexOf("const dealerLeadAppConfirmedDe
 const liveDealerRideLeadBlock =
   liveDealerRideLeadStart >= 0 ? apiRoute.slice(liveDealerRideLeadStart, liveDealerRideLeadStart + 900) : "";
 const noDemoOverrideBlock = apiRoute.includes("dealerLeadAppWithoutConfirmedDemoRide")
-  ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 1200)
+  ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 2000)
   : "";
 const regenDealerRideLeadStart = apiIndex.indexOf("const regenDealerRideEventLead");
 const regenDealerRideLeadBlock =

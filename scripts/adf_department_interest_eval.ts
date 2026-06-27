@@ -46,6 +46,11 @@ assert.ok(/adfDepartmentRoute = decideAdfDepartmentRoute\(/.test(sendgrid), "dec
 assert.ok(/adfDepartmentRoute\.kind === "apparel"/.test(sendgrid), "apparel override branch must exist");
 assert.ok(/adfDepartmentRoute\.kind === "parts"/.test(sendgrid), "parts override branch must exist");
 assert.ok(/adfDepartmentRoute\.kind === "service"/.test(sendgrid), "service override branch must exist");
+// Rider-education (Riding Academy / rider course / get-licensed) routes to a NON-SALES lane, not a bike
+// sale — so the lead isn't given a bike-sale task or pushed to test-ride before they're licensed.
+assert.ok(/adfDepartmentRoute\.kind === "riding_academy"/.test(sendgrid), "riding_academy override branch must exist");
+assert.ok(/riding_academy/.test(llm), "the parser schema + prompt must include riding_academy");
+assert.ok(/input\.department === "riding_academy"/.test(reducer), "the decision must pass riding_academy through");
 // Gated so it never runs on a clean bike lead the existing signals already handled.
 assert.ok(/isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue/.test(sendgrid),
   "parser must be gated to initial ADF + missed-signal + a catalog/placeholder cue");
@@ -55,12 +60,13 @@ assert.ok(/adfDepartmentTerseInquiry/.test(sendgrid) && /adfDepartmentCue[\s\S]{
   "the cue must also fire on a terse inquiry (belt-and-suspenders for non-lexicon items)");
 
 // --- 2) Decision-table coverage (pure). ---
-type Row = { id: string; input: Parameters<typeof decideAdfDepartmentRoute>[0]; kind: "apparel" | "parts" | "service" | "none" };
+type Row = { id: string; input: Parameters<typeof decideAdfDepartmentRoute>[0]; kind: "apparel" | "parts" | "service" | "riding_academy" | "none" };
 const base = { parserAccepted: true, confidence: 0.9, confidenceMin: 0.7 };
 const rows: Row[] = [
   { id: "apparel_confident", input: { ...base, department: "apparel" }, kind: "apparel" },
   { id: "parts_confident", input: { ...base, department: "parts" }, kind: "parts" },
   { id: "service_confident", input: { ...base, department: "service" }, kind: "service" },
+  { id: "riding_academy_confident", input: { ...base, department: "riding_academy" }, kind: "riding_academy" },
   { id: "at_floor", input: { ...base, department: "apparel", confidence: 0.7 }, kind: "apparel" },
   { id: "below_floor", input: { ...base, department: "apparel", confidence: 0.69 }, kind: "none" },
   { id: "vehicle_is_none", input: { ...base, department: "vehicle" }, kind: "none" },
@@ -76,11 +82,14 @@ for (const r of rows) {
 // --- 3) LLM coverage + adversarial negatives (gated; skips cleanly). ---
 const confidenceMin = 0.7;
 // Terse, verb-less ADF inquiries that ARE department requests. The vest is the production replay fixture.
-const departmentCases: { inquiry: string; vehicle?: string; want: "apparel" | "parts" | "service" }[] = [
+const departmentCases: { inquiry: string; vehicle?: string; want: "apparel" | "parts" | "service" | "riding_academy" }[] = [
   { inquiry: "small womens black leather vest", vehicle: "Harley-Davidson Full Line", want: "apparel" },
   { inquiry: "looking for a riding jacket, size XL", want: "apparel" },
   { inquiry: "need brake pads and a battery for my Street Glide", want: "parts" },
-  { inquiry: "oil change and 5k service", want: "service" }
+  { inquiry: "oil change and 5k service", want: "service" },
+  // Rider-education must NOT become a bike sale — even with a bike attached (Rafael Morales).
+  { inquiry: "Your course and price", vehicle: "Street 750", want: "riding_academy" },
+  { inquiry: "looking for a course motorcycle so I can get my license", want: "riding_academy" }
 ];
 // Real bike shoppers — must NOT route to a department (decision => none; the normal vehicle flow runs).
 const vehicleCases: { inquiry: string; vehicle?: string }[] = [

@@ -809,11 +809,11 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
 // shopper to the apparel desk is worse than the current miss, so we only act on a confident
 // apparel/parts/service verdict; a "vehicle" or "none" verdict, low confidence, or no parser => none.
 // ---------------------------------------------------------------------------
-export type AdfDepartmentRouteKind = "apparel" | "parts" | "service" | "none";
+export type AdfDepartmentRouteKind = "apparel" | "parts" | "service" | "riding_academy" | "none";
 
 export type AdfDepartmentRouteInput = {
   parserAccepted: boolean;
-  department?: "apparel" | "parts" | "service" | "vehicle" | "none" | null;
+  department?: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none" | null;
   confidence: number;
   confidenceMin: number;
 };
@@ -827,7 +827,12 @@ export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDep
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  if (input.department === "apparel" || input.department === "parts" || input.department === "service") {
+  if (
+    input.department === "apparel" ||
+    input.department === "parts" ||
+    input.department === "service" ||
+    input.department === "riding_academy"
+  ) {
     return { kind: input.department };
   }
   return { kind: "none" };
