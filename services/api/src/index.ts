@@ -36428,56 +36428,6 @@ app.post("/conversations/:id/messages/:messageId/feedback", async (req, res) => 
   return res.json({ ok: true, conversation: conv, message: msg, redraft });
 });
 
-// Operator "Report issue" — the explicit-human-flag feed of the self-healing loop. Turn-WIDE (not
-// message-bound): a rep flags wrong routing/intent, bad cadence, a missed/wrong appointment, a
-// missing/duplicate task, a botched handoff, etc., with a free-text note. Recorded on the
-// conversation; the read-only outcome-audit sweep turns each OPEN report into a `reported_issue`
-// anomaly (Tier 2 escalate, approve-first) carrying the note as the fix steering. POST {category?,
-// note, messageId?}. Resolve with { resolve: <id> }.
-const REPORTED_ISSUE_CATEGORIES = new Set(["routing", "cadence", "appointment", "task", "handoff", "other"]);
-app.post("/conversations/:id/report-issue", async (req, res) => {
-  const conv = getConversation(req.params.id);
-  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
-  const user = (req as any).user ?? null;
-  if (!canUserAccessConversation(user, conv)) {
-    return res.status(403).json({ ok: false, error: "forbidden" });
-  }
-  const list = (((conv as any).reportedIssues as any[]) ?? []).slice();
-
-  // Resolve mode: mark a prior report resolved (stops it feeding the loop).
-  const resolveId = String(req.body?.resolve ?? "").trim();
-  if (resolveId) {
-    const target = list.find(r => String(r?.id ?? "") === resolveId);
-    if (!target) return res.status(404).json({ ok: false, error: "report not found" });
-    target.status = "resolved";
-    target.resolvedAt = new Date().toISOString();
-    (conv as any).reportedIssues = list;
-    saveConversation(conv);
-    return res.json({ ok: true, conversation: conv, reportedIssue: target });
-  }
-
-  const note = String(req.body?.note ?? "").trim();
-  if (!note) return res.status(400).json({ ok: false, error: "note required" });
-  const categoryRaw = String(req.body?.category ?? "").trim().toLowerCase();
-  const category = REPORTED_ISSUE_CATEGORIES.has(categoryRaw) ? categoryRaw : "other";
-  const messageId = String(req.body?.messageId ?? "").trim() || undefined;
-  const report = {
-    id: `ri_${crypto.randomUUID()}`,
-    at: new Date().toISOString(),
-    category,
-    note: note.slice(0, 1000),
-    messageId: messageId ?? null,
-    byUserId: String(user?.id ?? "").trim() || null,
-    byUserName: String(user?.name ?? user?.email ?? "").trim() || null,
-    status: "open" as const,
-    resolvedAt: null
-  };
-  list.push(report);
-  (conv as any).reportedIssues = list;
-  saveConversation(conv);
-  return res.json({ ok: true, conversation: conv, reportedIssue: report });
-});
-
 app.get("/conversations/:id/messages/:messageId/media/:mediaIndex", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
@@ -38530,8 +38480,10 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
   const createTicket = req.body?.createTicket !== false;
   const allowedTypes: OpsAnomalyType[] = [
     "routing",
-    "task_inbox",
     "cadence",
+    "appointment",
+    "task_inbox",
+    "handoff",
     "inventory",
     "integration",
     "ui",
