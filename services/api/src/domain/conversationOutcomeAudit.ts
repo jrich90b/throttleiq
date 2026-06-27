@@ -50,6 +50,7 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   cadence_quality_suppressed: "comprehension",
   open_critic_finding: "discovery",
   intent_unaddressed: "comprehension",
+  reported_issue: "feedback",
   task_autoclose_regression: "state",
   watch_fire_miss: "state",
   watch_fired_wrong_model: "state",
@@ -74,6 +75,13 @@ type AuditableConv = {
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
+  reportedIssues?: Array<{
+    id?: string | null;
+    at?: string | null;
+    category?: string | null;
+    note?: string | null;
+    status?: string | null;
+  }> | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
 };
 
@@ -242,6 +250,29 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
         detail: `staff materially corrected the AI draft (${hc.category ?? "?"})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`
       });
     }
+  }
+
+  // 5d. OPERATOR-REPORTED ISSUE: a rep clicked "Report issue" with a note (the explicit-human-flag
+  //     net). Turn-WIDE — routing/cadence/appointment/task/handoff/other — and the note is the
+  //     strongest, most explicit "this was wrong + here's why" signal we get (better than an inferred
+  //     👎 or an edit diff). One anomaly per OPEN report (resolved ones stop feeding the loop); recent
+  //     only (a fresh signal; the loop's dedup prevents re-work). The classifier escalates it Tier 2
+  //     (approve-first) with the note as the fix steering.
+  for (const ri of conv.reportedIssues ?? []) {
+    if (String(ri?.status ?? "open").toLowerCase() === "resolved") continue;
+    const note = String(ri?.note ?? "").trim();
+    if (!note) continue;
+    const riAtMs = Date.parse(String(ri?.at ?? ""));
+    if (!Number.isFinite(riAtMs)) continue;
+    const ageDays = (now.getTime() - riAtMs) / (1000 * 60 * 60 * 24);
+    if (ageDays < 0 || ageDays > 21) continue;
+    out.push({
+      ...base,
+      dimension: "reported_issue",
+      severity: "P2",
+      healed: false,
+      detail: `operator-reported (${ri?.category ?? "other"}): ${note.slice(0, 180)}`
+    });
   }
 
   // 5e. Cadence-quality suppressed/held (folded from the cadence-quality judge): a PROACTIVE follow-up
