@@ -61,7 +61,12 @@ const cases: Array<[any, string | null]> = [
   [
     { reason: "call", summary: "Customer asked if the Street Glide is in stock.", action: "Verify inventory and follow up." },
     "availability"
-  ]
+  ],
+  // A SCHEDULING/booking task is not an inventory-availability buy-signal: "check availability" there
+  // means the CALENDAR. The corrected deriver labels it a booking action, so it must NOT badge
+  // Availability (Gary Busenlehner, 2026-06-27: a "schedule the visit … (check availability) … calendar"
+  // task was wrongly badged Availability).
+  [{ reason: "call", action: "Call customer to confirm a time and book the visit." }, null]
 ];
 
 for (const [todo, expected] of cases) {
@@ -76,5 +81,14 @@ assert.ok(/lr-task-card--priority/.test(taskInbox), "TaskInboxSection must apply
 
 const inbox = fs.readFileSync("apps/web/src/app/components/InboxSection.tsx", "utf8");
 assert.ok(/salesCriticalKind\(/.test(inbox), "InboxSection row chip must be reason-aware");
+
+// The badge reads the backend-derived action label. deriveTodoActionLabel must classify a scheduling
+// task as a BOOKING action BEFORE the inventory/availability branch — otherwise "check availability"
+// (calendar) is mislabeled "confirm inventory and availability" and trips the Availability badge.
+const apiIndex = fs.readFileSync("services/api/src/index.ts", "utf8");
+const schedIdx = apiIndex.indexOf('Call customer to confirm a time and book the visit.');
+const invIdx = apiIndex.indexOf('Call customer to confirm inventory and availability.');
+assert.ok(schedIdx > 0, "deriveTodoActionLabel must have a scheduling/booking action label");
+assert.ok(schedIdx < invIdx, "the scheduling branch must precede the inventory/availability branch in deriveTodoActionLabel");
 
 console.log("task_reason_badge:eval ok");
