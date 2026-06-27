@@ -28333,6 +28333,13 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
     if (/(credit|prequal|finance|apr|payment|monthly)/.test(text)) {
       return withDue("Call customer to review financing and payment options.");
     }
+    // A scheduling/booking task — here "check availability" means the CALENDAR (is there a time), NOT
+    // inventory. Must come BEFORE the inventory branch so a "schedule the visit … (check availability)"
+    // task isn't mislabeled "confirm inventory and availability" (which also wrongly trips the
+    // Availability sales badge). Gary Busenlehner: a booking task tagged "Availability".
+    if (/\b(schedule (?:the |a )?(?:visit|appointment)|put it on the calendar|on the calendar|confirm a time|set up a time|book (?:the |a )?(?:visit|appointment|time))\b/i.test(text)) {
+      return withDue("Call customer to confirm a time and book the visit.");
+    }
     if (/(inventory|availability|stock|watch)/.test(text)) {
       return withDue("Call customer to confirm inventory and availability.");
     }
