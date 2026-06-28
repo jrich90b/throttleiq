@@ -29,7 +29,7 @@ const {
   buildVehicleRecommendationFollowupReply,
   buildVehicleRecommendationTodoSummary
 } = await import("../services/api/src/domain/inventoryRecommender.ts");
-const { decideVehicleRecommendationTurn } = await import(
+const { decideVehicleRecommendationTurn, shouldBowOutRecommenderForNamedModel } = await import(
   "../services/api/src/domain/routeStateReducer.ts"
 );
 
@@ -117,6 +117,31 @@ assert.equal(rec({ wantsRecommendation: false }), "none", "not a recommendation 
 assert.equal(rec({ confidence: 0.5 }), "none", "below confidence floor => none");
 assert.equal(rec({ modelUnknown: false }), "none", "a specific model in play => let pricing handle it");
 
+// --- 3b) Named-model bow-out precedence (Tyrone Woods +13179357913, 2026-06-22). ---
+// A named model normally hands off to finance/pricing ("price THIS bike"). But a named model CLASS
+// PLUS a budget profile and no unit in play is "find me a <model> that fits my budget" — keep the
+// recommender instead of looping "which bike are you looking at so I can run it correctly?".
+assert.equal(
+  shouldBowOutRecommenderForNamedModel({ namedModelThisTurn: true, hasBudgetProfile: false }),
+  true,
+  "named a model, no budget context => bow out to finance/pricing"
+);
+assert.equal(
+  shouldBowOutRecommenderForNamedModel({ namedModelThisTurn: true, hasBudgetProfile: true }),
+  false,
+  'named a model class WITH a budget profile => keep the recommender ("road king or street glider" + $1.8-2k down/$450-550/mo)'
+);
+assert.equal(
+  shouldBowOutRecommenderForNamedModel({ namedModelThisTurn: false, hasBudgetProfile: false }),
+  false,
+  "no model named => recommender path continues regardless of budget"
+);
+assert.equal(
+  shouldBowOutRecommenderForNamedModel({ namedModelThisTurn: false, hasBudgetProfile: true }),
+  false,
+  "no model named, budget present => recommender path continues"
+);
+
 // --- 4) Reply + todo builders. ---
 const reply = buildVehicleRecommendationReply({
   firstName: "Sam",
@@ -162,6 +187,13 @@ assert.match(
   apiSource,
   /if \(!isModelUnknownForPayments\(conv\)\) return null;/,
   "fail-direction: the resolver only fires when no model is in play (else existing flow runs)"
+);
+// The named-model bow-out is the centralized pure precedence (not an inline regex gate), and it is
+// budget-aware so a named model class + budget profile keeps the recommender (Tyrone Woods).
+assert.match(
+  apiSource,
+  /shouldBowOutRecommenderForNamedModel\(\{[\s\S]*?hasBudgetProfile[\s\S]*?\}\)/,
+  "the resolver routes the named-model bow-out through the centralized budget-aware precedence"
 );
 // Precedence (live path): the recommendation resolver must be wired before the live finance
 // "which bike?" continuation loop (its last occurrence is the live finance_followup_continuation

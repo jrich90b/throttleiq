@@ -19,6 +19,7 @@ export {
   decideCustomerAckConfirmBooking,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
