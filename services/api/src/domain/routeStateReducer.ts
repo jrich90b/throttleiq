@@ -425,6 +425,30 @@ export function decideCustomerAckConfirmBooking(input: ConfirmBookingDecisionInp
   return { kind: "offer_alternatives", hasAlternatives: input.hasAlternatives };
 }
 
+// A scheduling turn where the agent DEFERRED ("I'll check / I'll confirm that time and follow up")
+// but did NOT book this turn and did NOT offer alternative slots is a silent promise with nothing
+// behind it — the salesperson never sees the requested time. That turn MUST leave an owner follow-up
+// task. Operator-reported 4× on +17167506588 ("next Saturday same time around 1" → "I'll check that
+// time and follow up", no task). FAIL DIRECTION = create the task whenever unsure: an extra owner
+// task is safe; a silently-dropped reschedule request is the bug. The booking arm (decideCustomerAck-
+// ConfirmBooking) and the offer-alternatives branch are excluded — they already act for the customer.
+export type SchedulingDeferralFollowUpInput = {
+  deferred: boolean; // this turn produced a deferral ack (no concrete slot resolved/booked this turn)
+  booked: boolean; // the booking arm actually wrote/locked the appointment this turn
+  offeredAlternatives: boolean; // we offered concrete alternative slots (not a silent defer)
+  hasRequestedPhrase: boolean; // a concrete requested day/time was carried (for the summary, NOT a gate)
+};
+export type SchedulingDeferralFollowUpDecision = { createTask: boolean };
+
+export function decideSchedulingDeferralFollowUpTask(
+  input: SchedulingDeferralFollowUpInput
+): SchedulingDeferralFollowUpDecision {
+  if (input.booked) return { createTask: false }; // auto-book already handled it
+  if (input.offeredAlternatives) return { createTask: false }; // we gave the customer times to pick
+  if (!input.deferred) return { createTask: false }; // not a deferral turn
+  return { createTask: true }; // deferred, not booked, no alternatives => owner must follow up
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the
