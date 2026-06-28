@@ -49816,6 +49816,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: regenCustomerAckActionParse?.confidence ?? null,
         shouldBook: regenCustomerAckActionParse?.shouldBook ?? false
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionRequestedPhrase(regenCustomerAckActionParse)
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(buildCustomerAckConfirmationReply(regenCustomerAckActionParse), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
@@ -49851,6 +49862,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey,
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionSchedulePhrase(regenCustomerAckActionParse)
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(buildCustomerAckAvailableTimesReply(regenCustomerAckActionParse), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
@@ -59141,6 +59163,18 @@ if (authToken && signature) {
         leadKey: conv.leadKey,
         confidence: customerAckActionParse?.confidence ?? null
       });
+      // Couldn't book → "I'll check … and follow up with confirmation" is a deferral → owner task.
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionRequestedPhrase(customerAckActionParse)
+        },
+        event.body,
+        event.providerMessageId
+      );
       return publishLiveTwilioReply(buildCustomerAckConfirmationReply(customerAckActionParse), {
         turnSchedulingIntent: true
       });
@@ -59302,6 +59336,23 @@ if (authToken && signature) {
       confidence: customerAckActionParse?.confidence ?? null
     });
     setDialogState(conv, "schedule_request");
+    // ask_for_available_times ("I'll check available times … and follow up") and the default arrival
+    // ack ("I'll check that time and follow up") DEFER without booking → leave an owner task so the
+    // request isn't silently dropped. accept_tentative is a lock-in QUESTION, not a deferral (no task).
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: action !== "accept_tentative_appointment",
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase:
+          action === "ask_for_available_times"
+            ? customerAckActionSchedulePhrase(customerAckActionParse)
+            : customerAckActionRequestedPhrase(customerAckActionParse)
+      },
+      event.body,
+      event.providerMessageId
+    );
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (

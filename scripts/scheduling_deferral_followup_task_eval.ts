@@ -56,8 +56,24 @@ assert.match(
 
 // --- 3) Both paths wired (live + regen), in sync. ---
 const helperCalls = api.match(/addSchedulingDeferralFollowUpTodo\(/g) ?? [];
-// 1 definition + 4 call sites (live provide_arrival_window, live arrival_update, regen ditto).
-assert.ok(helperCalls.length >= 5, `helper must be wired at all four scheduling arms (found ${helperCalls.length} refs incl. def)`);
+// 1 definition + 8 call sites: live+regen × {provide_arrival_window, arrival_update,
+// ask_for_available_times, confirm-lockin-fallback}. The ask_for_available_times + confirm-fallback
+// arms were the gap a shadow replay caught after the first cut (s R "next Friday July 3", Tyrone
+// "Tuesday after 3" → "I'll check available times … and follow up", no task).
+assert.ok(helperCalls.length >= 9, `helper must be wired at every deferral arm (found ${helperCalls.length} refs incl. def)`);
+// The ask_for_available_times deferral feeds the helper its requested phrase in BOTH paths.
+assert.match(
+  api,
+  /action === "ask_for_available_times"\s*\n?\s*\?\s*customerAckActionSchedulePhrase\(customerAckActionParse\)/,
+  "live ask_for_available_times deferral creates the owner task (carrying the requested phrase)"
+);
+assert.match(
+  api,
+  /customerAckActionSchedulePhrase\(regenCustomerAckActionParse\)/,
+  "regen ask_for_available_times deferral creates the owner task (parity)"
+);
+// The confirm-booking lock-in fallback ("I'll check … and follow up with confirmation") also creates it.
+assert.match(api, /customer_ack_confirm_lockin_fallback[\s\S]*?addSchedulingDeferralFollowUpTodo\(/, "live confirm-lockin fallback creates the task");
 // Live arms feed event.body; regen arms feed (inbound as any)?.providerMessageId — assert both shapes exist.
 assert.match(
   api,
