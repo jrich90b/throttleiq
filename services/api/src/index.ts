@@ -515,6 +515,7 @@ import {
   decideCustomerAckConfirmBooking,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
+  shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
@@ -2198,7 +2199,6 @@ async function resolveVehicleRecommendationReply(
   // Recommendation is the "no model yet" case. A customer pricing a known bike is NOT asking for
   // suggestions — let the finance/pricing flow handle that.
   if (!isModelUnknownForPayments(conv)) return null;
-  if (findMentionedModel(text.toLowerCase())) return null; // named a model this turn => not "pick for me"
   // The ask often spans two quick texts ("Can you give me some options" + "I'm not looking for
   // cruisers"); use the recent inbound cluster so the hint + parser see the whole request.
   const recentInbound = (conv.messages ?? [])
@@ -2212,10 +2212,23 @@ async function resolveVehicleRecommendationReply(
   // monthly cap and/or a down payment with no model in play is a "pick one that fits my budget"
   // request even when phrased as a plain statement ("I'd like a cruiser, ~$2k down, $450-550/mo")
   // (Tyrone Woods, 6/26 — got another clarifying question instead). The caller already gated on
-  // model-unknown + no model named this turn, and the typed parser still owns wantsRecommendation, so
-  // this only LETS the parser run (fail-safe — a parser miss still returns null to the existing flow).
+  // model-unknown, and the typed parser still owns wantsRecommendation, so this only LETS the parser
+  // run (fail-safe — a parser miss still returns null to the existing flow).
   const budgetCtx = findRecentInboundPaymentBudgetContext(conv);
   const hasBudgetProfile = budgetCtx.monthlyBudget != null || budgetCtx.downPayment != null;
+  // Naming a model this turn normally means "price THIS bike" → let finance handle it. EXCEPTION:
+  // with a budget profile and no unit in play (we passed isModelUnknownForPayments above), a named
+  // model CLASS is "find me a <model> that fits my budget", not "price the exact unit I'm on" — keep
+  // the recommender (Tyrone Woods +13179357913, 2026-06-22: looped "which bike?" after "road king or
+  // street glider"). Centralized precedence; the typed parser still scopes the actual segment.
+  if (
+    shouldBowOutRecommenderForNamedModel({
+      namedModelThisTurn: !!findMentionedModel(text.toLowerCase()),
+      hasBudgetProfile
+    })
+  ) {
+    return null;
+  }
   if (!vehicleRecommendationParserHint(askText) && !hasBudgetProfile) return null;
   const parse = await safeLlmParse("vehicle_recommendation_parser", () =>
     parseVehicleRecommendationRequestWithLLM({ text: askText, history: buildHistory(conv, 8) })

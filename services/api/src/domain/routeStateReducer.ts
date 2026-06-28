@@ -618,6 +618,25 @@ export function decideVehicleRecommendationTurn(
   return { kind: "recommend" };
 }
 
+// When the customer NAMES a model on a turn where no model is yet in play for pricing, should the
+// recommender bow out to the finance/pricing flow? Naming a model is normally "price THIS bike"
+// (finance owns it). EXCEPTION: when the customer has given a budget profile (a monthly cap and/or a
+// down payment) and there is still no concrete unit to price, naming a model CLASS is "find me a
+// <model> that fits my budget", not "price the exact unit I'm on" — keep the recommender and let the
+// typed parser scope it. Without that exception the agent loops "Which bike are you looking at so I
+// can run it correctly?" forever (Tyrone Woods +13179357913, 2026-06-22: gave used-cruiser + $1.8–2k
+// down + $450–550/mo, narrowed to "road king or street glider", and got re-asked which bike).
+//
+// FAIL DIRECTION = bow out (true): a named model with no budget context falls through to the existing
+// finance/pricing behavior, never a wrong-target recommendation. The caller has already established
+// model-unknown-for-payments before invoking this (so there is genuinely no unit to price).
+export function shouldBowOutRecommenderForNamedModel(input: {
+  namedModelThisTurn: boolean;
+  hasBudgetProfile: boolean;
+}): boolean {
+  return input.namedModelThisTurn && !input.hasBudgetProfile;
+}
+
 // --- Vehicle media request (photos/links/colors of suggested units, 2026-06-24) ----------------
 // After the recommender suggests units, the customer asks to SEE them. Fire ONLY when the parser is
 // confident AND we actually have persisted units that carry a listing URL — otherwise fall through
