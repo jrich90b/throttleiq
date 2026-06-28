@@ -519,6 +519,7 @@ import {
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
+  decideSchedulingDeferralFollowUpTask,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
@@ -9124,6 +9125,43 @@ function addAppointmentStatusReviewTodo(conv: any, text: string | null | undefin
   );
 }
 
+// When a scheduling turn DEFERS a requested time ("I'll check that time and follow up") without
+// booking it or offering alternatives, leave an owner follow-up task so the salesperson actually
+// confirms the time — instead of a silent promise (operator-reported 4× on +17167506588). Centralized
+// gate (decideSchedulingDeferralFollowUpTask) + summary-marker dedupe so repeated regen of the same
+// turn doesn't stack tasks. "call" reason = top priority + survives the sold-lead suppression. Shared
+// by BOTH the live and regen scheduling arms (route-parity). Fail-direction: create when unsure.
+function addSchedulingDeferralFollowUpTodo(
+  conv: any,
+  input: { deferred: boolean; booked: boolean; offeredAlternatives: boolean; requestedPhrase: string },
+  inboundText: string | null | undefined,
+  providerMessageId?: string | null
+) {
+  const decision = decideSchedulingDeferralFollowUpTask({
+    deferred: input.deferred,
+    booked: input.booked,
+    offeredAlternatives: input.offeredAlternatives,
+    hasRequestedPhrase: !!String(input.requestedPhrase ?? "").trim()
+  });
+  if (!decision.createTask) return;
+  const convId = String(conv?.id ?? "").trim();
+  const exists =
+    !!convId &&
+    listOpenTodos().some(todo => {
+      if (todo.convId !== convId || String(todo.status ?? "open") !== "open") return false;
+      return /Follow up to book reschedule/i.test(String(todo.summary ?? ""));
+    });
+  if (exists) return;
+  const phrase = String(input.requestedPhrase ?? "").trim() || String(inboundText ?? "").trim();
+  addTodo(
+    conv,
+    "call",
+    `Follow up to book reschedule${phrase ? `: ${phrase}` : "."}`,
+    providerMessageId ?? undefined,
+    conv?.leadOwner
+  );
+}
+
 async function buildAppointmentStatusQuestionReply(args: {
   conv: any;
   text: string | null | undefined;
@@ -9307,7 +9345,15 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
   conv: any;
   parsed: CustomerAckActionParse | null;
   rawText: string | null | undefined;
-}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+}): Promise<{
+  reply: string;
+  alternatives: any[];
+  checkedCalendar: boolean;
+  // We deferred ("I'll check/confirm ... and follow up") without booking or offering alternatives —
+  // the caller must leave an owner follow-up task so the requested time isn't silently dropped.
+  needsOwnerFollowUpTask: boolean;
+  requestedPhrase: string; // the requested day/time for the task summary (may be empty)
+}> {
   const cfg = await getSchedulerConfigHot();
   const requested = resolveCustomerAckRequestedDayTime({
     conv: args.conv,
@@ -9326,7 +9372,9 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
         confidence: args.parsed?.confidence
       }),
       alternatives: [],
-      checkedCalendar: false
+      checkedCalendar: false,
+      needsOwnerFollowUpTask: true, // deferred with no resolved slot => owner must follow up
+      requestedPhrase: customerAckActionRequestedPhrase(args.parsed)
     };
   }
   const appointmentType = inferAppointmentTypeFromConv(args.conv);
@@ -9349,20 +9397,26 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
         confidence: args.parsed?.confidence
       }),
       alternatives: [],
-      checkedCalendar: false
+      checkedCalendar: false,
+      needsOwnerFollowUpTask: true, // availability lookup failed => deferred, owner must follow up
+      requestedPhrase: customerAckActionRequestedPhrase(args.parsed)
     };
   }
   if (!availability.available) {
     return {
       reply: buildRequestedSlotUnavailableReply(availability.requestedLabel, availability.alternatives),
       alternatives: availability.alternatives,
-      checkedCalendar: true
+      checkedCalendar: true,
+      needsOwnerFollowUpTask: false, // we offered alternatives — not a silent defer
+      requestedPhrase: availability.requestedLabel
     };
   }
   return {
     reply: `That time looks available — I’ll confirm ${availability.requestedLabel} and follow up.`,
     alternatives: [],
-    checkedCalendar: true
+    checkedCalendar: true,
+    needsOwnerFollowUpTask: true, // promised to confirm but didn't book this turn => owner must lock it in
+    requestedPhrase: availability.requestedLabel
   };
 }
 
@@ -9370,7 +9424,13 @@ async function buildAppointmentTimingArrivalReplyWithCalendarCheck(args: {
   conv: any;
   parsed: AppointmentTimingParse | null;
   rawText: string | null | undefined;
-}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+}): Promise<{
+  reply: string;
+  alternatives: any[];
+  checkedCalendar: boolean;
+  needsOwnerFollowUpTask: boolean;
+  requestedPhrase: string;
+}> {
   return buildCustomerAckArrivalReplyWithCalendarCheck({
     conv: args.conv,
     rawText: args.rawText,
@@ -49814,6 +49874,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: checked.needsOwnerFollowUpTask,
+          booked: false,
+          offeredAlternatives: checked.alternatives.length > 0,
+          requestedPhrase: checked.requestedPhrase
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(checked.reply, undefined, {
         turnSchedulingIntent: checked.alternatives.length > 0,
         turnAvailabilityIntent: false,
@@ -51160,6 +51231,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
+    // Parity with the live arrival_update arm: a deferred-without-booking reschedule leaves an owner
+    // follow-up task so the requested time isn't silently dropped (+17167506588).
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: !!checked?.needsOwnerFollowUpTask,
+        booked: false,
+        offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
+        requestedPhrase: checked?.requestedPhrase ?? ""
+      },
+      event.body,
+      (inbound as any)?.providerMessageId
+    );
     // A tentative window ("maybe Saturday") gets the soft-visit cadence window. (A pure
     // soft-visit COMMITMENT, intent:none, is handled in its own reachable branch below — it
     // never enters this kind-gated block, so it must not be routed here.)
@@ -59186,6 +59270,17 @@ if (authToken && signature) {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: checked.needsOwnerFollowUpTask,
+          booked: false,
+          offeredAlternatives: checked.alternatives.length > 0,
+          requestedPhrase: checked.requestedPhrase
+        },
+        event.body,
+        event.providerMessageId
+      );
       return publishLiveTwilioReply(checked.reply, { turnSchedulingIntent: true });
     }
     const reply =
@@ -59247,6 +59342,19 @@ if (authToken && signature) {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
+    // After the resolve sweep above (so it isn't immediately closed): if we deferred the requested
+    // time without booking or offering alternatives, leave an owner follow-up task (+17167506588).
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: !!checked?.needsOwnerFollowUpTask,
+        booked: false,
+        offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
+        requestedPhrase: checked?.requestedPhrase ?? ""
+      },
+      event.body,
+      event.providerMessageId
+    );
     if (appointmentTimingIntent === "tentative_time_window") {
       const cfg = await getSchedulerConfigHot();
       await applySoftVisitCadenceWindow(

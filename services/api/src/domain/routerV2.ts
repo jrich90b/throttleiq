@@ -17,6 +17,7 @@ export {
   decideWatchOptOutTurn,
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
+  decideSchedulingDeferralFollowUpTask,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
