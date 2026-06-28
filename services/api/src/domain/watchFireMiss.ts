@@ -50,14 +50,34 @@ export function inventoryItemMatchesWatch(item: InventoryFeedItem, watch: Invent
   return true;
 }
 
-function activeWatches(conv: any): InventoryWatch[] {
-  const out: InventoryWatch[] = [];
-  const push = (w: InventoryWatch | undefined | null) => {
-    if (w && w.model && w.status !== "paused") out.push(w);
+// Same LOGICAL watch (model + year + condition), regardless of object identity — used to drop a stale
+// singular `inventoryWatch` that mirrors an `inventoryWatches[]` entry.
+function sameWatchIdentity(a: InventoryWatch, b: InventoryWatch): boolean {
+  const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
+  const cond = (c: unknown) => {
+    const s = norm(c);
+    return /\b(pre[- ]?owned|used|cpo|certified)\b/.test(s) ? "used" : /\bnew\b/.test(s) ? "new" : s;
   };
-  push(conv?.inventoryWatch);
-  for (const w of conv?.inventoryWatches ?? []) push(w);
-  return out;
+  return (
+    norm(a.model) === norm(b.model) &&
+    String(a.year ?? "") === String(b.year ?? "") &&
+    cond(a.condition) === cond(b.condition)
+  );
+}
+
+// The firing engine (notifyInventoryWatchersForAvailableItem) reads `inventoryWatches[]` when present
+// and falls back to the singular `inventoryWatch` ONLY when the array is empty; it records
+// lastNotifiedAt/lastNotifiedStockId on the ARRAY entry and never on the singular. So a conversation
+// can carry the SAME watch twice — a current array entry (with the notification record) and a stale
+// singular copy (without it). Naively unioning both double-counts the stale copy as a phantom "never
+// notified" miss (5 of 11 live highs on 2026-06-28 were this). Mirror the engine: take the array as
+// canonical and include the singular only when it is a genuinely DISTINCT watch, not a stale mirror.
+function activeWatches(conv: any): InventoryWatch[] {
+  const arr: InventoryWatch[] = Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [];
+  const single: InventoryWatch | undefined = conv?.inventoryWatch ?? undefined;
+  const merged: InventoryWatch[] = [...arr];
+  if (single && !arr.some(w => w && sameWatchIdentity(w, single))) merged.push(single);
+  return merged.filter(w => w && w.model && w.status !== "paused");
 }
 
 const isClosedOrSold = (conv: any): boolean =>
