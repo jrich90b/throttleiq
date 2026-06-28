@@ -35,17 +35,43 @@ if (process.argv.includes("--self-test")) {
     // NOT a miss: closed conversation
     { id: "c5", leadKey: "+1555000005", status: "closed", inventoryWatch: { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01" } },
     // NOT a miss: no matching unit in stock
-    { id: "c6", leadKey: "+1555000006", inventoryWatch: { model: "Fat Boy", year: 2024, status: "active", createdAt: "2026-06-01" } }
+    { id: "c6", leadKey: "+1555000006", inventoryWatch: { model: "Fat Boy", year: 2024, status: "active", createdAt: "2026-06-01" } },
+    // NOT a miss: the SAME watch is carried both as a stale singular `inventoryWatch` (no notify
+    // record) AND in `inventoryWatches[]` WITH the notify record for the available unit. The firing
+    // engine records lastNotified on the array entry only, leaving the singular stale; the detector
+    // must NOT double-count the stale singular as a phantom "never notified" miss (live FP class
+    // 2026-06-28: Low Rider S S7-26, Road King U896-23, etc.).
+    {
+      id: "c7",
+      leadKey: "+1555000007",
+      inventoryWatch: { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01" },
+      inventoryWatches: [
+        { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01", lastNotifiedAt: "2026-06-26", lastNotifiedStockId: "STK100" }
+      ]
+    },
+    // STILL a miss: a genuinely DISTINCT singular watch (different model) alongside a notified array
+    // entry must remain surfaced — the dedup only drops a stale MIRROR, never a distinct watch.
+    {
+      id: "c8",
+      leadKey: "+1555000008",
+      inventoryWatch: { model: "Road Glide", year: 2024, status: "active", createdAt: "2026-06-01" },
+      inventoryWatches: [
+        { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01", lastNotifiedAt: "2026-06-26", lastNotifiedStockId: "STK100" }
+      ]
+    }
   ] as any[];
   const misses = findWatchFireMisses({ conversations, feedItems: feed });
   const byId = Object.fromEntries(misses.map(m => [m.convId, m]));
-  assert.equal(misses.length, 2, `expected 2 misses, got ${misses.length}: ${misses.map(m => m.convId)}`);
+  assert.equal(misses.length, 3, `expected 3 misses, got ${misses.length}: ${misses.map(m => m.convId)}`);
   assert.equal(byId.c1?.confidence, "high", "c1 must be a high-confidence never-notified miss");
   assert.equal(byId.c1?.matchedStockId, "STK100");
   assert.equal(byId.c2?.confidence, "medium", "c2 must be a medium-confidence different-unit miss");
+  assert.ok(!byId.c7, "c7 must NOT be flagged — the array entry's notify record covers the stale singular mirror");
+  assert.equal(byId.c8?.confidence, "high", "c8 must stay flagged — a DISTINCT singular Road Glide watch (STK200) was never notified");
+  assert.equal(byId.c8?.matchedStockId, "STK200");
   for (const id of ["c3", "c4", "c5", "c6"]) assert.ok(!byId[id], `${id} must NOT be flagged`);
   assert.equal(misses[0].confidence, "high", "high-confidence misses sort first");
-  console.log("PASS watch fire miss audit (self-test: matcher + 6-fixture detector)");
+  console.log("PASS watch fire miss audit (self-test: matcher + 8-fixture detector, stale-singular dedup)");
   process.exit(0);
 }
 
