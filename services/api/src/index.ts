@@ -125,6 +125,12 @@ import {
   type InventorySnapshot,
   type InventorySnapshotLoadResult
 } from "./domain/inventoryWatchSnapshot.js";
+import {
+  reconcileFirstSeen,
+  loadInventoryFirstSeen,
+  saveInventoryFirstSeen,
+  type InventoryFirstSeenMap
+} from "./domain/inventoryFirstSeen.js";
 import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
@@ -4794,7 +4800,21 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 }
 
 const INVENTORY_SNAPSHOT_PATH = path.join(getDataDir(), "inventory_snapshot.json");
+const INVENTORY_FIRST_SEEN_PATH = path.join(getDataDir(), "inventory_first_seen.json");
 let inventoryWatchRunning = false;
+
+// Track when each unit was FIRST seen in the feed so the watch_fire_miss detector can tell a genuine
+// post-watch arrival (a real cron miss) from a unit that was already in stock when the watch was set
+// (intentionally not fired). Pure reconcile + atomic save; never blocks the cron on an IO error.
+async function updateInventoryFirstSeen(items: any[], arrivalsTrusted: boolean): Promise<void> {
+  try {
+    const prev = await loadInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH);
+    const { next } = reconcileFirstSeen({ prev, feedItems: items, arrivalsTrusted });
+    await saveInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH, next);
+  } catch (e: any) {
+    console.warn("[inventory-watch] first-seen update failed:", e?.message ?? e);
+  }
+}
 
 function inventoryKey(item: any): string | null {
   return inventorySnapshotKey(item);
@@ -5571,6 +5591,11 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       console.warn("[inventory-watch] notifications skipped because snapshot save failed.");
       return;
     }
+    // Record first-seen arrival times alongside the snapshot. A fresh key counts as a genuine ARRIVAL
+    // only when the cron itself trusts this sweep's diff (scanPlan.allowNotifications) — on an
+    // untrusted/bulk-resync sweep the new keys are feed artifacts, recorded as baseline so the
+    // detector never reads them as misses. Detector-only signal; does not gate any customer send.
+    await updateInventoryFirstSeen(items, scanPlan.allowNotifications);
     // Deliberate IN-STOCK REVIEW pass (admin-triggered, opts.includeInStock): draft for ALL available
     // matching units, not just newly-arrived ones, and bypass the new-arrival bulk guard. This is for the
     // watch-fire-miss backlog (a watcher whose bike is in stock but wasn't a fresh arrival, so the cron

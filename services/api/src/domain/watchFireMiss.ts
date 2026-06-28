@@ -11,6 +11,8 @@
 import type { Conversation, InventoryWatch } from "./conversationStore.js";
 import type { InventoryFeedItem } from "./inventoryFeed.js";
 import { modelMatches } from "./inventoryFeed.js";
+import { inventorySnapshotKey } from "./inventoryWatchSnapshot.js";
+import { unitArrivedAfter, type FirstSeenEntry } from "./inventoryFirstSeen.js";
 
 export type WatchFireMiss = {
   convId: string;
@@ -90,13 +92,24 @@ const isClosedOrSold = (conv: any): boolean =>
 export function findWatchFireMisses(args: {
   conversations: Conversation[];
   feedItems: InventoryFeedItem[];
+  // When provided, a matching unit is a miss candidate ONLY if it genuinely arrived AFTER the watch
+  // was created (the cron would have fired). A unit already in stock at watch-creation (baseline) or
+  // with no first-seen record is NOT a miss — the cron intentionally holds off (Joe's policy). Omit
+  // for the legacy/self-test behavior (no arrival gate).
+  firstSeen?: Record<string, FirstSeenEntry>;
 }): WatchFireMiss[] {
   const feed = args.feedItems ?? [];
+  const firstSeen = args.firstSeen;
   const misses: WatchFireMiss[] = [];
   for (const conv of args.conversations ?? []) {
     if (isClosedOrSold(conv)) continue;
     for (const watch of activeWatches(conv)) {
-      const matches = feed.filter(item => inventoryItemMatchesWatch(item, watch));
+      const matches = feed.filter(item => {
+        if (!inventoryItemMatchesWatch(item, watch)) return false;
+        if (!firstSeen) return true; // legacy: no arrival gate
+        const key = inventorySnapshotKey(item);
+        return !!key && unitArrivedAfter(firstSeen[key], (watch as any).createdAt);
+      });
       if (!matches.length) continue;
       const lastNotifiedAt = watch.lastNotifiedAt ? String(watch.lastNotifiedAt) : null;
       const notNotifiedMatch =

@@ -71,7 +71,34 @@ if (process.argv.includes("--self-test")) {
   assert.equal(byId.c8?.matchedStockId, "STK200");
   for (const id of ["c3", "c4", "c5", "c6"]) assert.ok(!byId[id], `${id} must NOT be flagged`);
   assert.equal(misses[0].confidence, "high", "high-confidence misses sort first");
-  console.log("PASS watch fire miss audit (self-test: matcher + 8-fixture detector, stale-singular dedup)");
+
+  // --- Arrival gate (firstSeen): only units that arrived AFTER the watch are misses (Joe's policy:
+  // a unit already in stock at watch-creation is intentionally never fired). Same fixtures, now with
+  // a first-seen map. c1's STK100 arrived after the watch => still a miss; flip it to baseline /
+  // before-the-watch and it must clear.
+  const watchCreated = "2026-06-01";
+  const arrivedAfter = { stk100: { key: "stk100", firstSeenAt: "2026-06-10", baseline: false } } as any;
+  const gated = findWatchFireMisses({ conversations, feedItems: feed, firstSeen: arrivedAfter });
+  const gatedById = Object.fromEntries(gated.map(m => [m.convId, m]));
+  assert.equal(gatedById.c1?.confidence, "high", "c1: STK100 arrived after the watch => still a high miss");
+  assert.equal(gatedById.c1?.matchedStockId, "STK100");
+  // STK200 (c8's Road Glide) has NO first-seen entry => unknown arrival => NOT a miss under the gate.
+  assert.ok(!gatedById.c8, "c8: a unit with no first-seen record is not a confirmed post-watch arrival => not flagged");
+
+  // STK100 already in stock at watch creation (baseline) => c1 clears.
+  const baselineSeen = { stk100: { key: "stk100", firstSeenAt: new Date(0).toISOString(), baseline: true } } as any;
+  assert.ok(
+    !findWatchFireMisses({ conversations, feedItems: feed, firstSeen: baselineSeen }).some(m => m.convId === "c1"),
+    "c1: a baseline (already-in-stock) unit must NOT be flagged"
+  );
+  // STK100 first-seen BEFORE the watch was created => c1 clears.
+  const seenBefore = { stk100: { key: "stk100", firstSeenAt: "2026-05-01", baseline: false } } as any;
+  assert.ok(
+    !findWatchFireMisses({ conversations, feedItems: feed, firstSeen: seenBefore }).some(m => m.convId === "c1"),
+    `c1: a unit first seen before the watch (${watchCreated}) must NOT be flagged`
+  );
+
+  console.log("PASS watch fire miss audit (self-test: matcher + dedup + arrival-gate, 8 fixtures)");
   process.exit(0);
 }
 
@@ -88,11 +115,25 @@ async function main() {
   const raw = JSON.parse(fs.readFileSync(convPath, "utf8"));
   const conversations = Array.isArray(raw) ? raw : Array.isArray(raw?.conversations) ? raw.conversations : Object.values(raw);
   const feedItems = await getInventoryFeed().catch(() => []);
-  const misses = findWatchFireMisses({ conversations, feedItems });
+  // Arrival gate: load the first-seen map written by the watch-fire cron so we only flag a unit that
+  // genuinely arrived AFTER the watch (a real cron miss), not one already in stock at watch-creation
+  // (which the cron intentionally never fires). Absent map => legacy behavior (no gate), with a note.
+  const { loadInventoryFirstSeen } = await import("../services/api/src/domain/inventoryFirstSeen.ts");
+  const firstSeenPath =
+    process.env.INVENTORY_FIRST_SEEN_PATH ||
+    (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, "inventory_first_seen.json") : path.join(path.dirname(convPath), "inventory_first_seen.json"));
+  const firstSeenMap = await loadInventoryFirstSeen(firstSeenPath).catch(() => null);
+  const firstSeen = firstSeenMap?.entries;
+  const misses = findWatchFireMisses({ conversations, feedItems, firstSeen });
 
   const lines: string[] = [];
   lines.push(`# Watch-fire miss report — ${misses.length} active watch(es) with a matching in-stock unit not notified`);
   lines.push(`# Feed items scanned: ${feedItems.length}. Source: ${convPath}`);
+  lines.push(
+    firstSeen
+      ? `# Arrival gate ON: only units that arrived after the watch (first-seen map: ${Object.keys(firstSeen).length} keys) are flagged.`
+      : `# Arrival gate OFF (no inventory_first_seen.json) — legacy scan; already-in-stock units may over-report.`
+  );
   lines.push("# Candidates for the agent-watch loop: verify, then fix the watch-fire code parser-first + backfill (notify).");
   lines.push("");
   if (!misses.length) lines.push("(no watch-fire misses)");
