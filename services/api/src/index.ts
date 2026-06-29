@@ -30363,6 +30363,7 @@ async function processDueFollowUpsUnlocked() {
         maybeAddCallTodoForFollowUp();
       }
       }
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence email auto-send → CRM log
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
     }
@@ -30380,6 +30381,7 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       appendOutbound(conv, "salesperson", to, smsMessage, "human", undefined, mediaUrls);
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence SMS fallback auto-send → CRM log
       if (isPostSale) {
         const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
@@ -30411,6 +30413,7 @@ async function processDueFollowUpsUnlocked() {
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       });
       appendOutbound(conv, from, to, smsMessage, "twilio", msg.sid, mediaUrls);
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence SMS auto-send → CRM log
       if (isPostSale) {
         const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
@@ -30512,6 +30515,7 @@ async function processAppointmentConfirmations() {
           ...triggerMeta
         };
         appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
+        queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm auto-send → CRM log
       } catch (e: any) {
         console.log("[appt-confirm] send failed:", e?.message ?? e);
         continue;
@@ -30536,6 +30540,7 @@ async function processAppointmentConfirmations() {
         ...triggerMeta
       };
       appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm fallback auto-send → CRM log
     }
   }
 }
@@ -47425,6 +47430,63 @@ function buildTlpLogFailureQuestion(leadRef: string, err: any): string {
   return `TLP log failed for leadRef ${leadRef}.${detail} Retry in TLP or update manually.`;
 }
 
+// Reusable TLP (CRM) contact logger — extracted from the manual POST /conversations/:id/send handler so
+// the AUTO-SEND paths (cadence, appointment confirmations, webhook autopilot) log the same way instead of
+// sending blind (the crm_log_stale coverage gap). Idempotent: buildTranscript returns count===0 once the
+// CRM is current for a leadRef, so calling it from multiple paths cannot double-log. Failures persist an
+// internal question (buildTlpLogFailureQuestion) so the crm_update_error detector surfaces them.
+async function logTlpForConversation(
+  conv: any,
+  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+): Promise<void> {
+  const leadRefs = resolveTlpContactLeadRefs(conv, {
+    explicitLeadRef: opts.explicitLeadRef ?? undefined,
+    draftId: opts.draftId ?? undefined,
+    multiRefWindowHours: Number(process.env.TLP_MULTI_REF_WINDOW_HOURS ?? 72)
+  });
+  if (leadRefs.length === 0) {
+    console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
+    return;
+  }
+  for (const leadRef of leadRefs) {
+    const { note, lastAt, count } = buildTranscript(conv, {
+      since: crmLastLoggedAtForLeadRef(conv, leadRef),
+      leadRef
+    });
+    if (count === 0 || !note) {
+      console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
+      continue;
+    }
+    try {
+      console.log("📝 TLP log start", { leadRef, convId: conv.id });
+      await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
+      if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
+      console.log("✅ TLP log success", { leadRef, convId: conv.id });
+    } catch (err: any) {
+      console.warn("⚠️ TLP log failed:", err?.message ?? err);
+      addInternalQuestion(conv.id, conv.leadKey, buildTlpLogFailureQuestion(leadRef, err));
+    }
+  }
+}
+
+// SERIALIZED TLP job queue. tlpLogCustomerContact launches its OWN Chromium per call (unique temp
+// profile, no internal lock), so firing it from the BATCHED cadence/appointment auto-send paths would
+// spawn many concurrent browsers and OOM the (2GB) box. Chain every fire-and-forget TLP log so at most
+// ONE runs at a time. The manual /send path routes through here too, so manual + auto are globally
+// serialized.
+let tlpLogChain: Promise<void> = Promise.resolve();
+function queueTlpLogForConversation(
+  conv: any,
+  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+): void {
+  tlpLogChain = tlpLogChain
+    .catch(() => undefined)
+    .then(() => logTlpForConversation(conv, opts))
+    .catch((err: any) => {
+      console.warn("⚠️ TLP async log failed:", err?.message ?? err);
+    });
+}
+
 app.post("/crm/tlp/log-contact", async (req, res) => {
   const leadRef = String(req.body?.leadRef ?? "").trim();
   const conversationId = String(req.body?.conversationId ?? "").trim();
@@ -48517,46 +48579,12 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
   };
 
-  const maybeLogTlp = async () => {
-    const leadRefs = resolveTlpContactLeadRefs(conv, {
-      explicitLeadRef: req.body?.leadRef ?? req.body?.tlpLeadRef,
-      draftId,
-      multiRefWindowHours: Number(process.env.TLP_MULTI_REF_WINDOW_HOURS ?? 72)
-    });
-    if (leadRefs.length === 0) {
-      console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
-      return;
-    }
-    for (const leadRef of leadRefs) {
-      const { note, lastAt, count } = buildTranscript(conv, {
-        since: crmLastLoggedAtForLeadRef(conv, leadRef),
-        leadRef
-      });
-      if (count === 0 || !note) {
-        console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
-        continue;
-      }
-      try {
-        console.log("📝 TLP env", {
-          TLP_USERNAME: process.env.TLP_USERNAME ? "set" : "missing",
-          TLP_PASSWORD: process.env.TLP_PASSWORD ? "set" : "missing",
-          TLP_BASE_URL: process.env.TLP_BASE_URL ?? "https://tlpcrm.com",
-          TLP_HEADLESS: process.env.TLP_HEADLESS ?? "true"
-        });
-        console.log("📝 TLP log start", { leadRef, convId: conv.id });
-        await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
-        if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
-        console.log("✅ TLP log success", { leadRef, convId: conv.id });
-      } catch (err: any) {
-        console.warn("⚠️ TLP log failed:", err?.message ?? err);
-        const msg = buildTlpLogFailureQuestion(leadRef, err);
-        addInternalQuestion(conv.id, conv.leadKey, msg);
-      }
-    }
-  };
+  // Delegates to the shared, SERIALIZED logger so the manual /send path and the auto-send paths share
+  // one TLP browser queue (never concurrent Chromium). Same behavior as before for this handler.
   const queueTlpLog = () => {
-    void maybeLogTlp().catch((err: any) => {
-      console.warn("⚠️ TLP async log failed:", err?.message ?? err);
+    queueTlpLogForConversation(conv, {
+      explicitLeadRef: req.body?.leadRef ?? req.body?.tlpLeadRef,
+      draftId
     });
   };
   const queueTuningLog = (twilioSid: string | null) => {
@@ -54725,6 +54753,11 @@ if (authToken && signature) {
       String(options?.providerMessageId ?? "").trim() || undefined,
       mediaUrls
     );
+    // [tlp-autosend-log] A genuine AUTOPILOT agent reply is a customer contact → log to CRM. Gated to
+    // autopilot so suggest-mode forceSend compliance acks (opt-out confirmations) don't spam TLP.
+    if (webhookMode === "autopilot") {
+      queueTlpLogForConversation(conv);
+    }
     saveConversation(conv);
     await flushConversationStore();
     return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(publishedText, mediaUrls));
