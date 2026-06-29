@@ -192,6 +192,33 @@ eq(dims({ id: "crm4", questions: [{ text: "TLP log failed for leadRef 12345.", s
 eq(dims({ id: "crm5", crm: { lastLoggedAt: "2026-06-25T00:00:00.000Z" }, questions: [{ text: "TLP log failed for leadRef 12345.", status: "open", createdAt: RECENT_Q }] }), [], "CRM logged successfully AFTER the failure => recovered, de-noised");
 eq(dims({ id: "crm6", questions: [{ text: "Customer asked about financing — needs a callback.", status: "open", createdAt: RECENT_Q }] }), [], "a non-TLP internal question => not a crm_update_error");
 
+// --- 8. crm_log_stale: a real send newer than the last TLP log by > N days, no open TLP-fail Q. ---
+const STALE_SEND = "2026-06-20T14:30:00.000Z"; // >2d before NOW (CRM_LOG_STALE_DAYS default 2)
+const FRESH_SEND = "2026-06-24T20:00:00.000Z"; // <2d before NOW (async-pending window)
+eq(dims({ id: "cls1", lead: { leadRef: "11028" }, crm: { lastLoggedAt: "2026-04-27T17:10:04.914Z" },
+  messages: [{ direction: "out", provider: "twilio", at: STALE_SEND, body: "Hope you're enjoying the Street Glide" }] }),
+  ["crm_log_stale"], "post-sale cadence auto-send long after the last CRM log => crm_log_stale");
+eq(dims({ id: "cls2", lead: { leadRef: "11545" },
+  messages: [{ direction: "in", provider: "sendgrid_adf", at: "2026-06-19T00:00:00.000Z", body: "Ref 11545" },
+             { direction: "out", provider: "human", at: STALE_SEND, body: "Happy to help." }] }),
+  ["crm_log_stale"], "never-logged conv with a real send => crm_log_stale");
+eq(dims({ id: "cls3", lead: { leadRef: "11337" }, crm: { lastLoggedAt: STALE_SEND, lastLoggedAtByLeadRef: { "11337": STALE_SEND } },
+  messages: [{ direction: "out", provider: "twilio", at: STALE_SEND, body: "x" }] }), [],
+  "per-leadRef CRM log == send time => logged, clean");
+eq(dims({ id: "cls4", lead: { leadRef: "11546" },
+  messages: [{ direction: "out", provider: "human", at: FRESH_SEND, body: "Hey there" }] }), [],
+  "send within CRM_LOG_STALE_DAYS => async-pending, not flagged");
+eq(dims({ id: "cls5",
+  messages: [{ direction: "out", provider: "twilio", at: STALE_SEND, body: "x" }] }), [],
+  "no leadRef anywhere => nothing could log, not a miss");
+eq(dims({ id: "cls6", lead: { leadRef: "11028" },
+  messages: [{ direction: "out", provider: "twilio", at: STALE_SEND, body: "x" }],
+  questions: [{ text: "TLP log failed for leadRef 11028.", status: "open", createdAt: RECENT_Q }] }),
+  ["crm_update_error"], "open TLP-fail question takes precedence (exclusive with crm_log_stale)");
+eq(dims({ id: "cls7", lead: { leadRef: "11471" },
+  messages: [{ direction: "out", provider: "draft_ai", at: STALE_SEND, body: "draft" }] }), [],
+  "draft_ai (suggest-mode, never sent) is not a real send => clean");
+
 // --- A fully healthy conv trips nothing. ---
 eq(dims({ id: "ok", appointment: { status: "confirmed", bookedEventId: "e", whenText: "x" }, followUpCadence: { status: "active", kind: "standard" }, followUp: { mode: "active" } }), [], "healthy conv => zero anomalies");
 
