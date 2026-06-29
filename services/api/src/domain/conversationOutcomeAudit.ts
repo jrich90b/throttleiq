@@ -58,7 +58,10 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   // CRM (TLP) Playwright update failure. Nominal category "state" (a side-effect that didn't
   // apply); the classifier overrides this dimension to Tier 2 escalate (it's an integration
   // diagnosis — selector drift / login / timeout — not an auto-heal), mirroring reported_issue.
-  crm_update_error: "state"
+  crm_update_error: "state",
+  // CRM log coverage gap: a real send not reflected in TLP with no failure recorded (auto-send
+  // paths that never trigger logging). Also Tier-2 escalate (integration-wiring diagnosis).
+  crm_log_stale: "state"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
 
@@ -79,9 +82,10 @@ type AuditableConv = {
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
-  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
+  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; feedback?: { rating?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
-  crm?: { lastLoggedAt?: string | null } | null;
+  lead?: { leadRef?: string | null } | null;
+  crm?: { lastLoggedAt?: string | null; lastLoggedAtByLeadRef?: Record<string, string | null> | null } | null;
 };
 
 function isClosed(conv: AuditableConv): boolean {
@@ -300,6 +304,49 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
       healed: false,
       detail: String(crmFailure.q.text ?? "CRM update failed").slice(0, 180)
     });
+  }
+
+  // 8. CRM log STALE (the coverage-gap blind spot, distinct from crm_update_error): a REAL outbound
+  //    was SENT (provider twilio/human/sendgrid or a Twilio sid) NEWER than the last successful TLP
+  //    log, with a resolvable leadRef and NO open TLP-failure question. That means the send never
+  //    even ATTEMPTED a CRM log (the auto-send paths — cadence, appointment-confirm, webhook autopilot
+  //    — don't trigger logging today), so it's INVISIBLE to crm_update_error (which only fires on a
+  //    persisted failure). Surfaced so the wiring gap is caught + fixed. Exclusive with
+  //    crm_update_error. De-noised: requires a leadRef; recent sends (< CRM_LOG_STALE_DAYS, the
+  //    fire-and-forget async window) don't trip; ≤21d recency cap; draft_ai (suggest-mode, never sent)
+  //    does not count as a send.
+  const leadRef = String(conv.lead?.leadRef ?? "").trim();
+  const hasCrmFailure = out.some(a => a.dimension === "crm_update_error");
+  if (leadRef && !hasCrmFailure) {
+    const staleDays = Number(process.env.CRM_LOG_STALE_DAYS ?? 2);
+    const sentOutMs = (conv.messages ?? [])
+      .filter(
+        m =>
+          m?.direction === "out" &&
+          !!m?.body &&
+          (["twilio", "human", "sendgrid"].includes(String(m?.provider ?? "").toLowerCase()) ||
+            !!String((m as any)?.sid ?? "").trim())
+      )
+      .map(m => Date.parse(String(m?.at ?? "")))
+      .filter(t => Number.isFinite(t));
+    const lastSentMs = sentOutMs.length ? Math.max(...sentOutMs) : NaN;
+    if (Number.isFinite(lastSentMs)) {
+      const crmByRef = conv.crm?.lastLoggedAtByLeadRef?.[leadRef];
+      const crmLoggedMs = Date.parse(String(crmByRef ?? conv.crm?.lastLoggedAt ?? ""));
+      const loggedAfterSend = Number.isFinite(crmLoggedMs) && crmLoggedMs >= lastSentMs;
+      const ageDays = (now.getTime() - lastSentMs) / (1000 * 60 * 60 * 24);
+      if (!loggedAfterSend && ageDays >= staleDays && ageDays <= 21) {
+        out.push({
+          ...base,
+          dimension: "crm_log_stale",
+          severity: "P2",
+          healed: false,
+          detail: `a sent outbound (${Math.round(ageDays)}d ago) is newer than the last TLP log${
+            Number.isFinite(crmLoggedMs) ? ` (${Math.round((now.getTime() - crmLoggedMs) / (1000 * 60 * 60 * 24))}d ago)` : " (never logged)"
+          } — no failure recorded (the send never attempted a CRM log)`
+        });
+      }
+    }
   }
 
   return out.map(a => ({ ...a, category: categoryFor(a.dimension) }));
