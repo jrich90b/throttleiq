@@ -53,6 +53,22 @@ export function classifyOutcomeAnomaly(
     };
   }
 
+  // A CRM (TLP) update error is a Playwright/browser-automation INTEGRATION failure (selector drift,
+  // login, launch timeout) that left the dealer's CRM stale. The fix is a diagnosis of the connector
+  // (or a transient/credentials issue), NOT a parser few-shot and NOT a reconcile heal — and it is
+  // never an auto-mergeable code change. So it is ALWAYS Tier 2 (escalate, notify, never auto-merge):
+  // the loop opens an approve-first PR (or surfaces the runtime cause), the operator decides.
+  if (anomaly.dimension === "crm_update_error") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale: "CRM/TLP Playwright update failed → diagnose the integration (selector drift / login / timeout); approve-first, never auto-merge"
+    };
+  }
+
   // A `healed` dimension that re-appears across runs means the reconcile heal isn't actually fixing it —
   // a gap in the heal logic (e.g. the single/array inventory-watch leak the loop caught 6/25). That's a
   // reviewed code fix, not a transient → escalate. Seen once, it's just the tick that hasn't run yet.

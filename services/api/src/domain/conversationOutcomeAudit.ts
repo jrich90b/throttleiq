@@ -54,7 +54,11 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   task_autoclose_regression: "state",
   watch_fire_miss: "state",
   watch_fired_wrong_model: "state",
-  negative_feedback: "feedback"
+  negative_feedback: "feedback",
+  // CRM (TLP) Playwright update failure. Nominal category "state" (a side-effect that didn't
+  // apply); the classifier overrides this dimension to Tier 2 escalate (it's an integration
+  // diagnosis — selector drift / login / timeout — not an auto-heal), mirroring reported_issue.
+  crm_update_error: "state"
 };
 const categoryFor = (dimension: string): OutcomeCategory => CATEGORY_BY_DIMENSION[dimension] ?? "state";
 
@@ -76,6 +80,8 @@ type AuditableConv = {
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
   messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; feedback?: { rating?: string | null } | null }> | null;
+  questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
+  crm?: { lastLoggedAt?: string | null } | null;
 };
 
 function isClosed(conv: AuditableConv): boolean {
@@ -269,6 +275,31 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   const lastOut = [...(conv.messages ?? [])].reverse().find(m => m?.direction === "out");
   if (String(lastOut?.feedback?.rating ?? "").toLowerCase() === "down") {
     out.push({ ...base, dimension: "negative_feedback", severity: "P2", healed: false, detail: "the latest outbound was thumbed-down and not yet improved" });
+  }
+
+  // 7. CRM (TLP) update error: the Playwright-driven TLP push (log contact / mark delivered) FAILED
+  //    and persisted an open internal question ("TLP log failed for leadRef ..." / "TLP delivered
+  //    step failed for leadRef ..."; see buildTlpLogFailureQuestion + the delivered-step sites). The
+  //    dealer's CRM is now stale. Surfaced so the loop DIAGNOSES the integration (selector drift /
+  //    login / launch timeout) and opens an approve-first fix — never an auto-heal. Recent only
+  //    (≤21d). De-noised: skip when the CRM has since logged successfully (crm.lastLoggedAt newer
+  //    than the failure) — a transient that already recovered.
+  const crmLastLoggedMs = Date.parse(String(conv.crm?.lastLoggedAt ?? ""));
+  const crmFailure = (conv.questions ?? [])
+    .filter(q => String(q?.status ?? "").toLowerCase() !== "done")
+    .filter(q => /\btlp\b[\s\S]*\bfail/i.test(String(q?.text ?? "")))
+    .map(q => ({ q, atMs: Date.parse(String(q?.createdAt ?? "")) }))
+    .filter(({ atMs }) => Number.isFinite(atMs) && (now.getTime() - atMs) / (1000 * 60 * 60 * 24) <= 21)
+    .filter(({ atMs }) => !(Number.isFinite(crmLastLoggedMs) && crmLastLoggedMs >= atMs))
+    .sort((a, b) => b.atMs - a.atMs)[0];
+  if (crmFailure) {
+    out.push({
+      ...base,
+      dimension: "crm_update_error",
+      severity: "P2",
+      healed: false,
+      detail: String(crmFailure.q.text ?? "CRM update failed").slice(0, 180)
+    });
   }
 
   return out.map(a => ({ ...a, category: categoryFor(a.dimension) }));

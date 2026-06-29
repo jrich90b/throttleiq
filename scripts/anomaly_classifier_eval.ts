@@ -50,6 +50,14 @@ check(classifyOutcomeAnomaly(A({ category: "discovery", healed: false, dimension
   { graduatedCategories: new Set(["open_critic_finding"]) } as any),
   { tier: 2, action: "escalate", autoMergeEligible: false }, "discovery never auto-merges even if graduated");
 
+// --- CRM/TLP update error: an integration failure => ALWAYS Tier 2 escalate, never auto-merge. ---
+check(classifyOutcomeAnomaly(A({ category: "state", healed: false, dimension: "crm_update_error" })),
+  { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "crm_update_error => escalate (diagnose integration)");
+// Even graduated, a CRM integration error never auto-merges (the fix is a connector diagnosis).
+check(classifyOutcomeAnomaly(A({ category: "state", healed: false, dimension: "crm_update_error" }),
+  { graduatedCategories: new Set(["crm_update_error"]) }),
+  { tier: 2, action: "escalate", autoMergeEligible: false }, "crm_update_error never auto-merges even if graduated");
+
 // --- conservative default: an unknown category => Tier 2 escalate. ---
 check(classifyOutcomeAnomaly(A({ category: "mystery", healed: false } as any)),
   { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "unknown category => escalate");
