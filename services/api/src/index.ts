@@ -49835,11 +49835,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
-      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
         conv,
         text: event.body,
         appointmentType
       });
+      if (!windowSlots.length) {
+        // [schedule-offer-bare-time-day-carry] Mirror of the live arm: retry the slot search
+        // from the parser's normalized day+time when the raw inbound is a bare/compact time
+        // ("1230") that yields no weekday clause, so we never degrade to a vague deferral on a
+        // concrete same-day time proposal (+17165701338). Fail-safe: dayless phrase => no slots.
+        const requestedPhrase = customerAckActionRequestedPhrase(regenCustomerAckActionParse);
+        if (requestedPhrase && requestedPhrase !== String(event.body ?? "").trim()) {
+          windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+            conv,
+            text: requestedPhrase,
+            appointmentType
+          });
+        }
+      }
       const windowReply = buildRequestedDaySlotReply(windowSlots);
       if (windowReply) {
         setLastSuggestedSlots(conv, windowSlots);
@@ -59258,11 +59272,27 @@ if (authToken && signature) {
     }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
-      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
         conv,
         text: event.body,
         appointmentType
       });
+      if (!windowSlots.length) {
+        // [schedule-offer-bare-time-day-carry] The raw inbound can be a bare/compact time with
+        // no weekday ("1230" after we offered concrete slots) that yields no clause, so the slot
+        // search returns nothing and the turn degrades to a vague "I'll check times and follow
+        // up" while the customer believes they're booked and shows up (+17165701338). Retry the
+        // search from the parser's NORMALIZED day+time, which carries the offered day. Fail-safe:
+        // an empty or dayless phrase still returns no slots and the prior behavior stands.
+        const requestedPhrase = customerAckActionRequestedPhrase(customerAckActionParse);
+        if (requestedPhrase && requestedPhrase !== String(event.body ?? "").trim()) {
+          windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+            conv,
+            text: requestedPhrase,
+            appointmentType
+          });
+        }
+      }
       const windowReply = buildRequestedDaySlotReply(windowSlots);
       if (windowReply) {
         setLastSuggestedSlots(conv, windowSlots);
