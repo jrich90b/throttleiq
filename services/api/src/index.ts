@@ -18,6 +18,11 @@ import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildWatch
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import {
+  isInventoryWatchOptedOut,
+  setInventoryWatchOptOut,
+  clearInventoryWatchOptOut
+} from "./domain/inventoryWatchOptOut.js";
+import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
   buildPhotoShareReplyWithVision,
@@ -2506,7 +2511,7 @@ async function resolveWatchOptOutReply(
     confidenceMin: watchOptOutConfidenceMin()
   });
   if (decision.kind !== "pause_watch") return null;
-  const paused = pauseInventoryWatches(conv);
+  const paused = markInventoryWatchOptOut(conv, "watch_opt_out");
   stopFollowUpCadence(conv, "watch_opt_out");
   recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
   return buildWatchOptOutAck();
@@ -5630,6 +5635,9 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
         conv.inventoryWatches = [conv.inventoryWatch];
       }
       if (conv.status === "closed") continue;
+      // Durable opt-out: a customer who asked us to stop alerting them is off
+      // the watch alerts regardless of any later (re-)created active watch.
+      if (isInventoryWatchOptedOut(conv)) continue;
       const phone = conv.lead?.phone ?? conv.leadKey;
       if (phone && isSuppressed(phone)) continue;
       if (conv.followUp?.mode === "manual_handoff") continue;
@@ -5737,6 +5745,14 @@ function pauseInventoryWatches(conv: any): number {
   return paused;
 }
 
+// Explicit customer opt-out: pause the current watches AND set the durable
+// opt-out flag so a later watch (re-)creation can't refire alerts at someone who
+// asked us to stop. See domain/inventoryWatchOptOut.ts.
+function markInventoryWatchOptOut(conv: any, reason: string): number {
+  setInventoryWatchOptOut(conv, reason);
+  return pauseInventoryWatches(conv);
+}
+
 async function notifyInventoryWatchersForAvailableItem(
   matchedItem: InventoryFeedItem,
   opts?: { reason?: string; excludeConvId?: string | null }
@@ -5758,6 +5774,9 @@ async function notifyInventoryWatchersForAvailableItem(
   for (const conv of getAllConversations()) {
     if (opts?.excludeConvId && conv.id === opts.excludeConvId) continue;
     if (conv.status === "closed") continue;
+    // Durable opt-out: honor a customer's "stop alerting me" even if a watch was
+    // re-created after they opted out. See domain/inventoryWatchOptOut.ts.
+    if (isInventoryWatchOptedOut(conv)) continue;
     const phone = conv.lead?.phone ?? conv.leadKey;
     if (phone && isSuppressed(phone)) continue;
     if (conv.followUp?.mode === "manual_handoff") continue;
@@ -11857,6 +11876,10 @@ function ensureInventoryWatchForHeldCadence(
   conv: any,
   item: Partial<InventoryFeedItem> & { condition?: string | null }
 ) {
+  // Don't auto-create an alerting watch for a lead who opted out of watch
+  // alerts — this auto path is exactly what re-armed alerts after Mark Scoville
+  // opted out. An explicit re-subscribe (inventory_watch_active) clears the flag.
+  if (isInventoryWatchOptedOut(conv)) return;
   const model = canonicalizeWatchModelLabel(item?.model ?? conv?.lead?.vehicle?.model ?? null);
   if (!model) return;
   const createdAt = nowIso();
@@ -18714,6 +18737,13 @@ function isFollowUpDialogState(name: DialogStateName): boolean {
 
 function setDialogState(conv: any, name: DialogStateName) {
   if (!conv) return;
+  // Re-opt-in: entering the explicit active-watch dialog means the customer is
+  // actively subscribing again, so clear any prior durable watch opt-out. This
+  // is the one transition every explicit watch activation passes through and the
+  // held-unit auto-guard does NOT, so it's the clean place to reverse the flag.
+  if (name === "inventory_watch_active") {
+    clearInventoryWatchOptOut(conv);
+  }
   const updatedAt = new Date().toISOString();
   if (conv.dialogState?.name === name) {
     conv.dialogState.updatedAt = updatedAt;
