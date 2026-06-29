@@ -178,6 +178,20 @@ eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 
 eq(dims({ id: "c6b", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "bad", feedback: { rating: "down" } }, { direction: "out", provider: "draft_ai", at: "t2", body: "redraft" }] }), [], "a newer outbound after the 👎 => addressed, clean");
 eq(dims({ id: "c6c", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "good", feedback: { rating: "up" } }] }), [], "thumbs-UP => not an anomaly");
 
+// --- 7. CRM (TLP) update error: an open TLP-failure internal question => crm_update_error. ---
+const RECENT_Q = "2026-06-24T12:00:00.000Z"; // within 21d of NOW
+const OLD_Q = "2026-05-01T12:00:00.000Z";    // > 21d before NOW
+{
+  const a = auditConversationOutcome({ id: "crm1", questions: [{ text: "TLP log failed for leadRef 12345. Last error: lead: quick lookup failed. Retry in TLP or update manually.", status: "open", createdAt: RECENT_Q }] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["crm_update_error"], "open recent TLP-log-failure question => crm_update_error");
+  eq(a[0].category, "state", "crm_update_error nominal category=state");
+}
+eq(dims({ id: "crm2", questions: [{ text: "TLP delivered step failed for leadRef 9. visit: submit button not found. Retry in TLP or update manually.", status: "open", createdAt: RECENT_Q }] }), ["crm_update_error"], "open recent TLP-delivered-step failure => crm_update_error");
+eq(dims({ id: "crm3", questions: [{ text: "TLP log failed for leadRef 12345. Retry in TLP or update manually.", status: "done", createdAt: RECENT_Q }] }), [], "resolved (status=done) TLP failure => clean");
+eq(dims({ id: "crm4", questions: [{ text: "TLP log failed for leadRef 12345.", status: "open", createdAt: OLD_Q }] }), [], "stale (>21d) TLP failure => clean (ages out)");
+eq(dims({ id: "crm5", crm: { lastLoggedAt: "2026-06-25T00:00:00.000Z" }, questions: [{ text: "TLP log failed for leadRef 12345.", status: "open", createdAt: RECENT_Q }] }), [], "CRM logged successfully AFTER the failure => recovered, de-noised");
+eq(dims({ id: "crm6", questions: [{ text: "Customer asked about financing — needs a callback.", status: "open", createdAt: RECENT_Q }] }), [], "a non-TLP internal question => not a crm_update_error");
+
 // --- A fully healthy conv trips nothing. ---
 eq(dims({ id: "ok", appointment: { status: "confirmed", bookedEventId: "e", whenText: "x" }, followUpCadence: { status: "active", kind: "standard" }, followUp: { mode: "active" } }), [], "healthy conv => zero anomalies");
 
