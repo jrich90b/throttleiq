@@ -50383,7 +50383,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerProfile = await getDealerProfileHot();
-  const regenRequestedDayTime = parseRequestedDayTime(event.body ?? "", regenTz);
+  // [reschedule-bare-time-day-carry] Mirror the live /webhooks/twilio reschedule fix: carry the
+  // day from the agent's last concrete offer for a bare-time accept ("1:00 PM works") so a
+  // reschedule-pending lead is NOT short-circuited into the booking-link reschedule deflection
+  // below — instead it falls through to the day-aware slot search (+17167506588).
+  const regenRequestedDayTime = parseRequestedDayTime(
+    applyInferredScheduleDayToTimeOnlyText(
+      event.body ?? "",
+      String(getLastNonVoiceOutbound(conv)?.body ?? ""),
+      conv.scheduler?.lastSuggestedSlots ?? [],
+      regenTz
+    ),
+    regenTz
+  );
   const regenAppointmentOutcomeRescheduleReply =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -57155,6 +57167,25 @@ if (authToken && signature) {
       cfg.timezone
     );
     requestedReschedule = bookedWindowAdjustment ?? parseRequestedDayTime(event.body, cfg.timezone);
+    if (!requestedReschedule) {
+      // [reschedule-bare-time-day-carry] Customer replied with only a time ("1:00 PM works")
+      // to the agent's own concrete day+time offer (e.g. "...Friday, July 3. How's 1:00 PM or
+      // 2:30 PM?"). Carry the DAY from that last outbound offer BEFORE the stale-appointment
+      // fallback below, so we never resolve the wrong day from the original booked date
+      // (+17167506588: a no-show reschedule deflected to the booked Saturday's closed slots).
+      // Fail-safe: if no day can be inferred from the offer the text is returned unchanged and
+      // we fall through to the existing behavior.
+      const lastOfferText = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+      const dayCarriedText = applyInferredScheduleDayToTimeOnlyText(
+        event.body,
+        lastOfferText,
+        conv.scheduler?.lastSuggestedSlots ?? [],
+        cfg.timezone
+      );
+      if (dayCarriedText !== String(event.body ?? "").trim()) {
+        requestedReschedule = parseRequestedDayTime(dayCarriedText, cfg.timezone);
+      }
+    }
     if (!requestedReschedule && conv.appointment.whenIso) {
       const token = extractTimeToken(event.body);
       const hasTimeFallbackCue =
