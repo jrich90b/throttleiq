@@ -9,7 +9,7 @@ import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
 import { summarizeTriage } from "./lib/taskTriage";
-import { resizeImageForUpload } from "./lib/imageResize";
+import { resizeImageForUpload, humanizeUploadError } from "./lib/imageResize";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -8557,7 +8557,9 @@ export default function Home() {
       }
       setMdfFiles([]);
     } catch (err) {
-      setMdfError(err instanceof Error ? err.message : "MDF packet could not be created.");
+      // WebKit/iOS surfaces a dropped upload fetch as "Load failed" — turn it (and too-large) into
+      // clear, actionable guidance instead of the cryptic raw error the dealer saw on mobile.
+      setMdfError(humanizeUploadError(err, "MDF packet could not be created."));
     } finally {
       setMdfLoading(false);
     }
