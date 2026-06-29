@@ -86,4 +86,19 @@ assert.equal(
 );
 assert.match(api, /recordRouteOutcome\((?:scope|"live"|"regen"), "vehicle_media_request"/, "route outcome recorded");
 
+// --- 5) Persist the quoted unit on the finance/pricing estimate arm (both paths). ---
+// The estimate arm fetches the EXACT feed unit to quote a payment but used to discard its url/images,
+// so a later "can I see the pics/link?" found no persisted units → the generator fabricated a generic
+// /inventory?query= or promo link (the dominant photo/link thumbs-down cluster, conc. +17167506588).
+// Persisting the unit (with its VDP url + photos) lets the existing deterministic media reply fire.
+assert.match(api, /function persistDiscussedUnit\(conv: any, item: InventoryFeedItem/, "discussed-unit persist helper exists");
+const persistCalls = (api.match(/persistDiscussedUnit\(conv, item\)/g) ?? []).length;
+assert.ok(persistCalls >= 3, `the estimate arms must persist the quoted unit in both paths (found ${persistCalls})`);
+assert.match(api, /toRecommendedUnits\(\[item\]\)\[0\]/, "persist reuses the recommender mapping (carries url + images)");
+assert.match(
+  api,
+  /if \(!mapped \|\| \(!mapped\.url && !\(mapped\.images && mapped\.images\.length\)\)\) return;/,
+  "persist skips url-less units — never enables an empty/fabricated link"
+);
+
 console.log("PASS vehicle media request eval (decision + deterministic links + parser + both paths)");
