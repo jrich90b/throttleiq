@@ -4,6 +4,7 @@ import twilio from "twilio";
 import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
+import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import {
   upsertConversationByLeadKey,
@@ -1650,27 +1651,11 @@ function isTestRideSeason(profile: any, now: Date): boolean {
   return months.includes(current);
 }
 
+// Delegates to the shared, DD/MM-aware structured-ADF date parser. Was a MM/DD-only private copy that
+// dropped Room58 "Book test ride" dates like 29/6/2026 (month=29 → null) → the lead fell through to a
+// generic "not in stock" deflection that ignored the requested test-ride date/time.
 function parsePreferredDateOnly(value: string | null | undefined): Date | null {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
-  if (m[3] && m[3].length === 2) year = 2000 + year;
-  if (
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(year) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+  return parsePreferredAdfDate(value);
 }
 
 function formatPreferredDateForReply(value: string | null | undefined): string | null {
