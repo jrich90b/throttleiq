@@ -17,6 +17,7 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildWatchAvailableReply } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
+import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import {
   isInventoryWatchOptedOut,
   setInventoryWatchOptOut,
@@ -13248,27 +13249,11 @@ function isUnknownInterestVehicle(conv: any): boolean {
   return /full line|other/i.test(raw);
 }
 
+// Delegates to the shared, DD/MM-aware structured-ADF date parser (regen twin of sendgridInbound's
+// parsePreferredDateOnly) so the live + regen test-ride first-touch can't drift. Was a MM/DD-only copy
+// that dropped Room58 dates like 29/6/2026 → null → generic deflection.
 function parsePreferredDateOnlyForReply(value: string | null | undefined): Date | null {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
-  if (m[3] && m[3].length === 2) year = 2000 + year;
-  if (
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(year) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+  return parsePreferredAdfDate(value);
 }
 
 function formatPreferredDateForReply(value: string | null | undefined): string | null {
