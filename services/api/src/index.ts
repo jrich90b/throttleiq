@@ -18,6 +18,7 @@ import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildWatch
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
+import { decideConversationAccess } from "./domain/conversationAccess.js";
 import {
   isInventoryWatchOptedOut,
   setInventoryWatchOptOut,
@@ -4108,13 +4109,6 @@ async function maybeRestoreSalesLeadOwnerFromPreference(conv: any): Promise<bool
 
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
-  const role = String(user?.role ?? "").toLowerCase();
-  if (role === "manager") return true;
-  if (user?.permissions?.canViewAllLeads) return true;
-  if (user?.permissions?.canViewAllTasks) {
-    const convId = String(conv?.id ?? "").trim();
-    if (convId && listOpenTodos().some(todo => todo.convId === convId && todo.status === "open")) return true;
-  }
   const requesterId = String(user?.id ?? "").trim();
   const ownerId = String(conv?.leadOwner?.id ?? "").trim();
   const requesterName = String(user?.name ?? "").trim().toLowerCase();
@@ -4122,13 +4116,21 @@ function canUserAccessConversation(user: any, conv: any): boolean {
   const isLeadOwner =
     (!!requesterId && !!ownerId && requesterId === ownerId) ||
     (!!requesterName && !!ownerName && requesterName === ownerName);
-  if (isLeadOwner) return true;
-  const dept = getConversationDepartment(conv);
-  if (role === "service" || role === "parts" || role === "apparel") {
-    return dept === role;
-  }
-  if (role === "salesperson") return !dept;
-  return true;
+  const hasOwner = !!ownerId || !!ownerName;
+  const convId = String(conv?.id ?? "").trim();
+  const hasOpenTodo =
+    !!user?.permissions?.canViewAllTasks &&
+    !!convId &&
+    listOpenTodos().some(todo => todo.convId === convId && todo.status === "open");
+  return decideConversationAccess({
+    role: String(user?.role ?? ""),
+    canViewAllLeads: !!user?.permissions?.canViewAllLeads,
+    canViewAllTasks: !!user?.permissions?.canViewAllTasks,
+    isLeadOwner,
+    hasOwner,
+    department: getConversationDepartment(conv),
+    hasOpenTodo
+  });
 }
 
 app.use((req, res, next) => {
