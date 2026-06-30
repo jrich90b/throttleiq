@@ -466,6 +466,7 @@ import {
   findInventoryPrice,
   getInventoryFeed,
   hasInventoryForModelYear,
+  unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import {
@@ -5497,6 +5498,19 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     }
     return false;
   })();
+  // Distinct-model guard (Joe 2026-06-30): a specific base-model watch ("Road
+  // Glide") must NOT be satisfied by a DISTINCT sibling unit ("Road Glide
+  // Limited"/"...ST"/CVO/Ultra/Classic/Special) via the directional include or a
+  // catalog-code alias — those are separate models. Generic FAMILY watches
+  // (familyMatch) still collect variants. watch.openToOtherTrims relaxes it.
+  if (
+    !genericWatchFamily &&
+    !familyMatch &&
+    !watch.openToOtherTrims &&
+    unitIsDistinctModelFromWatch(item.model, watch.model)
+  ) {
+    return false;
+  }
   const itemModelIsCodeOnly = modelTextLooksLikeCatalogCode(item.model);
   if (
     genericWatchFamily &&
