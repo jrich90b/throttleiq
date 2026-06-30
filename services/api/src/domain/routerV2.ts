@@ -10,6 +10,7 @@ export {
   decideDealStatusCheckTurn,
   decideEventPromoTurn,
   decideNonBuyerSurveyTurn,
+  decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,

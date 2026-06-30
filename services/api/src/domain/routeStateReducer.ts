@@ -1522,3 +1522,42 @@ export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuy
   }
   return { kind: "none" };
 }
+
+// Dealer Lead App MARKETING SURVEY lead (the Tim Williams class, +17163741119, 2026-06-24) — the
+// buyer-side twin of decideNonBuyerSurveyTurn. Where that keys on the STRUCTURED purchase-timeframe
+// field, many DLA surveys embed the whole Q&A in the free-text Customer Comments (ownership history +
+// "do you expect to make a purchase?" + "which model are you interested in?" + "Demo Bikes Ridden"),
+// so the structured field is empty and the lead falls through to the generic sales generator — which
+// read the survey's "Demo Bikes Ridden: <model>" field as a completed test ride at THIS dealer and
+// fabricated "Thanks again for coming in for the test ride ... Congrats on the <model>" (held by the
+// context-fidelity gate). The survey is comprehended by `parseDealerLeadSurveyWithLLM`; this pure
+// decision maps the parse to the FIRST-touch reply: a confident non-buyer reuses the existing
+// no-pressure ack, a buyer (or a confident survey of unknown horizon) gets the warm buyer ack
+// (acknowledge stated model interest + invite a ride/visit), and anything else routes normally.
+// Like decideNonBuyerSurveyTurn this is structured routing off a typed parse, applied at the INITIAL
+// ADF draft only (both paths). Fail-direction safe: a false positive on a real inventory lead still
+// yields a correct warm opener (no fabricated frame, no false availability claim, no close), and a
+// false negative just keeps current behavior (the context-fidelity gate still backstops fabrication).
+export type DealerLeadSurveyTurnKind = "buyer_survey_ack" | "non_buyer_survey_ack" | "none";
+
+export type DealerLeadSurveyTurnInput = {
+  isDealerLeadSurvey: boolean;
+  purchaseIntent?: "buyer" | "non_buyer" | "unknown" | null;
+  confidence?: number | null;
+};
+
+export type DealerLeadSurveyTurnDecision = { kind: DealerLeadSurveyTurnKind };
+
+export function decideDealerLeadSurveyTurn(
+  input: DealerLeadSurveyTurnInput
+): DealerLeadSurveyTurnDecision {
+  if (!input.isDealerLeadSurvey) return { kind: "none" };
+  // Only divert on a confident survey read (mirrors the >= 0.7 floors used by the other ADF
+  // parser-driven reducers). Unsure => normal routing answers the lead.
+  const confidence =
+    typeof input.confidence === "number" && Number.isFinite(input.confidence) ? input.confidence : 0;
+  if (confidence < 0.7) return { kind: "none" };
+  if (input.purchaseIntent === "non_buyer") return { kind: "non_buyer_survey_ack" };
+  // "buyer" or a confident-but-unspecified survey => warm buyer acknowledgement.
+  return { kind: "buyer_survey_ack" };
+}

@@ -2008,6 +2008,30 @@ export type NonMotorcycleTradeParse = {
   confidence?: number;
 };
 
+// A Dealer Lead App "Marketing Questions" survey — a structured lead-gen submission whose body
+// is a Q&A about the customer's ownership history, purchase timeframe, the model they're
+// INTERESTED IN, and which demo bikes they say they've ridden ("Demo Bikes Ridden: ..."). It is
+// NOT a direct inventory inquiry. The generic sales generator read the survey's "Demo Bikes
+// Ridden: <model>" field as a completed test ride at THIS dealer and fabricated "Thanks again
+// for coming in for the test ride ... Congrats on the <model>" (Tim Williams, +17163741119,
+// held by the context-fidelity gate 2026-06-24). This parser comprehends the survey so the
+// first touch can be a warm, accurate acknowledgement of stated interest instead.
+export type DealerLeadSurveyParse = {
+  // True when the inbound is a structured dealer marketing/satisfaction survey (Dealer Lead App
+  // "Marketing Questions" or equivalent), as opposed to a direct sales/inventory inquiry.
+  isDealerLeadSurvey: boolean;
+  // The customer's stated purchase intent from the survey's purchase-timeframe answer.
+  //  - "buyer": they expect to buy (any horizon — "now", "0-3 months", "3-12 months", etc.).
+  //  - "non_buyer": they explicitly say they're NOT looking to buy.
+  //  - "unknown": survey present but the purchase-intent answer is missing/ambiguous.
+  purchaseIntent: "buyer" | "non_buyer" | "unknown";
+  // The model the customer said they are INTERESTED IN ("Which model are you interested in?"),
+  // cleaned to a human label (e.g. "Street Glide 3 Limited"). NEVER the model they already own or
+  // a "Demo Bikes Ridden" entry. Null when not clearly stated.
+  interestedModel?: string | null;
+  confidence?: number;
+};
+
 export type ServiceAppointmentRequestParse = {
   // The customer wants to bring their bike IN for SERVICE or a PARTS/ACCESSORY INSTALL and
   // schedule an appointment (e.g. "bringing it in for the wedge air cleaner install next month,
@@ -3232,6 +3256,18 @@ const NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     intent: { type: "string", enum: ["non_motorcycle_trade", "none"] },
     item: { type: ["string", "null"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const DEALER_LEAD_SURVEY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_dealer_lead_survey", "purchase_intent", "interested_model", "confidence"],
+  properties: {
+    is_dealer_lead_survey: { type: "boolean" },
+    purchase_intent: { type: "string", enum: ["buyer", "non_buyer", "unknown"] },
+    interested_model: { type: ["string", "null"] },
     confidence: { type: "number" }
   }
 };
@@ -7486,6 +7522,115 @@ export async function parseNonMotorcycleTradeWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, item, explicitRequest, confidence };
+}
+
+// Cheap pre-filter that GATES the (LLM) dealer-lead-survey parser — it does NOT decide intent.
+// Only ADF bodies carrying the structured marketing-survey markers run the parser; everything
+// else keeps the normal pipeline untouched. Fail-direction is safe: a miss here just means the
+// survey parser doesn't run (current behavior + the context-fidelity gate still backstop a
+// fabricated frame). Precedent: hasNonMotorcycleTrade/hasServiceAppointment-style hint gating.
+export function hasDealerLeadSurveyHint(text: string | null | undefined): boolean {
+  const s = String(text ?? "");
+  if (!s.trim()) return false;
+  return (
+    /\bdealer lead app\b/i.test(s) ||
+    /\bmarketing questions\b/i.test(s) ||
+    /\bdemo bikes ridden\b/i.test(s) ||
+    /how many years have you owned/i.test(s) ||
+    /do you expect to make a (?:motorcycle )?purchase/i.test(s) ||
+    /which model of motorcycle are you interested in/i.test(s)
+  );
+}
+
+// Parser-first recognizer for a DEALER LEAD APP MARKETING SURVEY (the Tim Williams class,
+// +17163741119, 2026-06-24). A structured "Marketing Questions: Dealer Lead App" survey embedded
+// in the ADF Customer Comments — ownership history + purchase timeframe + "which model are you
+// interested in?" + "Demo Bikes Ridden: <model>" — is NOT a direct inventory inquiry. The generic
+// sales generator read the survey's "Demo Bikes Ridden" field as a completed test ride at THIS
+// dealer and fabricated "Thanks again for coming in for the test ride ... Congrats on the <model>"
+// (held by the context-fidelity gate). This typed parser comprehends the survey so the first touch
+// can be a warm, accurate acknowledgement of stated interest + an invite to ride/visit, never a
+// fabricated past action. Fail-direction safe: unsure => is_dealer_lead_survey=false, normal
+// pipeline runs; we only divert on a confident survey read, and even a false positive yields a
+// correct warm opener (no fabricated frame, no false availability, no close).
+export async function parseDealerLeadSurveyWithLLM(args: {
+  text: string;
+}): Promise<DealerLeadSurveyParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEALER_LEAD_SURVEY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEALER_LEAD_SURVEY_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEALER_LEAD_SURVEY_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEALER_LEAD_SURVEY_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const prompt = [
+    "You read inbound web/CRM leads for a Harley-Davidson dealership. Decide whether THIS lead is a",
+    "structured DEALER MARKETING SURVEY (a 'Dealer Lead App' / 'Marketing Questions' lead-gen",
+    "questionnaire) rather than a direct inventory/sales inquiry. A marketing survey is a fixed Q&A,",
+    "e.g.: 'How many years have you owned your Harley-Davidson motorcycle?', 'Do you expect to make a",
+    "motorcycle purchase in the near future?', 'Which model of motorcycle are you interested in?',",
+    "'Demo Bikes Ridden: ...'. Return only JSON matching the schema.",
+    "",
+    "Fields:",
+    "- is_dealer_lead_survey: true only when the body is clearly such a structured marketing survey.",
+    "  A free-text question ('is the 2026 Road Glide in stock?', 'what's my payment?') is NOT a survey.",
+    "- purchase_intent: from the purchase-timeframe answer —",
+    '    "buyer" = they expect to purchase (any horizon: "now", "0-3 months", "3-12 months", "yes ...").',
+    '    "non_buyer" = they explicitly say they are NOT interested in purchasing.',
+    '    "unknown" = survey present but the purchase answer is missing/ambiguous.',
+    "- interested_model: the model from the 'Which model are you interested in?' answer, cleaned to a",
+    "  human label (e.g. '2026,TRIKE,STREET GLIDE 3 LIMITED' -> 'Street Glide 3 Limited'). CRITICAL:",
+    "  this is the model they are INTERESTED IN — NEVER the model they already OWN and NEVER a 'Demo",
+    "  Bikes Ridden' entry (those are survey questions, not a test ride taken at this dealer). Null if",
+    "  not clearly stated.",
+    "- confidence 0..1; use >= 0.7 only when the survey read is clear.",
+    "",
+    "Examples:",
+    '- "WEB LEAD (ADF) ... Customer Comments: Marketing Questions: Dealer Lead App ... Do you expect to make a motorcycle purchase in the near future? Yes, in 3-12 months - Which model of motorcycle are you interested in? 2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED" -> {"is_dealer_lead_survey":true,"purchase_intent":"buyer","interested_model":"Street Glide 3 Limited","confidence":0.95}',
+    '- "Marketing Questions ... Do you expect to make a motorcycle purchase? I am not interested in purchasing at this time" -> {"is_dealer_lead_survey":true,"purchase_intent":"non_buyer","interested_model":null,"confidence":0.92}',
+    '- "Is the 2026 Road Glide still available? What day can I come test ride it?" -> {"is_dealer_lead_survey":false,"purchase_intent":"unknown","interested_model":null,"confidence":0.9}',
+    "",
+    `Lead body:\n${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dealer_lead_survey_parser",
+      schema: DEALER_LEAD_SURVEY_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-dealer-lead-survey-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const isDealerLeadSurvey = parsed.is_dealer_lead_survey === true;
+  const rawIntent = String(parsed.purchase_intent ?? "").toLowerCase();
+  const purchaseIntent: DealerLeadSurveyParse["purchaseIntent"] =
+    rawIntent === "buyer" ? "buyer" : rawIntent === "non_buyer" ? "non_buyer" : "unknown";
+  const interestedModel =
+    typeof parsed.interested_model === "string" && parsed.interested_model.trim()
+      ? parsed.interested_model.trim()
+      : null;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { isDealerLeadSurvey, purchaseIntent, interestedModel, confidence };
 }
 
 // Parser-first recognizer for a CUSTOMER-INITIATED service / parts-install APPOINTMENT request.

@@ -47,9 +47,9 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
@@ -79,7 +79,9 @@ import {
   parseVehicleFactQuestionWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
   parseWalkInOutcomeWithLLM,
-  parseAdfDepartmentInterestWithLLM
+  parseAdfDepartmentInterestWithLLM,
+  parseDealerLeadSurveyWithLLM,
+  hasDealerLeadSurveyHint
 } from "../domain/llmDraft.js";
 import type {
   CompositeSalesInquiryParse,
@@ -8890,6 +8892,38 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const nbDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
     const nbFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
     draft = buildNonBuyerSurveyAck(nbFirstName, nbAgentName, nbDealerName);
+  } else if (
+    // Dealer Lead App MARKETING SURVEY lead (Tim Williams, +17163741119, 2026-06-24) — the
+    // buyer-side twin of the non-buyer branch above. The survey Q&A lives in the free-text
+    // Customer Comments (not the structured purchase-timeframe field), so it fell through to the
+    // generic sales generator, which read the survey's "Demo Bikes Ridden: <model>" field as a
+    // completed test ride here and fabricated "Thanks again for coming in for the test ride ...
+    // Congrats on the <model>" (held by the context-fidelity gate). Comprehend the survey and
+    // override the opener with a warm, accurate acknowledgement of stated interest + an invite to
+    // ride/visit — never a fabricated past action. INITIAL ADF only; event_promo and the explicit
+    // non-buyer ack (above) win. The hint pre-filter gates the LLM call to actual survey bodies.
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    hasDealerLeadSurveyHint(effectiveInquiry)
+  ) {
+    const dlsParse = await parseDealerLeadSurveyWithLLM({ text: effectiveInquiry });
+    const dlsDecision = decideDealerLeadSurveyTurn({
+      isDealerLeadSurvey: dlsParse?.isDealerLeadSurvey ?? false,
+      purchaseIntent: dlsParse?.purchaseIntent ?? "unknown",
+      confidence: dlsParse?.confidence ?? null
+    });
+    if (dlsDecision.kind !== "none") {
+      const dlsAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+      const dlsDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const dlsFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+      draft =
+        dlsDecision.kind === "buyer_survey_ack"
+          ? buildBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName, dlsParse?.interestedModel ?? null)
+          : buildNonBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName);
+    }
   }
 
   const emailTo = lead.email?.trim();
