@@ -31,6 +31,80 @@ export type AnomalyClassification = {
   rationale: string;
 };
 
+/**
+ * Stale-finding suppressor — the "never re-fix a ghost" guard for the anomaly feed.
+ *
+ * A detector keeps surfacing a finding until its triggering event ages out of the detector window —
+ * even after the root cause is FIXED and DEPLOYED (a pre-fix send can never be retroactively logged; a
+ * pre-fix draft was already replaced). Those stale findings inflate the work order and cost real triage
+ * time (2026-06-30: all 23 crm_log_stale findings were pre-fix sends; the +17167506588 scheduling
+ * cluster was already fixed by 6fb77dd2). This mirrors auto_loop_next_task's GUARDED_CHECK_EVALS — "a
+ * check guarded by an eval in ci:eval is presumed fixed; remaining findings are historical."
+ *
+ * A finding is suppressed ONLY when ALL three hold (ANY uncertainty KEEPS it — fail-safe; we never hide
+ * a finding we aren't sure is stale):
+ *   1. its dimension is in the explicit DIMENSION_FIX_CUTOVERS ledger, AND
+ *   2. that dimension's guarding eval is present in ci:eval (proves the fix is in the shipped code), AND
+ *   3. the finding carries an occurredAt STRICTLY BEFORE the fix's commit date (provably pre-fix code;
+ *      the commit→deploy window and anything after is KEPT — it may be a real post-fix regression).
+ */
+export type FixCutover = {
+  eval: string; // the ci:eval entry that guards this dimension's fix
+  committedAt: string; // ISO date the fix LANDED in main; events strictly before it are provably pre-fix
+  commit?: string;
+  note?: string;
+};
+
+// Ledger of dimensions whose root cause is fixed + eval-guarded. Add an entry ONLY when the fix is
+// merged to main WITH an eval wired into ci:eval. Use the fix's COMMIT date (conservative: anything
+// strictly before is provably pre-fix code; the commit→deploy window is kept, not suppressed).
+export const DIMENSION_FIX_CUTOVERS: Record<string, FixCutover> = {
+  crm_log_stale: {
+    eval: "tlp_autosend_coverage:eval",
+    committedAt: "2026-06-29",
+    commit: "10b341fa",
+    note: "auto-send paths wired to TLP logging (queueTlpLogForConversation)"
+  }
+};
+
+export type StaleSuppression = { anomaly: OutcomeAnomaly; reason: string };
+export type StaleSuppressionResult = { kept: OutcomeAnomaly[]; suppressed: StaleSuppression[] };
+
+export function suppressStaleFindings(
+  anomalies: OutcomeAnomaly[],
+  opts: { guardingEvals: ReadonlySet<string>; cutovers?: Record<string, FixCutover> }
+): StaleSuppressionResult {
+  const cutovers = opts.cutovers ?? DIMENSION_FIX_CUTOVERS;
+  const kept: OutcomeAnomaly[] = [];
+  const suppressed: StaleSuppression[] = [];
+  for (const a of anomalies) {
+    const cut = cutovers[String(a?.dimension ?? "")];
+    if (!cut) {
+      kept.push(a);
+      continue; // dimension not in the ledger → keep
+    }
+    if (!opts.guardingEvals.has(cut.eval)) {
+      kept.push(a);
+      continue; // the fix is not proven in ci:eval (could be reverted) → keep
+    }
+    const eventMs = Date.parse(String(a?.occurredAt ?? ""));
+    const cutMs = Date.parse(String(cut.committedAt));
+    if (!Number.isFinite(eventMs) || !Number.isFinite(cutMs)) {
+      kept.push(a);
+      continue; // no resolvable event time → can't prove stale → keep
+    }
+    if (eventMs < cutMs) {
+      suppressed.push({
+        anomaly: a,
+        reason: `stale: ${a.dimension} event ${a.occurredAt} predates fix ${cut.commit ?? cut.committedAt} (${cut.eval})`
+      });
+    } else {
+      kept.push(a); // on/after the fix commit → could be a real post-fix regression → keep
+    }
+  }
+  return { kept, suppressed };
+}
+
 export function classifyOutcomeAnomaly(
   anomaly: Pick<OutcomeAnomaly, "category" | "dimension" | "healed" | "severity">,
   opts: { persistent?: boolean; graduatedCategories?: Set<string> } = {}
