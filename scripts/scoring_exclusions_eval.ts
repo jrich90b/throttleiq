@@ -10,6 +10,7 @@ import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
   isClosingAckNoAction,
+  isHumanRewrittenOutbound,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
   isShadowReplayMessage,
@@ -46,6 +47,33 @@ assert.equal(
 assert.equal(isNonSalesConversation({ followUp: { reason: "hiring_manager_inquiry" } }), true);
 assert.equal(isNonSalesConversation({ followUp: { reason: "post_sale" } }), false);
 assert.equal(isNonSalesConversation({}), false);
+
+// Human-rewritten outbound (Gary Busenlehner +17163168664 6/29: agent drafted a
+// clean scheduling answer, Scott sent different text, tone scorer graded the
+// AGENT on Scott's words). A non-empty originalDraftBody that DIFFERS from the
+// sent body means a human rewrote the draft — not the agent's reply.
+assert.equal(
+  isHumanRewrittenOutbound({
+    body: "You can take the bike but unfortunately it wont have the accessories installed",
+    originalDraftBody: "Sure. what time on tomorrow works best?"
+  }),
+  true
+);
+// Verbatim-approved draft (body matches the draft, modulo whitespace) IS the
+// agent's reply — must still be graded.
+assert.equal(
+  isHumanRewrittenOutbound({ body: "Sounds good, see you then!", originalDraftBody: "Sounds good, see you then!" }),
+  false
+);
+assert.equal(
+  isHumanRewrittenOutbound({ body: "Sounds good,  see you then!", originalDraftBody: "Sounds good, see you then!" }),
+  false
+); // whitespace-only difference is not a rewrite
+// Automated/agent send with no draft snapshot — never excluded (fail-safe: a
+// real agent miss can never be hidden by this classifier).
+assert.equal(isHumanRewrittenOutbound({ body: "Great — we'll see you then." }), false);
+assert.equal(isHumanRewrittenOutbound({ body: "Great — we'll see you then.", originalDraftBody: "" }), false);
+assert.equal(isHumanRewrittenOutbound({ body: "", originalDraftBody: "some draft" }), false);
 
 // Year-rollover park fingerprint (the cadence bug that must stay flagged):
 // 1st of a month at a round 9-o'clock boundary (09:00Z, or 09:00 ET = 13:00Z/14:00Z).

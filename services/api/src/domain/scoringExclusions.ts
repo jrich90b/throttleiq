@@ -118,6 +118,38 @@ export function isNonSalesConversation(conv: {
 }
 
 /**
+ * A human-rewritten outbound — the agent drafted X (captured in
+ * `originalDraftBody`) but a staff member SENT a different body — is not the
+ * agent's customer-facing reply. Quality scorers (tone QA) measure the AGENT, so
+ * grading it on a staff member's hand-typed text is a phantom miss.
+ *
+ * Production case (2026-06-29, Gary Busenlehner +17163168664): the agent drafted
+ * "Sure. what time on tomorrow works best?" — a clean scheduling answer to "Can
+ * you get it ready for tomorrow" — but Scott sent "You can take the bike but
+ * unfortunately it wont have the accessories installed". The tone scorer flagged
+ * the AGENT with `intent_mismatch` + `question_not_answered_first` on Scott's
+ * words, tanking the release-gate tone pass rate on a turn the agent handled
+ * correctly.
+ *
+ * `originalDraftBody` is stamped ONLY when a human EDITS a draft before sending
+ * (verbatim-approved drafts and automated agent sends carry no
+ * `originalDraftBody`), so requiring a NON-EMPTY draft that DIFFERS from the sent
+ * body makes this fail-safe: it can never misfire on an agent's own send and so
+ * cannot hide a real agent miss. The agent's draft-quality on edited sends is
+ * already measured by the edit-feedback miner, so skipping here loses no signal.
+ */
+export function isHumanRewrittenOutbound(msg: {
+  body?: string | null;
+  originalDraftBody?: string | null;
+}): boolean {
+  const draft = String(msg?.originalDraftBody ?? "").replace(/\s+/g, " ").trim();
+  if (!draft) return false;
+  const sent = String(msg?.body ?? "").replace(/\s+/g, " ").trim();
+  if (!sent) return false;
+  return sent.toLowerCase() !== draft.toLowerCase();
+}
+
+/**
  * Year-rollover park fingerprint. The fixed-but-must-stay-caught cadence bug
  * (parsePauseUntil / bumpCadenceNextDueAt parking a lead a year out) lands on
  * the FIRST of a month at a round 9-o'clock boundary: 09:00 UTC (`{month}-01T09:00Z`,

@@ -5,6 +5,7 @@ import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
   isClosingAckNoAction,
+  isHumanRewrittenOutbound,
   isNonSalesConversation,
   isShadowReplayMessage
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -235,6 +236,15 @@ function main() {
           issueDetails: [{ code: "missing_response", detail: "no outbound reply in configured response window" }],
           status: "missing_response"
         });
+        continue;
+      }
+
+      // A staff member who rewrote the agent's draft before sending owns the
+      // customer-facing text — grading the AGENT on it is a phantom miss. Skip
+      // (the edit-feedback miner already measures the agent's draft quality).
+      if (isHumanRewrittenOutbound(matchedOut)) {
+        skippedTurns += 1;
+        skippedReasonMap.set("human_rewrote_draft", (skippedReasonMap.get("human_rewrote_draft") ?? 0) + 1);
         continue;
       }
 
