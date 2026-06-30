@@ -19,6 +19,7 @@ import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
+import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
 import {
   isInventoryWatchOptedOut,
   setInventoryWatchOptOut,
@@ -467,6 +468,7 @@ import {
   findInventoryPrice,
   getInventoryFeed,
   hasInventoryForModelYear,
+  unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import {
@@ -5499,6 +5501,19 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     }
     return false;
   })();
+  // Distinct-model guard (Joe 2026-06-30): a specific base-model watch ("Road
+  // Glide") must NOT be satisfied by a DISTINCT sibling unit ("Road Glide
+  // Limited"/"...ST"/CVO/Ultra/Classic/Special) via the directional include or a
+  // catalog-code alias — those are separate models. Generic FAMILY watches
+  // (familyMatch) still collect variants. watch.openToOtherTrims relaxes it.
+  if (
+    !genericWatchFamily &&
+    !familyMatch &&
+    !watch.openToOtherTrims &&
+    unitIsDistinctModelFromWatch(item.model, watch.model)
+  ) {
+    return false;
+  }
   const itemModelIsCodeOnly = modelTextLooksLikeCatalogCode(item.model);
   if (
     genericWatchFamily &&
@@ -5646,7 +5661,9 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
       if (isInventoryWatchOptedOut(conv)) continue;
       const phone = conv.lead?.phone ?? conv.leadKey;
       if (phone && isSuppressed(phone)) continue;
-      if (conv.followUp?.mode === "manual_handoff") continue;
+      // A held lead (manual_handoff or paused_indefinite "hold off") is off
+      // proactive outreach until they re-engage — never fire a watch alert at them.
+      if (isProactiveContactPaused(conv)) continue;
       let matchedWatch: InventoryWatch | null = null;
       let matchedItem: any | null = null;
       for (const watch of watches) {
@@ -5785,7 +5802,9 @@ async function notifyInventoryWatchersForAvailableItem(
     if (isInventoryWatchOptedOut(conv)) continue;
     const phone = conv.lead?.phone ?? conv.leadKey;
     if (phone && isSuppressed(phone)) continue;
-    if (conv.followUp?.mode === "manual_handoff") continue;
+    // A held lead (manual_handoff or paused_indefinite "hold off") is off
+    // proactive outreach until they re-engage — never fire a watch alert at them.
+    if (isProactiveContactPaused(conv)) continue;
     const watches =
       conv.inventoryWatches?.length
         ? conv.inventoryWatches
@@ -29515,7 +29534,11 @@ async function processDueFollowUpsUnlocked() {
       continue;
     }
     if (!isPostSale && conv.followUp?.mode === "holding_inventory") continue;
-    if (!isPostSale && conv.followUp?.mode === "manual_handoff") continue;
+    // Held leads (manual_handoff or paused_indefinite "hold off") are off
+    // proactive cadence until they re-engage. paused_indefinite was previously
+    // missing here, so a held lead still got a "just checking in" cadence draft
+    // (Kevin Short +17166035402, 2026-06-30).
+    if (!isPostSale && isProactiveContactPaused(conv)) continue;
     if (!isPostSale) {
       if (conv.followUp?.skipNextCheckin) {
         conv.followUp.skipNextCheckin = false;
