@@ -14,6 +14,8 @@
 //   - mid-conversation: ties the trade to the existing relationship instead of
 //     re-introducing cold.
 // The "Totally fair question" template stays for genuine customer-SMS trade questions.
+import { isPlaceholderModel } from "./modelDeflection.js";
+
 export function buildTradeAdfAck(args: {
   bikeLabel?: string | null;
   // A DISTINCT purchase vehicle the customer named on a trade-toward-buy lead (the structured ADF
@@ -29,9 +31,21 @@ export function buildTradeAdfAck(args: {
   const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
   // Only weave the purchase in when it's REAL and DISTINCT from the trade. Guards against ADF feeds
   // that duplicate the trade into the vehicle field (or a buy lead mis-tagged with a trade), which
-  // would otherwise read "trade your X toward the X".
+  // would otherwise read "trade your X toward the X". Also drop placeholder/make-only targets
+  // ("Harley-Davidson Other", "Full Line") — a Trade Accelerator ADF whose `vehicle` field is a
+  // placeholder would otherwise read "trade your Road King toward the 2026 Harley-Davidson Other"
+  // (Gene Campana, Ref 11551, 2026-06-26 — staff stripped the fabricated target). Falling through to
+  // the no-purchase branch ("I got your trade-in request for X") matches the human correction.
+  // Deterministic placeholder classification (a known field value, not comprehension) via the shared
+  // isPlaceholderModel; fail-direction safe — when the target is a non-bookable placeholder we ask
+  // what they want instead of asserting a model.
   const purchase =
-    purchaseRaw && norm(purchaseRaw) !== norm(bike) && !/^your bike$/i.test(purchaseRaw) ? purchaseRaw : "";
+    purchaseRaw &&
+    norm(purchaseRaw) !== norm(bike) &&
+    !/^your bike$/i.test(purchaseRaw) &&
+    !isPlaceholderModel(purchaseRaw)
+      ? purchaseRaw
+      : "";
 
   if (args.midConversation) {
     return purchase
