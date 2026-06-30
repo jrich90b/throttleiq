@@ -35,6 +35,11 @@ export type OutcomeAnomaly = {
   severity: OutcomeSeverity;
   healed: boolean; // a reconcile heal exists for this class → a hit means the heal lagged/missed (regression)
   detail: string;
+  // ISO timestamp of the TRIGGERING event (the send/draft/booking that caused this finding), when the
+  // detector can resolve it. Lets the stale-finding suppressor (anomalyClassifier.suppressStaleFindings)
+  // drop a finding whose event predates the deployed fix for its dimension — never re-fix a ghost.
+  // Optional: a detector that can't resolve an event time omits it, and the suppressor keeps the finding.
+  occurredAt?: string;
 };
 
 const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
@@ -341,6 +346,9 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
           dimension: "crm_log_stale",
           severity: "P2",
           healed: false,
+          // The triggering event is the un-logged SEND; surfaced so the stale-finding suppressor can drop
+          // sends that predate the TLP-autosend-coverage fix (a pre-fix send can never be re-logged).
+          occurredAt: new Date(lastSentMs).toISOString(),
           detail: `a sent outbound (${Math.round(ageDays)}d ago) is newer than the last TLP log${
             Number.isFinite(crmLoggedMs) ? ` (${Math.round((now.getTime() - crmLoggedMs) / (1000 * 60 * 60 * 24))}d ago)` : " (never logged)"
           } — no failure recorded (the send never attempted a CRM log)`

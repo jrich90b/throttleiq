@@ -16,7 +16,24 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const { classifyOutcomeAnomaly } = await import("../services/api/src/domain/anomalyClassifier.ts");
+const { classifyOutcomeAnomaly, suppressStaleFindings } = await import(
+  "../services/api/src/domain/anomalyClassifier.ts"
+);
+
+// The set of eval scripts wired into ci:eval — a dimension's fix counts as "shipped" (so its stale
+// pre-fix findings can be suppressed) only if its guarding eval is in this chain. Can't read it →
+// empty set → suppress NOTHING (fail-safe: keep every finding).
+function ciEvalScriptSet(): ReadonlySet<string> {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8"));
+    const chain = String(pkg?.scripts?.["ci:eval"] ?? "");
+    const set = new Set<string>();
+    for (const m of chain.matchAll(/npm run ([\w:-]+)/g)) set.add(m[1]);
+    return set;
+  } catch {
+    return new Set<string>();
+  }
+}
 
 const reportRoot = process.env.REPORT_ROOT || path.resolve("reports");
 const feedPath = path.join(reportRoot, "outcome_audit", "latest.json");
@@ -60,6 +77,17 @@ for (const sib of [
   } catch {
     /* a malformed sibling feed must never break the deterministic loop */
   }
+}
+
+// Stale-finding suppression (never re-fix a ghost): drop findings whose dimension is eval-guarded AND
+// whose triggering event predates the deployed fix. Conservative — keeps anything it can't prove stale.
+const rawAnomalyCount = anomalies.length;
+const { kept, suppressed } = suppressStaleFindings(anomalies, { guardingEvals: ciEvalScriptSet() });
+anomalies.length = 0;
+anomalies.push(...kept);
+if (suppressed.length) {
+  console.log(`Suppressed ${suppressed.length} stale finding(s) — root cause fixed + eval-guarded + event predates the fix:`);
+  for (const s of suppressed.slice(0, 20)) console.log(`   - ${s.anomaly.convId} ${s.anomaly.dimension} — ${s.reason}`);
 }
 
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
@@ -110,6 +138,9 @@ const payload = {
   generatedAt: new Date().toISOString(),
   feedGeneratedAt: feed?.generatedAt ?? null,
   totalAnomalies: anomalies.length,
+  rawAnomalyCount,
+  suppressedStaleCount: suppressed.length,
+  suppressedStale: suppressed.map(s => ({ convId: s.anomaly.convId, dimension: s.anomaly.dimension, reason: s.reason })),
   workOrderCount: workOrders.length,
   byTier,
   byAction,

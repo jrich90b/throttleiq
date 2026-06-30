@@ -218,6 +218,12 @@ eq(dims({ id: "cls6", lead: { leadRef: "11028" },
 eq(dims({ id: "cls7", lead: { leadRef: "11471" },
   messages: [{ direction: "out", provider: "draft_ai", at: STALE_SEND, body: "draft" }] }), [],
   "draft_ai (suggest-mode, never sent) is not a real send => clean");
+// crm_log_stale must carry occurredAt = the triggering SEND time, so the stale-finding suppressor can
+// drop pre-fix sends (stale_finding_suppression:eval). The send time, not "now".
+const clsAnom = auditConversationOutcome({ id: "cls8", lead: { leadRef: "11028" }, crm: { lastLoggedAt: "2026-04-27T17:10:04.914Z" },
+  messages: [{ direction: "out", provider: "twilio", at: STALE_SEND, body: "Hope you're enjoying the Street Glide" }] }, { now: NOW })
+  .find((x: any) => x.dimension === "crm_log_stale");
+eq(clsAnom?.occurredAt, STALE_SEND, "crm_log_stale carries occurredAt = the un-logged send time");
 
 // --- A fully healthy conv trips nothing. ---
 eq(dims({ id: "ok", appointment: { status: "confirmed", bookedEventId: "e", whenText: "x" }, followUpCadence: { status: "active", kind: "standard" }, followUp: { mode: "active" } }), [], "healthy conv => zero anomalies");
