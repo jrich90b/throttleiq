@@ -103,6 +103,32 @@ export function buildNonBuyerSurveyAck(
 }
 
 /**
+ * Approved acknowledgement for a BUYER-side Dealer Lead App marketing-survey lead (the Tim
+ * Williams class, +17163741119, 2026-06-24) — the twin of `buildNonBuyerSurveyAck`. A structured
+ * "Marketing Questions: Dealer Lead App" survey (purchase timeframe + "which model are you
+ * interested in?" + "Demo Bikes Ridden: <model>") was answered by the generic sales generator as
+ * if the customer had already test-ridden the bike here — "Thanks again for coming in for the test
+ * ride on the <model>. Congrats on the <model>." — because it read the survey's "Demo Bikes Ridden"
+ * field as a completed dealer visit. Used when `decideDealerLeadSurveyTurn` returns
+ * `buyer_survey_ack`. Acknowledges the customer's STATED model interest (when the survey named one)
+ * and warmly invites a test ride / offers to pull availability — the correct opener for a buyer —
+ * but asserts NO completed past action ("thanks for coming in" / "congrats"), NO availability/stock
+ * claim, and NO fabricated frame. Pinned by `dealer_lead_survey_ack:eval`.
+ */
+export function buildBuyerSurveyAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string,
+  interestedModel?: string | null
+): string {
+  const model = String(interestedModel ?? "").trim();
+  const body = model
+    ? `Thanks for letting us know the ${model} is on your radar — great pick. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just say the word.`
+    : "Thanks for sharing what you're looking for. Want to come in for a test ride, or I can pull together current availability and options whenever you're ready? Just say the word.";
+  return `${buildAgentIntro(firstName, agentName, dealerName)}${body}`;
+}
+
+/**
  * Strip a leading agent greeting/intro (old "Hi {name} — …" or new "Hey {name}, …") from a
  * body before re-prefixing, so we never double up. Initial-ADF use only.
  */

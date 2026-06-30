@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildWatchAvailableReply } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
@@ -266,6 +266,8 @@ import {
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
+  parseDealerLeadSurveyWithLLM,
+  hasDealerLeadSurveyHint,
   parseDealerTransactionPolicyWithLLM,
   parseResponseControlWithLLM,
   parsePurchaseDeliveryLogisticsWithLLM,
@@ -520,6 +522,7 @@ import {
   decideWatchOptOutTurn,
   decideEventPromoTurn,
   decideNonBuyerSurveyTurn,
+  decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
@@ -50505,6 +50508,59 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
     const reply = buildNonBuyerSurveyAck(firstName, agentName, dealerName);
     recordRouteOutcome("regen", "non_buyer_survey_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  // Dealer Lead App MARKETING SURVEY lead (Tim Williams, +17163741119, 2026-06-24) — regen twin of
+  // the live buyer-survey override. The survey Q&A lives in the free-text Customer Comments (not the
+  // structured purchase-timeframe field that drives regenIsAdfFirstTouchNonBuyer above), so it fell
+  // through to the generic sales generator, which read "Demo Bikes Ridden: <model>" as a completed
+  // test ride here and fabricated "Thanks again for coming in for the test ride ... Congrats on the
+  // <model>" (held by the context-fidelity gate). Gated to the ADF FIRST touch (no customer SMS reply
+  // yet); event_promo and the explicit non-buyer ack (above) win. The hint pre-filter gates the LLM.
+  const regenIsAdfFirstTouchSurveyEligible =
+    event.provider === "sendgrid_adf" &&
+    !(Array.isArray(conv.messages) &&
+      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind !==
+      "non_buyer_survey_ack" &&
+    hasDealerLeadSurveyHint(event.body ?? "");
+  const regenDealerSurveyParse = regenIsAdfFirstTouchSurveyEligible
+    ? await safeLlmParse("regen_dealer_lead_survey_parser", () =>
+        parseDealerLeadSurveyWithLLM({ text: event.body ?? "" })
+      )
+    : null;
+  const regenDealerSurveyDecision = regenIsAdfFirstTouchSurveyEligible
+    ? decideDealerLeadSurveyTurn({
+        isDealerLeadSurvey: regenDealerSurveyParse?.isDealerLeadSurvey ?? false,
+        purchaseIntent: regenDealerSurveyParse?.purchaseIntent ?? "unknown",
+        confidence: regenDealerSurveyParse?.confidence ?? null
+      })
+    : { kind: "none" as const };
+  if (regenDealerSurveyDecision.kind !== "none") {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName =
+      normalizeDisplayCase(conv.lead?.firstName) ||
+      (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
+    const reply =
+      regenDealerSurveyDecision.kind === "buyer_survey_ack"
+        ? buildBuyerSurveyAck(firstName, agentName, dealerName, regenDealerSurveyParse?.interestedModel ?? null)
+        : buildNonBuyerSurveyAck(firstName, agentName, dealerName);
+    recordRouteOutcome("regen", regenDealerSurveyDecision.kind, {
       convId: conv.id,
       leadKey: conv.leadKey
     });
