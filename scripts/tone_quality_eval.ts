@@ -38,6 +38,9 @@ type EvalRow = {
   issueCodes: string[];
   issueDetails: Array<{ code: string; detail: string }>;
   status: "responded" | "missing_response";
+  // True when staff rewrote the agent's draft before sending and we graded the
+  // agent's `originalDraftBody` (its actual output) rather than the human's text.
+  gradedAgentDraft?: boolean;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -239,16 +242,16 @@ function main() {
         continue;
       }
 
-      // A staff member who rewrote the agent's draft before sending owns the
-      // customer-facing text — grading the AGENT on it is a phantom miss. Skip
-      // (the edit-feedback miner already measures the agent's draft quality).
-      if (isHumanRewrittenOutbound(matchedOut)) {
-        skippedTurns += 1;
-        skippedReasonMap.set("human_rewrote_draft", (skippedReasonMap.get("human_rewrote_draft") ?? 0) + 1);
-        continue;
-      }
-
-      const outboundText = normalizeText(matchedOut?.body);
+      // When a staff member rewrote the agent's draft before sending, the SENT
+      // body is the human's words, not the agent's — grading the agent on it is a
+      // phantom miss. Grade the agent's own draft (`originalDraftBody`) instead:
+      // this measures what the agent WOULD have sent (the autopilot-readiness
+      // signal the release gate wants) and is fail-safe (a bad draft still scores
+      // bad), while keeping the turn in the denominator. In this dealer staff
+      // rewrite most sends, so skipping these instead would collapse the sample.
+      const outboundWasHumanRewritten = isHumanRewrittenOutbound(matchedOut);
+      const gradedBody = outboundWasHumanRewritten ? matchedOut?.originalDraftBody : matchedOut?.body;
+      const outboundText = normalizeText(gradedBody);
       const tone = evaluateTurnToneQuality({ inboundText, outboundText });
       const outAtIso = String(matchedOut?.at ?? "");
       const outAtMs = toMs(outAtIso);
@@ -272,7 +275,8 @@ function main() {
         intent: tone.intent,
         issueCodes: tone.issues.map(x => x.code),
         issueDetails: tone.issues.map(x => ({ code: x.code, detail: x.detail })),
-        status: "responded"
+        status: "responded",
+        gradedAgentDraft: outboundWasHumanRewritten || undefined
       });
     }
   }
