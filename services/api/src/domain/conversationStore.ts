@@ -560,6 +560,12 @@ export type InventoryWatch = {
   downPayment?: number;
   note?: string;
   exactness?: "exact" | "year_model" | "model_range" | "model_only";
+  // When true, a base-model watch may fire on a DISTINCT sibling model (e.g. a
+  // "Road Glide" watch on a "Road Glide Limited") — set only when the customer is
+  // known to be open to other trims (typically used inventory). Default/undefined
+  // = strict: a base watch fires only on the exact base model. See
+  // unitIsDistinctModelFromWatch (inventoryFeed) + the distinct-model guard.
+  openToOtherTrims?: boolean;
   status?: "active" | "paused";
   createdAt: string;
   lastNotifiedAt?: string;
