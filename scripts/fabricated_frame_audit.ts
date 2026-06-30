@@ -107,7 +107,41 @@ function selfTest(): void {
   // Window filter excludes older replies.
   assert.equal(scanConversation(conv, Date.parse("2026-06-17T00:00:00Z")).length, 0, "outside window -> nothing");
 
-  console.log("PASS fabricated-frame audit self-test (gratitude + question detection + scan/pairing + window)");
+  // Unified-feed adapter: a SENT fabricated frame becomes one comprehension anomaly;
+  // a DRAFT (caught pre-send) is NOT promoted to an autonomous work order.
+  const anomalies = fabricatedFrameAnomalies(found);
+  assert.equal(anomalies.length, 1, "a SENT fabricated frame becomes one feed anomaly");
+  assert.equal(anomalies[0].dimension, "fabricated_frame", "anomaly carries the fabricated_frame dimension");
+  assert.equal(anomalies[0].category, "comprehension", "fabricated frame classifies as comprehension (→ parser_fix_candidate)");
+  assert.equal(fabricatedFrameAnomalies([{ ...found[0], replyKind: "draft" }]).length, 0, "a DRAFT fabricated frame is NOT promoted to the feed");
+
+  console.log("PASS fabricated-frame audit self-test (gratitude + question detection + scan/pairing + window + unified-feed adapter)");
+}
+
+// Adapter: SENT fabricated-frame replies → OutcomeAnomaly entries for the unified
+// feed (anomaly_loop_detect merges reports/fabricated_frame/latest.json). A sent
+// fabricated frame is a customer-facing comprehension miss fixable by a guard/
+// few-shot, so it is category "comprehension" (→ parser_fix_candidate, Tier 1,
+// approve-first, notify). DRAFT findings are caught pre-send, so they stay in the
+// findings file for the digest and are NOT promoted to an autonomous work order.
+function fabricatedFrameAnomalies(findings: Finding[]): Array<{
+  convId: string;
+  dimension: "fabricated_frame";
+  category: "comprehension";
+  severity: "P2";
+  detail: string;
+}> {
+  return findings
+    .filter(f => f.replyKind === "sent")
+    .map(f => ({
+      convId: f.convId,
+      dimension: "fabricated_frame" as const,
+      category: "comprehension" as const,
+      severity: "P2" as const,
+      detail: `sent reply opened with a fabricated ${f.type} frame — customer: ${JSON.stringify(
+        f.customer
+      )} | opener: ${JSON.stringify(f.replyOpener)}`
+    }));
 }
 
 function main(): void {
@@ -143,6 +177,19 @@ function main(): void {
   const outDir = arg("--out-dir", "") || process.env.FABRICATED_FRAME_OUT_DIR || path.resolve(process.cwd(), "reports", "fabricated_frame");
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, "fabricated_frame_findings.json"), JSON.stringify(report, null, 2));
+
+  // Also emit the OutcomeAnomaly-shaped feed the unified anomaly loop merges, so a
+  // SENT fabricated frame reaches the same single work order the autonomous loop and
+  // the daily PR-review consume (it was previously visible only in the morning digest).
+  const anomalies = fabricatedFrameAnomalies(findings);
+  fs.writeFileSync(
+    path.join(outDir, "latest.json"),
+    JSON.stringify(
+      { generatedAt: new Date().toISOString(), source: conversationsPath, summary: { sent: sent.length, anomalies: anomalies.length }, anomalies },
+      null,
+      2
+    )
+  );
 
   console.log(`Fabricated-frame audit — last ${sinceHours}h: ${summary.total} (${summary.sent} sent, ${summary.draft} draft) | gratitude ${summary.gratitude} / question ${summary.question}`);
   for (const f of findings.slice(0, 12)) {
