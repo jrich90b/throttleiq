@@ -44,7 +44,11 @@ for (const sib of [
   { name: "operator-reported (ops anomaly)", file: path.join(reportRoot, "ops_anomaly", "latest.json") },
   // MDF assistant (Ansira co-op portal runner) failures — blocked/stuck/fell-back-because-it-didn't-load
   // runs (mdf_assistant_failure / mdf_assistant_stuck), synthetic mdf:<taskId> ids. Integration-diagnosis.
-  { name: "mdf-portal-health", file: path.join(reportRoot, "mdf_health", "latest.json") }
+  { name: "mdf-portal-health", file: path.join(reportRoot, "mdf_health", "latest.json") },
+  // Fabricated-frame: a SENT reply that opened with a frame the customer's turn didn't warrant
+  // ("You're welcome" with no thanks). A customer-facing comprehension miss that was previously
+  // visible only in the morning digest — fold it in so the autonomous loop + daily PR-review see it too.
+  { name: "fabricated-frame (comprehension)", file: path.join(reportRoot, "fabricated_frame", "latest.json") }
 ]) {
   if (!fs.existsSync(sib.file)) continue;
   try {
