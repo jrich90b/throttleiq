@@ -58,22 +58,27 @@ const lastAt = (c: any) => {
   return Number.isFinite(t) ? t : 0;
 };
 
-// Prefilter (deterministic, no LLM): recent, open, with a customer message AND a real agent reply to judge.
+const { decideOpenCriticAnomaly, summarizeTurnActions, selectOpenCriticAgentReply } = await import(
+  "../services/api/src/domain/conversationOutcomeAudit.ts"
+);
+
+// Prefilter (deterministic, no LLM): recent, open, with a customer message AND a real AGENT-authored
+// reply to judge. A conversation whose latest real outbound was typed/edited by a human (manual
+// takeover) is skipped — selectOpenCriticAgentReply returns null so the critic never grades a human's
+// message as an agent error (Kurtis Stone's manual self-intro "hello stone from American Harley…" was
+// misread as the agent addressing the customer as "Stone", 2026-06-30).
 const candidates = convs
   .filter(c => {
     if (isClosed(c)) return false;
     const msgs = Array.isArray(c?.messages) ? c.messages : [];
     const hasInbound = msgs.some((m: any) => m?.direction === "in" && String(m?.body ?? "").trim());
-    const hasRealReply = msgs.some(
-      (m: any) => m?.direction === "out" && REAL_OUT.has(String(m?.provider ?? "")) && String(m?.body ?? "").trim()
-    );
-    return hasInbound && hasRealReply && now - lastAt(c) <= windowMs;
+    const agentReply = selectOpenCriticAgentReply(msgs, REAL_OUT);
+    return hasInbound && !!agentReply && now - lastAt(c) <= windowMs;
   })
   .sort((a, b) => lastAt(b) - lastAt(a))
   .slice(0, MAX);
 
 const { critiqueConversationHandlingWithLLM } = await import("../services/api/src/domain/llmDraft.ts");
-const { decideOpenCriticAnomaly, summarizeTurnActions } = await import("../services/api/src/domain/conversationOutcomeAudit.ts");
 
 const anomalies: any[] = [];
 let judged = 0;
@@ -84,9 +89,7 @@ for (const c of candidates) {
     .filter((m: any) => (m?.direction === "in" || m?.direction === "out") && String(m?.body ?? "").trim())
     .slice(-12)
     .map((m: any) => ({ direction: m.direction as "in" | "out", body: String(m.body) }));
-  const lastReply = [...msgs]
-    .reverse()
-    .find((m: any) => m?.direction === "out" && REAL_OUT.has(String(m?.provider ?? "")) && String(m?.body ?? "").trim());
+  const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT);
   if (!lastReply) continue;
   const channel = String(lastReply?.from ?? "").includes("@") ? "email" : "sms";
   const convTodos = openTodos.filter((t: any) => String(t?.convId ?? "") === String(c?.id ?? ""));

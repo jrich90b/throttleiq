@@ -463,6 +463,59 @@ export function summarizeTurnActions(
   };
 }
 
+/** A minimal outbound-message shape for authorship classification (open-critic reply selection). */
+export type OutboundAuthorshipMsg = {
+  direction?: string | null;
+  body?: string | null;
+  provider?: string | null;
+  actorUserName?: string | null;
+  actorUserId?: string | null;
+  from?: string | null;
+};
+
+/**
+ * Is this outbound HUMAN-authored (a staff member typed it from scratch or materially EDITED the AI
+ * draft)? The send path (`/conversations/:id/send`, index.ts `shouldStampHumanOutboundActor`) stamps
+ * `actorUserId`/`actorUserName` ONLY when the sent text did not come from an AI draft, or when staff
+ * edited the draft. An AI draft APPROVED UNCHANGED carries NO actor — so the discriminator is the
+ * PRESENCE of an actor, NOT the provider (an approved AI draft sends via "twilio" too, so keying on
+ * provider would wrongly exclude the high-value staff-approved-AI-draft case).
+ */
+export function isHumanAuthoredOutbound(m: OutboundAuthorshipMsg | null | undefined): boolean {
+  if (!m || m.direction !== "out") return false;
+  return Boolean(String(m.actorUserName ?? "").trim() || String(m.actorUserId ?? "").trim());
+}
+
+/**
+ * Select the reply the OPEN-CRITIC should grade as the AGENT's, from a chronological (ascending)
+ * message list. The critic judges the agent's handling — it must never grade a human-typed/edited send
+ * as an agent error. Kurtis Stone's manual self-intro ("hello stone from American Harley…" — a missing
+ * comma after his own name) was misread by the critic as the agent addressing the CUSTOMER as "Stone"
+ * (2026-06-30, the false-positive "name-bleed" cluster). Returns the latest real (sent) outbound IFF it
+ * is agent-authored; if the latest real outbound is human-authored, a human is driving the thread, so we
+ * return null and the sweep skips the conversation. fail-direction: under-report (never flag a human's
+ * message as an agent bug); the deterministic detectors still cover side-effects on human-driven threads.
+ */
+export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
+  messages: T[],
+  realOutProviders: ReadonlySet<string>
+): T | null {
+  const list = Array.isArray(messages) ? messages : [];
+  let lastRealOut: T | null = null;
+  for (const m of list) {
+    if (
+      m?.direction === "out" &&
+      realOutProviders.has(String(m?.provider ?? "")) &&
+      String(m?.body ?? "").trim()
+    ) {
+      lastRealOut = m;
+    }
+  }
+  if (!lastRealOut) return null;
+  if (isHumanAuthoredOutbound(lastRealOut)) return null;
+  return lastRealOut;
+}
+
 export function decideOpenCriticAnomaly(
   finding: OpenCriticFinding,
   base: { convId: string; leadKey?: string | null }
