@@ -21,6 +21,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import {
+  findingKeyMarker,
+  findOpenPrForFindingKey,
+  isMeaningfulFindingKey,
+  type OpenPrSummary
+} from "../services/api/src/domain/loopPrDedup.ts";
 
 const argv = process.argv.slice(2);
 const sub = argv[0];
@@ -45,6 +51,57 @@ function loadWorkOrders(): any[] {
 
 function git(args: string[]): string {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
+}
+
+// Cross-routine dedup: list OPEN PRs (best-effort; an empty list on any gh error
+// fails toward building the PR, never toward silently dropping a fix).
+function listOpenPrs(): OpenPrSummary[] {
+  try {
+    const out = execFileSync(
+      "gh",
+      ["pr", "list", "--state", "open", "--limit", "200", "--json", "number,title,body"],
+      { encoding: "utf8" }
+    );
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// If a finding key is supplied and an OPEN PR already carries it, this is a
+// duplicate — skip (exit 3, distinct from success/usage/escalate) so the caller
+// moves on instead of filing a second PR for the same finding.
+function skipIfDuplicateOpenPr(findingKey: string | undefined): void {
+  if (!findingKey || !isMeaningfulFindingKey(findingKey)) return;
+  const existing = findOpenPrForFindingKey(listOpenPrs(), findingKey);
+  if (existing) {
+    console.log(`DUPLICATE: open PR #${existing.number} already covers "${findingKey}" — skipping (no new PR).`);
+    process.exit(3);
+  }
+}
+
+// Append the machine-readable finding-key marker so a later run (any routine) can
+// detect this PR already covers the finding.
+function withFindingKeyMarker(body: string, findingKey: string | undefined): string {
+  if (!findingKey || !isMeaningfulFindingKey(findingKey)) return body;
+  return `${body}\n${findingKeyMarker(findingKey)}\n`;
+}
+
+// Read-only triage helper: does an open PR already cover this finding key?
+if (sub === "check-open-pr") {
+  const key = flag("key");
+  if (!key) {
+    console.error("check-open-pr requires --key <convId::dimension>");
+    process.exit(2);
+  }
+  const existing = findOpenPrForFindingKey(listOpenPrs(), key);
+  if (existing) {
+    console.log(`EXISTS #${existing.number} — open PR already covers "${key}"`);
+    process.exit(3);
+  }
+  console.log(`NONE — no open PR covers "${key}"`);
+  process.exit(0);
 }
 
 if (sub === "list") {
@@ -157,6 +214,9 @@ if (sub === "open-pr") {
     console.error("No commits ahead of main on this branch — nothing to PR.");
     process.exit(2);
   }
+  // Cross-routine dedup: if another routine already filed an open PR for this
+  // finding, skip before spending the gates.
+  skipIfDuplicateOpenPr(flag("finding-key"));
   // GATE: tsc always; ci:eval unless the caller asserts it just passed on this branch.
   console.log("Running tsc…");
   execFileSync("node", ["../../node_modules/typescript/bin/tsc", "-p", "tsconfig.json", "--noEmit"], {
@@ -175,9 +235,11 @@ if (sub === "open-pr") {
   const briefFile = fs.existsSync(briefDir)
     ? fs.readdirSync(briefDir).map(f => path.join(briefDir, f)).sort().pop()
     : undefined;
-  const body =
+  const body = withFindingKeyMarker(
     (briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8") : `Loop-driven fix: ${title}`) +
-    "\n\n— Opened by the self-healing loop ACT runner (PR-only; review + merge to approve).\n";
+      "\n\n— Opened by the self-healing loop ACT runner (PR-only; review + merge to approve).\n",
+    flag("finding-key")
+  );
   const url = execFileSync(
     "gh",
     ["pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body],
@@ -201,6 +263,9 @@ if (sub === "review") {
     console.error("No commits ahead of main — nothing to review.");
     process.exit(2);
   }
+  // Cross-routine dedup: skip if another routine already filed an open PR for this
+  // finding (before spending the gates + the cross-model review).
+  if (has("ship")) skipIfDuplicateOpenPr(flag("finding-key"));
   // Gates feed the gate decision (a review can't approve over red gates).
   let evalsGreen = false;
   try {
@@ -255,9 +320,11 @@ if (sub === "review") {
     process.exit(2);
   }
   git(["push", "-u", "origin", branch]);
-  const body =
+  const body = withFindingKeyMarker(
     (briefFile && fs.existsSync(briefFile) ? fs.readFileSync(briefFile, "utf8") : `Loop-driven fix: ${title}`) +
-    `\n\n## Cross-model pre-ship review\n${review ? `verdict=**${review.verdict}** risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk}\n${review.reasons ?? ""}${review.concerns ? `\nconcerns: ${review.concerns}` : ""}` : "no independent review available"}\n\nGate: **${gate.ship ? "SHIP" : "ESCALATE"}** — ${gate.reason}\n— self-healing loop ACT runner.\n`;
+      `\n\n## Cross-model pre-ship review\n${review ? `verdict=**${review.verdict}** risk=${review.risk} onTarget=${review.onTarget} lawOk=${review.lawOk}\n${review.reasons ?? ""}${review.concerns ? `\nconcerns: ${review.concerns}` : ""}` : "no independent review available"}\n\nGate: **${gate.ship ? "SHIP" : "ESCALATE"}** — ${gate.reason}\n— self-healing loop ACT runner.\n`,
+    flag("finding-key")
+  );
   const url = execFileSync("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", String(title), "--body", body], { encoding: "utf8" }).trim();
   console.log(`PR opened: ${url}`);
   if (gate.ship) {
@@ -290,5 +357,5 @@ if (sub === "review") {
   process.exit(1);
 }
 
-console.error("Usage: act_runner.ts <list | prep --id <key>|--top | open-pr --title <t> [--eval-verified] | review [--ship --title <t>] [--eval-verified] [--finding <s>]>");
+console.error("Usage: act_runner.ts <list | prep --id <key>|--top | check-open-pr --key <convId::dimension> | open-pr --title <t> [--finding-key <k>] [--eval-verified] | review [--ship --title <t>] [--finding-key <k>] [--eval-verified] [--finding <s>]>");
 process.exit(2);

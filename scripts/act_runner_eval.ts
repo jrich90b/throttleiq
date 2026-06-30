@@ -11,6 +11,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import {
+  findingKeyMarker,
+  findOpenPrForFindingKey,
+  isMeaningfulFindingKey
+} from "../services/api/src/domain/loopPrDedup.ts";
 
 const src = fs.readFileSync("scripts/act_runner.ts", "utf8");
 
@@ -64,4 +69,24 @@ const listOut = execFileSync("npx", ["tsx", "scripts/act_runner.ts", "list"], {
 assert.match(listOut, /open_critic_finding/, "list shows the work order");
 assert.match(listOut, /id: \+1555::open_critic_finding/, "list shows the work-order id");
 
-console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; list/prep run.");
+// --- Cross-routine PR dedup (the pure matcher + the wiring source-guards). ---
+const k = "+17163308822::watch_fire_miss";
+const openPrs = [
+  { number: 7, title: "Daily review: watch_fire_miss", body: `root cause...\n${findingKeyMarker(k)}\n` },
+  { number: 8, title: "unrelated", body: "no marker here" }
+];
+assert.equal(findOpenPrForFindingKey(openPrs, k)?.number, 7, "finds the open PR carrying the finding-key marker");
+assert.equal(findOpenPrForFindingKey(openPrs, "+1999::other_dim"), null, "no false match for a different finding");
+assert.equal(findOpenPrForFindingKey([], k), null, "empty open-PR list never dedups (fail toward building)");
+// Fail-direction: an empty/malformed key must NEVER dedup (never silently drop a real fix).
+assert.equal(isMeaningfulFindingKey("::"), false, "a bare '::' key is not meaningful");
+assert.equal(isMeaningfulFindingKey(""), false, "an empty key is not meaningful");
+assert.equal(isMeaningfulFindingKey(k), true, "a real convId::dimension key is meaningful");
+assert.equal(findOpenPrForFindingKey(openPrs, "::"), null, "a malformed key never dedups");
+// Source-guards: open-pr and review --ship skip duplicates and stamp the marker.
+assert.match(src, /sub === "check-open-pr"/, "exposes a read-only check-open-pr triage subcommand");
+assert.match(src, /skipIfDuplicateOpenPr\(flag\("finding-key"\)\)/, "open-pr/review skip when an open PR already covers the finding");
+assert.match(src, /withFindingKeyMarker\(/, "the PR body is stamped with the finding-key marker for later dedup");
+assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit code (3)");
+
+console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); list/prep run.");
