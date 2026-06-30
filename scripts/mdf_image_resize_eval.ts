@@ -11,7 +11,7 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-const { computeResizeTarget } = await import("../apps/web/src/app/lib/imageResize.ts");
+const { computeResizeTarget, humanizeUploadError } = await import("../apps/web/src/app/lib/imageResize.ts");
 
 // Long edge over the cap -> downscale to maxEdge, aspect ratio preserved.
 assert.deepEqual(computeResizeTarget(4000, 3000, 500_000), { resize: true, width: 2000, height: 1500 }, "landscape 4000px -> 2000px");
@@ -35,9 +35,23 @@ assert.ok(/!file\.type\.startsWith\("image\/"\)/.test(lib), "non-image files (PD
 assert.ok(/canvas\.toBlob/.test(lib), "the resizer must encode via canvas.toBlob");
 assert.ok(/blob\.size >= file\.size.*return file|return file/.test(lib), "no-gain resize must fall back to the original");
 
+// --- Decode fallback: createImageBitmap can throw on large iOS photos; the <img> path must catch it. ---
+assert.ok(/createImageBitmap/.test(lib), "fast path uses createImageBitmap");
+assert.ok(/decodeImageForResize/.test(lib), "a decode helper with an <img> fallback must exist");
+assert.ok(/new Image\(\)/.test(lib) && /el\.onload/.test(lib), "the fallback must decode via HTMLImageElement (tolerant of large iOS images)");
+assert.ok(/naturalWidth/.test(lib), "the <img> fallback must read natural dimensions for the resize plan");
+
+// --- humanizeUploadError: WebKit 'Load failed' / too-large -> clear, actionable guidance. ---
+assert.match(humanizeUploadError(new Error("Load failed")), /check your connection|try again|tap/i, "Safari 'Load failed' becomes connection guidance");
+assert.match(humanizeUploadError(new Error("Failed to fetch")), /check your connection|try again|tap/i, "Chrome 'Failed to fetch' too");
+assert.match(humanizeUploadError(new Error("FUNCTION_PAYLOAD_TOO_LARGE")), /too large|smaller|crop/i, "413/too-large becomes a size hint");
+assert.equal(humanizeUploadError(new Error("Vendor name is required.")), "Vendor name is required.", "a real backend message passes through unchanged");
+assert.equal(humanizeUploadError(null, "fallback msg"), "fallback msg", "empty error uses the fallback");
+
 const page = fs.readFileSync("apps/web/src/app/page.tsx", "utf8");
-assert.ok(/import \{ resizeImageForUpload \} from "\.\/lib\/imageResize"/.test(page), "page must import the resizer");
+assert.ok(/import \{ resizeImageForUpload, humanizeUploadError \} from "\.\/lib\/imageResize"/.test(page), "page must import the resizer + error humanizer");
 assert.ok(/await resizeImageForUpload\(entry\.file\)/.test(page), "the MDF upload builder must resize each file before base64");
 assert.ok(/dataBase64: await readFileBase64\(blob\)/.test(page), "the upload must base64 the (possibly resized) blob, not the raw file");
+assert.ok(/setMdfError\(humanizeUploadError\(err/.test(page), "the MDF upload catch must humanize the error (no raw 'Load failed')");
 
-console.log("PASS mdf image-resize eval — computeResizeTarget + passthrough + upload-path source guards");
+console.log("PASS mdf image-resize eval — computeResizeTarget + decode fallback + humanizeUploadError + upload-path source guards");
