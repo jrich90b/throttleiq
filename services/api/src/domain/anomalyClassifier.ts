@@ -74,6 +74,22 @@ export function classifyOutcomeAnomaly(
     };
   }
 
+  // MDF assistant (Ansira co-op portal runner) failures — the Playwright/CDP runner blocked, hung, or
+  // fell back because the portal didn't load. Like the CRM cases this is an INTEGRATION/ops diagnosis
+  // (ansira-form-sync selector resync / restart the CDP Chrome / re-login the H-DNet session), never a
+  // parser fix or auto-heal → ALWAYS Tier 2 (escalate, notify, never auto-merge).
+  if (anomaly.dimension === "mdf_assistant_failure" || anomaly.dimension === "mdf_assistant_stuck") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale:
+        "MDF assistant (Ansira portal runner) failed/stuck → diagnose the integration (form change → ansira-form-sync / CDP Chrome down / H-DNet session expired); approve-first, never auto-merge"
+    };
+  }
+
   // A `healed` dimension that re-appears across runs means the reconcile heal isn't actually fixing it —
   // a gap in the heal logic (e.g. the single/array inventory-watch leak the loop caught 6/25). That's a
   // reviewed code fix, not a transient → escalate. Seen once, it's just the tick that hasn't run yet.
