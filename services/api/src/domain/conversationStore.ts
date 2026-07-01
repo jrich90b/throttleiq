@@ -4283,9 +4283,12 @@ export function scheduleLongTermFollowUp(
 export function stopFollowUpCadence(conv: Conversation, reason: string) {
   if (!conv.followUpCadence) return;
   // Post-sale and long-term cadences should continue even when sales flow triggers
-  // manual handoff (for example, service requests or internal coordination).
+  // manual handoff (for example, service requests or internal coordination), or when
+  // post-sale pickup/delivery-logistics chatter ("I'll be there in 10 minutes") routes
+  // through applyPurchaseDeliveryLogisticsDecision — that's expected post-sale small talk,
+  // not a reason to kill the cadence the sale itself just started.
   if (
-    reason === "manual_handoff" &&
+    (reason === "manual_handoff" || reason === "purchase_delivery") &&
     (conv.followUpCadence.kind === "post_sale" || conv.followUpCadence.kind === "long_term")
   ) {
     return;
