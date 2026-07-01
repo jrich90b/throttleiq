@@ -53973,6 +53973,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const result = await safeOrchestrateInbound("regen", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
+    disposition: conv.dialogState?.name ?? null,
     leadSource: conv.lead?.source ?? null,
     bucket: regenClassificationForTurn.bucket,
     cta: regenClassificationForTurn.cta,
@@ -63136,6 +63137,7 @@ if (authToken && signature) {
   const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
+    disposition: conv.dialogState?.name ?? null,
     leadSource: conv.lead?.source ?? null,
     bucket: liveClassificationForTurn.bucket,
     cta: liveClassificationForTurn.cta,
