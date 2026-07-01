@@ -310,6 +310,11 @@ const wfmSweep = fs.readFileSync("scripts/watch_fire_miss_sweep.ts", "utf8");
 assert.match(wfmSweep, /findWatchFireMisses/, "the watch-fire-miss sweep runs findWatchFireMisses");
 assert.match(wfmSweep, /inventory_snapshot\.json/, "the sweep reads the on-disk inventory snapshot (no network)");
 assert.match(wfmSweep, /byConv\.set|ONE anomaly per conversation/, "the sweep dedups to one anomaly per conversation (no digest flooding)");
+// Arrival gate: the sweep must load inventory_first_seen.json and pass it as `firstSeen`, mirroring
+// watch_fire_miss_audit.ts — omitting this makes the live sweep arrival-blind (flags already-in-stock
+// units the notify engine correctly never fires for, per Joe's new-arrival-only policy).
+assert.match(wfmSweep, /loadInventoryFirstSeen/, "the sweep loads the inventory first-seen map (arrival gate)");
+assert.match(wfmSweep, /findWatchFireMisses\(\{\s*conversations,\s*feedItems,\s*firstSeen\s*\}\)/, "the sweep passes firstSeen into findWatchFireMisses (arrival-aware, not arrival-blind)");
 // Inventory enrichment: the critic gets the in-stock model list so it can catch fabricated availability.
 assert.match(llm, /inStockModels\?: string\[\]/, "the critic accepts the in-stock model list");
 assert.match(llm, /IN-STOCK MODELS \(current, by model\)/, "the critic prompt includes the in-stock list");
