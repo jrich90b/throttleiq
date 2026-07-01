@@ -48840,6 +48840,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
+    queueTlpLog();
 
     return res.status(502).json({
       ok: false,
