@@ -6,6 +6,11 @@ import path from "node:path";
 async function main() {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "inventory-fact-answer-"));
   process.env.DATA_DIR = tmp;
+  // A FUTURE (relative) promo expiry so the fixture never rots. A hardcoded date time-bombs: the promo
+  // "Financing Special" (expiresAt "2026-06-30") correctly expired once the UTC clock crossed that day,
+  // and the agent then (correctly) stopped surfacing it — failing the eval. isInventoryNoteExpired is
+  // right ("inclusive through that day"); the fixture was the bug. Keep expiry well in the future.
+  const FUTURE_EXPIRY = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   process.env.INVENTORY_XML_URL = "http://127.0.0.1:9/inventory.xml";
   process.env.INVENTORY_FETCH_TIMEOUT_MS = "1";
   const warn = console.warn;
@@ -47,7 +52,7 @@ async function main() {
                 label: "Financing Special",
                 note: "Financing as low as 2.99%",
                 updatedAt: "2026-05-21T23:54:02.048Z",
-                expiresAt: "2026-06-30"
+                expiresAt: FUTURE_EXPIRY
               }
             ],
             updatedAt: "2026-05-21T23:54:02.048Z"
