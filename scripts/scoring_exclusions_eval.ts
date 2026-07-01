@@ -13,7 +13,9 @@ import {
   isHumanRewrittenOutbound,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
+  isOptOutKeywordInbound,
   isShadowReplayMessage,
+  isTestLeadEmail,
   isYearRolloverParkFingerprint
 } from "../services/api/src/domain/scoringExclusions.ts";
 
@@ -47,6 +49,37 @@ assert.equal(
 assert.equal(isNonSalesConversation({ followUp: { reason: "hiring_manager_inquiry" } }), true);
 assert.equal(isNonSalesConversation({ followUp: { reason: "post_sale" } }), false);
 assert.equal(isNonSalesConversation({}), false);
+
+// Placeholder / DLA test-harness leads (2026-07-01: 3 of 6 "tone missing" turns
+// were `test@` Dealer Lead App submissions the runtime correctly didn't draft).
+assert.equal(isTestLeadEmail("test@hotmail.com"), true); // live case
+assert.equal(isTestLeadEmail("test@icloud.com"), true); // live case
+assert.equal(isTestLeadEmail("TEST@Hotmail.com"), true); // case-insensitive
+assert.equal(isTestLeadEmail("test+dla@gmail.com"), true); // plus-tagged
+assert.equal(isTestLeadEmail("test.11@gmail.com"), true); // dotted-suffix variant
+assert.equal(isTestLeadEmail("kevin@example.com"), true); // reserved test domain (was inline)
+assert.equal(isTestLeadEmail("kevin@example.net"), true);
+assert.equal(isTestLeadEmail("contestwinner@yahoo.com"), false); // "test" is a substring, not the local-part
+assert.equal(isTestLeadEmail("greatest@gmail.com"), false);
+assert.equal(isTestLeadEmail("flhtharlet@roadrunner.com"), false); // real lead (Angelo)
+assert.equal(isTestLeadEmail("+17162667396"), false); // a phone convId is not an email
+assert.equal(isTestLeadEmail(""), false);
+assert.equal(isTestLeadEmail(null), false);
+
+// Carrier opt-out keywords (Tom Kraft +17165237203 6/30: bare "Stop" — Twilio
+// opts out + blocks outbound, so agent silence is the only legal behavior, not
+// a missing_response). Matches ONLY the whole-message bare keyword.
+assert.equal(isOptOutKeywordInbound("Stop"), true);
+assert.equal(isOptOutKeywordInbound("STOP"), true);
+assert.equal(isOptOutKeywordInbound("stop."), true);
+assert.equal(isOptOutKeywordInbound("unsubscribe"), true);
+assert.equal(isOptOutKeywordInbound("Cancel"), true);
+assert.equal(isOptOutKeywordInbound("opt out"), true);
+assert.equal(isOptOutKeywordInbound("opt-out"), true);
+assert.equal(isOptOutKeywordInbound("stop texting me about the road glide"), false); // real, answerable
+assert.equal(isOptOutKeywordInbound("Can you stop by tomorrow?"), false);
+assert.equal(isOptOutKeywordInbound("I need to cancel my appointment for Friday"), false);
+assert.equal(isOptOutKeywordInbound(""), false);
 
 // Human-rewritten outbound (Gary Busenlehner +17163168664 6/29: agent drafted a
 // clean scheduling answer, Scott sent different text, tone scorer graded the

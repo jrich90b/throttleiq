@@ -7,7 +7,9 @@ import {
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
   isNonSalesConversation,
-  isShadowReplayMessage
+  isOptOutKeywordInbound,
+  isShadowReplayMessage,
+  isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
@@ -148,7 +150,8 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   }
   if (isNonSalesConversation(conv)) return "non_sales_thread";
   if (provider === "voice_transcript") return "provider_voice_transcript";
-  if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
+  if (isTestLeadEmail(leadEmail) || isTestLeadEmail(conv?.id)) return "test_lead_email";
+  if (isOptOutKeywordInbound(inboundText)) return "opt_out_no_reply";
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";

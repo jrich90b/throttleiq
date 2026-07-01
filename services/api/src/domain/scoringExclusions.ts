@@ -118,6 +118,53 @@ export function isNonSalesConversation(conv: {
 }
 
 /**
+ * A placeholder / test-harness lead identity. The Dealer Lead App (DLA) ships
+ * canned test submissions the dealer fires to sanity-check the pipeline — e.g.
+ * `test@hotmail.com` / `test@icloud.com` ("KEVIN Test 111 Dla Cooper"). The
+ * runtime correctly declines to draft a first touch for these, but the tone
+ * scorer then counted each as a `missing_response`, inflating the release
+ * gate's tone-missing failure (2026-07-01: 3 of 6 "missing" turns were DLA
+ * `test@` submissions). The pre-existing inline `@example.com` skip missed them
+ * because they use real consumer domains.
+ *
+ * Fail-direction is safe: a genuine sales lead never uses the bare local-part
+ * `test` (or a `test+tag` / `test.<n>` variant), and `@example.com` /
+ * `@example.*` are reserved test domains — so this can never hide a real
+ * customer miss. Deliberately narrow: it matches the local-part shape, NOT any
+ * email merely containing "test" (e.g. `contestwinner@…` stays a real lead).
+ */
+const TEST_LEAD_LOCALPART_RE = /^test(?:[+._-]\w+)?$/i;
+const RESERVED_TEST_DOMAIN_RE = /@example\.(?:com|net|org)$/i;
+export function isTestLeadEmail(email: string | null | undefined): boolean {
+  const e = String(email ?? "").trim().toLowerCase();
+  if (!e || !e.includes("@")) return false;
+  if (RESERVED_TEST_DOMAIN_RE.test(e)) return true;
+  const localPart = e.slice(0, e.indexOf("@"));
+  return TEST_LEAD_LOCALPART_RE.test(localPart);
+}
+
+/**
+ * A standalone carrier opt-out keyword — "STOP", "STOPALL", "UNSUBSCRIBE",
+ * "CANCEL", "END", "QUIT" (Twilio's default STOP-keyword set). When a customer
+ * texts one of these, Twilio itself opts the number out, sends the compliance
+ * confirmation, and BLOCKS further outbound — so the agent staying silent is
+ * the only legal behavior, not a miss. The tone scorer graded Tom Kraft
+ * (+17165237203, 2026-07-01: bare "Stop") as a `missing_response`; a reply
+ * there would be a compliance violation, and the platform wouldn't have
+ * delivered it anyway.
+ *
+ * Fail-direction is safe: it matches ONLY a message that IS the bare keyword
+ * (optional trailing punctuation), mirroring Twilio's own whole-message match —
+ * "stop texting me about the road glide" is NOT an opt-out and still scores.
+ */
+const OPT_OUT_KEYWORD_RE = /^(?:stop|stopall|unsubscribe|cancel|end|quit|opt[\s-]?out)[.!\s]*$/i;
+export function isOptOutKeywordInbound(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return OPT_OUT_KEYWORD_RE.test(t);
+}
+
+/**
  * A human-rewritten outbound — the agent drafted X (captured in
  * `originalDraftBody`) but a staff member SENT a different body — is not the
  * agent's customer-facing reply. Quality scorers (tone QA) measure the AGENT, so
