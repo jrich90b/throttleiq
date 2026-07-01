@@ -312,7 +312,10 @@ import {
   noResponseJudgeShadowEnabled,
   decideCadenceQualityGate,
   isCadenceQualityJudgeEnabled,
-  cadenceQualityJudgeShadowEnabled
+  cadenceQualityJudgeShadowEnabled,
+  isCadenceQualityEnforceEnabled,
+  cadenceQualityEnforceFloor,
+  type CadenceQualityGateDecision
 } from "./domain/draftQualityGate.js";
 import {
   decideContextFidelityHold,
@@ -4295,12 +4298,13 @@ async function runCadenceQualityJudgeShadow(
   conv: any,
   message: string,
   channel: "sms" | "email"
-): Promise<void> {
+): Promise<CadenceQualityGateDecision | null> {
   try {
-    if (!conv?.id) return;
-    if (!cadenceQualityJudgeShadowEnabled() && !isCadenceQualityJudgeEnabled()) return;
+    if (!conv?.id) return null;
+    if (!cadenceQualityJudgeShadowEnabled() && !isCadenceQualityJudgeEnabled() && !isCadenceQualityEnforceEnabled())
+      return null;
     const text = String(message ?? "").trim();
-    if (!text) return;
+    if (!text) return null;
     let daysSinceLastInbound: number | null = null;
     const lastInbound = [...(conv.messages ?? [])].reverse().find((m: any) => m?.direction === "in" && m?.body);
     const lastMs = lastInbound?.at ? Date.parse(String(lastInbound.at)) : NaN;
@@ -4316,8 +4320,16 @@ async function runCadenceQualityJudgeShadow(
       lead: conv.lead,
       daysSinceLastInbound
     });
-    if (!verdict) return;
-    const decision = decideCadenceQualityGate({ enabled: isCadenceQualityJudgeEnabled(), verdict });
+    if (!verdict) return null;
+    // ENFORCE (flag-gated) is the LIVE cadence gate: when on, the decision uses the enforce floor (0.90)
+    // and live=true so a `suppress` verdict actually holds the touch back. Off → shadow (live=false,
+    // default floor) exactly as before.
+    const enforce = isCadenceQualityEnforceEnabled();
+    const decision = decideCadenceQualityGate({
+      enabled: enforce,
+      verdict,
+      minConfidence: enforce ? cadenceQualityEnforceFloor() : undefined
+    });
     if (decision.action !== "pass") {
       recordDecisionTrace({
         scope: "manual",
@@ -4358,9 +4370,13 @@ async function runCadenceQualityJudgeShadow(
       };
       saveConversation(conv);
     }
-    // STEP 1 is shadow-only: never suppress/alter the cadence draft here, even when decision.live is true.
+    // The CALLER enforces: when CADENCE_QUALITY_ENFORCE is on and decision.action === "suppress", the
+    // cadence loop skips this touch + advances. When off, this stays observe-only (the caller ignores
+    // the returned decision and the send proceeds unchanged).
+    return decision;
   } catch {
-    // Best-effort shadow tooling — never block or fail the cadence tick.
+    // Best-effort — never block or fail the cadence tick.
+    return null;
   }
 }
 
@@ -30294,6 +30310,25 @@ async function processDueFollowUpsUnlocked() {
       }
     };
 
+    // Cadence-quality ENFORCE (flag-gated, default off). One gate covering ALL send paths below: if the
+    // judge verdicts this PROACTIVE touch `suppress` at >= the enforce floor (a low-value/duplicate/
+    // contentless ping), hold it back — skip the send + advance the cadence — so we don't nag. The judge
+    // runs (awaited) + persists its verdict here; when enforce is off this block is inert and the shadow
+    // fire-and-forget below runs unchanged. Suppress-only for the first flip (hold/regenerate stay shadow).
+    if (isCadenceQualityEnforceEnabled()) {
+      const enfChannel: "sms" | "email" = useEmail ? "email" : "sms";
+      const enfMsg = useEmail && emailMessage ? emailMessage : smsMessage;
+      const enfDecision = await runCadenceQualityJudgeShadow(conv, enfMsg, enfChannel);
+      if (enfDecision?.action === "suppress") {
+        console.log("[followup][cadence-quality-enforce] suppressed low-value proactive touch", {
+          convId: conv.id,
+          channel: enfChannel
+        });
+        advanceFollowUpCadence(conv, cfg.timezone);
+        continue;
+      }
+    }
+
     if (!forceAutoSendPostSaleCadence && (systemMode === "suggest" || enforceSalesReviewForCadence)) {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : smsMessage;
@@ -30309,9 +30344,11 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
-      // Cadence-quality judge (shadow): observe whether this proactive touch should send / fits
-      // state / sounds human / isn't pushy. Fire-and-forget; never blocks or alters the cadence draft.
-      void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms");
+      // Cadence-quality judge (shadow): observe whether this proactive touch should send / fits state /
+      // sounds human / isn't pushy. Fire-and-forget; never blocks or alters the cadence draft. Skipped
+      // when ENFORCE is on — the awaited enforce gate above already judged + persisted this touch.
+      if (!isCadenceQualityEnforceEnabled())
+        void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms");
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
