@@ -87,7 +87,7 @@ type AuditableConv = {
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
-  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; feedback?: { rating?: string | null } | null }> | null;
+  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; draftStatus?: string | null; feedback?: { rating?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
   lead?: { leadRef?: string | null } | null;
   crm?: { lastLoggedAt?: string | null; lastLoggedAtByLeadRef?: Record<string, string | null> | null } | null;
@@ -279,11 +279,24 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
     }
   }
 
-  // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep and nothing better followed (the
-  //    closed-loop redraft would append a newer outbound). The system's own "this reply was wrong" signal.
+  // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep. If it's still a PENDING draft, the
+  //    closed-loop redraft (Phase 1) should replace it — a hit here is a genuine pipeline miss. Once a
+  //    message is actually SENT (provider !== draft_ai), rewriting delivered history is structurally
+  //    impossible (mirrors decideFeedbackRedraftTurn's own "can't redraft an already-sent message" gate,
+  //    index.ts ratedIsPendingDraft) — so "not yet improved" is never true for it; it's a review/coaching
+  //    signal on an already-sent message, not an unresolved auto-fix.
   const lastOut = [...(conv.messages ?? [])].reverse().find(m => m?.direction === "out");
   if (String(lastOut?.feedback?.rating ?? "").toLowerCase() === "down") {
-    out.push({ ...base, dimension: "negative_feedback", severity: "P2", healed: false, detail: "the latest outbound was thumbed-down and not yet improved" });
+    const ratedIsPendingDraft = lastOut?.provider === "draft_ai" && lastOut?.draftStatus !== "stale";
+    out.push({
+      ...base,
+      dimension: "negative_feedback",
+      severity: "P2",
+      healed: false,
+      detail: ratedIsPendingDraft
+        ? "a pending draft was thumbed-down and the auto-redraft has not replaced it"
+        : "the latest outbound (already sent) was thumbed-down — feedback for review, not an auto-fixable draft"
+    });
   }
 
   // 7. CRM (TLP) update error: the Playwright-driven TLP push (log contact / mark delivered) FAILED

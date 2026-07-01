@@ -174,11 +174,22 @@ eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 
   eq(a.openTasks, [{ reason: "pricing", summary: "Confirm OTD price" }], "open tasks captured");
 }
 
-// --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
+// --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). Detail text must NOT claim
+//        "not yet improved" for an already-SENT message — rewriting delivered history is impossible, so
+//        that phrasing only applies to a still-pending draft (a genuine redraft-pipeline miss). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
   eq(a.map(x => x.dimension), ["negative_feedback"], "latest outbound thumbed-down => negative_feedback");
   eq(a[0].category, "feedback", "negative_feedback is category=feedback");
+  assert.ok(!/not yet improved/i.test(a[0].detail), "an already-SENT thumbed-down message must not claim 'not yet improved' (nothing auto-redrafts a delivered message)"); n++;
+  assert.ok(/already sent/i.test(a[0].detail), "already-sent 👎 detail names it as a review/coaching signal, not a pipeline miss"); n++;
+}
+{
+  // A still-PENDING draft (never sent) thumbed-down: the closed-loop auto-redraft SHOULD have replaced
+  // it — a hit here IS a genuine pipeline miss, so the "not yet improved" framing is accurate.
+  const a = auditConversationOutcome({ id: "c6d", messages: [{ direction: "out", provider: "draft_ai", at: "t1", body: "pending draft", draftStatus: "pending", feedback: { rating: "down" } }] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["negative_feedback"], "pending draft thumbed-down => negative_feedback");
+  assert.ok(/not yet improved|has not replaced/i.test(a[0].detail), "a pending-draft 👎 keeps the 'should have auto-redrafted' framing"); n++;
 }
 eq(dims({ id: "c6b", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "bad", feedback: { rating: "down" } }, { direction: "out", provider: "draft_ai", at: "t2", body: "redraft" }] }), [], "a newer outbound after the 👎 => addressed, clean");
 eq(dims({ id: "c6c", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "good", feedback: { rating: "up" } }] }), [], "thumbs-UP => not an anomaly");
