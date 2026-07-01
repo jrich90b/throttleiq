@@ -186,7 +186,7 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   //    forever. A reconcile heal clears it, so a hit is a regression. (Same rule as healStaleHeldFlag,
   //    read-only: a real outbound exists AFTER the hold timestamp.)
   const heldAtMs = Date.parse(String(conv.draftHeld?.at ?? ""));
-  if (conv.draftHeld && Number.isFinite(heldAtMs)) {
+  if (!closed && conv.draftHeld && Number.isFinite(heldAtMs)) {
     const repliedAfter = (conv.messages ?? []).some(m => {
       if (m?.direction !== "out" || !REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))) return false;
       const t = Date.parse(String(m?.at ?? ""));

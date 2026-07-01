@@ -85,6 +85,11 @@ eq(dims({ ...held, messages: [{ direction: "out", provider: "draft_ai", at: "202
   eq(a[0].category, "comprehension", "held_draft_unresolved is category=comprehension");
   eq(a[0].severity, "P1", "held_draft_unresolved is P1");
 }
+// CLOSED conversation: staff already resolved/dismissed it by closing — a held draft on an already-closed
+// thread is noise, not a live unresolved miss (no further customer reply will ever go out). Also suppresses
+// stale_held_flag for the same reason (a defunct flag on a closed thread needs no heal).
+eq(dims({ ...held, closedReason: "other", messages: [] }), [], "held + no messages but CONVERSATION CLOSED => not flagged (staff already resolved it)");
+eq(dims({ ...held, closedReason: "other", messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:05:00.000Z", body: "hi" }] }), [], "closed + real reply after hold => not flagged (no live heal needed on a closed thread)");
 
 // --- 5b. context-fidelity SHADOW unresolved (Net 1): the scorer flagged out-of-context, shadow let it
 //         publish, and NO corrective reply followed. A DIFFERENT reply after the flag = resolved. ---
