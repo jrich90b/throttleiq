@@ -23,7 +23,7 @@ import path from "node:path";
 
 process.env.CONVERSATIONS_DB_PATH =
   process.env.CONVERSATIONS_DB_PATH || path.join(os.tmpdir(), `resume-cadence-eval-${Date.now()}.json`);
-const { resumeFollowUpCadence, upsertConversationByLeadKey } = await import(
+const { resumeFollowUpCadence, stopFollowUpCadence, upsertConversationByLeadKey } = await import(
   "../services/api/src/domain/conversationStore.ts"
 );
 
@@ -83,5 +83,23 @@ ok(high.followUpCadence.status === "active" && Number.isFinite(Date.parse(high.f
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(api, /resumeFollowUpCadence\(conv, cfg\.timezone/, "the held-unit-available heal resumes the cadence");
 n += 1;
+
+// --- stopFollowUpCadence: post_sale/long_term must survive "purchase_delivery" chatter, not just
+//     "manual_handoff" — pickup/delivery-logistics small talk after a sale is not a reason to kill the
+//     cadence the sale itself just started (Nicholas +17166286477: post_sale cadence silently stopped by
+//     applyPurchaseDeliveryLogisticsDecision routing "I'll be there in 10 min" through this reason). ---
+for (const kind of ["post_sale", "long_term"]) {
+  const c: any = upsertConversationByLeadKey(`+1555200${String(seq++).padStart(4, "0")}`, "suggest");
+  c.followUpCadence = { status: "active", kind, stepIndex: 0, nextDueAt: "2026-06-26T13:00:00.000Z" };
+  stopFollowUpCadence(c, "purchase_delivery");
+  ok(c.followUpCadence.status === "active", `${kind} cadence survives a "purchase_delivery" stop reason (kept active)`);
+}
+// A standard cadence is NOT protected — "purchase_delivery" still stops it normally.
+{
+  const c: any = upsertConversationByLeadKey(`+1555200${String(seq++).padStart(4, "0")}`, "suggest");
+  c.followUpCadence = { status: "active", kind: "standard", stepIndex: 0, nextDueAt: "2026-06-26T13:00:00.000Z" };
+  stopFollowUpCadence(c, "purchase_delivery");
+  ok(c.followUpCadence.status === "stopped", "a standard cadence still stops on purchase_delivery (only post_sale/long_term are protected)");
+}
 
 console.log(`PASS resume-followup-cadence eval (${n} assertions)`);
