@@ -13253,7 +13253,7 @@ export default function Home() {
       ) : null}
       {reportIssueOpen ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4">
-          <div className="w-full max-w-md rounded-lg border border-slate-700 bg-[#101522] p-4 text-slate-100 shadow-xl">
+          <div className="w-full max-w-md rounded-lg border border-[var(--border-strong)] bg-[var(--surface)] p-4 text-[var(--text-primary)] shadow-xl">
             <div className="text-base font-semibold">Report issue</div>
             <div className="mt-1 text-xs text-slate-400">
               This creates a support review item, opens an ops ticket when ticketing is connected, and queues the
@@ -14937,7 +14937,7 @@ export default function Home() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
 	                  disabled={appointmentCloseSaving}
 	                  onClick={async () => {
 	                    if (!appointmentCloseTarget) return;
@@ -15075,7 +15075,7 @@ export default function Home() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
                   disabled={appointmentOutcomeSaving}
                   onClick={() => {
                     void saveAppointmentOutcomeFromHeader();
@@ -15137,7 +15137,7 @@ export default function Home() {
                   Cancel
                 </button>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                  className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
                   disabled={approvalOutcomeSaving}
                   onClick={async () => {
                     if (!approvalOutcomeTarget) return;
@@ -15326,7 +15326,7 @@ export default function Home() {
       <section
         className={`flex-1 ${
           isCampaignSection
-            ? "bg-[#090d14] shadow-none lr-campaign-main"
+            ? "bg-[var(--background)] shadow-none lr-campaign-main"
             : "bg-[var(--surface)] shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] lr-app-main-panel"
         } ${
           section === "calendar" ? "p-2 overflow-hidden" : "p-6 overflow-y-auto"
@@ -15413,7 +15413,7 @@ export default function Home() {
                         key={`campaign-asset-target-${opt.value}`}
                         className={`inline-flex items-center gap-2 border rounded px-3 py-2 text-sm transition-colors lr-campaign-target-pill ${
                           isChecked
-                            ? "bg-[var(--lr-accent)] text-[#101522] border-[var(--lr-accent)] font-semibold"
+                            ? "bg-[var(--lr-accent)] text-[var(--accent-contrast)] border-[var(--lr-accent)] font-semibold"
                             : "bg-transparent text-gray-100 border-[rgba(255,255,255,0.32)]"
                         } cursor-pointer`}
                       >
@@ -18052,7 +18052,7 @@ export default function Home() {
                           type="button"
                           className={`w-8 h-8 rounded border ${calendarEditForm.colorId ? "border-gray-300" : "ring-2 ring-blue-400"}`}
                           title="Default"
-                          style={{ backgroundColor: "#f3f4f6" }}
+                          style={{ backgroundColor: "var(--surface-2)" }}
                           onClick={() => setCalendarEditForm({ ...calendarEditForm, colorId: "" })}
                         />
                         {CALENDAR_COLORS.map(c => (
@@ -21579,7 +21579,7 @@ export default function Home() {
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
                       onClick={saveManualAppointment}
                       disabled={manualApptSaving}
                     >
@@ -21885,7 +21885,7 @@ export default function Home() {
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                      className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
                       onClick={submitCadenceResolve}
                       disabled={cadenceResolveSaving}
                     >
@@ -24479,7 +24479,7 @@ export default function Home() {
                 Delete watch
               </button>
               <button
-                className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[#101522] font-semibold"
+                className="px-3 py-2 border rounded text-sm bg-[var(--accent)] text-[var(--accent-contrast)] font-semibold"
                 onClick={saveWatchEdit}
                 disabled={watchEditSaving}
               >

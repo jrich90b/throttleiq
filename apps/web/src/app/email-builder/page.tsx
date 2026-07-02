@@ -765,7 +765,7 @@ export default function EmailBuilderPage() {
             <div>
               <label className="block text-xs text-gray-300">Base campaign</label>
               <select
-                className="mt-1 w-full border border-white/25 bg-[#0a1020] rounded px-2.5 py-2 text-sm"
+                className="mt-1 w-full border border-white/25 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm"
                 value={selectedCampaignId}
                 onChange={e => setSelectedCampaignId(e.target.value)}
               >
@@ -834,7 +834,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Prompt override
               <textarea
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm min-h-[110px]"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm min-h-[110px]"
                 value={customPrompt}
                 onChange={e => setCustomPrompt(e.target.value)}
               />
@@ -843,7 +843,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Description override
               <textarea
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm min-h-[80px]"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm min-h-[80px]"
                 value={customDescription}
                 onChange={e => setCustomDescription(e.target.value)}
               />
@@ -872,7 +872,7 @@ export default function EmailBuilderPage() {
                 }}
               />
               <textarea
-                className="w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-xs min-h-[70px]"
+                className="w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-xs min-h-[70px]"
                 placeholder="Reference image URLs (one per line)"
                 value={referenceImageUrlsText}
                 onChange={e => setReferenceImageUrlsText(e.target.value)}
@@ -902,7 +902,7 @@ export default function EmailBuilderPage() {
                 }}
               />
               <textarea
-                className="w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-xs min-h-[70px]"
+                className="w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-xs min-h-[70px]"
                 placeholder="Brief file URLs (one per line)"
                 value={briefDocumentUrlsText}
                 onChange={e => setBriefDocumentUrlsText(e.target.value)}
@@ -965,7 +965,7 @@ export default function EmailBuilderPage() {
               </button>
             </div>
 
-            <div className="border border-white/20 rounded p-3 bg-[#0a1020] space-y-3">
+            <div className="border border-white/20 rounded p-3 bg-[var(--surface-2)] space-y-3">
               <div className="text-xs font-semibold text-gray-200">Send Email</div>
               <div className="inline-flex rounded border border-white/20 overflow-hidden text-xs">
                 <button
@@ -1137,7 +1137,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Email subject
               <input
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm"
                 value={subject}
                 onChange={e => setSubject(e.target.value)}
               />
@@ -1147,7 +1147,7 @@ export default function EmailBuilderPage() {
               Email body text is auto-derived from generated HTML.
             </div>
 
-            <details className="border border-white/20 rounded p-3 bg-[#0a1020]">
+            <details className="border border-white/20 rounded p-3 bg-[var(--surface-2)]">
               <summary className="text-xs font-semibold text-gray-200 cursor-pointer">Advanced HTML</summary>
               <textarea
                 className="mt-2 w-full border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-xs font-mono min-h-[180px]"
@@ -1160,7 +1160,7 @@ export default function EmailBuilderPage() {
               {contextPreview.map((row, idx) => {
                 const img = campaignPrimaryImage(row);
                 return (
-                  <div key={`ctx-preview-${row.id}`} className="border border-white/15 rounded p-2 bg-[#0a1020]">
+                  <div key={`ctx-preview-${row.id}`} className="border border-white/15 rounded p-2 bg-[var(--surface-2)]">
                     <div className="text-xs font-semibold text-gray-100">{row.name || `Campaign ${idx + 1}`}</div>
                     {img ? (
                       <a href={img} target="_blank" rel="noreferrer" className="block mt-2">

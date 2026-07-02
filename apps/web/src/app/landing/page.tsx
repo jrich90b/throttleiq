@@ -1,19 +1,6 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import localFont from "next/font/local";
-
-// Self-hosted (vendored woff2) instead of next/font/google: keeps the build HERMETIC so it never
-// fetches Google Fonts at build time. Next 16's default Turbopack builder fails that fetch on the
-// deploy host; a local font works in every bundler (Turbopack, webpack, Vercel). The variable file
-// covers the 500/700/800 weights this page uses (wght axis 200–800). (2026-06-24)
-const display = localFont({
-  src: "./fonts/bricolage-grotesque-variable.woff2",
-  weight: "200 800",
-  style: "normal",
-  display: "swap",
-  variable: "--font-marketing"
-});
 
 export const metadata: Metadata = {
   title: "LeadRider — AI lead response for powersports dealers",
@@ -130,17 +117,18 @@ const faqs = [
   }
 ];
 
-const displayFont = "[font-family:var(--font-marketing)]";
+// Same display face as the console (Barlow Condensed via the root layout).
+const displayFont = "[font-family:var(--font-display)]";
 
 export default function LeadRiderLandingPage() {
   return (
-    <main className={`${display.variable} lr-marketing min-h-screen bg-[#090b10] text-white`}>
+    <main className="lr-marketing min-h-screen bg-[var(--background)] text-[var(--text-primary)]">
       <div className="mx-auto w-full max-w-6xl px-6">
         <header className="flex items-center justify-between gap-4 border-b border-white/10 py-5">
           <div className="flex items-center gap-3">
             <Image src="/brand/lr-mark.svg" alt="LeadRider" width={40} height={40} priority />
             <span className={`${displayFont} text-[15px] font-bold tracking-[0.16em]`}>
-              LEAD<span className="text-[#fb7f04]">RIDER</span>
+              LEAD<span className="text-[var(--accent)]">RIDER</span>
             </span>
           </div>
           <nav className="hidden items-center gap-7 text-sm text-white/65 md:flex">
@@ -156,13 +144,13 @@ export default function LeadRiderLandingPage() {
           </nav>
           <div className="flex items-center gap-3">
             <Link
-              className="rounded-md border border-white/20 px-4 py-2 text-sm text-white/85 transition hover:border-[#fb7f04] hover:text-white"
+              className="rounded-md border border-white/20 px-4 py-2 text-sm text-white/85 transition hover:border-[var(--accent)] hover:text-white"
               href="/command"
             >
               Sign in
             </Link>
             <a
-              className="rounded-md bg-[#fb7f04] px-4 py-2 text-sm font-semibold text-[#111827] transition hover:bg-[#ff963f]"
+              className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--accent-contrast)] transition hover:bg-[var(--accent-hover)]"
               href={DEMO_MAILTO}
             >
               Book a demo
@@ -172,10 +160,10 @@ export default function LeadRiderLandingPage() {
 
         <section className="grid items-center gap-12 py-16 lg:grid-cols-[1.05fr_0.95fr] lg:py-20">
           <div>
-            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-[#fbaf64]">
+            <p className="mb-4 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--accent-text)]">
               AI lead response for powersports dealers
             </p>
-            <h1 className={`${displayFont} max-w-2xl text-5xl font-extrabold leading-[1.04] md:text-6xl`}>
+            <h1 className={`${displayFont} max-w-2xl text-5xl font-bold leading-[1.04] md:text-6xl`}>
               Leads don’t wait for Monday. Neither does LeadRider.
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-8 text-white/65">
@@ -184,7 +172,7 @@ export default function LeadRiderLandingPage() {
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <a
-                className="rounded-md bg-[#fb7f04] px-5 py-3 text-sm font-semibold text-[#111827] transition hover:bg-[#ff963f]"
+                className="rounded-md bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[var(--accent-contrast)] transition hover:bg-[var(--accent-hover)]"
                 href={DEMO_MAILTO}
               >
                 Book a demo
@@ -199,7 +187,7 @@ export default function LeadRiderLandingPage() {
             <ul className="mt-10 flex flex-wrap gap-x-7 gap-y-3 text-sm text-white/60">
               {heroProof.map((item) => (
                 <li key={item} className="flex items-center gap-2.5">
-                  <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#fb7f04]" />
+                  <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
                   {item}
                 </li>
               ))}
@@ -220,7 +208,7 @@ export default function LeadRiderLandingPage() {
         </section>
       </div>
 
-      <section className="border-y border-white/10 bg-[#0d1320]">
+      <section className="border-y border-white/10 bg-[var(--surface)]">
         <div className="mx-auto grid w-full max-w-6xl items-center gap-10 px-6 py-16 lg:grid-cols-2">
           <div className="overflow-hidden rounded-xl border border-white/12">
             <Image
@@ -232,7 +220,7 @@ export default function LeadRiderLandingPage() {
             />
           </div>
           <div>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-[#fbaf64]">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--accent-text)]">
               Speed wins the sale
             </p>
             <h2 className={`${displayFont} max-w-lg text-3xl font-bold leading-tight md:text-4xl`}>
@@ -250,7 +238,7 @@ export default function LeadRiderLandingPage() {
                 "Clean handoff to your team the moment they’re in"
               ].map((item) => (
                 <li key={item} className="flex items-start gap-3">
-                  <span aria-hidden className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#fb7f04]" />
+                  <span aria-hidden className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
                   {item}
                 </li>
               ))}
@@ -262,7 +250,7 @@ export default function LeadRiderLandingPage() {
       <section id="conversation" className="mx-auto w-full max-w-6xl scroll-mt-8 px-6 py-16 lg:py-20">
         <div className="grid items-start gap-12 lg:grid-cols-[0.9fr_1.1fr]">
           <div>
-            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-[#fbaf64]">
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--accent-text)]">
               See it work
             </p>
             <h2 className={`${displayFont} max-w-md text-3xl font-bold leading-tight md:text-4xl`}>
@@ -279,21 +267,21 @@ export default function LeadRiderLandingPage() {
                 ["11 min", "to booked"],
                 ["0", "staff involved"]
               ].map(([value, label]) => (
-                <div key={label} className="rounded-lg border border-white/10 bg-[#0d1320] p-4">
-                  <div className={`${displayFont} text-xl font-bold text-[#fb7f04]`}>{value}</div>
+                <div key={label} className="rounded-lg border border-white/10 bg-[var(--surface)] p-4">
+                  <div className={`${displayFont} text-xl font-bold text-[var(--accent)]`}>{value}</div>
                   <div className="mt-1 text-xs text-white/55">{label}</div>
                 </div>
               ))}
             </div>
           </div>
-          <div className="overflow-hidden rounded-xl border border-white/14 bg-[#0f1827]">
+          <div className="overflow-hidden rounded-xl border border-white/14 bg-[var(--surface-2)]">
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-3.5">
               <div className="flex items-center gap-2.5">
                 <Image src="/brand/lr-mark.svg" alt="" width={20} height={20} />
                 <span className="text-sm font-semibold text-white/90">Inbox — Mike R.</span>
                 <span className="text-xs text-white/45">website lead</span>
               </div>
-              <span className="rounded-full bg-[#d9fbe3] px-2.5 py-1 text-xs font-semibold text-[#166534]">
+              <span className="rounded-full border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--status-success-text)]">
                 Booked
               </span>
             </div>
@@ -301,18 +289,18 @@ export default function LeadRiderLandingPage() {
               {conversation.map((msg, i) =>
                 msg.from === "event" ? (
                   <div key={i} className="flex justify-center">
-                    <span className="rounded-full border border-[#fb7f04]/35 bg-[#fb7f04]/10 px-3.5 py-1.5 text-center text-xs font-medium text-[#fbaf64]">
+                    <span className="rounded-full border border-[var(--accent-text)] bg-[var(--accent-tint)] px-3.5 py-1.5 text-center text-xs font-medium text-[var(--accent-text)]">
                       {msg.body}
                     </span>
                   </div>
                 ) : (
                   <div key={i} className={msg.from === "rider" ? "text-right" : ""}>
-                    <div className="text-xs text-gray-500">{msg.meta}</div>
+                    <div className="text-xs text-white/50">{msg.meta}</div>
                     <div
                       className={`mt-1 inline-block max-w-[85%] rounded-2xl border px-3 py-2 text-left text-sm font-medium leading-6 ${
                         msg.from === "rider"
-                          ? "border-blue-600 bg-blue-600 text-white"
-                          : "border-gray-200 bg-gray-100 text-gray-900"
+                          ? "border-[var(--accent-text)] bg-[var(--accent-tint)] text-[var(--text-primary)]"
+                          : "border-[var(--border)] bg-[var(--surface-hover)] text-[var(--text-primary)]"
                       }`}
                     >
                       {msg.body}
@@ -325,13 +313,13 @@ export default function LeadRiderLandingPage() {
         </div>
       </section>
 
-      <section className="border-y border-white/10 bg-[#0d1320]">
+      <section className="border-y border-white/10 bg-[var(--surface)]">
         <div className="mx-auto w-full max-w-6xl px-6 py-16">
           <h2 className={`${displayFont} text-3xl font-bold md:text-4xl`}>How it works</h2>
           <div className="mt-10 grid gap-6 md:grid-cols-3">
             {steps.map((step, i) => (
-              <div key={step.title} className="rounded-xl border border-white/10 bg-[#090b10] p-6">
-                <div className={`${displayFont} text-sm font-bold text-[#fb7f04]`}>0{i + 1}</div>
+              <div key={step.title} className="rounded-xl border border-white/10 bg-[var(--background)] p-6">
+                <div className={`${displayFont} text-sm font-bold text-[var(--accent)]`}>0{i + 1}</div>
                 <h3 className={`${displayFont} mt-3 text-xl font-bold`}>{step.title}</h3>
                 <p className="mt-3 text-sm leading-6 text-white/60">{step.body}</p>
               </div>
@@ -354,7 +342,7 @@ export default function LeadRiderLandingPage() {
           {features.map((feature) => (
             <div
               key={feature.title}
-              className="rounded-xl border border-white/10 bg-[#0d1320] p-6 transition hover:border-[#fb7f04]/50"
+              className="rounded-xl border border-white/10 bg-[var(--surface)] p-6 transition hover:border-[var(--accent)]"
             >
               <h3 className={`${displayFont} text-lg font-bold`}>{feature.title}</h3>
               <p className="mt-3 text-sm leading-6 text-white/60">{feature.body}</p>
@@ -371,13 +359,13 @@ export default function LeadRiderLandingPage() {
           height={1080}
           className="h-[420px] w-full object-cover"
         />
-        <div className="absolute inset-0 flex items-center bg-gradient-to-r from-[#090b10]/90 via-[#090b10]/40 to-transparent">
+        <div className="absolute inset-0 flex items-center bg-gradient-to-r from-[#0e0d0c]/90 via-[#0e0d0c]/40 to-transparent">
           <div className="mx-auto w-full max-w-6xl px-6">
             <h2 className={`${displayFont} max-w-lg text-3xl font-bold leading-tight md:text-5xl`}>
               The store closes. The conversations don’t.
             </h2>
             <a
-              className="mt-8 inline-block rounded-md bg-[#fb7f04] px-5 py-3 text-sm font-semibold text-[#111827] transition hover:bg-[#ff963f]"
+              className="mt-8 inline-block rounded-md bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[var(--accent-contrast)] transition hover:bg-[var(--accent-hover)]"
               href={DEMO_MAILTO}
             >
               Book a demo
@@ -392,13 +380,13 @@ export default function LeadRiderLandingPage() {
           {faqs.map((faq) => (
             <details
               key={faq.q}
-              className="group rounded-xl border border-white/10 bg-[#0d1320] px-5 py-4 open:border-[#fb7f04]/40"
+              className="group rounded-xl border border-white/10 bg-[var(--surface)] px-5 py-4 open:border-[var(--accent)]"
             >
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-[15px] font-semibold marker:hidden">
                 {faq.q}
                 <span
                   aria-hidden
-                  className="text-[#fb7f04] transition-transform duration-200 group-open:rotate-45"
+                  className="text-[var(--accent)] transition-transform duration-200 group-open:rotate-45"
                 >
                   +
                 </span>
@@ -409,7 +397,7 @@ export default function LeadRiderLandingPage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 bg-[#0d1320]">
+      <section className="border-t border-white/10 bg-[var(--surface)]">
         <div className="mx-auto w-full max-w-6xl px-6 py-16 text-center">
           <h2 className={`${displayFont} mx-auto max-w-xl text-3xl font-bold leading-tight md:text-4xl`}>
             Ready to catch every lead?
@@ -418,7 +406,7 @@ export default function LeadRiderLandingPage() {
             See LeadRider answer your own leads, live, before you commit to anything.
           </p>
           <a
-            className="mt-8 inline-block rounded-md bg-[#fb7f04] px-6 py-3.5 text-sm font-semibold text-[#111827] transition hover:bg-[#ff963f]"
+            className="mt-8 inline-block rounded-md bg-[var(--accent)] px-6 py-3.5 text-sm font-semibold text-[var(--accent-contrast)] transition hover:bg-[var(--accent-hover)]"
             href={DEMO_MAILTO}
           >
             Book a demo
@@ -432,7 +420,7 @@ export default function LeadRiderLandingPage() {
             <Image src="/brand/lr-mark.svg" alt="" width={30} height={30} />
             <div>
               <div className={`${displayFont} text-sm font-bold tracking-[0.16em]`}>
-                LEAD<span className="text-[#fb7f04]">RIDER</span>
+                LEAD<span className="text-[var(--accent)]">RIDER</span>
               </div>
               <div className="text-xs text-white/45">AI lead response for powersports dealers</div>
             </div>
