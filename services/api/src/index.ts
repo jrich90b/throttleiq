@@ -64806,10 +64806,40 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                 );
               }
             } else {
-              recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
-                convId: conv.id,
-                leadKey: conv.leadKey
-              });
+              // Joe-approved 2026-07-02 (Brian Serena class, +17166021492: "marked called and
+              // left voicemail... there should probably be a follow up for 2nd attempt"): a
+              // voicemail-only outbound call on ANY conversation gets a 2nd-attempt call task
+              // (due next morning, same schedule the finance flow uses) so the lead can't fall
+              // through the cracks. Only the finance-specific cadence restart stays finance-only.
+              const cfg = await getSchedulerConfigHot();
+              const timezone = cfg.timezone || "America/New_York";
+              const existing = listOpenTodos().some(
+                t =>
+                  t.convId === conv.id &&
+                  t.status === "open" &&
+                  (t.taskClass === "followup" || t.reason === "call")
+              );
+              if (!existing) {
+                const schedule = buildDefaultCallbackFallbackSchedule(timezone);
+                addTodo(
+                  conv,
+                  "call",
+                  `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: left a voicemail, no contact on the last call.`,
+                  recordingSid || bodyCallSid || callbackCallSid || undefined,
+                  undefined,
+                  schedule,
+                  "followup"
+                );
+                recordRouteOutcome("manual", "voicemail_second_attempt_task_created", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey
+                });
+              } else {
+                recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey
+                });
+              }
             }
           }
           pauseFollowUpCadence(
