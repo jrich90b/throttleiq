@@ -6369,6 +6369,14 @@ export async function parseTradePayoffWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  return normalizeTradePayoffLLMOutput(parsed, text);
+}
+
+// Deterministic post-parse normalization for the trade-payoff LLM output —
+// extracted so the legacy parser and the merged unified parser share ONE set of
+// fail-safe guard rails (behavior-preserving extraction, 2026-07-02).
+export function normalizeTradePayoffLLMOutput(parsed: any, textRaw: string): TradePayoffParse {
+  const text = String(textRaw ?? "").trim();
   const payoffRaw = String(parsed.payoff_status ?? "").toLowerCase();
   let payoffStatus: TradePayoffParse["payoffStatus"] =
     payoffRaw === "no_lien" || payoffRaw === "has_lien" ? payoffRaw : "unknown";
@@ -8543,6 +8551,14 @@ export async function parseTradeTargetValueWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  return normalizeTradeTargetLLMOutput(parsed, text);
+}
+
+// Deterministic post-parse normalization for the trade-target-value LLM output —
+// extracted so the legacy parser and the merged unified parser share ONE set of
+// fail-safe guard rails (behavior-preserving extraction, 2026-07-02).
+export function normalizeTradeTargetLLMOutput(parsed: any, textRaw: string): TradeTargetValueParse {
+  const text = String(textRaw ?? "").trim();
   const hasTargetValue = !!parsed.has_target_value;
   const parsedAmount = Number(parsed.amount);
   const amount =
@@ -11465,6 +11481,23 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead
     })
   ]);
+  const legacy = combineUnifiedSlotParse(semantic, trade, tradeTarget);
+  if (legacy && process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1") {
+    // Shadow compare (consolidation-plan Phase-1 pattern): the merged one-call
+    // parser runs alongside, fire-and-forget — it logs disagreements and NEVER
+    // affects the live result or adds latency to the customer path.
+    void runUnifiedSlotsMergedShadowCompare(args, legacy);
+  }
+  return legacy;
+}
+
+// Pure combiner shared by the legacy 3-call path and the merged 1-call parser —
+// one implementation so shadow comparisons measure the LLM, not drift here.
+export function combineUnifiedSlotParse(
+  semantic: SemanticSlotParse | null,
+  trade: TradePayoffParse | null,
+  tradeTarget: TradeTargetValueParse | null
+): UnifiedSemanticSlotParse | null {
   if (!semantic && !trade && !tradeTarget) return null;
 
   const watchConfidence =
@@ -11511,6 +11544,344 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     tradeTargetConfidence,
     confidence
   };
+}
+
+// ---------------------------------------------------------------------------
+// Merged unified slot parser — the parser-consolidation shadow slice
+// (docs/comprehension_consolidation_plan.md, 2026-07-02). ONE structured call
+// carries all three jobs the legacy path runs as parallel sub-calls
+// (semantic slots + trade payoff + trade target value). Runs ONLY in shadow
+// (UNIFIED_SLOTS_MERGED_SHADOW=1) behind parseUnifiedSemanticSlotsWithLLM;
+// output is normalized by the SAME shared guard rails and compared field-by-
+// field against the legacy result. Cutover is a separate approve-first step.
+// NOTE: the rules/examples below are a MERGED-SHADOW COPY of the three legacy
+// prompts — if you edit a legacy parser's rules/examples, mirror it here (and
+// vice versa) until cutover deletes one of the copies.
+// ---------------------------------------------------------------------------
+
+const UNIFIED_SLOT_MERGED_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["semantic", "trade_payoff", "trade_target"],
+  properties: {
+    semantic: SEMANTIC_SLOT_PARSER_JSON_SCHEMA,
+    trade_payoff: TRADE_PAYOFF_PARSER_JSON_SCHEMA,
+    trade_target: TRADE_TARGET_VALUE_PARSER_JSON_SCHEMA
+  }
+};
+
+export async function parseUnifiedSemanticSlotsMergedWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  inventoryWatch?: Conversation["inventoryWatch"];
+  inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  tradePayoff?: Conversation["tradePayoff"];
+  dialogState?: string;
+}): Promise<UnifiedSemanticSlotParse | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_UNIFIED_SLOT_MERGED_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_UNIFIED_SLOT_MERGED_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_UNIFIED_SLOT_MERGED_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const watch = args.inventoryWatch ?? null;
+  const pending = args.inventoryWatchPending ?? null;
+  const dialogState = String(args.dialogState ?? "").trim();
+  const existingPayoff = args.tradePayoff ?? null;
+
+  const semanticExamples = [
+    'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","year_min":0,"year_max":0,"color":"black","condition":"new","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: text me if a road glide trike comes in" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: keep an eye out for a Pan Am Limited" output: {"watch_action":"set_watch","watch":{"model":"Pan America 1250 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: let me know if you get a CVO Street Glide 3 Limited" output: {"watch_action":"set_watch","watch":{"model":"CVO Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Keep an eye out for a 2020 Road Glide in black under $18k." output: {"watch_action":"set_watch","watch":{"model":"Road Glide","year":"2020","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":18000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Staff: We will keep an eye out for a XG500 or XG750 for you." output: {"watch_action":"set_watch","watch":{"model":"XG500 or XG750","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Staff: I will keep an eye out for a pre owned tri-glide in the $15-20 thousand range for you." output: {"watch_action":"set_watch","watch":{"model":"Tri Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: lmk if you get a 23 lrs in black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: watch for fxlrs in vivid black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"","year_min":0,"year_max":0,"color":"vivid black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: text me if a 2021-2023 street glide in silver comes in between 15k and 20k" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":2021,"year_max":2023,"color":"silver","condition":"unknown","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: you got any street glides that are used right now? probably thirteen, fourteen maybe. if you wanna jot me down and keep me in mind that would be sweet." output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Looking for a pre owned street glide special or road glide special in the $14,000-$16,000 price range. Likes black on black." output: {"watch_action":"set_watch","watch":{"model":"Street Glide Special","year":"","year_min":0,"year_max":0,"color":"black","condition":"used","min_price":14000,"max_price":16000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: Thanks Joe. I am all set on the bike search for now. I will reach out when I am looking again." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I am all set on the bike search for the time being. I appreciate your help and will reach out later." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: I have to cancel coming to you Tuesday. I am having service done on the bike and inspection. I need to do a few more things before I can sell. I will get back to you." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: 11am can you send photos of street glide limited" output: {"watch_action":"none","watch":{"model":"Street Glide Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"photos","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"watch_action":"none","watch":{"model":"Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: let me know if you guys have a demo day like Kawasaki" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: do you guys have demo days?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: can I get a call instead of texts?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"call_only","media_intent":"none","service_records_intent":false,"confidence":0.93}',
+    'input: "Customer: do you have service records on that bike?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":true,"confidence":0.94}'
+  ];
+  const payoffExamples = [
+    'input: "Customer: No lien no payoff. I own it and have the title." output: {"payoff_status":"no_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.98}',
+    'input: "Customer: I still owe on it through Eaglemark." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.95}',
+    'input: "Customer: I did not have the lien holder info. Do you have the lien holder address?" output: {"payoff_status":"has_lien","needs_lien_holder_info":true,"provides_lien_holder_info":false,"confidence":0.94}',
+    'input: "Customer: Lien holder is Eaglemark Savings Bank, PO Box 277940 Sacramento CA 95827." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":true,"confidence":0.96}',
+    'input: "Customer: I can come by Friday afternoon to look at it." output: {"payoff_status":"unknown","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.93}'
+  ];
+
+  const prompt = [
+    "You are ONE parser performing THREE independent extraction jobs on the same dealership SMS message.",
+    "Return only JSON that matches the provided schema: an object with keys \"semantic\", \"trade_payoff\", and \"trade_target\".",
+    "Run every job on every message — a job unrelated to the message returns its neutral/none/unknown values.",
+    "The examples below show each job's sub-object on its own; nest each under its key in the final JSON.",
+    "",
+    "=== JOB 1: semantic — semantic slots ===",
+    "Extract only these slots:",
+    "- watch_action: set_watch / stop_watch / none",
+    "- watch: model/year/year_min/year_max/color/condition/min_price/max_price/monthly_budget/down_payment if explicitly present",
+    "- department_intent: service / parts / apparel / none",
+    "- contact_preference_intent: call_only / none",
+    "- media_intent: video / photos / either / none",
+    "- service_records_intent: true/false",
+    "",
+    "Rules:",
+    "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
+    "- Strong set_watch phrases include 'keep an eye out for', 'watch for', 'text me if', 'let me know if/lmk if', 'when one comes in', and staff-authored 'I/we will keep an eye out for'.",
+    "- If department_intent is parts, service, or apparel, watch_action must be none even when the text says 'let me know if' or 'in stock'.",
+    "- Treat shorthand as valid intent/model cues (e.g., 'lmk' = let me know, 'lrs'/'fxlrs' = Low Rider S).",
+    "- Phrases like 'if one lands', 'if one comes in', 'when one lands', or 'shoot me a text' are set_watch when recent history, lead vehicle, existing watch, or pending watch provides the model context.",
+    "- Explicit 'watch for fxlrs/lrs' is set_watch and should normalize the model to Low Rider S.",
+    "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
+    "- Phrases like 'found one already, stop looking' mean stop_watch.",
+    "- In an existing watch context, phrases like 'all set on the bike search', 'set for the time being', or 'I will reach out when I am looking again' mean stop_watch.",
+    "- watch_action=none for general inventory questions without watch request.",
+    "- Never set watch_action from standalone time tokens or media requests. For 'send photos/video' requests, keep watch_action=none and set media_intent accordingly.",
+    "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
+    "- department_intent=parts for parts/part-number/OEM/brake pads/tires/accessory fitment questions, even if the text says 'in stock' and includes a bike model.",
+    "- department_intent=parts for engine/motor sourcing requests, including take-off Milwaukee-Eight / M-8 114 or 117 engines from customer upgrades.",
+    "- department_intent=service for install/repair price questions like headlight bulb to LED, light replacement, wiring/fitment labor.",
+    "- Use department_intent=none for general sales messages.",
+    "- contact_preference_intent=call_only only when customer explicitly asks for calls only / no texts.",
+    "- media_intent=video/photos/either only when the customer explicitly asks for media (walkaround, pics, photos, video).",
+    "- service_records_intent=true only when customer explicitly asks for service/maintenance records/history, battery/tires condition history, or similar records-check request.",
+    "- watch.model should be normalized human model text when possible; else empty string.",
+    "- watch.year should be empty string unless explicitly provided.",
+    "- watch.year_min/year_max are only for explicit year ranges like 2021-2023 or 2021 to 2023; otherwise 0.",
+    "- watch.color should be empty string unless explicitly provided.",
+    "- watch.condition should be one of new/used/any/unknown.",
+    "- min_price/max_price are explicit bike-price constraints only; parse k/grand as thousands; otherwise 0.",
+    "- monthly_budget/down_payment are explicit monthly/down values only; otherwise 0.",
+    "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...semanticExamples,
+    "",
+    "=== JOB 2: trade_payoff — trade-in lien/payoff state ===",
+    "Interpret the customer's latest message for trade payoff state.",
+    "Guidelines:",
+    "- payoff_status=no_lien when customer says they own it, have title, no lien/payoff/loan.",
+    "- payoff_status=has_lien when customer indicates they still owe, have a lien/payoff/lender/bank loan.",
+    "- payoff_status=unknown when neither is clearly stated.",
+    "- needs_lien_holder_info=true when customer asks for lien holder/payoff address/info/details/name.",
+    "- provides_lien_holder_info=true when customer provides lender/lien holder/payoff details.",
+    "- Spelling mistakes are common (e.g., lein).",
+    "- If message is unrelated to liens/payoff, return unknown/false/false with lower confidence.",
+    "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...payoffExamples,
+    "",
+    "=== JOB 3: trade_target — trade-in target value ===",
+    "Goal:",
+    "- Detect when customer states a specific trade value target for their bike.",
+    "",
+    "Examples that SHOULD set has_target_value=true:",
+    "- \"am i anywhere close to 7k\"",
+    "- \"I would need 7000 for my bike\"",
+    "- \"if i'm not at 7,000 it won't make sense\"",
+    "- \"i'd have to get at least $8,500\"",
+    "",
+    "Examples that SHOULD set has_target_value=false:",
+    "- \"what can you give me for my bike?\" (no concrete number)",
+    "- \"i want top dollar\" (no concrete number)",
+    "- unrelated pricing/payment questions for the bike they're buying.",
+    "",
+    "Rules:",
+    "- amount must be numeric dollars when present (convert shorthand like 7k -> 7000).",
+    "- raw_text should contain the customer phrase indicating their target.",
+    "- If no clear target amount is present, use has_target_value=false and amount=0.",
+    "- confidence is 0..1.",
+    "",
+    "=== Shared context ===",
+    `Lead vehicle: ${JSON.stringify({
+      year: lead?.vehicle?.year ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      color: lead?.vehicle?.color ?? null,
+      condition: lead?.vehicle?.condition ?? null
+    })}`,
+    `Trade context: ${JSON.stringify({
+      tradeVehicle: lead?.tradeVehicle?.model ?? null,
+      leadSource: lead?.source ?? null
+    })}`,
+    `Existing watch: ${JSON.stringify(watch ?? {})}`,
+    `Pending watch: ${JSON.stringify(pending ?? {})}`,
+    `Existing trade payoff state: ${JSON.stringify(existingPayoff ?? {})}`,
+    `Dialog state: ${dialogState || "none"}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "unified_slot_merged_parser",
+      schema: UNIFIED_SLOT_MERGED_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 480,
+      debugTag: "llm-unified-slot-merged-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  // Same shared guard rails as the legacy 3-call path — the comparison below
+  // measures the LLM merge, not normalization drift.
+  const semantic =
+    parsed.semantic && typeof parsed.semantic === "object"
+      ? normalizeSemanticSlotLLMOutput(parsed.semantic, {
+          text,
+          history,
+          lead,
+          inventoryWatch: watch ?? undefined,
+          inventoryWatchPending: pending ?? undefined
+        })
+      : null;
+  const trade =
+    parsed.trade_payoff && typeof parsed.trade_payoff === "object"
+      ? normalizeTradePayoffLLMOutput(parsed.trade_payoff, text)
+      : null;
+  const tradeTarget =
+    parsed.trade_target && typeof parsed.trade_target === "object"
+      ? normalizeTradeTargetLLMOutput(parsed.trade_target, text)
+      : null;
+  return combineUnifiedSlotParse(semantic, trade, tradeTarget);
+}
+
+export type UnifiedSlotFieldDiff = { field: string; legacy: unknown; merged: unknown };
+
+// Pure field-level comparison between the legacy 3-call result and the merged
+// 1-call result. Deterministic; pinned by unified_slots_merged_shadow:eval.
+export function diffUnifiedSlotParse(
+  legacy: UnifiedSemanticSlotParse,
+  merged: UnifiedSemanticSlotParse
+): { equal: boolean; diffs: UnifiedSlotFieldDiff[] } {
+  const diffs: UnifiedSlotFieldDiff[] = [];
+  const normStr = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const normNum = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
+  const push = (field: string, a: unknown, b: unknown) => {
+    diffs.push({ field, legacy: a ?? null, merged: b ?? null });
+  };
+  const cmpStr = (field: string, a: unknown, b: unknown, fallback = "") => {
+    if (normStr(a ?? fallback) !== normStr(b ?? fallback)) push(field, a, b);
+  };
+  const cmpNum = (field: string, a: unknown, b: unknown) => {
+    if (normNum(a) !== normNum(b)) push(field, a, b);
+  };
+  const cmpBool = (field: string, a: unknown, b: unknown) => {
+    if (!!a !== !!b) push(field, !!a, !!b);
+  };
+
+  cmpStr("watchAction", legacy.watchAction, merged.watchAction, "none");
+  cmpStr("watch.model", legacy.watch?.model, merged.watch?.model);
+  cmpStr("watch.year", legacy.watch?.year, merged.watch?.year);
+  cmpNum("watch.yearMin", legacy.watch?.yearMin, merged.watch?.yearMin);
+  cmpNum("watch.yearMax", legacy.watch?.yearMax, merged.watch?.yearMax);
+  cmpStr("watch.color", legacy.watch?.color, merged.watch?.color);
+  cmpStr("watch.condition", legacy.watch?.condition, merged.watch?.condition, "unknown");
+  cmpNum("watch.minPrice", legacy.watch?.minPrice, merged.watch?.minPrice);
+  cmpNum("watch.maxPrice", legacy.watch?.maxPrice, merged.watch?.maxPrice);
+  cmpNum("watch.monthlyBudget", legacy.watch?.monthlyBudget, merged.watch?.monthlyBudget);
+  cmpNum("watch.downPayment", legacy.watch?.downPayment, merged.watch?.downPayment);
+  cmpStr("departmentIntent", legacy.departmentIntent, merged.departmentIntent, "none");
+  cmpStr("contactPreferenceIntent", legacy.contactPreferenceIntent, merged.contactPreferenceIntent, "none");
+  cmpStr("mediaIntent", legacy.mediaIntent, merged.mediaIntent, "none");
+  cmpBool("serviceRecordsIntent", legacy.serviceRecordsIntent, merged.serviceRecordsIntent);
+  cmpStr("payoffStatus", legacy.payoffStatus, merged.payoffStatus, "unknown");
+  cmpBool("needsLienHolderInfo", legacy.needsLienHolderInfo, merged.needsLienHolderInfo);
+  cmpBool("providesLienHolderInfo", legacy.providesLienHolderInfo, merged.providesLienHolderInfo);
+  cmpNum("tradeTargetValue.amount", legacy.tradeTargetValue?.amount, merged.tradeTargetValue?.amount);
+
+  return { equal: diffs.length === 0, diffs };
+}
+
+// Fire-and-forget shadow runner: never throws into the live path, never blocks it.
+async function runUnifiedSlotsMergedShadowCompare(
+  args: {
+    text: string;
+    history?: { direction: "in" | "out"; body: string }[];
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+    tradePayoff?: Conversation["tradePayoff"];
+    dialogState?: string;
+  },
+  legacy: UnifiedSemanticSlotParse
+): Promise<void> {
+  try {
+    const startedAt = Date.now();
+    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
+    const elapsedMs = Date.now() - startedAt;
+    if (!merged) {
+      console.log("[unified-slots-shadow]", JSON.stringify({ at: new Date().toISOString(), outcome: "merged_null", elapsedMs }));
+      return;
+    }
+    const { equal, diffs } = diffUnifiedSlotParse(legacy, merged);
+    const record = {
+      at: new Date().toISOString(),
+      outcome: equal ? "agree" : "disagree",
+      elapsedMs,
+      diffs,
+      textPreview: String(args.text ?? "").slice(0, 140)
+    };
+    console.log("[unified-slots-shadow]", JSON.stringify(record));
+    appendUnifiedSlotsShadowRecord(record);
+  } catch (err: any) {
+    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
+  }
+}
+
+function appendUnifiedSlotsShadowRecord(record: Record<string, unknown>): void {
+  try {
+    const dir =
+      process.env.UNIFIED_SLOTS_SHADOW_DIR ||
+      (process.env.REPORT_ROOT ? `${process.env.REPORT_ROOT}/unified_slots_shadow` : "");
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    fs.appendFileSync(`${dir}/unified_slots_shadow_${day}.jsonl`, `${JSON.stringify(record)}\n`);
+  } catch {
+    // best-effort persistence; the console line is the primary record
+  }
 }
 
 export async function parseSemanticSlotsWithLLM(args: {
@@ -11651,6 +12022,34 @@ export async function parseSemanticSlotsWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  return normalizeSemanticSlotLLMOutput(parsed, {
+    text,
+    history,
+    lead,
+    inventoryWatch: watch ?? undefined,
+    inventoryWatchPending: pending ?? undefined
+  });
+}
+
+// Deterministic post-parse normalization for the semantic-slot LLM output — the
+// fail-safe watch/department/media guard rails, extracted so the legacy parser
+// and the merged unified parser share ONE implementation (behavior-preserving
+// extraction, 2026-07-02).
+export function normalizeSemanticSlotLLMOutput(
+  parsed: any,
+  ctx: {
+    text: string;
+    history: string[]; // "direction: body" lines, already sliced by the caller
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  }
+): SemanticSlotParse {
+  const text = String(ctx.text ?? "").trim();
+  const history = ctx.history ?? [];
+  const lead = ctx.lead ?? {};
+  const watch = ctx.inventoryWatch ?? null;
+  const pending = ctx.inventoryWatchPending ?? null;
   const textLower = text.toLowerCase();
   const watchActionRaw = String(parsed.watch_action ?? "").toLowerCase();
   let watchAction: SemanticSlotParse["watchAction"] =
