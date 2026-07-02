@@ -404,7 +404,7 @@ export function InboxSection(props: any) {
             <div key={group.key}>
               {group.isCampaignGroup ? (
                 <button
-                  className="w-full px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)] flex items-center justify-between gap-2"
+                  className="w-full px-1 pb-1 lr-section-label border-b border-[var(--border)] flex items-center justify-between gap-2"
                   onClick={() =>
                     setCampaignInboxExpanded((prev: Record<string, boolean>) => ({
                       ...prev,
@@ -418,7 +418,7 @@ export function InboxSection(props: any) {
                   </span>
                 </button>
               ) : (
-                <div className="px-1 pb-1 text-xs font-semibold text-[var(--accent)] border-b border-[var(--border)]">
+                <div className="px-1 pb-1 lr-section-label border-b border-[var(--border)]">
                   {group.label}
                 </div>
               )}
@@ -504,9 +504,9 @@ export function InboxSection(props: any) {
                       <div key={c.id} className="flex items-stretch">
                         <button
                           onClick={() => openConversation(c.id)}
-                          className={`lr-inbox-row flex-1 min-w-0 text-left p-4 transition-colors hover:bg-[color:rgba(251,127,4,0.16)] focus-visible:bg-[color:rgba(251,127,4,0.16)] ${
+                          className={`lr-inbox-row flex-1 min-w-0 text-left p-4 transition-colors hover:bg-[var(--surface-hover)] focus-visible:bg-[var(--surface-hover)] ${
                             linkedOpenCampaign ? "bg-gray-50/70 opacity-70" : ""
-                          } ${selectedId === c.id ? "bg-[color:rgba(63,126,255,0.18)]" : ""}`}
+                          } ${selectedId === c.id ? "bg-[var(--accent-tint)]" : ""}`}
                         >
                           <div className="lr-inbox-row-main">
                             <div className="min-w-0">
@@ -528,7 +528,7 @@ export function InboxSection(props: any) {
                               <div className="lr-inbox-badge-row">
                                 {c.walkIn && !isPhoneLogConversation(c) ? (
                                   <span
-                                    className="lr-inbox-icon-pill text-blue-600"
+                                    className="lr-inbox-icon-pill text-[var(--status-info-text)]"
                                     title="Walk-in"
                                     aria-label="Walk-in"
                                   >
@@ -550,7 +550,7 @@ export function InboxSection(props: any) {
                                 {c.status === "closed" ? (
                                   <span
                                     className={`lr-inbox-pill ${
-                                      isSoldConversation(c) ? "lr-inbox-pill-info" : "lr-inbox-pill-muted"
+                                      isSoldConversation(c) ? "lr-badge--sold" : "lr-inbox-pill-muted"
                                     }`}
                                     title={
                                       isSoldConversation(c)
@@ -574,7 +574,7 @@ export function InboxSection(props: any) {
                                   c.followUp?.reason === "order_hold" ||
                                   !!c.hold ? (
                                   <span
-                                    className="lr-inbox-pill lr-inbox-pill-warn"
+                                    className="lr-inbox-pill lr-badge--on-hold"
                                     title="Deposit down or bike on order — automatic follow-ups are paused"
                                   >
                                     On hold
@@ -610,7 +610,7 @@ export function InboxSection(props: any) {
                                       );
                                     }}
                                   >
-                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-success-text)]" />
                                     Outcome
                                   </button>
                                 ) : null}
@@ -640,16 +640,14 @@ export function InboxSection(props: any) {
                               {c.draftHeld ? (
                                 c.draftHeld?.heldKind === "context_fidelity" ? (
                                   <span
-                                    className="lr-inbox-meta-pill"
-                                    style={{ background: "#fee2e2", color: "#991b1b", borderColor: "#fca5a5" }}
+                                    className="lr-inbox-meta-pill lr-badge--needs-reply"
                                     title="The AI couldn't answer this one — write the reply yourself. Sending clears this flag."
                                   >
                                     Needs your reply
                                   </span>
                                 ) : (
                                   <span
-                                    className="lr-inbox-meta-pill"
-                                    style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}
+                                    className="lr-inbox-meta-pill lr-badge--being-fixed"
                                     title="The quality check caught a problem with the draft and is fixing it — nothing for you to do yet"
                                   >
                                     Being fixed
@@ -657,8 +655,7 @@ export function InboxSection(props: any) {
                                 )
                               ) : c.pendingDraft ? (
                                 <span
-                                  className="lr-inbox-meta-pill"
-                                  style={{ background: "#dbeafe", color: "#1e40af", borderColor: "#93c5fd" }}
+                                  className="lr-inbox-meta-pill lr-badge--draft-ready"
                                   title="A reply is drafted and waiting — open to review and send"
                                 >
                                   Draft ready
@@ -678,7 +675,10 @@ export function InboxSection(props: any) {
                             {c.draftHeld ? (
                               <span
                                 style={{
-                                  color: c.draftHeld?.heldKind === "context_fidelity" ? "#991b1b" : "#92400e"
+                                  color:
+                                    c.draftHeld?.heldKind === "context_fidelity"
+                                      ? "var(--status-danger-text)"
+                                      : "var(--status-warning-text)"
                                 }}
                               >
                                 {c.draftHeld?.heldKind === "context_fidelity"

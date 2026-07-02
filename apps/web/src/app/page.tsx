@@ -1475,8 +1475,8 @@ function getTodoSectionTheme(section: TodoInboxSection) {
 function getInboxDealFilterButtonClass(active: boolean) {
   return `px-2.5 py-1 text-xs rounded border ${
     active
-      ? "bg-[var(--accent)] text-[#101522] border-[var(--accent)] font-semibold"
-      : "bg-white/[0.04] text-[#e7edf8] hover:bg-[var(--surface-2)]"
+      ? "bg-[var(--accent)] text-[var(--accent-contrast)] border-[var(--accent)] font-semibold"
+      : "bg-[var(--surface-2)] text-[var(--text-secondary)] border-[var(--border-strong)] hover:bg-[var(--surface-hover)]"
   }`;
 }
 
@@ -21242,15 +21242,15 @@ export default function Home() {
             !cadenceAlert &&
             selectedCadence?.status === "active" &&
             selectedCadence?.nextDueAt ? (
-              <div className="mt-3 border rounded-lg bg-amber-50 px-3 py-2 text-sm flex items-center justify-between gap-3">
+              <div className="mt-3 border rounded-lg border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>
-                  <div className="font-medium text-amber-900">Follow-up cadence active</div>
-                  <div className="text-xs text-amber-800">
+                  <div className="font-medium text-[var(--status-warning-text)]">Follow-up cadence active</div>
+                  <div className="text-xs text-[var(--status-warning-text)]">
                     Next due: {formatCadenceDate(selectedCadence.nextDueAt)}
                   </div>
                 </div>
                 <button
-                  className="px-3 py-2 border rounded text-sm bg-white"
+                  className="px-3 py-2 border rounded text-sm lr-btn--sm lr-btn"
                   onClick={() => openCadenceResolve(selectedConv.id, "alert")}
                 >
                   Review
@@ -22800,7 +22800,7 @@ export default function Home() {
                   if (isPaymentEvent) {
                     return (
                       <div key={m.id} className="text-sm">
-                        <div className="mx-auto max-w-[92%] rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-950 shadow-sm">
+                        <div className="mx-auto max-w-[92%] rounded-xl border border-[var(--status-success-border)] bg-[var(--status-success-bg)] px-3 py-2 text-[var(--status-success-text)] shadow-sm">
                           <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                             {providerLabel} • {new Date(m.at).toLocaleString()}
                           </div>
@@ -22825,10 +22825,10 @@ export default function Home() {
                         <div
                           className={`inline-block mt-1 px-3 py-2 rounded-2xl border max-w-[85%] whitespace-pre-wrap break-words text-base font-medium ${
                             isSummary
-                              ? "bg-gray-50 text-gray-800 border-gray-200"
+                              ? "bg-[var(--surface-2)] text-[var(--text-secondary)] border-[var(--border)]"
                               : m.direction === "in"
-                                ? "bg-gray-100 text-gray-900 border-gray-200"
-                                : "bg-blue-600 text-white border-blue-600"
+                                ? "bg-[var(--surface-hover)] text-[var(--text-primary)] border-[var(--border)]"
+                                : "bg-[var(--accent-tint)] text-[var(--text-primary)] border-[var(--accent-text)]"
                           }`}
                         >
                           {renderMessageBody(messageBody)}
@@ -22850,7 +22850,7 @@ export default function Home() {
                                 {expandedCallSummaries[m.id] ? "Hide call summary" : "Show call summary"}
                               </button>
                               {expandedCallSummaries[m.id] ? (
-                                <div className="mt-2 px-3 py-2 rounded-xl border bg-gray-50 text-gray-800 border-gray-200">
+                                <div className="mt-2 px-3 py-2 rounded-xl border bg-[var(--surface-2)] text-[var(--text-secondary)] border-[var(--border)]">
                                   {summaryText}
                                 </div>
                               ) : null}
@@ -22985,7 +22985,7 @@ export default function Home() {
                   <div className="text-xs text-gray-500">
                     {composeSending ? "OUT • sending" : "AI • thinking"}
                   </div>
-                  <div className="inline-flex mt-1 items-center gap-2 px-3 py-2 rounded-2xl border bg-gray-100 text-gray-700 border-gray-200">
+                  <div className="inline-flex mt-1 items-center gap-2 px-3 py-2 rounded-2xl border bg-[var(--surface-hover)] text-[var(--text-secondary)] border-[var(--border)]">
                     <span>{composeSending ? "Sending" : "Thinking"}</span>
                     <span className="inline-flex items-center gap-1">
                       <span className="h-1.5 w-1.5 rounded-full bg-gray-500 animate-pulse" />
