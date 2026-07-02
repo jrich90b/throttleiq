@@ -191,6 +191,23 @@ eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 
   eq(a.map(x => x.dimension), ["negative_feedback"], "pending draft thumbed-down => negative_feedback");
   assert.ok(/not yet improved|has not replaced/i.test(a[0].detail), "a pending-draft 👎 keeps the 'should have auto-redrafted' framing"); n++;
 }
+{
+  // Age cap (2026-07-02): a weeks-old 👎 on an already-SENT message has been classified by the nightly
+  // feedback loop long ago — it must NOT resurface in every work order forever (all 4 negative_feedback
+  // items that day were May sends, 3 predating already-shipped fixes). Fresh 👎 (≤21d) emits WITH
+  // occurredAt stamped from the feedback time; stale (>21d) is dropped; unparseable keeps (fail-safe).
+  const fresh = auditConversationOutcome(
+    { id: "c6e", messages: [{ direction: "out", provider: "twilio", at: "2026-06-20T12:00:00.000Z", body: "reply", feedback: { rating: "down", at: "2026-06-20T12:30:00.000Z" } }] },
+    { now: NOW }
+  );
+  eq(fresh.map(x => x.dimension), ["negative_feedback"], "a fresh (≤21d) 👎 still emits");
+  eq(fresh[0].occurredAt, "2026-06-20T12:30:00.000Z", "fresh 👎 carries occurredAt from the feedback timestamp");
+  eq(
+    dims({ id: "c6f", messages: [{ direction: "out", provider: "twilio", at: "2026-05-05T12:00:00.000Z", body: "reply", feedback: { rating: "down", at: "2026-05-05T12:30:00.000Z" } }] }),
+    [],
+    "a stale (>21d) 👎 on a sent message is age-capped out of the feed"
+  );
+}
 eq(dims({ id: "c6b", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "bad", feedback: { rating: "down" } }, { direction: "out", provider: "draft_ai", at: "t2", body: "redraft" }] }), [], "a newer outbound after the 👎 => addressed, clean");
 eq(dims({ id: "c6c", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "good", feedback: { rating: "up" } }] }), [], "thumbs-UP => not an anomaly");
 
