@@ -5443,8 +5443,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const agentName = String(profile?.agentName ?? "").trim() || "Alexandra";
       const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
       const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
-      resubmissionAck = buildAdfResubmissionAck(firstName, agentName, dealerName);
-      appendOutbound(conv, "dealership", leadKey, resubmissionAck, "draft_ai");
+      // Same controlled publication boundary as every other ADF draft — the draft-state
+      // invariant guard decides whether the text may publish (reply_path:audit enforces this).
+      const invariant = applyDraftStateInvariants({
+        inboundText: event.body ?? "",
+        draftText: buildAdfResubmissionAck(firstName, agentName, dealerName),
+        followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        classificationBucket: conv.classification?.bucket ?? null,
+        classificationCta: conv.classification?.cta ?? null
+      });
+      if (invariant.allow) {
+        resubmissionAck = invariant.draftText;
+        appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai");
+      }
     }
     conv.updatedAt = new Date().toISOString();
     saveConversation(conv);
