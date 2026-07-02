@@ -849,6 +849,11 @@ import {
   type MetaPageSnapshot
 } from "./domain/metaIntegration.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
+import {
+  evaluatePromotionSuppression,
+  PROMOTION_SUPPRESSION_REASON_LABELS,
+  type PromotionSuppressionReason
+} from "./domain/promotionAudience.js";
 import { formatEmailLayout, formatSmsLayout } from "./domain/tone.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
@@ -47052,6 +47057,114 @@ app.post("/contacts/import", requireManager, (req, res) => {
   });
 });
 
+// Resolve the conversation behind a contact so broadcast sends can respect the
+// deal state (sold/hold/not-interested). Same keying buildContactsView uses,
+// plus phone/email fallbacks for imported contacts.
+function resolveConversationForContact(contact: any): any | null {
+  const candidates = [
+    contact?.conversationId,
+    contact?.leadKey,
+    contact?.phone ? normalizePhone(String(contact.phone)) : null,
+    contact?.email
+  ];
+  for (const raw of candidates) {
+    const key = String(raw ?? "").trim();
+    if (!key) continue;
+    const conv = getConversation(key);
+    if (conv) return conv;
+  }
+  return null;
+}
+
+// The one decision both the audience PREVIEW and the actual SEND share, so what
+// the manager sees in "Sending to X of Y" is exactly what the send will do.
+function assessBroadcastRecipient(
+  contact: any,
+  channel: "sms" | "email",
+  opts: { nowMs: number; includeDealSuppressed: boolean }
+): { skip: false } | { skip: true; reason: string; detail?: string } {
+  const contactStatus = String(contact?.status ?? "active").trim().toLowerCase();
+  if (contactStatus === "suppressed") return { skip: true, reason: "suppressed" };
+  if (contactStatus === "archived") return { skip: true, reason: "archived" };
+  if (!opts.includeDealSuppressed) {
+    const deal = evaluatePromotionSuppression(resolveConversationForContact(contact), {
+      nowMs: opts.nowMs
+    });
+    if (deal.suppressed && deal.reason) {
+      return { skip: true, reason: deal.reason, detail: deal.detail };
+    }
+  }
+  const phone = normalizePhone(String(contact?.phone ?? "").trim());
+  const email = String(contact?.email ?? "").trim();
+  if (channel === "sms") {
+    if (!phone || !phone.startsWith("+")) return { skip: true, reason: "missing_phone" };
+    if (isSuppressed(phone)) return { skip: true, reason: "suppressed" };
+  } else {
+    if (!email || !email.includes("@")) return { skip: true, reason: "missing_email" };
+    if (isSuppressed(email)) return { skip: true, reason: "suppressed" };
+  }
+  return { skip: false };
+}
+
+// Audience preview — "you're about to send to X of Y; N excluded and why" —
+// shown to the manager BEFORE a group broadcast goes out. Read-only.
+app.post("/contacts/broadcast/preview", requireManager, (req, res) => {
+  const channel = String(req.body?.channel ?? "sms").trim().toLowerCase() === "email" ? "email" : "sms";
+  const sendToAll = req.body?.sendToAll === true;
+  const listId = String(req.body?.listId ?? "").trim();
+  const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  if (!sendToAll && !listId) return res.status(400).json({ ok: false, error: "Missing listId" });
+
+  let list: any = null;
+  if (!sendToAll) {
+    list = getContactList(listId);
+    if (!list) return res.status(404).json({ ok: false, error: "List not found" });
+  }
+  const contacts = buildContactsView();
+  const recipientIds = sendToAll ? [] : resolveContactIdsForList(list, contacts);
+  const recipients = sendToAll ? contacts : contacts.filter(c => recipientIds.includes(String(c.id)));
+
+  const nowMs = Date.now();
+  const byReason: Record<string, number> = {};
+  const excluded: Array<{ id: string; name: string; reason: string; reasonLabel: string; detail?: string }> = [];
+  let sendable = 0;
+  for (const contact of recipients) {
+    const verdict = assessBroadcastRecipient(contact, channel, { nowMs, includeDealSuppressed });
+    if (!verdict.skip) {
+      sendable += 1;
+      continue;
+    }
+    byReason[verdict.reason] = (byReason[verdict.reason] ?? 0) + 1;
+    if (excluded.length < 200) {
+      const name =
+        String(contact?.name ?? "").trim() ||
+        [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim() ||
+        String(contact?.phone ?? contact?.email ?? contact?.id ?? "").trim();
+      excluded.push({
+        id: String(contact.id),
+        name,
+        reason: verdict.reason,
+        reasonLabel:
+          PROMOTION_SUPPRESSION_REASON_LABELS[verdict.reason as PromotionSuppressionReason] ??
+          verdict.reason.replace(/_/g, " "),
+        ...(verdict.detail ? { detail: verdict.detail } : {})
+      });
+    }
+  }
+
+  return res.json({
+    ok: true,
+    channel,
+    listId: sendToAll ? "all" : listId,
+    listName: sendToAll ? "All contacts" : String(list?.name ?? "").trim() || undefined,
+    total: recipients.length,
+    sendable,
+    excludedCount: recipients.length - sendable,
+    byReason,
+    excluded
+  });
+});
+
 app.post("/contacts/broadcast", requireManager, async (req, res) => {
   const channel = String(req.body?.channel ?? "sms").trim().toLowerCase() === "email" ? "email" : "sms";
   const sendToAll = req.body?.sendToAll === true;
@@ -47128,15 +47241,17 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
       .replace(/\n{3,}/g, "\n\n")
       .trim();
 
+  const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  const broadcastNowMs = Date.now();
   for (const contact of recipients) {
     try {
-      const contactStatus = String(contact.status ?? "active").trim().toLowerCase();
-      if (contactStatus === "suppressed") {
-        skipped.push({ id: String(contact.id), reason: "suppressed" });
-        continue;
-      }
-      if (contactStatus === "archived") {
-        skipped.push({ id: String(contact.id), reason: "archived" });
+      // Same decision the audience preview showed — keep send + preview in lockstep.
+      const verdict = assessBroadcastRecipient(contact, channel, {
+        nowMs: broadcastNowMs,
+        includeDealSuppressed
+      });
+      if (verdict.skip) {
+        skipped.push({ id: String(contact.id), reason: verdict.reason });
         continue;
       }
       const phone = normalizePhone(String(contact.phone ?? "").trim());

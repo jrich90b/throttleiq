@@ -4,6 +4,29 @@ import { SideNavIcon } from "./UiIcon";
 import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskTriage";
 import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
 
+// Turn a stored close reason ("not_interested", "wrong_number", free text) into
+// a short human label for the Closed badge, so "Closed" always says WHY.
+function humanizeClosedReason(reason: unknown): string {
+  const raw = String(reason ?? "").trim();
+  if (!raw) return "";
+  const known: Record<string, string> = {
+    sold: "Sold",
+    not_interested: "Not interested",
+    no_response: "No response",
+    wrong_number: "Wrong number",
+    opt_out: "Opted out",
+    archive: "Archived",
+    hold: "On hold",
+    other: ""
+  };
+  const key = raw.toLowerCase().replace(/[\s-]+/g, "_");
+  if (key in known) return known[key];
+  const pretty = raw.replace(/_/g, " ").trim();
+  if (!pretty) return "";
+  const capped = pretty.charAt(0).toUpperCase() + pretty.slice(1);
+  return capped.length > 24 ? `${capped.slice(0, 21)}…` : capped;
+}
+
 export function InboxSection(props: any) {
   const {
     view,
@@ -20,6 +43,9 @@ export function InboxSection(props: any) {
     inboxDealCounts,
     inboxDealFilter,
     setInboxDealFilter,
+    inboxTaskCounts,
+    inboxTaskFilter,
+    setInboxTaskFilter,
     getInboxDealFilterButtonClass,
     groupedConversations,
     campaignInboxExpanded,
@@ -278,18 +304,69 @@ export function InboxSection(props: any) {
         ) : null}
       </div>
 
-      <div className="mt-2 flex items-center gap-2">
-        <span className="text-xs text-gray-600">Deal status</span>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-gray-600 w-16 shrink-0">Deal status</span>
         {([
-          { key: "all" as const, label: "All" },
-          { key: "hot" as const, label: `Hot deals (${inboxDealCounts.hot})` },
-          { key: "hold" as const, label: `Hold deals (${inboxDealCounts.hold})` },
-          { key: "sold" as const, label: `Sold deals (${inboxDealCounts.sold})` }
-        ] as Array<{ key: "all" | "hot" | "sold" | "hold"; label: string }>).map(option => (
+          { key: "all" as const, label: "All", title: "Every conversation in this view" },
+          {
+            key: "active" as const,
+            label: `Active (${inboxDealCounts.active})`,
+            title: "Deals still in play — not sold, not on hold"
+          },
+          {
+            key: "hot" as const,
+            label: `Hot (${inboxDealCounts.hot})`,
+            title: "Engaged recently with real buying signals"
+          },
+          {
+            key: "hold" as const,
+            label: `On hold (${inboxDealCounts.hold})`,
+            title: "Deposit down or bike on order — follow-ups paused"
+          },
+          {
+            key: "sold" as const,
+            label: `Sold (${inboxDealCounts.sold})`,
+            title: "Customer bought — don't send them sales promotions"
+          }
+        ] as Array<{ key: "all" | "active" | "hot" | "sold" | "hold"; label: string; title: string }>).map(option => (
           <button
             key={`inbox-deal-filter-${option.key}`}
             className={getInboxDealFilterButtonClass(inboxDealFilter === option.key)}
             onClick={() => setInboxDealFilter(option.key)}
+            title={option.title}
+            aria-pressed={inboxDealFilter === option.key}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-gray-600 w-16 shrink-0">Tasks</span>
+        {([
+          { key: "all" as const, label: "All", title: "Don't filter by tasks" },
+          {
+            key: "open_task" as const,
+            label: `Has open task (${inboxTaskCounts.openTask})`,
+            title: "Customers with something still to do — call, follow-up, appointment"
+          },
+          {
+            key: "overdue" as const,
+            label: `Overdue (${inboxTaskCounts.overdue})`,
+            title: "Customers with a task past its due time"
+          },
+          {
+            key: "no_task" as const,
+            label: `No open tasks (${inboxTaskCounts.noTask})`,
+            title: "Customers with nothing pending"
+          }
+        ] as Array<{ key: "all" | "open_task" | "overdue" | "no_task"; label: string; title: string }>).map(option => (
+          <button
+            key={`inbox-task-filter-${option.key}`}
+            className={getInboxDealFilterButtonClass(inboxTaskFilter === option.key)}
+            onClick={() => setInboxTaskFilter(option.key)}
+            title={option.title}
+            aria-pressed={inboxTaskFilter === option.key}
           >
             {option.label}
           </button>
@@ -475,8 +552,17 @@ export function InboxSection(props: any) {
                                     className={`lr-inbox-pill ${
                                       isSoldConversation(c) ? "lr-inbox-pill-info" : "lr-inbox-pill-muted"
                                     }`}
+                                    title={
+                                      isSoldConversation(c)
+                                        ? "Customer bought — excluded from sales promotions"
+                                        : `Closed${humanizeClosedReason(c.closedReason) ? ` — ${humanizeClosedReason(c.closedReason)}` : ""}`
+                                    }
                                   >
-                                    {isSoldConversation(c) ? "Sold" : "Closed"}
+                                    {isSoldConversation(c)
+                                      ? "Sold"
+                                      : humanizeClosedReason(c.closedReason)
+                                        ? `Closed · ${humanizeClosedReason(c.closedReason)}`
+                                        : "Closed"}
                                   </span>
                                 ) : c.followUpCadence?.pauseReason === "manual_hold" ||
                                   c.followUpCadence?.pauseReason === "unit_hold" ||
@@ -487,7 +573,12 @@ export function InboxSection(props: any) {
                                   c.followUp?.reason === "unit_hold" ||
                                   c.followUp?.reason === "order_hold" ||
                                   !!c.hold ? (
-                                  <span className="lr-inbox-pill lr-inbox-pill-warn">Hold</span>
+                                  <span
+                                    className="lr-inbox-pill lr-inbox-pill-warn"
+                                    title="Deposit down or bike on order — automatic follow-ups are paused"
+                                  >
+                                    On hold
+                                  </span>
                                 ) : null}
                                 {linkedOpenCampaign ? (
                                   <span className="lr-inbox-pill lr-inbox-pill-muted">Open in Inbox</span>
@@ -534,7 +625,11 @@ export function InboxSection(props: any) {
                               ) : null}
                               <button
                                 className={`lr-inbox-meta-pill ${c.mode === "human" ? "is-human" : "is-ai"}`}
-                                title={c.mode === "human" ? "Switch to AI" : "Switch to Human"}
+                                title={
+                                  c.mode === "human"
+                                    ? "You write the replies on this conversation. Click to let the AI draft them for your review."
+                                    : "The AI drafts replies for your review on this conversation. Click to take over and write them yourself."
+                                }
                                 onClick={e => {
                                   e.stopPropagation();
                                   void setHumanModeForId(c.id, c.mode === "human" ? "suggest" : "human");
@@ -543,19 +638,31 @@ export function InboxSection(props: any) {
                                 {c.mode === "human" ? "Human" : "AI"}
                               </button>
                               {c.draftHeld ? (
+                                c.draftHeld?.heldKind === "context_fidelity" ? (
+                                  <span
+                                    className="lr-inbox-meta-pill"
+                                    style={{ background: "#fee2e2", color: "#991b1b", borderColor: "#fca5a5" }}
+                                    title="The AI couldn't answer this one — write the reply yourself. Sending clears this flag."
+                                  >
+                                    Needs your reply
+                                  </span>
+                                ) : (
+                                  <span
+                                    className="lr-inbox-meta-pill"
+                                    style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}
+                                    title="The quality check caught a problem with the draft and is fixing it — nothing for you to do yet"
+                                  >
+                                    Being fixed
+                                  </span>
+                                )
+                              ) : c.pendingDraft ? (
                                 <span
                                   className="lr-inbox-meta-pill"
-                                  style={{ background: "#fef3c7", color: "#92400e", borderColor: "#fcd34d" }}
-                                  title={
-                                    c.draftHeld?.heldKind === "context_fidelity"
-                                      ? "The AI couldn't answer this in context — needs your reply"
-                                      : "Draft held by the quality check — being fixed"
-                                  }
+                                  style={{ background: "#dbeafe", color: "#1e40af", borderColor: "#93c5fd" }}
+                                  title="A reply is drafted and waiting — open to review and send"
                                 >
-                                  {c.draftHeld?.heldKind === "context_fidelity" ? "Needs reply" : "Held"}
+                                  Draft ready
                                 </span>
-                              ) : c.pendingDraft ? (
-                                <span className="lr-inbox-meta-pill">Draft</span>
                               ) : null}
                               <span className="lr-inbox-meta-pill" title={`${c.messageCount} messages`}>
                                 {c.messageCount}
@@ -569,10 +676,14 @@ export function InboxSection(props: any) {
 
                           <div className="text-sm text-gray-700 mt-2 line-clamp-2">
                             {c.draftHeld ? (
-                              <span style={{ color: "#92400e" }}>
+                              <span
+                                style={{
+                                  color: c.draftHeld?.heldKind === "context_fidelity" ? "#991b1b" : "#92400e"
+                                }}
+                              >
                                 {c.draftHeld?.heldKind === "context_fidelity"
-                                  ? "Needs your reply — the AI couldn't answer this in context"
-                                  : "Draft held — being fixed (nothing to send)"}
+                                  ? "Needs your reply — the AI couldn't answer this one"
+                                  : "The AI's draft is being fixed — nothing for you to do yet"}
                               </span>
                             ) : c.pendingDraftPreview ? (
                               <>Draft: {renderBookingLinkLine(c.pendingDraftPreview)}</>

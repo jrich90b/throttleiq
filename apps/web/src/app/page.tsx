@@ -8,7 +8,7 @@ import { TaskInboxSection } from "./components/TaskInboxSection";
 import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
-import { summarizeTriage } from "./lib/taskTriage";
+import { dueBucketFor, summarizeTriage } from "./lib/taskTriage";
 import { resizeImageForUpload, humanizeUploadError } from "./lib/imageResize";
 
 type SpeechRecognitionLike = {
@@ -1446,7 +1446,8 @@ type WatchFormItem = {
 };
 
 type TodoInboxSection = "followup" | "appointment" | "todo" | "reminder";
-type InboxDealFilter = "all" | "hot" | "sold" | "hold";
+type InboxDealFilter = "all" | "active" | "hot" | "sold" | "hold";
+type InboxTaskFilter = "all" | "open_task" | "overdue" | "no_task";
 
 const TODO_SECTION_THEME: Record<TodoInboxSection, { header: string; title: string }> = {
   followup: {
@@ -2990,6 +2991,7 @@ export default function Home() {
   const [inboxQuery, setInboxQuery] = useState("");
   const [inboxOwnerFilter, setInboxOwnerFilter] = useState("all");
   const [inboxDealFilter, setInboxDealFilter] = useState<InboxDealFilter>("all");
+  const [inboxTaskFilter, setInboxTaskFilter] = useState<InboxTaskFilter>("all");
   const [campaignInboxExpanded, setCampaignInboxExpanded] = useState<Record<string, boolean>>({});
   const [todoQuery, setTodoQuery] = useState("");
   const [todoLeadOwnerFilter, setTodoLeadOwnerFilter] = useState("all");
@@ -3025,6 +3027,21 @@ export default function Home() {
   const [campaignQueueSendDialogCampaignId, setCampaignQueueSendDialogCampaignId] = useState("");
   const [campaignQueueSendDialogTarget, setCampaignQueueSendDialogTarget] = useState<CampaignAssetTarget | "">("");
   const [campaignQueueSendDialogListId, setCampaignQueueSendDialogListId] = useState("all");
+  // Pre-send audience preview for the Send Queue dialog: who receives it, who's
+  // excluded by deal status (recently sold / on hold / not interested) and why.
+  const [campaignQueueSendPreview, setCampaignQueueSendPreview] = useState<{
+    target: CampaignAssetTarget;
+    includeExcluded: boolean;
+    loading: boolean;
+    data: {
+      total: number;
+      sendable: number;
+      excludedCount: number;
+      byReason: Record<string, number>;
+      excluded: Array<{ id: string; name: string; reason: string; reasonLabel: string; detail?: string }>;
+      listName?: string;
+    } | null;
+  } | null>(null);
   const [campaignQueuePublishDialogCampaignId, setCampaignQueuePublishDialogCampaignId] = useState("");
   const [campaignQueuePublishDialogTarget, setCampaignQueuePublishDialogTarget] = useState<CampaignAssetTarget | "">("");
   const [campaignQueuePublishCaptionByTarget, setCampaignQueuePublishCaptionByTarget] = useState<
@@ -4266,6 +4283,46 @@ export default function Home() {
     setCampaignQueueSendDialogTarget("");
     setCampaignQueueSendDialogListId("all");
     setCampaignQueueActionBusyKey("");
+    setCampaignQueueSendPreview(null);
+  }
+
+  // Step 1 of a queued-campaign send: load the audience preview so the manager
+  // sees exactly who gets it (and who's excluded) before confirming.
+  async function requestCampaignQueueSendPreview(target: CampaignAssetTarget) {
+    const listIdRaw = String(campaignQueueSendDialogListId ?? "").trim();
+    const sendToAll = listIdRaw === "all";
+    setCampaignQueueSendPreview({ target, includeExcluded: false, loading: true, data: null });
+    setCampaignError(null);
+    try {
+      const resp = await fetch("/api/contacts/broadcast/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: target === "email" ? "email" : "sms",
+          ...(sendToAll ? { sendToAll: true } : { listId: listIdRaw })
+        })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.error ?? "Failed to load the audience preview");
+      }
+      setCampaignQueueSendPreview({
+        target,
+        includeExcluded: false,
+        loading: false,
+        data: {
+          total: Number(data.total ?? 0),
+          sendable: Number(data.sendable ?? 0),
+          excludedCount: Number(data.excludedCount ?? 0),
+          byReason: data.byReason ?? {},
+          excluded: Array.isArray(data.excluded) ? data.excluded : [],
+          listName: data.listName
+        }
+      });
+    } catch (err: any) {
+      setCampaignQueueSendPreview(null);
+      setCampaignError(err?.message ?? "Failed to load the audience preview");
+    }
   }
 
   function closePostQueuePublishDialog() {
@@ -4276,7 +4333,11 @@ export default function Home() {
     setCampaignQueueActionBusyKey("");
   }
 
-  async function sendQueuedCampaignAssetNow(entry: CampaignEntry, target: CampaignAssetTarget) {
+  async function sendQueuedCampaignAssetNow(
+    entry: CampaignEntry,
+    target: CampaignAssetTarget,
+    opts?: { includeDealSuppressed?: boolean }
+  ) {
     const campaignId = String(entry.id ?? "").trim();
     if (!campaignId) return;
     const busyKey = `send:${campaignId}:${target}`;
@@ -4318,7 +4379,8 @@ export default function Home() {
               }
             : { message }),
           campaignId,
-          campaignName: String(entry.name ?? "").trim() || undefined
+          campaignName: String(entry.name ?? "").trim() || undefined,
+          ...(opts?.includeDealSuppressed ? { includeDealSuppressed: true } : {})
         })
       });
       const data = await resp.json().catch(() => null);
@@ -4354,6 +4416,7 @@ export default function Home() {
         await loadCampaigns(campaignId);
       }
       const label = target === "email" ? "Email sent" : "SMS sent";
+      setCampaignQueueSendPreview(null);
       setSaveToast(`${label}: ${data.sent ?? 0}/${data.attempted ?? 0} from "${entry.name || "campaign"}"`);
     } catch (err: any) {
       setCampaignError(err?.message ?? "Failed to send queued campaign");
@@ -6955,6 +7018,26 @@ export default function Home() {
       setCadenceResolveError("Please choose a resume date.");
       return;
     }
+    if (cadenceResolution === "resume_on" && cadenceResumeDate) {
+      // A past resume date resumes immediately — that's almost never intended.
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (cadenceResumeDate < todayIso) {
+        setCadenceResolveError("The resume date is in the past — pick a future date.");
+        return;
+      }
+    }
+    if (cadenceResolution === "archive") {
+      // Archiving hides the conversation and stops follow-ups; confirm — it's
+      // categorically different from the pause/resume options around it.
+      const name =
+        cadenceResolveConv.lead?.name ||
+        [cadenceResolveConv.lead?.firstName, cadenceResolveConv.lead?.lastName].filter(Boolean).join(" ") ||
+        cadenceResolveConv.leadKey;
+      const ok = window.confirm(
+        `Archive the conversation with ${name}?\n\nIt moves to the Archive view and all follow-ups stop. You can reopen it later from Archive.`
+      );
+      if (!ok) return;
+    }
     if (cadenceWatchEnabled) {
       const hasModel = cadenceWatchItems.some(item => getItemModels(item).length > 0);
       if (!hasModel) {
@@ -8827,6 +8910,29 @@ export default function Home() {
     return byConv;
   }, [todos]);
 
+  // Task state per conversation for the inbox "Tasks" filter — same open-task
+  // sources as the row chips (convId + leadKey), same overdue rule as triage.
+  const getConversationTaskState = useCallback(
+    (c: ConversationListItem) => {
+      const seen = new Set<string>();
+      let hasOpenTask = false;
+      let hasOverdueTask = false;
+      const nowMs = Date.now();
+      for (const keyRaw of [c.id, c.leadKey]) {
+        const key = String(keyRaw ?? "").trim();
+        if (!key) continue;
+        for (const task of openTasksByConv.get(key) ?? []) {
+          if (seen.has(task.id)) continue;
+          seen.add(task.id);
+          hasOpenTask = true;
+          if (dueBucketFor(task, nowMs) === "overdue") hasOverdueTask = true;
+        }
+      }
+      return { hasOpenTask, hasOverdueTask };
+    },
+    [openTasksByConv]
+  );
+
   const selectedOpenTasks = useMemo(() => {
     if (!selectedConv) return [] as TodoItem[];
     const byId = new Map<string, TodoItem>();
@@ -9709,6 +9815,7 @@ export default function Home() {
     inboxTodoOwnerByConv,
     filteredConversations,
     inboxDealCounts,
+    inboxTaskCounts,
     groupedConversations
   } = useInboxSectionData({
     conversations,
@@ -9717,6 +9824,8 @@ export default function Home() {
     inboxQuery,
     inboxOwnerFilter,
     inboxDealFilter,
+    inboxTaskFilter,
+    getConversationTaskState,
     canFilterOwners: canViewAllLeads,
     canonicalizeOwnerName,
     inferOwnerDepartment,
@@ -13575,13 +13684,20 @@ export default function Home() {
                   <button
                     className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "suggest" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
                   onClick={() => updateMode("suggest")}
+                  title="The AI drafts every reply, but nothing sends until a person reviews and hits Send"
                 >
                   Suggest
                 </button>
                   <button
                     className={`px-2 py-1 border border-[var(--border)] rounded text-xs cursor-pointer ${mode === "autopilot" ? "font-semibold bg-[var(--accent)] text-white border-[var(--accent)]" : "hover:bg-white"}`}
-                  onClick={() => updateMode("autopilot")}
-                  title="Autopilot will auto-reply on inbound SMS"
+                  onClick={() => {
+                    if (mode === "autopilot") return;
+                    const ok = window.confirm(
+                      "Turn on Autopilot?\n\nThe AI will send SMS replies to customers automatically, without waiting for your approval. Switch back to Suggest at any time to review every reply before it sends."
+                    );
+                    if (ok) updateMode("autopilot");
+                  }}
+                  title="Autopilot: the AI sends SMS replies automatically without waiting for approval"
                 >
                   AI
                 </button>
@@ -13601,7 +13717,10 @@ export default function Home() {
             {inventoryLoading ? (
               <div className="text-sm text-gray-500">Loading inventory...</div>
             ) : inventoryItems.length === 0 ? (
-              <div className="text-sm text-gray-500">No inventory loaded.</div>
+              <div className="text-sm text-gray-500">
+                No inventory loaded yet. Inventory syncs from your feed automatically — or add a bike
+                manually from the Inventory panel on the right.
+              </div>
             ) : (
               <div className="text-xs text-gray-500">
                 Showing {inventoryItems.length} bikes
@@ -13631,7 +13750,10 @@ export default function Home() {
               </select>
             ) : null}
             {visibleWatchItems.length === 0 ? (
-              <div className="text-sm text-gray-500">No active watches.</div>
+              <div className="text-sm text-gray-500">
+                No active watches. A watch alerts a customer when a matching bike arrives — the AI
+                creates one automatically when a customer asks about a model that isn&apos;t in stock.
+              </div>
             ) : (
               <div className="border border-[var(--border)] rounded-lg divide-y bg-[var(--surface)]">
                 {visibleWatchItems.map(item => {
@@ -14304,6 +14426,9 @@ export default function Home() {
             inboxDealCounts={inboxDealCounts}
             inboxDealFilter={inboxDealFilter}
             setInboxDealFilter={setInboxDealFilter}
+            inboxTaskCounts={inboxTaskCounts}
+            inboxTaskFilter={inboxTaskFilter}
+            setInboxTaskFilter={setInboxTaskFilter}
             getInboxDealFilterButtonClass={getInboxDealFilterButtonClass}
             groupedConversations={groupedConversations}
             campaignInboxExpanded={campaignInboxExpanded}
@@ -15085,6 +15210,12 @@ export default function Home() {
                   className="px-3 py-2 border rounded text-sm"
                   onClick={async () => {
                     if (!todoResolveTarget) return;
+                    if (todoResolution === "archive") {
+                      const ok = window.confirm(
+                        "Archive this conversation?\n\nIt moves to the Archive view and all follow-ups stop. You can reopen it later from Archive."
+                      );
+                      if (!ok) return;
+                    }
                     await markTodoDone(todoResolveTarget, todoResolution);
                     setTodoResolveOpen(false);
                     setTodoResolveTarget(null);
@@ -22967,10 +23098,10 @@ export default function Home() {
                     }`}
                     title={
                       mode !== "suggest"
-                        ? "Switch system mode to Suggest to regenerate."
+                        ? "Regenerate only works in Suggest mode — switch System Mode (top of the sidebar) from AI to Suggest first."
                         : selectedConv.mode === "human"
-                          ? "Switch this conversation back to AI to regenerate."
-                          : "Regenerate an AI draft for the latest inbound."
+                          ? "This conversation is set to Human (you write the replies). Click the Human pill to switch it back to AI, then regenerate."
+                          : "Have the AI write a fresh draft reply to the customer's latest message."
                     }
                     onClick={regenerateDraft}
                     disabled={regenBusy || mode !== "suggest" || selectedConv.mode === "human"}
@@ -23654,7 +23785,10 @@ export default function Home() {
                 <select
                   className="border rounded px-3 py-2 text-sm flex-1 bg-white"
                   value={campaignQueueSendDialogListId}
-                  onChange={e => setCampaignQueueSendDialogListId(e.target.value)}
+                  onChange={e => {
+                    setCampaignQueueSendDialogListId(e.target.value);
+                    setCampaignQueueSendPreview(null);
+                  }}
                 >
                   <option value="all">All contacts</option>
                   {contactLists.map(list => (
@@ -23730,14 +23864,96 @@ export default function Home() {
                       <div className="flex flex-wrap items-center gap-2 mt-auto">
                         <button
                           className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
-                          disabled={Boolean(campaignQueueActionBusyKey)}
+                          disabled={Boolean(campaignQueueActionBusyKey) || Boolean(campaignQueueSendPreview?.loading)}
                           onClick={() => {
-                            void sendQueuedCampaignAssetNow(campaignQueueSendDialogEntry, target);
+                            void requestCampaignQueueSendPreview(target);
                           }}
+                          title="Shows who will receive this before anything sends"
                         >
-                          {isBusy ? "Sending..." : isEmail ? "Send Email" : "Send SMS"}
+                          {campaignQueueSendPreview?.target === target && campaignQueueSendPreview.loading
+                            ? "Checking recipients..."
+                            : isEmail
+                              ? "Review & Send Email"
+                              : "Review & Send SMS"}
                         </button>
                       </div>
+                      {campaignQueueSendPreview?.target === target && campaignQueueSendPreview.data ? (
+                        <div className="border border-[var(--accent)] rounded p-2.5 bg-amber-50 space-y-2">
+                          <div className="text-xs font-semibold text-gray-800">
+                            Sending to{" "}
+                            {campaignQueueSendPreview.includeExcluded
+                              ? campaignQueueSendPreview.data.total
+                              : campaignQueueSendPreview.data.sendable}{" "}
+                            of {campaignQueueSendPreview.data.total} contacts
+                            {campaignQueueSendPreview.data.listName
+                              ? ` in “${campaignQueueSendPreview.data.listName}”`
+                              : ""}
+                          </div>
+                          {campaignQueueSendPreview.data.excludedCount > 0 ? (
+                            <div className="text-[11px] text-gray-700 space-y-1">
+                              <div>
+                                {campaignQueueSendPreview.data.excludedCount} excluded:{" "}
+                                {Object.entries(campaignQueueSendPreview.data.byReason)
+                                  .map(([reason, count]) => {
+                                    const label =
+                                      campaignQueueSendPreview.data?.excluded.find(e => e.reason === reason)
+                                        ?.reasonLabel ?? reason.replace(/_/g, " ");
+                                    return `${count} ${label.toLowerCase()}`;
+                                  })
+                                  .join(", ")}
+                              </div>
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={campaignQueueSendPreview.includeExcluded}
+                                  onChange={e =>
+                                    setCampaignQueueSendPreview(prev =>
+                                      prev ? { ...prev, includeExcluded: e.target.checked } : prev
+                                    )
+                                  }
+                                />
+                                Also send to deal-status exclusions (recently sold / on hold / not interested) —
+                                not recommended for sales promotions
+                              </label>
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-gray-700">
+                              No exclusions — everyone selected is reachable.
+                            </div>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className="px-3 py-2 border rounded text-xs bg-[var(--accent)] text-white border-[var(--accent)] hover:brightness-95 disabled:opacity-60"
+                              disabled={
+                                Boolean(campaignQueueActionBusyKey) ||
+                                (campaignQueueSendPreview.includeExcluded
+                                  ? campaignQueueSendPreview.data.total
+                                  : campaignQueueSendPreview.data.sendable) === 0
+                              }
+                              onClick={() => {
+                                void sendQueuedCampaignAssetNow(campaignQueueSendDialogEntry, target, {
+                                  includeDealSuppressed: campaignQueueSendPreview.includeExcluded
+                                });
+                              }}
+                            >
+                              {isBusy
+                                ? "Sending..."
+                                : `Confirm & Send to ${
+                                    campaignQueueSendPreview.includeExcluded
+                                      ? campaignQueueSendPreview.data.total
+                                      : campaignQueueSendPreview.data.sendable
+                                  }`}
+                            </button>
+                            <button
+                              className="px-3 py-2 border rounded text-xs hover:bg-[var(--surface-2)]"
+                              disabled={Boolean(campaignQueueActionBusyKey)}
+                              onClick={() => setCampaignQueueSendPreview(null)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                       {isBusy ? <div className="text-[11px] text-gray-500">Sending selected asset…</div> : null}
                     </div>
                   );
