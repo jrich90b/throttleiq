@@ -5487,7 +5487,7 @@ function businessDaysBetween(fromMs: number, toMs: number): number {
 export function isInProcessDealLead(conv: Conversation): boolean {
   if (!conv) return false;
   if (conv.followUpCadence?.kind === "post_sale") return false;
-  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold/.test(
+  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold|in_process_deal/.test(
     String(conv.followUp?.reason ?? "").toLowerCase()
   );
 }

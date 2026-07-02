@@ -266,6 +266,7 @@ import {
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
+  parseDealProgressSignalWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
   parseDealerLeadSurveyWithLLM,
   hasDealerLeadSurveyHint,
@@ -526,6 +527,7 @@ import {
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
   decideEventPromoTurn,
+  decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
@@ -24040,6 +24042,33 @@ type CustomerDispositionDecision = {
   reason: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
 };
+
+// Cheap pre-filter that GATES the deal-progress LLM parser call (cost control, same pattern as
+// the disposition hint below) — never a routing decision itself. A miss just means today's
+// behavior (the turn drafts normally).
+function hasDealProgressParserHintText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return /\b(insurance|insured|allstate|geico|progressive|state farm|payoff|paid off|pay[- ]?off|delivery|deliver(?:ed|ing)?|pick(?:ing)?\s*up|pickup|trailer|paperwork|title|plates?|registration|notar|sign(?:ing)?\s+(?:the\s+)?(?:docs|papers|paperwork)|deposit|down payment|install(?:ed|ing)?)\b/.test(
+    lower
+  );
+}
+
+// Shared transition into the staff-driven deal state (Joe-approved 2026-07-02): per-turn
+// auto-drafts stop (staff answer with off-system deal facts), cadence goes quiet, and the
+// existing in-process-deal owner nudge + stale-handoff nets keep coverage.
+// isInProcessDealLead's reason regex includes "in_process_deal", so the 3-business-day
+// quiet nudge applies. A recorded sale flips the conv to post-sale machinery as usual.
+function applyInProcessDealTransition(conv: any, signal: string) {
+  setFollowUpMode(conv, "manual_handoff", "in_process_deal");
+  stopFollowUpCadence(conv, "in_process_deal");
+  stopRelatedCadences(conv, "in_process_deal", { setMode: "manual_handoff" });
+  recordRouteOutcome("live", "in_process_deal_entered", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    signal
+  });
+}
 
 function hasCustomerDispositionParserHintText(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
@@ -54940,6 +54969,76 @@ if (authToken && signature) {
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  // Staff-driven deal conversations (in_process_deal): the customer's turns are deal logistics a
+  // human answers with off-system facts — no auto-draft; the owner gets a reply-needed task
+  // instead (Joe-approved 2026-07-02; 5/7 staff-corrected drafts on 7/2 were this class).
+  // Regenerate is deliberately NOT gated — staff explicitly asking for a draft is the override.
+  if (
+    event.provider === "twilio" &&
+    conv.followUp?.mode === "manual_handoff" &&
+    conv.followUp?.reason === "in_process_deal"
+  ) {
+    const dealName = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+    addTodo(
+      conv,
+      "other",
+      `Deal in process — ${dealName} replied: "${excerpt}" — needs your answer.`,
+      event.providerMessageId,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    recordRouteOutcome("live", "in_process_deal_staff_todo_no_draft", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  // Entry detection (parser-first, hint-gated): a deal-logistics turn on a not-yet-protected
+  // conversation transitions it into in_process_deal on the spot — this turn already belongs to
+  // the salesperson, so it gets the owner task instead of a draft.
+  if (
+    event.provider === "twilio" &&
+    conv.followUp?.mode !== "manual_handoff" &&
+    conv.followUp?.mode !== "paused_indefinite" &&
+    !conv.sale?.soldAt &&
+    conv.status !== "closed" &&
+    hasDealProgressParserHintText(event.body)
+  ) {
+    const dealProgressParse = await safeLlmParse("deal_progress_parser", () =>
+      parseDealProgressSignalWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 8),
+        lead: conv.lead ?? undefined
+      })
+    );
+    const dealDecision = decideInProcessDealTurn({
+      parserAccepted: !!dealProgressParse,
+      dealInProgress: dealProgressParse?.dealInProgress ?? false,
+      confidence: dealProgressParse?.confidence ?? null,
+      followUpMode: conv.followUp?.mode ?? null,
+      saleRecorded: !!conv.sale?.soldAt,
+      conversationClosed: String(conv.status ?? "") === "closed"
+    });
+    if (dealDecision.kind === "enter_in_process_deal") {
+      applyInProcessDealTransition(conv, dealProgressParse?.signal ?? "none");
+      const dealName = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+      const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+      addTodo(
+        conv,
+        "other",
+        `Deal in process (${dealProgressParse?.signal ?? "deal"}) — ${dealName} said: "${excerpt}" — needs your answer.`,
+        event.providerMessageId,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
   }
   const mediaOnlyAvailabilityContext = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event);
   if (mediaOnlyAvailabilityContext) {

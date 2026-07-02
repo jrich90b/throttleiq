@@ -1523,6 +1523,37 @@ export type IndefiniteDeferTurnDecision =
 
 export const INDEFINITE_DEFER_PAUSE_DAYS = 14;
 
+// In-process deal entry (the Jeff Hollfelder / Gary Busenlehner class, Joe-approved 2026-07-02):
+// a customer's turn is deal LOGISTICS on a staff-worked purchase (insurance/payoff/delivery/
+// paperwork/accessory-install), read by the typed deal-progress parser — the per-turn auto-draft
+// stops for these conversations (staff answer with off-system deal facts; the agent's generic
+// "I'll check and follow up" was rewritten by staff on 5/7 corrections in the 7/2 audit) and the
+// owner-nudge + stale-handoff nets keep coverage. Conservative gates: parser acceptance at a high
+// floor; already-protected modes stay untouched; a sold/closed conv is post-sale machinery's job.
+export type InProcessDealTurnKind = "enter_in_process_deal" | "none";
+
+export type InProcessDealTurnInput = {
+  parserAccepted: boolean;
+  dealInProgress: boolean;
+  confidence?: number | null;
+  followUpMode?: string | null;
+  saleRecorded?: boolean;
+  conversationClosed?: boolean;
+};
+
+export type InProcessDealTurnDecision = { kind: InProcessDealTurnKind };
+
+export const IN_PROCESS_DEAL_CONFIDENCE_FLOOR = 0.8;
+
+export function decideInProcessDealTurn(input: InProcessDealTurnInput): InProcessDealTurnDecision {
+  if (!input.parserAccepted || !input.dealInProgress) return { kind: "none" };
+  if ((input.confidence ?? 0) < IN_PROCESS_DEAL_CONFIDENCE_FLOOR) return { kind: "none" };
+  if (input.conversationClosed || input.saleRecorded) return { kind: "none" };
+  const mode = String(input.followUpMode ?? "").toLowerCase();
+  if (mode === "manual_handoff" || mode === "paused_indefinite") return { kind: "none" };
+  return { kind: "enter_in_process_deal" };
+}
+
 export function decideIndefiniteDeferTurn(input: IndefiniteDeferTurnInput): IndefiniteDeferTurnDecision {
   if (input.shortWindowResolved) return { kind: "none" };
   if (!input.parserAccepted) return { kind: "none" };

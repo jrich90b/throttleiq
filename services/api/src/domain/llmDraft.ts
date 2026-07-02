@@ -1891,6 +1891,24 @@ export type CustomerDispositionParse = {
   confidence?: number;
 };
 
+// Staff-driven deal-progress signal (the Jeff Hollfelder / Gary Busenlehner class, Joe-approved
+// 2026-07-02): the customer's turn is deal LOGISTICS on a purchase being worked by a human —
+// insurance cards, payoff, delivery day, paperwork/title, accessory install status — not a new
+// sales inquiry. Used to transition the conversation into in_process_deal (drafts quiet, owner
+// nudge covers). Read by the LLM parser only — never keyword routing.
+export type DealProgressSignalParse = {
+  dealInProgress: boolean;
+  signal:
+    | "insurance"
+    | "payoff"
+    | "delivery"
+    | "paperwork"
+    | "accessory_install"
+    | "deposit_or_docs"
+    | "none";
+  confidence?: number;
+};
+
 export type FirstTimeRiderGuidanceParse = {
   intent:
     | "first_time_rider"
@@ -6042,6 +6060,124 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
     timeframeText,
     confidence
   };
+}
+
+const DEAL_PROGRESS_SIGNAL_PARSER_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    deal_in_progress: { type: "boolean" },
+    signal: {
+      type: "string",
+      enum: ["insurance", "payoff", "delivery", "paperwork", "accessory_install", "deposit_or_docs", "none"]
+    },
+    confidence: { type: "number" }
+  },
+  required: ["deal_in_progress", "signal", "confidence"]
+} as const;
+
+export async function parseDealProgressSignalWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<DealProgressSignalParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEAL_PROGRESS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEAL_PROGRESS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEAL_PROGRESS_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEAL_PROGRESS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A (production replay: insurance + delivery on a bought bike)
+inbound: "Just reached out to Allstate. They will email you the insurance cards. I would like to plan for Saturday morning delivery if that's ok. Thanks again"
+output: {"deal_in_progress":true,"signal":"insurance","confidence":0.97}`,
+    `EXAMPLE B (production replay: payoff + how to proceed)
+inbound: "Good morning Scott. The bike is finally paid off. Curious how we want to proceed? Saturday looks like no rain as of now."
+output: {"deal_in_progress":true,"signal":"payoff","confidence":0.95}`,
+    `EXAMPLE C (production replay: accessory install status on a purchased unit)
+history has: "out: Still waiting on the custom stitch seat, passenger pegs and mounts"
+inbound: "Can you get it ready for tomorrow"
+output: {"deal_in_progress":true,"signal":"accessory_install","confidence":0.9}`,
+    `EXAMPLE D (pickup logistics)
+inbound: "We can remove the highway pegs if needed. I will bring the trailer for pickup Thursday."
+output: {"deal_in_progress":true,"signal":"delivery","confidence":0.93}`,
+    `EXAMPLE E (pre-deal availability question — NOT deal progress)
+inbound: "Is the Low Rider ST still available?"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.96}`,
+    `EXAMPLE F (pricing inquiry — NOT deal progress)
+inbound: "Can you get me numbers on the orange ST with 2k down?"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.95}`,
+    `EXAMPLE G (a visit commitment is scheduling, not deal logistics)
+inbound: "I'll be there Saturday morning to look at it"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.94}`
+  ];
+  const prompt = [
+    "You read ONE inbound SMS from a motorcycle-dealership customer and decide whether it is",
+    "DEAL-PROGRESS LOGISTICS on a purchase a human salesperson is actively working — insurance",
+    "cards/proof, loan payoff, delivery/pickup arrangements, paperwork/title/registration/plates,",
+    "accessory installs on the purchased unit, deposits or signing docs.",
+    "- deal_in_progress=true ONLY for logistics of an in-flight purchase, where the history shows a",
+    "  human-worked deal (prices agreed, unit chosen, paperwork underway).",
+    "- Shopping questions (availability, pricing, comparisons), test-ride scheduling, and visit",
+    "  commitments are NOT deal progress.",
+    "- signal names the dominant logistics topic; none when deal_in_progress=false.",
+    "- confidence is 0..1.",
+    "- Return only JSON matching the schema.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "deal_progress_signal_parser",
+      schema: DEAL_PROGRESS_SIGNAL_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-deal-progress-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const signalRaw = String(parsed.signal ?? "").toLowerCase();
+  const signal: DealProgressSignalParse["signal"] =
+    signalRaw === "insurance" ||
+    signalRaw === "payoff" ||
+    signalRaw === "delivery" ||
+    signalRaw === "paperwork" ||
+    signalRaw === "accessory_install" ||
+    signalRaw === "deposit_or_docs"
+      ? signalRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { dealInProgress: !!parsed.deal_in_progress && signal !== "none", signal, confidence };
 }
 
 export async function parseFirstTimeRiderGuidanceWithLLM(args: {
