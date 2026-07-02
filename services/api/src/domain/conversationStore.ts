@@ -1937,6 +1937,22 @@ export function setContactPreference(
   scheduleSave();
 }
 
+// A bare acknowledgement with no content — the ONLY inbound class that must not pull a
+// staff-ARCHIVED conversation back into the active inbox (Deborah Kranz-Mitchell,
+// +17166280459, operator-reported 2026-07-01: she was told "if anything changes, give me a
+// shout", replied "Will do", and the archive was wiped). Deliberately deterministic and
+// NARROW: this gates a STATE side-effect (reopen), not comprehension — and the fail
+// direction is "reopen" (anything not unambiguously a bare ack, or any media, reopens).
+export function isBareAckInboundText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (t.length > 40) return false;
+  if (/^[\p{Extended_Pictographic}\s]+$/u.test(t)) return true; // emoji-only
+  return /^(ok(ay)?|k|will do|sure( thing)?|thanks?( so much| a lot)?|thank you( so much)?|sounds good|got it|no problem|you too|same to you|anytime|yes sir|yup|yep|have a (good|great) (day|one|weekend)|take care|👍)[.!\s]*$/i.test(
+    t
+  );
+}
+
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     const closedReason = String(conv.closedReason ?? "").toLowerCase();
@@ -1948,7 +1964,13 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
       /\b(unit_hold|order_hold|manual_hold|post_sale)\b/.test(
         String(conv.followUp?.reason ?? "").toLowerCase()
       );
-    if (!stickyClosed) {
+    // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
+    // question, or attachment still reopens (fail-safe toward reopening).
+    const archivedAckHold =
+      /archive/.test(closedReason) &&
+      !(evt.mediaUrls && evt.mediaUrls.length) &&
+      isBareAckInboundText(evt.body);
+    if (!stickyClosed && !archivedAckHold) {
       conv.status = "open";
       conv.closedAt = undefined;
       conv.closedReason = undefined;
