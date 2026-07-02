@@ -18,6 +18,25 @@ function parseMs(value: unknown): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+// Parse a date string ONLY when it yields a plausible task date. Guards against V8's
+// year-less parse quirk: `new Date("Thu, Jul 2, 9:00 AM")` (a summary-derived label with no
+// year) silently parses to the year 2001, which rendered a task as "9130 days ago" in the
+// Task Inbox (Henry Cole, +17168618786, operator-reported 2026-07-01). A label that parses
+// outside the sane window is a DISPLAY STRING, not a date — callers should fall back to
+// showing it verbatim (or nothing), never do relative-date math on it.
+export function parseSaneTaskDateMs(value: unknown, nowMs = Date.now()): number | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const t = new Date(raw).getTime();
+  if (!Number.isFinite(t)) return null;
+  const year = new Date(t).getFullYear();
+  const nowYear = new Date(nowMs).getFullYear();
+  // Anything before 2015 is presumed a year-less/garbage parse (the store predates nothing
+  // older); allow 5 years of future scheduling headroom.
+  if (year < 2015 || year > nowYear + 5) return null;
+  return t;
+}
+
 // The single timestamp a task is sorted/triaged by. An appointment is anchored
 // to its event time; everything else to its due time, then its reminder time.
 export function taskEffectiveDueMs(todo: TaskLike | null | undefined): number | null {
