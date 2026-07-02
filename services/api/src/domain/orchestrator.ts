@@ -619,10 +619,30 @@ function detectApparelFallbackRequest(text: string): boolean {
   );
 }
 
+// Structured department declared by a WEB TEXT WIDGET submission ("Department: Sales" header).
+// A widget lead's own department field OUTRANKS the keyword department fallbacks below — the
+// fallbacks exist for free-text SMS, and letting them re-route a declared-Sales lead is the
+// wrong-department class (Syed Saad, +19993605729, 2026-07-01: "I am purchasing detail[s]" on
+// the Iron 883 SALES widget tripped the "detail" service keyword → a service-department ack on
+// a purchase question). Structured-field precedence, not comprehension.
+function widgetDeclaredDepartment(text: string): string | null {
+  const t = String(text ?? "");
+  if (!/^\s*WEB TEXT WIDGET\b/i.test(t)) return null;
+  const m = t.match(/^Department:\s*(.+)$/im);
+  const dept = String(m?.[1] ?? "").trim().toLowerCase();
+  return dept || null;
+}
+
+function widgetDeclaresSalesDepartment(text: string): boolean {
+  return widgetDeclaredDepartment(text) === "sales";
+}
+
 function detectServiceFallbackRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detail)\b/.test(
+  // "detail" is scoped to actual detailing asks ("detailing", "detail my bike") — the bare noun
+  // over-matched "purchasing detail(s)" / "send details" (the Syed Saad miss).
+  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detailing|detail\s+(?:my|the|it|bike))\b/.test(
     t
   );
 }
@@ -2865,7 +2885,8 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: buildHiringManagerInquiryReply() }
     });
   }
-  if (detectPartsFallbackRequest(event.body)) {
+  const widgetSalesLead = widgetDeclaresSalesDepartment(event.body);
+  if (!widgetSalesLead && detectPartsFallbackRequest(event.body)) {
     const draft = /\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/i.test(
       event.body
     )
@@ -2879,7 +2900,7 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectApparelFallbackRequest(event.body)) {
+  if (!widgetSalesLead && detectApparelFallbackRequest(event.body)) {
     const draft = "Thanks — I’ll have our MotorClothes team check on that and follow up shortly.";
     return finalize({
       intent: "GENERAL",
@@ -2889,7 +2910,7 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectServiceFallbackRequest(event.body) && !financeRequest) {
+  if (!widgetSalesLead && detectServiceFallbackRequest(event.body) && !financeRequest) {
     const draft = /\bservice records?\b/i.test(event.body)
       ? "Thanks for the details — I’ll have the team check service records and follow up."
       : "We’ve received your service request and will have the service department follow up.";
