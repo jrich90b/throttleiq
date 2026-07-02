@@ -526,6 +526,7 @@ import {
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
   decideEventPromoTurn,
+  decideIndefiniteDeferTurn,
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
@@ -24252,7 +24253,26 @@ function resolveCustomerFollowUpDeferralDecision(
     );
     if (fallback) return fallback;
   }
-  return parseCustomerFollowUpDeferralFallback(text, base);
+  const shortWindow = parseCustomerFollowUpDeferralFallback(text, base);
+  if (shortWindow) return shortWindow;
+  // Indefinite defer while still engaged (Chuck Bailey class): an accepted defer_no_window that
+  // neither closed out (competing-active-intent guard, correctly) nor carries a concrete short
+  // window pauses the cadence for a default window instead of leaving it nudging. Decision is
+  // centralized in routeStateReducer (decideIndefiniteDeferTurn) — both paths flow through this
+  // resolver, so live/regen stay in parity.
+  const indefiniteDefer = decideIndefiniteDeferTurn({
+    parserAccepted: parsedAccepted,
+    disposition: parsed?.disposition ?? null,
+    shortWindowResolved: false
+  });
+  if (indefiniteDefer.kind === "pause_cadence_default_window") {
+    return {
+      label: "in a couple weeks",
+      until: new Date(base.getTime() + indefiniteDefer.pauseDays * 24 * 60 * 60 * 1000),
+      reason: "customer_thinking_it_over"
+    };
+  }
+  return null;
 }
 
 async function applyCustomerFollowUpDeferral(conv: any, decision: CustomerFollowUpDeferralDecision) {

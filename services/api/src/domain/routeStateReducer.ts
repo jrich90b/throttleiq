@@ -1491,6 +1491,45 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
   return { kind: "none" };
 }
 
+// Indefinite customer defer while still engaged (the Chuck Bailey class, +17163197142,
+// 2026-07-01, operator-reported: "this probably should not have a follow up after the customer
+// saying [still interested... but tied up with family concerns, will get back to you]").
+//
+// The disposition parser reads such a turn as `defer_no_window`, but the terminal closeout is
+// (CORRECTLY) suppressed by the competing-active-intent guard — the lead said they're still
+// interested, so we must not close them. Before this decision existed, the turn then fell
+// through the short-window deferral resolver (which only knows concrete "a few days" windows)
+// and landed in the general draft path with the CADENCE STILL ACTIVE — so the agent kept
+// nudging someone who explicitly asked for space.
+//
+// Decision: an accepted `defer_no_window` that neither closed out nor resolved a concrete
+// short window PAUSES the follow-up cadence for a default window (14 days) — the conversation
+// stays OPEN, watches stay, and cadence resumes automatically after the window. Fail-direction:
+// a false negative keeps today's behavior (nudges continue — annoying but recoverable); a false
+// positive pauses two weeks on a live lead (bounded by the parser-acceptance gate).
+export type IndefiniteDeferTurnKind = "pause_cadence_default_window" | "none";
+
+export type IndefiniteDeferTurnInput = {
+  parserAccepted: boolean;
+  disposition?: string | null;
+  // true when the with-window/short-window resolver already produced a concrete deferral —
+  // that path wins (it carries the customer's own timeframe).
+  shortWindowResolved: boolean;
+};
+
+export type IndefiniteDeferTurnDecision =
+  | { kind: "pause_cadence_default_window"; pauseDays: number }
+  | { kind: "none" };
+
+export const INDEFINITE_DEFER_PAUSE_DAYS = 14;
+
+export function decideIndefiniteDeferTurn(input: IndefiniteDeferTurnInput): IndefiniteDeferTurnDecision {
+  if (input.shortWindowResolved) return { kind: "none" };
+  if (!input.parserAccepted) return { kind: "none" };
+  if (String(input.disposition ?? "") !== "defer_no_window") return { kind: "none" };
+  return { kind: "pause_cadence_default_window", pauseDays: INDEFINITE_DEFER_PAUSE_DAYS };
+}
+
 // Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
 // App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
 // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was
