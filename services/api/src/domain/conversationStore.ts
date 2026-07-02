@@ -4033,6 +4033,28 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
   }).toISOString();
 }
 
+// No-show follow-up timing (Joe-approved 2026-07-02: "a did-not-show + needs-follow-up should get
+// its first touch in 1-2 business days, not a week out"). Next BUSINESS day at the standard
+// morning send window — Fri/Sat outcomes land Monday (2 calendar days max), never a Sunday.
+// Pinned by no_show_followup_timing:eval.
+export function resolveNoShowFollowUpDueAt(nowIso: string, timeZone: string): string {
+  const now = new Date(nowIso);
+  const parts = getZonedParts(now, timeZone);
+  const base = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  base.setUTCDate(base.getUTCDate() + 1);
+  // getUTCDay on the local-date proxy: 0=Sun, 6=Sat → roll forward to Monday.
+  while (base.getUTCDay() === 0 || base.getUTCDay() === 6) {
+    base.setUTCDate(base.getUTCDate() + 1);
+  }
+  return localPartsToUtcDate(timeZone, {
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+    hour24: 10,
+    minute: 30
+  }).toISOString();
+}
+
 export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);

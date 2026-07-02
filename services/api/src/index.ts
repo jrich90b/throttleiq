@@ -691,6 +691,7 @@ import {
   parseRequestedDayTime,
   parseRequestedDateOnly,
   startFollowUpCadence,
+  resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
   resumeFollowUpCadence,
@@ -17260,7 +17261,12 @@ async function activateAppointmentOutcomeFollowUp(args: {
   const nextDueAt = resolveOutcomeFollowUpDueAt({
     note,
     plan,
-    fallbackDueAt: computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone),
+    // A no-show's first touch lands the NEXT BUSINESS DAY (Joe-approved 2026-07-02, 1-2 day
+    // window; Fri/Sat -> Monday, never Sunday). Other outcomes keep the standard first offset.
+    fallbackDueAt:
+      args.primaryStatus === "did_not_show"
+        ? resolveNoShowFollowUpDueAt(now, timezone)
+        : computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone),
     timeZone: timezone,
     nowIso: now
   });
@@ -40576,12 +40582,14 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
       setFollowUpMode(conv, "paused_indefinite", "attendance_pause_indef");
       return;
     }
-    if (action === "pause_24h" || action === "pause_72h") {
+    if (action === "pause_24h" || action === "pause_72h" || action === "pause_next_business_day") {
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
         startFollowUpCadence(conv, nowIso, tz);
       }
-      const hours = action === "pause_24h" ? 24 : 72;
-      const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      const until =
+        action === "pause_next_business_day"
+          ? resolveNoShowFollowUpDueAt(nowIso, tz)
+          : new Date(Date.now() + (action === "pause_24h" ? 24 : 72) * 60 * 60 * 1000).toISOString();
       pauseFollowUpCadence(conv, until, "attendance_pause");
       return;
     }
@@ -40606,7 +40614,8 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
     if (outcome === "sold") return "archive";
     if (outcome === "hold") return "pause_indef";
     if (outcome === "undecided") return "resume";
-    if (outcome === "no_show") return "pause_72h";
+    // Joe-approved 2026-07-02: a no-show re-engages the NEXT BUSINESS DAY (1-2 days), not 72h flat.
+    if (outcome === "no_show") return "pause_next_business_day";
     return undefined;
   };
 
