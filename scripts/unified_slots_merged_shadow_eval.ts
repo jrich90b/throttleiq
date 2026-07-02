@@ -236,6 +236,19 @@ check("diff: real field changes are each named", () => {
   assert.deepEqual(fields, ["payoffStatus", "tradeTargetValue.amount", "watchAction"]);
 });
 
+check("diff: semantic scope ignores payoff/target fields (legacy didn't run them)", () => {
+  const a = base();
+  const b = base();
+  b.payoffStatus = "has_lien" as any;
+  (b as any).tradeTargetValue = { amount: 7000 };
+  const scoped = diffUnifiedSlotParse(a, b, { scope: "semantic" });
+  assert.equal(scoped.equal, true);
+  b.watchAction = "none" as any;
+  const scoped2 = diffUnifiedSlotParse(a, b, { scope: "semantic" });
+  assert.equal(scoped2.equal, false);
+  assert.deepEqual(scoped2.diffs.map(d => d.field), ["watchAction"]);
+});
+
 // ── 6. prompt-mirror tripwire ───────────────────────────────────────────────
 // The merged parser carries a copy of the legacy rules until cutover. Sentinel
 // rule lines must appear at least twice in llmDraft.ts (legacy + merged copy) —

@@ -11467,7 +11467,8 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead,
       inventoryWatch: args.inventoryWatch,
       inventoryWatchPending: args.inventoryWatchPending,
-      dialogState: args.dialogState
+      dialogState: args.dialogState,
+      _shadowSuppressed: true // the wrapper fires its own full-scope shadow below
     }),
     parseTradePayoffWithLLM({
       text: args.text,
@@ -11790,8 +11791,10 @@ export type UnifiedSlotFieldDiff = { field: string; legacy: unknown; merged: unk
 // 1-call result. Deterministic; pinned by unified_slots_merged_shadow:eval.
 export function diffUnifiedSlotParse(
   legacy: UnifiedSemanticSlotParse,
-  merged: UnifiedSemanticSlotParse
+  merged: UnifiedSemanticSlotParse,
+  opts?: { scope?: "all" | "semantic" }
 ): { equal: boolean; diffs: UnifiedSlotFieldDiff[] } {
+  const scope = opts?.scope ?? "all";
   const diffs: UnifiedSlotFieldDiff[] = [];
   const normStr = (v: unknown) => String(v ?? "").trim().toLowerCase();
   const normNum = (v: unknown) => {
@@ -11826,12 +11829,61 @@ export function diffUnifiedSlotParse(
   cmpStr("contactPreferenceIntent", legacy.contactPreferenceIntent, merged.contactPreferenceIntent, "none");
   cmpStr("mediaIntent", legacy.mediaIntent, merged.mediaIntent, "none");
   cmpBool("serviceRecordsIntent", legacy.serviceRecordsIntent, merged.serviceRecordsIntent);
-  cmpStr("payoffStatus", legacy.payoffStatus, merged.payoffStatus, "unknown");
-  cmpBool("needsLienHolderInfo", legacy.needsLienHolderInfo, merged.needsLienHolderInfo);
-  cmpBool("providesLienHolderInfo", legacy.providesLienHolderInfo, merged.providesLienHolderInfo);
-  cmpNum("tradeTargetValue.amount", legacy.tradeTargetValue?.amount, merged.tradeTargetValue?.amount);
+  if (scope === "all") {
+    // Payoff/target comparisons only make sense when the legacy side actually
+    // ran those jobs on this turn (the unified wrapper path).
+    cmpStr("payoffStatus", legacy.payoffStatus, merged.payoffStatus, "unknown");
+    cmpBool("needsLienHolderInfo", legacy.needsLienHolderInfo, merged.needsLienHolderInfo);
+    cmpBool("providesLienHolderInfo", legacy.providesLienHolderInfo, merged.providesLienHolderInfo);
+    cmpNum("tradeTargetValue.amount", legacy.tradeTargetValue?.amount, merged.tradeTargetValue?.amount);
+  }
 
   return { equal: diffs.length === 0, diffs };
+}
+
+// Semantic-scope shadow: fires from parseSemanticSlotsWithLLM on the live
+// traffic path. The legacy side of the comparison is the semantic result only;
+// merged payoff/target outputs are logged unvalidated for cutover review.
+async function runSemanticScopeMergedShadowCompare(
+  args: {
+    text: string;
+    history?: { direction: "in" | "out"; body: string }[];
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+    dialogState?: string;
+  },
+  legacySemantic: SemanticSlotParse
+): Promise<void> {
+  try {
+    const startedAt = Date.now();
+    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
+    const elapsedMs = Date.now() - startedAt;
+    if (!merged) {
+      console.log(
+        "[unified-slots-shadow]",
+        JSON.stringify({ at: new Date().toISOString(), scope: "semantic", outcome: "merged_null", elapsedMs })
+      );
+      return;
+    }
+    const legacyAsUnified = combineUnifiedSlotParse(legacySemantic, null, null);
+    if (!legacyAsUnified) return;
+    const { equal, diffs } = diffUnifiedSlotParse(legacyAsUnified, merged, { scope: "semantic" });
+    const record = {
+      at: new Date().toISOString(),
+      scope: "semantic",
+      outcome: equal ? "agree" : "disagree",
+      elapsedMs,
+      diffs,
+      mergedPayoffStatus: merged.payoffStatus,
+      mergedTradeTargetAmount: merged.tradeTargetValue?.amount ?? null,
+      textPreview: String(args.text ?? "").slice(0, 140)
+    };
+    console.log("[unified-slots-shadow]", JSON.stringify(record));
+    appendUnifiedSlotsShadowRecord(record);
+  } catch (err: any) {
+    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
+  }
 }
 
 // Fire-and-forget shadow runner: never throws into the live path, never blocks it.
@@ -11852,12 +11904,16 @@ async function runUnifiedSlotsMergedShadowCompare(
     const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
     const elapsedMs = Date.now() - startedAt;
     if (!merged) {
-      console.log("[unified-slots-shadow]", JSON.stringify({ at: new Date().toISOString(), outcome: "merged_null", elapsedMs }));
+      console.log(
+        "[unified-slots-shadow]",
+        JSON.stringify({ at: new Date().toISOString(), scope: "all", outcome: "merged_null", elapsedMs })
+      );
       return;
     }
     const { equal, diffs } = diffUnifiedSlotParse(legacy, merged);
     const record = {
       at: new Date().toISOString(),
+      scope: "all",
       outcome: equal ? "agree" : "disagree",
       elapsedMs,
       diffs,
@@ -11891,6 +11947,9 @@ export async function parseSemanticSlotsWithLLM(args: {
   inventoryWatch?: Conversation["inventoryWatch"];
   inventoryWatchPending?: Conversation["inventoryWatchPending"];
   dialogState?: string;
+  /** internal: set by parseUnifiedSemanticSlotsWithLLM so its own full-scope
+   *  shadow doesn't double-fire the semantic-scope shadow below. */
+  _shadowSuppressed?: boolean;
 }): Promise<SemanticSlotParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -12022,13 +12081,21 @@ export async function parseSemanticSlotsWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  return normalizeSemanticSlotLLMOutput(parsed, {
+  const out = normalizeSemanticSlotLLMOutput(parsed, {
     text,
     history,
     lead,
     inventoryWatch: watch ?? undefined,
     inventoryWatchPending: pending ?? undefined
   });
+  if (process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1" && !args._shadowSuppressed) {
+    // Semantic-scope shadow on the REAL production traffic path: wherever the
+    // semantic parser runs live, the merged 3-in-1 parser runs alongside,
+    // fire-and-forget — semantic fields are diffed; the merged payoff/target
+    // outputs are logged (unvalidated) for cutover review.
+    void runSemanticScopeMergedShadowCompare(args, out);
+  }
+  return out;
 }
 
 // Deterministic post-parse normalization for the semantic-slot LLM output — the
