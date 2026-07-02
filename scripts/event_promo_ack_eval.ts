@@ -67,6 +67,27 @@ for (const src of ["National Event Dealer Sweeps", "Room58 - National Event RSVP
 // The name inference must NOT sweep a real sales source into event_promo.
 assert.notEqual(resolveLeadRule("Facebook - RAQ").bucket, "event_promo", "a sales source must stay out of event_promo");
 
+// --- 1c) Demo-ride disambiguation: an INDIVIDUAL demo-ride REQUEST must route to test_ride (a real
+//         "let's set up a time to ride it" reply), NOT the event_promo "thanks for entering — good luck!"
+//         ack. ROOT CAUSE (Jennifer Adam, 2026-07-01): "GLA - DEMO RIDE" wasn't in the hdmc_test_ride_request
+//         allowlist, so it fell through to inferFromCatalog's `/event|rsvp|demo ride/` catch-all and was
+//         mis-bucketed event_promo. Its sibling "DEALER DEMO RIDE" was already handled — this pins parity.
+//         The genuine "Road to Your Ride" ROADSHOW demo-ride EVENTS must STAY event_promo. ---
+for (const src of ["GLA - DEMO RIDE", "GLA - Demo Ride", "DEALER DEMO RIDE"]) {
+  const r = resolveLeadRule(src);
+  assert.equal(r.bucket, "test_ride", `individual demo-ride request "${src}" must classify as test_ride, got ${r.bucket}/${r.cta}`);
+  assert.notEqual(
+    decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind,
+    "event_promo_ack",
+    `"${src}" must NOT be diverted to the event-promo ack`
+  );
+}
+// NB: the genuine "GLA - Road to Your Ride ... Demo Ride" ROADSHOW events (3025/3026) stay event_promo
+// in production via the catalog (inferFromCatalog's event catch-all) / the gla_demo_ride_dat sourceId
+// rule — they are deliberately NOT added to the test_ride allowlist above. That path is catalog-data-
+// dependent (DATA_DIR), so it isn't asserted here; the fix above is a purely additive allowlist entry
+// that cannot reach those event sources.
+
 // --- 2) Ack safety (pure). ---
 const ack = buildEventPromoAck("Matthew", "Alexandra", "American Harley-Davidson");
 assert.ok(/Matthew/.test(ack) && /Alexandra/.test(ack) && /American Harley-Davidson/.test(ack), "ack must identify lead + agent + dealer");

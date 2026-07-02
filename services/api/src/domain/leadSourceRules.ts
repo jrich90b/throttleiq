@@ -259,7 +259,14 @@ const RULES: LeadRule[] = [
   },
   {
     name: "hdmc_test_ride_request",
-    match: { equals: ["HD.COM ONLINE TEST RIDE REQUEST", "Test Ride Request - H-D.com (Test Ride Booking Form)", "DEALER DEMO RIDE"], sourceIds: [2814, 2864, 2813] },
+    // "GLA - DEMO RIDE" (2921) is an INDIVIDUAL demo-ride REQUEST for a specific bike — the sibling of
+    // "DEALER DEMO RIDE" (2813) — so it belongs here, in test_ride/schedule_test_ride. Without this it
+    // fell through to inferFromCatalog's `/event|rsvp|demo ride/` catch-all and was mis-bucketed as
+    // event_promo, so a real demo-ride request got a sweepstakes "thanks for entering — good luck!" ack
+    // (Jennifer Adam, 2026-07-01). The genuine "GLA - Road to Your Ride ... Demo Ride" ROADSHOW events
+    // (3025/3026) are NOT listed here — they stay event_promo (3026 via the gla_demo_ride_dat sourceId
+    // rule, 3025 via the catch-all).
+    match: { equals: ["HD.COM ONLINE TEST RIDE REQUEST", "Test Ride Request - H-D.com (Test Ride Booking Form)", "DEALER DEMO RIDE", "GLA - DEMO RIDE"], sourceIds: [2814, 2864, 2813, 2921] },
     bucket: "test_ride",
     cta: "schedule_test_ride",
     tone: "short_conversational"
