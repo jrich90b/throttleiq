@@ -352,6 +352,32 @@
   --shadow-4: 0 2px 8px rgba(5, 5, 5, 0.08), 0 12px 32px rgba(5, 5, 5, 0.14);
   --shadow-focus: 0 0 0 2px var(--accent-ring);
   --foreground: var(--text-primary);
+  /* Shell-level aliases (--lr-app-*, --lr-*, --lr-shell-*) resolve where
+     declared (on the dark shell), so light islands must re-declare them or
+     alias consumers keep dark-resolved values (light-on-light text). */
+  --lr-app-bg: var(--background);
+  --lr-app-bg-soft: var(--surface);
+  --lr-app-surface: var(--surface);
+  --lr-app-surface-2: var(--surface-2);
+  --lr-app-border: var(--border);
+  --lr-app-border-strong: var(--border-strong);
+  --lr-app-text: var(--text-primary);
+  --lr-app-muted: var(--text-secondary);
+  --lr-app-muted-soft: var(--text-muted);
+  --lr-bg: var(--background);
+  --lr-bg-soft: var(--surface);
+  --lr-surface: var(--surface);
+  --lr-surface-2: var(--surface-2);
+  --lr-border: var(--border);
+  --lr-text: var(--text-primary);
+  --lr-muted: var(--text-secondary);
+  --lr-muted-strong: var(--text-secondary);
+  --lr-accent: var(--accent);
+  --lr-accent-soft: var(--accent-tint);
+  --lr-shell-accent: var(--accent);
+  --lr-shell-bg: var(--background);
+  --lr-shell-surface: var(--surface);
+  --lr-shell-border: var(--border);
 }
 
 body {
@@ -3575,8 +3601,8 @@ input[type="reset"],
 
 .lr-app-theme .lr-app-sidebar-panel button.bg-\[var\(--accent\)\],
 .lr-app-theme .lr-app-main-panel button.bg-\[var\(--accent\)\] {
-  color: var(--text-primary) !important;
-  font-weight: 700;
+  color: var(--accent-contrast) !important;
+  font-weight: 600;
 }
 
 .lr-app-theme .bg-white,
@@ -3625,6 +3651,32 @@ input[type="reset"],
   --status-neutral-bg: var(--neutral-100);
   --status-neutral-border: var(--neutral-200);
   --foreground: var(--text-primary);
+  /* Shell-level aliases (--lr-app-*, --lr-*, --lr-shell-*) resolve where
+     declared (on the dark shell), so light islands must re-declare them or
+     alias consumers keep dark-resolved values (light-on-light text). */
+  --lr-app-bg: var(--background);
+  --lr-app-bg-soft: var(--surface);
+  --lr-app-surface: var(--surface);
+  --lr-app-surface-2: var(--surface-2);
+  --lr-app-border: var(--border);
+  --lr-app-border-strong: var(--border-strong);
+  --lr-app-text: var(--text-primary);
+  --lr-app-muted: var(--text-secondary);
+  --lr-app-muted-soft: var(--text-muted);
+  --lr-bg: var(--background);
+  --lr-bg-soft: var(--surface);
+  --lr-surface: var(--surface);
+  --lr-surface-2: var(--surface-2);
+  --lr-border: var(--border);
+  --lr-text: var(--text-primary);
+  --lr-muted: var(--text-secondary);
+  --lr-muted-strong: var(--text-secondary);
+  --lr-accent: var(--accent);
+  --lr-accent-soft: var(--accent-tint);
+  --lr-shell-accent: var(--accent);
+  --lr-shell-bg: var(--background);
+  --lr-shell-surface: var(--surface);
+  --lr-shell-border: var(--border);
 }
 
 /* Global readability guard: any intentionally light utility surface should
@@ -7017,6 +7069,19 @@ input[type="reset"],
   border: 1px solid var(--lr-app-border, var(--border));
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
+/* The snooze trigger lives inside a [data-actions-menu] light island (for the
+   popover), but should read as a dark task-card chip like its siblings. */
+.lr-app-theme .lr-task-snooze > .lr-task-btn {
+  --surface-2: #1d1c1a;
+  --surface-hover: #232220;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text-primary: var(--neutral-100);
+  --lr-app-text: var(--text-primary);
+  --lr-app-border: var(--border);
+  --lr-app-border-strong: var(--border-strong);
+}
+
 .lr-task-snooze-opt {
   text-align: left;
   padding: 0.4rem 0.55rem;
