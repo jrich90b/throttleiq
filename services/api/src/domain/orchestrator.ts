@@ -34,7 +34,7 @@ import {
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro, buildEventPromoAck } from "./agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck } from "./agentVoice.js";
 import { decideEventPromoTurn } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
@@ -2461,14 +2461,13 @@ export async function orchestrateInbound(
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const leadFirst = ctx?.lead?.firstName?.trim() || null;
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
-    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "that bike";
-    const draft =
-      `Hi ${leadFirst} — thanks for your recent demo ride on the ${bikeLabel}. ` +
-      `This is ${agentName} at ${dealerName}. ` +
-      `If you want more details on the ${bikeLabel}, I’m happy to help.`;
+    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || null;
+    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no fabricated
+    // "recent ride" frame, and no follow-up cadence (operator-reported, Joe 2026-07-02).
+    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel);
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",

@@ -47,7 +47,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
@@ -8875,6 +8875,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
     const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
     draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+  }
+
+  // Corporate/GLA demo-ride program lead (bucket=event_promo, cta=demo_ride_event): the ride
+  // does NOT happen at the dealership, so the finalized sales draft ("which bike are you asking
+  // about?" / scheduling times / availability+photo appends) is out of context. Override with
+  // ONE soft invite; the event_promo bucket close below (`event_promo_no_cadence`) guarantees
+  // no follow-up cadence (operator-reported, Joe 2026-07-02). Mirrors the orchestrator's
+  // demo_ride_event branch — same builder, both paths. Pinned by event_promo_ack:eval.
+  if (conv.classification?.bucket === "event_promo" && conv.classification?.cta === "demo_ride_event") {
+    const drAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const drDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const drFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    const drVehicle = conv.lead?.vehicle ?? {};
+    const drYear = String(drVehicle.year ?? "").trim();
+    const drModel = String(drVehicle.model ?? drVehicle.description ?? "").trim();
+    const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
+    draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
   }
 
   // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
