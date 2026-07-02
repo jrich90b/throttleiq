@@ -48,6 +48,7 @@ import {
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
@@ -5417,7 +5418,47 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "manual_handoff");
   }
 
+  // Re-submission guard (Jerill White class, Joe-approved 2026-07-02): the SAME structured form
+  // re-submitted (only the CRM Ref changes) must not restart the first-touch script. Detected
+  // BEFORE append (compares against prior inbounds) and returned BEFORE discardPendingDrafts so
+  // a burst re-submission keeps the original pending first-touch draft for staff. A todo tells
+  // the owner the customer is knocking twice; an ack draft goes out only when the previous
+  // outbound is old enough (>=24h) that silence would read as being ignored.
+  const adfResubmission = detectAdfFormResubmission({
+    messages: conv.messages,
+    newBody: event.body,
+    nowMs: Date.now()
+  });
   appendInbound(conv, event);
+  if (adfResubmission.resubmission) {
+    addTodo(
+      conv,
+      "other",
+      `Customer re-submitted the ${adfResubmission.source || "web"} form (${adfResubmission.priorCount + 1}x) — they're waiting on a person; reach out.`,
+      event.providerMessageId
+    );
+    let resubmissionAck: string | null = null;
+    if (adfResubmission.hoursSinceLastOutbound == null || adfResubmission.hoursSinceLastOutbound >= 24) {
+      const profile = await getDealerProfile();
+      const agentName = String(profile?.agentName ?? "").trim() || "Alexandra";
+      const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+      resubmissionAck = buildAdfResubmissionAck(firstName, agentName, dealerName);
+      appendOutbound(conv, "dealership", leadKey, resubmissionAck, "draft_ai");
+    }
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      note: "adf_resubmission",
+      resubmissionCount: adfResubmission.priorCount + 1,
+      draft: resubmissionAck
+    });
+  }
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
