@@ -348,6 +348,46 @@ const cases: Case[] = [
         body: picked.inbound?.body ?? ""
       };
     }
+  },
+  {
+    // Spanish iOS tapback wrapper (production replay: Armando Cortes, +17165350411, 2026-07-01):
+    // 'Le encanta "…"' is a reaction, not customer text — the picker must skip it and use the
+    // prior real inbound, exactly like the English 'Loved "…"' wrappers. The same detector copy
+    // in index.ts gates the LIVE reaction-only no-reply (source-consistency assertion below).
+    id: "skips_spanish_tapback_and_uses_prior_real_inbound",
+    expected: {
+      provider: "twilio",
+      creditAdf: false,
+      dlaNoPurchaseAdf: false,
+      bodyIncludes: "what color options"
+    },
+    run: () => {
+      const picked = pickRegenerateInbound({
+        latestDraftAt: "2026-07-01T15:10:05.000Z",
+        messages: [
+          {
+            direction: "in",
+            provider: "twilio",
+            body: "what color options does the street glide come in?",
+            at: "2026-07-01T13:00:00.000Z"
+          },
+          {
+            direction: "in",
+            provider: "twilio",
+            body:
+              "Le encanta \u201cHi Armando \u2014 this is Stone at American Harley-Davidson. Thanks again for coming to see us for your Street Glide. If you need anything, just let me know.\u201d",
+            at: "2026-07-01T15:09:45.000Z"
+          }
+        ]
+      });
+      return {
+        provider: picked.inbound?.provider ?? null,
+        creditAdf: picked.latestInboundIsCreditAdf,
+        dlaPostDemoRideAdf: picked.latestInboundIsDlaPostDemoRideAdf,
+        dlaNoPurchaseAdf: picked.latestInboundIsDlaNoPurchaseAdf,
+        body: picked.inbound?.body ?? ""
+      };
+    }
   }
 ];
 
@@ -373,3 +413,15 @@ if (passed !== cases.length) {
 }
 
 console.log(`\nAll ${cases.length} regenerate selection checks passed.`);
+
+// Source-consistency guard: the LIVE reaction-only no-reply gate uses a separate copy of the
+// detector in index.ts — the localized (Spanish) tapback alternation must exist in BOTH copies
+// or the live path and regenerate selection drift (the Armando Cortes miss class).
+import fs from "node:fs";
+for (const f of ["services/api/src/index.ts", "services/api/src/domain/regenerateSelection.ts"]) {
+  const src = fs.readFileSync(f, "utf8");
+  if (!src.includes("le encant(?:a|\u00f3)") && !src.includes("le encant(?:a|ó)")) {
+    console.error(`FAIL localized tapback alternation missing in ${f}`);
+    process.exit(1);
+  }
+}

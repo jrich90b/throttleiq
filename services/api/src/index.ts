@@ -21239,12 +21239,16 @@ function normalizeReactionInboundText(text: string): string {
     .trim();
 }
 
+  // Localized (Spanish) iOS tapback wrappers — carrier-generated STRUCTURED formats, the same
+  // class as the English set (production miss: Armando Cortes, +17165350411, 2026-07-01 —
+  // 'Le encanta "Hi Armando..."' drafted a reply on a closed/sold conversation instead of the
+  // reaction-only no-reply). Quoted-body requirement keeps this tight to the wrapper format.
 function isQuotedReactionInboundText(text: string): boolean {
   const normalized = normalizeReactionInboundText(text);
   if (!normalized) return false;
 
   if (
-    /^(liked|loved|disliked|laughed at|emphasized|questioned)\s+["'\u201c\u201d][\s\S]{1,1000}["'\u201c\u201d]$/i.test(
+    /^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))\s+["'\u201c\u201d][\s\S]{1,1000}["'\u201c\u201d]$/i.test(
       normalized
     )
   ) {
@@ -21258,7 +21262,7 @@ function isQuotedReactionInboundText(text: string): boolean {
 
   const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
   if (!reactionToken) return false;
-  if (/^(liked|loved|disliked|laughed at|emphasized|questioned)$/.test(reactionToken)) {
+  if (/^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))$/i.test(reactionToken)) {
     return true;
   }
   if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
