@@ -5764,7 +5764,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Joe-approved 2026-07-02 (Angelo Balistrieri, +17169123294): even when no follow-up is
+    // needed and the salesperson owns the lead, the customer still gets ONE thank-you draft
+    // for coming in for the ride. The publisher carries its own guards (appointment-outcome
+    // wins, DLA ride confirmation, already-thanked dedupe) — manual handoff below is unchanged.
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
         conv,
@@ -5848,14 +5852,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou,
       staffSms
     });
   }
   if (isDealerRideEventLead) {
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Same Joe-approved thank-you as the no-purchase arm — the ride happened; thank them once
+    // while the outcome stays with the salesperson (publisher guards prevent duplicates).
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -5869,7 +5875,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou
     });

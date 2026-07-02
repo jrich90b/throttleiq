@@ -51152,14 +51152,38 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
-    return respondRegenerateSkipped("dealer_ride_outcome_pending");
+    // Joe-approved 2026-07-02 (live/regen parity with the sendgridInbound arms): the customer
+    // still gets a thank-you-only draft for the ride — staff keep the outcome + follow-up.
+    {
+      const thankYou = buildDealerLeadAppPostRideReply({
+        conv,
+        dealerName: dealerProfile?.dealerName,
+        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        inventoryStatus: "unknown"
+      });
+      recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(thankYou);
+      }
+      return respondWithSmsRegeneratedDraft(thankYou);
+    }
   }
   if (regenDealerRideEventLead) {
     const dealerRideOutcome: any = conv?.dealerRide?.staffNotify?.outcome ?? null;
     if (!dealerRideOutcome?.status) {
       setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
       stopFollowUpCadence(conv, "manual_handoff");
-      return respondRegenerateSkipped("dealer_ride_outcome_pending");
+      const thankYou = buildDealerLeadAppPostRideReply({
+        conv,
+        dealerName: dealerProfile?.dealerName,
+        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        inventoryStatus: "unknown"
+      });
+      recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(thankYou);
+      }
+      return respondWithSmsRegeneratedDraft(thankYou);
     }
     const reply = buildDealerRideOutcomeCustomerDraft({
       conv,

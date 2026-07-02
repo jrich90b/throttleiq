@@ -865,8 +865,8 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (!draftText) {
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
-        verdict: "expected_no_response",
-        reasons: ["Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"]
+        verdict: "missing_response",
+        reasons: ["Dealer Lead App demo-ride ADF should produce a customer thank-you draft (Joe-approved 2026-07-02); staff keep the outcome"]
       };
     }
     if (
