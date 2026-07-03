@@ -578,6 +578,12 @@ export type VehicleChoiceConfidenceTurnInput = {
   hasReferencedModel: boolean;
   // passesModelRelevanceGuard(referencedModel, inboundText) — the over-attachment guard.
   modelRelevanceGuardPassed: boolean;
+  // An ACCEPTED concrete parsed action already owns this turn (dealer_location_question /
+  // inventory_watch_acknowledgement) — the alternatives offer must yield (corpus flywheel,
+  // 2026-07-03, +12399612259: "remind me again what address is this at?" drew the "Totally
+  // fair — happy to line up options" reply because this arm runs ~3k lines before the
+  // location arm).
+  concreteParsedActionThisTurn?: boolean;
 };
 
 export type VehicleChoiceConfidenceTurnDecision = {
@@ -588,6 +594,7 @@ export function decideVehicleChoiceConfidenceTurn(
   input: VehicleChoiceConfidenceTurnInput
 ): VehicleChoiceConfidenceTurnDecision {
   // FAIL DIRECTION = stay_silent. Each guard below, when it trips, keeps us quiet.
+  if (input.concreteParsedActionThisTurn) return { kind: "stay_silent" }; // the parsed action owns the turn
   if (!input.parserAccepted) return { kind: "stay_silent" };
   if (input.stance !== "open_to_alternatives") return { kind: "stay_silent" }; // committed/unclear => quiet
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
