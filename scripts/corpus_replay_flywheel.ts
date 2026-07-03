@@ -488,11 +488,28 @@ async function main() {
     }
     if (Number.isFinite(last)) lastInboundAt.set(convId, last);
   }
+  const lastOutboundAt = new Map<string, number>();
+  for (const [convId, msgs] of contextByConv) {
+    let last = NaN;
+    for (const m of msgs) {
+      if ((m as any)?.direction !== "out") continue;
+      const t = Date.parse(String(m?.at ?? ""));
+      if (Number.isFinite(t) && (!Number.isFinite(last) || t > last)) last = t;
+    }
+    if (Number.isFinite(last)) lastOutboundAt.set(convId, last);
+  }
   const isAnachronistic = (row: ReplayRow): boolean => {
-    const lastAt = lastInboundAt.get(String(row.conversationId ?? ""));
     const rowAt = Date.parse(String(row.messageAt ?? ""));
-    if (!Number.isFinite(lastAt) || !Number.isFinite(rowAt)) return false; // can't prove → score it
-    return rowAt < (lastAt as number) - 1000;
+    if (!Number.isFinite(rowAt)) return false; // can't prove → score it
+    const lastIn = lastInboundAt.get(String(row.conversationId ?? ""));
+    if (Number.isFinite(lastIn) && rowAt < (lastIn as number) - 1000) return true;
+    // The conversation materially moved PAST this turn (staff answered days later, deal advanced —
+    // Peter Massaro "forty eight": live-June-16 answered correctly, but the replay ran against
+    // July state where the price was long since sent). An outbound >24h after the turn means the
+    // snapshot state no longer resembles the turn-time state.
+    const lastOut = lastOutboundAt.get(String(row.conversationId ?? ""));
+    if (Number.isFinite(lastOut) && (lastOut as number) - rowAt > 24 * 60 * 60 * 1000) return true;
+    return false;
   };
   const adjustedAll = rows.map(row => {
     if (isAnachronistic(row)) {
