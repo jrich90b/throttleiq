@@ -449,6 +449,27 @@ export function decideSchedulingDeferralFollowUpTask(
   return { createTask: true }; // deferred, not booked, no alternatives => owner must follow up
 }
 
+// The tentative-time-window arm ("probably about 11 o'clock on Monday", "maybe Saturday around 3")
+// acks softly ("that can work — give me a heads up on the exact time") and never books. It carries
+// the SAME silent-drop risk as the deferral arms above (decideSchedulingDeferralFollowUpTask), but it
+// escaped that net: the tentative arm computes no calendar-check result, so `needsOwnerFollowUpTask`
+// was always null → no owner task. When the customer named a CONCRETE day AND time (not a vague
+// "sometime next week"), the salesperson must still SEE that requested slot or it's silently dropped —
+// Peter Meredith +17168303999 (2026-07-03): a bike-on-hold sales deal (deposit left on stock U894-13,
+// which needs prep before the sale finalizes). "probably about 11 o'clock on Monday" is a HEDGED
+// concrete time → the parser reads it as tentative (shouldBook=false), so the agent soft-acks and
+// never books — but the Monday-11 visit-to-finalize was silently dropped: NO owner task; only saved
+// because a salesperson booked it manually. FAIL DIRECTION = leave the task whenever a concrete
+// day+time is present; an extra owner
+// task is safe, a dropped requested time is the bug. Gated on day AND time (not day-only) so vague
+// windows keep going to the soft-visit cadence, not a task. Feeds decideSchedulingDeferralFollowUpTask.
+export function tentativeWindowNeedsOwnerFollowUp(input: {
+  hasRequestedDay: boolean;
+  hasRequestedTime: boolean;
+}): boolean {
+  return input.hasRequestedDay && input.hasRequestedTime;
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the
