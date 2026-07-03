@@ -242,6 +242,46 @@ const cases: Case[] = [
 let passed = 0;
 const failures: Array<{ id: string; got: string; reason: string }> = [];
 
+// Watch offer on blocked test rides (corpus flywheel 2026-07-03): an out-of-stock or on-hold
+// test-ride ask must include the keep-an-eye-out offer — the "yes" flows into the existing
+// watch-confirmation handling. Pure builder table, no lookup.
+{
+  const oos = buildBlockedTestRideInventoryDraft({
+    canOfferTestRide: false,
+    reason: "not_in_stock",
+    bikeLabel: "2020 Street 750",
+    availableCount: 0,
+    inventoryBrowseUrl: "https://example.com/inventory"
+  } as any);
+  const hold = buildBlockedTestRideInventoryDraft({
+    canOfferTestRide: false,
+    reason: "on_hold",
+    bikeLabel: "2026 Sportster S",
+    availableCount: 0,
+    inventoryBrowseUrl: "https://example.com/inventory"
+  } as any);
+  const missingModelDraft = buildBlockedTestRideInventoryDraft({
+    canOfferTestRide: false,
+    reason: "missing_model",
+    bikeLabel: "that bike",
+    availableCount: 0,
+    inventoryBrowseUrl: "https://example.com/inventory"
+  } as any);
+  const checks: Array<[string, boolean]> = [
+    ["oos_watch_offer", /keep an eye out and text you the moment one lands/i.test(oos)],
+    ["hold_watch_offer", /text you the moment it opens back up/i.test(hold)],
+    ["missing_model_no_watch_offer", !/keep an eye out/i.test(missingModelDraft)]
+  ];
+  for (const [id, ok] of checks) {
+    if (ok) {
+      passed += 1;
+      console.log(`PASS blocked_test_ride_${id}`);
+    } else {
+      failures.push({ id: `blocked_test_ride_${id}`, got: `${oos} || ${hold} || ${missingModelDraft}`, reason: "watch-offer expectation not met" });
+    }
+  }
+}
+
 const heldInventoryGate = await evaluateTestRideInventoryGate({
   lead: {
     vehicle: {

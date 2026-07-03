@@ -1774,10 +1774,22 @@ export function buildBlockedTestRideInventoryDraft(testRideInventoryGate: TestRi
   const inventoryLine = testRideInventoryGate.inventoryBrowseUrl
     ? `Here’s our current inventory so you can pick an in-stock bike: ${testRideInventoryGate.inventoryBrowseUrl}`
     : "If you want, I can send you a few in-stock options right now.";
+  // Watch offer (corpus flywheel, 2026-07-03, Joe-approved steering direction): an out-of-stock/
+  // on-hold test-ride ask must not dead-end at an inventory link — offer to text them the moment
+  // their bike lands. The customer's "yes" flows into the EXISTING watch-confirmation handling
+  // (isWatchConfirmationIntentText -> inventory watch), so this is a reply-only change.
+  const watchLine =
+    testRideInventoryGate.reason === "not_in_stock" || testRideInventoryGate.reason === "on_hold"
+      ? `I can also keep an eye out and text you the moment ${
+          testRideInventoryGate.reason === "on_hold" ? "it opens back up" : "one lands"
+        } — want me to?`
+      : "";
   const nextStepLine = testRideInventoryGate.alternateBikeLabel
     ? "If that works, I can line up the test ride right away."
     : "Once you pick one, I can line up the test ride right away.";
-  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, nextStepLine].filter(Boolean).join(" ");
+  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, watchLine, nextStepLine]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function resolveModelFromHistory(
