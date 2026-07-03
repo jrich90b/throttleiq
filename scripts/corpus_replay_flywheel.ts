@@ -178,10 +178,24 @@ export function isAcceptedClarify(row: ReplayRow, judge: IntentVerdict | null | 
 export function isFinancePolicyAnswer(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
   if (!judge || judge.addressed) return false;
   const draft = String(row.draft ?? "").toLowerCase();
-  const financeAsk = /financ|payment|down payment|monthly|apr|rate|numbers/i.test(String(judge.customerAsk ?? ""));
+  const financeAsk = /financ|payment|down payment|monthly|apr|rate|numbers|terms?|plans?/i.test(String(judge.customerAsk ?? ""));
   const policyMove =
-    /credit app|pre-?qual|what monthly payment|payment (?:are you|you['\u2019]re) (?:trying|looking)|stay around|budget/.test(draft);
+    /credit app|pre-?qual|what monthly payment|payment (?:are you|you['\u2019]re) (?:trying|looking)|stay around|budget|(?:our )?finance (?:team|manager) (?:will )?(?:confirm|check|reach out|follow up)|have (?:our )?finance/.test(
+      draft
+    );
   return financeAsk && policyMove;
+}
+
+// Blocked test-ride WITH the watch offer = the Joe-approved #151 behavior (2026-07-03): we never
+// book a bike we don't have; the draft explains it, offers alternates/inventory, AND offers the
+// watch. The judge wants a booking anyway — that's the judge being stricter than the design.
+export function isBlockedTestRideWithWatchOffer(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
+  if (!judge || judge.addressed) return false;
+  const draft = String(row.draft ?? "").toLowerCase();
+  return (
+    /don['\u2019]t want to book you on a bike/.test(draft) &&
+    /keep an eye out and text you the moment/.test(draft)
+  );
 }
 
 // Deliberate-silence BY DESIGN: states whose correct behavior is NO auto-draft (handoff family
@@ -265,6 +279,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isFinancePolicyAnswer(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isBlockedTestRideWithWatchOffer(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isDealerRideThankYou(row)) {
