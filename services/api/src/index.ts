@@ -9469,16 +9469,11 @@ async function buildAppointmentStatusQuestionReply(args: {
 
 // A customer who is ALREADY on site ("Hey I'm here who do I ask for?") must not hear "before
 // you head over" — they're standing in the showroom (corpus flywheel, 2026-07-03,
-// +17168039550: that turn drew "what time tomorrow works best?"). Deterministic gate on the
-// inbound phrasing of an ALREADY-ACCEPTED arrival parse (structured state, not routing).
-function isAlreadyOnSiteArrivalText(text: string | null | undefined): boolean {
-  const t = String(text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-  if (!t) return false;
-  return /\b(?:i'?m|we'?re|im)\s+(?:here|out front|in the parking lot|at the (?:shop|store|dealership))\b/.test(t) || /\bjust pulled (?:in|up)\b/.test(t);
-}
-
-function buildImmediateArrivalRequestReply(conv?: any, opts?: { inboundText?: string | null }): string {
-  if (isAlreadyOnSiteArrivalText(opts?.inboundText)) {
+// +17168039550: that turn drew "what time tomorrow works best?"). On-site is read by the
+// customer-ack PARSER (on_site field) — parser-first, never a comprehension regex (the
+// twilio_comprehension_debt ratchet rejected the regex version of this, correctly).
+function buildImmediateArrivalRequestReply(conv?: any, opts?: { onSite?: boolean }): string {
+  if (opts?.onSite) {
     const ownerFirst = normalizeDisplayCase(
       String(conv?.leadOwner?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? ""
     );
@@ -50125,7 +50120,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     addTodo(
       conv,
       "call",
-      isAlreadyOnSiteArrivalText(event.body)
+      regenCustomerAckActionParse?.onSite === true
           ? "Customer is AT the dealership right now — greet them and let the owner know."
           : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
       (inbound as any)?.providerMessageId,
@@ -50139,7 +50134,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { inboundText: event.body }), undefined, {
+    return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { onSite: regenCustomerAckActionParse?.onSite === true }), undefined, {
       turnSchedulingIntent: true,
       turnAvailabilityIntent: false,
       turnFinanceIntent: false
@@ -50271,7 +50266,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       addTodo(
         conv,
         "call",
-        isAlreadyOnSiteArrivalText(event.body)
+        regenCustomerAckActionParse?.onSite === true
           ? "Customer is AT the dealership right now — greet them and let the owner know."
           : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         (inbound as any)?.providerMessageId,
@@ -50286,7 +50281,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey,
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
-      return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { inboundText: event.body }), undefined, {
+      return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { onSite: regenCustomerAckActionParse?.onSite === true }), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
         turnFinanceIntent: false
@@ -56147,7 +56142,7 @@ if (authToken && signature) {
       addTodo(
         conv,
         "call",
-        isAlreadyOnSiteArrivalText(event.body)
+        customerAckActionParse?.onSite === true
           ? "Customer is AT the dealership right now — greet them and let the owner know."
           : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         event.providerMessageId,
@@ -56157,7 +56152,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-      const reply = buildImmediateArrivalRequestReply(conv, { inboundText: event.body });
+      const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
       recordRouteOutcome("live", "human_mode_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -59874,7 +59869,7 @@ if (authToken && signature) {
     addTodo(
       conv,
       "call",
-      isAlreadyOnSiteArrivalText(event.body)
+      customerAckActionParse?.onSite === true
           ? "Customer is AT the dealership right now — greet them and let the owner know."
           : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
       event.providerMessageId,
@@ -59884,7 +59879,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
     stopFollowUpCadence(conv, "immediate_arrival_request");
     stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-    const reply = buildImmediateArrivalRequestReply(conv, { inboundText: event.body });
+    const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
     recordRouteOutcome("live", "customer_ack_immediate_arrival_request_fallback_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey
@@ -59975,7 +59970,7 @@ if (authToken && signature) {
       addTodo(
         conv,
         "call",
-        isAlreadyOnSiteArrivalText(event.body)
+        customerAckActionParse?.onSite === true
           ? "Customer is AT the dealership right now — greet them and let the owner know."
           : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         event.providerMessageId,
@@ -59985,7 +59980,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-      const reply = buildImmediateArrivalRequestReply(conv, { inboundText: event.body });
+      const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
       recordRouteOutcome("live", "customer_ack_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
