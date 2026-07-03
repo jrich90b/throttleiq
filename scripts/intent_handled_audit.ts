@@ -200,7 +200,7 @@ export function summarizeFindings(findings: IntentFinding[]) {
   };
 }
 
-async function realJudge(c: IntentJudgeCandidate): Promise<IntentVerdict | null> {
+export async function realJudge(c: IntentJudgeCandidate): Promise<IntentVerdict | null> {
   const OpenAI = (await import("openai")).default;
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
