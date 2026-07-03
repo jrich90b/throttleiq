@@ -103,12 +103,23 @@ export function isDesignAcceptedHandoff(row: ReplayRow): boolean {
   return isDeptLead && isHandoffAck;
 }
 
+// Dealer-ride post-ride thank-you BY DESIGN (Joe-approved 2026-07-02): a confirmed demo-ride
+// lead gets ONE warm thank-you draft while the outcome + follow-up stay with the salesperson —
+// the judge reads it as "didn't answer the asks", but that IS the accepted policy.
+export function isDealerRideThankYou(row: ReplayRow): boolean {
+  const draft = String(row.draft ?? "").toLowerCase();
+  const body = String(row.body ?? "").toLowerCase();
+  const isDlaRide = /dealer lead app/.test(body) && /demo bikes? ridden|demo ride|test ride/.test(body);
+  const isThankYou = /thanks (?:again )?for coming in for the (?:test )?ride|thanks for your interest in the/.test(draft);
+  return isDlaRide && isThankYou;
+}
+
 // Deflection-with-commitment ("I'll confirm X and follow up"): the answer-don't-deflect program
 // tracks these as improvement targets, but in suggest mode staff fulfill the commitment — a
 // deflection is a quality gap, never a release-blocking critical.
 export function isDeflectionWithCommitment(row: ReplayRow): boolean {
   const draft = String(row.draft ?? "").toLowerCase();
-  return /(i['\u2019]ll|i will|going to) (?:have (?:the|our) team |have (?:\w+ )?)?(confirm|check(?: on)?|find out|get|verify|look into|review)[^.]{0,80}(follow up|get back|send|let you know|reach out)/.test(
+  return /(i['\u2019]ll|i will|going to|let me) (?:have (?:the|our) team |have (?:\w+ )?)?(confirm|check(?: on)?|find out|get|verify|look into|review)[^.]{0,80}(follow up|get back|send|let you know|reach out|text you)/.test(
     draft
   );
 }
@@ -187,7 +198,12 @@ export function scoreTurn(row: ReplayRow, judge: IntentVerdict | null | undefine
   };
 }
 
-export type ScoreAdjustment = "none" | "excluded_test_lead" | "design_accepted_handoff" | "deflection_downgraded";
+export type ScoreAdjustment =
+  | "none"
+  | "excluded_test_lead"
+  | "excluded_anachronistic"
+  | "design_accepted_handoff"
+  | "deflection_downgraded";
 
 /**
  * Apply the design-policy post-classification to a raw score (fidelity v2). Pure + auditable:
@@ -210,6 +226,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isFinancePolicyAnswer(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isDealerRideThankYou(row)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (score.critical && isDeflectionWithCommitment(row)) {
@@ -272,6 +291,7 @@ export type FlywheelSummary = {
   replaySource: string;
   totalTurns: number;
   excludedTestLeads: number;
+  excludedAnachronistic: number;
   designAccepted: number;
   deflectionsDowngraded: number;
   judged: number;
@@ -351,8 +371,35 @@ async function main() {
     }
   }
 
-  const adjustedAll = rows.map(row => adjustScore(scoreTurn(row, verdicts.get(turnKeyOf(row))), row));
-  const excludedTestLeads = adjustedAll.filter(s => s.excluded).length;
+  // State-anachronism guard: the sandbox replays each turn against the conversation's FINAL
+  // snapshot state, so any turn that is NOT the conversation's last inbound sees future context
+  // (later appointments, later decisions) and cannot be judged fairly (cohort-1 example: a June
+  // scheduling turn "confirmed" the July appointment that was booked days later). Only the last
+  // inbound per conversation is scored; earlier turns are counted, not judged.
+  const lastInboundAt = new Map<string, number>();
+  for (const [convId, msgs] of contextByConv) {
+    let last = NaN;
+    for (const m of msgs) {
+      if ((m as any)?.direction !== "in") continue;
+      const t = Date.parse(String(m?.at ?? ""));
+      if (Number.isFinite(t) && (!Number.isFinite(last) || t > last)) last = t;
+    }
+    if (Number.isFinite(last)) lastInboundAt.set(convId, last);
+  }
+  const isAnachronistic = (row: ReplayRow): boolean => {
+    const lastAt = lastInboundAt.get(String(row.conversationId ?? ""));
+    const rowAt = Date.parse(String(row.messageAt ?? ""));
+    if (!Number.isFinite(lastAt) || !Number.isFinite(rowAt)) return false; // can't prove → score it
+    return rowAt < (lastAt as number) - 1000;
+  };
+  const adjustedAll = rows.map(row => {
+    if (isAnachronistic(row)) {
+      return { ...scoreTurn(row, verdicts.get(turnKeyOf(row))), adjustment: "excluded_anachronistic" as const, excluded: true };
+    }
+    return adjustScore(scoreTurn(row, verdicts.get(turnKeyOf(row))), row);
+  });
+  const excludedTestLeads = adjustedAll.filter(s => s.adjustment === "excluded_test_lead").length;
+  const excludedAnachronistic = adjustedAll.filter(s => s.adjustment === "excluded_anachronistic").length;
   const scores = adjustedAll.filter(s => !s.excluded);
   const designAccepted = scores.filter(s => s.adjustment === "design_accepted_handoff").length;
   const deflectionsDowngraded = scores.filter(s => s.adjustment === "deflection_downgraded").length;
@@ -369,6 +416,7 @@ async function main() {
     replaySource: replayJson,
     totalTurns: scores.length,
     excludedTestLeads,
+    excludedAnachronistic,
     designAccepted,
     deflectionsDowngraded,
     judged,
