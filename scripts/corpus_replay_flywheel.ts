@@ -84,6 +84,9 @@ export function isTestLeadRow(row: ReplayRow): boolean {
   if (isTestLeadEmail(row.conversationId)) return true;
   const emailMatch = hay.match(/email:\s*(\S+)/);
   if (emailMatch && isTestLeadEmail(emailMatch[1])) return true;
+  // Internal staff emails on inbound leads = smoke/test submissions (gio@americanharley-... on a
+  // "Fuel economy 0.02 mpg" Kenect lead, sweep-2 false regression).
+  if (emailMatch && /@americanharley/.test(emailMatch[1])) return true;
   return /\btest\s*(?:lead|111|dla)\b/i.test(hay);
 }
 
@@ -285,18 +288,49 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
   return { ...score, adjustment: "none" };
 }
 
-export type BaselineEntry = { pass: boolean; critical: boolean; at: string };
+export type BaselineEntry = { pass: boolean; critical: boolean; at: string; draftSig?: string };
+
+// Normalized draft signature: strips dates/times/numbers/URLs so time-sensitive content (slot
+// offers, "Wed, Mar 11", prices) doesn't read as a code change between sweeps.
+export function draftSignature(draft: string | null | undefined): string {
+  return String(draft ?? "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\s+\d{1,2}\b/g, "<date>")
+    .replace(/\b\d{1,2}:\d{2}\s*(am|pm)?\b/g, "<time>")
+    .replace(/\b\d[\d,.]*\b/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 export type Baseline = Record<string, BaselineEntry>;
 
-/** Turns that PASSED in the previous baseline and FAIL now — the regression set. */
-export function diffAgainstBaseline(scores: TurnScore[], baseline: Baseline | null | undefined): TurnScore[] {
-  if (!baseline) return [];
-  return scores.filter(s => baseline[s.turnKey]?.pass === true && !s.pass);
+/**
+ * Turns that PASSED in the previous baseline and FAIL now WITH a materially changed draft —
+ * the code-caused regression set (T3). A pass->fail flip on an UNCHANGED draft signature is
+ * judge nondeterminism, returned separately as flaky so it can be counted, not gate-failed.
+ */
+export function diffAgainstBaseline(
+  scores: TurnScore[],
+  baseline: Baseline | null | undefined
+): { regressions: TurnScore[]; flaky: TurnScore[] } {
+  if (!baseline) return { regressions: [], flaky: [] };
+  const regressions: TurnScore[] = [];
+  const flaky: TurnScore[] = [];
+  for (const s of scores) {
+    const prev = baseline[s.turnKey];
+    if (!prev || prev.pass !== true || s.pass) continue;
+    const sigChanged = prev.draftSig != null && prev.draftSig !== draftSignature(s.draft);
+    if (sigChanged || prev.draftSig == null) regressions.push(s);
+    else flaky.push(s);
+  }
+  return { regressions, flaky };
 }
 
 export function mergeBaseline(prev: Baseline | null | undefined, scores: TurnScore[], atIso: string): Baseline {
   const next: Baseline = { ...(prev ?? {}) };
-  for (const s of scores) next[s.turnKey] = { pass: s.pass, critical: s.critical, at: atIso };
+  for (const s of scores) {
+    next[s.turnKey] = { pass: s.pass, critical: s.critical, at: atIso, draftSig: draftSignature(s.draft) };
+  }
   return next;
 }
 
@@ -348,6 +382,7 @@ export type FlywheelSummary = {
   failed: number;
   criticals: number;
   regressions: number;
+  flakyJudgeFlips: number;
   passRate: number;
   thresholds: { t1_criticals_zero: boolean; t2_pass_rate_ge_090: boolean; t3_regressions_zero: boolean };
 };
@@ -474,7 +509,7 @@ async function main() {
   const prevBaseline: Baseline | null = fs.existsSync(baselinePath)
     ? JSON.parse(fs.readFileSync(baselinePath, "utf8"))
     : null;
-  const regressions = diffAgainstBaseline(scores, prevBaseline);
+  const { regressions, flaky } = diffAgainstBaseline(scores, prevBaseline);
   const findings = buildFindings(scores, regressions, atIso);
 
   const failed = scores.filter(s => !s.pass);
@@ -492,6 +527,7 @@ async function main() {
     failed: failed.length,
     criticals: scores.filter(s => s.critical).length,
     regressions: regressions.length,
+    flakyJudgeFlips: flaky.length,
     passRate: scores.length ? Math.round(((scores.length - failed.length) / scores.length) * 1000) / 1000 : 1,
     thresholds: {
       t1_criticals_zero: scores.every(s => !s.critical),
@@ -553,12 +589,22 @@ function selfTest() {
   const review = scoreTurn(mk({ verdict: "review", reviewReasons: ["price claim"] }), null);
   assert(!review.pass && !review.critical, "unjudged review rows fail toward investigation");
 
-  // baseline diff — only pass→fail counts as regression
-  const base: Baseline = { [turnKeyOf(mk({}))]: { pass: true, critical: false, at: "t0" } };
-  assert(diffAgainstBaseline([major], base).length === 1, "pass→fail is a regression");
-  assert(diffAgainstBaseline([passScore], base).length === 0, "pass→pass is not");
-  assert(diffAgainstBaseline([major], { [turnKeyOf(mk({}))]: { pass: false, critical: false, at: "t0" } }).length === 0, "fail→fail is not a regression");
-  assert(diffAgainstBaseline([major], null).length === 0, "no baseline → no regressions (first run)");
+  // baseline diff — pass→fail with a CHANGED draft signature = regression; unchanged = flaky judge
+  const key = turnKeyOf(mk({}));
+  const changedSigBase: Baseline = { [key]: { pass: true, critical: false, at: "t0", draftSig: "a completely different draft <n>" } };
+  const sameSigBase: Baseline = { [key]: { pass: true, critical: false, at: "t0", draftSig: draftSignature(major.draft) } };
+  assert(diffAgainstBaseline([major], changedSigBase).regressions.length === 1, "pass→fail with changed draft is a regression");
+  assert(
+    diffAgainstBaseline([major], sameSigBase).regressions.length === 0 &&
+      diffAgainstBaseline([major], sameSigBase).flaky.length === 1,
+    "pass→fail on an UNCHANGED draft is a flaky judge flip, not a regression"
+  );
+  const legacyBase: Baseline = { [key]: { pass: true, critical: false, at: "t0" } };
+  assert(diffAgainstBaseline([major], legacyBase).regressions.length === 1, "legacy baseline entries (no sig) fail toward counting the regression");
+  assert(diffAgainstBaseline([passScore], changedSigBase).regressions.length === 0, "pass→pass is not");
+  assert(diffAgainstBaseline([major], { [key]: { pass: false, critical: false, at: "t0" } }).regressions.length === 0, "fail→fail is not a regression");
+  assert(diffAgainstBaseline([major], null).regressions.length === 0, "no baseline → no regressions (first run)");
+  assert(draftSignature("See you Wed, Mar 11 at 9:30 AM — $12,499") === draftSignature("See you Thu, Jul 3 at 1:00 PM — $13,999"), "time/price content normalizes to the same signature");
 
   // findings shape for the next.json fold
   const findings = buildFindings([major, passScore], [major], "2026-07-02T23:00:00.000Z");
