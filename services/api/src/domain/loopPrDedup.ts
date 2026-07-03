@@ -45,3 +45,37 @@ export function findOpenPrForFindingKey(
   }
   return null;
 }
+
+export type MergedPrSummary = OpenPrSummary & { mergedAt?: string | null };
+
+/**
+ * The first RECENTLY-MERGED PR whose body carries this finding key, or null (Joe,
+ * 2026-07-02: "sometimes I see double work in two different routines"). The open-PR
+ * dedup above stops working the moment a fix MERGES — but the finding keeps appearing
+ * in the work order until its report regenerates (or forever, for findings computed
+ * over old conversations), so the NEXT routine re-investigates and sometimes re-fixes
+ * it. A finding whose key sits in a PR merged within the window is COVERED: report it
+ * as fixed-awaiting-report-refresh instead of rebuilding it.
+ *
+ * Fail-direction unchanged: empty/malformed key, missing mergedAt, or a merge older
+ * than the window never dedups (fail toward building the fix, never toward silently
+ * dropping a real regression — a REAL post-fix recurrence carries a fresh occurredAt
+ * and its report row survives the refresh, so it comes back next cycle regardless).
+ */
+export function findMergedPrForFindingKey(
+  mergedPrs: MergedPrSummary[] | null | undefined,
+  key: string,
+  opts?: { nowMs?: number; windowDays?: number }
+): MergedPrSummary | null {
+  if (!isMeaningfulFindingKey(key)) return null;
+  const marker = findingKeyMarker(key);
+  const nowMs = opts?.nowMs ?? Date.now();
+  const windowMs = (opts?.windowDays ?? 14) * 24 * 60 * 60 * 1000;
+  for (const pr of mergedPrs ?? []) {
+    if (typeof pr?.body !== "string" || !pr.body.includes(marker)) continue;
+    const mergedMs = Date.parse(String(pr.mergedAt ?? ""));
+    if (!Number.isFinite(mergedMs)) continue; // can't prove recency → keep building
+    if (nowMs - mergedMs <= windowMs) return pr;
+  }
+  return null;
+}
