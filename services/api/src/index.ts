@@ -55309,6 +55309,24 @@ if (authToken && signature) {
     inboundReplyActionParse,
     "pending_incoming_inventory_acknowledgement"
   );
+  // An ACCEPTED dealer-location question answers IMMEDIATELY (corpus flywheel, 2026-07-03,
+  // +15866252399: "What location is it at?" was stolen by the availability arm thousands of
+  // lines before the late location arm — the same thief family as PR #150). The parser's own
+  // precedence rules (Examples C/G/K: a concrete location ask outranks scheduling status,
+  // watch context, and availability framing) are enforced here at the earliest point the
+  // accepted parse exists. The LATE location arm stays for the non-parser fallback cases.
+  if (event.provider === "twilio" && inboundParserLocationQuestion) {
+    const locDealerProfile = await getDealerProfileHot();
+    const locReply = buildDealerLocationReply(conv, locDealerProfile);
+    recordRouteOutcome("live", "dealer_location_question", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      early: true
+    });
+    return publishLiveTwilioReply(locReply);
+  }
   const appointmentCancelOrRescheduleHint =
     event.provider === "twilio" &&
     !isFinanceDocsQuestionText(event.body ?? "") &&
