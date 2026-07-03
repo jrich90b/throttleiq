@@ -86,6 +86,30 @@ assert.ok(
     resolverBody.indexOf("decideIndefiniteDeferTurn"),
   "the short-window fallback must be consulted BEFORE the default-window decision (customer timeframe wins)"
 );
+// Parsed-action precedence (2026-07-03, corpus flywheel): an ACCEPTED inventory-watch
+// acknowledgement / location question outranks the deferral branch — a customer asking to be
+// notified ("hit me up if one comes in") must never draw "take your time, no rush" + a pause.
+const deferralArm = index.slice(
+  index.indexOf("const followUpDeferralDecision = resolveCustomerFollowUpDeferralDecision"),
+  index.indexOf("const followUpDeferralDecision = resolveCustomerFollowUpDeferralDecision") + 1400
+);
+assert.ok(
+  /!inboundParserInventoryWatchAcknowledgement/.test(deferralArm),
+  "the deferral arm must yield to an accepted inventory-watch acknowledgement"
+);
+assert.ok(
+  /!inboundParserLocationQuestion/.test(deferralArm),
+  "the deferral arm must yield to an accepted dealer-location question"
+);
+const affordArm = index.slice(
+  index.indexOf("isAffordabilityRideConfidenceObjectionText(semanticInboundText) &&"),
+  index.indexOf("isAffordabilityRideConfidenceObjectionText(semanticInboundText) &&") + 300
+);
+assert.ok(
+  /!inboundParserLocationQuestion/.test(affordArm),
+  "the affordability-objection reply site must yield to an accepted location question (KEEP detector unchanged elsewhere)"
+);
+
 // Both paths call the shared resolver.
 const liveCalls = index.split("resolveCustomerFollowUpDeferralDecision(").length - 1;
 assert.ok(liveCalls >= 3, "both call sites (live + regen) plus the definition must reference the shared resolver");

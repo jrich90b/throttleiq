@@ -2165,10 +2165,12 @@ function buildVehicleChoiceAlternativesReply(
 // decideVehicleChoiceConfidenceTurn (pinned by the decision-table eval).
 async function resolveVehicleChoiceAlternativesReply(
   conv: Conversation | null | undefined,
-  inboundText: string
+  inboundText: string,
+  opts?: { concreteParsedActionThisTurn?: boolean }
 ): Promise<string | null> {
   const text = String(inboundText ?? "").trim();
   if (!text || !conv) return null;
+  if (opts?.concreteParsedActionThisTurn) return null; // the parsed action owns the turn (reducer-pinned)
   const referencedModel =
     findMentionedModel(text.toLowerCase()) ?? resolveKnownModelContextForShortList(conv);
   if (!referencedModel) return null; // no specific bike referenced => nothing to compare
@@ -2185,6 +2187,7 @@ async function resolveVehicleChoiceAlternativesReply(
     console.log("[llm-vehicle-choice-confidence-parse]", { convId: conv.id, ...parse });
   }
   const decision = decideVehicleChoiceConfidenceTurn({
+    concreteParsedActionThisTurn: !!opts?.concreteParsedActionThisTurn,
     parserAccepted: !!parse,
     stance: parse?.stance ?? null,
     confidence: parse?.confidence ?? 0,
@@ -52851,10 +52854,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // Same shared resolver, same fail-toward-silence gate; SMS-only + no explicit routing
     // override (mirrors the live twilio-only + parserPrecheckBlocksDeterministicShortcut gate).
     if (channel === "sms" && !regenRoutingIntentOverride) {
-      const regenVehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(
-        conv,
-        String(event.body ?? "")
-      );
+      const regenVehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, String(event.body ?? ""), {
+        concreteParsedActionThisTurn:
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "dealer_location_question") ||
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "inventory_watch_acknowledgement") ||
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "explicit_callback_request")
+      });
       if (regenVehicleChoiceReply) {
         recordRouteOutcome("regen", "vehicle_choice_open_to_alternatives", {
           convId: conv.id,
@@ -56762,7 +56767,18 @@ if (authToken && signature) {
     semanticInboundText,
     customerDispositionParse
   );
-  if (event.provider === "twilio" && followUpDeferralDecision) {
+  // An ACCEPTED parsed action for this turn outranks the deferral read (corpus flywheel,
+  // 2026-07-03, Joshua +16412012540: "Definitely hit me up if one comes in" is the parser's own
+  // inventory_watch_acknowledgement few-shot, but this branch returned first with "take your
+  // time, no rush" and — post-#149 — a 14-day pause on a customer ASKING to be notified). Same
+  // exclusion idiom the other early arms already use.
+  if (
+    event.provider === "twilio" &&
+    followUpDeferralDecision &&
+    !inboundParserInventoryWatchAcknowledgement &&
+    !inboundParserPendingIncomingInventoryAcknowledgement &&
+    !inboundParserLocationQuestion
+  ) {
     await applyCustomerFollowUpDeferral(conv, followUpDeferralDecision);
     const reply = buildCustomerFollowUpDeferralReply(conv);
     recordRouteOutcome("live", "customer_thinking_it_over_cadence_delayed", {
@@ -56786,7 +56802,16 @@ if (authToken && signature) {
   // agent prematurely CLOSE a live, engaged lead. A detector that feeds a fail-unsafe
   // close-suppression guard can't be deleted/parsered away (the disabled-LLM fallback would fail
   // toward a wrongful close), so it stays deterministic. It is part of the ratchet's KEEP-floor.
-  if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
+  // The KEEP detector stays (fail-unsafe close-suppression guard elsewhere) — but at THIS reply
+  // site it yields to an ACCEPTED parsed action for the turn (corpus flywheel, 2026-07-03,
+  // +12399612259: "I cant not currently and remind me again what address is this at?" is the
+  // parser's own dealer_location_question few-shot — Example C/G semantics: a concrete question
+  // outranks the objection framing — yet this arm answered the objection and dropped the ask).
+  if (
+    isAffordabilityRideConfidenceObjectionText(semanticInboundText) &&
+    !inboundParserLocationQuestion &&
+    !inboundParserInventoryWatchAcknowledgement
+  ) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
     setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
@@ -58216,7 +58241,12 @@ if (authToken && signature) {
   // relevance guard) so it FAILS toward silence and never preempts a more specific intent.
   // Same resolver runs in /conversations/:id/regenerate (route-parity law).
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
-    const vehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, inboundText);
+    const vehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, inboundText, {
+      concreteParsedActionThisTurn:
+        inboundParserLocationQuestion ||
+        inboundParserInventoryWatchAcknowledgement ||
+        inboundParserExplicitCallbackRequest
+    });
     if (vehicleChoiceReply) {
       recordRouteOutcome("live", "vehicle_choice_open_to_alternatives", {
         convId: conv.id,

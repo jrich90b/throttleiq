@@ -77,7 +77,11 @@ const rows: Row[] = [
   { id: "parser_not_accepted_stays_silent", input: { ...ok, parserAccepted: false }, kind: "stay_silent" },
   { id: "low_confidence_stays_silent", input: { ...ok, confidence: 0.79 }, kind: "stay_silent" },
   { id: "no_referenced_model_stays_silent", input: { ...ok, hasReferencedModel: false }, kind: "stay_silent" },
-  { id: "relevance_guard_fail_stays_silent", input: { ...ok, modelRelevanceGuardPassed: false }, kind: "stay_silent" }
+  { id: "relevance_guard_fail_stays_silent", input: { ...ok, modelRelevanceGuardPassed: false }, kind: "stay_silent" },
+  // An ACCEPTED concrete parsed action (dealer_location_question / inventory_watch_acknowledgement)
+  // owns the turn — the alternatives offer yields (corpus flywheel 2026-07-03, +12399612259:
+  // "remind me again what address is this at?" drew the "line up options" reply instead of the address).
+  { id: "concrete_parsed_action_owns_turn", input: { ...ok, concreteParsedActionThisTurn: true }, kind: "stay_silent" }
 ];
 
 for (const r of rows) {
