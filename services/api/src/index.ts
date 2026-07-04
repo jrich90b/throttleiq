@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
@@ -292,6 +292,7 @@ import {
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
   parseWatchOptOutWithLLM,
+  parseWatchScopeWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseNonMotorcycleTradeWithLLM,
   parseServiceAppointmentRequestWithLLM,
@@ -472,9 +473,12 @@ import {
   findInventoryPrice,
   getInventoryFeed,
   hasInventoryForModelYear,
+  modelMatches,
   unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import { trikeClassConflict } from "./domain/modelFamily.js";
+import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import {
   recommendInventory,
   buildVehicleRecommendationReply,
@@ -526,6 +530,7 @@ import {
   decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
+  decideWatchScopeTurn,
   decideEventPromoTurn,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
@@ -2538,6 +2543,87 @@ async function resolveWatchOptOutReply(
   stopFollowUpCadence(conv, "watch_opt_out");
   recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
   return buildWatchOptOutAck();
+}
+
+// A sibling-scope ask is PENDING when we asked (siblingScopeAskedAt) and nothing resolved it —
+// not broadened (openToOtherTrims), not declined, not paused. This pending state is the gate for
+// the scope-answer parser: no hint regex; while nothing is pending the parser never runs.
+function findPendingWatchScopeAsk(conv: any): InventoryWatch | null {
+  for (const w of collectInventoryWatches(conv)) {
+    if (!w || w.status === "paused") continue;
+    if (!w.siblingScopeAskedAt) continue;
+    if (w.openToOtherTrims || w.siblingScopeDeclinedAt || w.siblingScopeResolvedAt) continue;
+    return w;
+  }
+  return null;
+}
+
+function watchScopeConfidenceMin(): number {
+  const raw = Number(process.env.LLM_WATCH_SCOPE_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Applies
+// the customer's ANSWER to the one-time sibling-scope ask (buildWatchSiblingScopeAsk): a confident
+// "open to variants" BROADENS the watch (openToOtherTrims — same-family trims now fire); a
+// confident "base only" pins it strict and we never re-ask. STATE ONLY — this never composes the
+// reply; the normal draft pipeline sees the ask + answer in history and responds naturally, so an
+// answer that carries another question ("sure — what color is it?") never loses that question to a
+// canned ack. Decision centralized in decideWatchScopeTurn (routeStateReducer). Fail-safe: no
+// pending ask / unrelated / low confidence => no state change (the watch stays strict).
+async function applyWatchScopeAnswer(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<"broaden_watch" | "keep_base_only" | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  const pending = findPendingWatchScopeAsk(conv);
+  if (!pending) return null;
+  const parse = await safeLlmParse("watch_scope_parser", () =>
+    parseWatchScopeWithLLM({
+      text,
+      watchModel: pending.model,
+      askedUnitLabel: pending.siblingScopeAskModel ?? null,
+      history: buildHistory(conv, 8)
+    })
+  );
+  if (process.env.LLM_WATCH_SCOPE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-watch-scope-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideWatchScopeTurn({
+    scopeAskPending: true,
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: watchScopeConfidenceMin()
+  });
+  if (decision.kind === "none") return null;
+  const nowIsoValue = new Date().toISOString();
+  if (decision.kind === "broaden_watch") {
+    pending.openToOtherTrims = true;
+    pending.siblingScopeResolvedAt = nowIsoValue;
+  } else {
+    pending.siblingScopeDeclinedAt = nowIsoValue;
+    pending.siblingScopeResolvedAt = nowIsoValue;
+  }
+  conv.updatedAt = nowIsoValue;
+  saveConversation(conv);
+  recordRouteOutcome(
+    scope,
+    decision.kind === "broaden_watch" ? "inventory_watch_scope_broadened" : "inventory_watch_scope_base_only",
+    { convId: conv.id, leadKey: conv.leadKey, watchModel: pending.model, hasOtherAsk: !!parse?.hasOtherAsk }
+  );
+  // The variant that prompted the ask is likely still on the floor but is no longer a "new
+  // arrival," so the cron would never notify. On a live broaden, run the targeted in-stock pass
+  // for THIS conversation (dedup + 24h limits apply; draft-only in suggest mode). Live-only:
+  // regenerate re-drafts a reply and must not fan out extra notifications.
+  if (decision.kind === "broaden_watch" && scope === "live") {
+    void processInventoryWatchlist(conv.id, { includeInStock: true }).catch(e =>
+      console.warn("[watch-scope] post-broaden in-stock pass failed:", e?.message ?? e)
+    );
+  }
+  return decision.kind;
 }
 
 // Conversation closeout / sign-off: confidence floor (default 0.7 — biased toward NOT closing out).
@@ -5515,6 +5601,13 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const watchIsStreetGlide3 = isStreetGlide3Variant(watchModel);
   const itemIsStreetGlide3 = isStreetGlide3Variant(itemModel);
   if (watchIsStreetGlide3 && !itemIsStreetGlide3) return false;
+  // Cross-FAMILY guard (Joe, 2026-07-04): a trike-class unit never satisfies a two-wheel
+  // watch (or vice versa), even when the watch is open to other trims — "Road Glide 3"
+  // (FLTRT, TRIKE family) is NOT a "Road Glide" sibling. The distinct-trim token guard
+  // below can't catch it ("3" is not a trim token, and the substring includes). Symmetric,
+  // data-driven from model_codes_by_family.json; an unknown class infers nothing. The
+  // RG3/SG3 watch-side guards above stay as belt-and-suspenders.
+  if (trikeClassConflict(item.model, watch.model)) return false;
   // DIRECTIONAL: the in-stock UNIT's model must contain the WATCHED model — never the reverse. The old
   // bidirectional `|| watchModel.includes(itemModel)` let a trim-specific watch fire on a base unit
   // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra
@@ -5618,6 +5711,64 @@ function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item
   return inventoryWatchGroupMatchesLastNotifiedStock(watches, item);
 }
 
+// Sibling-variant scope ask (Joe, 2026-07-04). When the fire pass found NO full match for this
+// conversation, check whether a candidate unit is a same-FAMILY sibling trim of a strict watch —
+// exactly the case the distinct-trim fire guard (PR #129) stays quiet on. If so, draft the
+// ONE-TIME "open to variants?" ask (draft_ai, suggest mode — staff approve) and stamp the watch
+// so we never re-ask. Cross-family units (trikeClassConflict — "Road Glide 3" on a "Road Glide"
+// watch) never prompt the ask. Pure eligibility in domain/watchSiblingScope.ts; the customer's
+// answer is read by parseWatchScopeWithLLM + decideWatchScopeTurn in BOTH reply paths.
+function maybeDraftWatchSiblingScopeAsk(
+  conv: any,
+  watches: InventoryWatch[],
+  candidateItems: any[],
+  nowIsoValue: string
+): boolean {
+  for (const watch of watches) {
+    if (!watch) continue;
+    const lastNotifiedMs = watch.lastNotifiedAt ? new Date(String(watch.lastNotifiedAt)).getTime() : NaN;
+    const notifiedRecently = Number.isFinite(lastNotifiedMs) && Date.now() - lastNotifiedMs < 24 * 60 * 60 * 1000;
+    for (const item of candidateItems) {
+      if (!item?.model) continue;
+      const decision = decideWatchSiblingScopeAsk({
+        hasWatchModel: !!String(watch.model ?? "").trim(),
+        watchActive: watch.status !== "paused",
+        unitMatchesWatchDirectionally: modelMatches(String(item.model), String(watch.model ?? "")),
+        unitIsDistinctTrim: unitIsDistinctModelFromWatch(item.model, watch.model),
+        trikeClassConflict: trikeClassConflict(item.model, watch.model),
+        openToOtherTrims: !!watch.openToOtherTrims,
+        alreadyAsked: !!watch.siblingScopeAskedAt,
+        declined: !!watch.siblingScopeDeclinedAt,
+        notifiedRecently
+      });
+      if (decision.kind !== "ask_scope") continue;
+      const unitLabel = [item.year, item.make, item.model].filter(Boolean).join(" ");
+      const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+      const ask = buildWatchSiblingScopeAsk({
+        firstName: leadFirstName || null,
+        watchModelLabel: String(watch.model),
+        unitLabel
+      });
+      const to = conv.lead?.phone ?? conv.leadKey;
+      appendOutbound(conv, "salesperson", to, ask, "draft_ai");
+      watch.siblingScopeAskedAt = nowIsoValue;
+      watch.siblingScopeAskModel = String(item.model);
+      watch.siblingScopeAskStockId = item.stockId ? String(item.stockId) : undefined;
+      conv.updatedAt = nowIsoValue;
+      saveConversation(conv);
+      recordRouteOutcome("manual", "inventory_watch_sibling_scope_asked", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        watchModel: watch.model,
+        unitModel: item.model,
+        stockId: item.stockId ?? null
+      });
+      return true; // one ask per conversation per sweep (and once ever per watch)
+    }
+  }
+  return false;
+}
+
 async function processInventoryWatchlist(targetConvId?: string, opts?: { includeInStock?: boolean }) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
@@ -5714,7 +5865,12 @@ async function processInventoryWatchlist(targetConvId?: string, opts?: { include
         matchedItem = match;
         break;
       }
-      if (!matchedWatch || !matchedItem) continue;
+      if (!matchedWatch || !matchedItem) {
+        // No full match — but a same-family sibling trim may deserve the one-time
+        // "open to variants?" ask (never a cross-family/trike unit, never a re-ask).
+        maybeDraftWatchSiblingScopeAsk(conv, watches, candidateItems, nowIso);
+        continue;
+      }
 
       const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
       const make = matchedItem.make ?? matchedWatch.make;
@@ -5856,7 +6012,12 @@ async function notifyInventoryWatchersForAvailableItem(
       }
       return inventoryItemMatchesWatch(matchedItem, watch);
     });
-    if (!matchedWatch) continue;
+    if (!matchedWatch) {
+      // No full match for the released unit — same one-time sibling-scope ask as the cron
+      // path (same-family trim only; cross-family/trike never asks; never re-asks).
+      maybeDraftWatchSiblingScopeAsk(conv, watches, [matchedItem], nowIsoValue);
+      continue;
+    }
 
     const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
     const make = matchedItem.make ?? matchedWatch.make;
@@ -49196,6 +49357,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenAvailabilityMediaContext?.mediaUrls?.length) {
     event.mediaUrls = regenAvailabilityMediaContext.mediaUrls;
   }
+  // Sibling-scope answer (state only, gated on a PENDING ask) — parity with /webhooks/twilio.
+  // Idempotent: once resolved there is no pending ask and this is a no-op.
+  if (event.provider === "twilio") {
+    await applyWatchScopeAnswer(conv, event.body ?? "", "regen");
+  }
   const regenTurnId =
     String(event.providerMessageId ?? "").trim() ||
     `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
@@ -55071,6 +55237,12 @@ if (authToken && signature) {
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
+  }
+  // Sibling-scope answer (state only, gated on a PENDING ask): a confident "open to variants" /
+  // "base only" updates the watch before drafting, and the normal pipeline composes the reply
+  // with the ask + answer in view. Same application in regenerate (route-parity law).
+  if (event.provider === "twilio") {
+    await applyWatchScopeAnswer(conv, event.body ?? "", "live");
   }
   const mediaOnlyAvailabilityContext = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event);
   if (mediaOnlyAvailabilityContext) {

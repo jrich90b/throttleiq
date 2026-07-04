@@ -109,6 +109,27 @@ export function buildWatchAvailableReply(args: {
 }
 
 /**
+ * Sibling-variant scope ask (Joe, 2026-07-04). A same-family sibling trim landed while the
+ * customer holds a STRICT base-model watch — the fire guard rightly stays quiet, but the
+ * agent asks ONCE whether they want variant alerts too. The answer is read by
+ * parseWatchScopeWithLLM (decideWatchScopeTurn): yes => openToOtherTrims, no => stays
+ * base-only, either way we never re-ask. Deliberately NO availability promise beyond the
+ * one unit named, and the base model stays the default. Pinned by watch_sibling_scope:eval.
+ */
+export function buildWatchSiblingScopeAsk(args: {
+  firstName?: string | null;
+  watchModelLabel: string; // e.g. "Road Glide"
+  unitLabel: string; // e.g. "2026 Harley-Davidson Road Glide Special"
+}): string {
+  const opener = args.firstName ? `Hey ${args.firstName}, quick one` : "Quick one";
+  return (
+    `${opener} — a ${args.unitLabel} just landed here at the shop. ` +
+    `I know you're watching for the ${args.watchModelLabel}. Want me to give you a heads up on ` +
+    `${args.watchModelLabel} variants like this too, or keep it to just the ${args.watchModelLabel}?`
+  );
+}
+
+/**
  * Approved acknowledgement for a NON-BUYER / passenger survey lead (Elizabeth Klapa class,
  * 2026-06-25) — a Dealer Lead App survey whose structured purchase-timeframe says the person
  * is explicitly NOT a buyer ("I am not interested in purchasing at this time"). Used when

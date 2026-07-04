@@ -566,6 +566,15 @@ export type InventoryWatch = {
   // = strict: a base watch fires only on the exact base model. See
   // unitIsDistinctModelFromWatch (inventoryFeed) + the distinct-model guard.
   openToOtherTrims?: boolean;
+  // Sibling-variant scope clarification (watchSiblingScope.ts): when a same-family
+  // sibling trim lands during a strict watch, we ASK ONCE whether they're open to
+  // variants. askedAt records the one ask (never re-ask); declinedAt records a
+  // "just the base" answer (stays strict, never re-ask); a yes sets openToOtherTrims.
+  siblingScopeAskedAt?: string;
+  siblingScopeDeclinedAt?: string;
+  siblingScopeResolvedAt?: string;
+  siblingScopeAskModel?: string; // the unit model that prompted the ask (audit + parser context)
+  siblingScopeAskStockId?: string;
   status?: "active" | "paused";
   createdAt: string;
   lastNotifiedAt?: string;
