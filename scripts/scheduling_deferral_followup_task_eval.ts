@@ -15,7 +15,10 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { decideSchedulingDeferralFollowUpTask } from "../services/api/src/domain/routeStateReducer.ts";
+import {
+  decideSchedulingDeferralFollowUpTask,
+  tentativeWindowNeedsOwnerFollowUp
+} from "../services/api/src/domain/routeStateReducer.ts";
 
 // --- 1) Pure decision table. ---
 const decide = (over: Partial<Parameters<typeof decideSchedulingDeferralFollowUpTask>[0]>) =>
@@ -33,6 +36,32 @@ assert.equal(decide({ offeredAlternatives: true }), false, "offered alternatives
 assert.equal(decide({ deferred: false }), false, "not a deferral turn => no task");
 // Fail-direction: a missing/unresolved requested phrase must NOT suppress the task (still ping the owner).
 assert.equal(decide({ hasRequestedPhrase: false }), true, "fail-direction: create even without a resolved phrase");
+
+// --- 1b) Tentative-window concrete-day+time gate (2026-07-03, Peter Meredith +17168303999). ---
+// The tentative arm ("probably about 11 o'clock on Monday") has no calendar-check result, so it
+// escaped the deferral net (needsOwnerFollowUpTask was always null → no task). It must now leave a
+// task when the parser resolved a CONCRETE day AND time — but stay silent for vague windows (those
+// go to the soft-visit cadence, not a task).
+assert.equal(
+  tentativeWindowNeedsOwnerFollowUp({ hasRequestedDay: true, hasRequestedTime: true }),
+  true,
+  "concrete day + time (monday about 11:00) => owner must see the requested slot"
+);
+assert.equal(
+  tentativeWindowNeedsOwnerFollowUp({ hasRequestedDay: true, hasRequestedTime: false }),
+  false,
+  "day-only vague window (maybe Saturday) => soft-visit cadence, not a task"
+);
+assert.equal(
+  tentativeWindowNeedsOwnerFollowUp({ hasRequestedDay: false, hasRequestedTime: true }),
+  false,
+  "time-only, no day => not a concrete slot to hand off"
+);
+assert.equal(
+  tentativeWindowNeedsOwnerFollowUp({ hasRequestedDay: false, hasRequestedTime: false }),
+  false,
+  "no concrete signal => no task"
+);
 
 // --- 2) Shared helper + resolver wiring. ---
 const api = fs.readFileSync("services/api/src/index.ts", "utf8");
@@ -90,6 +119,36 @@ assert.match(
   api,
   /markOpenTodosResolvedByCommunication\(conv, event\.body[\s\S]*?addSchedulingDeferralFollowUpTodo\(/,
   "the deferral task is created AFTER markOpenTodosResolvedByCommunication (survives the sweep)"
+);
+
+// --- 4) Tentative-window concrete-day+time extension wired in BOTH paths (+17168303999). ---
+const tentativeGuards = api.match(/tentativeWindowNeedsOwnerFollowUp\(\{/g) ?? [];
+assert.ok(
+  tentativeGuards.length >= 2,
+  `tentative-window owner-task gate must be wired in both live + regen (found ${tentativeGuards.length})`
+);
+// Live arm keys the gate on the appointment-timing parse's resolved day + time.
+assert.match(
+  api,
+  /appointmentTimingIntent === "tentative_time_window" &&\s*tentativeWindowNeedsOwnerFollowUp\(\{\s*hasRequestedDay: !!appointmentTimingParse\?\.requested\?\.day,\s*hasRequestedTime: !!appointmentTimingParse\?\.requested\?\.timeText/,
+  "live tentative arm gates the owner task on the parser's concrete day+time"
+);
+// Regen arm mirrors it (parity — no live/regen drift).
+assert.match(
+  api,
+  /regenAppointmentTimingIntent === "tentative_time_window" &&\s*tentativeWindowNeedsOwnerFollowUp\(\{\s*hasRequestedDay: !!regenAppointmentTimingParse\?\.requested\?\.day,\s*hasRequestedTime: !!regenAppointmentTimingParse\?\.requested\?\.timeText/,
+  "regen tentative arm gates the owner task on the parser's concrete day+time (parity)"
+);
+// Both arms fold the tentative gate into the SAME deferral-task call (OR with the calendar-check flag).
+assert.match(
+  api,
+  /deferred: !!checked\?\.needsOwnerFollowUpTask \|\| tentativeConcreteDefer/,
+  "live arm ORs the tentative gate into the deferral signal"
+);
+assert.match(
+  api,
+  /deferred: !!checked\?\.needsOwnerFollowUpTask \|\| regenTentativeConcreteDefer/,
+  "regen arm ORs the tentative gate into the deferral signal (parity)"
 );
 
 console.log("PASS scheduling-deferral owner-follow-up-task eval (decision + helper + both-paths wiring)");

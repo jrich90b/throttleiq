@@ -543,6 +543,7 @@ import {
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
+  tentativeWindowNeedsOwnerFollowUp,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
@@ -51859,14 +51860,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       alternativeCount: checked?.alternatives.length ?? 0
     });
     // Parity with the live arrival_update arm: a deferred-without-booking reschedule leaves an owner
-    // follow-up task so the requested time isn't silently dropped (+17167506588).
+    // follow-up task so the requested time isn't silently dropped (+17167506588). Same tentative-window
+    // concrete-day+time extension as the live arm (+17168303999).
+    const regenTentativeConcreteDefer =
+      regenAppointmentTimingIntent === "tentative_time_window" &&
+      tentativeWindowNeedsOwnerFollowUp({
+        hasRequestedDay: !!regenAppointmentTimingParse?.requested?.day,
+        hasRequestedTime: !!regenAppointmentTimingParse?.requested?.timeText
+      });
     addSchedulingDeferralFollowUpTodo(
       conv,
       {
-        deferred: !!checked?.needsOwnerFollowUpTask,
+        deferred: !!checked?.needsOwnerFollowUpTask || regenTentativeConcreteDefer,
         booked: false,
         offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
-        requestedPhrase: checked?.requestedPhrase ?? ""
+        requestedPhrase:
+          checked?.requestedPhrase ??
+          (regenTentativeConcreteDefer
+            ? appointmentTimingRequestedPhrase(regenAppointmentTimingParse)
+            : "")
       },
       event.body,
       (inbound as any)?.providerMessageId
@@ -60162,13 +60174,23 @@ if (authToken && signature) {
     });
     // After the resolve sweep above (so it isn't immediately closed): if we deferred the requested
     // time without booking or offering alternatives, leave an owner follow-up task (+17167506588).
+    // A tentative window that named a CONCRETE day+time carries the same silent-drop risk but has no
+    // calendar-check result to flag it — so gate it on the parser's resolved day+time (+17168303999).
+    const tentativeConcreteDefer =
+      appointmentTimingIntent === "tentative_time_window" &&
+      tentativeWindowNeedsOwnerFollowUp({
+        hasRequestedDay: !!appointmentTimingParse?.requested?.day,
+        hasRequestedTime: !!appointmentTimingParse?.requested?.timeText
+      });
     addSchedulingDeferralFollowUpTodo(
       conv,
       {
-        deferred: !!checked?.needsOwnerFollowUpTask,
+        deferred: !!checked?.needsOwnerFollowUpTask || tentativeConcreteDefer,
         booked: false,
         offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
-        requestedPhrase: checked?.requestedPhrase ?? ""
+        requestedPhrase:
+          checked?.requestedPhrase ??
+          (tentativeConcreteDefer ? appointmentTimingRequestedPhrase(appointmentTimingParse) : "")
       },
       event.body,
       event.providerMessageId

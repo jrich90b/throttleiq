@@ -22,6 +22,7 @@ export {
   decideSchedulingTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
+  tentativeWindowNeedsOwnerFollowUp,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
