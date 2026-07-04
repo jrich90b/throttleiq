@@ -49,6 +49,53 @@ function includesInventoryWatch(value: string | null | undefined): boolean {
   return String(value ?? "").toLowerCase().includes("inventory_watch");
 }
 
+/**
+ * Over-attachment guard for the held-guard watch's TARGET (which model/year/color/condition
+ * the auto-created watch should carry).
+ *
+ * The held-unit follow-up guard fires from two kinds of source unit:
+ *   - the customer's EXACTLY referenced unit (matched by stock#/VIN) — the unit's own
+ *     attributes ARE the customer's interest, so they win; and
+ *   - a unit surfaced only by a MODEL SEARCH (a "Road Glide" search can surface a held
+ *     "Road Glide 3 / Iron Horse Metallic" via the directional inventory matcher). Inheriting
+ *     that unit's sibling model + specific color would create a watch — and later a
+ *     notification — for a bike the customer never named (Raysean Mcclinon +15136149740,
+ *     2026-07: asked for a Road Glide, got watched/notified for a "Road Glide 3").
+ *
+ * Approach A (Joe, 2026-07-04): the customer's EXPRESSED interest is authoritative. Only when
+ * `customerReferencedUnit` is true (an exact stock#/VIN reference) do the unit's model/color/
+ * year win; otherwise the watch is built from the expressed vehicle and the search-surfaced
+ * unit's attributes are ignored. Fail-safe: a base-model watch (post-#129 the matcher won't
+ * fire it on a distinct sibling) is the correct, non-over-attaching target. Raw values are
+ * returned; the caller canonicalizes/normalizes.
+ */
+export function resolveHeldGuardWatchTarget(input: {
+  expressed: { model?: string | null; year?: number | string | null; color?: string | null; condition?: string | null } | null | undefined;
+  unit: { model?: string | null; year?: number | string | null; color?: string | null; condition?: string | null } | null | undefined;
+  customerReferencedUnit: boolean;
+}): { model: string | null; year: number | null; color: string | null; condition: string | null } {
+  const exp = input.expressed ?? {};
+  const unit = input.unit ?? {};
+  const useUnit = !!input.customerReferencedUnit;
+  // When the customer referenced this exact unit, its own fields win (falling back to the
+  // expressed vehicle for any gaps). Otherwise the expressed vehicle wins outright — the
+  // search-surfaced unit's model/color must never over-attach.
+  const pick = <T>(u: T | null | undefined, e: T | null | undefined): T | null =>
+    (useUnit ? (u ?? e) : (e ?? u)) ?? null;
+  const modelRaw = pick(unit.model, exp.model);
+  const yearNum = Number(pick(unit.year, exp.year) ?? NaN);
+  // Color is only inherited from the unit when we're honoring that referenced unit; a
+  // search-surfaced unit's color is never carried onto an expressed-model watch.
+  const colorRaw = useUnit ? (unit.color ?? exp.color ?? null) : (exp.color ?? null);
+  const conditionRaw = pick(unit.condition, exp.condition);
+  return {
+    model: modelRaw != null && String(modelRaw).trim() ? String(modelRaw).trim() : null,
+    year: Number.isFinite(yearNum) ? yearNum : null,
+    color: colorRaw != null && String(colorRaw).trim() ? String(colorRaw).trim() : null,
+    condition: conditionRaw != null && String(conditionRaw).trim() ? String(conditionRaw).trim() : null
+  };
+}
+
 export function planStaleHeldUnitWatchHeal(input: {
   watches: Array<{ note?: string | null } | null | undefined>;
   followUpMode?: string | null;
