@@ -2337,6 +2337,26 @@ async function resolveVehicleRecommendationReply(
   return composed.reply;
 }
 
+// Persist a SPECIFIC unit we just discussed/quoted (with its feed listing url + photos) onto
+// conv.recommendedUnits, so a "can I see the pics/link?" follow-up answers with the REAL VDP link
+// instead of falling through to the generator (which fabricates a generic /inventory?query= or promo
+// link — the dominant photo/link thumbs-down cluster, conc. on +17167506588). The finance/pricing
+// estimate arm fetches the exact feed item to quote a payment but discarded its url/images; this keeps
+// them. Dedupe by stockId, cap at 6, reuse the recommender's mapping. Deterministic side-effect on
+// already-fetched feed data (no new LLM call); reply text is unchanged.
+function persistDiscussedUnit(conv: any, item: InventoryFeedItem | null | undefined): void {
+  if (!conv || !item) return;
+  const mapped = toRecommendedUnits([item])[0];
+  if (!mapped || (!mapped.url && !(mapped.images && mapped.images.length))) return; // nothing real to send later
+  const key = String(mapped.stockId ?? "").trim().toLowerCase();
+  const existing = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
+  const deduped = key
+    ? existing.filter((u: any) => String(u?.stockId ?? "").trim().toLowerCase() !== key)
+    : existing;
+  conv.recommendedUnits = [mapped, ...deduped].slice(0, 6);
+  conv.recommendedUnitsAt = new Date().toISOString();
+}
+
 // Follow-up to a recommendation: the customer asks to SEE the suggested bikes (photos/colors/links).
 // Parser-first; answers with the REAL listing URLs from the persisted recommended units (deterministic
 // — never a fabricated link). Returns null to fall through when it's not a media ask or we have no
@@ -53969,6 +53989,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             item?.condition ?? conv.lead?.vehicle?.condition,
             item?.year ?? conv.lead?.vehicle?.year
           );
+          persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
           const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
           reply =
             buildDownPaymentTermOptionsReply({
@@ -61051,6 +61072,7 @@ if (authToken && signature) {
           item?.condition ?? conv.lead?.vehicle?.condition,
           item?.year ?? conv.lead?.vehicle?.year
         );
+        persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
         const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
         reply =
           buildDownPaymentTermOptionsReply({
@@ -61117,6 +61139,7 @@ if (authToken && signature) {
           item?.condition ?? conv.lead?.vehicle?.condition,
           item?.year ?? conv.lead?.vehicle?.year
         );
+        persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
         const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
         const paymentBand = estimateMonthlyPaymentBandFromPrice({
           price: itemPrice,
