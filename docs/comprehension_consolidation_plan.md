@@ -2,6 +2,11 @@
 
 **Author:** generated 2026-06-13 · **Status:** in progress (2026-06-14) · **Owner:** Joe
 
+> **Architecture note (2026-06-20):** the consolidation target here is a single
+> *structured-output* `TurnUnderstanding` pass — **not** a model-driven agent loop. Why we
+> are not adopting an agent SDK for the customer runtime is recorded in
+> [`adr_agent_sdk_vs_parser_first.md`](adr_agent_sdk_vs_parser_first.md).
+
 ## Progress & how it's actually being executed (2026-06-14)
 
 This plan's endgame — one `parseTurnUnderstandingWithLLM` authority — is the
