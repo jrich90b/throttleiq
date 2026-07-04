@@ -26,8 +26,18 @@ try {
   feedItems = []; // missing snapshot → 0 misses (safe; never breaks the loop)
 }
 
+// Arrival gate: load the first-seen map so we only flag a unit that genuinely arrived AFTER the
+// watch (a real notify-cron miss), not one already in stock at watch-creation time (which the cron
+// intentionally never fires for — see watch_fire_miss_audit.ts, which already loads this map).
+const { loadInventoryFirstSeen } = await import("../services/api/src/domain/inventoryFirstSeen.ts");
+const firstSeenPath =
+  process.env.INVENTORY_FIRST_SEEN_PATH ||
+  (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, "inventory_first_seen.json") : path.join(path.dirname(dbPath), "inventory_first_seen.json"));
+const firstSeenMap = await loadInventoryFirstSeen(firstSeenPath).catch(() => null);
+const firstSeen = firstSeenMap?.entries;
+
 const { findWatchFireMisses } = await import("../services/api/src/domain/watchFireMiss.ts");
-const misses = feedItems.length ? findWatchFireMisses({ conversations, feedItems }) : [];
+const misses = feedItems.length ? findWatchFireMisses({ conversations, feedItems, firstSeen }) : [];
 
 // Dedup to ONE anomaly per conversation (a conv can yield several raw misses — multiple watches, or the
 // single+array watch union double-counting the same unit). Keep the highest-confidence one and roll up the

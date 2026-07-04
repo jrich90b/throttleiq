@@ -373,10 +373,23 @@ const RULES: LeadRule[] = [
     tone: "short_conversational"
   },
   {
-    name: "gla_demo_ride_dat",
+    name: "gla_demo_ride",
+    // ALL GLA demo-ride leads — corporate demo-ride program rides that do NOT happen at the
+    // dealership (operator-reported, Joe, 2026-07-02). Not a sweepstakes (the "thanks for
+    // entering — good luck!" ack is wrong: Jennifer Adam, 2026-07-01) and not a dealership
+    // test-ride booking (a "what day works to come in?" push is wrong too). cta=demo_ride_event
+    // → one soft invite (buildDemoRideEventSoftInvite) and no follow-up cadence (the
+    // event_promo bucket closes `event_promo_no_cadence`). "GLA - DEMO RIDE" (2921) previously
+    // fell through to inferFromCatalog's `/event|rsvp|demo ride/` catch-all as event_rsvp and
+    // drew the sweepstakes ack. Pinned by event_promo_ack:eval.
     match: {
-      equals: ["GLA - Demo Ride - DAT", "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride"],
-      sourceIds: [3026]
+      equals: [
+        "GLA - Demo Ride - DAT",
+        "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride",
+        "GLA - DEMO RIDE",
+        "GLA - Road to Your Ride Event Dealer Demo Ride"
+      ],
+      sourceIds: [3026, 2921, 3025]
     },
     bucket: "event_promo",
     cta: "demo_ride_event",

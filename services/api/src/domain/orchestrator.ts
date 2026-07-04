@@ -39,7 +39,7 @@ import {
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro, buildEventPromoAck } from "./agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck } from "./agentVoice.js";
 import { decideEventPromoTurn } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
@@ -624,10 +624,30 @@ function detectApparelFallbackRequest(text: string): boolean {
   );
 }
 
+// Structured department declared by a WEB TEXT WIDGET submission ("Department: Sales" header).
+// A widget lead's own department field OUTRANKS the keyword department fallbacks below — the
+// fallbacks exist for free-text SMS, and letting them re-route a declared-Sales lead is the
+// wrong-department class (Syed Saad, +19993605729, 2026-07-01: "I am purchasing detail[s]" on
+// the Iron 883 SALES widget tripped the "detail" service keyword → a service-department ack on
+// a purchase question). Structured-field precedence, not comprehension.
+function widgetDeclaredDepartment(text: string): string | null {
+  const t = String(text ?? "");
+  if (!/^\s*WEB TEXT WIDGET\b/i.test(t)) return null;
+  const m = t.match(/^Department:\s*(.+)$/im);
+  const dept = String(m?.[1] ?? "").trim().toLowerCase();
+  return dept || null;
+}
+
+function widgetDeclaresSalesDepartment(text: string): boolean {
+  return widgetDeclaredDepartment(text) === "sales";
+}
+
 function detectServiceFallbackRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detail)\b/.test(
+  // "detail" is scoped to actual detailing asks ("detailing", "detail my bike") — the bare noun
+  // over-matched "purchasing detail(s)" / "send details" (the Syed Saad miss).
+  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detailing|detail\s+(?:my|the|it|bike))\b/.test(
     t
   );
 }
@@ -1759,10 +1779,22 @@ export function buildBlockedTestRideInventoryDraft(testRideInventoryGate: TestRi
   const inventoryLine = testRideInventoryGate.inventoryBrowseUrl
     ? `Here’s our current inventory so you can pick an in-stock bike: ${testRideInventoryGate.inventoryBrowseUrl}`
     : "If you want, I can send you a few in-stock options right now.";
+  // Watch offer (corpus flywheel, 2026-07-03, Joe-approved steering direction): an out-of-stock/
+  // on-hold test-ride ask must not dead-end at an inventory link — offer to text them the moment
+  // their bike lands. The customer's "yes" flows into the EXISTING watch-confirmation handling
+  // (isWatchConfirmationIntentText -> inventory watch), so this is a reply-only change.
+  const watchLine =
+    testRideInventoryGate.reason === "not_in_stock" || testRideInventoryGate.reason === "on_hold"
+      ? `I can also keep an eye out and text you the moment ${
+          testRideInventoryGate.reason === "on_hold" ? "it opens back up" : "one lands"
+        } — want me to?`
+      : "";
   const nextStepLine = testRideInventoryGate.alternateBikeLabel
     ? "If that works, I can line up the test ride right away."
     : "Once you pick one, I can line up the test ride right away.";
-  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, nextStepLine].filter(Boolean).join(" ");
+  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, watchLine, nextStepLine]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function resolveModelFromHistory(
@@ -2469,14 +2501,13 @@ export async function orchestrateInbound(
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const leadFirst = ctx?.lead?.firstName?.trim() || null;
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
-    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "that bike";
-    const draft =
-      `Hi ${leadFirst} — thanks for your recent demo ride on the ${bikeLabel}. ` +
-      `This is ${agentName} at ${dealerName}. ` +
-      `If you want more details on the ${bikeLabel}, I’m happy to help.`;
+    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || null;
+    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no fabricated
+    // "recent ride" frame, and no follow-up cadence (operator-reported, Joe 2026-07-02).
+    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel);
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2874,7 +2905,8 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: buildHiringManagerInquiryReply() }
     });
   }
-  if (detectPartsFallbackRequest(event.body)) {
+  const widgetSalesLead = widgetDeclaresSalesDepartment(event.body);
+  if (!widgetSalesLead && detectPartsFallbackRequest(event.body)) {
     const draft = /\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/i.test(
       event.body
     )
@@ -2888,7 +2920,7 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectApparelFallbackRequest(event.body)) {
+  if (!widgetSalesLead && detectApparelFallbackRequest(event.body)) {
     const draft = "Thanks — I’ll have our MotorClothes team check on that and follow up shortly.";
     return finalize({
       intent: "GENERAL",
@@ -2898,7 +2930,7 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectServiceFallbackRequest(event.body) && !financeRequest) {
+  if (!widgetSalesLead && detectServiceFallbackRequest(event.body) && !financeRequest) {
     const draft = /\bservice records?\b/i.test(event.body)
       ? "Thanks for the details — I’ll have the team check service records and follow up."
       : "We’ve received your service request and will have the service department follow up.";

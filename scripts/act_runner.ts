@@ -23,6 +23,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   findingKeyMarker,
+  findMergedPrForFindingKey,
   findOpenPrForFindingKey,
   isMeaningfulFindingKey,
   type OpenPrSummary
@@ -69,12 +70,28 @@ function listOpenPrs(): OpenPrSummary[] {
   }
 }
 
+function listRecentlyMergedPrs(): Array<OpenPrSummary & { mergedAt?: string | null }> {
+  try {
+    const out = execFileSync(
+      "gh",
+      ["pr", "list", "--state", "merged", "--limit", "100", "--json", "number,title,body,mergedAt"],
+      { encoding: "utf8" }
+    );
+    const parsed = JSON.parse(out);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 // If a finding key is supplied and an OPEN PR already carries it, this is a
 // duplicate — skip (exit 3, distinct from success/usage/escalate) so the caller
 // moves on instead of filing a second PR for the same finding.
 function skipIfDuplicateOpenPr(findingKey: string | undefined): void {
   if (!findingKey || !isMeaningfulFindingKey(findingKey)) return;
-  const existing = findOpenPrForFindingKey(listOpenPrs(), findingKey);
+  const existing =
+    findOpenPrForFindingKey(listOpenPrs(), findingKey) ??
+    findMergedPrForFindingKey(listRecentlyMergedPrs(), findingKey);
   if (existing) {
     console.log(`DUPLICATE: open PR #${existing.number} already covers "${findingKey}" — skipping (no new PR).`);
     process.exit(3);
@@ -100,7 +117,15 @@ if (sub === "check-open-pr") {
     console.log(`EXISTS #${existing.number} — open PR already covers "${key}"`);
     process.exit(3);
   }
-  console.log(`NONE — no open PR covers "${key}"`);
+  // A recently-MERGED PR covering the key means the fix already landed and the finding is a
+  // stale echo awaiting its report refresh — report as covered (exit 4) so routines stop
+  // re-investigating fixes that shipped (the "double work in two routines" class).
+  const merged = findMergedPrForFindingKey(listRecentlyMergedPrs(), key);
+  if (merged) {
+    console.log(`MERGED #${merged.number} — fix already merged (${merged.mergedAt ?? "recent"}) for "${key}"; stale echo, do not rebuild`);
+    process.exit(4);
+  }
+  console.log(`NONE — no open or recently-merged PR covers "${key}"`);
   process.exit(0);
 }
 

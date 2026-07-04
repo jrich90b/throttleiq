@@ -56,6 +56,35 @@ export function buildEventPromoAck(
 }
 
 /**
+ * Approved SOFT INVITE for a corporate/GLA demo-ride lead (bucket=event_promo,
+ * cta=demo_ride_event). These are H-D corporate demo-ride program leads — the ride does NOT
+ * happen at the dealership, so a dealership scheduling push ("I can get you scheduled to come
+ * in — Wed 9:30 or 11:30?") and the sweepstakes "thanks for entering — good luck!" ack are BOTH
+ * wrong (operator-reported, Joe, 2026-07-02: "GLA demo rides are corporate demo rides that
+ * don't happen at the dealership... this should be a soft invite and there should be no
+ * follow-up cadence after the initial response"). One warm soft invite, then silence (the
+ * event_promo bucket already closes `event_promo_no_cadence`). Deliberately contains NO
+ * appointment offer/times, NO availability claim, and NO fabricated completed-ride frame
+ * ("thanks for your recent demo ride") — the source alone doesn't prove the ride happened.
+ * Pinned by `event_promo_ack:eval`.
+ */
+export function buildDemoRideEventSoftInvite(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string,
+  bikeLabel?: string | null
+): string {
+  const bike = (bikeLabel ?? "").trim();
+  const interestLine = bike
+    ? `Saw your interest in the ${bike} through the H-D demo ride program. `
+    : "Saw your interest through the H-D demo ride program. ";
+  const inviteLine = bike
+    ? `If you'd ever like to see one in person here at the shop, or have any questions about the ${bike}, I'm happy to help — no pressure at all.`
+    : "If you'd ever like to stop by the shop or have any questions, I'm happy to help — no pressure at all.";
+  return `${buildAgentIntro(firstName, agentName, dealerName)}${interestLine}${inviteLine}`;
+}
+
+/**
  * Inventory-watch "your bike is in stock" notification (the watch-fire reply). Beyond announcing the unit,
  * it (1) ASKS whether they're still looking, and (2) offers a clean opt-out — "if you're all set I'll take
  * you off the list." A "no / all set / found one" reply is read by the watch-opt-out parser

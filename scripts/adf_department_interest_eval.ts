@@ -85,6 +85,9 @@ const confidenceMin = 0.7;
 const departmentCases: { inquiry: string; vehicle?: string; want: "apparel" | "parts" | "service" | "riding_academy" }[] = [
   { inquiry: "small womens black leather vest", vehicle: "Harley-Davidson Full Line", want: "apparel" },
   { inquiry: "looking for a riding jacket, size XL", want: "apparel" },
+  // Branded gift-shop collectibles are apparel/MotorClothes, NOT parts (Stephanie Blalock, +12282200201).
+  { inquiry: "My husband and I stopped to get a poker chip but you were closed - can I buy one over the phone and ship it to me?", vehicle: "Harley-Davidson Full Line", want: "apparel" },
+  { inquiry: "do you sell HD keychains or pins", want: "apparel" },
   { inquiry: "need brake pads and a battery for my Street Glide", want: "parts" },
   { inquiry: "oil change and 5k service", want: "service" },
   // Rider-education must NOT become a bike sale — even with a bike attached (Rafael Morales).

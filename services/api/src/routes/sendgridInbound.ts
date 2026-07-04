@@ -47,7 +47,8 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
@@ -5417,7 +5418,60 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "manual_handoff");
   }
 
+  // Re-submission guard (Jerill White class, Joe-approved 2026-07-02): the SAME structured form
+  // re-submitted (only the CRM Ref changes) must not restart the first-touch script. Detected
+  // BEFORE append (compares against prior inbounds) and returned BEFORE discardPendingDrafts so
+  // a burst re-submission keeps the original pending first-touch draft for staff. A todo tells
+  // the owner the customer is knocking twice; an ack draft goes out only when the previous
+  // outbound is old enough (>=24h) that silence would read as being ignored.
+  const adfResubmission = detectAdfFormResubmission({
+    messages: conv.messages,
+    newBody: event.body,
+    nowMs: Date.now()
+  });
   appendInbound(conv, event);
+  if (adfResubmission.resubmission) {
+    addTodo(
+      conv,
+      "other",
+      `Customer re-submitted the ${adfResubmission.source || "web"} form (${adfResubmission.priorCount + 1}x) — they're waiting on a person; reach out.`,
+      event.providerMessageId
+    );
+    let resubmissionAck: string | null = null;
+    if (adfResubmission.hoursSinceLastOutbound == null || adfResubmission.hoursSinceLastOutbound >= 24) {
+      const profile = await getDealerProfile();
+      const agentName = String(profile?.agentName ?? "").trim() || "Alexandra";
+      const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+      // Same controlled publication boundary as every other ADF draft — the draft-state
+      // invariant guard decides whether the text may publish (reply_path:audit enforces this).
+      const invariant = applyDraftStateInvariants({
+        inboundText: event.body ?? "",
+        draftText: buildAdfResubmissionAck(firstName, agentName, dealerName),
+        followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        classificationBucket: conv.classification?.bucket ?? null,
+        classificationCta: conv.classification?.cta ?? null
+      });
+      if (invariant.allow) {
+        resubmissionAck = invariant.draftText;
+        appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai");
+      }
+    }
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      note: "adf_resubmission",
+      resubmissionCount: adfResubmission.priorCount + 1,
+      draft: resubmissionAck
+    });
+  }
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
@@ -5764,7 +5818,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Joe-approved 2026-07-02 (Angelo Balistrieri, +17169123294): even when no follow-up is
+    // needed and the salesperson owns the lead, the customer still gets ONE thank-you draft
+    // for coming in for the ride. The publisher carries its own guards (appointment-outcome
+    // wins, DLA ride confirmation, already-thanked dedupe) — manual handoff below is unchanged.
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
         conv,
@@ -5848,14 +5906,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou,
       staffSms
     });
   }
   if (isDealerRideEventLead) {
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Same Joe-approved thank-you as the no-purchase arm — the ride happened; thank them once
+    // while the outcome stays with the salesperson (publisher guards prevent duplicates).
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -5869,7 +5929,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou
     });
@@ -8869,6 +8929,23 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
     const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
     draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+  }
+
+  // Corporate/GLA demo-ride program lead (bucket=event_promo, cta=demo_ride_event): the ride
+  // does NOT happen at the dealership, so the finalized sales draft ("which bike are you asking
+  // about?" / scheduling times / availability+photo appends) is out of context. Override with
+  // ONE soft invite; the event_promo bucket close below (`event_promo_no_cadence`) guarantees
+  // no follow-up cadence (operator-reported, Joe 2026-07-02). Mirrors the orchestrator's
+  // demo_ride_event branch — same builder, both paths. Pinned by event_promo_ack:eval.
+  if (conv.classification?.bucket === "event_promo" && conv.classification?.cta === "demo_ride_event") {
+    const drAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const drDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const drFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    const drVehicle = conv.lead?.vehicle ?? {};
+    const drYear = String(drVehicle.year ?? "").trim();
+    const drModel = String(drVehicle.model ?? drVehicle.description ?? "").trim();
+    const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
+    draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
   }
 
   // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey

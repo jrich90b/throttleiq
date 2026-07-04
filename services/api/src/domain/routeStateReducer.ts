@@ -578,6 +578,12 @@ export type VehicleChoiceConfidenceTurnInput = {
   hasReferencedModel: boolean;
   // passesModelRelevanceGuard(referencedModel, inboundText) — the over-attachment guard.
   modelRelevanceGuardPassed: boolean;
+  // An ACCEPTED concrete parsed action already owns this turn (dealer_location_question /
+  // inventory_watch_acknowledgement) — the alternatives offer must yield (corpus flywheel,
+  // 2026-07-03, +12399612259: "remind me again what address is this at?" drew the "Totally
+  // fair — happy to line up options" reply because this arm runs ~3k lines before the
+  // location arm).
+  concreteParsedActionThisTurn?: boolean;
 };
 
 export type VehicleChoiceConfidenceTurnDecision = {
@@ -588,6 +594,7 @@ export function decideVehicleChoiceConfidenceTurn(
   input: VehicleChoiceConfidenceTurnInput
 ): VehicleChoiceConfidenceTurnDecision {
   // FAIL DIRECTION = stay_silent. Each guard below, when it trips, keeps us quiet.
+  if (input.concreteParsedActionThisTurn) return { kind: "stay_silent" }; // the parsed action owns the turn
   if (!input.parserAccepted) return { kind: "stay_silent" };
   if (input.stance !== "open_to_alternatives") return { kind: "stay_silent" }; // committed/unclear => quiet
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
@@ -1489,6 +1496,76 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
     return { kind: "event_promo_ack" };
   }
   return { kind: "none" };
+}
+
+// Indefinite customer defer while still engaged (the Chuck Bailey class, +17163197142,
+// 2026-07-01, operator-reported: "this probably should not have a follow up after the customer
+// saying [still interested... but tied up with family concerns, will get back to you]").
+//
+// The disposition parser reads such a turn as `defer_no_window`, but the terminal closeout is
+// (CORRECTLY) suppressed by the competing-active-intent guard — the lead said they're still
+// interested, so we must not close them. Before this decision existed, the turn then fell
+// through the short-window deferral resolver (which only knows concrete "a few days" windows)
+// and landed in the general draft path with the CADENCE STILL ACTIVE — so the agent kept
+// nudging someone who explicitly asked for space.
+//
+// Decision: an accepted `defer_no_window` that neither closed out nor resolved a concrete
+// short window PAUSES the follow-up cadence for a default window (14 days) — the conversation
+// stays OPEN, watches stay, and cadence resumes automatically after the window. Fail-direction:
+// a false negative keeps today's behavior (nudges continue — annoying but recoverable); a false
+// positive pauses two weeks on a live lead (bounded by the parser-acceptance gate).
+export type IndefiniteDeferTurnKind = "pause_cadence_default_window" | "none";
+
+export type IndefiniteDeferTurnInput = {
+  parserAccepted: boolean;
+  disposition?: string | null;
+  // true when the with-window/short-window resolver already produced a concrete deferral —
+  // that path wins (it carries the customer's own timeframe).
+  shortWindowResolved: boolean;
+};
+
+export type IndefiniteDeferTurnDecision =
+  | { kind: "pause_cadence_default_window"; pauseDays: number }
+  | { kind: "none" };
+
+export const INDEFINITE_DEFER_PAUSE_DAYS = 14;
+
+// In-process deal entry (the Jeff Hollfelder / Gary Busenlehner class, Joe-approved 2026-07-02):
+// a customer's turn is deal LOGISTICS on a staff-worked purchase (insurance/payoff/delivery/
+// paperwork/accessory-install), read by the typed deal-progress parser — the per-turn auto-draft
+// stops for these conversations (staff answer with off-system deal facts; the agent's generic
+// "I'll check and follow up" was rewritten by staff on 5/7 corrections in the 7/2 audit) and the
+// owner-nudge + stale-handoff nets keep coverage. Conservative gates: parser acceptance at a high
+// floor; already-protected modes stay untouched; a sold/closed conv is post-sale machinery's job.
+export type InProcessDealTurnKind = "enter_in_process_deal" | "none";
+
+export type InProcessDealTurnInput = {
+  parserAccepted: boolean;
+  dealInProgress: boolean;
+  confidence?: number | null;
+  followUpMode?: string | null;
+  saleRecorded?: boolean;
+  conversationClosed?: boolean;
+};
+
+export type InProcessDealTurnDecision = { kind: InProcessDealTurnKind };
+
+export const IN_PROCESS_DEAL_CONFIDENCE_FLOOR = 0.8;
+
+export function decideInProcessDealTurn(input: InProcessDealTurnInput): InProcessDealTurnDecision {
+  if (!input.parserAccepted || !input.dealInProgress) return { kind: "none" };
+  if ((input.confidence ?? 0) < IN_PROCESS_DEAL_CONFIDENCE_FLOOR) return { kind: "none" };
+  if (input.conversationClosed || input.saleRecorded) return { kind: "none" };
+  const mode = String(input.followUpMode ?? "").toLowerCase();
+  if (mode === "manual_handoff" || mode === "paused_indefinite") return { kind: "none" };
+  return { kind: "enter_in_process_deal" };
+}
+
+export function decideIndefiniteDeferTurn(input: IndefiniteDeferTurnInput): IndefiniteDeferTurnDecision {
+  if (input.shortWindowResolved) return { kind: "none" };
+  if (!input.parserAccepted) return { kind: "none" };
+  if (String(input.disposition ?? "") !== "defer_no_window") return { kind: "none" };
+  return { kind: "pause_cadence_default_window", pauseDays: INDEFINITE_DEFER_PAUSE_DAYS };
 }
 
 // Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead

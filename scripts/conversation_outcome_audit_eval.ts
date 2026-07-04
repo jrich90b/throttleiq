@@ -85,6 +85,11 @@ eq(dims({ ...held, messages: [{ direction: "out", provider: "draft_ai", at: "202
   eq(a[0].category, "comprehension", "held_draft_unresolved is category=comprehension");
   eq(a[0].severity, "P1", "held_draft_unresolved is P1");
 }
+// CLOSED conversation: staff already resolved/dismissed it by closing — a held draft on an already-closed
+// thread is noise, not a live unresolved miss (no further customer reply will ever go out). Also suppresses
+// stale_held_flag for the same reason (a defunct flag on a closed thread needs no heal).
+eq(dims({ ...held, closedReason: "other", messages: [] }), [], "held + no messages but CONVERSATION CLOSED => not flagged (staff already resolved it)");
+eq(dims({ ...held, closedReason: "other", messages: [{ direction: "out", provider: "twilio", at: "2026-06-25T01:05:00.000Z", body: "hi" }] }), [], "closed + real reply after hold => not flagged (no live heal needed on a closed thread)");
 
 // --- 5b. context-fidelity SHADOW unresolved (Net 1): the scorer flagged out-of-context, shadow let it
 //         publish, and NO corrective reply followed. A DIFFERENT reply after the flag = resolved. ---
@@ -169,11 +174,39 @@ eq(decideOpenCriticAnomaly({ hasIssue: true, severity: "major", confidence: 0.5 
   eq(a.openTasks, [{ reason: "pricing", summary: "Confirm OTD price" }], "open tasks captured");
 }
 
-// --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). ---
+// --- 6. unaddressed 👎 on the LATEST outbound (a newer outbound clears it). Detail text must NOT claim
+//        "not yet improved" for an already-SENT message — rewriting delivered history is impossible, so
+//        that phrasing only applies to a still-pending draft (a genuine redraft-pipeline miss). ---
 {
   const a = auditConversationOutcome({ id: "c6", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "reply", feedback: { rating: "down" } }] }, { now: NOW });
   eq(a.map(x => x.dimension), ["negative_feedback"], "latest outbound thumbed-down => negative_feedback");
   eq(a[0].category, "feedback", "negative_feedback is category=feedback");
+  assert.ok(!/not yet improved/i.test(a[0].detail), "an already-SENT thumbed-down message must not claim 'not yet improved' (nothing auto-redrafts a delivered message)"); n++;
+  assert.ok(/already sent/i.test(a[0].detail), "already-sent 👎 detail names it as a review/coaching signal, not a pipeline miss"); n++;
+}
+{
+  // A still-PENDING draft (never sent) thumbed-down: the closed-loop auto-redraft SHOULD have replaced
+  // it — a hit here IS a genuine pipeline miss, so the "not yet improved" framing is accurate.
+  const a = auditConversationOutcome({ id: "c6d", messages: [{ direction: "out", provider: "draft_ai", at: "t1", body: "pending draft", draftStatus: "pending", feedback: { rating: "down" } }] }, { now: NOW });
+  eq(a.map(x => x.dimension), ["negative_feedback"], "pending draft thumbed-down => negative_feedback");
+  assert.ok(/not yet improved|has not replaced/i.test(a[0].detail), "a pending-draft 👎 keeps the 'should have auto-redrafted' framing"); n++;
+}
+{
+  // Age cap (2026-07-02): a weeks-old 👎 on an already-SENT message has been classified by the nightly
+  // feedback loop long ago — it must NOT resurface in every work order forever (all 4 negative_feedback
+  // items that day were May sends, 3 predating already-shipped fixes). Fresh 👎 (≤21d) emits WITH
+  // occurredAt stamped from the feedback time; stale (>21d) is dropped; unparseable keeps (fail-safe).
+  const fresh = auditConversationOutcome(
+    { id: "c6e", messages: [{ direction: "out", provider: "twilio", at: "2026-06-20T12:00:00.000Z", body: "reply", feedback: { rating: "down", at: "2026-06-20T12:30:00.000Z" } }] },
+    { now: NOW }
+  );
+  eq(fresh.map(x => x.dimension), ["negative_feedback"], "a fresh (≤21d) 👎 still emits");
+  eq(fresh[0].occurredAt, "2026-06-20T12:30:00.000Z", "fresh 👎 carries occurredAt from the feedback timestamp");
+  eq(
+    dims({ id: "c6f", messages: [{ direction: "out", provider: "twilio", at: "2026-05-05T12:00:00.000Z", body: "reply", feedback: { rating: "down", at: "2026-05-05T12:30:00.000Z" } }] }),
+    [],
+    "a stale (>21d) 👎 on a sent message is age-capped out of the feed"
+  );
 }
 eq(dims({ id: "c6b", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "bad", feedback: { rating: "down" } }, { direction: "out", provider: "draft_ai", at: "t2", body: "redraft" }] }), [], "a newer outbound after the 👎 => addressed, clean");
 eq(dims({ id: "c6c", messages: [{ direction: "out", provider: "twilio", at: "t1", body: "good", feedback: { rating: "up" } }] }), [], "thumbs-UP => not an anomaly");
@@ -310,6 +343,11 @@ const wfmSweep = fs.readFileSync("scripts/watch_fire_miss_sweep.ts", "utf8");
 assert.match(wfmSweep, /findWatchFireMisses/, "the watch-fire-miss sweep runs findWatchFireMisses");
 assert.match(wfmSweep, /inventory_snapshot\.json/, "the sweep reads the on-disk inventory snapshot (no network)");
 assert.match(wfmSweep, /byConv\.set|ONE anomaly per conversation/, "the sweep dedups to one anomaly per conversation (no digest flooding)");
+// Arrival gate: the sweep must load inventory_first_seen.json and pass it as `firstSeen`, mirroring
+// watch_fire_miss_audit.ts — omitting this makes the live sweep arrival-blind (flags already-in-stock
+// units the notify engine correctly never fires for, per Joe's new-arrival-only policy).
+assert.match(wfmSweep, /loadInventoryFirstSeen/, "the sweep loads the inventory first-seen map (arrival gate)");
+assert.match(wfmSweep, /findWatchFireMisses\(\{\s*conversations,\s*feedItems,\s*firstSeen\s*\}\)/, "the sweep passes firstSeen into findWatchFireMisses (arrival-aware, not arrival-blind)");
 // Inventory enrichment: the critic gets the in-stock model list so it can catch fabricated availability.
 assert.match(llm, /inStockModels\?: string\[\]/, "the critic accepts the in-stock model list");
 assert.match(llm, /IN-STOCK MODELS \(current, by model\)/, "the critic prompt includes the in-stock list");

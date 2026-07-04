@@ -269,6 +269,17 @@ export default function EmailBuilderPage() {
   const [sendTo, setSendTo] = useState("");
   const [sendGroupId, setSendGroupId] = useState("");
   const [testTo, setTestTo] = useState("");
+  // Audience preview shown before a group send — who gets it, who's excluded and why.
+  const [groupSendPreview, setGroupSendPreview] = useState<{
+    total: number;
+    sendable: number;
+    excludedCount: number;
+    byReason: Record<string, number>;
+    excluded: Array<{ id: string; name: string; reason: string; reasonLabel: string; detail?: string }>;
+    listName?: string;
+  } | null>(null);
+  const [groupSendPreviewLoading, setGroupSendPreviewLoading] = useState(false);
+  const [groupSendIncludeExcluded, setGroupSendIncludeExcluded] = useState(false);
 
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -540,9 +551,55 @@ export default function EmailBuilderPage() {
     }
   }
 
-  async function sendEmailNow(mode: "live" | "test") {
+  // Step 1 of a group send: load the audience preview so the manager sees
+  // "sending to X of Y — N excluded (and why)" BEFORE anything goes out.
+  async function requestGroupSendPreview() {
+    const groupId = String(sendGroupId ?? "").trim();
     if (!selectedCampaignId) {
       setError("Select a campaign.");
+      return;
+    }
+    if (!groupId) {
+      setError("Select a recipient group.");
+      return;
+    }
+    setGroupSendPreviewLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const resp = await fetch("/api/contacts/broadcast/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: "email", listId: groupId })
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok || !data?.ok) {
+        throw new Error(data?.details || data?.error || "Failed to load the audience preview");
+      }
+      setGroupSendIncludeExcluded(false);
+      setGroupSendPreview({
+        total: Number(data.total ?? 0),
+        sendable: Number(data.sendable ?? 0),
+        excludedCount: Number(data.excludedCount ?? 0),
+        byReason: data.byReason ?? {},
+        excluded: Array.isArray(data.excluded) ? data.excluded : [],
+        listName: data.listName
+      });
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to load the audience preview");
+    } finally {
+      setGroupSendPreviewLoading(false);
+    }
+  }
+
+  async function sendEmailNow(mode: "live" | "test", opts?: { confirmedGroup?: boolean }) {
+    if (!selectedCampaignId) {
+      setError("Select a campaign.");
+      return;
+    }
+    if (mode === "live" && sendMode === "group" && !opts?.confirmedGroup) {
+      // Group sends always go through the preview/confirm step.
+      await requestGroupSendPreview();
       return;
     }
     const recipient = String(mode === "test" ? testTo : sendTo).trim();
@@ -576,7 +633,8 @@ export default function EmailBuilderPage() {
                 campaignName: String(selectedCampaign?.name ?? "").trim() || undefined,
                 subject,
                 emailBodyText: emailText,
-                emailBodyHtml: emailHtml
+                emailBodyHtml: emailHtml,
+                ...(groupSendIncludeExcluded ? { includeDealSuppressed: true } : {})
               }
             : {
                 campaignId: selectedCampaignId,
@@ -594,6 +652,8 @@ export default function EmailBuilderPage() {
       }
       if (groupSend) {
         const group = contactLists.find(list => list.id === groupId);
+        setGroupSendPreview(null);
+        setGroupSendIncludeExcluded(false);
         setNotice(
           `Email campaign sent to ${group?.name ?? "selected group"}: ${data.sent ?? 0}/${data.attempted ?? 0}. Skipped ${data.skipped ?? 0}, failed ${data.failed ?? 0}.`
         );
@@ -705,7 +765,7 @@ export default function EmailBuilderPage() {
             <div>
               <label className="block text-xs text-gray-300">Base campaign</label>
               <select
-                className="mt-1 w-full border border-white/25 bg-[#0a1020] rounded px-2.5 py-2 text-sm"
+                className="mt-1 w-full border border-white/25 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm"
                 value={selectedCampaignId}
                 onChange={e => setSelectedCampaignId(e.target.value)}
               >
@@ -774,7 +834,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Prompt override
               <textarea
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm min-h-[110px]"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm min-h-[110px]"
                 value={customPrompt}
                 onChange={e => setCustomPrompt(e.target.value)}
               />
@@ -783,7 +843,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Description override
               <textarea
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm min-h-[80px]"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm min-h-[80px]"
                 value={customDescription}
                 onChange={e => setCustomDescription(e.target.value)}
               />
@@ -812,7 +872,7 @@ export default function EmailBuilderPage() {
                 }}
               />
               <textarea
-                className="w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-xs min-h-[70px]"
+                className="w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-xs min-h-[70px]"
                 placeholder="Reference image URLs (one per line)"
                 value={referenceImageUrlsText}
                 onChange={e => setReferenceImageUrlsText(e.target.value)}
@@ -842,7 +902,7 @@ export default function EmailBuilderPage() {
                 }}
               />
               <textarea
-                className="w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-xs min-h-[70px]"
+                className="w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-xs min-h-[70px]"
                 placeholder="Brief file URLs (one per line)"
                 value={briefDocumentUrlsText}
                 onChange={e => setBriefDocumentUrlsText(e.target.value)}
@@ -905,7 +965,7 @@ export default function EmailBuilderPage() {
               </button>
             </div>
 
-            <div className="border border-white/20 rounded p-3 bg-[#0a1020] space-y-3">
+            <div className="border border-white/20 rounded p-3 bg-[var(--surface-2)] space-y-3">
               <div className="text-xs font-semibold text-gray-200">Send Email</div>
               <div className="inline-flex rounded border border-white/20 overflow-hidden text-xs">
                 <button
@@ -930,7 +990,11 @@ export default function EmailBuilderPage() {
                     <select
                       className="flex-1 min-w-[260px] border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-sm"
                       value={sendGroupId}
-                      onChange={e => setSendGroupId(e.target.value)}
+                      onChange={e => {
+                        setSendGroupId(e.target.value);
+                        setGroupSendPreview(null);
+                        setGroupSendIncludeExcluded(false);
+                      }}
                     >
                       {contactLists.map(list => (
                         <option key={list.id} value={list.id}>
@@ -941,15 +1005,91 @@ export default function EmailBuilderPage() {
                     </select>
                     <button
                       className="px-3 py-2 rounded bg-[#f28c28] text-[#111] text-sm font-semibold disabled:opacity-50"
-                      disabled={sending !== "" || !selectedCampaignId || !sendGroupId}
-                      onClick={() => void sendEmailNow("live")}
+                      disabled={sending !== "" || groupSendPreviewLoading || !selectedCampaignId || !sendGroupId}
+                      onClick={() => void requestGroupSendPreview()}
+                      title="Shows who will receive this email before anything sends"
                     >
-                      {sending === "live" ? "Sending..." : "Send Group"}
+                      {groupSendPreviewLoading ? "Checking recipients..." : "Review & Send"}
                     </button>
                   </div>
                   <div className="mt-1 text-[11px] text-gray-400">
                     Campaign emails are sent individually to each group contact. No CC or shared recipient list is used.
                   </div>
+                  {groupSendPreview ? (
+                    <div className="mt-2 border border-[#f28c28]/50 rounded p-3 bg-[#131a2b] space-y-2">
+                      <div className="text-sm font-semibold text-gray-100">
+                        Sending to {groupSendIncludeExcluded ? groupSendPreview.total : groupSendPreview.sendable} of{" "}
+                        {groupSendPreview.total} contacts
+                        {groupSendPreview.listName ? ` in “${groupSendPreview.listName}”` : ""}
+                      </div>
+                      {groupSendPreview.excludedCount > 0 ? (
+                        <div className="text-xs text-gray-300 space-y-1">
+                          <div>
+                            {groupSendPreview.excludedCount} excluded:{" "}
+                            {Object.entries(groupSendPreview.byReason)
+                              .map(([reason, count]) => {
+                                const label =
+                                  groupSendPreview.excluded.find(e => e.reason === reason)?.reasonLabel ??
+                                  reason.replace(/_/g, " ");
+                                return `${count} ${label.toLowerCase()}`;
+                              })
+                              .join(", ")}
+                          </div>
+                          {groupSendPreview.excluded.filter(e =>
+                            ["recently_sold", "on_hold", "not_interested", "wrong_number"].includes(e.reason)
+                          ).length ? (
+                            <div className="text-[11px] text-gray-400">
+                              {groupSendPreview.excluded
+                                .filter(e =>
+                                  ["recently_sold", "on_hold", "not_interested", "wrong_number"].includes(e.reason)
+                                )
+                                .slice(0, 8)
+                                .map(e => `${e.name}${e.detail ? ` (${e.detail})` : ""}`)
+                                .join(" · ")}
+                              {groupSendPreview.excludedCount > 8 ? " · …" : ""}
+                            </div>
+                          ) : null}
+                          <label className="flex items-center gap-2 text-[11px] text-gray-300">
+                            <input
+                              type="checkbox"
+                              checked={groupSendIncludeExcluded}
+                              onChange={e => setGroupSendIncludeExcluded(e.target.checked)}
+                            />
+                            Also send to customers excluded by deal status (recently sold / on hold / not
+                            interested) — not recommended for sales promotions
+                          </label>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-300">No exclusions — everyone in this group is reachable.</div>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          className="px-3 py-2 rounded bg-[#f28c28] text-[#111] text-sm font-semibold disabled:opacity-50"
+                          disabled={
+                            sending !== "" ||
+                            (groupSendIncludeExcluded ? groupSendPreview.total : groupSendPreview.sendable) === 0
+                          }
+                          onClick={() => void sendEmailNow("live", { confirmedGroup: true })}
+                        >
+                          {sending === "live"
+                            ? "Sending..."
+                            : `Confirm & Send to ${
+                                groupSendIncludeExcluded ? groupSendPreview.total : groupSendPreview.sendable
+                              }`}
+                        </button>
+                        <button
+                          className="px-3 py-2 rounded border border-white/25 text-sm hover:bg-white/10"
+                          disabled={sending !== ""}
+                          onClick={() => {
+                            setGroupSendPreview(null);
+                            setGroupSendIncludeExcluded(false);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </label>
               ) : (
               <label className="block text-xs text-gray-300">
@@ -997,7 +1137,7 @@ export default function EmailBuilderPage() {
             <label className="block text-xs text-gray-300">
               Email subject
               <input
-                className="mt-1 w-full border border-white/20 bg-[#0a1020] rounded px-2.5 py-2 text-sm"
+                className="mt-1 w-full border border-white/20 bg-[var(--surface-2)] rounded px-2.5 py-2 text-sm"
                 value={subject}
                 onChange={e => setSubject(e.target.value)}
               />
@@ -1007,7 +1147,7 @@ export default function EmailBuilderPage() {
               Email body text is auto-derived from generated HTML.
             </div>
 
-            <details className="border border-white/20 rounded p-3 bg-[#0a1020]">
+            <details className="border border-white/20 rounded p-3 bg-[var(--surface-2)]">
               <summary className="text-xs font-semibold text-gray-200 cursor-pointer">Advanced HTML</summary>
               <textarea
                 className="mt-2 w-full border border-white/20 bg-[#070c17] rounded px-2.5 py-2 text-xs font-mono min-h-[180px]"
@@ -1020,7 +1160,7 @@ export default function EmailBuilderPage() {
               {contextPreview.map((row, idx) => {
                 const img = campaignPrimaryImage(row);
                 return (
-                  <div key={`ctx-preview-${row.id}`} className="border border-white/15 rounded p-2 bg-[#0a1020]">
+                  <div key={`ctx-preview-${row.id}`} className="border border-white/15 rounded p-2 bg-[var(--surface-2)]">
                     <div className="text-xs font-semibold text-gray-100">{row.name || `Campaign ${idx + 1}`}</div>
                     {img ? (
                       <a href={img} target="_blank" rel="noreferrer" className="block mt-2">

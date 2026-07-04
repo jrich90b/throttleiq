@@ -87,7 +87,7 @@ type AuditableConv = {
   contextFidelityShadow?: { at?: string | null; frame?: string | null; severity?: string | null; reason?: string | null; draftPreview?: string | null } | null;
   humanCorrection?: { at?: string | null; category?: string | null; reason?: string | null; steering?: string | null } | null;
   cadenceQualityShadow?: { at?: string | null; overall?: string | null; reason?: string | null; cadenceKind?: string | null } | null;
-  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; feedback?: { rating?: string | null } | null }> | null;
+  messages?: Array<{ direction?: string | null; provider?: string | null; at?: string | null; body?: string | null; sid?: string | null; draftStatus?: string | null; feedback?: { rating?: string | null; at?: string | null } | null }> | null;
   questions?: Array<{ text?: string | null; status?: string | null; createdAt?: string | null }> | null;
   lead?: { leadRef?: string | null } | null;
   crm?: { lastLoggedAt?: string | null; lastLoggedAtByLeadRef?: Record<string, string | null> | null } | null;
@@ -186,7 +186,7 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
   //    forever. A reconcile heal clears it, so a hit is a regression. (Same rule as healStaleHeldFlag,
   //    read-only: a real outbound exists AFTER the hold timestamp.)
   const heldAtMs = Date.parse(String(conv.draftHeld?.at ?? ""));
-  if (conv.draftHeld && Number.isFinite(heldAtMs)) {
+  if (!closed && conv.draftHeld && Number.isFinite(heldAtMs)) {
     const repliedAfter = (conv.messages ?? []).some(m => {
       if (m?.direction !== "out" || !REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))) return false;
       const t = Date.parse(String(m?.at ?? ""));
@@ -279,11 +279,37 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
     }
   }
 
-  // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep and nothing better followed (the
-  //    closed-loop redraft would append a newer outbound). The system's own "this reply was wrong" signal.
+  // 6. Unaddressed 👎: the LAST outbound was thumbed-down by a rep. If it's still a PENDING draft, the
+  //    closed-loop redraft (Phase 1) should replace it — a hit here is a genuine pipeline miss. Once a
+  //    message is actually SENT (provider !== draft_ai), rewriting delivered history is structurally
+  //    impossible (mirrors decideFeedbackRedraftTurn's own "can't redraft an already-sent message" gate,
+  //    index.ts ratedIsPendingDraft) — so "not yet improved" is never true for it; it's a review/coaching
+  //    signal on an already-sent message, not an unresolved auto-fix.
   const lastOut = [...(conv.messages ?? [])].reverse().find(m => m?.direction === "out");
   if (String(lastOut?.feedback?.rating ?? "").toLowerCase() === "down") {
-    out.push({ ...base, dimension: "negative_feedback", severity: "P2", healed: false, detail: "the latest outbound was thumbed-down and not yet improved" });
+    const ratedIsPendingDraft = lastOut?.provider === "draft_ai" && lastOut?.draftStatus !== "stale";
+    // Age-cap (mirrors the cadence_quality_suppressed gate above): a weeks-old thumb-down on an
+    // already-SENT message is a review/coaching signal that the nightly feedback loop has long since
+    // classified — resurfacing it in every work order forever is pure noise (2026-07-02: all 4
+    // negative_feedback items were May sends, 3 of them predating fixes that already shipped). The
+    // feedback timestamp is stamped as occurredAt so downstream stale-suppression can reason about
+    // age at all (these rows previously carried none).
+    const nfAtRaw = String(lastOut?.feedback?.at ?? lastOut?.at ?? "");
+    const nfAtMs = Date.parse(nfAtRaw);
+    const nfAgeDays = Number.isFinite(nfAtMs) ? (now.getTime() - nfAtMs) / (1000 * 60 * 60 * 24) : null;
+    const nfFresh = nfAgeDays == null || (nfAgeDays >= 0 && nfAgeDays <= 21);
+    if (nfFresh) {
+      out.push({
+        ...base,
+        dimension: "negative_feedback",
+        severity: "P2",
+        healed: false,
+        ...(Number.isFinite(nfAtMs) ? { occurredAt: new Date(nfAtMs).toISOString() } : {}),
+        detail: ratedIsPendingDraft
+          ? "a pending draft was thumbed-down and the auto-redraft has not replaced it"
+          : "the latest outbound (already sent) was thumbed-down — feedback for review, not an auto-fixable draft"
+      });
+    }
   }
 
   // 7. CRM (TLP) update error: the Playwright-driven TLP push (log contact / mark delivered) FAILED

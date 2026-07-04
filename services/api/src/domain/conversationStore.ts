@@ -1937,6 +1937,22 @@ export function setContactPreference(
   scheduleSave();
 }
 
+// A bare acknowledgement with no content — the ONLY inbound class that must not pull a
+// staff-ARCHIVED conversation back into the active inbox (Deborah Kranz-Mitchell,
+// +17166280459, operator-reported 2026-07-01: she was told "if anything changes, give me a
+// shout", replied "Will do", and the archive was wiped). Deliberately deterministic and
+// NARROW: this gates a STATE side-effect (reopen), not comprehension — and the fail
+// direction is "reopen" (anything not unambiguously a bare ack, or any media, reopens).
+export function isBareAckInboundText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (t.length > 40) return false;
+  if (/^[\p{Extended_Pictographic}\s]+$/u.test(t)) return true; // emoji-only
+  return /^(ok(ay)?|k|will do|sure( thing)?|thanks?( so much| a lot)?|thank you( so much)?|sounds good|got it|no problem|you too|same to you|anytime|yes sir|yup|yep|have a (good|great) (day|one|weekend)|take care|👍)[.!\s]*$/i.test(
+    t
+  );
+}
+
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     const closedReason = String(conv.closedReason ?? "").toLowerCase();
@@ -1948,7 +1964,13 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
       /\b(unit_hold|order_hold|manual_hold|post_sale)\b/.test(
         String(conv.followUp?.reason ?? "").toLowerCase()
       );
-    if (!stickyClosed) {
+    // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
+    // question, or attachment still reopens (fail-safe toward reopening).
+    const archivedAckHold =
+      /archive/.test(closedReason) &&
+      !(evt.mediaUrls && evt.mediaUrls.length) &&
+      isBareAckInboundText(evt.body);
+    if (!stickyClosed && !archivedAckHold) {
       conv.status = "open";
       conv.closedAt = undefined;
       conv.closedReason = undefined;
@@ -4011,6 +4033,28 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
   }).toISOString();
 }
 
+// No-show follow-up timing (Joe-approved 2026-07-02: "a did-not-show + needs-follow-up should get
+// its first touch in 1-2 business days, not a week out"). Next BUSINESS day at the standard
+// morning send window — Fri/Sat outcomes land Monday (2 calendar days max), never a Sunday.
+// Pinned by no_show_followup_timing:eval.
+export function resolveNoShowFollowUpDueAt(nowIso: string, timeZone: string): string {
+  const now = new Date(nowIso);
+  const parts = getZonedParts(now, timeZone);
+  const base = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  base.setUTCDate(base.getUTCDate() + 1);
+  // getUTCDay on the local-date proxy: 0=Sun, 6=Sat → roll forward to Monday.
+  while (base.getUTCDay() === 0 || base.getUTCDay() === 6) {
+    base.setUTCDate(base.getUTCDate() + 1);
+  }
+  return localPartsToUtcDate(timeZone, {
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+    hour24: 10,
+    minute: 30
+  }).toISOString();
+}
+
 export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
@@ -4283,9 +4327,12 @@ export function scheduleLongTermFollowUp(
 export function stopFollowUpCadence(conv: Conversation, reason: string) {
   if (!conv.followUpCadence) return;
   // Post-sale and long-term cadences should continue even when sales flow triggers
-  // manual handoff (for example, service requests or internal coordination).
+  // manual handoff (for example, service requests or internal coordination), or when
+  // post-sale pickup/delivery-logistics chatter ("I'll be there in 10 minutes") routes
+  // through applyPurchaseDeliveryLogisticsDecision — that's expected post-sale small talk,
+  // not a reason to kill the cadence the sale itself just started.
   if (
-    reason === "manual_handoff" &&
+    (reason === "manual_handoff" || reason === "purchase_delivery") &&
     (conv.followUpCadence.kind === "post_sale" || conv.followUpCadence.kind === "long_term")
   ) {
     return;
@@ -5440,7 +5487,7 @@ function businessDaysBetween(fromMs: number, toMs: number): number {
 export function isInProcessDealLead(conv: Conversation): boolean {
   if (!conv) return false;
   if (conv.followUpCadence?.kind === "post_sale") return false;
-  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold/.test(
+  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold|in_process_deal/.test(
     String(conv.followUp?.reason ?? "").toLowerCase()
   );
 }

@@ -89,4 +89,25 @@ assert.match(src, /skipIfDuplicateOpenPr\(flag\("finding-key"\)\)/, "open-pr/rev
 assert.match(src, /withFindingKeyMarker\(/, "the PR body is stamped with the finding-key marker for later dedup");
 assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit code (3)");
 
+
+// --- Merged-PR finding dedup (Joe, 2026-07-02: "double work in two different routines"): a
+//     finding whose key sits in a RECENTLY-MERGED PR is a stale echo awaiting report refresh —
+//     covered, not rebuildable. Windowed + fail-toward-building on any uncertainty. ---
+{
+  const { findMergedPrForFindingKey, findingKeyMarker } = await import("../services/api/src/domain/loopPrDedup.ts");
+  const NOW = Date.parse("2026-07-02T12:00:00.000Z");
+  const key = "+15551234567::human_correction_material";
+  const freshMerged = [{ number: 148, body: `fix\n${findingKeyMarker(key)}`, mergedAt: "2026-07-01T12:00:00.000Z" }];
+  assert.ok(findMergedPrForFindingKey(freshMerged, key, { nowMs: NOW })?.number === 148, "a fresh merged PR covers its finding key");
+  const oldMerged = [{ number: 90, body: `fix\n${findingKeyMarker(key)}`, mergedAt: "2026-06-01T12:00:00.000Z" }];
+  assert.equal(findMergedPrForFindingKey(oldMerged, key, { nowMs: NOW }), null, "a merge outside the window never dedups");
+  const noDate = [{ number: 91, body: `fix\n${findingKeyMarker(key)}` }];
+  assert.equal(findMergedPrForFindingKey(noDate, key, { nowMs: NOW }), null, "missing mergedAt cannot prove recency → keep building");
+  assert.equal(findMergedPrForFindingKey(freshMerged, "::", { nowMs: NOW }), null, "meaningless key never dedups");
+  const fs2 = await import("node:fs");
+  const runner = fs2.readFileSync("scripts/act_runner.ts", "utf8");
+  assert.ok(/findMergedPrForFindingKey\(listRecentlyMergedPrs\(\)/.test(runner), "act_runner consults merged PRs in check-open-pr AND the build path");
+  assert.ok(/process\.exit\(4\)/.test(runner), "merged coverage exits with its own distinct code (4)");
+}
+
 console.log("PASS act runner eval — PR-only (never merges), refuses main, gate-enforced; prep brief carries the parser-first contract; cross-routine PR dedup (marker + skip); list/prep run.");

@@ -59,4 +59,14 @@ assert.doesNotMatch(
   "a draft_ai (unsent) outbound must never trigger a CRM log"
 );
 
+// crm_log_stale regression guard: the manual /send handler's Twilio-send-EXCEPTION catch branch (the
+// message is still recorded as sent so the rep sees it) must also queue a TLP log, mirroring the other
+// 3 branches in this same handler (email success, Twilio-not-configured, Twilio success). This exact
+// branch was the one gap: a real send with no CRM log attempt and no failure recorded.
+assert.match(
+  src,
+  /queueTuningLog\(null\);\s*\n\s*queueTlpLog\(\);\s*\n\s*return res\.status\(502\)\.json\(\{\s*ok: false,\s*sent: false,\s*error: "Twilio send failed"/,
+  "the manual /send Twilio-exception catch branch must also queue a TLP log (crm_log_stale regression guard)"
+);
+
 console.log("PASS tlp auto-send coverage eval");
