@@ -2002,6 +2002,20 @@ export type WatchOptOutParse = {
   confidence?: number;
 };
 
+export type WatchScopeParse = {
+  // The customer was ASKED (buildWatchSiblingScopeAsk) whether their inventory watch should also
+  // cover same-family sibling trims ("Road Glide" watch — also alert on Special/ST/Limited?).
+  // "open_to_variants": yes / open to the variants / engages with the offered variant.
+  // "base_only": no — hold out for the exact base model only.
+  // "unrelated": the message doesn't answer the scope question (a different ask, small talk).
+  intent: "open_to_variants" | "base_only" | "unrelated";
+  // The message ALSO asks something beyond the scope answer ("sure — what color is it?"): the
+  // caller applies the watch side effect but leaves the reply to the normal draft pipeline so
+  // the extra ask isn't dropped.
+  hasOtherAsk?: boolean;
+  confidence?: number;
+};
+
 export type FinanceProcessQuestionParse = {
   // "finance_process_handoff": a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS
   //   of financing & its related steps (insurance timing, down-payment deadlines, order of
@@ -3251,6 +3265,17 @@ const WATCH_OPT_OUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   required: ["intent", "confidence"],
   properties: {
     intent: { type: "string", enum: ["watch_opt_out", "none"] },
+    confidence: { type: "number" }
+  }
+};
+
+const WATCH_SCOPE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "has_other_ask", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["open_to_variants", "base_only", "unrelated"] },
+    has_other_ask: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -7370,6 +7395,103 @@ export async function parseWatchOptOutWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, confidence };
+}
+
+// Watch sibling-scope answer parser. We ASKED (buildWatchSiblingScopeAsk) whether the customer's
+// inventory watch should also cover same-family sibling trims; this reads their answer. Gated by
+// the caller on a PENDING ask (watch.siblingScopeAskedAt, unresolved) — no hint regex; the pending
+// state is the gate. Returns null when disabled; callers treat null as "no scope answer" and let
+// the normal pipeline run (fail toward keeping the watch strict — today's behavior).
+export async function parseWatchScopeWithLLM(args: {
+  text: string;
+  watchModel?: string | null; // the watched base model, e.g. "Road Glide"
+  askedUnitLabel?: string | null; // the sibling unit named in our ask, e.g. "2026 Road Glide Special"
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<WatchScopeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WATCH_SCOPE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WATCH_SCOPE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WATCH_SCOPE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WATCH_SCOPE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const watchModel = String(args.watchModel ?? "").trim() || "the base model";
+  const askedUnit = String(args.askedUnitLabel ?? "").trim();
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership thread. The customer has an INVENTORY WATCH on a specific",
+    `base model (${watchModel}) and we just ASKED them whether we should also alert them about`,
+    `same-family sibling variants (Special / ST / Limited / CVO trims)${askedUnit ? ` — one just came in: ${askedUnit}` : ""}.`,
+    "Decide what THIS message answers. Return only JSON matching the schema.",
+    "",
+    "Classify intent:",
+    '- "open_to_variants": yes / open to seeing the variants / flexible ("sure", "yeah that works",',
+    '  "either is fine", "I\'d look at the Special too") — OR they engage with the offered variant',
+    '  itself ("what color is that one?", "how much is the Special?").',
+    '- "base_only": they want ONLY the exact base model ("no just the base", "holding out for the',
+    '  standard one", "nah, gotta be the regular ' + watchModel.replace(/"/g, "") + '").',
+    '- "unrelated": the message does not answer the scope question at all (a different topic,',
+    "  scheduling, trade talk, small talk). When unsure, choose unrelated.",
+    "",
+    "has_other_ask: true when the message ALSO asks something beyond the scope answer (a price,",
+    "a photo, availability, scheduling) — even when intent is open_to_variants or base_only.",
+    "",
+    "Hard rules:",
+    '- A bare pleasantry or an unrelated question => "unrelated".',
+    '- "not interested anymore" / "take me off the list" is an OPT-OUT, not a scope answer =>',
+    '  "unrelated" (a separate parser owns opt-outs).',
+    "- confidence 0..1; use >= 0.7 only when the answer is clear.",
+    "",
+    "Examples:",
+    '- "sure that works" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.9}',
+    '- "yeah I\'d look at the Special too" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.95}',
+    '- "either way is fine with me" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.85}',
+    '- "sure — what color is it?" -> {"intent":"open_to_variants","has_other_ask":true,"confidence":0.85}',
+    '- "how much is that one?" -> {"intent":"open_to_variants","has_other_ask":true,"confidence":0.75}',
+    '- "no just the base please" -> {"intent":"base_only","has_other_ask":false,"confidence":0.95}',
+    '- "nah holding out for the standard one" -> {"intent":"base_only","has_other_ask":false,"confidence":0.9}',
+    '- "when do the base models usually come in?" -> {"intent":"base_only","has_other_ask":true,"confidence":0.75}',
+    '- "thanks man" -> {"intent":"unrelated","has_other_ask":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"unrelated","has_other_ask":true,"confidence":0.85}',
+    '- "take me off the list" -> {"intent":"unrelated","has_other_ask":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "watch_scope_parser",
+      schema: WATCH_SCOPE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-watch-scope-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
+  const intent: WatchScopeParse["intent"] =
+    rawIntent === "open_to_variants" ? "open_to_variants" : rawIntent === "base_only" ? "base_only" : "unrelated";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, hasOtherAsk: parsed.has_other_ask === true, confidence };
 }
 
 // ADF intake department classifier — see AdfDepartmentInterestParse above for why. Returns null when

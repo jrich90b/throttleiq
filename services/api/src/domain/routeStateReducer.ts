@@ -844,6 +844,44 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
   return { kind: "pause_watch" };
 }
 
+// --- Watch sibling-scope answer (2026-07-04) --------------------------------
+// After the one-time "open to variants?" ask (buildWatchSiblingScopeAsk — a same-family sibling
+// trim landed during a strict base-model watch), the customer's answer either BROADENS the watch
+// (openToOtherTrims — same-family trims now fire) or pins it BASE-ONLY (never re-ask). The side
+// effect is watch state ONLY — the reply stays with the normal draft pipeline, which sees the ask
+// + answer in history and responds naturally (so an answer carrying another question never gets a
+// canned ack that drops it). Centralized + pure; the parser signal + the pending-ask gate are fed in.
+//
+// FAIL DIRECTION: unsure => none (the watch stays strict — today's behavior; no state change).
+// A wrongly-broadened watch texts the customer about bikes they didn't ask for — the exact
+// over-attachment class we just fixed on the create side — so only a confident answer acts.
+// ---------------------------------------------------------------------------
+export type WatchScopeTurnKind = "broaden_watch" | "keep_base_only" | "none";
+
+export type WatchScopeTurnInput = {
+  /** A sibling-scope ask is pending on a watch (asked, unresolved, not already open/declined). */
+  scopeAskPending: boolean;
+  parserAccepted: boolean;
+  intent?: string | null; // "open_to_variants" | "base_only" | "unrelated"
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type WatchScopeTurnDecision = {
+  kind: WatchScopeTurnKind;
+};
+
+export function decideWatchScopeTurn(input: WatchScopeTurnInput): WatchScopeTurnDecision {
+  if (!input.scopeAskPending) return { kind: "none" }; // nothing was asked
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  if (input.intent === "open_to_variants") return { kind: "broaden_watch" };
+  if (input.intent === "base_only") return { kind: "keep_base_only" };
+  return { kind: "none" }; // "unrelated" or anything else — the normal pipeline owns the turn
+}
+
 // --- ADF intake department route (2026-06-19) ------------------------------
 //
 // On an initial web (ADF) lead, the Inquiry field is the customer's stated request, so naming an
