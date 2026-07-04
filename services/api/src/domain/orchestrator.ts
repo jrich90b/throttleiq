@@ -5,7 +5,12 @@ import { buildTradeAdfAck } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
 import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
 import { textContainsSchedulingOffer } from "./bookingFunnel.js";
-import { appendVisitInvite, shouldAppendVisitInvite } from "./proactiveVisitInvite.js";
+import {
+  appendVisitInvite,
+  shouldAppendVisitInvite,
+  visitInviteExpandedEnabled,
+  isDisengagedDisposition
+} from "./proactiveVisitInvite.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
@@ -2108,6 +2113,7 @@ export async function orchestrateInbound(
     leadSource?: string | null;
     bucket?: string | null;
     cta?: string | null;
+    disposition?: string | null; // conv.dialogState.name — the disposition parser's state (stepped-back/keep-current/…), for the visit-invite disengagement guard
     primaryIntentHint?: PrimaryIntentHint | null;
     availabilityIntentHint?: boolean;
     schedulingIntentHint?: boolean;
@@ -2173,7 +2179,9 @@ export async function orchestrateInbound(
         draft: String(out.draft ?? ""),
         draftAlreadyOffers: textContainsSchedulingOffer(String(out.draft ?? "")),
         alreadyOfferedThisConversation: offeredEarlier,
-        wrongContext: visitInviteWrongContext
+        wrongContext: visitInviteWrongContext,
+        expanded: visitInviteExpandedEnabled(),
+        customerDisengaged: isDisengagedDisposition(ctx?.disposition)
       })
     ) {
       out.draft = appendVisitInvite(String(out.draft ?? ""));
