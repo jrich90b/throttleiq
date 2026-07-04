@@ -657,7 +657,8 @@ import {
 } from "./domain/workflowRegressionGuards.js";
 import {
   HELD_GUARD_WATCH_NOTE,
-  planStaleHeldUnitWatchHeal
+  planStaleHeldUnitWatchHeal,
+  resolveHeldGuardWatchTarget
 } from "./domain/heldUnitWatchHeal.js";
 import {
   isAutoCloseEligibleTask,
@@ -11512,15 +11513,20 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
       ? "is currently on hold and may no longer be available"
       : "is no longer available";
   if (hold && modelLabel) {
-    ensureInventoryWatchForHeldCadence(conv, {
-      year: conv?.lead?.vehicle?.year ?? null,
-      make: conv?.lead?.vehicle?.make ?? null,
-      model: conv?.lead?.vehicle?.model ?? null,
-      color: conv?.lead?.vehicle?.color ?? null,
-      condition: conv?.lead?.vehicle?.condition ?? null,
-      stockId: stockId ?? undefined,
-      vin: vin ?? undefined
-    });
+    ensureInventoryWatchForHeldCadence(
+      conv,
+      {
+        year: conv?.lead?.vehicle?.year ?? null,
+        make: conv?.lead?.vehicle?.make ?? null,
+        model: conv?.lead?.vehicle?.model ?? null,
+        color: conv?.lead?.vehicle?.color ?? null,
+        condition: conv?.lead?.vehicle?.condition ?? null,
+        stockId: stockId ?? undefined,
+        vin: vin ?? undefined
+      },
+      // The lead's OWN exact unit (matched by the lead's stock#/VIN) → customer-referenced.
+      { customerReferencedUnit: true }
+    );
   }
   if (modelLabel) {
     return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can show you similar options in stock, or I can keep an eye out for ${watchLabel} and text you first.`;
@@ -11927,18 +11933,27 @@ function findExactCadenceUnavailableUnit(args: {
 
 function ensureInventoryWatchForHeldCadence(
   conv: any,
-  item: Partial<InventoryFeedItem> & { condition?: string | null }
+  item: Partial<InventoryFeedItem> & { condition?: string | null },
+  opts?: { customerReferencedUnit?: boolean }
 ) {
   // Don't auto-create an alerting watch for a lead who opted out of watch
   // alerts — this auto path is exactly what re-armed alerts after Mark Scoville
   // opted out. An explicit re-subscribe (inventory_watch_active) clears the flag.
   if (isInventoryWatchOptedOut(conv)) return;
-  const model = canonicalizeWatchModelLabel(item?.model ?? conv?.lead?.vehicle?.model ?? null);
+  // Over-attachment guard (Approach A): only let a search-surfaced unit's sibling model/color
+  // become the watch when the customer actually referenced that exact unit (stock#/VIN);
+  // otherwise watch what the customer EXPRESSED. See resolveHeldGuardWatchTarget.
+  const target = resolveHeldGuardWatchTarget({
+    expressed: conv?.lead?.vehicle ?? null,
+    unit: item ?? null,
+    customerReferencedUnit: !!opts?.customerReferencedUnit
+  });
+  const model = canonicalizeWatchModelLabel(target.model);
   if (!model) return;
   const createdAt = nowIso();
-  const yearRaw = Number(item?.year ?? conv?.lead?.vehicle?.year ?? NaN);
-  const condition = normalizeWatchCondition(item?.condition ?? conv?.lead?.vehicle?.condition ?? null);
-  const color = String(item?.color ?? conv?.lead?.vehicle?.color ?? "").trim() || undefined;
+  const yearRaw = Number(target.year ?? NaN);
+  const condition = normalizeWatchCondition(target.condition);
+  const color = target.color ? String(target.color).trim() || undefined : undefined;
   const watch: InventoryWatch = {
     model,
     ...(Number.isFinite(yearRaw) ? { year: yearRaw } : {}),
@@ -12285,13 +12300,18 @@ async function buildCadenceHeldInventoryOverride(args: {
     const statusText =
       exactUnavailable.kind === "sold" ? "has sold" : "is on hold right now";
     if (exactUnavailable.kind === "hold") {
-      ensureInventoryWatchForHeldCadence(conv, {
-        ...exactUnavailable.item,
-        model: exactUnavailable.item?.model ?? fallbackModel ?? undefined,
-        year: exactUnavailable.item?.year ?? context.year ?? conv?.lead?.vehicle?.year ?? undefined,
-        color: exactUnavailable.item?.color ?? context.color ?? conv?.lead?.vehicle?.color ?? undefined,
-        condition: exactUnavailable.item?.condition ?? context.condition ?? conv?.lead?.vehicle?.condition
-      });
+      ensureInventoryWatchForHeldCadence(
+        conv,
+        {
+          ...exactUnavailable.item,
+          model: exactUnavailable.item?.model ?? fallbackModel ?? undefined,
+          year: exactUnavailable.item?.year ?? context.year ?? conv?.lead?.vehicle?.year ?? undefined,
+          color: exactUnavailable.item?.color ?? context.color ?? conv?.lead?.vehicle?.color ?? undefined,
+          condition: exactUnavailable.item?.condition ?? context.condition ?? conv?.lead?.vehicle?.condition
+        },
+        // Matched by an EXACT stock#/VIN ref (findExactCadenceUnavailableUnit) → customer-referenced.
+        { customerReferencedUnit: true }
+      );
     }
     const recentContextText = (conv.messages ?? [])
       .slice(-8)
@@ -12389,13 +12409,20 @@ async function buildCadenceHeldInventoryOverride(args: {
   if (!shouldOverrideHeld && !shouldOverrideSold) return null;
 
   if (shouldOverrideHeld && heldItem) {
-    ensureInventoryWatchForHeldCadence(conv, {
-      ...heldItem,
-      model: heldItem.model ?? context.model,
-      year: heldItem.year ?? context.year ?? undefined,
-      color: heldItem.color ?? context.color ?? undefined,
-      condition: heldItem.condition ?? context.condition
-    });
+    ensureInventoryWatchForHeldCadence(
+      conv,
+      {
+        ...heldItem,
+        model: heldItem.model ?? context.model,
+        year: heldItem.year ?? context.year ?? undefined,
+        color: heldItem.color ?? context.color ?? undefined,
+        condition: heldItem.condition ?? context.condition
+      },
+      // Surfaced only by a MODEL SEARCH (findInventoryMatches on context.model), not an exact
+      // stock#/VIN reference → NOT customer-referenced. Watch the expressed model, never the
+      // search-surfaced sibling unit's model/color (over-attachment guard, Raysean +15136149740).
+      { customerReferencedUnit: false }
+    );
   }
 
   const firstName = normalizeDisplayCase(args.name || "there");
