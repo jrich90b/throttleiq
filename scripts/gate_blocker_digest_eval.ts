@@ -91,6 +91,46 @@ check("draft blocker windows mirror the audit: >1.5d and ≤7d, open convs, draf
   );
 });
 
+check("a dismissed (draftStatus stale) draft is NOT a blocker — console hides it (Zachary Bushey)", () => {
+  const r = collectGateBlockers(
+    [
+      {
+        id: "+20",
+        status: "open",
+        lead: { firstName: "Zachary", lastName: "Bushey" },
+        messages: [
+          { direction: "out", provider: "twilio", body: "sent", at: iso(8 * DAY) },
+          { direction: "out", provider: "draft_ai", body: "draft", at: iso(3 * DAY), draftStatus: "stale" }
+        ]
+      }
+    ] as any,
+    NOW
+  );
+  assert.deepEqual(r.drafts, []);
+});
+
+check("a stale trailing draft does not MASK an older still-pending draft (getLatestPendingDraft parity)", () => {
+  const r = collectGateBlockers(
+    [
+      {
+        id: "+21",
+        status: "open",
+        lead: { firstName: "Mae" },
+        messages: [
+          { direction: "out", provider: "twilio", body: "sent", at: iso(8 * DAY) },
+          { direction: "out", provider: "draft_ai", body: "live draft", at: iso(3 * DAY) },
+          { direction: "out", provider: "draft_ai", body: "retired", at: iso(2 * DAY), draftStatus: "stale" }
+        ]
+      }
+    ] as any,
+    NOW
+  );
+  assert.deepEqual(
+    r.drafts.map(b => b.convId),
+    ["+21"]
+  );
+});
+
 check("appointment blocker windows mirror the audit: >3d and ≤14d, booked/confirmed, unrecorded", () => {
   const r = collectGateBlockers(
     [

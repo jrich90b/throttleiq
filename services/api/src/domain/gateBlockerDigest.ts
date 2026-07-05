@@ -89,10 +89,26 @@ export function collectGateBlockers(convs: AnyObj[], nowMs: number): GateBlocker
     const open = conv.status !== "closed";
 
     if (open) {
+      // Mirror the console's pending-draft semantics (conversationStore
+      // getLatestPendingDraft): the newest NON-STALE draft counts only when it's
+      // newer than the last real send. A draftStatus "stale" draft was already
+      // dismissed/superseded — the console hides it, and a digest naming a draft
+      // staff cannot see or clear kills trust in the checklist (Zachary Bushey
+      // +17169013675, 2026-07-05).
       const msgs: AnyObj[] = Array.isArray(conv.messages) ? conv.messages : [];
-      const last = msgs[msgs.length - 1];
-      if (last?.direction === "out" && last?.provider === "draft_ai") {
-        const draftMs = parseMs(last.at);
+      let lastDraftIdx = -1;
+      let lastSentIdx = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m?.direction !== "out") continue;
+        if (m?.provider === "draft_ai" && m?.draftStatus !== "stale") lastDraftIdx = i;
+        if (m?.provider === "human" || m?.provider === "twilio" || m?.provider === "sendgrid") {
+          lastSentIdx = i;
+        }
+      }
+      const pending = lastDraftIdx > lastSentIdx ? msgs[lastDraftIdx] : null;
+      if (pending) {
+        const draftMs = parseMs(pending.at);
         if (draftMs != null) {
           const ageDays = (nowMs - draftMs) / DAY_MS;
           if (ageDays > 1.5 && ageDays <= 7) {

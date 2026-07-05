@@ -171,17 +171,34 @@ export function auditConversations(
     }
 
     if (open) {
+      // Mirror the console's pending-draft semantics (conversationStore
+      // getLatestPendingDraft): the newest NON-STALE draft counts only when it's
+      // newer than the last real send. A draftStatus "stale" message is one the
+      // system/staff already dismissed or superseded — the console hides it, so
+      // grading it "unactioned" nags staff about a draft they cannot see or
+      // clear (Zachary Bushey +17169013675, 2026-07-05: 27 of the 34 flagged
+      // drafts were stale phantoms; the gate failed on items nobody could act on).
       const msgs: AnyObj[] = Array.isArray(conv.messages) ? conv.messages : [];
-      const last = msgs[msgs.length - 1];
-      if (last?.direction === "out" && last?.provider === "draft_ai") {
-        const draftMs = parseMs(last.at);
+      let lastDraftIdx = -1;
+      let lastSentIdx = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m?.direction !== "out") continue;
+        if (m?.provider === "draft_ai" && m?.draftStatus !== "stale") lastDraftIdx = i;
+        if (m?.provider === "human" || m?.provider === "twilio" || m?.provider === "sendgrid") {
+          lastSentIdx = i;
+        }
+      }
+      const pending = lastDraftIdx > lastSentIdx ? msgs[lastDraftIdx] : null;
+      if (pending) {
+        const draftMs = parseMs(pending.at);
         if (draftMs != null) {
           const ageDays = (nowMs - draftMs) / DAY_MS;
           if (ageDays > 1.5) {
             draftUnactioned.push({
               convId: String(conv.id),
               name: leadName(conv),
-              evidence: `pending draft from ${last.at} (${Math.round(ageDays)}d old) never sent or replaced`,
+              evidence: `pending draft from ${pending.at} (${Math.round(ageDays)}d old) never sent or replaced`,
               recent: ageDays <= 7
             });
           }
@@ -289,6 +306,29 @@ function selfTest() {
         { direction: "out", provider: "draft_ai", at: "2026-06-09T00:00:00.000Z", body: "draft" }
       ]
     },
+    // Dismissed/superseded draft (draftStatus stale): the console hides it, so the
+    // audit must NOT grade it unactioned (Zachary Bushey class, 2026-07-05).
+    {
+      id: "+8",
+      status: "open",
+      lead: { firstName: "Zack" },
+      messages: [
+        { direction: "out", provider: "twilio", at: "2026-06-07T00:00:00.000Z", body: "sent" },
+        { direction: "out", provider: "draft_ai", at: "2026-06-09T00:00:00.000Z", body: "draft", draftStatus: "stale" }
+      ]
+    },
+    // A stale trailing draft must not MASK an older still-pending one: the console
+    // shows the 3d-old non-stale draft (getLatestPendingDraft), so the audit flags it.
+    {
+      id: "+9",
+      status: "open",
+      lead: { firstName: "Mae" },
+      messages: [
+        { direction: "out", provider: "twilio", at: "2026-06-07T00:00:00.000Z", body: "sent" },
+        { direction: "out", provider: "draft_ai", at: "2026-06-09T00:00:00.000Z", body: "live draft" },
+        { direction: "out", provider: "draft_ai", at: "2026-06-09T01:00:00.000Z", body: "retired", draftStatus: "stale" }
+      ]
+    },
     // Healthy conv: nothing flagged.
     {
       id: "+7",
@@ -391,8 +431,16 @@ function selfTest() {
   if (byCheck.appointment_outcome_missing.total !== 1 || byCheck.appointment_outcome_missing.offenders[0].convId !== "+5") {
     fail("appointment_outcome_missing flags the past appointment");
   }
-  if (byCheck.draft_unactioned.total !== 1 || byCheck.draft_unactioned.offenders[0].convId !== "+6") {
-    fail("draft_unactioned flags the stale pending draft");
+  if (
+    byCheck.draft_unactioned.total !== 2 ||
+    !byCheck.draft_unactioned.offenders.some((o: Offender) => o.convId === "+6") ||
+    !byCheck.draft_unactioned.offenders.some((o: Offender) => o.convId === "+9")
+  ) {
+    fail("draft_unactioned flags pending drafts (incl. behind a stale trailer), got: " +
+      byCheck.draft_unactioned.offenders.map((o: Offender) => o.convId).join(","));
+  }
+  if (byCheck.draft_unactioned.offenders.some((o: Offender) => o.convId === "+8")) {
+    fail("draft_unactioned must NOT flag a dismissed (draftStatus stale) draft — console hides it");
   }
   if (timeframeJustifiesMonths("Over 1 Year") !== 12) fail("timeframe parse: over 1 year");
   if (timeframeJustifiesMonths("4-6 Months") !== 6) fail("timeframe parse: range");
