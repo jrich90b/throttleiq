@@ -287,5 +287,19 @@
       "watch_action": "none",
       "department_intent": "none"
     }
+  },
+  {
+    "id": "watch_used_triglide_no_connective_garbage",
+    "text": "Used Triglide",
+    "history": [
+      { "direction": "out", "body": "Do you prefer a new or used trike, or are you open to either?" },
+      { "direction": "out", "body": "are you looking at any particular trike model (Freewheeler, Tri Glide, or open to either)?" }
+    ],
+    "expected": {
+      "watch_action": "set_watch",
+      "department_intent": "none",
+      "watch_model_contains": "tri glide",
+      "watch_condition": "used"
+    }
   }
 ]

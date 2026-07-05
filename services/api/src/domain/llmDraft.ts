@@ -12421,6 +12421,25 @@ export function normalizeSemanticSlotLLMOutput(
 
   const watchObj = parsed.watch && typeof parsed.watch === "object" ? parsed.watch : {};
   let model = cleanOptionalString(watchObj.model);
+  // Fail-safe sanitizer: reject a watch model that is a lifted question/qualifier
+  // fragment rather than a real model — e.g. the parser copying the agent's own
+  // "new or used trike" question into "Or New Trike" (prod +15857552622,
+  // 2026-07-04), which then rendered customer-facing as "keep an eye out for Or
+  // New Trike". Blank it; the set_watch context-recovery block below back-fills
+  // the real model from thread context. Deterministic structured-extraction guard
+  // (AGENTS.md-allowed) in the shared normalizer, so BOTH reply paths + the
+  // merged-shadow parser inherit it. Surgical to the garbage signature so a
+  // legitimate two-model list ("XG500 or XG750") is preserved: a real Harley
+  // model never starts with a connective, never carries a condition word
+  // (new/used), and never contains open/either/both.
+  if (model) {
+    const startsWithConnective = /^\s*(?:or|and|either|both)\b/i.test(model);
+    const hasConditionWord = /\b(?:new|used|pre[-\s]?owned)\b/i.test(model);
+    const hasNonModelQuantifier = /\b(?:open|either|both)\b/i.test(model);
+    if (startsWithConnective || hasConditionWord || hasNonModelQuantifier) {
+      model = null;
+    }
+  }
   const year = cleanOptionalString(watchObj.year);
   const toPositiveNum = (value: unknown): number | null => {
     const n = Number(value);
@@ -12520,6 +12539,8 @@ export function normalizeSemanticSlotLLMOutput(
     else if (/\bstreet glide\b/.test(contextText)) model = "Street Glide";
     else if (/\blow rider s\b|\bfxlrs\b|\blrs\b/.test(contextText)) model = "Low Rider S";
     else if (/\biron 883\b|\b883\b/.test(contextText)) model = "Iron 883";
+    else if (/\btri[-\s]*glide\b|\btriglide\b|\bflhtcutg\b/.test(contextText)) model = "Tri Glide";
+    else if (/\bfreewheeler\b/.test(contextText)) model = "Freewheeler";
   }
   const hasCallOnlyCue =
     /\b(call only|phone only|call me only|no text|do not text|don't text|text me not)\b/.test(textLower);
