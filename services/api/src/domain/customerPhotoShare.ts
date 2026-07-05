@@ -255,6 +255,23 @@ export function shouldUseVisionIdentification(description: {
 export const CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT =
   "Customer texted a photo of a bike they like (image attached in the thread). Identify the bike and match it against current and incoming inventory before any other follow-up. Do not restart style/budget discovery questions.";
 
+// Overrides the bike-match context above when the photo is a PART/accessory, so the next
+// turn routes to parts/service instead of matching it against bike inventory.
+export const CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT =
+  "Customer texted a photo of a motorcycle PART or accessory (not a whole bike). Route to parts/service — do NOT match it against bike inventory. Clarify whether they want to buy the part or have it installed.";
+
+/**
+ * Reply when vision recognized the shared image is a motorcycle PART/accessory (exhaust, seat,
+ * wheel, a part in a box, a part-number label, a broken component) — NOT a whole bike to match
+ * against inventory and NOT chatter. Recognize the part, let the customer disambiguate
+ * buy-vs-install, and hand off to the right person. Pinned by customer_photo_share:eval.
+ */
+export function buildMotorcyclePartPhotoShareReply(firstName?: string | null): string {
+  const name = String(firstName ?? "").trim();
+  const greeting = name ? `Thanks ${name}! ` : "Thanks! ";
+  return `${greeting}Looks like a part there — are you looking to grab one, or get it put on? Either way I'll get the right person on it.`;
+}
+
 const MAX_VISION_IMAGE_BYTES = 6 * 1024 * 1024;
 
 // A vision-composed social one-liner is customer-facing, so it passes a deterministic guard:
@@ -341,10 +358,17 @@ export async function buildPhotoShareReplyWithVision(args: {
   anchorAtIso?: string | null;
   dataDir: string;
   contextText?: string;
-}): Promise<{ reply: string; identifiedFamily: string | null; todoSummary: string }> {
+}): Promise<{
+  reply: string;
+  identifiedFamily: string | null;
+  todoSummary: string;
+  kind?: "bike_match" | "part" | "non_motorcycle";
+}> {
   // Trade-in photo: the customer is showing us their unit to appraise, not a bike they like to
   // match against our stock. Divert to the trade frame + appraisal handoff (covers all photo-share
   // convergence points + both live and regenerate paths, which all funnel through this function).
+  // Wins over the part branch below: a part photo from a trade lead still goes to the appraiser
+  // (fail-safe — a human sees it).
   if (isTradePhotoShareConversation(args.conv as any)) {
     return buildTradePhotoShareResult(args);
   }
@@ -373,6 +397,17 @@ export async function buildPhotoShareReplyWithVision(args: {
     // a screenshot) — divert to a clarification instead of the "match it against stock"
     // reply. Fail-safe: only fires on an explicit is_motorcycle=false; a vision error/null
     // (the catch / a missing description) still falls through to the existing bike-match fallback.
+    // A motorcycle PART/accessory — route to parts/service, never bike inventory or chatter.
+    // Checked before the generic non-motorcycle branch (a part is is_motorcycle=false too).
+    if (description && description.isMotorcyclePart === true) {
+      const who = String(args.firstName ?? "").trim() || "Customer";
+      return {
+        reply: buildMotorcyclePartPhotoShareReply(args.firstName),
+        identifiedFamily: null,
+        todoSummary: `${who} sent a photo of a motorcycle PART/accessory — route to parts/service (buy vs install). Do NOT match it against bike inventory.`,
+        kind: "part"
+      };
+    }
     if (description && description.isMotorcycle === false) {
       const who = String(args.firstName ?? "").trim() || "Customer";
       const isChatter = !!sanitizeSocialPhotoReply(description.socialReply);
@@ -381,7 +416,8 @@ export async function buildPhotoShareReplyWithVision(args: {
         identifiedFamily: null,
         todoSummary: isChatter
           ? `${who} shared a friendly non-motorcycle photo (chatter) — the agent acknowledged it socially. No bike action needed.`
-          : `${who} sent a non-motorcycle photo (document/unclear) — take a look in the thread and follow up if needed.`
+          : `${who} sent a non-motorcycle photo (document/unclear) — take a look in the thread and follow up if needed.`,
+        kind: "non_motorcycle"
       };
     }
     if (!shouldUseVisionIdentification(description)) return fallback;
