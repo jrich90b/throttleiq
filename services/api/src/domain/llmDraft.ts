@@ -11463,13 +11463,16 @@ export async function parseVoiceDurableFactsWithLLM(args: {
 
 export type VehicleImageDescription = {
   isMotorcycle: boolean;
+  // A close-up of a motorcycle PART or accessory (exhaust, seat, wheel, a part in a box,
+  // a part-number label, a broken component) — NOT a whole bike. Routes to parts/service.
+  isMotorcyclePart: boolean;
   make: string;
   modelFamily: string;
   color: string;
   distinctiveFeatures: string;
   confidence: number;
   // For a NON-motorcycle photo (true chatter — a fish, a pet, scenery): a brief, warm,
-  // friend-style one-liner a salesperson would text back. Empty for motorcycle photos.
+  // friend-style one-liner a salesperson would text back. Empty for motorcycle/part photos.
   socialReply: string;
 };
 
@@ -11497,6 +11500,7 @@ export async function describeVehicleImageWithLLM(args: {
     additionalProperties: false,
     required: [
       "is_motorcycle",
+      "is_motorcycle_part",
       "make",
       "model_family",
       "color",
@@ -11506,6 +11510,7 @@ export async function describeVehicleImageWithLLM(args: {
     ],
     properties: {
       is_motorcycle: { type: "boolean" },
+      is_motorcycle_part: { type: "boolean" },
       make: { type: "string" },
       model_family: { type: "string" },
       color: { type: "string" },
@@ -11522,11 +11527,13 @@ export async function describeVehicleImageWithLLM(args: {
     "- color is the visible paint description (e.g. \"red over black two-tone\").",
     "- distinctive_features: short comma list (e.g. \"Tour-Pak, ape hangers, passenger backrest\").",
     "- confidence reflects the model_family identification only, 0 to 1. If you cannot tell the family, use a low confidence and an empty model_family.",
-    "- is_motorcycle=false for paperwork, screenshots of documents, people, or anything that is not a motorcycle photo.",
-    "- social_reply: ONLY when is_motorcycle is false AND the photo is friendly personal chatter (a fish someone caught, a pet, a kid, scenery, a meal) — a brief, warm, casual one-liner a friendly salesperson would text back, like \"Haha, nice catch!\" or \"Aw, cute pup!\". Under 12 words, no sales pitch, no question, no inventory, no mention of bikes. Leave social_reply EMPTY for a motorcycle photo, for documents/paperwork/screenshots, or anything sensitive/unclear.",
+    "- is_motorcycle=true ONLY for a WHOLE motorcycle. is_motorcycle=false for paperwork, screenshots, people, a fish/pet/scenery, OR a close-up of a single part/accessory.",
+    "- is_motorcycle_part=true when the photo is a close-up of a motorcycle PART or accessory (exhaust, seat, wheel, handlebars, mirror, saddlebag, a part in a box, a part-number label, a broken component) rather than a whole bike. For a whole bike: is_motorcycle=true, is_motorcycle_part=false. For a non-vehicle photo: both false.",
+    "- social_reply: ONLY when BOTH is_motorcycle and is_motorcycle_part are false AND the photo is friendly personal chatter (a fish someone caught, a pet, a kid, scenery, a meal) — a brief, warm, casual one-liner a friendly salesperson would text back, like \"Haha, nice catch!\" or \"Aw, cute pup!\". Under 12 words, no sales pitch, no question, no inventory, no mention of bikes. Leave social_reply EMPTY for a motorcycle photo, a part photo, documents/screenshots, or anything sensitive/unclear.",
     "",
-    'EXAMPLE output for a photo of a red-and-black full-dress tourer with a top case: {"is_motorcycle":true,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
-    'EXAMPLE output for a photo of a fish someone caught: {"is_motorcycle":false,"make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
+    'EXAMPLE whole tourer: {"is_motorcycle":true,"is_motorcycle_part":false,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
+    'EXAMPLE a chrome exhaust on a workbench: {"is_motorcycle":false,"is_motorcycle_part":true,"make":"","model_family":"","color":"chrome","distinctive_features":"slip-on exhaust","confidence":0,"social_reply":""}',
+    'EXAMPLE a fish someone caught: {"is_motorcycle":false,"is_motorcycle_part":false,"make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
     args.contextText ? `Customer message context: ${String(args.contextText).slice(0, 200)}` : ""
   ]
     .filter(Boolean)
@@ -11567,6 +11574,7 @@ export async function describeVehicleImageWithLLM(args: {
     if (!parsed || typeof parsed !== "object") return null;
     return {
       isMotorcycle: !!parsed.is_motorcycle,
+      isMotorcyclePart: !!parsed.is_motorcycle_part,
       make: String(parsed.make ?? "").trim(),
       modelFamily: String(parsed.model_family ?? "").trim(),
       color: String(parsed.color ?? "").trim(),

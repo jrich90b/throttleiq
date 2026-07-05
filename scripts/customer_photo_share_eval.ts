@@ -17,6 +17,7 @@ const {
   buildCustomerVehiclePhotoShareReply,
   buildIdentifiedPhotoShareReply,
   buildNonMotorcyclePhotoShareReply,
+  buildMotorcyclePartPhotoShareReply,
   sanitizeSocialPhotoReply,
   detectCustomerVehiclePhotoShareText,
   findNearestInboundImageUrls,
@@ -266,16 +267,43 @@ for (const reply of [chatterReply, neutralReply]) {
   }
 }
 
+// Motorcycle PART/accessory: route to parts/service — never an inventory match, never chatter.
+const partReply = buildMotorcyclePartPhotoShareReply("Bobby");
+assert.match(partReply, /Bobby/, "part reply greets by name");
+assert.match(partReply, /\bpart\b/i, "part reply recognizes it's a part");
+assert.match(partReply, /grab|put on|install/i, "part reply lets the customer disambiguate buy vs install");
+for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i]) {
+  assert.ok(!banned.test(partReply), `part reply must not claim to match inventory (${banned})`);
+}
+
 // Source guard: the vision flow diverts an is_motorcycle=false image away from the bike-match
-// reply (only on an explicit false — fail-safe), passing the vision social line through.
+// reply (only on an explicit false — fail-safe), passing the vision social line through, AND
+// routes a part photo (checked first) to the parts reply.
 const photoShareSource = await fs.readFile(
   path.resolve("services/api/src/domain/customerPhotoShare.ts"),
   "utf8"
 );
 assert.match(
   photoShareSource,
-  /description\.isMotorcycle === false[\s\S]{0,260}buildNonMotorcyclePhotoShareReply\(args\.firstName, description\.socialReply\)/,
+  /description\.isMotorcyclePart === true[\s\S]{0,300}buildMotorcyclePartPhotoShareReply[\s\S]{0,400}kind: "part"/,
+  "buildPhotoShareReplyWithVision must route an is_motorcycle_part image to the parts reply with kind=part"
+);
+assert.match(
+  photoShareSource,
+  /description\.isMotorcycle === false[\s\S]{0,300}buildNonMotorcyclePhotoShareReply\(args\.firstName, description\.socialReply\)/,
   "buildPhotoShareReplyWithVision must divert an is_motorcycle=false image to the social/neutral reply with the vision line"
+);
+// The part branch must come BEFORE the generic non-motorcycle branch (a part is is_motorcycle=false too).
+assert.ok(
+  photoShareSource.indexOf("description.isMotorcyclePart === true") <
+    photoShareSource.indexOf("description.isMotorcycle === false"),
+  "the part branch must be checked before the generic non-motorcycle branch"
+);
+// Caller parity: both paths re-point the agent context to parts/service for a part photo.
+const apiSourcePart = await fs.readFile(path.resolve("services/api/src/index.ts"), "utf8");
+assert.ok(
+  (apiSourcePart.match(/photoShare\.kind === "part"[\s\S]{0,140}CUSTOMER_PHOTO_SHARE_PART_AGENT_CONTEXT/g) ?? []).length >= 3,
+  "all three photo-share convergence points must re-point the context to parts for a part photo"
 );
 
 // --- Trade-in photo framing (Jessica Ornce +17167134728, 2026-06-23). ---
