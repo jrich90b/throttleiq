@@ -542,6 +542,7 @@ import {
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
+  decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
@@ -53053,7 +53054,41 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const regenTradeQualifierResponse = lastOutboundAskedTradeQualifier
       ? await parseTradeQualifierResponseWithLLM({ text: event.body ?? "" })
       : null;
-    if (regenTradeQualifierResponse?.hasTrade === "declined") {
+    // Centralized trade-qualifier route decision (shared with live via decideTradeQualifierTurn).
+    const regenTradeQualifierDecision = decideTradeQualifierTurn({
+      askedTradeQualifier: lastOutboundAskedTradeQualifier,
+      hasTrade: regenTradeQualifierResponse?.hasTrade
+    });
+    if (regenTradeQualifierDecision.kind === "trade_affirm") {
+      // Parity with live (closes the prior gap where regen affirm fell through to the orchestrator):
+      // capture the trade vehicle, set trade_init, and ask miles/payoff.
+      const regenTradeBodyLower = String(event.body ?? "").toLowerCase();
+      const tradeYear = extractYearSingle(regenTradeBodyLower);
+      const tradeModel = findMentionedModel(regenTradeBodyLower);
+      conv.lead = conv.lead ?? {};
+      conv.lead.tradeVehicle = conv.lead.tradeVehicle ?? {};
+      if (tradeYear) conv.lead.tradeVehicle.year = String(tradeYear);
+      if (tradeModel) {
+        conv.lead.tradeVehicle.model = tradeModel;
+        conv.lead.tradeVehicle.description = tradeModel;
+      }
+      if (!isTradeDialogState(getDialogState(conv))) {
+        setDialogState(conv, "trade_init");
+      }
+      const tradeLabel = tradeModel
+        ? formatModelLabel(tradeYear ? String(tradeYear) : null, tradeModel)
+        : tradeYear
+          ? `${tradeYear} bike`
+          : "your bike";
+      const reply = tradeModel || tradeYear
+        ? `Perfect — thanks. ${tradeLabel} helps. About how many miles are on it, and is there any payoff left on it?`
+        : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply);
+    }
+    if (regenTradeQualifierDecision.kind === "trade_decline") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = {};
       const paymentBudget = resolvePaymentBudgetForConversation(conv, String(event.body ?? ""));
@@ -58447,7 +58482,12 @@ if (authToken && signature) {
     // "unclear" or a null parse falls through — safer than a silent regex miss. Same parser runs
     // in /conversations/:id/regenerate.
     const tradeQualifierResponse = await parseTradeQualifierResponseWithLLM({ text: inboundText });
-    if (tradeQualifierResponse?.hasTrade === "affirmed") {
+    // Centralized trade-qualifier route decision (shared with regenerate via decideTradeQualifierTurn).
+    const tradeQualifierDecision = decideTradeQualifierTurn({
+      askedTradeQualifier: lastOutboundAskedTradeQualifier,
+      hasTrade: tradeQualifierResponse?.hasTrade
+    });
+    if (tradeQualifierDecision.kind === "trade_affirm") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = conv.lead.tradeVehicle ?? {};
       if (tradeYear) conv.lead.tradeVehicle.year = String(tradeYear);
@@ -58468,7 +58508,7 @@ if (authToken && signature) {
         : "Perfect — thanks. What year and model is your trade, about how many miles are on it, and is there any payoff left?";
       return publishLiveTwilioReply(reply);
     }
-    if (tradeQualifierResponse?.hasTrade === "declined") {
+    if (tradeQualifierDecision.kind === "trade_decline") {
       conv.lead = conv.lead ?? {};
       conv.lead.tradeVehicle = {};
       const paymentBudget = resolvePaymentBudgetForConversation(conv, inboundText);
