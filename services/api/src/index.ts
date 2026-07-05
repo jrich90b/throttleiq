@@ -668,6 +668,7 @@ import {
   planStaleHeldUnitWatchHeal,
   resolveHeldGuardWatchTarget
 } from "./domain/heldUnitWatchHeal.js";
+import { hasDisclosedUnitUnavailabilityWithoutReply } from "./domain/cadenceAvailabilityDisclosure.js";
 import {
   isAutoCloseEligibleTask,
   decideTaskAutoClose,
@@ -11696,6 +11697,12 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
     return null;
   }
 
+  // Say the unit is gone ONCE. If we already disclosed its unavailability and the
+  // customer hasn't written back, don't re-send the same "that bike is gone" nag
+  // every cadence step (Lizbeth +18035525355 got it 5×) — the watch armed below on
+  // the first disclosure carries the follow-through; let the normal cadence run.
+  if (hasDisclosedUnitUnavailabilityWithoutReply(conv?.messages)) return null;
+
   const firstName = normalizeDisplayCase(args.name || "there");
   const modelLabel =
     formatModelLabelForFollowUp(conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.model ?? null) ||
@@ -12447,6 +12454,13 @@ async function buildCadenceHeldInventoryOverride(args: {
     });
     return null;
   }
+  // Every path in this builder produces a unit-unavailability disclosure ("that
+  // bike has sold / is on hold"). Say it once: if we already disclosed and the
+  // customer hasn't replied since, suppress so the cadence rotates to its normal
+  // varied message instead of re-nagging (Lizbeth +18035525355). Runs in BOTH the
+  // live tick and regen — draft-only regen never flips a message to "sent", so a
+  // suppressed disclosure only reflects a real prior send.
+  if (hasDisclosedUnitUnavailabilityWithoutReply(conv?.messages)) return null;
   const parserContext = await getParserCadenceInventoryTargetContext({
     conv,
     lastDraft: args.lastDraft
