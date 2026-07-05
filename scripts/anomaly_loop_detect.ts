@@ -65,7 +65,12 @@ for (const sib of [
   // Fabricated-frame: a SENT reply that opened with a frame the customer's turn didn't warrant
   // ("You're welcome" with no thanks). A customer-facing comprehension miss that was previously
   // visible only in the morning digest — fold it in so the autonomous loop + daily PR-review see it too.
-  { name: "fabricated-frame (comprehension)", file: path.join(reportRoot, "fabricated_frame", "latest.json") }
+  { name: "fabricated-frame (comprehension)", file: path.join(reportRoot, "fabricated_frame", "latest.json") },
+  // Corpus replay flywheel (offline readiness): the nightly sandbox sweep replays every
+  // conversation's last inbound through the DEPLOYED code and judges the drafts — regressions
+  // (a turn that passed before, on a changed draft) and judge-major misses land here so the
+  // loop consumes offline findings exactly like live ones (corpus_replay_nightly.ts, 05:00 UTC).
+  { name: "corpus-replay (offline flywheel)", file: path.join(reportRoot, "corpus_replay", "latest.json") }
 ]) {
   if (!fs.existsSync(sib.file)) continue;
   try {

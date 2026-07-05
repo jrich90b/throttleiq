@@ -25,4 +25,12 @@ assert.ok(/occurredAt: atIso/.test(flywheel), "findings are timestamped for down
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
 
+// Nightly box orchestrator: the sweep gate is pure + self-tested (skip-if-unchanged, forced,
+// weekly UTC-Monday confirmation, fail-toward-measuring), and the detect chain folds the
+// flywheel's latest.json like every other sibling feed.
+const nightlyOut = execFileSync("npx", ["tsx", "scripts/corpus_replay_nightly.ts", "--self-test"], { encoding: "utf8" });
+assert.ok(/self-test OK/.test(nightlyOut), `nightly self-test must pass, got: ${nightlyOut.slice(0, 200)}`);
+const detect = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
+assert.ok(/corpus_replay", "latest\.json"/.test(detect), "anomaly_loop_detect must fold the corpus_replay sibling feed into next.json");
+
 console.log("PASS corpus replay flywheel eval (self-test + shared-judge + cost-cap + finding-shape guards)");

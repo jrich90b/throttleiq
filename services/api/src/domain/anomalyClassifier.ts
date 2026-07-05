@@ -133,6 +133,36 @@ export function classifyOutcomeAnomaly(
   // coverage-gap blind spot. Both are INTEGRATION-wiring diagnoses, NOT parser few-shots and NOT
   // reconcile heals, and never an auto-mergeable code change → ALWAYS Tier 2 (escalate, notify, never
   // auto-merge): the loop opens an approve-first PR (or surfaces the runtime cause), the operator decides.
+  // Corpus replay flywheel findings (offline sandbox sweep of the deployed code). A REGRESSION
+  // (a turn that previously passed, failing on a materially changed draft) means a merged change
+  // broke customer-facing behavior — always Tier 2, escalate + notify (rollback is a judgment
+  // call). A judge-major miss on a never-passed turn is a comprehension-gap candidate: Tier 1
+  // parser_fix_candidate (fixture/few-shot work), auto-merge only via the category ladder like
+  // every other Tier-1 class. A replay ERROR is harness/integration diagnosis — Tier 2.
+  if (anomaly.dimension === "corpus_replay_regression" || anomaly.dimension === "corpus_replay_error") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale:
+        anomaly.dimension === "corpus_replay_regression"
+          ? "offline sweep: a previously-passing turn now fails on a changed draft — a merged change likely regressed it; diagnose + approve-first"
+          : "offline sweep errored on this turn — harness/integration diagnosis, never auto-merge"
+    };
+  }
+  if (anomaly.dimension === "corpus_replay_judge_fail") {
+    return {
+      tier: 1,
+      action: "parser_fix_candidate",
+      workOrder: true,
+      autoMergeEligible: graduated,
+      notify: false,
+      rationale: "offline sweep: judged wrong-intent/unaddressed draft — parser fixture/few-shot candidate (graduated ladder applies)"
+    };
+  }
+
   if (anomaly.dimension === "crm_update_error" || anomaly.dimension === "crm_log_stale") {
     const why =
       anomaly.dimension === "crm_log_stale"

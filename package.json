@@ -134,6 +134,7 @@
     "initial_adf_todo_cadence:eval": "npx tsx scripts/initial_adf_todo_cadence_eval.ts",
     "conversation_replay:eval": "npx tsx scripts/conversation_replay_eval.ts",
     "corpus_replay:flywheel": "npx tsx scripts/corpus_replay_flywheel.ts",
+    "corpus_replay:nightly": "npx tsx scripts/corpus_replay_nightly.ts",
     "corpus_replay_flywheel:eval": "npx tsx scripts/corpus_replay_flywheel_eval.ts",
     "inbound_shadow:replay": "npx tsx scripts/inbound_shadow_replay.ts",
     "route_watchdog:run": "npx tsx scripts/route_audit_watchdog.ts",

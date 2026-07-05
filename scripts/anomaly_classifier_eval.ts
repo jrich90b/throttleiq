@@ -50,6 +50,22 @@ check(classifyOutcomeAnomaly(A({ category: "discovery", healed: false, dimension
   { graduatedCategories: new Set(["open_critic_finding"]) } as any),
   { tier: 2, action: "escalate", autoMergeEligible: false }, "discovery never auto-merges even if graduated");
 
+// --- Corpus replay flywheel (offline sweep): a REGRESSION or harness ERROR => Tier 2 escalate;
+//     a judge-fail on a never-passed turn => Tier 1 parser fixture candidate (ladder applies). ---
+check(classifyOutcomeAnomaly(A({ category: "reply", healed: false, dimension: "corpus_replay_regression" })),
+  { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "corpus_replay_regression => escalate (merged change likely regressed it)");
+check(classifyOutcomeAnomaly(A({ category: "reply", healed: false, dimension: "corpus_replay_error" })),
+  { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "corpus_replay_error => escalate (harness diagnosis)");
+check(classifyOutcomeAnomaly(A({ category: "reply", healed: false, dimension: "corpus_replay_judge_fail" })),
+  { tier: 1, action: "parser_fix_candidate", workOrder: true, notify: false, autoMergeEligible: false }, "corpus_replay_judge_fail => tier 1 parser fixture candidate, ungraduated no auto-merge");
+check(classifyOutcomeAnomaly(A({ category: "reply", healed: false, dimension: "corpus_replay_judge_fail" }),
+  { graduatedCategories: new Set(["corpus_replay_judge_fail"]) }),
+  { tier: 1, autoMergeEligible: true }, "corpus_replay_judge_fail graduates like any Tier-1 category");
+// A regression NEVER auto-merges, graduated or not.
+check(classifyOutcomeAnomaly(A({ category: "reply", healed: false, dimension: "corpus_replay_regression" }),
+  { graduatedCategories: new Set(["corpus_replay_regression"]) }),
+  { tier: 2, autoMergeEligible: false }, "corpus_replay_regression never auto-merges even if graduated");
+
 // --- CRM/TLP update error: an integration failure => ALWAYS Tier 2 escalate, never auto-merge. ---
 check(classifyOutcomeAnomaly(A({ category: "state", healed: false, dimension: "crm_update_error" })),
   { tier: 2, action: "escalate", workOrder: true, notify: true, autoMergeEligible: false }, "crm_update_error => escalate (diagnose integration)");

@@ -135,6 +135,23 @@ sweep, this one is LLM-backed, so its cron MUST load the OpenAI key (source the 
 Conservative + capped (OPEN_CRITIC_MAX, OPEN_CRITIC_WINDOW_DAYS); kill with LLM_OPEN_CRITIC_ENABLED=0.
 Findings are category=`discovery` → DETECT escalates them (Tier 2, notify, never auto-merge).
 
+### Corpus replay flywheel — nightly offline sweep (LIVE on americanharley 2026-07-05)
+The offline readiness loop (Joe, 7/2: "run potential conversations, evals and shadow tests")
+runs ON the instance: `corpus_replay_nightly.ts` snapshots the store locally, replays every
+conversation's last inbound through the DEPLOYED dist (`inbound_shadow_replay --last-turn-only`
+— no build on the box), judges drafts with the shared intent-handled judge (cache under
+REPORT_ROOT/corpus_replay keeps unchanged drafts free), and writes OutcomeAnomaly findings to
+`reports/corpus_replay/latest.json` — merged into next.json by the 8:55 DETECT like every other
+sibling feed. SKIP-IF-UNCHANGED: no sweep when the deployed commit hasn't moved (a sweep
+measures code, not time); forced weekly on UTC Monday (= Sunday night ET) or with FORCE=1.
+Tiers: `corpus_replay_regression`/`corpus_replay_error` → Tier 2 escalate;
+`corpus_replay_judge_fail` → Tier 1 parser-fixture candidate (ladder applies).
+
+```
+# 5:00 AM UTC (1:00am ET) — corpus replay flywheel sweep (skip-if-unchanged; needs OPENAI_API_KEY)
+0 5 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; LLM_ENABLED=1 DATA_DIR=/home/ubuntu/leadrider-runtime/americanharley/data REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run corpus_replay:nightly >> /home/ubuntu/leadrider-runtime/americanharley/reports/corpus_replay_cron.log 2>&1"
+```
+
 ### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
 Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
 next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). It also MERGES the Net 3
