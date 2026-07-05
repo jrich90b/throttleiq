@@ -20,6 +20,7 @@ export {
   decideWatchOptOutTurn,
   decideWatchScopeTurn,
   decideSchedulingTurn,
+  decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
