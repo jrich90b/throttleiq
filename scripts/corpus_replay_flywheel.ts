@@ -17,9 +17,11 @@
  *   npx tsx scripts/corpus_replay_flywheel.ts --replay-json <inbound-shadow-*.json> [--out-dir DIR] [--max-judge N]
  *   npx tsx scripts/corpus_replay_flywheel.ts --self-test        # pure scaffolding, no network
  *
- * Thresholds the loop drives toward (tracked in summary.json):
- *   T1 criticals === 0 on a full sweep; T2 passRate >= 0.90 twice consecutively;
- *   T3 regressions === 0 twice consecutively.
+ * Release contract (Joe, 2026-07-05 — correctness blocks, quality trends):
+ *   GATE (blocks rollout): criticals === 0 AND regressions === 0, two consecutive sweeps.
+ *   TREND (tracked, never blocking): overall passRate target >= 0.85 (aligned with the live
+ *   tone-gate floor) — judge-minor quality nits inform voice work but cannot block a release
+ *   (blocking on an LLM judge's taste invites Goodharting the voice charter).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -50,6 +52,9 @@ export type ReplayRow = {
   router?: { followUpMode?: string | null; followUpReason?: string | null } | null;
   error?: string;
 };
+
+// Tracked quality trend target — aligned with the live tone-gate floor (85%). Never blocking.
+export const TREND_PASS_RATE_TARGET = 0.85;
 
 export type TurnScore = {
   turnKey: string;
@@ -406,7 +411,13 @@ export type FlywheelSummary = {
   regressions: number;
   flakyJudgeFlips: number;
   passRate: number;
-  thresholds: { t1_criticals_zero: boolean; t2_pass_rate_ge_090: boolean; t3_regressions_zero: boolean };
+  thresholds: {
+    gate_criticals_zero: boolean; // BLOCKING
+    gate_regressions_zero: boolean; // BLOCKING
+    gate_pass: boolean; // both blocking bars green this sweep
+    trend_pass_rate: number; // tracked vs TREND_PASS_RATE_TARGET, never blocking
+    trend_on_target: boolean;
+  };
 };
 
 async function main() {
@@ -570,11 +581,18 @@ async function main() {
     regressions: regressions.length,
     flakyJudgeFlips: flaky.length,
     passRate: scores.length ? Math.round(((scores.length - failed.length) / scores.length) * 1000) / 1000 : 1,
-    thresholds: {
-      t1_criticals_zero: scores.every(s => !s.critical),
-      t2_pass_rate_ge_090: scores.length > 0 && (scores.length - failed.length) / scores.length >= 0.9,
-      t3_regressions_zero: regressions.length === 0
-    }
+    thresholds: (() => {
+      const criticalsZero = scores.every(s => !s.critical);
+      const regressionsZero = regressions.length === 0;
+      const rate = scores.length ? (scores.length - failed.length) / scores.length : 1;
+      return {
+        gate_criticals_zero: criticalsZero,
+        gate_regressions_zero: regressionsZero,
+        gate_pass: criticalsZero && regressionsZero,
+        trend_pass_rate: Math.round(rate * 1000) / 1000,
+        trend_on_target: rate >= TREND_PASS_RATE_TARGET
+      };
+    })()
   };
 
   fs.mkdirSync(outDir, { recursive: true });
@@ -586,7 +604,8 @@ async function main() {
     `flywheel: ${summary.totalTurns} turns, ${summary.judged} judged (${summary.judgeSkippedByCap} over cap), ` +
       `pass ${summary.passed}/${summary.totalTurns} (${(summary.passRate * 100).toFixed(1)}%), ` +
       `criticals ${summary.criticals}, regressions ${summary.regressions} — ` +
-      `T1:${summary.thresholds.t1_criticals_zero ? "PASS" : "fail"} T2:${summary.thresholds.t2_pass_rate_ge_090 ? "PASS" : "fail"} T3:${summary.thresholds.t3_regressions_zero ? "PASS" : "fail"}`
+      `GATE:${summary.thresholds.gate_pass ? "PASS" : "fail"} (criticals ${summary.thresholds.gate_criticals_zero ? "ok" : "BLOCK"}, regressions ${summary.thresholds.gate_regressions_zero ? "ok" : "BLOCK"}) ` +
+      `TREND:${(summary.thresholds.trend_pass_rate * 100).toFixed(1)}% ${summary.thresholds.trend_on_target ? "on-target" : `below ${TREND_PASS_RATE_TARGET * 100}%`}`
   );
 }
 

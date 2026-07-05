@@ -25,6 +25,18 @@ assert.ok(/occurredAt: atIso/.test(flywheel), "findings are timestamped for down
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
 
+// Release contract (Joe, 2026-07-05): the GATE blocks on correctness only (criticals=0 AND
+// regressions=0); the pass-rate is a tracked TREND aligned with the live tone floor (0.85),
+// never blocking — pinned so a future edit can't quietly re-block on the judge's taste.
+{
+  const { TREND_PASS_RATE_TARGET } = await import("./corpus_replay_flywheel.ts");
+  assert.equal(TREND_PASS_RATE_TARGET, 0.85, "trend target stays aligned with the live tone-gate floor");
+  const src = fs.readFileSync("scripts/corpus_replay_flywheel.ts", "utf8");
+  assert.ok(/gate_pass: criticalsZero && regressionsZero/.test(src), "the blocking gate is criticals+regressions ONLY");
+  assert.ok(!/pass_rate_ge_090|>=\s*0\.9\b/.test(src), "the retired 90%-overall blocker must not reappear");
+  assert.ok(/trend_on_target: rate >= TREND_PASS_RATE_TARGET/.test(src), "pass rate is tracked as a trend, not a gate");
+}
+
 // Nightly box orchestrator: the sweep gate is pure + self-tested (skip-if-unchanged, forced,
 // weekly UTC-Monday confirmation, fail-toward-measuring), and the detect chain folds the
 // flywheel's latest.json like every other sibling feed.
