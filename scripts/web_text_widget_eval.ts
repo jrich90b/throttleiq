@@ -251,6 +251,48 @@ cases.push(
 
 const apiSource = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
 const llmDraftSource = readFileSync(new URL("../services/api/src/domain/llmDraft.ts", import.meta.url), "utf8");
+// --- Declared-Sales widget outranks the orchestrator's department keyword fallbacks (Syed Saad,
+//     +19993605729, 2026-07-01: "I am purchasing detail[s]" on the Iron 883 SALES widget tripped
+//     the "detail" service keyword and drew a service-department ack on a purchase question). ---
+const orchestratorSource = readFileSync(
+  path.join(process.cwd(), "services/api/src/domain/orchestrator.ts"),
+  "utf8"
+);
+cases.push(
+  {
+    id: "widget_department_extractor_exists",
+    actual:
+      orchestratorSource.includes("function widgetDeclaredDepartment") &&
+      orchestratorSource.includes("function widgetDeclaresSalesDepartment"),
+    expected: true
+  },
+  {
+    id: "sales_widget_gates_parts_fallback",
+    actual: /!widgetSalesLead && detectPartsFallbackRequest\(event\.body\)/.test(orchestratorSource),
+    expected: true
+  },
+  {
+    id: "sales_widget_gates_apparel_fallback",
+    actual: /!widgetSalesLead && detectApparelFallbackRequest\(event\.body\)/.test(orchestratorSource),
+    expected: true
+  },
+  {
+    id: "sales_widget_gates_service_fallback",
+    actual: /!widgetSalesLead && detectServiceFallbackRequest\(event\.body\)/.test(orchestratorSource),
+    expected: true
+  },
+  {
+    id: "bare_detail_noun_no_longer_matches_service",
+    actual: /\|detail\)\b/.test(orchestratorSource),
+    expected: false
+  },
+  {
+    id: "detailing_ask_still_matches_service",
+    actual: /detailing\|detail/.test(orchestratorSource),
+    expected: true
+  }
+);
+
 const widgetRouteStart = apiSource.indexOf('app.post("/public/widget/text-us"');
 const widgetRoute = widgetRouteStart >= 0 ? apiSource.slice(widgetRouteStart, widgetRouteStart + 14000) : "";
 const salesContextResolverStart = apiSource.indexOf("async function resolveWebTextWidgetSalesVehicleContext");
@@ -366,6 +408,18 @@ cases.push(
     expected: true
   }
 );
+
+cases.push({
+  // Paul Foley +19054842961 (2026-06-22): a parts web-widget question got a department
+  // task but no customer reply. Non-sales widgets (parts/service/apparel) must also
+  // acknowledge — a handoff ack, never dead air.
+  id: "nonsales_widget_publishes_department_handoff_ack",
+  actual:
+    apiSource.includes("evaluateDeptAckInvariant") &&
+    apiSource.includes("they'll text you right back") &&
+    apiSource.includes("_ack_draft_created"),
+  expected: true
+});
 
 let passed = 0;
 for (const c of cases) {

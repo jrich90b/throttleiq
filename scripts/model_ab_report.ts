@@ -22,7 +22,11 @@ const SENT_OUT = new Set(["twilio", "sendgrid", "human"]);
 const WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 
-const ARM_MODEL: Record<string, string> = { control: "gpt-5-mini", challenger: "gpt-5" };
+const ARM_MODEL: Record<string, string> = {
+  control: "gpt-5-mini",
+  challenger: "gpt-5",
+  anthropic: process.env.ANTHROPIC_DRAFT_MODEL || "claude-sonnet-4-6"
+};
 
 function convBooked(conv: any): boolean {
   if (conv?.appointment?.bookedEventId) return true;
@@ -61,7 +65,8 @@ function main() {
 
   const arms: Record<string, { sentReplies: number; replied: number; convs: Set<string>; booked: Set<string> }> = {
     control: { sentReplies: 0, replied: 0, convs: new Set(), booked: new Set() },
-    challenger: { sentReplies: 0, replied: 0, convs: new Set(), booked: new Set() }
+    challenger: { sentReplies: 0, replied: 0, convs: new Set(), booked: new Set() },
+    anthropic: { sentReplies: 0, replied: 0, convs: new Set(), booked: new Set() }
   };
 
   for (const conv of convs) {
@@ -94,39 +99,47 @@ function main() {
   }
 
   const pct = (r: number, n: number) => (n ? Math.round((r / n) * 1000) / 10 : 0);
-  const row = (k: "control" | "challenger") => {
+  const row = (k: keyof typeof arms) => {
     const a = arms[k];
     return {
       arm: k,
-      model: ARM_MODEL[k],
+      model: ARM_MODEL[k] ?? k,
       sentReplies: a.sentReplies,
       replyRatePct: pct(a.replied, a.sentReplies),
       convs: a.convs.size,
       bookedRatePct: pct(a.booked.size, a.convs.size)
     };
   };
-  const control = row("control"), challenger = row("challenger");
+  const control = row("control"), challenger = row("challenger"), anthropic = row("anthropic");
+  const deltaVsControl = (s: typeof control, armKey: keyof typeof arms) => ({
+    replyRatePct: Math.round((s.replyRatePct - control.replyRatePct) * 10) / 10,
+    replyZ: zTest(arms[armKey].replied, arms[armKey].sentReplies, arms.control.replied, arms.control.sentReplies),
+    bookedRatePct: Math.round((s.bookedRatePct - control.bookedRatePct) * 10) / 10
+  });
   const report = {
     generatedAt: new Date().toISOString(),
     source: { conversationsPath, since: sinceIso || "(none — includes pre-launch control-model sends; pass --since)" },
     control,
     challenger,
-    delta: {
-      replyRatePct: Math.round((challenger.replyRatePct - control.replyRatePct) * 10) / 10,
-      replyZ: zTest(arms.challenger.replied, arms.challenger.sentReplies, arms.control.replied, arms.control.sentReplies),
-      bookedRatePct: Math.round((challenger.bookedRatePct - control.bookedRatePct) * 10) / 10
-    }
+    anthropic,
+    delta: deltaVsControl(challenger, "challenger"), // back-compat: challenger vs control
+    deltaChallenger: deltaVsControl(challenger, "challenger"),
+    deltaAnthropic: deltaVsControl(anthropic, "anthropic")
   };
 
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, "model_ab_report.json"), JSON.stringify(report, null, 2));
   const fmt = (s: typeof control) =>
-    `${s.arm.padEnd(10)} (${s.model.padEnd(10)}) replies:${String(s.sentReplies).padStart(4)}  replyRate:${String(s.replyRatePct).padStart(5)}%  booked:${s.bookedRatePct}% (${s.convs} convs)`;
-  console.log("\n=== Draft-model A/B (gpt-5 vs gpt-5-mini) ===");
+    `${String(s.arm).padEnd(10)} (${s.model.padEnd(16)}) replies:${String(s.sentReplies).padStart(4)}  replyRate:${String(s.replyRatePct).padStart(5)}%  booked:${s.bookedRatePct}% (${s.convs} convs)`;
+  console.log("\n=== Draft-model A/B (gpt-5-mini control vs gpt-5 challenger vs Sonnet) ===");
   if (!sinceMs) console.log("WARNING: no --since cutoff; pre-launch sends were all control-model regardless of arm and dilute this. Pass --since <launch ISO>.");
   console.log(fmt(control));
   console.log(fmt(challenger));
-  console.log(`delta reply: ${report.delta.replyRatePct >= 0 ? "+" : ""}${report.delta.replyRatePct}pp (z=${report.delta.replyZ}, |z|>=1.96 ~ significant) | booked: ${report.delta.bookedRatePct >= 0 ? "+" : ""}${report.delta.bookedRatePct}pp`);
+  console.log(fmt(anthropic));
+  const fmtDelta = (label: string, d: ReturnType<typeof deltaVsControl>) =>
+    `${label}: reply ${d.replyRatePct >= 0 ? "+" : ""}${d.replyRatePct}pp (z=${d.replyZ}, |z|>=1.96 ~ significant) | booked ${d.bookedRatePct >= 0 ? "+" : ""}${d.bookedRatePct}pp`;
+  console.log(fmtDelta("challenger vs control", report.deltaChallenger));
+  console.log(fmtDelta("anthropic  vs control", report.deltaAnthropic));
   console.log(`report: ${path.join(outDir, "model_ab_report.json")}\n`);
 }
 

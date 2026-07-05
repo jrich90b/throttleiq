@@ -130,6 +130,81 @@ restore_if_backup_exists() {
     echo "[feedback-hourly] step=language_seed_eval skipped"
   fi
 
+  # --- Behavior audits on the recent window (the hourly miss-detection sweep) -------------------
+  # Flags cadence / handoff / task / no-response / wrong-intent misses within ~2h instead of waiting
+  # for the nightly. Each step is `|| true` so a single audit failure can NEVER break this loop or the
+  # rule-promotion/rollback above. agent_manager:report (next) re-ranks whatever these produce, and the
+  # agent-watch routine then diagnoses + patches the code parser-first (approve-first PR).
+  ROUTE_AUDIT_DIR="${ROUTE_AUDIT_DIR:-$REPORT_ROOT/route_audit}"
+  FOLLOWUP_TASK_AUDIT_JSON="$LOG_DIR/followup_task_consistency_hourly_$TS.json"
+  WATCHDOG_JSON="$LOG_DIR/route_watchdog_hourly_$TS.json"
+  WATCHDOG_SINCE_MIN=$(( FAST_LOOP_SINCE_HOURS * 60 ))
+  export ROUTE_AUDIT_DIR
+
+  # Cost split: the DETERMINISTIC detectors run every hour (free). The LLM-judge audits (intent_handled,
+  # outcome_qa) cost per turn, and the live held-gate already flags the worst wrong-intent/fabrication in
+  # real time — so run those only every LLM_AUDIT_EVERY_HOURS (default 4). 10# forces base-10 on the hour.
+  HOUR_NOW="$(date +%H)"
+  RUN_LLM_AUDITS=$(( 10#$HOUR_NOW % ${LLM_AUDIT_EVERY_HOURS:-4} == 0 ? 1 : 0 ))
+
+  echo "[feedback-hourly] step=followup_task_consistency_audit"   # cadence / task / handoff state
+  npm run followup_task_consistency:audit -- --conversations "$CONVERSATIONS_DB_PATH" --since-hours "$FAST_LOOP_SINCE_HOURS" --out "$FOLLOWUP_TASK_AUDIT_JSON" || true
+
+  echo "[feedback-hourly] step=stale_handoff_todo_audit"          # handed-off leads going stale
+  npm run stale_handoff_todo:audit || true
+
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=intent_handled_audit"            # wrong-intent (the Adam/Douglas class) — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    INTENT_HANDLED_SINCE_HOURS="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" npm run intent_handled:audit || true
+  else
+    echo "[feedback-hourly] step=intent_handled_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
+
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=context_fidelity_audit"          # answering out of context (over-attach/stale/wrong-lead-type) — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    mkdir -p "$REPORT_ROOT/context_fidelity"
+    LLM_ENABLED=1 CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" REPORT_ROOT="$REPORT_ROOT" npx tsx scripts/context_fidelity_audit.ts --since-hours="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" > /dev/null 2>&1 || true
+  else
+    echo "[feedback-hourly] step=context_fidelity_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
+
+  echo "[feedback-hourly] step=compliance_send_audit"             # opt-out / STOP footer
+  npm run compliance:audit || true
+
+  echo "[feedback-hourly] step=task_autoclose_stale_report"       # task completion not marked
+  mkdir -p "$REPORT_ROOT/task_autoclose"
+  LLM_ENABLED=1 CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" npx tsx scripts/task_fulfillment_autoclose_report.ts --limit=200 > "$REPORT_ROOT/task_autoclose/task_autoclose_report.txt" 2>&1 || true
+
+  echo "[feedback-hourly] step=draft_held_report"                 # held drafts (the bridge to the code fix)
+  mkdir -p "$REPORT_ROOT/draft_held"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" DRAFT_HELD_REPORT_OUT="$REPORT_ROOT/draft_held/draft_held_report.txt" npx tsx scripts/draft_held_report.ts > /dev/null 2>&1 || true
+
+  echo "[feedback-hourly] step=route_watchdog"                    # actionable inbound with no response
+  npm run route_watchdog:run -- --conversations "$CONVERSATIONS_DB_PATH" --route-audit-dir "$ROUTE_AUDIT_DIR" --since-min "$WATCHDOG_SINCE_MIN" --out "$WATCHDOG_JSON" || true
+
+  OUTCOME_QA_OUT_DIR="${OUTCOME_QA_OUT_DIR:-$REPORT_ROOT/outcome_qa}"
+  BOOKING_FUNNEL_OUT_DIR="${BOOKING_FUNNEL_OUT_DIR:-$REPORT_ROOT/booking_funnel}"
+  mkdir -p "$OUTCOME_QA_OUT_DIR" "$BOOKING_FUNNEL_OUT_DIR"
+  export OUTCOME_QA_OUT_DIR
+
+  if [[ "$RUN_LLM_AUDITS" == "1" ]]; then
+    echo "[feedback-hourly] step=outcome_qa_audit"               # context / outcomes / disposition QA — LLM, every ${LLM_AUDIT_EVERY_HOURS:-4}h
+    OUTCOME_QA_SINCE_HOURS="$(( ${LLM_AUDIT_EVERY_HOURS:-4} ))" npm run outcome_qa:audit -- --conversations "$CONVERSATIONS_DB_PATH" --out-dir "$OUTCOME_QA_OUT_DIR" || true
+  else
+    echo "[feedback-hourly] step=outcome_qa_audit skipped (LLM audits run every ${LLM_AUDIT_EVERY_HOURS:-4}h)"
+  fi
+
+  echo "[feedback-hourly] step=booking_funnel_audit"              # appointment bookings (offer->book misses)
+  BOOKING_FUNNEL_OUT_DIR="$BOOKING_FUNNEL_OUT_DIR" npx tsx scripts/booking_funnel_audit.ts --since-days 1 --out-dir "$BOOKING_FUNNEL_OUT_DIR" > /dev/null 2>&1 || true
+
+  echo "[feedback-hourly] step=watch_fire_miss_audit"             # active watch + matching unit in stock + not notified
+  mkdir -p "$REPORT_ROOT/watch_fire_miss"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" WATCH_FIRE_MISS_OUT="$REPORT_ROOT/watch_fire_miss/watch_fire_miss_report.txt" npx tsx scripts/watch_fire_miss_audit.ts > /dev/null 2>&1 || true
+
+  echo "[feedback-hourly] step=cross_lead_leak_audit"             # another customer's contact in the wrong thread
+  mkdir -p "$REPORT_ROOT/cross_lead_leak"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" CROSS_LEAD_LEAK_OUT="$REPORT_ROOT/cross_lead_leak/cross_lead_leak_report.txt" npx tsx scripts/cross_lead_leak_audit.ts > /dev/null 2>&1 || true
+
   echo "[feedback-hourly] step=agent_manager_report"
   npm run agent_manager:report
 

@@ -5,13 +5,19 @@ import { buildTradeAdfAck } from "./tradeAdfReply.js";
 import { buildPaymentMethodsReply, hasPaymentMethodsTenderHint } from "./paymentMethodsReply.js";
 import { buildMonthlyTargetAck } from "./financialEmpathyLine.js";
 import { textContainsSchedulingOffer } from "./bookingFunnel.js";
-import { appendVisitInvite, shouldAppendVisitInvite } from "./proactiveVisitInvite.js";
+import {
+  appendVisitInvite,
+  shouldAppendVisitInvite,
+  visitInviteExpandedEnabled,
+  isDisengagedDisposition
+} from "./proactiveVisitInvite.js";
 import { prependHardshipAck, shouldPrependHardshipAck } from "./hardshipEmpathyAck.js";
 import {
   classifySmallTalkWithLLM,
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   generateDraftWithLLM,
+  selfHealDraftWithLLM,
   summarizeConversationMemoryWithLLM
 } from "./llmDraft.js";
 import { resolveInventoryUrlByStock } from "./inventoryUrlResolver.js";
@@ -26,10 +32,17 @@ import {
 } from "./inventoryFeed.js";
 import { listInventoryHolds, normalizeInventoryHoldKey } from "./inventoryHolds.js";
 import { listInventorySolds, normalizeInventorySoldKey } from "./inventorySolds.js";
+import {
+  resolveModelDiscontinuation,
+  buildDiscontinuedModelReply,
+  modelDiscontinuationReplyEnabled
+} from "./modelDiscontinuation.js";
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro } from "./agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck } from "./agentVoice.js";
+import { decideEventPromoTurn } from "./routeStateReducer.js";
+import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import {
   buildInternationalShippingUnavailableReply,
@@ -195,7 +208,7 @@ function buildDealershipFaqReply(args: {
     case "new_vs_used":
       return "New gives you full warranty and latest tech; used lowers upfront cost. If you want, I can compare both options for your budget.";
     default:
-      return "Thanks for reaching out. How can I help?";
+      return "Thanks for the message. How can I help?";
   }
 }
 
@@ -612,10 +625,30 @@ function detectApparelFallbackRequest(text: string): boolean {
   );
 }
 
+// Structured department declared by a WEB TEXT WIDGET submission ("Department: Sales" header).
+// A widget lead's own department field OUTRANKS the keyword department fallbacks below — the
+// fallbacks exist for free-text SMS, and letting them re-route a declared-Sales lead is the
+// wrong-department class (Syed Saad, +19993605729, 2026-07-01: "I am purchasing detail[s]" on
+// the Iron 883 SALES widget tripped the "detail" service keyword → a service-department ack on
+// a purchase question). Structured-field precedence, not comprehension.
+function widgetDeclaredDepartment(text: string): string | null {
+  const t = String(text ?? "");
+  if (!/^\s*WEB TEXT WIDGET\b/i.test(t)) return null;
+  const m = t.match(/^Department:\s*(.+)$/im);
+  const dept = String(m?.[1] ?? "").trim().toLowerCase();
+  return dept || null;
+}
+
+function widgetDeclaresSalesDepartment(text: string): boolean {
+  return widgetDeclaredDepartment(text) === "sales";
+}
+
 function detectServiceFallbackRequest(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
-  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detail)\b/.test(
+  // "detail" is scoped to actual detailing asks ("detailing", "detail my bike") — the bare noun
+  // over-matched "purchasing detail(s)" / "send details" (the Syed Saad miss).
+  return /\b(service|service department|service writer|service records?|oil change|inspection|maintenance|repair|warranty work|install|replace|swap|upgrade|detailing|detail\s+(?:my|the|it|bike))\b/.test(
     t
   );
 }
@@ -1284,14 +1317,6 @@ function inferAppointmentType(
 
 type HandoffReason = "pricing" | "payments" | "approval" | "manager" | "other";
 
-function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
-  const tf = timeframe ? timeframe.trim() : "a future";
-  if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
-  }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m here when you’re ready. Just reach out when the time is right.`;
-}
-
 function deriveModelFromDescription(desc?: string | null): string | null {
   if (!desc) return null;
   let s = desc.replace(/\s+/g, " ").trim();
@@ -1755,10 +1780,22 @@ export function buildBlockedTestRideInventoryDraft(testRideInventoryGate: TestRi
   const inventoryLine = testRideInventoryGate.inventoryBrowseUrl
     ? `Here’s our current inventory so you can pick an in-stock bike: ${testRideInventoryGate.inventoryBrowseUrl}`
     : "If you want, I can send you a few in-stock options right now.";
+  // Watch offer (corpus flywheel, 2026-07-03, Joe-approved steering direction): an out-of-stock/
+  // on-hold test-ride ask must not dead-end at an inventory link — offer to text them the moment
+  // their bike lands. The customer's "yes" flows into the EXISTING watch-confirmation handling
+  // (isWatchConfirmationIntentText -> inventory watch), so this is a reply-only change.
+  const watchLine =
+    testRideInventoryGate.reason === "not_in_stock" || testRideInventoryGate.reason === "on_hold"
+      ? `I can also keep an eye out and text you the moment ${
+          testRideInventoryGate.reason === "on_hold" ? "it opens back up" : "one lands"
+        } — want me to?`
+      : "";
   const nextStepLine = testRideInventoryGate.alternateBikeLabel
     ? "If that works, I can line up the test ride right away."
     : "Once you pick one, I can line up the test ride right away.";
-  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, nextStepLine].filter(Boolean).join(" ");
+  return [modelLine, alternateLine || inventoryLine, alternateUrlLine, watchLine, nextStepLine]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function resolveModelFromHistory(
@@ -2077,6 +2114,7 @@ export async function orchestrateInbound(
     leadSource?: string | null;
     bucket?: string | null;
     cta?: string | null;
+    disposition?: string | null; // conv.dialogState.name — the disposition parser's state (stepped-back/keep-current/…), for the visit-invite disengagement guard
     primaryIntentHint?: PrimaryIntentHint | null;
     availabilityIntentHint?: boolean;
     schedulingIntentHint?: boolean;
@@ -2145,7 +2183,9 @@ export async function orchestrateInbound(
         draft: String(out.draft ?? ""),
         draftAlreadyOffers: textContainsSchedulingOffer(String(out.draft ?? "")),
         alreadyOfferedThisConversation: offeredEarlier,
-        wrongContext: visitInviteWrongContext
+        wrongContext: visitInviteWrongContext,
+        expanded: visitInviteExpandedEnabled(),
+        customerDisengaged: isDisengagedDisposition(ctx?.disposition)
       })
     ) {
       out.draft = appendVisitInvite(String(out.draft ?? ""));
@@ -2257,6 +2297,32 @@ export async function orchestrateInbound(
       shouldRespond: true,
       draft
     });
+  }
+
+  // Model-discontinuation precedence (DARK unless MODEL_DISCONTINUATION_REPLY_ENABLED). When the
+  // customer wants numbers/availability on a SPECIFIC model the dealer no longer carries, don't
+  // fabricate availability/pricing or punt to a credit app — say it's discontinued and offer current
+  // alternatives. Conservative: only on a confident "discontinued" (resolveModelDiscontinuation reads
+  // the MSRP catalog + live inventory; stale-sheet/borderline => unknown, never a false claim). Early
+  // guard => preempts the pricing/financing/availability handlers in BOTH paths (orchestrateInbound is
+  // shared by /webhooks/twilio and /conversations/:id/regenerate).
+  if (modelDiscontinuationReplyEnabled()) {
+    const refModel = String(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description ?? "").trim();
+    const wantsNumbers =
+      !!(ctx?.pricingIntentHint || ctx?.financeIntentHint || ctx?.availabilityIntentHint) ||
+      detectFinanceRequest(event.body) ||
+      detectPricingOrPayment(event.body);
+    if (refModel && !isUnknownModel(refModel) && wantsNumbers) {
+      const disc = await resolveModelDiscontinuation(refModel);
+      if (disc.status === "discontinued") {
+        return finalize({
+          intent: "AVAILABILITY",
+          stage: "ENGAGED",
+          shouldRespond: true,
+          draft: buildDiscontinuedModelReply(refModel)
+        });
+      }
+    }
   }
 
   const canSmallTalk =
@@ -2374,7 +2440,7 @@ export async function orchestrateInbound(
     }
     if (wantsPickupPrompt) {
       const draft =
-        `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+        `Hi ${leadFirst} — thanks for the message about selling your ${yearLabel}${modelLabel}. ` +
         `I can help with a trade‑in appraisal.${mileageLine} If the weather’s rough, we can pick the bike up. ` +
         "What town are you located in?";
       return finalize({
@@ -2386,7 +2452,7 @@ export async function orchestrateInbound(
       });
     }
     const draft =
-      `Hi ${leadFirst} — thanks for reaching out about selling your ${yearLabel}${modelLabel}. ` +
+      `Hi ${leadFirst} — thanks for the message about selling your ${yearLabel}${modelLabel}. ` +
       `I can help with a trade‑in appraisal.${mileageLine} ${optionLine}` +
       `${pickupOfferLine} If you want to stop in, I can set a time.`;
     return finalize({
@@ -2411,16 +2477,16 @@ export async function orchestrateInbound(
     const draft = isPrequalSubmission
       ? hasPriorOutbound
         ? `Perfect, thanks ${leadFirst} — we just saw your pre-qualification submission come through for ${bikeLabel}. ` +
-          "Our business manager will review it and reach out shortly to go over options and next steps."
+          "Our business manager will review it and follow up shortly to go over options and next steps."
         : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
           `This is ${agentName} at ${dealerName}. We received your pre-qualification submission. ` +
-          "I’ll have our business manager reach out to review options."
+          "I’ll have our business manager follow up to review options."
       : hasPriorOutbound
         ? `Perfect, thanks ${leadFirst} — we just saw your online credit app come through for ${bikeLabel}. ` +
-          "Our business manager will review it and reach out shortly to go over options."
+          "Our business manager will review it and follow up shortly to go over options."
         : `Hi ${leadFirst} — thanks for your interest in the ${bikeLabel}. ` +
           `This is ${agentName} at ${dealerName}. We received your online credit application. ` +
-          "I’ll have our business manager reach out to go over your options.";
+          "I’ll have our business manager follow up to go over your options.";
     return finalize({
       intent: "FINANCING",
       stage: "ENGAGED",
@@ -2430,19 +2496,39 @@ export async function orchestrateInbound(
       });
   }
 
+  // Non-sales marketing lead (sweepstakes / event RSVP / bare event_promo) arriving as an ADF:
+  // acknowledge warmly, never run the sales/availability/stock logic below (which produced the
+  // out-of-context "That stock number is still available, what day works to stop in?" drafts on
+  // sweepstakes entries — 2026-06-20 context-fidelity audit). Scoped to the ADF turn so a genuine
+  // SMS question from such a lead still gets a real answer. Demo-ride events are handled separately.
+  const isNonSalesEventPromoAdf =
+    decideEventPromoTurn({ classificationBucket: ctx?.bucket, classificationCta: ctx?.cta }).kind ===
+      "event_promo_ack" && event.provider === "sendgrid_adf";
+  if (isNonSalesEventPromoAdf) {
+    const dealerProfile = await getDealerProfileWithAgentName();
+    const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const leadFirst = ctx?.lead?.firstName?.trim() || null;
+    return finalize({
+      intent: "GENERAL",
+      stage: "ENGAGED",
+      shouldRespond: true,
+      draft: buildEventPromoAck(leadFirst, agentName, dealerName)
+    });
+  }
+
   const isDemoRideEventLead = ctx?.bucket === "event_promo" && ctx?.cta === "demo_ride_event";
   if (isDemoRideEventLead && event.provider === "sendgrid_adf") {
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const leadFirst = ctx?.lead?.firstName?.trim() || "there";
+    const leadFirst = ctx?.lead?.firstName?.trim() || null;
     const yearLabel = ctx?.lead?.vehicle?.year ? `${ctx.lead.vehicle.year} ` : "";
     const modelLabel = normalizeModelLabel(ctx?.lead?.vehicle?.model ?? ctx?.lead?.vehicle?.description);
-    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || "that bike";
-    const draft =
-      `Hi ${leadFirst} — thanks for your recent demo ride on the ${bikeLabel}. ` +
-      `This is ${agentName} at ${dealerName}. ` +
-      `If you want more details on the ${bikeLabel}, I’m happy to help.`;
+    const bikeLabel = `${yearLabel}${modelLabel}`.trim() || null;
+    // Corporate demo-ride program lead: one SOFT INVITE, no scheduling push, no fabricated
+    // "recent ride" frame, and no follow-up cadence (operator-reported, Joe 2026-07-02).
+    const draft = buildDemoRideEventSoftInvite(leadFirst, agentName, dealerName, bikeLabel);
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2631,9 +2717,11 @@ export async function orchestrateInbound(
     // asked (and, mid-conversation, ignores the live relationship). Acknowledge the form
     // instead; the "Totally fair question" framing stays for genuine customer-SMS trade
     // questions. See buildTradeAdfAck (tradeAdfReply.ts).
+    const pv = ctx?.lead?.vehicle ?? {};
+    const purchaseLabel = [pv?.year, pv?.model ?? pv?.description].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     const draft =
       event.provider === "sendgrid_adf"
-        ? buildTradeAdfAck({ bikeLabel: tradeLabel, midConversation: hasPriorOutbound })
+        ? buildTradeAdfAck({ bikeLabel: tradeLabel, purchaseLabel, midConversation: hasPriorOutbound })
         : "Totally fair question. " +
           leadLine +
           mileageLine +
@@ -2696,8 +2784,8 @@ export async function orchestrateInbound(
         : "Thanks for your inquiry. ";
       const salesName = await detectSalespersonMention(event.body);
       const reachOut = salesName
-        ? `I’ll have ${salesName} reach out.`
-        : "I’ll have someone from our sales team reach out.";
+        ? `I’ll have ${salesName} get in touch.`
+        : "I’ll have someone from our sales team get in touch.";
       const ack =
         `${buildAgentIntro(firstName, agentName, dealerName)}${thanks}${reachOut}`;
       return finalize({
@@ -2823,7 +2911,7 @@ export async function orchestrateInbound(
     });
   }
 
-  const fallbackDraft = "Thanks for reaching out. How can I help?";
+  const fallbackDraft = "Thanks for the message. How can I help?";
   const dayName = extractDayName(event.body);
   const dayPart = extractDayPart(event.body);
   const timeMatch = String(event.body ?? "").match(/\b(\d{1,2})(?::\d{2})?\s*(am|pm)\b/i);
@@ -2838,12 +2926,13 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: buildHiringManagerInquiryReply() }
     });
   }
-  if (detectPartsFallbackRequest(event.body)) {
+  const widgetSalesLead = widgetDeclaresSalesDepartment(event.body);
+  if (!widgetSalesLead && detectPartsFallbackRequest(event.body)) {
     const draft = /\b(?:m[\s-]?8|milwaukee[\s-]?eight|114\s*\/\s*117|117\s*\/\s*114)\b/i.test(
       event.body
     )
       ? buildTakeOffMilwaukeeEightEngineReply()
-      : "Thanks — I’ll have our parts department reach out shortly.";
+      : "Thanks — I’ll have our parts department follow up shortly.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2852,8 +2941,8 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectApparelFallbackRequest(event.body)) {
-    const draft = "Thanks — I’ll have our MotorClothes team check on that and reach out shortly.";
+  if (!widgetSalesLead && detectApparelFallbackRequest(event.body)) {
+    const draft = "Thanks — I’ll have our MotorClothes team check on that and follow up shortly.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -2862,10 +2951,10 @@ export async function orchestrateInbound(
       handoff: { required: true, reason: "other", ack: draft }
     });
   }
-  if (detectServiceFallbackRequest(event.body) && !financeRequest) {
+  if (!widgetSalesLead && detectServiceFallbackRequest(event.body) && !financeRequest) {
     const draft = /\bservice records?\b/i.test(event.body)
       ? "Thanks for the details — I’ll have the team check service records and follow up."
-      : "We’ve received your service request and will have the service department reach out.";
+      : "We’ve received your service request and will have the service department follow up.";
     return finalize({
       intent: "GENERAL",
       stage: "ENGAGED",
@@ -3849,7 +3938,7 @@ export async function orchestrateInbound(
           ? `Thanks for your interest in the ${yearLabel}${modelLabel}. `
           : isInitialFacebookLeadTouch
             ? "Thanks for your Facebook quote request. "
-            : "Thanks for reaching out. ";
+            : "Thanks for the message. ";
         const timelineNote = longTermInvite ? longTermInvite.trim() : "";
         const ack =
           `${buildAgentIntro(firstName, agentName, dealerName)}${thankLine}` +
@@ -4769,7 +4858,7 @@ export async function orchestrateInbound(
 
       const longTermMonths = lead.purchaseTimeframeMonthsStart;
       if (event.provider === "sendgrid_adf" && longTermMonths && longTermMonths >= 1) {
-        const msg = buildLongTermMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
+        const msg = buildLongTermTimelineMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
         return finalize({
           intent,
           stage: "ENGAGED",
@@ -4783,8 +4872,8 @@ export async function orchestrateInbound(
       const vinForNote = ctx?.lead?.vehicle?.vin ?? null;
       const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
 
-      const draft = await generateDraftWithLLM({
-        channel: "sms",
+      const draftCtx = {
+        channel: "sms" as const,
         leadSource: ctx?.leadSource ?? null,
         bucket: ctx?.bucket ?? null,
         cta: ctx?.cta ?? null,
@@ -4813,7 +4902,22 @@ export async function orchestrateInbound(
         voiceSummary: ctx?.voiceSummary ?? null,
         memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null,
         needsEmpathy: ctx?.needsEmpathy ?? null
-      });
+      };
+      const baseDraft = await generateDraftWithLLM(draftCtx);
+      // STEP 3 (dark unless DRAFT_QUALITY_AUTO_REGENERATE): if the judge would HOLD this draft,
+      // regenerate ONCE with its steering and re-judge — self-heal before it ever reaches the gate.
+      // No-op (no extra LLM calls) when the flag is off; on failure returns the original (gate holds).
+      const heal = await selfHealDraftWithLLM({ draft: baseDraft, ctx: draftCtx });
+      // Observability for the live cutover: log every actual self-heal attempt (before/after) so the
+      // rewrites can be audited. Only fires when auto-regenerate is on (no_op otherwise), and only on
+      // a real heal/failure — not on the common pass-through — so it's low-volume.
+      if (heal.outcome === "healed" || heal.outcome === "still_failing") {
+        console.warn(
+          "[draft-self-heal]",
+          JSON.stringify({ outcome: heal.outcome, before: String(baseDraft).slice(0, 160), after: String(heal.draft).slice(0, 160) })
+        );
+      }
+      const draft = heal.draft;
 
       let memorySummary: string | null = null;
       if (ambiguousFlow && ctx?.memorySummaryShouldUpdate) {

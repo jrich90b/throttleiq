@@ -26,6 +26,19 @@ type Conversation = {
   closedAt?: string | null;
   closedReason?: string | null;
   messages: Message[];
+  // Set by the STEP 2 pre-publish quality gate: the agent's draft failed the quality check and is
+  // being fixed, so there is intentionally NO sendable draft. The reply box is replaced with a
+  // read-only "being fixed" panel so a bad draft can't be sent or edited.
+  draftHeld?: {
+    at: string;
+    reason: string;
+    // "context_fidelity" => the AI answered out of context; the rep must reply (reply box stays enabled,
+    // sending clears the hold). Otherwise (draft-quality) => "being fixed", reply box disabled.
+    heldKind?: string | null;
+    steering?: string | null;
+    judgeReason?: string;
+    channel: "sms" | "email";
+  } | null;
 };
 
 function isPhoneLogAdfBody(text?: string | null) {
@@ -200,7 +213,26 @@ export default function ConversationPage() {
       </div>
       {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
 
-      {pendingDraft ? (
+      {conv.draftHeld && conv.draftHeld.heldKind === "context_fidelity" ? (
+        <div className="mt-4 border rounded-lg p-3 text-sm border-amber-300 bg-amber-50 text-amber-900">
+          <div className="font-medium">Needs your reply — the AI couldn&apos;t answer this in context</div>
+          <div className="mt-1">
+            The agent&apos;s draft didn&apos;t address what the customer actually asked, so it was held back.
+            Please reply to the customer below — sending clears this flag.
+            {conv.draftHeld.steering ? (
+              <div className="mt-1 text-amber-800">Suggested angle: {conv.draftHeld.steering}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : conv.draftHeld ? (
+        <div className="mt-4 border rounded-lg p-3 text-sm border-amber-300 bg-amber-50 text-amber-900">
+          <div className="font-medium">Draft held — being fixed</div>
+          <div className="mt-1">
+            The agent&apos;s draft didn&apos;t pass the quality check, so it&apos;s held back instead of
+            shown. There&apos;s nothing to send yet — a corrected draft appears here once it passes.
+          </div>
+        </div>
+      ) : pendingDraft ? (
         <div className="mt-4 border rounded-lg p-3 text-sm">
           <div className="font-medium">Draft ready to send</div>
           <div className="text-gray-600 mt-1">
@@ -232,17 +264,27 @@ export default function ConversationPage() {
         })}
       </div>
 
-      <div className="mt-6 flex gap-2">
-        <input
-          value={sendBody}
-          onChange={e => setSendBody(e.target.value)}
-          className="flex-1 border rounded px-3 py-2"
-          placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
-        />
-        <button className="px-4 py-2 border rounded" onClick={send}>
-          Send
-        </button>
-      </div>
+      {conv.draftHeld && conv.draftHeld.heldKind !== "context_fidelity" ? (
+        <div className="mt-6 border rounded-lg p-4 text-sm border-amber-300 bg-amber-50 text-amber-900">
+          <div className="font-medium">No draft to send — held for quality</div>
+          <div className="mt-1">
+            The reply box is intentionally disabled here so a flagged draft can&apos;t be sent or edited.
+            It reopens automatically once a corrected draft passes the check.
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 flex gap-2">
+          <input
+            value={sendBody}
+            onChange={e => setSendBody(e.target.value)}
+            className="flex-1 border rounded px-3 py-2"
+            placeholder={pendingDraft ? "Edit draft then Send…" : "Type a message…"}
+          />
+          <button className="px-4 py-2 border rounded" onClick={send}>
+            Send
+          </button>
+        </div>
+      )}
 
       {conv.status !== "closed" ? (
         <div className="mt-4 flex items-center gap-2">

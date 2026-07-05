@@ -6,6 +6,11 @@ import {
   isNonSalesConversation,
   isShadowReplayMessage
 } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  classifyStuckTurn,
+  STUCK_MAX_AGE_SEC_DEFAULT,
+  type StuckSuppressionReason
+} from "../services/api/src/domain/routeWatchdogClassification.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -14,6 +19,7 @@ type ParsedArgs = {
   routeAuditDir: string;
   sinceMin: number;
   stuckOlderSec: number;
+  stuckMaxAgeSec: number;
   limit: number;
   outPath?: string;
   failOnStuckOver: number;
@@ -46,6 +52,11 @@ function parseArgs(argv: string[]): ParsedArgs {
   const stuckOlderSecRaw = Number(
     args.get("--stuck-older-sec") || process.env.ROUTE_WATCHDOG_STUCK_OLDER_SEC || "120"
   );
+  const stuckMaxAgeSecRaw = Number(
+    args.get("--stuck-max-age-sec") ||
+      process.env.ROUTE_WATCHDOG_STUCK_MAX_AGE_SEC ||
+      String(STUCK_MAX_AGE_SEC_DEFAULT)
+  );
   const limitRaw = Number(args.get("--limit") || process.env.ROUTE_WATCHDOG_LIMIT || "50");
   const failOnStuckOverRaw = Number(
     args.get("--fail-on-stuck-over") || process.env.ROUTE_WATCHDOG_FAIL_ON_STUCK_OVER || "-1"
@@ -62,6 +73,10 @@ function parseArgs(argv: string[]): ParsedArgs {
     routeAuditDir,
     sinceMin: Number.isFinite(sinceMinRaw) && sinceMinRaw > 0 ? sinceMinRaw : 180,
     stuckOlderSec: Number.isFinite(stuckOlderSecRaw) && stuckOlderSecRaw > 0 ? stuckOlderSecRaw : 120,
+    stuckMaxAgeSec:
+      Number.isFinite(stuckMaxAgeSecRaw) && stuckMaxAgeSecRaw > 0
+        ? stuckMaxAgeSecRaw
+        : STUCK_MAX_AGE_SEC_DEFAULT,
     limit: Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 50,
     outPath,
     failOnStuckOver: Number.isFinite(failOnStuckOverRaw) ? failOnStuckOverRaw : -1,
@@ -122,7 +137,12 @@ function readJsonl(filePath: string): AnyObj[] {
   return rows;
 }
 
-function collectStuckTurns(conversations: any[], olderThanSec: number, nowMs: number) {
+function collectStuckTurns(
+  conversations: any[],
+  olderThanSec: number,
+  maxAgeSec: number,
+  nowMs: number
+) {
   return conversations
     .map(conv => {
       if (isNonSalesConversation(conv)) return null;
@@ -151,9 +171,15 @@ function collectStuckTurns(conversations: any[], olderThanSec: number, nowMs: nu
       const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
       if (ageSec < olderThanSec) return null;
 
+      const classification = classifyStuckTurn(conv, { ageSec, maxAgeSec });
+
       return {
         convId: String(conv?.id ?? ""),
         leadKey: String(conv?.leadKey ?? ""),
+        actionable: classification.actionable,
+        suppressionReason: classification.suppressionReason,
+        convStatus: conv?.status ?? null,
+        convMode: conv?.mode ?? null,
         followUp: conv?.followUp ?? null,
         dialogState: conv?.dialogState ?? null,
         classification: conv?.classification ?? null,
@@ -181,7 +207,29 @@ function main() {
   const raw = JSON.parse(fs.readFileSync(parsed.conversationsPath, "utf8"));
   const conversations = toConversations(raw);
 
-  const stuckRows = collectStuckTurns(conversations, parsed.stuckOlderSec, nowMs).slice(0, parsed.limit);
+  const matchedStuck = collectStuckTurns(
+    conversations,
+    parsed.stuckOlderSec,
+    parsed.stuckMaxAgeSec,
+    nowMs
+  );
+  // Surface only genuinely-actionable stalls (recent, unsuppressed) as the
+  // headline count; keep the benign-suppressed rows for transparency. A closed
+  // / handed-off / paused / rep-owned / aged-out turn is correct silence, not a
+  // routing miss — counting it spams the "routing-stuck-turns" P0.
+  const actionableStuck = matchedStuck.filter((r: any) => r?.actionable);
+  const suppressedStuck = matchedStuck.filter((r: any) => !r?.actionable);
+  const suppressionReasonCounts = (() => {
+    const m = new Map<string, number>();
+    for (const r of suppressedStuck) {
+      const reason = String((r as any)?.suppressionReason ?? "unknown") as StuckSuppressionReason | "unknown";
+      m.set(reason, (m.get(reason) ?? 0) + 1);
+    }
+    return [...m.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+  })();
+  const stuckRows = actionableStuck.slice(0, parsed.limit);
 
   const outcomeFiles = dateStampsSince(sinceMs, nowMs).map(stamp =>
     path.join(parsed.routeAuditDir, `route_outcomes_${stamp}.jsonl`)
@@ -230,8 +278,18 @@ function main() {
     },
     stuckTurns: {
       olderThanSec: parsed.stuckOlderSec,
+      maxAgeSec: parsed.stuckMaxAgeSec,
+      // `count` / `rows` are the ACTIONABLE set (drives the agent_manager P0).
       count: stuckRows.length,
-      rows: stuckRows
+      rows: stuckRows,
+      // Full picture for triage: everything the floor matched + why each benign
+      // row was suppressed.
+      matchedTotal: matchedStuck.length,
+      suppressed: {
+        count: suppressedStuck.length,
+        reasonCounts: suppressionReasonCounts,
+        rows: suppressedStuck.slice(0, parsed.limit)
+      }
     },
     routeOutcomes: {
       rowCount: outcomeRows.length,

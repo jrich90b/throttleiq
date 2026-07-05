@@ -14,15 +14,25 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
+import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
+import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
+import { decideConversationAccess } from "./domain/conversationAccess.js";
+import { isProactiveContactPaused } from "./domain/proactiveContactPause.js";
+import {
+  isInventoryWatchOptedOut,
+  setInventoryWatchOptOut,
+  clearInventoryWatchOptOut
+} from "./domain/inventoryWatchOptOut.js";
 import {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
   buildPhotoShareReplyWithVision,
   CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT,
   detectCustomerVehiclePhotoShareText,
-  isSalesPhotoShareConversation
+  isSalesPhotoShareConversation,
+  isTradePhotoShareConversation
 } from "./domain/customerPhotoShare.js";
 import { buildReservationHandoffReply, detectReservationRequestText } from "./domain/reservationIntent.js";
 import {
@@ -123,6 +133,12 @@ import {
   type InventorySnapshot,
   type InventorySnapshotLoadResult
 } from "./domain/inventoryWatchSnapshot.js";
+import {
+  reconcileFirstSeen,
+  loadInventoryFirstSeen,
+  saveInventoryFirstSeen,
+  type InventoryFirstSeenMap
+} from "./domain/inventoryFirstSeen.js";
 import { hasPriorInventoryWatchOutboundForItem } from "./domain/inventoryWatchDedup.js";
 import { runClaudeAgentTask } from "./domain/claudeAgent.js";
 import {
@@ -250,7 +266,10 @@ import {
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
   parseCustomerDispositionWithLLM,
+  parseDealProgressSignalWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
+  parseDealerLeadSurveyWithLLM,
+  hasDealerLeadSurveyHint,
   parseDealerTransactionPolicyWithLLM,
   parseResponseControlWithLLM,
   parsePurchaseDeliveryLogisticsWithLLM,
@@ -266,8 +285,49 @@ import {
   parseSemanticSlotsWithLLM,
   parseTradePayoffWithLLM,
   parseTradeQualifierResponseWithLLM,
-  summarizeVoiceTranscriptWithLLM
+  parseVehicleChoiceConfidenceWithLLM,
+  parseVehicleRecommendationRequestWithLLM,
+  parseVehicleMediaRequestWithLLM,
+  generateDraftWithLLM,
+  parseDealStatusCheckWithLLM,
+  parseConversationCloseoutWithLLM,
+  parseWatchOptOutWithLLM,
+  parseWatchScopeWithLLM,
+  parseFinanceProcessQuestionWithLLM,
+  parseNonMotorcycleTradeWithLLM,
+  parseServiceAppointmentRequestWithLLM,
+  summarizeVoiceTranscriptWithLLM,
+  judgeDraftQualityWithLLM,
+  judgeShouldRespondWithLLM,
+  judgeCadenceQualityWithLLM,
+  getCachedSelfHealVerdict,
+  scoreContextFidelityWithLLM,
+  classifyDraftEditWithLLM
 } from "./domain/llmDraft.js";
+import {
+  decideDraftQualityGate,
+  isDraftQualityJudgeEnabled,
+  draftQualityJudgeShadowEnabled,
+  draftQualityHoldClassOnly,
+  decideNoResponseJudge,
+  isNoResponseJudgeEnabled,
+  noResponseJudgeShadowEnabled,
+  decideCadenceQualityGate,
+  isCadenceQualityJudgeEnabled,
+  cadenceQualityJudgeShadowEnabled,
+  isCadenceQualityEnforceEnabled,
+  cadenceQualityEnforceFloor,
+  type CadenceQualityGateDecision
+} from "./domain/draftQualityGate.js";
+import {
+  decideContextFidelityHold,
+  contextFidelityHoldShadowEnabled,
+  isContextFidelityHoldEnabled,
+  contextFidelityHeldSurfacingEnabled,
+  CONTEXT_FIDELITY_HANDOFF_ACK
+} from "./domain/contextFidelityHold.js";
+import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
+import { isSpecificModel } from "./domain/modelDeflection.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -413,8 +473,22 @@ import {
   findInventoryPrice,
   getInventoryFeed,
   hasInventoryForModelYear,
+  modelMatches,
+  unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import { trikeClassConflict } from "./domain/modelFamily.js";
+import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
+import {
+  recommendInventory,
+  buildVehicleRecommendationReply,
+  buildVehicleRecommendationFollowupReply,
+  buildVehicleRecommendationTodoSummary,
+  toRecommendedUnits,
+  buildRecommendedUnitsMediaReply
+} from "./domain/inventoryRecommender.js";
+import { buildFinanceAppInviteLine } from "./domain/financeAppInvite.js";
+import { buildRecommendedUnitsPaymentEstimateReply, buildRecommendationWithEstimateReply } from "./domain/paymentEstimate.js";
 import {
   buildInventoryBackedVehicleFactAnswer,
   mergeRecentPriceQuestionIntoFinanceAnswer
@@ -453,8 +527,28 @@ import {
   buildNoResponseFallbackTodoSummary,
   buildRouteDecisionSnapshot,
   decideCadenceInviteArm,
+  decideConversationCloseoutTurn,
+  decideDealStatusCheckTurn,
+  decideWatchOptOutTurn,
+  decideWatchScopeTurn,
+  decideEventPromoTurn,
+  decideInProcessDealTurn,
+  decideIndefiniteDeferTurn,
+  decideNonBuyerSurveyTurn,
+  decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
+  decideFinanceProcessQuestionTurn,
+  decideNonMotorcycleTradeTurn,
+  decideServiceAppointmentTurn,
   decideSchedulingTurn,
+  decideCustomerAckConfirmBooking,
+  decideSchedulingDeferralFollowUpTask,
+  tentativeWindowNeedsOwnerFollowUp,
+  decideVehicleChoiceConfidenceTurn,
+  decideVehicleRecommendationTurn,
+  shouldBowOutRecommenderForNamedModel,
+  decideVehicleMediaRequestTurn,
+  decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
   evaluateNoResponseFallback,
@@ -510,6 +604,7 @@ import {
   buildRideChallengeSignupReply,
   buildTakeOffMilwaukeeEightEngineReply,
   buildUnlistedInventoryHandoffReply,
+  hasPriorCustomerFacingOutbound,
   extractInventoryStockIdMention,
   getBroadScheduleWindowLabel,
   getScheduleDayOptionsLabel,
@@ -527,6 +622,7 @@ import {
   isFollowUpReminderOnlyText,
   isServiceStatusUpdateQuestionText,
   isServiceSchedulingAvailabilityRequestText,
+  isDealerVisitTimeCheckInText,
   hasExplicitCalendarDateForScheduleMemory,
   isImmediateChatCallbackAvailabilityText,
   isIncidentalInfoAcknowledgementText,
@@ -567,17 +663,21 @@ import {
 } from "./domain/workflowRegressionGuards.js";
 import {
   HELD_GUARD_WATCH_NOTE,
-  planStaleHeldUnitWatchHeal
+  planStaleHeldUnitWatchHeal,
+  resolveHeldGuardWatchTarget
 } from "./domain/heldUnitWatchHeal.js";
 import {
   isAutoCloseEligibleTask,
   decideTaskAutoClose,
   isTaskFulfillmentAutoCloseEnabled,
-  taskFulfillmentAutoCloseShadowEnabled
+  taskFulfillmentAutoCloseShadowEnabled,
+  decideDepartmentTaskSoftClose,
+  isDepartmentTaskSoftCloseEnabled
 } from "./domain/taskFulfillmentAutoClose.js";
 import {
   resolveAuthoritativeModels,
   modelAuthorityEnabled,
+  passesModelRelevanceGuard,
   toAuthorityModels,
   type AuthorityModel
 } from "./domain/turnUnderstandingAuthority.js";
@@ -601,6 +701,7 @@ import {
   parseRequestedDayTime,
   parseRequestedDateOnly,
   startFollowUpCadence,
+  resolveNoShowFollowUpDueAt,
   pauseFollowUpCadence,
   stopFollowUpCadence,
   resumeFollowUpCadence,
@@ -611,19 +712,33 @@ import {
   finalizeDraftAsSent,
   discardPendingDrafts,
   discardAllDrafts,
+  saveOperatorDraft,
   setMessageFeedback,
   addTodo,
   addCallTodoIfMissing,
+  upsertPendingIncomingInventoryNotifyTodo,
+  healPendingIncomingNotifyTodoDuplicates,
+  healStaleHeldFlag,
+  isSchedulingLeakConversation,
+  realignMisdeferredLongTermCadence,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
+  CONTEXT_FIDELITY_HELD_TODO_MARKER,
   shouldNudgeStaleHandoffLead,
+  shouldSurfaceUnsentFirstTouch,
+  REAL_OUTBOUND_CONTACT_PROVIDERS,
+  collectInventoryWatches,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
   addInternalQuestion,
   listOpenQuestions,
   markQuestionDone,
   markTodoDone,
+  snoozeTodo,
+  setTodoAutoCloseCheck,
+  setTodoAutoSoftClose,
+  cleanModelDisplayName,
   markTodoEscalated,
   markTodoReminderSent,
   markOpenCallTodosDoneForCompletedVoiceAttempt,
@@ -673,6 +788,9 @@ import {
   buildPendingIncomingInventoryTaskSummary,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
+  hasPartsInquirySignal,
+  partsTurnPrecedenceEnabled,
+  isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
 } from "./domain/pendingIncomingInventory.js";
 import { buildEffectiveHistory } from "./domain/effectiveContext.js";
@@ -742,6 +860,11 @@ import {
   type MetaPageSnapshot
 } from "./domain/metaIntegration.js";
 import { isLikelyVoicemailTranscript, maybeMarkEngagedFromCall } from "./domain/engagement.js";
+import {
+  evaluatePromotionSuppression,
+  PROMOTION_SUPPRESSION_REASON_LABELS,
+  type PromotionSuppressionReason
+} from "./domain/promotionAudience.js";
 import { formatEmailLayout, formatSmsLayout } from "./domain/tone.js";
 
 import { getSystemMode, setSystemMode, type SystemMode } from "./domain/settingsStore.js";
@@ -2017,6 +2140,837 @@ function buildShortListClarifierReply(conv: any, inboundText: string): {
   };
 }
 
+// Vehicle-choice confidence: confidence floor to offer alternatives (default 0.8 — a high
+// bar, because a false positive undercuts a buyer who already chose). Override-able for tuning.
+function vehicleChoiceConfidenceMin(): number {
+  const raw = Number(process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.8;
+}
+
+// Reply for an "open_to_alternatives" turn. Reuses the short-list clarifier (our existing
+// recommendation funnel) so we never freehand inventory: acknowledge the bike they referenced
+// without undercutting it, offer to line up a couple of options to compare, then ask the one
+// narrowing question the clarifier already owns.
+function buildVehicleChoiceAlternativesReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  referencedLabel: string | null
+): string {
+  const clarifier = buildShortListClarifierReply(conv, inboundText);
+  const lead = referencedLabel
+    ? `Totally fair — the ${referencedLabel} is a strong pick, and I'm happy to line up a couple of other options to compare so you feel good about it. `
+    : `Totally fair — happy to line up a couple of other options to compare so you feel good about it. `;
+  return `${lead}${clarifier.reply}`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law).
+// FAIL DIRECTION = stay silent: returns a reply ONLY when the customer is lukewarm about a
+// SPECIFIC referenced bike at high confidence and the model-relevance guard passes; otherwise
+// null (the orchestrator/LLM handles the turn normally). The deterministic pre-gates (no
+// referenced model, relevance-guard fail) short-circuit BEFORE the LLM call — both fail toward
+// silence and save a round-trip — while the full precedence stays owned by the pure
+// decideVehicleChoiceConfidenceTurn (pinned by the decision-table eval).
+async function resolveVehicleChoiceAlternativesReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  opts?: { concreteParsedActionThisTurn?: boolean }
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (opts?.concreteParsedActionThisTurn) return null; // the parsed action owns the turn (reducer-pinned)
+  const referencedModel =
+    findMentionedModel(text.toLowerCase()) ?? resolveKnownModelContextForShortList(conv);
+  if (!referencedModel) return null; // no specific bike referenced => nothing to compare
+  const guardPassed = passesModelRelevanceGuard(referencedModel, text); // over-attachment guard
+  if (!guardPassed) return null;
+  const parse = await safeLlmParse("vehicle_choice_confidence_parser", () =>
+    parseVehicleChoiceConfidenceWithLLM({
+      text,
+      history: buildHistory(conv, 8),
+      referencedModel
+    })
+  );
+  if (process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-vehicle-choice-confidence-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideVehicleChoiceConfidenceTurn({
+    concreteParsedActionThisTurn: !!opts?.concreteParsedActionThisTurn,
+    parserAccepted: !!parse,
+    stance: parse?.stance ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleChoiceConfidenceMin(),
+    hasReferencedModel: true,
+    modelRelevanceGuardPassed: guardPassed
+  });
+  if (decision.kind !== "offer_alternatives") return null;
+  markPendingShortListPrompt(conv, "vehicle_choice_open_to_alternatives");
+  const label = formatModelToken(referencedModel) || referencedModel;
+  return buildVehicleChoiceAlternativesReply(conv, text, label);
+}
+
+// Vehicle recommendation: confidence floor to act on a "pick some for me" request (default 0.7).
+function vehicleRecommendationConfidenceMin(): number {
+  const raw = Number(process.env.LLM_VEHICLE_RECOMMENDATION_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the recommendation parser only runs on suggestion-ish turns. A hint MISS
+// falls through to existing behavior (fail-safe); the parser — not this regex — owns the decision.
+const VEHICLE_RECOMMENDATION_HINT_RE =
+  /\b(option|options|suggest|suggestion|recommend|recommendation|some (?:bikes?|ideas?)|show me|give me (?:some|a few|options)|what (?:do|have) you (?:have|got|carry)|what (?:can|could) i get|what would you|help me (?:find|pick)|looking for (?:something|a bike))\b/i;
+
+function vehicleRecommendationParserHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return VEHICLE_RECOMMENDATION_HINT_RE.test(t);
+}
+
+// Shared by BOTH the live and regenerate paths (route-parity law). When the customer asks us to
+// SUGGEST bikes (no specific model in play) — "give me some options", "~$200/mo", "not cruisers" —
+// answer with real inventory instead of looping "which bike are you looking at?" (s R Gurajala
+// +17167506588, 2026-06-24). Returns null on any miss so the existing finance/pricing flow runs.
+async function resolveVehicleRecommendationReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  // Recommendation is the "no model yet" case. A customer pricing a known bike is NOT asking for
+  // suggestions — let the finance/pricing flow handle that.
+  if (!isModelUnknownForPayments(conv)) return null;
+  // The ask often spans two quick texts ("Can you give me some options" + "I'm not looking for
+  // cruisers"); use the recent inbound cluster so the hint + parser see the whole request.
+  const recentInbound = (conv.messages ?? [])
+    .filter((m: any) => m?.direction === "in")
+    .slice(-3)
+    .map((m: any) => String(m?.body ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  const askText = recentInbound || text;
+  // Trigger the recommender on EITHER an explicit ask ("send me options") OR a budget profile — a
+  // monthly cap and/or a down payment with no model in play is a "pick one that fits my budget"
+  // request even when phrased as a plain statement ("I'd like a cruiser, ~$2k down, $450-550/mo")
+  // (Tyrone Woods, 6/26 — got another clarifying question instead). The caller already gated on
+  // model-unknown, and the typed parser still owns wantsRecommendation, so this only LETS the parser
+  // run (fail-safe — a parser miss still returns null to the existing flow).
+  const budgetCtx = findRecentInboundPaymentBudgetContext(conv);
+  const hasBudgetProfile = budgetCtx.monthlyBudget != null || budgetCtx.downPayment != null;
+  // Naming a model this turn normally means "price THIS bike" → let finance handle it. EXCEPTION:
+  // with a budget profile and no unit in play (we passed isModelUnknownForPayments above), a named
+  // model CLASS is "find me a <model> that fits my budget", not "price the exact unit I'm on" — keep
+  // the recommender (Tyrone Woods +13179357913, 2026-06-22: looped "which bike?" after "road king or
+  // street glider"). Centralized precedence; the typed parser still scopes the actual segment.
+  if (
+    shouldBowOutRecommenderForNamedModel({
+      namedModelThisTurn: !!findMentionedModel(text.toLowerCase()),
+      hasBudgetProfile
+    })
+  ) {
+    return null;
+  }
+  if (!vehicleRecommendationParserHint(askText) && !hasBudgetProfile) return null;
+  const parse = await safeLlmParse("vehicle_recommendation_parser", () =>
+    parseVehicleRecommendationRequestWithLLM({ text: askText, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-vehicle-recommendation-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideVehicleRecommendationTurn({
+    parserAccepted: !!parse,
+    wantsRecommendation: !!parse?.wantsRecommendation,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleRecommendationConfidenceMin(),
+    modelUnknown: true
+  });
+  if (decision.kind !== "recommend") return null;
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  let matches: InventoryFeedItem[] = [];
+  try {
+    const items = await getInventoryFeed();
+    matches = recommendInventory(items, {
+      condition: parse?.condition ?? null,
+      excludeSegments: parse?.excludeSegments ?? [],
+      includeSegments: parse?.includeSegments ?? []
+    });
+  } catch {
+    matches = [];
+  }
+  recordRouteOutcome(scope, "vehicle_recommendation", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    matches: matches.length,
+    monthlyBudget: parse?.monthlyBudget ?? null
+  });
+  if (!matches.length) {
+    // Confidently a suggestion request, but no priced match to send — commit to follow up + owner
+    // todo rather than re-asking "which bike?".
+    addTodo(conv, "call", buildVehicleRecommendationTodoSummary(firstName), providerMessageId ?? undefined);
+    return buildVehicleRecommendationFollowupReply(firstName);
+  }
+  // Persist the suggested units (with listing url + color) so a "show me pics/links/colors" follow-up
+  // can answer with the REAL links instead of punting (s R Gurajala, 2026-06-24).
+  conv.recommendedUnits = toRecommendedUnits(matches);
+  conv.recommendedUnitsAt = new Date().toISOString();
+  // Recommend AND quote in one turn when they've already given a down payment — don't list bikes and
+  // make them ask "what's the payment?" a turn later (Tyrone Woods, 6/26). The composer appends the
+  // disclaimed monthly range for the priced units; `quoted` means we already estimated for this down
+  // payment, so we mark it and the standalone estimate path won't double-fire.
+  const composed = buildRecommendationWithEstimateReply({
+    firstName,
+    matches,
+    recommendedUnits: conv.recommendedUnits,
+    monthlyBudget: parse?.monthlyBudget ?? budgetCtx.monthlyBudget ?? null,
+    downPayment: budgetCtx.downPayment ?? null,
+    termMonths: budgetCtx.termMonths
+  });
+  if (composed.quoted && budgetCtx.downPayment != null) {
+    conv.paymentEstimateSentForDown = budgetCtx.downPayment;
+    recordRouteOutcome(scope, "recommended_units_payment_estimate", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      units: matches.length,
+      downPayment: budgetCtx.downPayment,
+      viaRecommendation: true
+    });
+  }
+  return composed.reply;
+}
+
+// Persist a SPECIFIC unit we just discussed/quoted (with its feed listing url + photos) onto
+// conv.recommendedUnits, so a "can I see the pics/link?" follow-up answers with the REAL VDP link
+// instead of falling through to the generator (which fabricates a generic /inventory?query= or promo
+// link — the dominant photo/link thumbs-down cluster, conc. on +17167506588). The finance/pricing
+// estimate arm fetches the exact feed item to quote a payment but discarded its url/images; this keeps
+// them. Dedupe by stockId, cap at 6, reuse the recommender's mapping. Deterministic side-effect on
+// already-fetched feed data (no new LLM call); reply text is unchanged.
+function persistDiscussedUnit(conv: any, item: InventoryFeedItem | null | undefined): void {
+  if (!conv || !item) return;
+  const mapped = toRecommendedUnits([item])[0];
+  if (!mapped || (!mapped.url && !(mapped.images && mapped.images.length))) return; // nothing real to send later
+  const key = String(mapped.stockId ?? "").trim().toLowerCase();
+  const existing = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
+  const deduped = key
+    ? existing.filter((u: any) => String(u?.stockId ?? "").trim().toLowerCase() !== key)
+    : existing;
+  conv.recommendedUnits = [mapped, ...deduped].slice(0, 6);
+  conv.recommendedUnitsAt = new Date().toISOString();
+}
+
+// Follow-up to a recommendation: the customer asks to SEE the suggested bikes (photos/colors/links).
+// Parser-first; answers with the REAL listing URLs from the persisted recommended units (deterministic
+// — never a fabricated link). Returns null to fall through when it's not a media ask or we have no
+// units with a usable url. Centralized so live + regenerate stay in sync.
+async function resolveRecommendedUnitsMediaReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<{ reply: string; mediaUrls: string[] } | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!conv || !text) return null;
+  const units = Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : [];
+  // We can answer if any unit has a usable photo OR a listing url.
+  const hasSomethingToSend = units.some(
+    u =>
+      /^https?:\/\//i.test(String(u?.url ?? "")) ||
+      (Array.isArray(u?.images) && u.images.some(x => /\.(jpe?g|png)(\?|$)/i.test(String(x ?? ""))))
+  );
+  if (!hasSomethingToSend) return null; // nothing real to send => let normal handling run
+  if (!vehicleMediaRequestParserHint(text)) return null;
+  const parse = await safeLlmParse("vehicle_media_request_parser", () =>
+    parseVehicleMediaRequestWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  const decision = decideVehicleMediaRequestTurn({
+    parserAccepted: !!parse,
+    wantsMedia: !!parse?.wantsMedia,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: vehicleRecommendationConfidenceMin(),
+    hasUnitsWithUrl: hasSomethingToSend
+  });
+  if (decision.kind !== "send_media") return null;
+  const built = buildRecommendedUnitsMediaReply({
+    firstName: normalizeDisplayCase(conv.lead?.firstName),
+    units
+  });
+  if (!built) return null;
+  recordRouteOutcome(scope, "vehicle_media_request", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    photos: built.mediaUrls.length,
+    focus: parse?.focus ?? null
+  });
+  return built;
+}
+
+// Cheap pre-filter: only run the media-request parser on photo/link/color-ish turns. A hint MISS
+// falls through to existing behavior (fail-safe); the parser — not this regex — owns the decision.
+function vehicleMediaRequestParserHint(text: string): boolean {
+  return /\b(pic|pics|picture|pictures|photo|photos|image|images|see (?:it|them|the bike)|look like|color|colors|colour|colours|link|links|url)\b/i.test(
+    String(text ?? "")
+  );
+}
+
+// Disclaimed payment estimate (Joe, 2026-06-24): once a payment-focused lead gives a down payment and
+// we have recommended units with prices, share a ROUGH monthly RANGE for them (the disclaimed math
+// Joe was doing by hand) instead of punting "I'll have someone run numbers." Deterministic + always
+// disclaimed; never a single fabricated figure. Centralized so live + regenerate match.
+function resolveRecommendedUnitsPaymentEstimateReply(
+  conv: Conversation | null | undefined,
+  scope: "live" | "regen"
+): string | null {
+  if (!conv) return null;
+  const units = (Array.isArray(conv.recommendedUnits) ? conv.recommendedUnits : []).filter(
+    u => Number.isFinite(Number(u?.price)) && Number(u?.price) > 0
+  );
+  if (!units.length) return null; // no priced units to estimate => let the finance route handle it
+  const ctx = findRecentInboundPaymentBudgetContext(conv);
+  const downPayment = ctx.downPayment;
+  if (downPayment == null) return null; // only estimate once they've given a down payment
+  // Offer once PER down-payment value — so we don't re-fire on later "ok"/"thanks" turns, but DO
+  // re-estimate if they change the down payment ("actually $1000 down").
+  if (conv.paymentEstimateSentForDown === downPayment) return null;
+  const reply = buildRecommendedUnitsPaymentEstimateReply({
+    firstName: normalizeDisplayCase(conv.lead?.firstName),
+    units,
+    downPayment,
+    termMonths: ctx.termMonths
+  });
+  if (!reply) return null;
+  conv.paymentEstimateSentForDown = downPayment;
+  recordRouteOutcome(scope, "recommended_units_payment_estimate", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    units: units.length,
+    downPayment
+  });
+  return reply;
+}
+
+// Deal/progress status check: confidence floor to rescue a status check from the small-talk
+// pleasantry path (default 0.7). Override-able for tuning.
+function dealStatusCheckConfidenceMin(): number {
+  const raw = Number(process.env.LLM_DEAL_STATUS_CHECK_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the deal-status parser only runs on status-ish phrasings (it lives inside
+// the small-talk branch, so this further narrows an already-small set of turns). This is a gate,
+// NOT comprehension: a hint miss falls through to the existing behavior (fail-safe), and the
+// parser — not this regex — owns the deal_status_check vs pleasantry decision.
+const DEAL_STATUS_CHECK_HINT_RE =
+  /\b(how(?:'?s| is| are)?\s+(?:we|it|things|everything)|how\s+we\s+look|any\s+(?:update|word|news|movement|progress)|what'?s\s+(?:the\s+)?(?:latest|new|news|word|update)|where\s+(?:are\s+)?(?:we|things)\b|where\s+do\s+we\s+stand|hear(?:d)?\s+(?:anything|back)|coming\s+along|status\s+(?:update|on)|update\s+on)\b/i;
+
+function dealStatusCheckParserHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return DEAL_STATUS_CHECK_HINT_RE.test(t);
+}
+
+// Honest status acknowledgement — no fabricated status. By the time this fires the specific
+// status handlers (appointment / delivery) have already declined the turn, so we genuinely
+// don't have an automated answer: acknowledge + commit to a real follow-up (a staff todo is
+// created at the call site). This is a safe handoff per AGENTS.md fallback policy, NOT a
+// pleasantry and NOT a fabricated update.
+function buildDealStatusCheckReply(): string {
+  return "Good question — let me grab the latest on where things stand and I'll get right back to you.";
+}
+
+// Shared by BOTH the live and regenerate small-talk-rescue sites (route-parity law). Returns an
+// honest status reply (and creates an owner follow-up todo) ONLY when a confident, explicit deal
+// status check is detected; otherwise null so the existing small-talk pleasantry path runs.
+async function resolveDealStatusCheckReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!dealStatusCheckParserHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("deal_status_check_parser", () =>
+    parseDealStatusCheckWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_DEAL_STATUS_CHECK_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-deal-status-check-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideDealStatusCheckTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: dealStatusCheckConfidenceMin()
+  });
+  if (decision.kind !== "answer_status") return null;
+  addTodo(
+    conv,
+    "call",
+    "Customer asked for a deal/progress status update. Pull the latest and follow up with where things stand.",
+    providerMessageId ?? undefined
+  );
+  recordRouteOutcome(scope, "deal_status_check", { convId: conv.id, leadKey: conv.leadKey });
+  return buildDealStatusCheckReply();
+}
+
+// Watch opt-out: confidence floor (default 0.7 — moderate; biased toward KEEPING the watch on doubt).
+function watchOptOutConfidenceMin(): number {
+  const raw = Number(process.env.LLM_WATCH_OPT_OUT_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the watch-opt-out parser only runs on disinterest/opt-out-ish phrasings. A gate,
+// NOT comprehension: a hint miss falls through to existing behavior; the parser owns the decision.
+const WATCH_OPT_OUT_HINT_RE =
+  /\b(not interested|no longer|take me off|stop (the )?alert|stop notif|stop (let|text)|unsubscrib|all set|already (bought|got|purchased)|found (one|something)|no thanks|not looking|don'?t need|cancel (the )?(watch|alert)|opt[-\s]?out)\b/i;
+function watchOptOutHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return WATCH_OPT_OUT_HINT_RE.test(t);
+}
+
+function buildWatchOptOutAck(): string {
+  return "No problem — I'll take you off the alerts for that one. Just text me anytime if you want back on.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). PAUSES the
+// customer's inventory watch (so the watch-fire engine stops notifying) + stops the related cadence,
+// and returns a brief ack — ONLY when the conv has an ACTIVE watch AND a confident, explicit watch
+// opt-out is detected; otherwise null so existing handling runs. Lighter than a full disposition
+// closeout (keeps them as a lead, just off the alerts).
+async function resolveWatchOptOutReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!hasActiveInventoryWatch(conv)) return null; // nothing to remove
+  if (!watchOptOutHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("watch_opt_out_parser", () =>
+    parseWatchOptOutWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-watch-opt-out-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideWatchOptOutTurn({
+    hasActiveWatch: true,
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: watchOptOutConfidenceMin()
+  });
+  if (decision.kind !== "pause_watch") return null;
+  const paused = markInventoryWatchOptOut(conv, "watch_opt_out");
+  stopFollowUpCadence(conv, "watch_opt_out");
+  recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
+  return buildWatchOptOutAck();
+}
+
+// A sibling-scope ask is PENDING when we asked (siblingScopeAskedAt) and nothing resolved it —
+// not broadened (openToOtherTrims), not declined, not paused. This pending state is the gate for
+// the scope-answer parser: no hint regex; while nothing is pending the parser never runs.
+function findPendingWatchScopeAsk(conv: any): InventoryWatch | null {
+  for (const w of collectInventoryWatches(conv)) {
+    if (!w || w.status === "paused") continue;
+    if (!w.siblingScopeAskedAt) continue;
+    if (w.openToOtherTrims || w.siblingScopeDeclinedAt || w.siblingScopeResolvedAt) continue;
+    return w;
+  }
+  return null;
+}
+
+function watchScopeConfidenceMin(): number {
+  const raw = Number(process.env.LLM_WATCH_SCOPE_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Applies
+// the customer's ANSWER to the one-time sibling-scope ask (buildWatchSiblingScopeAsk): a confident
+// "open to variants" BROADENS the watch (openToOtherTrims — same-family trims now fire); a
+// confident "base only" pins it strict and we never re-ask. STATE ONLY — this never composes the
+// reply; the normal draft pipeline sees the ask + answer in history and responds naturally, so an
+// answer that carries another question ("sure — what color is it?") never loses that question to a
+// canned ack. Decision centralized in decideWatchScopeTurn (routeStateReducer). Fail-safe: no
+// pending ask / unrelated / low confidence => no state change (the watch stays strict).
+async function applyWatchScopeAnswer(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<"broaden_watch" | "keep_base_only" | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  const pending = findPendingWatchScopeAsk(conv);
+  if (!pending) return null;
+  const parse = await safeLlmParse("watch_scope_parser", () =>
+    parseWatchScopeWithLLM({
+      text,
+      watchModel: pending.model,
+      askedUnitLabel: pending.siblingScopeAskModel ?? null,
+      history: buildHistory(conv, 8)
+    })
+  );
+  if (process.env.LLM_WATCH_SCOPE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-watch-scope-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideWatchScopeTurn({
+    scopeAskPending: true,
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: watchScopeConfidenceMin()
+  });
+  if (decision.kind === "none") return null;
+  const nowIsoValue = new Date().toISOString();
+  if (decision.kind === "broaden_watch") {
+    pending.openToOtherTrims = true;
+    pending.siblingScopeResolvedAt = nowIsoValue;
+  } else {
+    pending.siblingScopeDeclinedAt = nowIsoValue;
+    pending.siblingScopeResolvedAt = nowIsoValue;
+  }
+  conv.updatedAt = nowIsoValue;
+  saveConversation(conv);
+  recordRouteOutcome(
+    scope,
+    decision.kind === "broaden_watch" ? "inventory_watch_scope_broadened" : "inventory_watch_scope_base_only",
+    { convId: conv.id, leadKey: conv.leadKey, watchModel: pending.model, hasOtherAsk: !!parse?.hasOtherAsk }
+  );
+  // The variant that prompted the ask is likely still on the floor but is no longer a "new
+  // arrival," so the cron would never notify. On a live broaden, run the targeted in-stock pass
+  // for THIS conversation (dedup + 24h limits apply; draft-only in suggest mode). Live-only:
+  // regenerate re-drafts a reply and must not fan out extra notifications.
+  if (decision.kind === "broaden_watch" && scope === "live") {
+    void processInventoryWatchlist(conv.id, { includeInStock: true }).catch(e =>
+      console.warn("[watch-scope] post-broaden in-stock pass failed:", e?.message ?? e)
+    );
+  }
+  return decision.kind;
+}
+
+// Conversation closeout / sign-off: confidence floor (default 0.7 — biased toward NOT closing out).
+function conversationCloseoutConfidenceMin(): number {
+  const raw = Number(process.env.LLM_CONVERSATION_CLOSEOUT_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the closeout parser only runs on closer-ish phrasings. A gate, NOT
+// comprehension: a hint miss falls through to existing behavior (fail-safe), and the parser —
+// not this regex — owns the reciprocate-vs-silent-vs-none decision.
+const CONVERSATION_CLOSEOUT_HINT_RE =
+  /\b(?:have a (?:good|great|nice)|good (?:night|one)|take care|talk (?:soon|to you|later)|see you|catch you|thanks again|thank you|appreciate|you guys (?:are|rock)|the best|ride safe|stay safe|happy (?:friday|holidays?|weekend)|weekend|cya|later|peace|cheers|bye|good bye|goodbye|you too|same to you|all set|we'?re good)\b/i;
+
+function conversationCloseoutHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return CONVERSATION_CLOSEOUT_HINT_RE.test(t);
+}
+
+// Defense-in-depth actionable-signal guard fed to the pure decision: never close out a turn that
+// asks for anything (mirrors the isCloseoutSignoffNoResponseText guard tokens + any question mark).
+// The parser independently returns none on asks; this is the deterministic safety floor.
+function closeoutHasActionableSignal(text: string): boolean {
+  const raw = String(text ?? "");
+  if (/[?]/.test(raw)) return true;
+  return /\b(?:call|text|appointment|schedule|book|available|availability|price|pricing|payment|trade|inventory|stock|test ride|ride today|come in|stop in|how much|when can|what time)\b/i.test(
+    raw
+  );
+}
+
+// Deterministic warm closer when the LLM generator is unavailable — still terminal (no pivot/question).
+function buildCloseoutReciprocationFallbackReply(text: string): string {
+  const t = String(text ?? "").toLowerCase();
+  if (/\bweekend\b/.test(t)) return "You too — have a great weekend!";
+  if (/\b(?:night|evening)\b/.test(t)) return "You too — have a good one!";
+  if (/\b(?:the best|you guys (?:are|rock)|appreciate|thank)\b/.test(t)) return "Appreciate that — ride safe!";
+  return "Anytime — take care!";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Reads a
+// conversational closer and returns either a terminal warm reciprocation OR a silent close (no
+// reply), or null when it's not a confident closeout (=> existing small-talk behavior runs).
+// Scope = the immediate exchange only; the follow-up cadence is intentionally untouched.
+async function resolveConversationCloseoutReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<{ kind: "reciprocate"; reply: string } | { kind: "silent" } | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!conversationCloseoutHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("conversation_closeout_parser", () =>
+    parseConversationCloseoutWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-conversation-closeout-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideConversationCloseoutTurn({
+    parserAccepted: !!parse,
+    kind: parse?.kind ?? null,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: conversationCloseoutConfidenceMin(),
+    hasActionableSignal: closeoutHasActionableSignal(text)
+  });
+  if (decision.kind === "none") return null;
+  if (decision.kind === "close_silent") {
+    recordRouteOutcome(scope, "conversation_closeout_silent", { convId: conv.id, leadKey: conv.leadKey });
+    return { kind: "silent" };
+  }
+  // reciprocate_and_close: ONE brief warm farewell, no pivot/question (closingHint forces it).
+  const generated = await safeLlmParse("conversation_closeout_reply", () =>
+    generateSmallTalkReplyWithLLM({
+      text,
+      history: buildHistory(conv, 8),
+      closingHint: true
+    })
+  );
+  const reply = String(generated?.reply ?? "").trim() || buildCloseoutReciprocationFallbackReply(text);
+  recordRouteOutcome(scope, "conversation_closeout_reciprocate", { convId: conv.id, leadKey: conv.leadKey });
+  return { kind: "reciprocate", reply };
+}
+
+// Finance-process / logistics handoff: confidence floor (default 0.7).
+function financeProcessConfidenceMin(): number {
+  const raw = Number(process.env.LLM_FINANCE_PROCESS_QUESTION_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the finance-process parser only runs on process/logistics-ish phrasings.
+// A gate, NOT comprehension: a hint miss falls through to existing behavior (fail-safe), and the
+// parser — not this regex — owns the handoff-vs-number-question decision.
+const FINANCE_PROCESS_QUESTION_HINT_RE =
+  /\b(insurance|binder|proof of insurance|down\s*payment|put .* down|how long (do|have)|more time|by when|when (do|does|is|will)|what comes first|before (we|you|i) (finalize|sign|can)|after (i|we) sign|need .*(before|first)|paperwork|the title|finaliz)\b/i;
+
+function financeProcessQuestionHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return FINANCE_PROCESS_QUESTION_HINT_RE.test(t);
+}
+
+// Honest finance-manager handoff — NO fabricated policy. The agent can't know dealer/lender
+// process rules (insurance deadlines, down-payment timing), so it acknowledges the specific
+// question and routes to the business manager (safe handoff per AGENTS.md fallback policy).
+function buildFinanceProcessHandoffReply(): string {
+  return "Good question — that's one our finance manager can answer exactly so you get it right. Let me loop them in and they'll reach out shortly.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// the handoff reply (and sets the payments handoff state + a manager todo + stops cadence) ONLY
+// when a confident, explicit finance-PROCESS question is detected; otherwise null so the existing
+// finance handling runs. Mirrors the isPaymentNumbersStatusQuestionText handoff side effects.
+async function resolveFinanceProcessHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!financeProcessQuestionHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("finance_process_question_parser", () =>
+    parseFinanceProcessQuestionWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-finance-process-question-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideFinanceProcessQuestionTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: financeProcessConfidenceMin()
+  });
+  if (decision.kind !== "finance_process_handoff") return null;
+  addTodo(
+    conv,
+    "payments",
+    `Finance-process question for the business manager. Customer asked: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "finance_process_question");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "finance_process_question", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "finance_process_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildFinanceProcessHandoffReply();
+}
+
+function nonMotorcycleTradeConfidenceMin(): number {
+  const v = Number(process.env.NON_MOTORCYCLE_TRADE_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
+// Cheap pre-filter so we only spend an LLM call on plausible non-motorcycle trades;
+// a miss => existing trade handling runs (fail-safe). Needs a non-bike noun AND a
+// trade/sell/apply verb.
+function nonMotorcycleTradeHint(text: string): boolean {
+  const t = String(text ?? "");
+  const item =
+    /\b(camper|trailer|rv|motorhome|cars?|trucks?|suv|boats?|jet ?ski|atv|utv|side[- ]by[- ]side|snowmobile|sled)\b/i.test(
+      t
+    );
+  const verb = /\b(trade|trade[- ]?in|put toward|apply|applied|sell|take|swap)\b/i.test(t);
+  return item && verb;
+}
+
+function buildNonMotorcycleTradeHandoffReply(item?: string | null): string {
+  const thing = String(item ?? "").trim() || "that";
+  return `Good question — let me have our team take a look at the ${thing} specifically, since that's outside our usual motorcycle trades. They'll follow up with you on it.`;
+}
+
+// Lighter ack once we've already handed the non-motorcycle item to the team and the customer
+// keeps sending details — acknowledge receipt, don't re-pitch the handoff.
+function buildNonMotorcycleTradeContinuationReply(item?: string | null): string {
+  const thing = String(item ?? "").trim() || "that";
+  return `Thanks — I'll get those details on the ${thing} over to our team and they'll follow up with you.`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// a staff-handoff reply (and sets manual handoff + an owner todo + stops cadence) ONLY when a
+// confident, explicit NON-motorcycle trade is detected; otherwise null so the normal trade
+// handling runs. Mirrors resolveFinanceProcessHandoffReply.
+async function resolveNonMotorcycleTradeHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  // Sticky continuation: once a conversation is in the non-motorcycle-trade handoff, keep
+  // consulting the parser on follow-up turns (camper details have no "trade" verb, so the
+  // cheap pre-filter would miss them) — that keeps the thread with the team instead of
+  // running camper specs through the bike pipeline. A real pivot => parser none => break out.
+  const alreadyHandoff =
+    conv.followUp?.mode === "manual_handoff" && conv.followUp?.reason === "non_motorcycle_trade";
+  if (!alreadyHandoff && !nonMotorcycleTradeHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("non_motorcycle_trade_parser", () =>
+    parseNonMotorcycleTradeWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-non-motorcycle-trade-parse]", { convId: conv.id, alreadyHandoff, ...parse });
+  }
+  const decision = decideNonMotorcycleTradeTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: nonMotorcycleTradeConfidenceMin()
+  });
+  if (decision.kind !== "non_motorcycle_trade_handoff") return null;
+  const itemNote = parse?.item ? ` (${parse.item})` : "";
+  // addTodo merges into the existing open manager todo, so a continuation appends the new
+  // details for the owner rather than spawning duplicates.
+  addTodo(
+    conv,
+    "manager",
+    `Non-motorcycle trade${itemNote} — owner to assess whether we take it. Customer: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setFollowUpMode(conv, "manual_handoff", "non_motorcycle_trade");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "non_motorcycle_trade", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, alreadyHandoff ? "non_motorcycle_trade_continuation" : "non_motorcycle_trade_handoff", {
+    convId: conv.id,
+    leadKey: conv.leadKey
+  });
+  return alreadyHandoff
+    ? buildNonMotorcycleTradeContinuationReply(parse?.item)
+    : buildNonMotorcycleTradeHandoffReply(parse?.item);
+}
+
+function serviceAppointmentRequestConfidenceMin(): number {
+  const v = Number(process.env.SERVICE_APPOINTMENT_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
+// Cheap pre-filter so we only spend an LLM call on a plausible service / parts-install appointment
+// request; a miss => existing handling runs (fail-safe). Needs a work/install noun AND a
+// bring-it-in / appointment signal. The typed parser owns the actual decision.
+function serviceAppointmentRequestHint(text: string): boolean {
+  const t = String(text ?? "");
+  const work =
+    /\b(service|oil change|tune|tuner|inspect|inspection|maintenance|repair|install|air ?cleaner|air ?intake|intake|exhaust|pipes?|stage ?\d|cam|seat|handlebars?|bars|lights?|tires?|brakes?|recall|screaming eagle)\b/i.test(
+      t
+    );
+  const bringIn =
+    /\b(appointment|appt|bring(?:ing)? (?:it|the bike|my bike|her|him) in|bring it in|drop(?:ping)? (?:it|the bike|her|him)? ?off|get it in|come in|schedule|book|set ?up a time|when can)\b/i.test(
+      t
+    );
+  return work && bringIn;
+}
+
+// Tier-2 service handoff reply: acknowledge the install/service, name it + the customer's window,
+// and tell them the service team will confirm a TIME. LeadRider has NO service-scheduler
+// integration, so this must NEVER quote or claim a slot (that would fabricate availability).
+function buildServiceAppointmentRequestReply(serviceItem?: string | null, timingText?: string | null): string {
+  const item = String(serviceItem ?? "").trim();
+  const timing = String(timingText ?? "").trim();
+  const forItem = item ? ` for the ${item}` : "";
+  const aroundWhen = timing ? ` around ${timing}` : "";
+  return `Got it — I'll have our service team get you scheduled${forItem} and confirm a time that works${aroundWhen}. They'll follow up shortly to lock it in.`;
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns a
+// service-department handoff reply (and sets the service classification + an owner todo + stops the
+// sales cadence) ONLY when a confident, explicit customer-initiated service/parts-install
+// appointment request is detected; otherwise null so existing handling runs. Mirrors
+// resolveNonMotorcycleTradeHandoffReply. Catches the gap where the keyword-gated
+// isServiceDepartmentSchedulingRequest missed a parts-install request on a non-service conv.
+async function resolveServiceAppointmentRequestReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  // If the conversation already has service-department context, the existing keyword-gated
+  // service-scheduling handoff owns the turn — don't double-handle.
+  if (hasServiceDepartmentContext(conv)) return null;
+  if (!serviceAppointmentRequestHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("service_appointment_request_parser", () =>
+    parseServiceAppointmentRequestWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_SERVICE_APPOINTMENT_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-service-appointment-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideServiceAppointmentTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: serviceAppointmentRequestConfidenceMin()
+  });
+  if (decision.kind !== "service_appointment_handoff") return null;
+  await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+  const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+  const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+  if (!hasServiceTodo) {
+    const itemNote = parse?.serviceItem ? ` (${parse.serviceItem})` : "";
+    addTodo(
+      conv,
+      "service",
+      `Service appointment request${itemNote} — service to confirm a time. Customer: ${text}`,
+      providerMessageId ?? undefined,
+      serviceTodoOwner
+    );
+  }
+  conv.classification = {
+    ...(conv.classification ?? {}),
+    bucket: "service",
+    cta: "service_request"
+  };
+  setDialogState(conv, "service_handoff");
+  setFollowUpMode(conv, "manual_handoff", "service_request");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "service_appointment_handoff", {
+    convId: conv.id,
+    leadKey: conv.leadKey
+  });
+  return buildServiceAppointmentRequestReply(parse?.serviceItem, parse?.timingText);
+}
+
 function buildActionableStylePreferenceReply(args: {
   conv: Conversation | null | undefined;
   inboundText: string;
@@ -3283,13 +4237,6 @@ async function maybeRestoreSalesLeadOwnerFromPreference(conv: any): Promise<bool
 
 function canUserAccessConversation(user: any, conv: any): boolean {
   if (AUTH_DISABLED || !user) return true;
-  const role = String(user?.role ?? "").toLowerCase();
-  if (role === "manager") return true;
-  if (user?.permissions?.canViewAllLeads) return true;
-  if (user?.permissions?.canViewAllTasks) {
-    const convId = String(conv?.id ?? "").trim();
-    if (convId && listOpenTodos().some(todo => todo.convId === convId && todo.status === "open")) return true;
-  }
   const requesterId = String(user?.id ?? "").trim();
   const ownerId = String(conv?.leadOwner?.id ?? "").trim();
   const requesterName = String(user?.name ?? "").trim().toLowerCase();
@@ -3297,13 +4244,21 @@ function canUserAccessConversation(user: any, conv: any): boolean {
   const isLeadOwner =
     (!!requesterId && !!ownerId && requesterId === ownerId) ||
     (!!requesterName && !!ownerName && requesterName === ownerName);
-  if (isLeadOwner) return true;
-  const dept = getConversationDepartment(conv);
-  if (role === "service" || role === "parts" || role === "apparel") {
-    return dept === role;
-  }
-  if (role === "salesperson") return !dept;
-  return true;
+  const hasOwner = !!ownerId || !!ownerName;
+  const convId = String(conv?.id ?? "").trim();
+  const hasOpenTodo =
+    !!user?.permissions?.canViewAllTasks &&
+    !!convId &&
+    listOpenTodos().some(todo => todo.convId === convId && todo.status === "open");
+  return decideConversationAccess({
+    role: String(user?.role ?? ""),
+    canViewAllLeads: !!user?.permissions?.canViewAllLeads,
+    canViewAllTasks: !!user?.permissions?.canViewAllTasks,
+    isLeadOwner,
+    hasOwner,
+    department: getConversationDepartment(conv),
+    hasOpenTodo
+  });
 }
 
 app.use((req, res, next) => {
@@ -3399,7 +4354,394 @@ type CustomerReplyDraftInvariantEvaluator = (
   invariantHints?: CustomerReplyDraftInvariantHints
 ) => { allow: boolean; draftText: string; reason?: string };
 
-function publishCustomerReplyDraft(args: {
+// Draft-quality pre-send judge — SHADOW (STEP 1). Runs the multi-dimensional judge over a
+// just-published draft and LOGS what the (dark) gate WOULD do (regenerate / hold) without
+// ever changing the live draft. Fire-and-forget; gated by the shadow/enable flags so it adds
+// no LLM call when both are off. The live regenerate/hold + auto-release-on-fix is a later,
+// approve-first step; this step only earns trust by measuring precision in production.
+async function runDraftQualityJudgeShadow(
+  conv: any,
+  draft: string,
+  channel: "sms" | "email",
+  scope: "live" | "regen" | "manual"
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!draftQualityJudgeShadowEnabled() && !isDraftQualityJudgeEnabled()) return;
+    const draftText = String(draft ?? "").trim();
+    if (!draftText) return;
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    if (!inbound) return;
+    const verdict = await judgeDraftQualityWithLLM({
+      draft: draftText,
+      inbound,
+      history: buildHistory(conv, 8),
+      lead: conv.lead,
+      channel
+    });
+    if (!verdict) return;
+    const decision = decideDraftQualityGate({ enabled: isDraftQualityJudgeEnabled(), verdict });
+    if (decision.action !== "pass") {
+      recordDecisionTrace({
+        scope,
+        stage: decision.live ? `draft_quality.${decision.action}` : "draft_quality.shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          overall: verdict.overall,
+          intentOk: verdict.intentOk,
+          toneOk: verdict.toneOk,
+          dispositionOk: verdict.dispositionOk,
+          safetyOk: verdict.safetyOk,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          steering: String(verdict.steering ?? "").slice(0, 180),
+          channel,
+          draftPreview: draftText.slice(0, 140)
+        }
+      });
+    }
+    // STEP 1 is shadow-only: never mutate the draft here, even when decision.live is true.
+  } catch {
+    // Best-effort shadow tooling — never block or fail a draft publish.
+  }
+}
+
+// Cadence-quality judge — SHADOW (STEP 1). Judge #3. The draft + no-response judges only see
+// INBOUND-triggered turns; this runs on a PROACTIVE follow-up cadence message about to go out and
+// LOGS whether it should send / fits state / sounds human / isn't pushy — without ever altering or
+// suppressing the cadence draft. Fire-and-forget; flag-gated. The live "suppress/regenerate the
+// cadence touch" action is a later, approve-first step.
+async function runCadenceQualityJudgeShadow(
+  conv: any,
+  message: string,
+  channel: "sms" | "email"
+): Promise<CadenceQualityGateDecision | null> {
+  try {
+    if (!conv?.id) return null;
+    if (!cadenceQualityJudgeShadowEnabled() && !isCadenceQualityJudgeEnabled() && !isCadenceQualityEnforceEnabled())
+      return null;
+    const text = String(message ?? "").trim();
+    if (!text) return null;
+    let daysSinceLastInbound: number | null = null;
+    const lastInbound = [...(conv.messages ?? [])].reverse().find((m: any) => m?.direction === "in" && m?.body);
+    const lastMs = lastInbound?.at ? Date.parse(String(lastInbound.at)) : NaN;
+    if (Number.isFinite(lastMs)) {
+      daysSinceLastInbound = Math.max(0, Math.floor((Date.now() - lastMs) / 86_400_000));
+    }
+    const cadenceKind = conv.followUpCadence?.kind ?? null;
+    const verdict = await judgeCadenceQualityWithLLM({
+      message: text,
+      channel,
+      cadenceKind,
+      history: buildHistory(conv, 8),
+      lead: conv.lead,
+      daysSinceLastInbound
+    });
+    if (!verdict) return null;
+    // ENFORCE (flag-gated) is the LIVE cadence gate: when on, the decision uses the enforce floor (0.90)
+    // and live=true so a `suppress` verdict actually holds the touch back. Off → shadow (live=false,
+    // default floor) exactly as before.
+    const enforce = isCadenceQualityEnforceEnabled();
+    const decision = decideCadenceQualityGate({
+      enabled: enforce,
+      verdict,
+      minConfidence: enforce ? cadenceQualityEnforceFloor() : undefined
+    });
+    if (decision.action !== "pass") {
+      recordDecisionTrace({
+        scope: "manual",
+        stage: decision.live ? `cadence_quality.${decision.action}` : "cadence_quality.shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          overall: verdict.overall,
+          sendWorthy: verdict.sendWorthy,
+          stateFit: verdict.stateFit,
+          toneOk: verdict.toneOk,
+          dispositionOk: verdict.dispositionOk,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          steering: String(verdict.steering ?? "").slice(0, 180),
+          channel,
+          cadenceKind,
+          messagePreview: text.slice(0, 140)
+        }
+      });
+    }
+    // Fold the cadence-quality judge into the self-healing feed (like the context-fidelity shadow): when a
+    // PROACTIVE cadence message is judged suppress/hold (a bad message we'd send unprompted), persist the
+    // verdict so the read-only outcome-audit sweep surfaces it as a comprehension gap. Detection only — STEP
+    // 1 stays shadow (the draft is NOT altered here).
+    if (verdict.overall === "suppress" || verdict.overall === "hold") {
+      (conv as any).cadenceQualityShadow = {
+        at: new Date().toISOString(),
+        overall: verdict.overall,
+        confidence: verdict.confidence ?? null,
+        reason: String(verdict.reason ?? "").slice(0, 240),
+        steering: String(verdict.steering ?? "").slice(0, 240) || null,
+        channel,
+        cadenceKind: cadenceKind ?? null,
+        messagePreview: text.slice(0, 240)
+      };
+      saveConversation(conv);
+    }
+    // The CALLER enforces: when CADENCE_QUALITY_ENFORCE is on and decision.action === "suppress", the
+    // cadence loop skips this touch + advances. When off, this stays observe-only (the caller ignores
+    // the returned decision and the send proceeds unchanged).
+    return decision;
+  } catch {
+    // Best-effort — never block or fail the cadence tick.
+    return null;
+  }
+}
+
+// No-response pre-send judge — SHADOW (STEP 1). The agent chose silence on a customer turn; this
+// runs the should-respond judge and LOGS whether that silence was a wrongful miss, without ever
+// producing a reply. Fire-and-forget; flag-gated. The live "generate a reply instead of silence"
+// action is a later, approve-first step. Covers the blind spot the draft judge can't see (no draft
+// is produced on a suppression, so the draft judge never fires).
+async function runNoResponseJudgeShadow(
+  conv: any,
+  inbound: string,
+  scope: "live" | "regen" | "manual"
+): Promise<void> {
+  try {
+    if (!conv?.id) return;
+    if (!noResponseJudgeShadowEnabled() && !isNoResponseJudgeEnabled()) return;
+    const text = String(inbound ?? "").trim();
+    if (!text) return;
+    const verdict = await judgeShouldRespondWithLLM({
+      inbound: text,
+      history: buildHistory(conv, 8),
+      lead: conv.lead
+    });
+    if (!verdict) return;
+    const decision = decideNoResponseJudge({ enabled: isNoResponseJudgeEnabled(), verdict });
+    // Log a wrongful silence (action != pass) OR a social-reciprocation opportunity (a warm closer
+    // the agent stayed silent on — surfaced separately so staff can decide whether to reciprocate).
+    const isSocialReciprocation = verdict.category === "social_reciprocation";
+    if (decision.action !== "pass" || isSocialReciprocation) {
+      recordDecisionTrace({
+        scope,
+        stage:
+          decision.action !== "pass"
+            ? decision.live
+              ? "no_response.flag"
+              : "no_response.shadow"
+            : "no_response.social_reciprocation",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          action: decision.action,
+          live: decision.live,
+          category: verdict.category,
+          shouldRespond: verdict.shouldRespond,
+          confidence: verdict.confidence ?? null,
+          reason: String(verdict.reason ?? "").slice(0, 180),
+          inboundPreview: text.slice(0, 140)
+        }
+      });
+    }
+    // STEP 1 is shadow-only: never produce a reply here, even when decision.live is true.
+  } catch {
+    // Best-effort shadow tooling — never block or fail the request.
+  }
+}
+
+// STEP 2 pre-publish quality gate (dark unless DRAFT_QUALITY_JUDGE_ENABLED). Runs the draft-quality
+// judge BEFORE the draft is stored, so a failing draft is never written to the outgoing field. When
+// the flag is OFF this short-circuits immediately (no judge call, no latency) — behavior identical to
+// before. Returns held=true (with the gate action) only on a confident hold/regenerate while live.
+async function gateDraftBeforePublish(
+  conv: Conversation,
+  candidate: string,
+  channel: "sms" | "email"
+): Promise<{ held: false } | { held: true; reason: string; judgeReason?: string }> {
+  if (!isDraftQualityJudgeEnabled()) return { held: false }; // dark: no judge call, no latency
+  try {
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    if (!inbound) return { held: false };
+    // De-dup: if self-heal already judged THIS exact draft this request, reuse its verdict (no 2nd LLM
+    // call). Miss => judge as before. Halves the per-draft judge cost when auto-regenerate is on.
+    const verdict =
+      getCachedSelfHealVerdict(inbound, candidate) ??
+      (await judgeDraftQualityWithLLM({
+        draft: candidate,
+        inbound,
+        history: buildHistory(conv, 8),
+        lead: conv.lead,
+        channel
+      }));
+    const decision = decideDraftQualityGate({ enabled: true, verdict });
+    // First live slice = HOLD-class only (the backtest showed it catches real fabrications/wrong-
+    // answers; needs_regenerate is noisier + has no auto-regenerate yet). When STEP 3 (auto-
+    // regenerate) lands, set DRAFT_QUALITY_HOLD_CLASS_ONLY=0 to also act on regenerate.
+    const holdOnly = draftQualityHoldClassOnly();
+    const acts = decision.action === "hold" || (decision.action === "regenerate" && !holdOnly);
+    if (decision.live && acts) {
+      return { held: true, reason: `live_${decision.action}`, judgeReason: verdict?.reason };
+    }
+  } catch {
+    // Fail-open: a judge error must never block a draft (fail toward publishing).
+  }
+  return { held: false };
+}
+
+// Context-fidelity hold — score the about-to-publish reply draft for "answering out of context" and
+// decide whether to hold. Runs when the SHADOW (CONTEXT_FIDELITY_HOLD_SHADOW) OR the LIVE enforce flag
+// (CONTEXT_FIDELITY_HOLD_ENABLED) is on (a NET-NEW LLM call, so off by default). The pure hold slice
+// lives in decideContextFidelityHold (hold-class + major + conf>=0.8 + turn-judged frame). This logs
+// the would-hold and returns the decision; the caller (publishCustomerReplyDraft, the shared chokepoint
+// for the live webhook AND regenerate) performs the actual enforcement when `live`. Never throws.
+// One open "needs your reply" task per conversation for a context-fidelity hold (deduped on the shared
+// marker). appendOutbound closes it when the rep replies. Owner defaults to the lead owner via addTodo —
+// this NEVER changes conv.leadOwner (Joe's constraint).
+function upsertContextFidelityHeldTodo(conv: Conversation, frame: string | null): void {
+  const alreadyOpen = listOpenTodos().some(
+    t => t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)
+  );
+  if (alreadyOpen) return;
+  addTodo(
+    conv,
+    "other",
+    `Needs your reply — the ${CONTEXT_FIDELITY_HELD_TODO_MARKER} (${frame ?? "context"}). Reply to the customer.`,
+    undefined,
+    undefined,
+    undefined,
+    "followup"
+  );
+}
+
+async function evaluateContextFidelityHold(
+  conv: Conversation,
+  candidate: string,
+  channel: "sms" | "email",
+  scope: "live" | "regen" | "manual"
+): Promise<{ hold: boolean; live: boolean; frame: string | null; reason: string; steering: string | null; severity: string | null; confidence: number | null } | null> {
+  const live = isContextFidelityHoldEnabled();
+  if (!contextFidelityHoldShadowEnabled() && !live) return null; // dark: no scorer call, no latency
+  try {
+    const inbound = String(getLastInboundBody(conv) ?? "").trim();
+    const draft = String(candidate ?? "").trim();
+    if (!inbound || !draft) return null; // cadence/proactive draft has no inbound — out of scope here
+    const anchor = {
+      modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
+      leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
+      appointmentBooked: !!conv?.appointment?.bookedEventId,
+      dialogState: conv?.dialogState?.name ?? null
+    };
+    const sc = await scoreContextFidelityWithLLM({ draft, inbound, history: buildHistory(conv, 8), anchor, channel });
+    const decision = decideContextFidelityHold({ enabled: live, score: sc });
+    if (decision.action !== "hold") return { hold: false, live, frame: decision.frame ?? null, reason: decision.reason, steering: null, severity: sc?.severity ?? null, confidence: sc?.confidence ?? null };
+    // Keep both literal markers so the shadow measurement string survives and the enforce path is greppable.
+    const marker = live ? "[context-fidelity-hold-enforce]" : "[context-fidelity-hold-shadow]";
+    console.warn(
+      `${marker} conv=${conv.id} scope=${scope} frame=${decision.frame} conf=${sc?.confidence ?? "-"} reason="${String(sc?.reason ?? "").slice(0, 160)}"`
+    );
+    // Shadow-only trace here; the enforce path records context_fidelity.held with the action it took.
+    if (!live) {
+      recordDecisionTrace({
+        scope,
+        stage: "context_fidelity.hold_shadow",
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        detail: {
+          frame: decision.frame ?? null,
+          confidence: sc?.confidence ?? null,
+          severity: sc?.severity ?? null,
+          reason: String(sc?.reason ?? "").slice(0, 180),
+          steering: String(sc?.steering ?? "").slice(0, 180),
+          unsupportedAssertion: String(sc?.unsupportedAssertion ?? "").slice(0, 180),
+          inboundPreview: inbound.slice(0, 160),
+          draftPreview: draft.slice(0, 200),
+          channel
+        }
+      });
+    }
+    return { hold: true, live, frame: decision.frame ?? null, reason: decision.reason, steering: String(sc?.steering ?? "").slice(0, 240) || null, severity: sc?.severity ?? null, confidence: sc?.confidence ?? null };
+  } catch {
+    // Best-effort — never block or fail a publish.
+    return null;
+  }
+}
+
+// Net 2 of the gap-detection loop: when staff EDIT the AI's draft before sending, the generated→sent
+// diff is the strongest "the agent was wrong here" signal — a labeled human correction. Judge whether
+// the edit was MATERIAL (substance changed — a comprehension miss the loop should fix) vs COSMETIC
+// (voice/length only); persist only material ones on conv.humanCorrection so the read-only outcome-audit
+// sweep turns them into comprehension anomalies. Fire-and-forget (never blocks the send); best-effort.
+async function recordDraftEditCorrection(
+  conv: Conversation,
+  args: { generated: string; sent: string; channel: "sms" | "email"; messageId?: string | null }
+): Promise<void> {
+  try {
+    const generated = String(args.generated ?? "").trim();
+    const sent = String(args.sent ?? "").trim();
+    if (!generated || !sent || generated === sent) return;
+    const verdict = await classifyDraftEditWithLLM({
+      generated,
+      sent,
+      inbound: String(getLastInboundBody(conv) ?? ""),
+      history: buildHistory(conv, 8),
+      anchor: {
+        modelOfRecord: conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? null,
+        leadType: [conv?.classification?.bucket, conv?.classification?.cta].filter(Boolean).join("/") || null,
+        dialogState: conv?.dialogState?.name ?? null
+      },
+      channel: args.channel
+    });
+    if (!verdict || !verdict.isMaterial) return; // cosmetic edits are NOT a comprehension gap
+    if (typeof verdict.confidence === "number" && verdict.confidence < 0.6) return; // low-signal
+    (conv as any).humanCorrection = {
+      at: new Date().toISOString(),
+      category: verdict.category ?? null,
+      confidence: verdict.confidence ?? null,
+      reason: verdict.reason ?? null,
+      steering: verdict.steering ?? null,
+      channel: args.channel,
+      messageId: args.messageId ?? null,
+      generatedPreview: generated.slice(0, 240),
+      sentPreview: sent.slice(0, 240)
+    };
+    saveConversation(conv);
+    recordDecisionTrace({
+      scope: "manual",
+      stage: "human_correction.material",
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      detail: {
+        category: verdict.category ?? null,
+        confidence: verdict.confidence ?? null,
+        reason: String(verdict.reason ?? "").slice(0, 160),
+        channel: args.channel
+      }
+    });
+  } catch {
+    // Best-effort detection — never disrupt the send path.
+  }
+}
+
+// Detect a staff edit (the sent body differs from the AI draft we consumed) and, when so, fire the
+// fire-and-forget material-correction judge. Called at the SUCCESSFUL send sites only (email + twilio).
+function maybeRecordDraftEditCorrection(
+  conv: Conversation,
+  fin: { usedDraft: boolean; originalDraftBody?: string },
+  sent: string,
+  channel: "sms" | "email",
+  messageId?: string | null
+): void {
+  if (!fin?.usedDraft) return;
+  const generated = String(fin.originalDraftBody ?? "");
+  if (!generated.trim() || generated.trim() === String(sent ?? "").trim()) return; // no edit
+  void recordDraftEditCorrection(conv, { generated, sent: String(sent ?? ""), channel, messageId });
+}
+
+async function publishCustomerReplyDraft(args: {
   conv: Conversation;
   channel: "sms" | "email";
   text: string;
@@ -3412,10 +4754,134 @@ function publishCustomerReplyDraft(args: {
   routeScope?: "live" | "regen" | "manual";
   routeOutcome?: string;
   routeDetail?: Record<string, unknown>;
-}): { ok: true; draft: string } | { ok: false; reason: string } {
+}): Promise<{ ok: true; draft: string } | { ok: false; reason: string; held?: boolean }> {
   const invariant = args.evaluateInvariant(args.text, args.invariantHints);
   if (!invariant.allow) {
     return { ok: false, reason: invariant.reason ?? "draft_invariant_blocked" };
+  }
+
+  // STEP 2 gate: on a held verdict, store NO draft — clear any existing draft + set the held marker
+  // so the outgoing field never shows it. Dark unless the live flag is on (then this is a no-op).
+  const gate = await gateDraftBeforePublish(args.conv, invariant.draftText, args.channel);
+  if (gate.held) {
+    discardPendingDrafts(args.conv, "draft_quality_held");
+    delete args.conv.emailDraft;
+    args.conv.draftHeld = {
+      at: new Date().toISOString(),
+      reason: gate.reason,
+      judgeReason: gate.judgeReason,
+      channel: args.channel,
+      // Diagnosis context for the agent-watch code-fix loop (the bridge).
+      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+    };
+    saveConversation(args.conv);
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "draft_quality.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        reason: gate.reason,
+        judgeReason: String(gate.judgeReason ?? "").slice(0, 180),
+        channel: args.channel
+      }
+    });
+    return { ok: false, reason: "draft_quality_held", held: true };
+  }
+  // A passing draft supersedes any prior held state on this conversation.
+  if (args.conv.draftHeld) args.conv.draftHeld = null;
+
+  // Context-fidelity hold: score the about-to-publish draft for "answering out of context". Shadow logs
+  // would-holds (CONTEXT_FIDELITY_HOLD_SHADOW). When CONTEXT_FIDELITY_HOLD_ENABLED is on, ENFORCE —
+  // substitute a safe handoff ack and create a staff follow-up task instead of letting the out-of-context
+  // draft through (AGENTS.md Fallback Policy: a held draft fails safe to a handoff + task). Same
+  // chokepoint = both the live webhook and regenerate are covered.
+  const cfHold = await evaluateContextFidelityHold(args.conv, invariant.draftText, args.channel, args.routeScope ?? "live");
+  const contextFidelityEnforced = !!(cfHold?.hold && cfHold.live);
+  if (contextFidelityEnforced && contextFidelityHeldSurfacingEnabled()) {
+    // HELD-no-draft surfacing (suggest mode): mirror the draft-quality held block — store NO draft, set a
+    // reason-tagged held marker (drives the inbox card tag + banner) + ONE deduped staff task, so a rep
+    // can't rubber-stamp a generic ack over an unanswered turn. Cleared when a human replies (appendOutbound).
+    discardPendingDrafts(args.conv, "context_fidelity_held");
+    delete args.conv.emailDraft;
+    args.conv.draftHeld = {
+      at: new Date().toISOString(),
+      reason: "context_fidelity_out_of_context",
+      heldKind: "context_fidelity",
+      frame: cfHold?.frame ?? null,
+      steering: cfHold?.steering ?? null,
+      channel: args.channel,
+      inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+      draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+    } as any;
+    upsertContextFidelityHeldTodo(args.conv, cfHold?.frame ?? null);
+    saveConversation(args.conv);
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "context_fidelity.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        frame: cfHold?.frame ?? null,
+        reason: cfHold?.reason ?? null,
+        surfacing: "held_no_draft",
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 160),
+        heldDraftPreview: String(invariant.draftText ?? "").slice(0, 200)
+      }
+    });
+    return { ok: false, reason: "context_fidelity_held", held: true };
+  }
+  // Context-fidelity SHADOW feed (Net 1 of the gap-detection loop): when the scorer is NOT enforcing,
+  // a MAJOR would-hold means this published draft answers out of context. Persist the verdict on the
+  // conversation so the daily read-only outcome-audit sweep surfaces the comprehension gap to the
+  // self-healing loop WITHOUT a human having to catch it (the decision trace is in-memory/ephemeral).
+  // Detection only — the draft still publishes exactly as before. A passing draft (here) or an
+  // operator draft clears it; the audit detector treats a DIFFERENT reply going out after as resolved.
+  if (cfHold && !cfHold.live) {
+    if (cfHold.hold && String(cfHold.severity ?? "").toLowerCase() === "major") {
+      (args.conv as any).contextFidelityShadow = {
+        at: new Date().toISOString(),
+        frame: cfHold.frame ?? null,
+        severity: cfHold.severity ?? null,
+        confidence: cfHold.confidence ?? null,
+        reason: String(cfHold.reason ?? "").slice(0, 240),
+        steering: cfHold.steering ? String(cfHold.steering).slice(0, 240) : null,
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 240),
+        draftPreview: String(invariant.draftText ?? "").slice(0, 240)
+      };
+    } else if (!cfHold.hold && (args.conv as any).contextFidelityShadow) {
+      // A later draft passed the scorer — supersede the prior shadow flag.
+      (args.conv as any).contextFidelityShadow = null;
+    }
+  }
+  const publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
+  if (contextFidelityEnforced) {
+    // Legacy enforcement (surfacing flag off / future autopilot): substitute the safe handoff ack + task.
+    addTodo(
+      args.conv,
+      "other",
+      `Out-of-context catch: the AI reply didn't answer what the customer asked (${cfHold?.frame ?? "context"}). Review the thread and reply.`,
+      undefined,
+      undefined,
+      undefined,
+      "followup"
+    );
+    recordDecisionTrace({
+      scope: args.routeScope ?? "live",
+      stage: "context_fidelity.held",
+      convId: args.conv.id,
+      leadKey: args.conv.leadKey,
+      detail: {
+        frame: cfHold?.frame ?? null,
+        reason: cfHold?.reason ?? null,
+        channel: args.channel,
+        inboundPreview: String(getLastInboundBody(args.conv) ?? "").slice(0, 160),
+        heldDraftPreview: String(invariant.draftText ?? "").slice(0, 200)
+      }
+    });
   }
 
   const shouldDiscardPendingDrafts =
@@ -3426,7 +4892,7 @@ function publishCustomerReplyDraft(args: {
 
   let draft: string;
   if (args.channel === "email") {
-    draft = formatEmailBodyForConversation(invariant.draftText, args.conv);
+    draft = formatEmailBodyForConversation(publishText, args.conv);
     args.conv.emailDraft = draft;
   } else {
     const from = String(args.from ?? "dealership").trim() || "dealership";
@@ -3437,14 +4903,14 @@ function publishCustomerReplyDraft(args: {
       args.conv,
       from,
       to,
-      invariant.draftText,
+      publishText,
       "draft_ai",
       undefined,
-      args.mediaUrls,
+      contextFidelityEnforced ? undefined : args.mediaUrls,
       undefined,
-      args.invariantHints
+      contextFidelityEnforced ? undefined : args.invariantHints
     );
-    draft = message?.body ?? invariant.draftText;
+    draft = message?.body ?? publishText;
   }
 
   saveConversation(args.conv);
@@ -3454,6 +4920,12 @@ function publishCustomerReplyDraft(args: {
       leadKey: args.conv.leadKey,
       ...(args.routeDetail ?? {})
     });
+  }
+  // Shadow: judge the just-published draft (fire-and-forget; never blocks the publish). Skipped when
+  // the live gate is ON — gateDraftBeforePublish already judged this draft synchronously above, so
+  // running the shadow hook too would double the LLM call.
+  if (!isDraftQualityJudgeEnabled()) {
+    void runDraftQualityJudgeShadow(args.conv, draft, args.channel, args.routeScope ?? "live");
   }
   return { ok: true, draft };
 }
@@ -3478,7 +4950,21 @@ function maybeTagReplyTo(replyTo: string | undefined, conv: any): string | undef
 }
 
 const INVENTORY_SNAPSHOT_PATH = path.join(getDataDir(), "inventory_snapshot.json");
+const INVENTORY_FIRST_SEEN_PATH = path.join(getDataDir(), "inventory_first_seen.json");
 let inventoryWatchRunning = false;
+
+// Track when each unit was FIRST seen in the feed so the watch_fire_miss detector can tell a genuine
+// post-watch arrival (a real cron miss) from a unit that was already in stock when the watch was set
+// (intentionally not fired). Pure reconcile + atomic save; never blocks the cron on an IO error.
+async function updateInventoryFirstSeen(items: any[], arrivalsTrusted: boolean): Promise<void> {
+  try {
+    const prev = await loadInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH);
+    const { next } = reconcileFirstSeen({ prev, feedItems: items, arrivalsTrusted });
+    await saveInventoryFirstSeen(INVENTORY_FIRST_SEEN_PATH, next);
+  } catch (e: any) {
+    console.warn("[inventory-watch] first-seen update failed:", e?.message ?? e);
+  }
+}
 
 function inventoryKey(item: any): string | null {
   return inventorySnapshotKey(item);
@@ -4136,7 +5622,20 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const watchIsStreetGlide3 = isStreetGlide3Variant(watchModel);
   const itemIsStreetGlide3 = isStreetGlide3Variant(itemModel);
   if (watchIsStreetGlide3 && !itemIsStreetGlide3) return false;
-  const directMatch = itemModel.includes(watchModel) || watchModel.includes(itemModel);
+  // Cross-FAMILY guard (Joe, 2026-07-04): a trike-class unit never satisfies a two-wheel
+  // watch (or vice versa), even when the watch is open to other trims — "Road Glide 3"
+  // (FLTRT, TRIKE family) is NOT a "Road Glide" sibling. The distinct-trim token guard
+  // below can't catch it ("3" is not a trim token, and the substring includes). Symmetric,
+  // data-driven from model_codes_by_family.json; an unknown class infers nothing. The
+  // RG3/SG3 watch-side guards above stay as belt-and-suspenders.
+  if (trikeClassConflict(item.model, watch.model)) return false;
+  // DIRECTIONAL: the in-stock UNIT's model must contain the WATCHED model — never the reverse. The old
+  // bidirectional `|| watchModel.includes(itemModel)` let a trim-specific watch fire on a base unit
+  // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra
+  // Classic" matched an "Ultra Limited"). A base/family watch still matches a specific unit (unit includes
+  // watch); a specific watch only matches a unit that includes that specificity. Family watches
+  // (e.g. "Sportster") are handled separately by familyMatch below. Mirrors modelMatches (inventoryFeed).
+  const directMatch = itemModel.includes(watchModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const familyMatch = (() => {
     if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
@@ -4145,6 +5644,19 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
     }
     return false;
   })();
+  // Distinct-model guard (Joe 2026-06-30): a specific base-model watch ("Road
+  // Glide") must NOT be satisfied by a DISTINCT sibling unit ("Road Glide
+  // Limited"/"...ST"/CVO/Ultra/Classic/Special) via the directional include or a
+  // catalog-code alias — those are separate models. Generic FAMILY watches
+  // (familyMatch) still collect variants. watch.openToOtherTrims relaxes it.
+  if (
+    !genericWatchFamily &&
+    !familyMatch &&
+    !watch.openToOtherTrims &&
+    unitIsDistinctModelFromWatch(item.model, watch.model)
+  ) {
+    return false;
+  }
   const itemModelIsCodeOnly = modelTextLooksLikeCatalogCode(item.model);
   if (
     genericWatchFamily &&
@@ -4220,7 +5732,65 @@ function inventoryWatchGroupAlreadyNotifiedStock(watches: InventoryWatch[], item
   return inventoryWatchGroupMatchesLastNotifiedStock(watches, item);
 }
 
-async function processInventoryWatchlist(targetConvId?: string) {
+// Sibling-variant scope ask (Joe, 2026-07-04). When the fire pass found NO full match for this
+// conversation, check whether a candidate unit is a same-FAMILY sibling trim of a strict watch —
+// exactly the case the distinct-trim fire guard (PR #129) stays quiet on. If so, draft the
+// ONE-TIME "open to variants?" ask (draft_ai, suggest mode — staff approve) and stamp the watch
+// so we never re-ask. Cross-family units (trikeClassConflict — "Road Glide 3" on a "Road Glide"
+// watch) never prompt the ask. Pure eligibility in domain/watchSiblingScope.ts; the customer's
+// answer is read by parseWatchScopeWithLLM + decideWatchScopeTurn in BOTH reply paths.
+function maybeDraftWatchSiblingScopeAsk(
+  conv: any,
+  watches: InventoryWatch[],
+  candidateItems: any[],
+  nowIsoValue: string
+): boolean {
+  for (const watch of watches) {
+    if (!watch) continue;
+    const lastNotifiedMs = watch.lastNotifiedAt ? new Date(String(watch.lastNotifiedAt)).getTime() : NaN;
+    const notifiedRecently = Number.isFinite(lastNotifiedMs) && Date.now() - lastNotifiedMs < 24 * 60 * 60 * 1000;
+    for (const item of candidateItems) {
+      if (!item?.model) continue;
+      const decision = decideWatchSiblingScopeAsk({
+        hasWatchModel: !!String(watch.model ?? "").trim(),
+        watchActive: watch.status !== "paused",
+        unitMatchesWatchDirectionally: modelMatches(String(item.model), String(watch.model ?? "")),
+        unitIsDistinctTrim: unitIsDistinctModelFromWatch(item.model, watch.model),
+        trikeClassConflict: trikeClassConflict(item.model, watch.model),
+        openToOtherTrims: !!watch.openToOtherTrims,
+        alreadyAsked: !!watch.siblingScopeAskedAt,
+        declined: !!watch.siblingScopeDeclinedAt,
+        notifiedRecently
+      });
+      if (decision.kind !== "ask_scope") continue;
+      const unitLabel = [item.year, item.make, item.model].filter(Boolean).join(" ");
+      const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
+      const ask = buildWatchSiblingScopeAsk({
+        firstName: leadFirstName || null,
+        watchModelLabel: String(watch.model),
+        unitLabel
+      });
+      const to = conv.lead?.phone ?? conv.leadKey;
+      appendOutbound(conv, "salesperson", to, ask, "draft_ai");
+      watch.siblingScopeAskedAt = nowIsoValue;
+      watch.siblingScopeAskModel = String(item.model);
+      watch.siblingScopeAskStockId = item.stockId ? String(item.stockId) : undefined;
+      conv.updatedAt = nowIsoValue;
+      saveConversation(conv);
+      recordRouteOutcome("manual", "inventory_watch_sibling_scope_asked", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        watchModel: watch.model,
+        unitModel: item.model,
+        stockId: item.stockId ?? null
+      });
+      return true; // one ask per conversation per sweep (and once ever per watch)
+    }
+  }
+  return false;
+}
+
+async function processInventoryWatchlist(targetConvId?: string, opts?: { includeInStock?: boolean }) {
   if (inventoryWatchRunning) return;
   inventoryWatchRunning = true;
   try {
@@ -4249,7 +5819,17 @@ async function processInventoryWatchlist(targetConvId?: string) {
       console.warn("[inventory-watch] notifications skipped because snapshot save failed.");
       return;
     }
-    if (!scanPlan.allowNotifications) {
+    // Record first-seen arrival times alongside the snapshot. A fresh key counts as a genuine ARRIVAL
+    // only when the cron itself trusts this sweep's diff (scanPlan.allowNotifications) — on an
+    // untrusted/bulk-resync sweep the new keys are feed artifacts, recorded as baseline so the
+    // detector never reads them as misses. Detector-only signal; does not gate any customer send.
+    await updateInventoryFirstSeen(items, scanPlan.allowNotifications);
+    // Deliberate IN-STOCK REVIEW pass (admin-triggered, opts.includeInStock): draft for ALL available
+    // matching units, not just newly-arrived ones, and bypass the new-arrival bulk guard. This is for the
+    // watch-fire-miss backlog (a watcher whose bike is in stock but wasn't a fresh arrival, so the cron
+    // held off). It still only DRAFTS (draft_ai, suggest mode — staff approve), never sends. The regular
+    // cron (no opts) is UNCHANGED: new-arrival-only + the bulk guard.
+    if (!opts?.includeInStock && !scanPlan.allowNotifications) {
       console.warn(
         `[inventory-watch] notifications skipped: ${scanPlan.reason} ` +
           `(previous=${scanPlan.previousCount}, current=${scanPlan.currentCount}, new=${scanPlan.newCount}, ` +
@@ -4258,7 +5838,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       return;
     }
     const newItems = scanPlan.newItems;
-    const candidateItems = newItems.filter(i => isWatchCandidateAvailable(i));
+    const candidateItems = (opts?.includeInStock ? items : newItems).filter(i => isWatchCandidateAvailable(i));
     if (!candidateItems.length) return;
     const newItemKeys = new Set(newItems.map(i => inventoryKey(i)).filter(Boolean));
 
@@ -4277,9 +5857,14 @@ async function processInventoryWatchlist(targetConvId?: string) {
         conv.inventoryWatches = [conv.inventoryWatch];
       }
       if (conv.status === "closed") continue;
+      // Durable opt-out: a customer who asked us to stop alerting them is off
+      // the watch alerts regardless of any later (re-)created active watch.
+      if (isInventoryWatchOptedOut(conv)) continue;
       const phone = conv.lead?.phone ?? conv.leadKey;
       if (phone && isSuppressed(phone)) continue;
-      if (conv.followUp?.mode === "manual_handoff") continue;
+      // A held lead (manual_handoff or paused_indefinite "hold off") is off
+      // proactive outreach until they re-engage — never fire a watch alert at them.
+      if (isProactiveContactPaused(conv)) continue;
       let matchedWatch: InventoryWatch | null = null;
       let matchedItem: any | null = null;
       for (const watch of watches) {
@@ -4301,7 +5886,12 @@ async function processInventoryWatchlist(targetConvId?: string) {
         matchedItem = match;
         break;
       }
-      if (!matchedWatch || !matchedItem) continue;
+      if (!matchedWatch || !matchedItem) {
+        // No full match — but a same-family sibling trim may deserve the one-time
+        // "open to variants?" ask (never a cross-family/trike unit, never a re-ask).
+        maybeDraftWatchSiblingScopeAsk(conv, watches, candidateItems, nowIso);
+        continue;
+      }
 
       const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
       const make = matchedItem.make ?? matchedWatch.make;
@@ -4313,10 +5903,12 @@ async function processInventoryWatchlist(targetConvId?: string) {
       const matchedKey = inventoryKey(matchedItem);
       const isNewArrival = matchedKey ? newItemKeys.has(matchedKey) : false;
       const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
-      const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
-      const baseReply = isNewArrival
-        ? `${opener} — we just got ${name}${colorText} in stock. Want details or a time to check it out?`
-        : `${opener} — we have ${name}${colorText} in stock right now. Want details or a time to check it out?`;
+      const baseReply = buildWatchAvailableReply({
+        firstName: leadFirstName || null,
+        bikeLabel: name,
+        colorText,
+        availability: isNewArrival ? "new" : "in_stock"
+      });
       const listingUrlRaw = String(matchedItem?.url ?? "").trim();
       const listingUrl =
         listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
@@ -4324,6 +5916,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       if (hasPriorInventoryWatchOutboundForItem(conv, matchedItem, reply)) {
         matchedWatch.lastNotifiedAt = nowIso;
         matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? matchedKey ?? undefined;
+        matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
         conv.updatedAt = nowIso;
         saveConversation(conv);
         continue;
@@ -4336,6 +5929,7 @@ async function processInventoryWatchlist(targetConvId?: string) {
       appendOutbound(conv, "salesperson", to, reply, "draft_ai", undefined, imageUrl ? [imageUrl] : undefined);
       matchedWatch.lastNotifiedAt = nowIso;
       matchedWatch.lastNotifiedStockId = matchedItem.stockId ?? matchedItem.vin ?? undefined;
+      matchedWatch.lastNotifiedModel = matchedItem.model ? String(matchedItem.model) : undefined; // the UNIT's model (not the watch's) — feeds watch_fired_wrong_model
       setFollowUpMode(conv, "holding_inventory", "inventory_watch_match");
       setDialogState(conv, "inventory_watch_matched");
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
@@ -4359,6 +5953,35 @@ async function processInventoryWatchlist(targetConvId?: string) {
   }
 }
 
+// Does this conversation have at least one ACTIVE inventory watch (one the engine would still fire)?
+// Unions the single `inventoryWatch` AND the `inventoryWatches` array (collectInventoryWatches) — they
+// can coexist, so the old array-if-present-else-single check missed an active single watch.
+function hasActiveInventoryWatch(conv: any): boolean {
+  return collectInventoryWatches(conv).some((w: any) => w && w.status !== "paused");
+}
+
+// Remove a customer from active inventory-watch alerts: pause every active watch (the watch-fire
+// engine skips paused watches — 4834/4945). Reversible — keeps the record so they can be re-added if
+// they ask. Returns how many were paused. Unions single + array so neither is left active.
+function pauseInventoryWatches(conv: any): number {
+  let paused = 0;
+  for (const w of collectInventoryWatches(conv)) {
+    if (w && w.status !== "paused") {
+      w.status = "paused";
+      paused++;
+    }
+  }
+  return paused;
+}
+
+// Explicit customer opt-out: pause the current watches AND set the durable
+// opt-out flag so a later watch (re-)creation can't refire alerts at someone who
+// asked us to stop. See domain/inventoryWatchOptOut.ts.
+function markInventoryWatchOptOut(conv: any, reason: string): number {
+  setInventoryWatchOptOut(conv, reason);
+  return pauseInventoryWatches(conv);
+}
+
 async function notifyInventoryWatchersForAvailableItem(
   matchedItem: InventoryFeedItem,
   opts?: { reason?: string; excludeConvId?: string | null }
@@ -4380,9 +6003,14 @@ async function notifyInventoryWatchersForAvailableItem(
   for (const conv of getAllConversations()) {
     if (opts?.excludeConvId && conv.id === opts.excludeConvId) continue;
     if (conv.status === "closed") continue;
+    // Durable opt-out: honor a customer's "stop alerting me" even if a watch was
+    // re-created after they opted out. See domain/inventoryWatchOptOut.ts.
+    if (isInventoryWatchOptedOut(conv)) continue;
     const phone = conv.lead?.phone ?? conv.leadKey;
     if (phone && isSuppressed(phone)) continue;
-    if (conv.followUp?.mode === "manual_handoff") continue;
+    // A held lead (manual_handoff or paused_indefinite "hold off") is off
+    // proactive outreach until they re-engage — never fire a watch alert at them.
+    if (isProactiveContactPaused(conv)) continue;
     const watches =
       conv.inventoryWatches?.length
         ? conv.inventoryWatches
@@ -4405,7 +6033,12 @@ async function notifyInventoryWatchersForAvailableItem(
       }
       return inventoryItemMatchesWatch(matchedItem, watch);
     });
-    if (!matchedWatch) continue;
+    if (!matchedWatch) {
+      // No full match for the released unit — same one-time sibling-scope ask as the cron
+      // path (same-family trim only; cross-family/trike never asks; never re-asks).
+      maybeDraftWatchSiblingScopeAsk(conv, watches, [matchedItem], nowIsoValue);
+      continue;
+    }
 
     const year = matchedItem.year ?? (matchedWatch.year ? String(matchedWatch.year) : undefined);
     const make = matchedItem.make ?? matchedWatch.make;
@@ -4415,8 +6048,12 @@ async function notifyInventoryWatchersForAvailableItem(
     const name = [year, make, model, trim].filter(Boolean).join(" ");
     const colorText = color ? ` in ${color}` : "";
     const leadFirstName = normalizeDisplayCase(String(conv.lead?.firstName ?? "").split(/\s+/)[0] ?? "");
-    const opener = leadFirstName ? `Hey ${leadFirstName}, good news` : "Good news";
-    const baseReply = `${opener} — ${name}${colorText} is available again. Want details or a time to check it out?`;
+    const baseReply = buildWatchAvailableReply({
+      firstName: leadFirstName || null,
+      bikeLabel: name,
+      colorText,
+      availability: "again"
+    });
     const listingUrlRaw = String(matchedItem?.url ?? "").trim();
     const listingUrl = listingUrlRaw && /^https?:\/\//i.test(listingUrlRaw) ? listingUrlRaw : "";
     const reply = listingUrl ? `${baseReply}\n${listingUrl}` : baseReply;
@@ -5106,7 +6743,7 @@ app.post("/public/widget/text-us", async (req, res) => {
             classificationCta: conv.classification?.cta ?? null,
             ...(invariantHints ?? {})
           });
-        publishCustomerReplyDraft({
+        await publishCustomerReplyDraft({
           conv,
           channel: "sms",
           text: draftText,
@@ -5150,6 +6787,39 @@ app.post("/public/widget/text-us", async (req, res) => {
       setFollowUpMode(conv, "manual_handoff", `${todoReason}_request`);
       if (todoReason === "service") setDialogState(conv, "service_handoff");
       stopFollowUpCadence(conv, "manual_handoff");
+      // Non-sales web-widget leads must not get silence either (Paul Foley +19054842961,
+      // 2026-06-22: a parts widget question got a department task but no reply). Mirror the
+      // sales "never go silent" rule with a handoff ACK — route to the department, never
+      // fabricate parts/service/apparel availability. Suggest mode keeps it a staff-approved
+      // draft; the customer gave phone + text consent so it delivers by SMS.
+      const deptLabel = webTextWidgetDepartmentLabel(department);
+      const deptAck = `Hi ${firstName || "there"} — thanks for reaching out to our ${deptLabel} team. I've passed your message along and they'll text you right back.`;
+      const evaluateDeptAckInvariant = (
+        text: string,
+        invariantHints?: CustomerReplyDraftInvariantHints
+      ) =>
+        applyDraftStateInvariants({
+          inboundText: message,
+          draftText: text,
+          followUpMode: conv.followUp?.mode ?? null,
+          followUpReason: conv.followUp?.reason ?? null,
+          dialogState: getDialogState(conv),
+          classificationBucket: conv.classification?.bucket ?? null,
+          classificationCta: conv.classification?.cta ?? null,
+          ...(invariantHints ?? {})
+        });
+      await publishCustomerReplyDraft({
+        conv,
+        channel: "sms",
+        text: deptAck,
+        evaluateInvariant: evaluateDeptAckInvariant,
+        from: "salesperson",
+        to: phone,
+        discardPendingDraftsBeforePublish: true,
+        routeScope: "live",
+        routeOutcome: `web_text_widget_${todoReason}_ack_draft_created`,
+        routeDetail: { department }
+      });
     }
     upsertContact({
       leadKey: phone,
@@ -5402,6 +7072,20 @@ app.post("/debug/conversations/reload", async (_req, res) => {
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message ?? "Failed to reload conversation store" });
+  }
+});
+
+// Watch-fire-miss REVIEW pass: draft the "your watched bike is in stock" notification for watchers whose
+// matching unit is in stock but never got pinged (the cron only fires on NEW arrivals; this clears the
+// in-stock backlog). DRAFTS ONLY (draft_ai, suggest mode) — staff read each conversation in the console
+// and approve / edit / skip; nothing is auto-sent. Reuses the engine's message + every guard (closed /
+// suppressed / handoff / already-drafted). One-shot, operator-triggered.
+app.post("/debug/watch-fire-review", async (_req, res) => {
+  try {
+    await processInventoryWatchlist(undefined, { includeInStock: true });
+    res.json({ ok: true, note: "Drafted in-stock watch notifications for review — see the console (suggest mode; nothing sent)." });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message ?? "watch-fire review failed" });
   }
 });
 
@@ -6020,6 +7704,7 @@ async function suppressRelatedPhones(
 async function applySmsOptOut(conv: any, event: { from?: string } | undefined) {
   await suppressRelatedPhones(conv, event, "sms_stop", "twilio");
   stopFollowUpCadence(conv, "opt_out");
+  pauseInventoryWatches(conv); // remove from watch alerts too (so a reopen can't refire)
   closeConversation(conv, "opt_out");
   stopRelatedCadences(conv, "opt_out", { close: true });
 }
@@ -7239,6 +8924,26 @@ async function buildVehicleFactQuestionReply(args: {
   };
 }
 
+// Approved acknowledgement for a non-sales event_promo / sweepstakes turn
+// (decideEventPromoTurn). Returns the ack text when this lead must NOT receive a
+// sales / availability / vehicle-fact answer, else null. Shared by every reply
+// chokepoint so live + regenerate stay in sync.
+async function maybeEventPromoAckReply(conv: Conversation): Promise<string | null> {
+  if (
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack"
+  ) {
+    return null;
+  }
+  const profile = await getDealerProfileHot();
+  const agentName = String((profile as any)?.agentName ?? "").trim() || "Sales Team";
+  const dealerName = String((profile as any)?.dealerName ?? "").trim() || "American Harley-Davidson";
+  const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+  return buildEventPromoAck(firstName, agentName, dealerName);
+}
+
 async function applyVehicleFactQuestionDecision(args: {
   conv: Conversation;
   text: string | null | undefined;
@@ -7247,6 +8952,10 @@ async function applyVehicleFactQuestionDecision(args: {
   decision: VehicleFactQuestionDecision;
   scope: "live" | "regen";
 }): Promise<string> {
+  // A sweepstakes/event_promo lead never asked a vehicle-fact question — answering one
+  // ("It's a 2026 Road Glide.") is out of context. Acknowledge instead. (Both paths.)
+  const eventPromoAck = await maybeEventPromoAckReply(args.conv);
+  if (eventPromoAck) return eventPromoAck;
   const result = await buildVehicleFactQuestionReply({
     conv: args.conv,
     decision: args.decision,
@@ -7671,6 +9380,43 @@ function addAppointmentStatusReviewTodo(conv: any, text: string | null | undefin
   );
 }
 
+// When a scheduling turn DEFERS a requested time ("I'll check that time and follow up") without
+// booking it or offering alternatives, leave an owner follow-up task so the salesperson actually
+// confirms the time — instead of a silent promise (operator-reported 4× on +17167506588). Centralized
+// gate (decideSchedulingDeferralFollowUpTask) + summary-marker dedupe so repeated regen of the same
+// turn doesn't stack tasks. "call" reason = top priority + survives the sold-lead suppression. Shared
+// by BOTH the live and regen scheduling arms (route-parity). Fail-direction: create when unsure.
+function addSchedulingDeferralFollowUpTodo(
+  conv: any,
+  input: { deferred: boolean; booked: boolean; offeredAlternatives: boolean; requestedPhrase: string },
+  inboundText: string | null | undefined,
+  providerMessageId?: string | null
+) {
+  const decision = decideSchedulingDeferralFollowUpTask({
+    deferred: input.deferred,
+    booked: input.booked,
+    offeredAlternatives: input.offeredAlternatives,
+    hasRequestedPhrase: !!String(input.requestedPhrase ?? "").trim()
+  });
+  if (!decision.createTask) return;
+  const convId = String(conv?.id ?? "").trim();
+  const exists =
+    !!convId &&
+    listOpenTodos().some(todo => {
+      if (todo.convId !== convId || String(todo.status ?? "open") !== "open") return false;
+      return /Follow up to book reschedule/i.test(String(todo.summary ?? ""));
+    });
+  if (exists) return;
+  const phrase = String(input.requestedPhrase ?? "").trim() || String(inboundText ?? "").trim();
+  addTodo(
+    conv,
+    "call",
+    `Follow up to book reschedule${phrase ? `: ${phrase}` : "."}`,
+    providerMessageId ?? undefined,
+    conv?.leadOwner
+  );
+}
+
 async function buildAppointmentStatusQuestionReply(args: {
   conv: any;
   text: string | null | undefined;
@@ -7721,7 +9467,20 @@ async function buildAppointmentStatusQuestionReply(args: {
   return "I’ll have the team confirm your appointment status and follow up shortly.";
 }
 
-function buildImmediateArrivalRequestReply(_conv?: any): string {
+// A customer who is ALREADY on site ("Hey I'm here who do I ask for?") must not hear "before
+// you head over" — they're standing in the showroom (corpus flywheel, 2026-07-03,
+// +17168039550: that turn drew "what time tomorrow works best?"). On-site is read by the
+// customer-ack PARSER (on_site field) — parser-first, never a comprehension regex (the
+// twilio_comprehension_debt ratchet rejected the regex version of this, correctly).
+function buildImmediateArrivalRequestReply(conv?: any, opts?: { onSite?: boolean }): string {
+  if (opts?.onSite) {
+    const ownerFirst = normalizeDisplayCase(
+      String(conv?.leadOwner?.name ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? ""
+    );
+    return ownerFirst
+      ? `You're in the right place — ask for ${ownerFirst} at the front desk, and I'll let them know you're here.`
+      : "You're in the right place — ask for the sales desk up front, and I'll let the team know you're here.";
+  }
   return "Let me confirm we can take you now before you head over. I’ll follow up shortly.";
 }
 
@@ -7854,7 +9613,15 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
   conv: any;
   parsed: CustomerAckActionParse | null;
   rawText: string | null | undefined;
-}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+}): Promise<{
+  reply: string;
+  alternatives: any[];
+  checkedCalendar: boolean;
+  // We deferred ("I'll check/confirm ... and follow up") without booking or offering alternatives —
+  // the caller must leave an owner follow-up task so the requested time isn't silently dropped.
+  needsOwnerFollowUpTask: boolean;
+  requestedPhrase: string; // the requested day/time for the task summary (may be empty)
+}> {
   const cfg = await getSchedulerConfigHot();
   const requested = resolveCustomerAckRequestedDayTime({
     conv: args.conv,
@@ -7873,7 +9640,9 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
         confidence: args.parsed?.confidence
       }),
       alternatives: [],
-      checkedCalendar: false
+      checkedCalendar: false,
+      needsOwnerFollowUpTask: true, // deferred with no resolved slot => owner must follow up
+      requestedPhrase: customerAckActionRequestedPhrase(args.parsed)
     };
   }
   const appointmentType = inferAppointmentTypeFromConv(args.conv);
@@ -7896,20 +9665,26 @@ async function buildCustomerAckArrivalReplyWithCalendarCheck(args: {
         confidence: args.parsed?.confidence
       }),
       alternatives: [],
-      checkedCalendar: false
+      checkedCalendar: false,
+      needsOwnerFollowUpTask: true, // availability lookup failed => deferred, owner must follow up
+      requestedPhrase: customerAckActionRequestedPhrase(args.parsed)
     };
   }
   if (!availability.available) {
     return {
       reply: buildRequestedSlotUnavailableReply(availability.requestedLabel, availability.alternatives),
       alternatives: availability.alternatives,
-      checkedCalendar: true
+      checkedCalendar: true,
+      needsOwnerFollowUpTask: false, // we offered alternatives — not a silent defer
+      requestedPhrase: availability.requestedLabel
     };
   }
   return {
     reply: `That time looks available — I’ll confirm ${availability.requestedLabel} and follow up.`,
     alternatives: [],
-    checkedCalendar: true
+    checkedCalendar: true,
+    needsOwnerFollowUpTask: true, // promised to confirm but didn't book this turn => owner must lock it in
+    requestedPhrase: availability.requestedLabel
   };
 }
 
@@ -7917,7 +9692,13 @@ async function buildAppointmentTimingArrivalReplyWithCalendarCheck(args: {
   conv: any;
   parsed: AppointmentTimingParse | null;
   rawText: string | null | undefined;
-}): Promise<{ reply: string; alternatives: any[]; checkedCalendar: boolean }> {
+}): Promise<{
+  reply: string;
+  alternatives: any[];
+  checkedCalendar: boolean;
+  needsOwnerFollowUpTask: boolean;
+  requestedPhrase: string;
+}> {
   return buildCustomerAckArrivalReplyWithCalendarCheck({
     conv: args.conv,
     rawText: args.rawText,
@@ -7934,6 +9715,229 @@ async function buildAppointmentTimingArrivalReplyWithCalendarCheck(args: {
         }
       : null
   });
+}
+
+// Create (or rebook) a real calendar event for an already-matched available slot and persist the
+// confirmed appointment on the conversation. Mirrors the voice-transcript booking tail
+// (applyPostCallSummaryActions) so SMS confirm-turns and voice bookings share one code path. The
+// staff "New appointment booked" SMS fires on its own from the appointment-notify sweep once
+// bookedEventId is set. Returns booked=false (no fabricated confirm) if the calendar write fails.
+async function bookConfirmedAppointmentSlot(args: {
+  conv: any;
+  slot: any; // exactSlot shape from findRequestedAppointmentSlotAvailability
+  cfg: any;
+  sourceMessageId?: string | null;
+}): Promise<{ booked: boolean; whenText: string; repName: string | null }> {
+  const { conv, slot, cfg } = args;
+  const appointmentType =
+    String(slot?.appointmentType ?? "").trim() || inferAppointmentTypeFromConv(conv) || "inventory_visit";
+  const stockId = conv.lead?.vehicle?.stockId ?? null;
+  const firstName = normalizeDisplayCase(conv.lead?.firstName);
+  const lastName = conv.lead?.lastName ?? "";
+  const leadName =
+    conv.lead?.name?.trim() || [firstName, lastName].filter(Boolean).join(" ").trim() || conv.leadKey;
+  const summary = `Appt: ${appointmentType} – ${leadName}${stockId ? ` – ${stockId}` : ""}`;
+  const description = [
+    `LeadKey: ${conv.leadKey ?? ""}`,
+    `Phone: ${conv.lead?.phone ?? conv.leadKey ?? ""}`,
+    `Email: ${conv.lead?.email ?? ""}`,
+    `FirstName: ${firstName ?? ""}`,
+    `LastName: ${lastName ?? ""}`,
+    `Stock: ${stockId ?? ""}`,
+    `VIN: ${conv.lead?.vehicle?.vin ?? ""}`,
+    `Source: ${conv.lead?.source ?? ""}`,
+    `VisitType: ${appointmentType}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const colorId = getAppointmentTypeColorId(cfg, appointmentType);
+  const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
+  const existingCalendarId = String(conv.appointment?.bookedCalendarId ?? "").trim();
+  let eventIdToPersist: string | null = existingEventId || null;
+  let eventLinkToPersist: string | null = conv.appointment?.bookedEventLink ?? null;
+  try {
+    const cal = await getAuthedCalendarClient();
+    const isSameCalendarRebook =
+      !!existingEventId && !!existingCalendarId && existingCalendarId === slot.calendarId;
+    if (isSameCalendarRebook && existingEventId) {
+      const updated = await updateEventDetails(cal, slot.calendarId, existingEventId, cfg.timezone, {
+        startIso: slot.start,
+        endIso: slot.end,
+        summary,
+        description,
+        colorId
+      });
+      eventIdToPersist = updated?.id ?? existingEventId;
+      eventLinkToPersist = updated?.htmlLink ?? eventLinkToPersist;
+    } else {
+      if (existingEventId && existingCalendarId) {
+        try {
+          await updateEventDetails(cal, existingCalendarId, existingEventId, cfg.timezone, { status: "cancelled" });
+        } catch (cancelErr: any) {
+          console.warn("[confirm-book] cancel prior event failed:", cancelErr?.message ?? cancelErr);
+        }
+      }
+      const created = await insertEvent(
+        cal,
+        slot.calendarId,
+        cfg.timezone,
+        summary,
+        description,
+        slot.start,
+        slot.end,
+        colorId
+      );
+      eventIdToPersist = created?.id ?? eventIdToPersist;
+      eventLinkToPersist = created?.htmlLink ?? eventLinkToPersist;
+    }
+  } catch (e: any) {
+    console.log("[confirm-book] calendar write failed:", e?.message ?? e);
+    return { booked: false, whenText: "", repName: null };
+  }
+  if (!eventIdToPersist) return { booked: false, whenText: "", repName: null };
+  const repName =
+    String(slot.salespersonName ?? "").trim() ||
+    (cfg.salespeople ?? []).find((p: any) => p.id === slot.salespersonId)?.name ||
+    null;
+  const whenText = formatSlotLocal(slot.start, cfg.timezone);
+  conv.appointment = conv.appointment ?? { status: "none", updatedAt: new Date().toISOString() };
+  conv.appointment.status = "confirmed";
+  conv.appointment.bookedEventId = eventIdToPersist;
+  conv.appointment.bookedEventLink = eventLinkToPersist;
+  conv.appointment.bookedSalespersonId = slot.salespersonId ?? null;
+  conv.appointment.bookedSalespersonName = repName ?? undefined;
+  conv.appointment.bookedCalendarId = slot.calendarId ?? null;
+  conv.appointment.whenIso = slot.start;
+  conv.appointment.whenText = whenText;
+  conv.appointment.whenLocal = whenText;
+  conv.appointment.appointmentType = appointmentType;
+  conv.appointment.confirmedBy = "customer";
+  conv.appointment.acknowledged = true;
+  conv.appointment.reschedulePending = false;
+  conv.appointment.matchedSlot = {
+    salespersonId: slot.salespersonId,
+    salespersonName: slot.salespersonName ?? repName ?? undefined,
+    calendarId: slot.calendarId,
+    start: slot.start,
+    end: slot.end,
+    startLocal: whenText,
+    endLocal: formatSlotLocal(slot.end, cfg.timezone),
+    appointmentType
+  };
+  conv.appointment.updatedAt = new Date().toISOString();
+  setAppointmentBookedBy(conv, {
+    actor: "ai",
+    channel: "sms",
+    sourceMessageId: args.sourceMessageId ? String(args.sourceMessageId) : undefined
+  });
+  const sp = (cfg.salespeople ?? []).find((p: any) => p.id === slot.salespersonId);
+  if (sp) setPreferredSalespersonForConv(conv, sp, "customer_confirm_booking");
+  onAppointmentBooked(conv);
+  return { booked: true, whenText, repName };
+}
+
+// Customer confirmed a CONCRETE day+time the agent didn't pre-offer ("Ya 10 will work",
+// "Around 1pm", "Is 10:45 good?"). Instead of deflecting ("I'll check that time and follow up"),
+// check that exact time against the calendar and ACTUALLY book it (live) — or offer the nearest
+// alternatives if it's taken. Never fabricates a confirmation: returns null when no concrete time
+// can be resolved or the calendar can't be reached, so the caller falls back to a lock-in ask.
+//   - `book: true`  (live inbound): create the calendar event on a free slot.
+//   - `book: false` (regenerate draft): availability-check only, NO calendar write (the live turn
+//     already booked); reflects the booked state if present, else drafts a lock-in confirmation.
+// Both paths route here from decideSchedulingTurn `confirm_appointment`, keeping live/regen in sync.
+async function resolveCustomerAckConfirmBooking(args: {
+  conv: any;
+  parsed: CustomerAckActionParse | null;
+  rawText: string | null | undefined;
+  book: boolean;
+  sourceMessageId?: string | null;
+}): Promise<{ reply: string; booked: boolean; alternatives: any[]; checkedCalendar: boolean } | null> {
+  const conv = args.conv;
+  // --- IO (the parts that read config / calendar / write the event). The DECISION over these results
+  // is the pure decideCustomerAckConfirmBooking (routeStateReducer), pinned by an eval. ---
+  const serviceContext = isServiceDepartmentSchedulingRequest(conv, args.rawText);
+  const cfg = serviceContext ? null : await getSchedulerConfigHot().catch(() => null);
+
+  const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
+  const existingWhenText = String(conv.appointment?.whenText ?? conv.appointment?.whenLocal ?? "").trim();
+  const hasExistingBooking = !!cfg && !!existingEventId && !!existingWhenText;
+
+  let requested: ReturnType<typeof resolveCustomerAckRequestedDayTime> = null;
+  let availability: Awaited<ReturnType<typeof findRequestedAppointmentSlotAvailability>> = null;
+  let bookResult: { booked: boolean; whenText: string; repName: string | null } | null = null;
+  let appointmentType = "";
+  if (cfg && !serviceContext && !hasExistingBooking) {
+    requested = resolveCustomerAckRequestedDayTime({
+      conv,
+      parsed: args.parsed,
+      rawText: args.rawText,
+      timeZone: cfg.timezone || "America/New_York"
+    });
+    if (requested) {
+      appointmentType = inferAppointmentTypeFromConv(conv);
+      availability = await findRequestedAppointmentSlotAvailability({ conv, requested, appointmentType }).catch(e => {
+        console.log("[confirm-book] availability check failed:", e?.message ?? e);
+        return null;
+      });
+      if (availability?.available && availability.exactSlot && args.book) {
+        bookResult = await bookConfirmedAppointmentSlot({
+          conv,
+          slot: availability.exactSlot,
+          cfg,
+          sourceMessageId: args.sourceMessageId
+        });
+      }
+    }
+  }
+
+  const outcome = decideCustomerAckConfirmBooking({
+    serviceContext,
+    hasConfig: !!cfg,
+    hasExistingBooking,
+    requestedResolved: !!requested,
+    availabilityChecked: !!availability,
+    slotFree: !!(availability?.available && availability?.exactSlot),
+    book: args.book,
+    bookSucceeded: !!bookResult?.booked,
+    hasAlternatives: (availability?.alternatives?.length ?? 0) > 0
+  });
+
+  switch (outcome.kind) {
+    case "fall_back":
+      return null; // caller asks the customer to lock in — never a fabricated confirm
+    case "already_booked": {
+      const repName = appointmentStatusStaffName(conv, cfg ?? undefined);
+      const repSuffix = repName ? ` with ${repName}` : "";
+      setDialogState(conv, "schedule_booked");
+      return { reply: `Perfect — you’re all set for ${existingWhenText}${repSuffix}. See you then.`, booked: true, alternatives: [], checkedCalendar: false };
+    }
+    case "regen_lock_in": {
+      // Regenerate draft on a free slot: don't write the calendar — honest lock-in confirmation.
+      setDialogState(conv, "schedule_request");
+      return { reply: `Perfect — ${normalizeDisplayCase(availability!.requestedLabel)} works. I’ll get you locked in and confirm.`, booked: false, alternatives: [], checkedCalendar: true };
+    }
+    case "booked": {
+      const repSuffix = bookResult!.repName ? ` with ${bookResult!.repName}` : "";
+      setDialogState(conv, "schedule_booked");
+      return { reply: `Perfect — you’re all set for ${bookResult!.whenText}${repSuffix}. See you then.`, booked: true, alternatives: [], checkedCalendar: true };
+    }
+    case "offer_alternatives": {
+      // Requested time is taken → offer the nearest alternatives (never a fabricated confirm).
+      if (outcome.hasAlternatives) {
+        setLastSuggestedSlots(conv, availability!.alternatives);
+        setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      } else {
+        setDialogState(conv, "schedule_request");
+      }
+      return {
+        reply: buildRequestedSlotUnavailableReply(availability!.requestedLabel, availability!.alternatives),
+        booked: false,
+        alternatives: availability!.alternatives,
+        checkedCalendar: true
+      };
+    }
+  }
+  return null; // unreachable (switch is exhaustive over ConfirmBookingOutcome) — satisfies the type checker
 }
 
 function customerWillProvideScheduleTimeText(text: string | null | undefined): boolean {
@@ -8115,8 +10119,14 @@ async function maybeHandleInventoryStatusParserRoute(args: {
       !imageMentionedModel &&
       isSalesPhotoShareConversation(args.conv)
     ) {
-      setDialogState(args.conv, "inventory_init");
-      setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      // A trade-in photo gets the trade frame (handled inside buildPhotoShareReplyWithVision); it
+      // must NOT inherit the inventory-match dialog state or the "match it against inventory"
+      // persistent agent context, which would mis-route future turns (Jessica Ornce, 2026-06-23).
+      const tradePhotoContext = isTradePhotoShareConversation(args.conv);
+      if (!tradePhotoContext) {
+        setDialogState(args.conv, "inventory_init");
+        setAgentContext(args.conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+      }
       const photoShare = await buildPhotoShareReplyWithVision({
         conv: args.conv,
         firstName: normalizeDisplayCase(args.conv.lead?.firstName),
@@ -8139,6 +10149,7 @@ async function maybeHandleInventoryStatusParserRoute(args: {
         leadKey: args.conv.leadKey,
         parserAction: "image_availability_check",
         parserConfidence: args.parsedStatus?.confidence ?? null,
+        tradeContext: tradePhotoContext,
         fallback: false
       });
       return { kind: "reply", reply };
@@ -9697,15 +11708,20 @@ async function buildCadenceLeadUnitAvailabilityOverride(args: {
       ? "is currently on hold and may no longer be available"
       : "is no longer available";
   if (hold && modelLabel) {
-    ensureInventoryWatchForHeldCadence(conv, {
-      year: conv?.lead?.vehicle?.year ?? null,
-      make: conv?.lead?.vehicle?.make ?? null,
-      model: conv?.lead?.vehicle?.model ?? null,
-      color: conv?.lead?.vehicle?.color ?? null,
-      condition: conv?.lead?.vehicle?.condition ?? null,
-      stockId: stockId ?? undefined,
-      vin: vin ?? undefined
-    });
+    ensureInventoryWatchForHeldCadence(
+      conv,
+      {
+        year: conv?.lead?.vehicle?.year ?? null,
+        make: conv?.lead?.vehicle?.make ?? null,
+        model: conv?.lead?.vehicle?.model ?? null,
+        color: conv?.lead?.vehicle?.color ?? null,
+        condition: conv?.lead?.vehicle?.condition ?? null,
+        stockId: stockId ?? undefined,
+        vin: vin ?? undefined
+      },
+      // The lead's OWN exact unit (matched by the lead's stock#/VIN) → customer-referenced.
+      { customerReferencedUnit: true }
+    );
   }
   if (modelLabel) {
     return `Hey ${firstName}, quick update — ${unitText} ${statusText}. If you want, I can show you similar options in stock, or I can keep an eye out for ${watchLabel} and text you first.`;
@@ -10112,14 +12128,27 @@ function findExactCadenceUnavailableUnit(args: {
 
 function ensureInventoryWatchForHeldCadence(
   conv: any,
-  item: Partial<InventoryFeedItem> & { condition?: string | null }
+  item: Partial<InventoryFeedItem> & { condition?: string | null },
+  opts?: { customerReferencedUnit?: boolean }
 ) {
-  const model = canonicalizeWatchModelLabel(item?.model ?? conv?.lead?.vehicle?.model ?? null);
+  // Don't auto-create an alerting watch for a lead who opted out of watch
+  // alerts — this auto path is exactly what re-armed alerts after Mark Scoville
+  // opted out. An explicit re-subscribe (inventory_watch_active) clears the flag.
+  if (isInventoryWatchOptedOut(conv)) return;
+  // Over-attachment guard (Approach A): only let a search-surfaced unit's sibling model/color
+  // become the watch when the customer actually referenced that exact unit (stock#/VIN);
+  // otherwise watch what the customer EXPRESSED. See resolveHeldGuardWatchTarget.
+  const target = resolveHeldGuardWatchTarget({
+    expressed: conv?.lead?.vehicle ?? null,
+    unit: item ?? null,
+    customerReferencedUnit: !!opts?.customerReferencedUnit
+  });
+  const model = canonicalizeWatchModelLabel(target.model);
   if (!model) return;
   const createdAt = nowIso();
-  const yearRaw = Number(item?.year ?? conv?.lead?.vehicle?.year ?? NaN);
-  const condition = normalizeWatchCondition(item?.condition ?? conv?.lead?.vehicle?.condition ?? null);
-  const color = String(item?.color ?? conv?.lead?.vehicle?.color ?? "").trim() || undefined;
+  const yearRaw = Number(target.year ?? NaN);
+  const condition = normalizeWatchCondition(target.condition);
+  const color = target.color ? String(target.color).trim() || undefined : undefined;
   const watch: InventoryWatch = {
     model,
     ...(Number.isFinite(yearRaw) ? { year: yearRaw } : {}),
@@ -10224,9 +12253,49 @@ async function applyStaleHeldUnitWatchHeal(conv: any): Promise<boolean> {
 // can review what a live cutover would close — e.g. Don Pagels' "notify when the
 // Freewheeler is available" call task, fulfilled by the "it is available" text.
 // Best-effort: never throws into the send/call path. See domain/taskFulfillmentAutoClose.ts.
+// Closure-signal pre-filter for the INBOUND task-auto-close trigger. A gate, NOT comprehension:
+// a miss just means we don't run the (parser-first) fulfillment check on this inbound (fail-safe —
+// the task stays open, existing behavior). The classifier still owns the close decision, and it
+// still requires a prior dealer outbound that actually accomplished the objective. This lets a
+// customer's "I'm all set" / "just curious" close a task the staff already handled, even when no
+// staff reply follows (the outbound hook only fires on a send).
+const TASK_AUTOCLOSE_INBOUND_CLOSURE_RE =
+  /\b(all set|i'?m good|we'?re good|no need|no thanks|that'?s all|that'?s it|just curious|never\s?mind|got (?:it|what i needed|everything i needed)|all good|appreciate it|thanks,?\s*(?:that'?s|i'?m|just|no)\b)/i;
+
+function taskAutoCloseInboundClosureHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return TASK_AUTOCLOSE_INBOUND_CLOSURE_RE.test(t);
+}
+
+// Broadened inbound auto-close gate: run the (0.85-gated, accomplished-not-promised)
+// fulfillment classifier on a customer reply whenever the conversation has an ELIGIBLE open
+// task AND a prior dealer outbound that could have fulfilled it — not only on an explicit
+// closure phrase. This is the "close the task by PARSING the SMS conversation" path: the
+// customer asked pricing/availability, staff answered, and the next turn closes the task even
+// without "I'm all set". The classifier still owns the verdict (a miss just leaves it open),
+// so this only widens WHEN we look, not the bar. Bounded to convs with an eligible open task
+// + a recent dealer reply to cap LLM calls.
+function hasEligibleAutoCloseInboundContext(conv: any): boolean {
+  if (!conv?.id) return false;
+  const hasEligible = listOpenTodos().some(
+    (t: any) =>
+      t.convId === conv.id &&
+      isAutoCloseEligibleTask({
+        status: t.status,
+        reason: t.reason,
+        taskClass: t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)
+      })
+  );
+  if (!hasEligible) return false;
+  return (conv.messages ?? [])
+    .slice(-8)
+    .some((m: any) => m?.direction === "out" && String(m?.body ?? "").trim());
+}
+
 async function runTaskFulfillmentAutoClose(
   conv: any,
-  action: { channel: "sms" | "email" | "call"; text: string }
+  action: { channel: "sms" | "email" | "call"; text: string; direction?: "out" | "in" }
 ): Promise<void> {
   try {
     if (!conv?.id) return;
@@ -10253,8 +12322,14 @@ async function runTaskFulfillmentAutoClose(
         text: String(m?.body ?? "")
       }))
       .filter(a => a.text.trim());
-    // Make sure the triggering action is the final item even if message append timing differs.
-    if (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText) {
+    // For an OUTBOUND trigger (a staff/agent send), make sure that just-sent message is the final
+    // item even if message-append timing differs. For an INBOUND trigger (a customer closure like
+    // "I'm all set"), the window already ends with that inbound — do NOT push it as an out action;
+    // the classifier still requires a prior dealer OUT in the window to have fulfilled anything.
+    if (
+      (action.direction ?? "out") !== "in" &&
+      (!activity.length || activity[activity.length - 1].text.replace(/\s+/g, " ").trim() !== actionText)
+    ) {
       activity.push({ direction: "out", channel: action.channel, text: actionText });
     }
     const verdicts = await classifyTaskFulfillmentWithLLM({
@@ -10266,6 +12341,17 @@ async function runTaskFulfillmentAutoClose(
     for (const task of eligible) {
       const verdict = verdicts.find(v => v.taskId === task.id) ?? null;
       const decision = decideTaskAutoClose({ enabled, eligible: true, verdict });
+      // Persist the verdict on the task so staff can see WHY it did/didn't auto-close.
+      if (verdict) {
+        setTodoAutoCloseCheck(conv.id, task.id, {
+          at: new Date().toISOString(),
+          fulfilled: !!verdict.fulfilled,
+          confidence: typeof verdict.confidence === "number" ? verdict.confidence : null,
+          evidence: String(verdict.evidence ?? "").slice(0, 200) || undefined,
+          decision: decision.reason,
+          channel: action.channel
+        });
+      }
       if (verdict?.fulfilled || decision.close) {
         recordDecisionTrace({
           scope: "live",
@@ -10287,6 +12373,42 @@ async function runTaskFulfillmentAutoClose(
       }
       if (decision.close) {
         markTodoDone(conv.id, task.id);
+        continue;
+      }
+      // Not closing — for a DEPARTMENT handoff the dept engaged but the customer hasn't booked, soft-close
+      // (snooze out of the urgent view) + NUDGE: it re-surfaces as a staff follow-up at the nudge date if
+      // still un-booked. No customer message. Dark behind DEPARTMENT_TASK_SOFT_CLOSE_NUDGE.
+      const soft = decideDepartmentTaskSoftClose({
+        enabled: isDepartmentTaskSoftCloseEnabled(),
+        task: { status: task.status, reason: task.reason, autoSoftCloseAt: task.autoSoftCloseAt },
+        verdict,
+        appointmentBooked: !!conv?.appointment?.bookedEventId,
+        now: new Date()
+      });
+      if ((soft.softClose || soft.reason === "shadow_would_soft_close") && soft.nudgeAt) {
+        recordDecisionTrace({
+          scope: "live",
+          stage: soft.softClose ? "task_autoclose.soft_closed" : "task_autoclose.soft_close_shadow",
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          detail: {
+            taskId: task.id,
+            reason: task.reason,
+            summary: String(task.summary ?? "").slice(0, 140),
+            nudgeAt: soft.nudgeAt,
+            deferUntil: verdict?.deferUntil ?? null,
+            decision: soft.reason
+          }
+        });
+      }
+      if (soft.softClose && soft.nudgeAt) {
+        snoozeTodo(conv.id, task.id, soft.nudgeAt);
+        setTodoAutoSoftClose(conv.id, task.id, {
+          at: new Date().toISOString(),
+          nudgeAt: soft.nudgeAt,
+          reason: soft.reason,
+          evidence: String(verdict?.evidence ?? "").slice(0, 200) || undefined
+        });
       }
     }
   } catch {
@@ -10373,13 +12495,18 @@ async function buildCadenceHeldInventoryOverride(args: {
     const statusText =
       exactUnavailable.kind === "sold" ? "has sold" : "is on hold right now";
     if (exactUnavailable.kind === "hold") {
-      ensureInventoryWatchForHeldCadence(conv, {
-        ...exactUnavailable.item,
-        model: exactUnavailable.item?.model ?? fallbackModel ?? undefined,
-        year: exactUnavailable.item?.year ?? context.year ?? conv?.lead?.vehicle?.year ?? undefined,
-        color: exactUnavailable.item?.color ?? context.color ?? conv?.lead?.vehicle?.color ?? undefined,
-        condition: exactUnavailable.item?.condition ?? context.condition ?? conv?.lead?.vehicle?.condition
-      });
+      ensureInventoryWatchForHeldCadence(
+        conv,
+        {
+          ...exactUnavailable.item,
+          model: exactUnavailable.item?.model ?? fallbackModel ?? undefined,
+          year: exactUnavailable.item?.year ?? context.year ?? conv?.lead?.vehicle?.year ?? undefined,
+          color: exactUnavailable.item?.color ?? context.color ?? conv?.lead?.vehicle?.color ?? undefined,
+          condition: exactUnavailable.item?.condition ?? context.condition ?? conv?.lead?.vehicle?.condition
+        },
+        // Matched by an EXACT stock#/VIN ref (findExactCadenceUnavailableUnit) → customer-referenced.
+        { customerReferencedUnit: true }
+      );
     }
     const recentContextText = (conv.messages ?? [])
       .slice(-8)
@@ -10477,13 +12604,20 @@ async function buildCadenceHeldInventoryOverride(args: {
   if (!shouldOverrideHeld && !shouldOverrideSold) return null;
 
   if (shouldOverrideHeld && heldItem) {
-    ensureInventoryWatchForHeldCadence(conv, {
-      ...heldItem,
-      model: heldItem.model ?? context.model,
-      year: heldItem.year ?? context.year ?? undefined,
-      color: heldItem.color ?? context.color ?? undefined,
-      condition: heldItem.condition ?? context.condition
-    });
+    ensureInventoryWatchForHeldCadence(
+      conv,
+      {
+        ...heldItem,
+        model: heldItem.model ?? context.model,
+        year: heldItem.year ?? context.year ?? undefined,
+        color: heldItem.color ?? context.color ?? undefined,
+        condition: heldItem.condition ?? context.condition
+      },
+      // Surfaced only by a MODEL SEARCH (findInventoryMatches on context.model), not an exact
+      // stock#/VIN reference → NOT customer-referenced. Watch the expressed model, never the
+      // search-surfaced sibling unit's model/color (over-attachment guard, Raysean +15136149740).
+      { customerReferencedUnit: false }
+    );
   }
 
   const firstName = normalizeDisplayCase(args.name || "there");
@@ -11389,27 +13523,11 @@ function isUnknownInterestVehicle(conv: any): boolean {
   return /full line|other/i.test(raw);
 }
 
+// Delegates to the shared, DD/MM-aware structured-ADF date parser (regen twin of sendgridInbound's
+// parsePreferredDateOnly) so the live + regen test-ride first-touch can't drift. Was a MM/DD-only copy
+// that dropped Room58 dates like 29/6/2026 → null → generic deflection.
 function parsePreferredDateOnlyForReply(value: string | null | undefined): Date | null {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
-  if (m[3] && m[3].length === 2) year = 2000 + year;
-  if (
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(year) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+  return parsePreferredAdfDate(value);
 }
 
 function formatPreferredDateForReply(value: string | null | undefined): string | null {
@@ -12097,9 +14215,18 @@ function buildDealerLeadAppPostRideReply(args: {
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
     ) || "that bike";
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one
+  // actually happened; otherwise an initial-touch intro. Assuming a visit that didn't happen is the
+  // single biggest out-of-context miss in production (the Knighton/Krugov class).
+  const visited = customerVisitConfirmed(args.conv);
+  const useVisitFraming = !phantomVisitGuardEnabled() || visited;
+  const intro = useVisitFraming
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
+    return useVisitFraming
+      ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
+      : `${intro} It's in stock — want to set up a time to come ride it? Any questions, just text me anytime.`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
@@ -12229,7 +14356,15 @@ function buildDealerRideOutcomeCustomerDraft(args: {
     "Alexandra";
   const senderFirst = normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
   const modelLabel = getDealerRideOutcomeModelLabel(args.conv, args.unit);
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark): a recorded ride outcome (sold/hold/showed) implies they came in, so the
+  // recap intro is correct then; for did_not_show/cancelled it would fabricate a visit.
+  const rideVisited =
+    !phantomVisitGuardEnabled() ||
+    rideOutcomeImpliesVisit(args.primaryStatus, args.secondaryStatus, args.outcome) ||
+    customerVisitConfirmed(args.conv);
+  const intro = rideVisited
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
 
   if (args.secondaryStatus === "sold" || args.outcome === "sold") {
     return `${intro} Congrats on the ${modelLabel}. If you need anything, just let me know.`;
@@ -12328,7 +14463,7 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     return { queued: false, reason: "phone_preferred", draft };
   }
   if (preferredMethod === "email") {
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "email",
       text: draft,
@@ -12350,7 +14485,7 @@ async function queueDealerRideOutcomeCustomerDraft(args: {
     ) {
       return { queued: false, reason: "duplicate", draft };
     }
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text: draft,
@@ -12386,7 +14521,7 @@ function isGenericMetaOfferModel(model?: string | null): boolean {
 }
 
 function normalizeDisplayModelForYear(model?: string | null, year?: string | number | null): string {
-  const base = normalizeDisplayCase(model);
+  const base = normalizeDisplayCase(cleanModelDisplayName(model));
   const yearNum = Number(year);
   if (
     base &&
@@ -12401,7 +14536,9 @@ function normalizeDisplayModelForYear(model?: string | null, year?: string | num
 }
 
 function formatModelLabelForFollowUp(year?: string | null, model?: string | null): string {
-  if (!model || /full line/i.test(model)) return "the bike";
+  // Placeholder "models" (Full Line / Other / Harley-Davidson Other) are not real
+  // bikes — say "the bike" instead of "the Other" so follow-up text never names junk.
+  if (!model || /\b(full line|other)\b/i.test(model)) return "the bike";
   const base = normalizeDisplayModelForYear(model, year);
   return /^the\s/i.test(base) ? base : `the ${base}`;
 }
@@ -15352,7 +17489,12 @@ async function activateAppointmentOutcomeFollowUp(args: {
   const nextDueAt = resolveOutcomeFollowUpDueAt({
     note,
     plan,
-    fallbackDueAt: computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone),
+    // A no-show's first touch lands the NEXT BUSINESS DAY (Joe-approved 2026-07-02, 1-2 day
+    // window; Fri/Sat -> Monday, never Sunday). Other outcomes keep the standard first offset.
+    fallbackDueAt:
+      args.primaryStatus === "did_not_show"
+        ? resolveNoShowFollowUpDueAt(now, timezone)
+        : computeFollowUpDueAt(now, FOLLOW_UP_DAY_OFFSETS[0], timezone),
     timeZone: timezone,
     nowIso: now
   });
@@ -16859,6 +19001,13 @@ function isFollowUpDialogState(name: DialogStateName): boolean {
 
 function setDialogState(conv: any, name: DialogStateName) {
   if (!conv) return;
+  // Re-opt-in: entering the explicit active-watch dialog means the customer is
+  // actively subscribing again, so clear any prior durable watch opt-out. This
+  // is the one transition every explicit watch activation passes through and the
+  // held-unit auto-guard does NOT, so it's the clean place to reverse the flag.
+  if (name === "inventory_watch_active") {
+    clearInventoryWatchOptOut(conv);
+  }
   const updatedAt = new Date().toISOString();
   if (conv.dialogState?.name === name) {
     conv.dialogState.updatedAt = updatedAt;
@@ -18921,23 +21070,47 @@ function ensureUniqueDraft(
       .filter((m: any) => m.direction === "out")
       .map((m: any) => normalizeOutboundText(m.body))
   );
+  // answer-don't-deflect: when we're forced to a generic uniqueness fallback AND the customer's model
+  // is already on record (a SPECIFIC model, not a placeholder), the fallback must NOT ask "which model
+  // are you leaning toward?" about a bike we already know — it references the known model instead. This
+  // is the dominant model-deflection miss in prod (impact: ~21/40 model-asks have a specific anchor).
+  // Fail-direction safe: a placeholder/absent anchor keeps the original generic ask.
+  const anchoredModel = pickSpecificAnchorModel(conv);
   let candidate = stripIntroIfRepeated(draft, conv, dealerName, agentName);
   if (!candidate) {
-    candidate = "Got it — happy to help with pricing or a model comparison.";
+    candidate = anchoredModel
+      ? `Got it — happy to help with pricing on the ${anchoredModel} or anything else you’re weighing.`
+      : "Got it — happy to help with pricing or a model comparison.";
   }
   if (!used.has(normalizeOutboundText(candidate))) return candidate;
-  const fallbacks = [
-    "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
-    "Thanks for the update — I can help with pricing or compare models if that’s useful.",
-    "Understood. If you want pricing details or a quick model comparison, just say the word."
-  ];
+  const fallbacks = anchoredModel
+    ? [
+        `Happy to help with the ${anchoredModel} — pricing, a quick comparison, or whatever you’re weighing.`,
+        `Want me to pull together pricing on the ${anchoredModel}, or compare it with a couple options?`,
+        `Glad to help on the ${anchoredModel} — just say what would be most useful.`
+      ]
+    : [
+        "Got it — happy to help with pricing or a model comparison. Which model are you leaning toward?",
+        "Thanks for the update — I can help with pricing or compare models if that’s useful.",
+        "Understood. If you want pricing details or a quick model comparison, just say the word."
+      ];
   for (const fb of fallbacks) {
     if (!used.has(normalizeOutboundText(fb))) return fb;
   }
-  const suffix = " Let me know what you’re leaning toward.";
+  const suffix = anchoredModel
+    ? ` Just let me know what you’d like to know about the ${anchoredModel}.`
+    : " Let me know what you’re leaning toward.";
   return used.has(normalizeOutboundText(candidate + suffix))
     ? `${candidate} Thanks for the update.`
     : candidate + suffix;
+}
+
+// The SPECIFIC model on record for this conversation (cleaned of make prefix), or null when the anchor
+// is a placeholder ("Other"/"Full Line"/bare make) or absent — in which case asking is correct.
+function pickSpecificAnchorModel(conv: any): string | null {
+  const raw = String(conv?.lead?.vehicle?.model ?? conv?.lead?.vehicle?.description ?? "").trim();
+  if (!isSpecificModel(raw)) return null;
+  return raw.replace(/^harley[-\s]?davidson\s+/i, "").trim() || raw;
 }
 
 function ensureUniqueDispositionReply(reply: string, conv: any): string {
@@ -19200,7 +21373,7 @@ function applySlotOfferPolicy(conv: any, reply: string, lastOutboundText: string
 function stripTradeIntroSentence(text: string): string {
   return String(text ?? "")
     .replace(
-      /^([^.!?]*\bthanks for (reaching out about selling|using our trade[-\s]?in estimator)[^.!?]*[.!?]\s*)/i,
+      /^([^.!?]*\bthanks for (reaching out about selling|the message about selling|using our trade[-\s]?in estimator)[^.!?]*[.!?]\s*)/i,
       ""
     )
     .trim();
@@ -19300,12 +21473,16 @@ function normalizeReactionInboundText(text: string): string {
     .trim();
 }
 
+  // Localized (Spanish) iOS tapback wrappers — carrier-generated STRUCTURED formats, the same
+  // class as the English set (production miss: Armando Cortes, +17165350411, 2026-07-01 —
+  // 'Le encanta "Hi Armando..."' drafted a reply on a closed/sold conversation instead of the
+  // reaction-only no-reply). Quoted-body requirement keeps this tight to the wrapper format.
 function isQuotedReactionInboundText(text: string): boolean {
   const normalized = normalizeReactionInboundText(text);
   if (!normalized) return false;
 
   if (
-    /^(liked|loved|disliked|laughed at|emphasized|questioned)\s+["'\u201c\u201d][\s\S]{1,1000}["'\u201c\u201d]$/i.test(
+    /^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))\s+["'\u201c\u201d][\s\S]{1,1000}["'\u201c\u201d]$/i.test(
       normalized
     )
   ) {
@@ -19319,7 +21496,7 @@ function isQuotedReactionInboundText(text: string): boolean {
 
   const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
   if (!reactionToken) return false;
-  if (/^(liked|loved|disliked|laughed at|emphasized|questioned)$/.test(reactionToken)) {
+  if (/^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))$/i.test(reactionToken)) {
     return true;
   }
   if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
@@ -22091,6 +24268,33 @@ type CustomerDispositionDecision = {
   state: "customer_sell_on_own" | "customer_keep_current_bike" | "customer_stepping_back";
 };
 
+// Cheap pre-filter that GATES the deal-progress LLM parser call (cost control, same pattern as
+// the disposition hint below) — never a routing decision itself. A miss just means today's
+// behavior (the turn drafts normally).
+function hasDealProgressParserHintText(text: string | null | undefined): boolean {
+  const lower = String(text ?? "").toLowerCase();
+  if (!lower.trim()) return false;
+  return /\b(insurance|insured|allstate|geico|progressive|state farm|payoff|paid off|pay[- ]?off|delivery|deliver(?:ed|ing)?|pick(?:ing)?\s*up|pickup|trailer|paperwork|title|plates?|registration|notar|sign(?:ing)?\s+(?:the\s+)?(?:docs|papers|paperwork)|deposit|down payment|install(?:ed|ing)?)\b/.test(
+    lower
+  );
+}
+
+// Shared transition into the staff-driven deal state (Joe-approved 2026-07-02): per-turn
+// auto-drafts stop (staff answer with off-system deal facts), cadence goes quiet, and the
+// existing in-process-deal owner nudge + stale-handoff nets keep coverage.
+// isInProcessDealLead's reason regex includes "in_process_deal", so the 3-business-day
+// quiet nudge applies. A recorded sale flips the conv to post-sale machinery as usual.
+function applyInProcessDealTransition(conv: any, signal: string) {
+  setFollowUpMode(conv, "manual_handoff", "in_process_deal");
+  stopFollowUpCadence(conv, "in_process_deal");
+  stopRelatedCadences(conv, "in_process_deal", { setMode: "manual_handoff" });
+  recordRouteOutcome("live", "in_process_deal_entered", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    signal
+  });
+}
+
 function hasCustomerDispositionParserHintText(text: string | null | undefined): boolean {
   const lower = String(text ?? "").toLowerCase();
   if (!lower.trim()) return false;
@@ -22241,6 +24445,7 @@ function applyCustomerDispositionCloseout(conv: any, decision: CustomerDispositi
   stopFollowUpCadence(conv, decision.reason);
   setFollowUpMode(conv, "paused_indefinite", decision.reason);
   setDialogState(conv, decision.state as DialogStateName);
+  pauseInventoryWatches(conv); // a customer stepping back is off the watch alerts too
   closeConversation(conv, decision.reason);
   stopRelatedCadences(conv, decision.reason, { close: true });
 }
@@ -22302,7 +24507,26 @@ function resolveCustomerFollowUpDeferralDecision(
     );
     if (fallback) return fallback;
   }
-  return parseCustomerFollowUpDeferralFallback(text, base);
+  const shortWindow = parseCustomerFollowUpDeferralFallback(text, base);
+  if (shortWindow) return shortWindow;
+  // Indefinite defer while still engaged (Chuck Bailey class): an accepted defer_no_window that
+  // neither closed out (competing-active-intent guard, correctly) nor carries a concrete short
+  // window pauses the cadence for a default window instead of leaving it nudging. Decision is
+  // centralized in routeStateReducer (decideIndefiniteDeferTurn) — both paths flow through this
+  // resolver, so live/regen stay in parity.
+  const indefiniteDefer = decideIndefiniteDeferTurn({
+    parserAccepted: parsedAccepted,
+    disposition: parsed?.disposition ?? null,
+    shortWindowResolved: false
+  });
+  if (indefiniteDefer.kind === "pause_cadence_default_window") {
+    return {
+      label: "in a couple weeks",
+      until: new Date(base.getTime() + indefiniteDefer.pauseDays * 24 * 60 * 60 * 1000),
+      reason: "customer_thinking_it_over"
+    };
+  }
+  return null;
 }
 
 async function applyCustomerFollowUpDeferral(conv: any, decision: CustomerFollowUpDeferralDecision) {
@@ -24333,6 +26557,29 @@ function buildManualQuoteDetailsReceivedReply(): string {
   return "Thanks — those quote details help. I’ll have the team use them and follow up with the numbers.";
 }
 
+// Funnel progression (Joe, 2026-06-24): once a payment-focused lead engages with numbers (the
+// manual-quote-details moment), move them toward getting pre-approved — append the credit-app link +
+// a soft visit invite, ONCE. Deterministic link (never fabricated); no-op if there's no credit-app
+// URL or we already offered. Same helper in both the live and regenerate paths.
+async function buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv: Conversation): Promise<string> {
+  let reply = buildManualQuoteDetailsReceivedReply();
+  if (conv.financeAppInviteSentAt) return reply;
+  try {
+    const dp = await getDealerProfileHot();
+    const line = buildFinanceAppInviteLine({
+      creditAppUrl: (dp as any)?.creditAppUrl,
+      bookingUrl: (dp as any)?.bookingUrl
+    });
+    if (line) {
+      reply = `${reply} ${line}`;
+      conv.financeAppInviteSentAt = new Date().toISOString();
+    }
+  } catch {
+    // best-effort — the base reply stands without the offer
+  }
+  return reply;
+}
+
 function applyManualQuoteDetailsReceivedState(
   conv: any,
   inboundText: string | null | undefined,
@@ -24761,6 +27008,13 @@ function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | u
   if (!source) return false;
   if (!hasServiceDepartmentContext(conv)) return false;
   if (hasSalesSchedulingOverrideText(source)) return false;
+  // The customer is ANSWERING a dealer-initiated visit-time check-in ("what time are you coming in?")
+  // — that's a visit confirmation for the scheduling cluster, not a customer-initiated service request.
+  // Defer so a sticky service-classified lead doesn't get "I'll have SERVICE check availability" for a
+  // plain visit time (Bobby Kindred, 2026-06-25). Reads OUR last outbound (dealer framing). If that
+  // check-in was explicitly about SERVICE timing, keep service routing (don't defer).
+  const lastOutboundBody = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+  if (isDealerVisitTimeCheckInText(lastOutboundBody) && !/\bservice\b/i.test(lastOutboundBody)) return false;
   const signals = detectSchedulingSignals(source);
   return (
     signals.explicit ||
@@ -25803,17 +28057,19 @@ function applyPendingIncomingInventoryState(
   setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
   stopFollowUpCadence(conv, "pending_incoming_inventory");
   stopRelatedCadences(conv, "pending_incoming_inventory", { setMode: "manual_handoff" });
-  addTodo(
+  // Per-conversation SINGLETON upsert (class-agnostic). A bare addTodo here dedups by taskClass,
+  // but the identical "Notify when the trade arrives" objective lands in different class buckets
+  // ("followup" passed here vs "todo" from inferTodoTaskClass), so copies piled up (Nicholas
+  // Braun, 2026-06-23). The upsert collapses any duplicates and keeps one. Covers BOTH paths —
+  // live + regenerate both call applyPendingIncomingInventoryState.
+  upsertPendingIncomingInventoryNotifyTodo(
     conv,
-    "call",
     buildPendingIncomingInventoryTaskSummary({
       pending,
       customerName: customerNameForPendingIncomingInventory(conv)
     }),
     opts?.sourceMessageId ?? undefined,
-    conv.leadOwner,
-    undefined,
-    "followup"
+    conv.leadOwner
   );
   return true;
 }
@@ -26614,6 +28870,13 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
     if (/(credit|prequal|finance|apr|payment|monthly)/.test(text)) {
       return withDue("Call customer to review financing and payment options.");
     }
+    // A scheduling/booking task — here "check availability" means the CALENDAR (is there a time), NOT
+    // inventory. Must come BEFORE the inventory branch so a "schedule the visit … (check availability)"
+    // task isn't mislabeled "confirm inventory and availability" (which also wrongly trips the
+    // Availability sales badge). Gary Busenlehner: a booking task tagged "Availability".
+    if (/\b(schedule (?:the |a )?(?:visit|appointment)|put it on the calendar|on the calendar|confirm a time|set up a time|book (?:the |a )?(?:visit|appointment|time))\b/i.test(text)) {
+      return withDue("Call customer to confirm a time and book the visit.");
+    }
     if (/(inventory|availability|stock|watch)/.test(text)) {
       return withDue("Call customer to confirm inventory and availability.");
     }
@@ -26621,7 +28884,12 @@ function deriveTodoActionLabel(todo: any, conv: any, timeZone = "America/New_Yor
       conv?.lead?.vehicle?.year ?? null,
       conv?.lead?.vehicle?.model ?? null
     );
-    if (model) return withDue(`Call customer to follow up on ${model}.`);
+    // Only name the lead-attached vehicle when this lead is actually about it.
+    // ADF forms attach a bike even to Jumpstart / MSF rider-course leads where the
+    // model is noise — naming it ("follow up on the Breakout") is over-attachment.
+    if (model && leadVehicleRelevantToFollowUp(conv)) {
+      return withDue(`Call customer to follow up on ${model}.`);
+    }
     return withDue("Call customer and update status.");
   }
   if (/(call only|phone only|no text|do not text)/.test(text)) return "Call customer (call-only).";
@@ -26721,6 +28989,170 @@ async function processDueFollowUpsUnlocked() {
       .filter(shouldTodoHoldCustomerCadence)
       .map(t => t.convId)
   );
+  // State-invariant reconciler: a handed-off lead must never carry an ACTIVE customer
+  // cadence (it could auto-text mid-handoff). The write-time guard in setFollowUpMode
+  // prevents new ones; this heals any that slipped through before it existed.
+  // stopFollowUpCadence preserves post_sale/long_term, so those keep running by design.
+  let cadenceHandoffHealed = 0;
+  for (const conv of convs) {
+    if (conv.followUp?.mode !== "manual_handoff") continue;
+    const cad = conv.followUpCadence;
+    if (cad?.status !== "active") continue;
+    // post_sale / long_term cadences are intentionally kept through a handoff (matches
+    // stopFollowUpCadence's own carve-out) — so only count/record the ones we actually stop.
+    const preserved = cad.kind === "post_sale" || cad.kind === "long_term";
+    stopFollowUpCadence(conv, "manual_handoff");
+    if (preserved) continue;
+    saveConversation(conv);
+    cadenceHandoffHealed += 1;
+    recordRouteOutcome("manual", "cadence_handoff_invariant_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      reason: String(conv.followUp?.reason ?? "")
+    });
+  }
+  // State-invariant: a CLOSED/SOLD conversation must not keep an ACTIVE inventory watch — a reopen
+  // could refire "it's available again!" to a customer who already closed/bought. The write-time guard
+  // in closeConversation covers most close paths; this heals sold-via-applyOutcomeSold + any backlog
+  // (the outcome auditor found 15 on 6/25). Reversible (paused, not deleted); fail-direction safe.
+  let closedWatchesPaused = 0;
+  for (const conv of convs) {
+    const closed = !!(conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt);
+    if (!closed || !hasActiveInventoryWatch(conv)) continue;
+    const n = pauseInventoryWatches(conv);
+    if (n > 0) {
+      saveConversation(conv);
+      closedWatchesPaused += n;
+      recordRouteOutcome("manual", "closed_watch_paused", { convId: conv.id, leadKey: conv.leadKey, paused: n });
+    }
+  }
+  if (closedWatchesPaused > 0) {
+    console.log(`[state-reconcile] paused ${closedWatchesPaused} inventory watch(es) on closed/sold conversations`);
+  }
+  if (cadenceHandoffHealed > 0) {
+    console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
+  }
+  // Pending-incoming notify-todo dedup heal: the singleton "Notify when the trade arrives" task
+  // historically duplicated because addTodo dedups by taskClass and the same objective split
+  // across class buckets (Nicholas Braun: 4 open copies, 2026-06-23). The upsert at write-time
+  // prevents new ones; this collapses any that already piled up. Class-agnostic, idempotent.
+  const notifyDupConvIds = new Map<string, number>();
+  for (const t of openTodos) {
+    if (!isPendingIncomingInventoryNotifyTodoSummary(t.summary)) continue;
+    notifyDupConvIds.set(t.convId, (notifyDupConvIds.get(t.convId) ?? 0) + 1);
+  }
+  let pendingNotifyDupsHealed = 0;
+  for (const [convId, count] of notifyDupConvIds) {
+    if (count < 2) continue;
+    const conv = convById.get(convId);
+    if (!conv) continue;
+    const retired = healPendingIncomingNotifyTodoDuplicates(conv);
+    if (retired <= 0) continue;
+    saveConversation(conv);
+    pendingNotifyDupsHealed += retired;
+    recordRouteOutcome("manual", "pending_incoming_notify_todo_dedup_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      retired
+    });
+  }
+  if (pendingNotifyDupsHealed > 0) {
+    console.log(
+      `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
+    );
+  }
+  // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in
+  // context" whose held marker outlived a real reply (a reply went out after the hold) should drop the
+  // flag + close its todo (s R Gurajala, 2026-06-25 — a sent draft cleared via finalizeDraftAsSent but
+  // older stragglers persisted). Deterministic; this is the cron auto-checking flags for accuracy.
+  let staleHeldFlagsHealed = 0;
+  for (const conv of convs) {
+    if (!conv.draftHeld) continue;
+    if (healStaleHeldFlag(conv)) {
+      saveConversation(conv);
+      staleHeldFlagsHealed += 1;
+      recordRouteOutcome("manual", "stale_held_flag_heal", { convId: conv.id, leadKey: conv.leadKey });
+    }
+  }
+  if (staleHeldFlagsHealed > 0) {
+    console.log(`[state-reconcile] cleared ${staleHeldFlagsHealed} stale "needs reply" flag(s) after a reply went out`);
+  }
+  // Cadence re-align: a lead wrongly deferred to a long_term (months-out) first touch when its
+  // structured purchase timeframe actually resolves to the STANDARD day-1 ramp (Richard Tait, 6/25:
+  // a "3-12 Months" marketplace lead pushed ~3 months out by the old inline threshold). Heal the
+  // never-contacted ones so their initial nurture fires now, not in 3 months. Capped per tick.
+  let cadenceRealigned = 0;
+  for (const conv of convs) {
+    if (cadenceRealigned >= 25) break;
+    if (realignMisdeferredLongTermCadence(conv, cfg.timezone, now)) {
+      saveConversation(conv);
+      cadenceRealigned += 1;
+      recordRouteOutcome("manual", "long_term_cadence_realigned_to_standard", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        purchaseTimeframe: conv.lead?.purchaseTimeframe ?? null
+      });
+    }
+  }
+  if (cadenceRealigned > 0) {
+    console.log(`[state-reconcile] re-aligned ${cadenceRealigned} mis-deferred long_term cadence(s) to standard`);
+  }
+  // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
+  // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
+  // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
+  // Deduped via schedulingLeakFlaggedAt (re-flag after 3d) + only when there's no open todo; capped.
+  const SCHEDULING_LEAK_TODO_MARKER = "a time was discussed but nothing is booked";
+  // Retire scheduling-leak todos that are no longer current leaks (booked, closed, or aged out of the
+  // actionable window) — self-cleans the over-broad first batch and keeps the inbox accurate going
+  // forward (e.g. once the visit is on the calendar, or the lead goes cold past the max-idle window).
+  let schedulingLeakTodosRetired = 0;
+  {
+    const convByIdForLeak = new Map(convs.map(c => [c.id, c]));
+    for (const t of openTodos) {
+      if (!String(t.summary ?? "").includes(SCHEDULING_LEAK_TODO_MARKER)) continue;
+      const conv = convByIdForLeak.get(t.convId);
+      if (!conv) continue;
+      if (isSchedulingLeakConversation(conv, now)) continue; // still a live leak — keep the todo
+      if (markTodoDone(conv.id, t.id)) {
+        conv.schedulingLeakFlaggedAt = undefined;
+        saveConversation(conv);
+        schedulingLeakTodosRetired += 1;
+      }
+    }
+  }
+  if (schedulingLeakTodosRetired > 0) {
+    console.log(`[state-reconcile] retired ${schedulingLeakTodosRetired} stale scheduling-leak todo(s) (booked/closed/aged out)`);
+  }
+  const SCHEDULING_LEAK_TODOS_PER_TICK = 15;
+  const SCHEDULING_LEAK_RENUDGE_MS = 3 * 24 * 60 * 60 * 1000;
+  const convIdsWithOpenTodoForLeak = new Set(openTodos.map(t => t.convId));
+  let schedulingLeaksFlagged = 0;
+  for (const conv of convs) {
+    if (schedulingLeaksFlagged >= SCHEDULING_LEAK_TODOS_PER_TICK) break;
+    if (convIdsWithOpenTodoForLeak.has(conv.id)) continue; // already has a task — don't stack
+    if (!isSchedulingLeakConversation(conv, now)) continue;
+    const flaggedMs = conv.schedulingLeakFlaggedAt ? Date.parse(conv.schedulingLeakFlaggedAt) : NaN;
+    if (Number.isFinite(flaggedMs) && now.getTime() - flaggedMs < SCHEDULING_LEAK_RENUDGE_MS) continue;
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const todo = addTodo(
+      conv,
+      "call",
+      `Schedule the visit for ${who} — a time was discussed but nothing is booked. Confirm a time (check availability) and put it on the calendar.`,
+      undefined,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    if (todo) {
+      conv.schedulingLeakFlaggedAt = now.toISOString();
+      saveConversation(conv);
+      schedulingLeaksFlagged += 1;
+      recordRouteOutcome("manual", "scheduling_leak_flagged", { convId: conv.id, leadKey: conv.leadKey });
+    }
+  }
+  if (schedulingLeaksFlagged > 0) {
+    console.log(`[state-reconcile] flagged ${schedulingLeaksFlagged} scheduling leak(s) (time discussed, nothing booked)`);
+  }
   // Stale manual-handoff safety net: a lead handed to a human/department whose
   // conversation went quiet gets ONE staff "follow up" todo (no auto-send) so it
   // doesn't die silently (Mike +17163686204). Capped per tick + deduped via
@@ -26758,6 +29190,104 @@ async function processDueFollowUpsUnlocked() {
         reason: handoffReason,
         idleDays
       });
+    }
+  }
+
+  // Unsent first-touch safety net: a NEVER-contacted lead whose initial reply was DRAFTED but never sent
+  // — email-preferred / email-only ADF leads whose draft sits in the Email tab with no cadence and no
+  // todo, so they aged past the stale-handoff 21-day window into permanent silence (8 old
+  // AutoDealers.Digital inventory leads, 6/25). Surface ONE channel-aware staff todo so the first touch
+  // actually goes out. Fresh open-todo set so it never stacks on a todo another sweep just created;
+  // deduped via firstTouchSurfacedAt; capped per tick.
+  const FIRST_TOUCH_TODOS_PER_TICK = 15;
+  const convIdsWithOpenTodoNow = new Set(listOpenTodos().map(t => t.convId));
+  let firstTouchSurfaced = 0;
+  for (const conv of convs) {
+    if (firstTouchSurfaced >= FIRST_TOUCH_TODOS_PER_TICK) break;
+    if (!shouldSurfaceUnsentFirstTouch(conv, convIdsWithOpenTodoNow.has(conv.id), now)) continue;
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const prefersPhone =
+      String(conv.lead?.preferredContactMethod ?? "").toLowerCase() === "phone" &&
+      !!String(conv.lead?.phone ?? "").trim();
+    const todo = prefersPhone
+      ? addTodo(conv, "call", `Call ${who} — they prefer a call and no first contact has gone out yet.`, undefined, conv.leadOwner, undefined, "followup")
+      : addTodo(conv, "note", `Send the first reply to ${who} — a reply was drafted but never sent (check the Email tab).`, undefined, conv.leadOwner, undefined, "followup");
+    if (todo) {
+      conv.firstTouchSurfacedAt = now.toISOString();
+      saveConversation(conv);
+      firstTouchSurfaced += 1;
+      recordRouteOutcome("manual", "unsent_first_touch_surfaced", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        prefersPhone
+      });
+    }
+  }
+  if (firstTouchSurfaced > 0) {
+    console.log(`[state-reconcile] surfaced ${firstTouchSurfaced} unsent first-touch todo(s) (drafted, never sent)`);
+  }
+
+  // Task-fulfillment auto-close BACKFILL: re-check open eligible tasks against their conversation
+  // window and close the ones already fulfilled — catches tasks resolved with NO trailing trigger
+  // (Paul Foley 6/22: a parts question answered, customer thanked, then quiet, so neither the send
+  // nor a later inbound re-fired the check). Throttled hard so it never floods or over-spends:
+  // only tasks not checked in the last 12h (autoCloseCheck.at is the marker), only convs with a
+  // prior dealer outbound, capped per tick. The 0.85 classifier still owns every close.
+  if (isTaskFulfillmentAutoCloseEnabled()) {
+    const AUTOCLOSE_BACKFILL_PER_TICK = 10;
+    const AUTOCLOSE_BACKFILL_RECHECK_MS = 12 * 60 * 60 * 1000;
+    let autoCloseBackfillRan = 0;
+    // Sweep FRESHEST-first: a task fulfilled-but-still-open is by definition recently active
+    // (just answered), so the most-recently-touched conversations are the likeliest closes —
+    // and they shouldn't wait behind the long tail of old leads. (Paul Foley sat unreached
+    // because the old default iterated oldest-first and he's a same-day lead.)
+    const lastMsgMs = (c: any): number => {
+      let m = 0;
+      for (const msg of c?.messages ?? []) {
+        const t = Date.parse(String(msg?.at ?? ""));
+        if (Number.isFinite(t) && t > m) m = t;
+      }
+      return m;
+    };
+    const backfillOrder = [...convs].sort((a, b) => lastMsgMs(b) - lastMsgMs(a));
+    for (const conv of backfillOrder) {
+      if (autoCloseBackfillRan >= AUTOCLOSE_BACKFILL_PER_TICK) break;
+      const eligible = openTodos.filter(
+        t =>
+          t.convId === conv.id &&
+          isAutoCloseEligibleTask({
+            status: t.status,
+            reason: t.reason,
+            taskClass: t.taskClass ?? inferTodoTaskClass(t.reason, t.summary, t)
+          })
+      );
+      if (!eligible.length) continue;
+      // Skip when every eligible task was already re-checked recently (throttle).
+      const due = eligible.some(t => {
+        const at = Date.parse(String((t as any).autoCloseCheck?.at ?? ""));
+        return !Number.isFinite(at) || now.getTime() - at > AUTOCLOSE_BACKFILL_RECHECK_MS;
+      });
+      if (!due) continue;
+      // Need a prior REAL dealer outbound (sent text/email or a call) that could have fulfilled the
+      // objective — an unsent draft_ai is NOT a communication, so a never-contacted lead's task can't
+      // be "fulfilled" and must not be auto-closed (would silently kill an unsent first-touch todo).
+      const hasDealerOutbound = (conv.messages ?? []).some(
+        (m: any) =>
+          m?.direction === "out" &&
+          REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? "")) &&
+          String(m?.body ?? "").trim()
+      );
+      if (!hasDealerOutbound) continue;
+      autoCloseBackfillRan += 1;
+      // direction "in" => re-evaluate the existing window without appending a synthetic action.
+      await runTaskFulfillmentAutoClose(conv, {
+        channel: "sms",
+        text: "(auto-close backfill re-check)",
+        direction: "in"
+      });
+    }
+    if (autoCloseBackfillRan > 0) {
+      console.log(`[autoclose-backfill] re-checked ${autoCloseBackfillRan} conversation(s) with eligible open tasks`);
     }
   }
 
@@ -27309,7 +29839,11 @@ async function processDueFollowUpsUnlocked() {
       continue;
     }
     if (!isPostSale && conv.followUp?.mode === "holding_inventory") continue;
-    if (!isPostSale && conv.followUp?.mode === "manual_handoff") continue;
+    // Held leads (manual_handoff or paused_indefinite "hold off") are off
+    // proactive cadence until they re-engage. paused_indefinite was previously
+    // missing here, so a held lead still got a "just checking in" cadence draft
+    // (Kevin Short +17166035402, 2026-06-30).
+    if (!isPostSale && isProactiveContactPaused(conv)) continue;
     if (!isPostSale) {
       if (conv.followUp?.skipNextCheckin) {
         conv.followUp.skipNextCheckin = false;
@@ -27478,8 +30012,13 @@ async function processDueFollowUpsUnlocked() {
       // "enjoying it / anything you need" check-in. Fails safe to pre-owned when the
       // purchase condition is unknown. (postSaleCadence.ts)
       const isNewBike = postSaleVehicleIsNew(conv);
+      // Phantom-visit guard (dark): "coming to see us" assumes a physical visit — but a sale can be an
+      // online/HDFS deal with no visit (the Knighton class). Fall back to a visit-neutral congrats.
+      const postSaleVisited = !phantomVisitGuardEnabled() || customerVisitConfirmed(conv);
       const smsTemplates = [
-        `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`,
+        postSaleVisited
+          ? `Hi ${firstName} — this is ${repName} at ${dealerName}. Thanks again for coming to see us for your ${bikeModel}. If you need anything, just let me know.`
+          : `Hi ${firstName} — this is ${repName} at ${dealerName}. Congrats on your ${bikeModel}! If you need anything, just let me know.`,
         postSaleAccessoryOrEnjoyMessage({ firstName, repName, dealerName, bikeModel, isNewBike }),
         `Hi ${firstName} — ${repName} at ${dealerName}. Happy 1-year anniversary with your ${bikeModel}. If you’re ever thinking about trading in, let me know.`,
         `Hi ${firstName} — ${repName} at ${dealerName}. Just checking in. How are you liking your ${bikeModel}? If you’re ever thinking about trading in, let me know.`
@@ -28060,6 +30599,25 @@ async function processDueFollowUpsUnlocked() {
       }
     };
 
+    // Cadence-quality ENFORCE (flag-gated, default off). One gate covering ALL send paths below: if the
+    // judge verdicts this PROACTIVE touch `suppress` at >= the enforce floor (a low-value/duplicate/
+    // contentless ping), hold it back — skip the send + advance the cadence — so we don't nag. The judge
+    // runs (awaited) + persists its verdict here; when enforce is off this block is inert and the shadow
+    // fire-and-forget below runs unchanged. Suppress-only for the first flip (hold/regenerate stay shadow).
+    if (isCadenceQualityEnforceEnabled()) {
+      const enfChannel: "sms" | "email" = useEmail ? "email" : "sms";
+      const enfMsg = useEmail && emailMessage ? emailMessage : smsMessage;
+      const enfDecision = await runCadenceQualityJudgeShadow(conv, enfMsg, enfChannel);
+      if (enfDecision?.action === "suppress") {
+        console.log("[followup][cadence-quality-enforce] suppressed low-value proactive touch", {
+          convId: conv.id,
+          channel: enfChannel
+        });
+        advanceFollowUpCadence(conv, cfg.timezone);
+        continue;
+      }
+    }
+
     if (!forceAutoSendPostSaleCadence && (systemMode === "suggest" || enforceSalesReviewForCadence)) {
       const draftTo = useEmail ? emailTo! : to;
       const draftMessage = useEmail && emailMessage ? emailMessage : smsMessage;
@@ -28075,6 +30633,11 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       appendOutbound(conv, from ?? "salesperson", draftTo, draftMessage, "draft_ai", undefined, mediaUrls);
+      // Cadence-quality judge (shadow): observe whether this proactive touch should send / fits state /
+      // sounds human / isn't pushy. Fire-and-forget; never blocks or alters the cadence draft. Skipped
+      // when ENFORCE is on — the awaited enforce gate above already judged + persisted this touch.
+      if (!isCadenceQualityEnforceEnabled())
+        void runCadenceQualityJudgeShadow(conv, draftMessage, useEmail ? "email" : "sms");
       maybeAddCallTodoForFollowUp();
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
@@ -28139,6 +30702,7 @@ async function processDueFollowUpsUnlocked() {
         maybeAddCallTodoForFollowUp();
       }
       }
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence email auto-send → CRM log
       advanceFollowUpCadence(conv, cfg.timezone);
       continue;
     }
@@ -28156,6 +30720,7 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       appendOutbound(conv, "salesperson", to, smsMessage, "human", undefined, mediaUrls);
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence SMS fallback auto-send → CRM log
       if (isPostSale) {
         const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
@@ -28187,6 +30752,7 @@ async function processDueFollowUpsUnlocked() {
         ...(mediaUrls && mediaUrls.length ? { mediaUrl: mediaUrls } : {})
       });
       appendOutbound(conv, from, to, smsMessage, "twilio", msg.sid, mediaUrls);
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] cadence SMS auto-send → CRM log
       if (isPostSale) {
         const retired = retireSupersededPostSaleCloseoutDrafts(conv, smsMessage);
         if (retired > 0) {
@@ -28288,6 +30854,7 @@ async function processAppointmentConfirmations() {
           ...triggerMeta
         };
         appendOutbound(conv, from, toNumber, smsMessage, "twilio", msg.sid);
+        queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm auto-send → CRM log
       } catch (e: any) {
         console.log("[appt-confirm] send failed:", e?.message ?? e);
         continue;
@@ -28312,6 +30879,7 @@ async function processAppointmentConfirmations() {
         ...triggerMeta
       };
       appendOutbound(conv, "salesperson", toNumber, smsMessage, "human");
+      queueTlpLogForConversation(conv); // [tlp-autosend-log] appointment-confirm fallback auto-send → CRM log
     }
   }
 }
@@ -34211,7 +36779,66 @@ app.get("/conversations/:id", async (req, res) => {
   });
 });
 
-app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
+function feedbackDownRedraftEnabled(): boolean {
+  return String(process.env.FEEDBACK_DOWN_REDRAFT_ENABLED ?? "1") !== "0";
+}
+
+// Phase 1 of the closed-loop feedback system (2026-06-24): on a thumbs-DOWN of a still-pending AI
+// draft, re-generate the reply with the rep's reason as STEERING and publish it as a fresh pending
+// draft (supersedes the down-rated one). Suggest mode → a human still reviews + Sends. Generation/
+// voice layer only (no routing change); code-level misses are the approve-first parser-first fix
+// path (Phases 2-3). Fail-safe: any miss/error leaves the original draft untouched.
+async function maybeRedraftOnNegativeFeedback(args: {
+  conv: Conversation;
+  ratedMsg: any;
+  reason?: string;
+  note?: string;
+  actor?: { userId?: string; userName?: string };
+}): Promise<{ redrafted: boolean; draft?: string; reason?: string }> {
+  const { conv, ratedMsg } = args;
+  const ratedIsPendingDraft =
+    ratedMsg?.direction === "out" && ratedMsg?.provider === "draft_ai" && ratedMsg?.draftStatus !== "stale";
+  const decision = decideFeedbackRedraftTurn({
+    enabled: feedbackDownRedraftEnabled(),
+    rating: "down",
+    ratedIsPendingDraft: !!ratedIsPendingDraft,
+    reason: args.reason,
+    note: args.note
+  });
+  if (decision.kind !== "redraft") return { redrafted: false, reason: "record_only" };
+  const inbound = String(getLastInboundBody(conv) ?? "").trim();
+  if (!inbound) return { redrafted: false, reason: "no_inbound" };
+  try {
+    const dealerProfile = await getDealerProfileHot();
+    const lead = conv.lead ?? {};
+    const redraft = String(
+      (await generateDraftWithLLM({
+        channel: "sms",
+        leadKey: conv.leadKey,
+        lead,
+        leadSource: (lead as any)?.source ?? null,
+        bucket: (conv as any)?.classification?.bucket ?? null,
+        cta: (conv as any)?.classification?.cta ?? null,
+        inquiry: inbound,
+        history: buildHistory(conv, 10),
+        dealerProfile,
+        steering: decision.steering ?? null
+      })) ?? ""
+    ).trim();
+    if (!redraft) return { redrafted: false, reason: "empty_redraft" };
+    saveOperatorDraft(conv, { body: redraft, channel: "sms", actor: { userName: "Auto-redraft (thumbs-down)" } });
+    recordRouteOutcome("manual", "feedback_down_redraft", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      hadReason: !!args.reason
+    });
+    return { redrafted: true, draft: redraft };
+  } catch {
+    return { redrafted: false, reason: "error" };
+  }
+}
+
+app.post("/conversations/:id/messages/:messageId/feedback", async (req, res) => {
   const conv = getConversation(req.params.id);
   if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
   const user = (req as any).user ?? null;
@@ -34253,8 +36880,24 @@ app.post("/conversations/:id/messages/:messageId/feedback", (req, res) => {
     at: new Date().toISOString()
   });
   if (!msg) return res.status(404).json({ ok: false, error: "message not found" });
+  // Phase 1 closed-loop feedback: a thumbs-DOWN on a still-pending AI draft triggers a steered
+  // re-draft into the same console box (suggest mode — a human still hits Send). Up / sent-message /
+  // disabled all fall through to record-only (decideFeedbackRedraftTurn owns that gate).
+  let redraft: { redrafted: boolean; draft?: string; reason?: string } = { redrafted: false };
+  if (rating === "down") {
+    redraft = await maybeRedraftOnNegativeFeedback({
+      conv,
+      ratedMsg: msg,
+      reason,
+      note,
+      actor: {
+        userId: String(user?.id ?? "").trim() || undefined,
+        userName: String(user?.name ?? user?.email ?? "").trim() || undefined
+      }
+    });
+  }
   saveConversation(conv);
-  return res.json({ ok: true, conversation: conv, message: msg });
+  return res.json({ ok: true, conversation: conv, message: msg, redraft });
 });
 
 app.get("/conversations/:id/messages/:messageId/media/:mediaIndex", async (req, res) => {
@@ -36237,6 +38880,34 @@ app.post("/todos/:convId/:todoId/done", requirePermission("canAccessTodos"), asy
   res.json({ ok: true, todo: task });
 });
 
+// Snooze: push an open task's due time forward. Staff "I'll deal with it later"
+// without losing the task — it drops out of Overdue/Today and resurfaces later.
+app.post("/todos/:convId/:todoId/snooze", requirePermission("canAccessTodos"), (req, res) => {
+  const { convId, todoId } = req.params;
+  const user = (req as any).user ?? null;
+  const convForAccess = getConversation(convId);
+  if (convForAccess && !canUserAccessConversation(user, convForAccess)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  const existingTask = listOpenTodos().find(t => t.id === todoId && t.convId === convId);
+  if (existingTask) {
+    const taskDepartment = inferTodoDepartment(existingTask, convForAccess ?? getConversation(convId));
+    if (!canUserAccessTodoTask(user, existingTask, convForAccess ?? getConversation(convId), taskDepartment)) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+  }
+  const dueAtRaw = String(req.body?.dueAt ?? "").trim();
+  const at = new Date(dueAtRaw);
+  if (!dueAtRaw || Number.isNaN(at.getTime())) {
+    return res.status(400).json({ ok: false, error: "invalid_due_at" });
+  }
+  const task = snoozeTodo(convId, todoId, at.toISOString());
+  if (!task) return res.status(404).json({ ok: false, error: "Todo not found" });
+  const conv = getConversation(convId);
+  if (conv) saveConversation(conv);
+  return res.json({ ok: true, todo: task });
+});
+
 function opsAnomalyDefaultTitle(type: OpsAnomalyType): string {
   switch (type) {
     case "routing":
@@ -36281,8 +38952,10 @@ app.post("/ops/anomalies", requirePermission("canAccessTodos"), async (req, res)
   const createTicket = req.body?.createTicket !== false;
   const allowedTypes: OpsAnomalyType[] = [
     "routing",
-    "task_inbox",
     "cadence",
+    "appointment",
+    "task_inbox",
+    "handoff",
     "inventory",
     "integration",
     "ui",
@@ -38183,12 +40856,14 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
       setFollowUpMode(conv, "paused_indefinite", "attendance_pause_indef");
       return;
     }
-    if (action === "pause_24h" || action === "pause_72h") {
+    if (action === "pause_24h" || action === "pause_72h" || action === "pause_next_business_day") {
       if (!conv.followUpCadence || conv.followUpCadence.status === "stopped") {
         startFollowUpCadence(conv, nowIso, tz);
       }
-      const hours = action === "pause_24h" ? 24 : 72;
-      const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      const until =
+        action === "pause_next_business_day"
+          ? resolveNoShowFollowUpDueAt(nowIso, tz)
+          : new Date(Date.now() + (action === "pause_24h" ? 24 : 72) * 60 * 60 * 1000).toISOString();
       pauseFollowUpCadence(conv, until, "attendance_pause");
       return;
     }
@@ -38213,7 +40888,8 @@ app.post("/questions/:convId/:questionId/done", (req, res) => {
     if (outcome === "sold") return "archive";
     if (outcome === "hold") return "pause_indef";
     if (outcome === "undecided") return "resume";
-    if (outcome === "no_show") return "pause_72h";
+    // Joe-approved 2026-07-02: a no-show re-engages the NEXT BUSINESS DAY (1-2 days), not 72h flat.
+    if (outcome === "no_show") return "pause_next_business_day";
     return undefined;
   };
 
@@ -44668,6 +47344,114 @@ app.post("/contacts/import", requireManager, (req, res) => {
   });
 });
 
+// Resolve the conversation behind a contact so broadcast sends can respect the
+// deal state (sold/hold/not-interested). Same keying buildContactsView uses,
+// plus phone/email fallbacks for imported contacts.
+function resolveConversationForContact(contact: any): any | null {
+  const candidates = [
+    contact?.conversationId,
+    contact?.leadKey,
+    contact?.phone ? normalizePhone(String(contact.phone)) : null,
+    contact?.email
+  ];
+  for (const raw of candidates) {
+    const key = String(raw ?? "").trim();
+    if (!key) continue;
+    const conv = getConversation(key);
+    if (conv) return conv;
+  }
+  return null;
+}
+
+// The one decision both the audience PREVIEW and the actual SEND share, so what
+// the manager sees in "Sending to X of Y" is exactly what the send will do.
+function assessBroadcastRecipient(
+  contact: any,
+  channel: "sms" | "email",
+  opts: { nowMs: number; includeDealSuppressed: boolean }
+): { skip: false } | { skip: true; reason: string; detail?: string } {
+  const contactStatus = String(contact?.status ?? "active").trim().toLowerCase();
+  if (contactStatus === "suppressed") return { skip: true, reason: "suppressed" };
+  if (contactStatus === "archived") return { skip: true, reason: "archived" };
+  if (!opts.includeDealSuppressed) {
+    const deal = evaluatePromotionSuppression(resolveConversationForContact(contact), {
+      nowMs: opts.nowMs
+    });
+    if (deal.suppressed && deal.reason) {
+      return { skip: true, reason: deal.reason, detail: deal.detail };
+    }
+  }
+  const phone = normalizePhone(String(contact?.phone ?? "").trim());
+  const email = String(contact?.email ?? "").trim();
+  if (channel === "sms") {
+    if (!phone || !phone.startsWith("+")) return { skip: true, reason: "missing_phone" };
+    if (isSuppressed(phone)) return { skip: true, reason: "suppressed" };
+  } else {
+    if (!email || !email.includes("@")) return { skip: true, reason: "missing_email" };
+    if (isSuppressed(email)) return { skip: true, reason: "suppressed" };
+  }
+  return { skip: false };
+}
+
+// Audience preview — "you're about to send to X of Y; N excluded and why" —
+// shown to the manager BEFORE a group broadcast goes out. Read-only.
+app.post("/contacts/broadcast/preview", requireManager, (req, res) => {
+  const channel = String(req.body?.channel ?? "sms").trim().toLowerCase() === "email" ? "email" : "sms";
+  const sendToAll = req.body?.sendToAll === true;
+  const listId = String(req.body?.listId ?? "").trim();
+  const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  if (!sendToAll && !listId) return res.status(400).json({ ok: false, error: "Missing listId" });
+
+  let list: any = null;
+  if (!sendToAll) {
+    list = getContactList(listId);
+    if (!list) return res.status(404).json({ ok: false, error: "List not found" });
+  }
+  const contacts = buildContactsView();
+  const recipientIds = sendToAll ? [] : resolveContactIdsForList(list, contacts);
+  const recipients = sendToAll ? contacts : contacts.filter(c => recipientIds.includes(String(c.id)));
+
+  const nowMs = Date.now();
+  const byReason: Record<string, number> = {};
+  const excluded: Array<{ id: string; name: string; reason: string; reasonLabel: string; detail?: string }> = [];
+  let sendable = 0;
+  for (const contact of recipients) {
+    const verdict = assessBroadcastRecipient(contact, channel, { nowMs, includeDealSuppressed });
+    if (!verdict.skip) {
+      sendable += 1;
+      continue;
+    }
+    byReason[verdict.reason] = (byReason[verdict.reason] ?? 0) + 1;
+    if (excluded.length < 200) {
+      const name =
+        String(contact?.name ?? "").trim() ||
+        [contact?.firstName, contact?.lastName].filter(Boolean).join(" ").trim() ||
+        String(contact?.phone ?? contact?.email ?? contact?.id ?? "").trim();
+      excluded.push({
+        id: String(contact.id),
+        name,
+        reason: verdict.reason,
+        reasonLabel:
+          PROMOTION_SUPPRESSION_REASON_LABELS[verdict.reason as PromotionSuppressionReason] ??
+          verdict.reason.replace(/_/g, " "),
+        ...(verdict.detail ? { detail: verdict.detail } : {})
+      });
+    }
+  }
+
+  return res.json({
+    ok: true,
+    channel,
+    listId: sendToAll ? "all" : listId,
+    listName: sendToAll ? "All contacts" : String(list?.name ?? "").trim() || undefined,
+    total: recipients.length,
+    sendable,
+    excludedCount: recipients.length - sendable,
+    byReason,
+    excluded
+  });
+});
+
 app.post("/contacts/broadcast", requireManager, async (req, res) => {
   const channel = String(req.body?.channel ?? "sms").trim().toLowerCase() === "email" ? "email" : "sms";
   const sendToAll = req.body?.sendToAll === true;
@@ -44744,15 +47528,17 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
       .replace(/\n{3,}/g, "\n\n")
       .trim();
 
+  const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  const broadcastNowMs = Date.now();
   for (const contact of recipients) {
     try {
-      const contactStatus = String(contact.status ?? "active").trim().toLowerCase();
-      if (contactStatus === "suppressed") {
-        skipped.push({ id: String(contact.id), reason: "suppressed" });
-        continue;
-      }
-      if (contactStatus === "archived") {
-        skipped.push({ id: String(contact.id), reason: "archived" });
+      // Same decision the audience preview showed — keep send + preview in lockstep.
+      const verdict = assessBroadcastRecipient(contact, channel, {
+        nowMs: broadcastNowMs,
+        includeDealSuppressed
+      });
+      if (verdict.skip) {
+        skipped.push({ id: String(contact.id), reason: verdict.reason });
         continue;
       }
       const phone = normalizePhone(String(contact.phone ?? "").trim());
@@ -45094,6 +47880,63 @@ function buildTlpLogFailureQuestion(leadRef: string, err: any): string {
   const raw = String(err?.message ?? err ?? "").replace(/\s+/g, " ").trim();
   const detail = raw ? ` Last error: ${raw.slice(0, 260)}.` : "";
   return `TLP log failed for leadRef ${leadRef}.${detail} Retry in TLP or update manually.`;
+}
+
+// Reusable TLP (CRM) contact logger — extracted from the manual POST /conversations/:id/send handler so
+// the AUTO-SEND paths (cadence, appointment confirmations, webhook autopilot) log the same way instead of
+// sending blind (the crm_log_stale coverage gap). Idempotent: buildTranscript returns count===0 once the
+// CRM is current for a leadRef, so calling it from multiple paths cannot double-log. Failures persist an
+// internal question (buildTlpLogFailureQuestion) so the crm_update_error detector surfaces them.
+async function logTlpForConversation(
+  conv: any,
+  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+): Promise<void> {
+  const leadRefs = resolveTlpContactLeadRefs(conv, {
+    explicitLeadRef: opts.explicitLeadRef ?? undefined,
+    draftId: opts.draftId ?? undefined,
+    multiRefWindowHours: Number(process.env.TLP_MULTI_REF_WINDOW_HOURS ?? 72)
+  });
+  if (leadRefs.length === 0) {
+    console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
+    return;
+  }
+  for (const leadRef of leadRefs) {
+    const { note, lastAt, count } = buildTranscript(conv, {
+      since: crmLastLoggedAtForLeadRef(conv, leadRef),
+      leadRef
+    });
+    if (count === 0 || !note) {
+      console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
+      continue;
+    }
+    try {
+      console.log("📝 TLP log start", { leadRef, convId: conv.id });
+      await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
+      if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
+      console.log("✅ TLP log success", { leadRef, convId: conv.id });
+    } catch (err: any) {
+      console.warn("⚠️ TLP log failed:", err?.message ?? err);
+      addInternalQuestion(conv.id, conv.leadKey, buildTlpLogFailureQuestion(leadRef, err));
+    }
+  }
+}
+
+// SERIALIZED TLP job queue. tlpLogCustomerContact launches its OWN Chromium per call (unique temp
+// profile, no internal lock), so firing it from the BATCHED cadence/appointment auto-send paths would
+// spawn many concurrent browsers and OOM the (2GB) box. Chain every fire-and-forget TLP log so at most
+// ONE runs at a time. The manual /send path routes through here too, so manual + auto are globally
+// serialized.
+let tlpLogChain: Promise<void> = Promise.resolve();
+function queueTlpLogForConversation(
+  conv: any,
+  opts: { explicitLeadRef?: string | null; draftId?: string | null } = {}
+): void {
+  tlpLogChain = tlpLogChain
+    .catch(() => undefined)
+    .then(() => logTlpForConversation(conv, opts))
+    .catch((err: any) => {
+      console.warn("⚠️ TLP async log failed:", err?.message ?? err);
+    });
 }
 
 app.post("/crm/tlp/log-contact", async (req, res) => {
@@ -46188,46 +49031,12 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
   };
 
-  const maybeLogTlp = async () => {
-    const leadRefs = resolveTlpContactLeadRefs(conv, {
-      explicitLeadRef: req.body?.leadRef ?? req.body?.tlpLeadRef,
-      draftId,
-      multiRefWindowHours: Number(process.env.TLP_MULTI_REF_WINDOW_HOURS ?? 72)
-    });
-    if (leadRefs.length === 0) {
-      console.log("📝 TLP skip: missing leadRef", { convId: conv.id });
-      return;
-    }
-    for (const leadRef of leadRefs) {
-      const { note, lastAt, count } = buildTranscript(conv, {
-        since: crmLastLoggedAtForLeadRef(conv, leadRef),
-        leadRef
-      });
-      if (count === 0 || !note) {
-        console.log("📝 TLP skip: no new messages", { leadRef, convId: conv.id });
-        continue;
-      }
-      try {
-        console.log("📝 TLP env", {
-          TLP_USERNAME: process.env.TLP_USERNAME ? "set" : "missing",
-          TLP_PASSWORD: process.env.TLP_PASSWORD ? "set" : "missing",
-          TLP_BASE_URL: process.env.TLP_BASE_URL ?? "https://tlpcrm.com",
-          TLP_HEADLESS: process.env.TLP_HEADLESS ?? "true"
-        });
-        console.log("📝 TLP log start", { leadRef, convId: conv.id });
-        await tlpLogCustomerContact({ leadRef, phone: conv.lead?.phone ?? conv.leadKey, note });
-        if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
-        console.log("✅ TLP log success", { leadRef, convId: conv.id });
-      } catch (err: any) {
-        console.warn("⚠️ TLP log failed:", err?.message ?? err);
-        const msg = buildTlpLogFailureQuestion(leadRef, err);
-        addInternalQuestion(conv.id, conv.leadKey, msg);
-      }
-    }
-  };
+  // Delegates to the shared, SERIALIZED logger so the manual /send path and the auto-send paths share
+  // one TLP browser queue (never concurrent Chromium). Same behavior as before for this handler.
   const queueTlpLog = () => {
-    void maybeLogTlp().catch((err: any) => {
-      console.warn("⚠️ TLP async log failed:", err?.message ?? err);
+    queueTlpLogForConversation(conv, {
+      explicitLeadRef: req.body?.leadRef ?? req.body?.tlpLeadRef,
+      draftId
     });
   };
   const queueTuningLog = (twilioSid: string | null) => {
@@ -46303,6 +49112,7 @@ app.post("/conversations/:id/send", async (req, res) => {
       if (!fin.usedDraft) {
         appendOutbound(conv, emailFrom, emailTo!, signed, outboundProvider, undefined, undefined, actorForOutbound(emailBody));
       }
+      maybeRecordDraftEditCorrection(conv, fin, signed, "email", draftId);
       applyManualOutboundStateHints(emailBody, { channel: "email" });
       await reconcileManualOutboundState(emailBody, { channel: "email", delivered: true });
       finalizeManualSendDraftState({ clearEmailDraft: true, preserveSmsDrafts: true });
@@ -46413,6 +49223,8 @@ app.post("/conversations/:id/send", async (req, res) => {
     queueTlpLog();
     // Shadow auto-close: did this SMS fulfill an open call/follow-up task? (fire-and-forget)
     void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: smsBody });
+    // Net 2: a staff edit to the AI draft is a labeled correction → judge material-vs-cosmetic (fire-and-forget).
+    maybeRecordDraftEditCorrection(conv, fin, smsBody, "sms", draftId);
 
     return res.json({
       ok: true,
@@ -46430,6 +49242,7 @@ app.post("/conversations/:id/send", async (req, res) => {
     }
     await reconcileManualSmsSendState({ hadOutbound, delivered: false });
     queueTuningLog(null);
+    queueTlpLog();
 
     return res.status(502).json({
       ok: false,
@@ -46439,6 +49252,38 @@ app.post("/conversations/:id/send", async (req, res) => {
       conversation: conv
     });
   }
+});
+
+// Operator-authored DRAFT save (NEVER sends). Powers the customer-reply operator skill: a human
+// (or Claude acting as one) composes a reply for ONE hard case and drops it into the SAME console
+// approval box the LLM pipeline uses. A human still hits Send — this endpoint only stores a pending
+// draft (supersedes any prior one). The actual send is the separate POST /conversations/:id/send.
+app.post("/conversations/:id/draft", async (req, res) => {
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const user = (req as any).user ?? null;
+  const text = String(req.body?.body ?? "").trim();
+  if (!text) return res.status(400).json({ ok: false, error: "Missing body" });
+  const channelRaw = String(req.body?.channel ?? "").trim().toLowerCase();
+  const channel: "sms" | "email" = channelRaw === "email" ? "email" : "sms";
+  const mediaUrls = Array.isArray(req.body?.mediaUrls)
+    ? req.body.mediaUrls.map((u: unknown) => String(u ?? "").trim()).filter((u: string) => /^https?:\/\//i.test(u))
+    : undefined;
+  const actor = {
+    userId: String(user?.id ?? "").trim() || undefined,
+    userName: String(user?.name ?? user?.email ?? "operator").trim() || "operator"
+  };
+  // Email bodies get the same formatting the pipeline applies before storing emailDraft.
+  const body = channel === "email" ? formatEmailBodyForConversation(text, conv) : text;
+  const result = saveOperatorDraft(conv, { body, channel, mediaUrls, actor });
+  saveConversation(conv);
+  recordRouteOutcome("manual", "operator_draft_saved", {
+    convId: conv.id,
+    leadKey: conv.leadKey,
+    channel,
+    by: actor.userName
+  });
+  return res.json({ ok: true, draft: result.draft, channel });
 });
 
 app.post("/conversations/:id/draft/clear", async (req, res) => {
@@ -46546,6 +49391,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (regenAvailabilityMediaContext?.mediaUrls?.length) {
     event.mediaUrls = regenAvailabilityMediaContext.mediaUrls;
   }
+  // Sibling-scope answer (state only, gated on a PENDING ask) — parity with /webhooks/twilio.
+  // Idempotent: once resolved there is no pending ask and this is a no-op.
+  if (event.provider === "twilio") {
+    await applyWatchScopeAnswer(conv, event.body ?? "", "regen");
+  }
   const regenTurnId =
     String(event.providerMessageId ?? "").trim() ||
     `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
@@ -46605,6 +49455,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey
     });
+    // Shadow: when regenerate produces NO draft (true silence), judge whether the turn warranted a
+    // reply. The keptExisting case (draft provided) is not a silence — skip it.
+    if (!draft) {
+      void runNoResponseJudgeShadow(conv, getLastInboundBody(conv) ?? "", "regen");
+    }
     discardPendingDrafts(conv, note);
     saveConversation(conv);
     return res.json({
@@ -46637,7 +49492,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // to clear; there is no draft to clear anyway).
     return res.json({ ok: true, conversation: conv, skipped: true, note: reason, preservedDraft: true });
   };
-  const respondWithSmsRegeneratedDraft = (
+  const respondWithSmsRegeneratedDraft = async (
     text: string,
     mediaUrls?: string[],
     invariantHints?: {
@@ -46648,7 +49503,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       shortAckIntent?: boolean;
     }
   ) => {
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text,
@@ -46665,8 +49520,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     return res.json({ ok: true, conversation: conv, draft: published.draft });
   };
-  const respondWithEmailRegeneratedDraft = (text: string) => {
-    const published = publishCustomerReplyDraft({
+  const respondWithEmailRegeneratedDraft = async (text: string) => {
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "email",
       text,
@@ -47265,7 +50120,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     addTodo(
       conv,
       "call",
-      "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+      regenCustomerAckActionParse?.onSite === true
+          ? "Customer is AT the dealership right now — greet them and let the owner know."
+          : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
       (inbound as any)?.providerMessageId,
       conv.leadOwner
     );
@@ -47277,7 +50134,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       convId: conv.id,
       leadKey: conv.leadKey
     });
-    return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv), undefined, {
+    return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { onSite: regenCustomerAckActionParse?.onSite === true }), undefined, {
       turnSchedulingIntent: true,
       turnAvailabilityIntent: false,
       turnFinanceIntent: false
@@ -47409,7 +50266,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       addTodo(
         conv,
         "call",
-        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        regenCustomerAckActionParse?.onSite === true
+          ? "Customer is AT the dealership right now — greet them and let the owner know."
+          : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         (inbound as any)?.providerMessageId,
         conv.leadOwner
       );
@@ -47422,7 +50281,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey,
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
-      return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv), undefined, {
+      return respondWithSmsRegeneratedDraft(buildImmediateArrivalRequestReply(conv, { onSite: regenCustomerAckActionParse?.onSite === true }), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
         turnFinanceIntent: false
@@ -47442,6 +50301,34 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
     if (action === "confirm_proposed_appointment" && regenCustomerAckActionParse?.shouldBook) {
+      // Regenerate is a DRAFT preview — availability-check only, never a calendar write (book:false).
+      // If the live turn already booked, this reflects "you're all set"; otherwise it drafts an honest
+      // lock-in confirmation or offers alternatives. Same route helper as the live path (in sync).
+      const result = await resolveCustomerAckConfirmBooking({
+        conv,
+        parsed: regenCustomerAckActionParse,
+        rawText: event.body,
+        book: false,
+        sourceMessageId: (inbound as any)?.providerMessageId
+      });
+      if (result) {
+        recordRouteOutcome(
+          "regen",
+          `customer_ack_confirm_${result.booked ? "booked" : result.alternatives.length ? "offered_alts" : "lockin"}`,
+          {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            confidence: regenCustomerAckActionParse?.confidence ?? null,
+            booked: result.booked,
+            alternativeCount: result.alternatives.length
+          }
+        );
+        return respondWithSmsRegeneratedDraft(result.reply, undefined, {
+          turnSchedulingIntent: true,
+          turnAvailabilityIntent: false,
+          turnFinanceIntent: false
+        });
+      }
       setDialogState(conv, "schedule_request");
       recordRouteOutcome("regen", "customer_ack_confirm_proposed_appointment", {
         convId: conv.id,
@@ -47449,6 +50336,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         confidence: regenCustomerAckActionParse?.confidence ?? null,
         shouldBook: regenCustomerAckActionParse?.shouldBook ?? false
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionRequestedPhrase(regenCustomerAckActionParse)
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(buildCustomerAckConfirmationReply(regenCustomerAckActionParse), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
@@ -47457,11 +50355,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
-      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
         conv,
         text: event.body,
         appointmentType
       });
+      if (!windowSlots.length) {
+        // [schedule-offer-bare-time-day-carry] Mirror of the live arm: retry the slot search
+        // from the parser's normalized day+time when the raw inbound is a bare/compact time
+        // ("1230") that yields no weekday clause, so we never degrade to a vague deferral on a
+        // concrete same-day time proposal (+17165701338). Fail-safe: dayless phrase => no slots.
+        const requestedPhrase = customerAckActionRequestedPhrase(regenCustomerAckActionParse);
+        if (requestedPhrase && requestedPhrase !== String(event.body ?? "").trim()) {
+          windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+            conv,
+            text: requestedPhrase,
+            appointmentType
+          });
+        }
+      }
       const windowReply = buildRequestedDaySlotReply(windowSlots);
       if (windowReply) {
         setLastSuggestedSlots(conv, windowSlots);
@@ -47484,6 +50396,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey,
         confidence: regenCustomerAckActionParse?.confidence ?? null
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionSchedulePhrase(regenCustomerAckActionParse)
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(buildCustomerAckAvailableTimesReply(regenCustomerAckActionParse), undefined, {
         turnSchedulingIntent: true,
         turnAvailabilityIntent: false,
@@ -47507,6 +50430,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: checked.needsOwnerFollowUpTask,
+          booked: false,
+          offeredAlternatives: checked.alternatives.length > 0,
+          requestedPhrase: checked.requestedPhrase
+        },
+        event.body,
+        (inbound as any)?.providerMessageId
+      );
       return respondWithSmsRegeneratedDraft(checked.reply, undefined, {
         turnSchedulingIntent: checked.alternatives.length > 0,
         turnAvailabilityIntent: false,
@@ -47741,7 +50675,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
   }
 
-  if (event.provider === "twilio" && hasAccessoryRequestParserHint(event.body ?? "")) {
+  if (
+    event.provider === "twilio" &&
+    (hasAccessoryRequestParserHint(event.body ?? "") ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "")))
+  ) {
     const accessoryRequestParse = await safeLlmParse("regen_accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: event.body ?? "",
@@ -47891,6 +50829,54 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  // Finance-process / logistics handoff (parity with live /webhooks/twilio).
+  {
+    const regenFinanceProcessReply = await resolveFinanceProcessHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenFinanceProcessReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenFinanceProcessReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenFinanceProcessReply);
+    }
+  }
+
+  // Non-motorcycle trade handoff (parity with live /webhooks/twilio).
+  {
+    const regenNonMotoTradeReply = await resolveNonMotorcycleTradeHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenNonMotoTradeReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenNonMotoTradeReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenNonMotoTradeReply);
+    }
+  }
+
+  // Service / parts-install appointment handoff (parity with live /webhooks/twilio).
+  {
+    const regenServiceApptReply = await resolveServiceAppointmentRequestReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenServiceApptReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenServiceApptReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenServiceApptReply);
+    }
+  }
+
   const cadenceRegenContextParserEligible =
     process.env.LLM_ENABLED === "1" &&
     process.env.LLM_CADENCE_REGENERATE_CONTEXT_PARSER_ENABLED !== "0" &&
@@ -47931,7 +50917,19 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
 
   const dealerProfile = await getDealerProfileHot();
-  const regenRequestedDayTime = parseRequestedDayTime(event.body ?? "", regenTz);
+  // [reschedule-bare-time-day-carry] Mirror the live /webhooks/twilio reschedule fix: carry the
+  // day from the agent's last concrete offer for a bare-time accept ("1:00 PM works") so a
+  // reschedule-pending lead is NOT short-circuited into the booking-link reschedule deflection
+  // below — instead it falls through to the day-aware slot search (+17167506588).
+  const regenRequestedDayTime = parseRequestedDayTime(
+    applyInferredScheduleDayToTimeOnlyText(
+      event.body ?? "",
+      String(getLastNonVoiceOutbound(conv)?.body ?? ""),
+      conv.scheduler?.lastSuggestedSlots ?? [],
+      regenTz
+    ),
+    regenTz
+  );
   const regenAppointmentOutcomeRescheduleReply =
     event.provider === "twilio" &&
     channel === "sms" &&
@@ -47955,6 +50953,94 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
     return respondWithSmsRegeneratedDraft(regenAppointmentOutcomeRescheduleReply, undefined, {
       turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25) — regen twin of the live
+  // ADF intake override. A Dealer Lead App survey whose STRUCTURED purchase-timeframe says the
+  // person is explicitly NOT a buyer ("I am not interested in purchasing at this time") must
+  // not be re-pitched on the FIRST touch ("Which bike are you asking about?" / photos+pricing).
+  // Gated to the initial ADF first-touch (the regen target is the ADF submission AND no customer
+  // SMS reply exists yet) so a later genuine sales question still routes normally. Placed before
+  // the sales-oriented ADF branches so it short-circuits them. event_promo keeps its own handling.
+  const regenIsAdfFirstTouchNonBuyer =
+    event.provider === "sendgrid_adf" &&
+    !(Array.isArray(conv.messages) &&
+      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
+      "non_buyer_survey_ack";
+  if (regenIsAdfFirstTouchNonBuyer) {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName = normalizeDisplayCase(conv.lead?.firstName) || (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
+    const reply = buildNonBuyerSurveyAck(firstName, agentName, dealerName);
+    recordRouteOutcome("regen", "non_buyer_survey_ack", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
+  }
+  // Dealer Lead App MARKETING SURVEY lead (Tim Williams, +17163741119, 2026-06-24) — regen twin of
+  // the live buyer-survey override. The survey Q&A lives in the free-text Customer Comments (not the
+  // structured purchase-timeframe field that drives regenIsAdfFirstTouchNonBuyer above), so it fell
+  // through to the generic sales generator, which read "Demo Bikes Ridden: <model>" as a completed
+  // test ride here and fabricated "Thanks again for coming in for the test ride ... Congrats on the
+  // <model>" (held by the context-fidelity gate). Gated to the ADF FIRST touch (no customer SMS reply
+  // yet); event_promo and the explicit non-buyer ack (above) win. The hint pre-filter gates the LLM.
+  const regenIsAdfFirstTouchSurveyEligible =
+    event.provider === "sendgrid_adf" &&
+    !(Array.isArray(conv.messages) &&
+      conv.messages.some((m: any) => m?.direction === "in" && String(m?.provider ?? "").toLowerCase() === "twilio")) &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind !==
+      "non_buyer_survey_ack" &&
+    hasDealerLeadSurveyHint(event.body ?? "");
+  const regenDealerSurveyParse = regenIsAdfFirstTouchSurveyEligible
+    ? await safeLlmParse("regen_dealer_lead_survey_parser", () =>
+        parseDealerLeadSurveyWithLLM({ text: event.body ?? "" })
+      )
+    : null;
+  const regenDealerSurveyDecision = regenIsAdfFirstTouchSurveyEligible
+    ? decideDealerLeadSurveyTurn({
+        isDealerLeadSurvey: regenDealerSurveyParse?.isDealerLeadSurvey ?? false,
+        purchaseIntent: regenDealerSurveyParse?.purchaseIntent ?? "unknown",
+        confidence: regenDealerSurveyParse?.confidence ?? null
+      })
+    : { kind: "none" as const };
+  if (regenDealerSurveyDecision.kind !== "none") {
+    const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
+    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const firstName =
+      normalizeDisplayCase(conv.lead?.firstName) ||
+      (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
+    const reply =
+      regenDealerSurveyDecision.kind === "buyer_survey_ack"
+        ? buildBuyerSurveyAck(firstName, agentName, dealerName, regenDealerSurveyParse?.interestedModel ?? null)
+        : buildNonBuyerSurveyAck(firstName, agentName, dealerName);
+    recordRouteOutcome("regen", regenDealerSurveyDecision.kind, {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    if (channel === "email") {
+      return respondWithEmailRegeneratedDraft(reply);
+    }
+    return respondWithSmsRegeneratedDraft(reply, undefined, {
+      turnSchedulingIntent: false,
       turnAvailabilityIntent: false,
       turnFinanceIntent: false
     });
@@ -48212,7 +51298,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const reply = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
+    const reply = buildRideChallengeSignupReply({
+      firstName,
+      agentName,
+      dealerName,
+      established: hasPriorCustomerFacingOutbound(conv.messages)
+    });
     recordRouteOutcome("regen", "ride_challenge_signup_ack", {
       convId: conv.id,
       leadKey: conv.leadKey
@@ -48353,14 +51444,38 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_no_purchase");
     stopFollowUpCadence(conv, "manual_handoff");
-    return respondRegenerateSkipped("dealer_ride_outcome_pending");
+    // Joe-approved 2026-07-02 (live/regen parity with the sendgridInbound arms): the customer
+    // still gets a thank-you-only draft for the ride — staff keep the outcome + follow-up.
+    {
+      const thankYou = buildDealerLeadAppPostRideReply({
+        conv,
+        dealerName: dealerProfile?.dealerName,
+        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        inventoryStatus: "unknown"
+      });
+      recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(thankYou);
+      }
+      return respondWithSmsRegeneratedDraft(thankYou);
+    }
   }
   if (regenDealerRideEventLead) {
     const dealerRideOutcome: any = conv?.dealerRide?.staffNotify?.outcome ?? null;
     if (!dealerRideOutcome?.status) {
       setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
       stopFollowUpCadence(conv, "manual_handoff");
-      return respondRegenerateSkipped("dealer_ride_outcome_pending");
+      const thankYou = buildDealerLeadAppPostRideReply({
+        conv,
+        dealerName: dealerProfile?.dealerName,
+        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        inventoryStatus: "unknown"
+      });
+      recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(thankYou);
+      }
+      return respondWithSmsRegeneratedDraft(thankYou);
     }
     const reply = buildDealerRideOutcomeCustomerDraft({
       conv,
@@ -48761,6 +51876,30 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
+    // Parity with the live arrival_update arm: a deferred-without-booking reschedule leaves an owner
+    // follow-up task so the requested time isn't silently dropped (+17167506588). Same tentative-window
+    // concrete-day+time extension as the live arm (+17168303999).
+    const regenTentativeConcreteDefer =
+      regenAppointmentTimingIntent === "tentative_time_window" &&
+      tentativeWindowNeedsOwnerFollowUp({
+        hasRequestedDay: !!regenAppointmentTimingParse?.requested?.day,
+        hasRequestedTime: !!regenAppointmentTimingParse?.requested?.timeText
+      });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: !!checked?.needsOwnerFollowUpTask || regenTentativeConcreteDefer,
+        booked: false,
+        offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
+        requestedPhrase:
+          checked?.requestedPhrase ??
+          (regenTentativeConcreteDefer
+            ? appointmentTimingRequestedPhrase(regenAppointmentTimingParse)
+            : "")
+      },
+      event.body,
+      (inbound as any)?.providerMessageId
+    );
     // A tentative window ("maybe Saturday") gets the soft-visit cadence window. (A pure
     // soft-visit COMMITMENT, intent:none, is handled in its own reachable branch below — it
     // never enters this kind-gated block, so it must not be routed here.)
@@ -49114,9 +52253,13 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithSmsRegeneratedDraft(reply);
     }
   }
+  // Parts/accessory inquiry defers the incoming-inventory recital (dark behind PARTS_TURN_PRECEDENCE_ENABLED).
+  // Mirror of the live path (route-parity).
+  const regenPartsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const regenPendingIncomingAcknowledgement =
     event.provider === "twilio" &&
     channel === "sms" &&
+    !regenPartsTurnDefer &&
     !regenParserPricingIntent &&
     !regenParserSchedulingIntent &&
     !regenParserCallbackIntent &&
@@ -49125,7 +52268,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: regenLastOutboundForActionText
+          lastOutboundText: regenLastOutboundForActionText,
+          partsInquiry: regenPartsTurnDefer
         })));
   if (regenPendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -49167,8 +52311,12 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
         })));
   if (regenCustomerPhotoShare) {
-    setDialogState(conv, "inventory_init");
-    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    // Trade-in photos take the trade frame; skip the inventory dialog/agent context (see live path).
+    const regenTradePhotoContext = isTradePhotoShareConversation(conv);
+    if (!regenTradePhotoContext) {
+      setDialogState(conv, "inventory_init");
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    }
     const photoShare = await buildPhotoShareReplyWithVision({
       conv,
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -49184,6 +52332,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       leadKey: conv.leadKey,
       parserAction: regenInboundReplyActionParse?.action ?? null,
       parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      tradeContext: regenTradePhotoContext,
       fallback: !regenParserCustomerPhotoShare
     });
     return respondWithSmsRegeneratedDraft(reply, undefined, {
@@ -49684,6 +52833,26 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     }
     if (regenEffectiveAction === "skip") {
       if (regenNoResponseSmallTalkQuestion) {
+        // Watch opt-out: pause the watch (stop the alerts) on a confident opt-out before composing a
+        // pleasantry. Parser-first + fail-safe (null => existing behavior). Parity with live.
+        const regenWatchOptOutReply = await resolveWatchOptOutReply(conv, regenNoResponseInboundText, "regen");
+        if (regenWatchOptOutReply) {
+          if (channel === "email") return respondWithEmailRegeneratedDraft(regenWatchOptOutReply);
+          return respondWithSmsRegeneratedDraft(regenWatchOptOutReply);
+        }
+        // Rescue a deal/progress status check before composing a pleasantry (parity with live).
+        const regenDealStatusReply = await resolveDealStatusCheckReply(
+          conv,
+          regenNoResponseInboundText,
+          (inbound as any)?.providerMessageId,
+          "regen"
+        );
+        if (regenDealStatusReply) {
+          if (channel === "email") {
+            return respondWithEmailRegeneratedDraft(regenDealStatusReply);
+          }
+          return respondWithSmsRegeneratedDraft(regenDealStatusReply);
+        }
         const regenStyleReply = buildActionableStylePreferenceReply({
           conv,
           inboundText: regenNoResponseInboundText
@@ -49701,6 +52870,22 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             return respondWithEmailRegeneratedDraft(regenStyleReply.reply);
           }
           return respondWithSmsRegeneratedDraft(regenStyleReply.reply);
+        }
+        // Conversation closeout (parity with live): a warm closer gets ONE terminal warm reply (no
+        // pivot/question); a bare echo after we already signed off regenerates to no reply. Parser-
+        // first + fail-safe (null => existing small-talk reply). Scope = immediate exchange only.
+        const regenCloseout = await resolveConversationCloseoutReply(conv, regenNoResponseInboundText, "regen");
+        if (regenCloseout?.kind === "silent") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout_regen");
+          return respondRegenerateSkipped("conversation_closeout_silent");
+        }
+        if (regenCloseout?.kind === "reciprocate") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout_regen");
+          setDialogState(conv, "small_talk");
+          if (channel === "email") {
+            return respondWithEmailRegeneratedDraft(regenCloseout.reply);
+          }
+          return respondWithSmsRegeneratedDraft(regenCloseout.reply);
         }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: regenNoResponseInboundText,
@@ -49873,6 +53058,57 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         return respondWithEmailRegeneratedDraft(reply);
       }
       return respondWithSmsRegeneratedDraft(reply);
+    }
+    // Recommended-unit media follow-up (parity with live): "show me pics/colors/links" of the bikes
+    // we suggested → real listing links from the persisted units, not a punt.
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenEstimateReply = resolveRecommendedUnitsPaymentEstimateReply(conv, "regen");
+      if (regenEstimateReply) {
+        return respondWithSmsRegeneratedDraft(regenEstimateReply, undefined, {
+          turnFinanceIntent: true,
+          financeContextIntent: true
+        });
+      }
+    }
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenMediaReply = await resolveRecommendedUnitsMediaReply(conv, String(event.body ?? ""), "regen");
+      if (regenMediaReply) {
+        return respondWithSmsRegeneratedDraft(
+          regenMediaReply.reply,
+          regenMediaReply.mediaUrls.length ? regenMediaReply.mediaUrls : undefined
+        );
+      }
+    }
+    // Vehicle recommendation (parity with live /webhooks/twilio): suggest real inventory when the
+    // customer asks for options with no model in play, instead of looping "which bike?".
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenRecommendationReply = await resolveVehicleRecommendationReply(
+        conv,
+        String(event.body ?? ""),
+        event.providerMessageId,
+        "regen"
+      );
+      if (regenRecommendationReply) {
+        return respondWithSmsRegeneratedDraft(regenRecommendationReply);
+      }
+    }
+    // Vehicle-choice confidence / open-to-alternatives (parity with live /webhooks/twilio).
+    // Same shared resolver, same fail-toward-silence gate; SMS-only + no explicit routing
+    // override (mirrors the live twilio-only + parserPrecheckBlocksDeterministicShortcut gate).
+    if (channel === "sms" && !regenRoutingIntentOverride) {
+      const regenVehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, String(event.body ?? ""), {
+        concreteParsedActionThisTurn:
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "dealer_location_question") ||
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "inventory_watch_acknowledgement") ||
+          isAcceptedInboundReplyAction(regenInboundReplyActionParse, "explicit_callback_request")
+      });
+      if (regenVehicleChoiceReply) {
+        recordRouteOutcome("regen", "vehicle_choice_open_to_alternatives", {
+          convId: conv.id,
+          leadKey: conv.leadKey
+        });
+        return respondWithSmsRegeneratedDraft(regenVehicleChoiceReply);
+      }
     }
     const lastOutboundForMedia = String(lastOutboundBeforeInbound?.body ?? "");
     const activeBike =
@@ -50724,7 +53960,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         leadKey: conv.leadKey
       });
       return respondWithSmsRegeneratedDraft(
-        buildManualQuoteDetailsReceivedReply(),
+        await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv),
         undefined,
         {
           turnFinanceIntent: true,
@@ -50782,6 +54018,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             item?.condition ?? conv.lead?.vehicle?.condition,
             item?.year ?? conv.lead?.vehicle?.year
           );
+          persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
           const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
           reply =
             buildDownPaymentTermOptionsReply({
@@ -51186,6 +54423,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const result = await safeOrchestrateInbound("regen", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
+    disposition: conv.dialogState?.name ?? null,
     leadSource: conv.lead?.source ?? null,
     bucket: regenClassificationForTurn.bucket,
     cta: regenClassificationForTurn.cta,
@@ -51382,7 +54620,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   await seedInventoryWatchPendingFromReply(conv, event, reply);
 
     if (channel === "email") {
-      const published = publishCustomerReplyDraft({
+      const published = await publishCustomerReplyDraft({
         conv,
         channel: "email",
         text: reply,
@@ -51406,7 +54644,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
     }
 
-    const published = publishCustomerReplyDraft({
+    const published = await publishCustomerReplyDraft({
       conv,
       channel: "sms",
       text: reply,
@@ -51942,6 +55180,18 @@ if (authToken && signature) {
   // Phase 1 shadow: compare the Turn Understanding pass against the
   // deterministic extractors. Fire-and-forget; never blocks the reply.
   shadowCompareTurnUnderstanding(conv, event.body ?? "", buildHistory(conv, 10));
+  // Inbound task auto-close: re-check whether a staff follow-up already fulfilled an open
+  // call/follow-up task and close it — on an explicit closure phrase ("I'm all set") OR, more
+  // broadly, on any customer reply when the conversation has an eligible open task + a prior
+  // dealer answer (the "close by parsing the SMS conversation" path: they asked pricing/
+  // availability, staff answered). Fire-and-forget; the parser-first classifier owns the
+  // verdict, so widening WHEN we look never lowers the bar — a miss leaves the task open.
+  if (
+    taskAutoCloseInboundClosureHint(event.body ?? "") ||
+    hasEligibleAutoCloseInboundContext(conv)
+  ) {
+    void runTaskFulfillmentAutoClose(conv, { channel: "sms", text: event.body ?? "", direction: "in" });
+  }
   const liveManualReconcile = await reconcileStateFromRecentManualOutbound(conv, event.receivedAt);
   if (liveManualReconcile.changed) {
     recordRouteOutcome("live", "manual_outbound_reconciled", {
@@ -51969,6 +55219,82 @@ if (authToken && signature) {
     });
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
     return res.status(200).type("text/xml").send(twiml);
+  }
+  // Staff-driven deal conversations (in_process_deal): the customer's turns are deal logistics a
+  // human answers with off-system facts — no auto-draft; the owner gets a reply-needed task
+  // instead (Joe-approved 2026-07-02; 5/7 staff-corrected drafts on 7/2 were this class).
+  // Regenerate is deliberately NOT gated — staff explicitly asking for a draft is the override.
+  if (
+    event.provider === "twilio" &&
+    conv.followUp?.mode === "manual_handoff" &&
+    conv.followUp?.reason === "in_process_deal"
+  ) {
+    const dealName = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+    addTodo(
+      conv,
+      "other",
+      `Deal in process — ${dealName} replied: "${excerpt}" — needs your answer.`,
+      event.providerMessageId,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    recordRouteOutcome("live", "in_process_deal_staff_todo_no_draft", {
+      convId: conv.id,
+      leadKey: conv.leadKey
+    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+    return res.status(200).type("text/xml").send(twiml);
+  }
+  // Entry detection (parser-first, hint-gated): a deal-logistics turn on a not-yet-protected
+  // conversation transitions it into in_process_deal on the spot — this turn already belongs to
+  // the salesperson, so it gets the owner task instead of a draft.
+  if (
+    event.provider === "twilio" &&
+    conv.followUp?.mode !== "manual_handoff" &&
+    conv.followUp?.mode !== "paused_indefinite" &&
+    !conv.sale?.soldAt &&
+    conv.status !== "closed" &&
+    hasDealProgressParserHintText(event.body)
+  ) {
+    const dealProgressParse = await safeLlmParse("deal_progress_parser", () =>
+      parseDealProgressSignalWithLLM({
+        text: event.body ?? "",
+        history: buildHistory(conv, 8),
+        lead: conv.lead ?? undefined
+      })
+    );
+    const dealDecision = decideInProcessDealTurn({
+      parserAccepted: !!dealProgressParse,
+      dealInProgress: dealProgressParse?.dealInProgress ?? false,
+      confidence: dealProgressParse?.confidence ?? null,
+      followUpMode: conv.followUp?.mode ?? null,
+      saleRecorded: !!conv.sale?.soldAt,
+      conversationClosed: String(conv.status ?? "") === "closed"
+    });
+    if (dealDecision.kind === "enter_in_process_deal") {
+      applyInProcessDealTransition(conv, dealProgressParse?.signal ?? "none");
+      const dealName = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+      const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+      addTodo(
+        conv,
+        "other",
+        `Deal in process (${dealProgressParse?.signal ?? "deal"}) — ${dealName} said: "${excerpt}" — needs your answer.`,
+        event.providerMessageId,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
+  // Sibling-scope answer (state only, gated on a PENDING ask): a confident "open to variants" /
+  // "base only" updates the watch before drafting, and the normal pipeline composes the reply
+  // with the ask + answer in view. Same application in regenerate (route-parity law).
+  if (event.provider === "twilio") {
+    await applyWatchScopeAnswer(conv, event.body ?? "", "live");
   }
   const mediaOnlyAvailabilityContext = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event);
   if (mediaOnlyAvailabilityContext) {
@@ -52058,6 +55384,11 @@ if (authToken && signature) {
       String(options?.providerMessageId ?? "").trim() || undefined,
       mediaUrls
     );
+    // [tlp-autosend-log] A genuine AUTOPILOT agent reply is a customer contact → log to CRM. Gated to
+    // autopilot so suggest-mode forceSend compliance acks (opt-out confirmations) don't spam TLP.
+    if (webhookMode === "autopilot") {
+      queueTlpLogForConversation(conv);
+    }
     saveConversation(conv);
     await flushConversationStore();
     return res.status(200).type("text/xml").send(twilioMessageWebhookResponse(publishedText, mediaUrls));
@@ -52229,6 +55560,24 @@ if (authToken && signature) {
     inboundReplyActionParse,
     "pending_incoming_inventory_acknowledgement"
   );
+  // An ACCEPTED dealer-location question answers IMMEDIATELY (corpus flywheel, 2026-07-03,
+  // +15866252399: "What location is it at?" was stolen by the availability arm thousands of
+  // lines before the late location arm — the same thief family as PR #150). The parser's own
+  // precedence rules (Examples C/G/K: a concrete location ask outranks scheduling status,
+  // watch context, and availability framing) are enforced here at the earliest point the
+  // accepted parse exists. The LATE location arm stays for the non-parser fallback cases.
+  if (event.provider === "twilio" && inboundParserLocationQuestion) {
+    const locDealerProfile = await getDealerProfileHot();
+    const locReply = buildDealerLocationReply(conv, locDealerProfile);
+    recordRouteOutcome("live", "dealer_location_question", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserAction: inboundReplyActionParse?.action ?? null,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      early: true
+    });
+    return publishLiveTwilioReply(locReply);
+  }
   const appointmentCancelOrRescheduleHint =
     event.provider === "twilio" &&
     !isFinanceDocsQuestionText(event.body ?? "") &&
@@ -52355,8 +55704,13 @@ if (authToken && signature) {
       .filter(m => m.direction === "out" && m.body)
       .slice(-1)[0]?.body ?? ""
   );
+  // Parts/accessory inquiries must not be answered with the incoming-inventory recital — defer so the
+  // accessory decision owns the turn (dark behind PARTS_TURN_PRECEDENCE_ENABLED). The signal is a
+  // SPECIFIC parts prefilter; a bare "let me know when it's here" ack never matches.
+  const partsTurnDefer = partsTurnPrecedenceEnabled() && hasPartsInquirySignal(event.body ?? "");
   const pendingIncomingAcknowledgement =
     event.provider === "twilio" &&
+    !partsTurnDefer &&
     !inboundParserLocationQuestion &&
     !inboundParserExplicitCallbackRequest &&
     !inboundParserScheduleStatusUpdate &&
@@ -52365,7 +55719,8 @@ if (authToken && signature) {
         shouldHandlePendingIncomingInventoryTurn({
           conv,
           inboundText: event.body ?? "",
-          lastOutboundText: pendingIncomingLastOutboundText
+          lastOutboundText: pendingIncomingLastOutboundText,
+          partsInquiry: partsTurnDefer
         })));
   if (pendingIncomingAcknowledgement) {
     applyPendingIncomingInventoryState(conv, {
@@ -52404,8 +55759,12 @@ if (authToken && signature) {
           hasInboundMedia: (event.mediaUrls?.length ?? 0) > 0
         })));
   if (customerPhotoShareAccepted) {
-    setDialogState(conv, "inventory_init");
-    setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    // Trade-in photos take the trade frame; skip the inventory dialog/agent context (see resolver path).
+    const liveTradePhotoContext = isTradePhotoShareConversation(conv);
+    if (!liveTradePhotoContext) {
+      setDialogState(conv, "inventory_init");
+      setAgentContext(conv, { text: CUSTOMER_PHOTO_SHARE_AGENT_CONTEXT, mode: "persistent" });
+    }
     const photoShare = await buildPhotoShareReplyWithVision({
       conv,
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -52421,6 +55780,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      tradeContext: liveTradePhotoContext,
       fallback: !inboundParserCustomerPhotoShare
     });
     return publishLiveTwilioReply(
@@ -52783,7 +56143,9 @@ if (authToken && signature) {
       addTodo(
         conv,
         "call",
-        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        customerAckActionParse?.onSite === true
+          ? "Customer is AT the dealership right now — greet them and let the owner know."
+          : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         event.providerMessageId,
         conv.leadOwner
       );
@@ -52791,7 +56153,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-      const reply = buildImmediateArrivalRequestReply(conv);
+      const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
       recordRouteOutcome("live", "human_mode_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -52984,7 +56346,7 @@ if (authToken && signature) {
               : null
         });
         if (draft) {
-          const published = publishCustomerReplyDraft({
+          const published = await publishCustomerReplyDraft({
             conv,
             channel: "sms",
             text: draft,
@@ -53676,7 +57038,18 @@ if (authToken && signature) {
     semanticInboundText,
     customerDispositionParse
   );
-  if (event.provider === "twilio" && followUpDeferralDecision) {
+  // An ACCEPTED parsed action for this turn outranks the deferral read (corpus flywheel,
+  // 2026-07-03, Joshua +16412012540: "Definitely hit me up if one comes in" is the parser's own
+  // inventory_watch_acknowledgement few-shot, but this branch returned first with "take your
+  // time, no rush" and — post-#149 — a 14-day pause on a customer ASKING to be notified). Same
+  // exclusion idiom the other early arms already use.
+  if (
+    event.provider === "twilio" &&
+    followUpDeferralDecision &&
+    !inboundParserInventoryWatchAcknowledgement &&
+    !inboundParserPendingIncomingInventoryAcknowledgement &&
+    !inboundParserLocationQuestion
+  ) {
     await applyCustomerFollowUpDeferral(conv, followUpDeferralDecision);
     const reply = buildCustomerFollowUpDeferralReply(conv);
     recordRouteOutcome("live", "customer_thinking_it_over_cadence_delayed", {
@@ -53692,14 +57065,24 @@ if (authToken && signature) {
     });
   }
 
-  // Deterministic COMPREHENSION reply-router — MIGRATE candidate (AGENTS.md "comprehend,
-  // never regex" + Migrate-vs-Keep). This reads the customer's affordability / ride-
-  // confidence objection with a regex and composes a reply. Fail direction if retired =
-  // a less-precise generic orchestrator reply (fail-SAFE), the same class as the already-
-  // migrated location/callback routers — so this is comprehension debt to move to a typed
-  // parser + replay fixture, NOT a deterministic gate to keep. Not yet migrated (needs
-  // parser coverage); do not delete without a parser replacement.
-  if (isAffordabilityRideConfidenceObjectionText(semanticInboundText)) {
+  // Deterministic detector — KEEP (re-classified 2026-06-22 by the de-tangle fail-direction
+  // test; corrects the earlier "MIGRATE candidate" label, which only looked at this reply site).
+  // At THIS site it reads the affordability / ride-confidence objection and composes a reply
+  // (fail-SAFE in isolation). BUT the SAME detector is also a fail-UNSAFE invariant guard in
+  // shouldSuppressDispositionCloseout (transitionSafety.ts) — there, a false negative lets the
+  // agent prematurely CLOSE a live, engaged lead. A detector that feeds a fail-unsafe
+  // close-suppression guard can't be deleted/parsered away (the disabled-LLM fallback would fail
+  // toward a wrongful close), so it stays deterministic. It is part of the ratchet's KEEP-floor.
+  // The KEEP detector stays (fail-unsafe close-suppression guard elsewhere) — but at THIS reply
+  // site it yields to an ACCEPTED parsed action for the turn (corpus flywheel, 2026-07-03,
+  // +12399612259: "I cant not currently and remind me again what address is this at?" is the
+  // parser's own dealer_location_question few-shot — Example C/G semantics: a concrete question
+  // outranks the objection framing — yet this arm answered the objection and dropped the ask).
+  if (
+    isAffordabilityRideConfidenceObjectionText(semanticInboundText) &&
+    !inboundParserLocationQuestion &&
+    !inboundParserInventoryWatchAcknowledgement
+  ) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
     setFollowUpMode(conv, "active", "affordability_ride_confidence_objection");
@@ -53707,6 +57090,57 @@ if (authToken && signature) {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
+  }
+
+  // Finance-process / logistics handoff: a conditional/timing/sequencing question about the
+  // financing process (insurance timing, down-payment deadlines, order of operations) gets a
+  // finance-manager handoff, not a generic non-answer. Parser-first + fail-safe (null => existing
+  // finance handling). Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const financeProcessReply = await resolveFinanceProcessHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (financeProcessReply) {
+      return publishLiveTwilioReply(financeProcessReply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
+  }
+
+  // Non-motorcycle trade handoff: a customer wanting to trade something other than a
+  // motorcycle (camper, trailer, RV, car, boat...) needs a person to assess it, not a
+  // trade-value draft. Parser-first + fail-safe (null => normal trade handling). Same
+  // resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const nonMotoTradeReply = await resolveNonMotorcycleTradeHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (nonMotoTradeReply) {
+      return publishLiveTwilioReply(nonMotoTradeReply);
+    }
+  }
+
+  // Service / parts-install appointment handoff: a customer wanting to bring the bike in for
+  // service or to install a part/accessory (no service-scheduler integration → intake + "service
+  // will confirm a time", never book a slot). Parser-first + fail-safe (null => normal handling).
+  // Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const serviceApptReply = await resolveServiceAppointmentRequestReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (serviceApptReply) {
+      return publishLiveTwilioReply(serviceApptReply);
+    }
   }
 
   if (event.provider === "twilio" && !semanticShortAck && hasCompositeSalesInquiryParserHint(semanticInboundText)) {
@@ -53739,7 +57173,12 @@ if (authToken && signature) {
     }
   }
 
-  if (event.provider === "twilio" && !semanticShortAck && hasAccessoryRequestParserHint(semanticInboundText)) {
+  if (
+    event.provider === "twilio" &&
+    !semanticShortAck &&
+    (hasAccessoryRequestParserHint(semanticInboundText) ||
+      (partsTurnPrecedenceEnabled() && hasPartsInquirySignal(semanticInboundText)))
+  ) {
     const accessoryRequestParse = await safeLlmParse("accessory_request_parser", () =>
       parseAccessoryRequestWithLLM({
         text: semanticInboundText,
@@ -54476,6 +57915,25 @@ if (authToken && signature) {
       cfg.timezone
     );
     requestedReschedule = bookedWindowAdjustment ?? parseRequestedDayTime(event.body, cfg.timezone);
+    if (!requestedReschedule) {
+      // [reschedule-bare-time-day-carry] Customer replied with only a time ("1:00 PM works")
+      // to the agent's own concrete day+time offer (e.g. "...Friday, July 3. How's 1:00 PM or
+      // 2:30 PM?"). Carry the DAY from that last outbound offer BEFORE the stale-appointment
+      // fallback below, so we never resolve the wrong day from the original booked date
+      // (+17167506588: a no-show reschedule deflected to the booked Saturday's closed slots).
+      // Fail-safe: if no day can be inferred from the offer the text is returned unchanged and
+      // we fall through to the existing behavior.
+      const lastOfferText = String(getLastNonVoiceOutbound(conv)?.body ?? "");
+      const dayCarriedText = applyInferredScheduleDayToTimeOnlyText(
+        event.body,
+        lastOfferText,
+        conv.scheduler?.lastSuggestedSlots ?? [],
+        cfg.timezone
+      );
+      if (dayCarriedText !== String(event.body ?? "").trim()) {
+        requestedReschedule = parseRequestedDayTime(dayCarriedText, cfg.timezone);
+      }
+    }
     if (!requestedReschedule && conv.appointment.whenIso) {
       const token = extractTimeToken(event.body);
       const hasTimeFallbackCue =
@@ -54961,7 +58419,7 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parserIntentOverride: routingParserIntentOverridePrecheck
     });
-    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+    return publishLiveTwilioReply(await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv), {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
@@ -55012,6 +58470,60 @@ if (authToken && signature) {
         turnFinanceIntent: true,
         financeContextIntent: true
       });
+    }
+  }
+  // Recommended-unit media follow-up: after we suggested bikes, the customer asks to SEE them
+  // (pics/colors/links) — answer with the REAL listing links instead of punting (s R Gurajala,
+  // 2026-06-24). Runs before the recommender (this is a follow-up to one); same resolver in regenerate.
+  // Disclaimed payment estimate: a down payment + priced recommended units → rough monthly ranges
+  // (before the finance route's "run numbers" punt). Same resolver in regenerate.
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const estimateReply = resolveRecommendedUnitsPaymentEstimateReply(conv, "live");
+    if (estimateReply) {
+      return publishLiveTwilioReply(estimateReply, { turnFinanceIntent: true, financeContextIntent: true }, { draftOnly: true });
+    }
+  }
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const mediaReply = await resolveRecommendedUnitsMediaReply(conv, inboundText, "live");
+    if (mediaReply) {
+      return publishLiveTwilioReply(mediaReply.reply, undefined, {
+        draftOnly: true,
+        mediaUrls: mediaReply.mediaUrls.length ? mediaReply.mediaUrls : undefined
+      });
+    }
+  }
+  // Vehicle recommendation: the customer asked us to SUGGEST bikes (no model in play) — answer with
+  // real inventory instead of looping "which bike are you looking at?" (s R Gurajala, 2026-06-24).
+  // Runs before the finance/pricing "which bike?" continuation; same resolver runs in regenerate.
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const recommendationReply = await resolveVehicleRecommendationReply(
+      conv,
+      inboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (recommendationReply) {
+      return publishLiveTwilioReply(recommendationReply, undefined, { draftOnly: true });
+    }
+  }
+  // Vehicle-choice confidence / open-to-alternatives. When the customer is lukewarm about a
+  // SPECIFIC bike they referenced, proactively offer a couple of alternatives; when committed,
+  // stay out of the way. Low precedence + tightly gated (parser stance + high confidence +
+  // relevance guard) so it FAILS toward silence and never preempts a more specific intent.
+  // Same resolver runs in /conversations/:id/regenerate (route-parity law).
+  if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
+    const vehicleChoiceReply = await resolveVehicleChoiceAlternativesReply(conv, inboundText, {
+      concreteParsedActionThisTurn:
+        inboundParserLocationQuestion ||
+        inboundParserInventoryWatchAcknowledgement ||
+        inboundParserExplicitCallbackRequest
+    });
+    if (vehicleChoiceReply) {
+      recordRouteOutcome("live", "vehicle_choice_open_to_alternatives", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return publishLiveTwilioReply(vehicleChoiceReply, undefined, { draftOnly: true });
     }
   }
   if (event.provider === "twilio" && !parserPrecheckBlocksDeterministicShortcut) {
@@ -56358,7 +59870,9 @@ if (authToken && signature) {
     addTodo(
       conv,
       "call",
-      "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+      customerAckActionParse?.onSite === true
+          ? "Customer is AT the dealership right now — greet them and let the owner know."
+          : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
       event.providerMessageId,
       conv.leadOwner
     );
@@ -56366,7 +59880,7 @@ if (authToken && signature) {
     setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
     stopFollowUpCadence(conv, "immediate_arrival_request");
     stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-    const reply = buildImmediateArrivalRequestReply(conv);
+    const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
     recordRouteOutcome("live", "customer_ack_immediate_arrival_request_fallback_draft_created", {
       convId: conv.id,
       leadKey: conv.leadKey
@@ -56382,6 +59896,7 @@ if (authToken && signature) {
   const sched = decideSchedulingTurn({
     customerAckActionAccepted,
     customerAckAction: customerAckActionParse?.action,
+    customerAckShouldBook: customerAckActionParse?.shouldBook ?? false,
     appointmentTimingAccepted,
     appointmentTimingIntent,
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
@@ -56391,7 +59906,8 @@ if (authToken && signature) {
   });
   if (
     event.provider === "twilio" &&
-    (sched.kind === "accept_tentative" ||
+    (sched.kind === "confirm_appointment" ||
+      sched.kind === "accept_tentative" ||
       sched.kind === "ask_available_times" ||
       sched.kind === "appointment_status_question" ||
       sched.kind === "arrival_window" ||
@@ -56401,13 +59917,63 @@ if (authToken && signature) {
     // sched.kind being a customer-ack kind implies customerAckActionAccepted, i.e. a
     // non-null parse (the old `?.action ===` outer gate used to narrow this).
     const action = customerAckActionParse!.action;
+    if (sched.kind === "confirm_appointment") {
+      // Customer confirmed a concrete time the agent didn't pre-offer ("Ya 10 will work",
+      // "Around 1pm"). Check the calendar and ACTUALLY book it (live), or offer alternatives —
+      // instead of the old "I'll check that time and follow up" deflection.
+      const result = await resolveCustomerAckConfirmBooking({
+        conv,
+        parsed: customerAckActionParse,
+        rawText: event.body,
+        book: true,
+        sourceMessageId: event.providerMessageId
+      });
+      if (result) {
+        recordRouteOutcome(
+          "live",
+          `customer_ack_confirm_${result.booked ? "auto_booked" : result.alternatives.length ? "offered_alts" : "unavailable"}`,
+          {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            confidence: customerAckActionParse?.confidence ?? null,
+            booked: result.booked,
+            alternativeCount: result.alternatives.length
+          }
+        );
+        return publishLiveTwilioReply(result.reply, { turnSchedulingIntent: true });
+      }
+      // No concrete time / calendar unreachable / booking failed → lock-in ask (no false confirm).
+      setDialogState(conv, "schedule_request");
+      recordRouteOutcome("live", "customer_ack_confirm_lockin_fallback", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: customerAckActionParse?.confidence ?? null
+      });
+      // Couldn't book → "I'll check … and follow up with confirmation" is a deferral → owner task.
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: true,
+          booked: false,
+          offeredAlternatives: false,
+          requestedPhrase: customerAckActionRequestedPhrase(customerAckActionParse)
+        },
+        event.body,
+        event.providerMessageId
+      );
+      return publishLiveTwilioReply(buildCustomerAckConfirmationReply(customerAckActionParse), {
+        turnSchedulingIntent: true
+      });
+    }
     if (action === "immediate_arrival_request") {
       discardPendingDrafts(conv, "immediate_arrival_request");
       delete conv.emailDraft;
       addTodo(
         conv,
         "call",
-        "Customer says they can come in now. Confirm staff availability before telling them to head over.",
+        customerAckActionParse?.onSite === true
+          ? "Customer is AT the dealership right now — greet them and let the owner know."
+          : "Customer says they can come in now. Confirm staff availability before telling them to head over.",
         event.providerMessageId,
         conv.leadOwner
       );
@@ -56415,7 +59981,7 @@ if (authToken && signature) {
       setFollowUpMode(conv, "manual_handoff", "immediate_arrival_request");
       stopFollowUpCadence(conv, "immediate_arrival_request");
       stopRelatedCadences(conv, "immediate_arrival_request", { setMode: "manual_handoff" });
-      const reply = buildImmediateArrivalRequestReply(conv);
+      const reply = buildImmediateArrivalRequestReply(conv, { onSite: customerAckActionParse?.onSite === true });
       recordRouteOutcome("live", "customer_ack_immediate_arrival_request_draft_created", {
         convId: conv.id,
         leadKey: conv.leadKey,
@@ -56449,11 +60015,27 @@ if (authToken && signature) {
     }
     if (action === "ask_for_available_times") {
       const appointmentType = inferAppointmentTypeFromConv(conv);
-      const windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
         conv,
         text: event.body,
         appointmentType
       });
+      if (!windowSlots.length) {
+        // [schedule-offer-bare-time-day-carry] The raw inbound can be a bare/compact time with
+        // no weekday ("1230" after we offered concrete slots) that yields no clause, so the slot
+        // search returns nothing and the turn degrades to a vague "I'll check times and follow
+        // up" while the customer believes they're booked and shows up (+17165701338). Retry the
+        // search from the parser's NORMALIZED day+time, which carries the offered day. Fail-safe:
+        // an empty or dayless phrase still returns no slots and the prior behavior stands.
+        const requestedPhrase = customerAckActionRequestedPhrase(customerAckActionParse);
+        if (requestedPhrase && requestedPhrase !== String(event.body ?? "").trim()) {
+          windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+            conv,
+            text: requestedPhrase,
+            appointmentType
+          });
+        }
+      }
       const windowReply = buildRequestedDaySlotReply(windowSlots);
       if (windowReply) {
         setLastSuggestedSlots(conv, windowSlots);
@@ -56526,6 +60108,17 @@ if (authToken && signature) {
         checkedCalendar: checked.checkedCalendar,
         alternativeCount: checked.alternatives.length
       });
+      addSchedulingDeferralFollowUpTodo(
+        conv,
+        {
+          deferred: checked.needsOwnerFollowUpTask,
+          booked: false,
+          offeredAlternatives: checked.alternatives.length > 0,
+          requestedPhrase: checked.requestedPhrase
+        },
+        event.body,
+        event.providerMessageId
+      );
       return publishLiveTwilioReply(checked.reply, { turnSchedulingIntent: true });
     }
     const reply =
@@ -56547,6 +60140,23 @@ if (authToken && signature) {
       confidence: customerAckActionParse?.confidence ?? null
     });
     setDialogState(conv, "schedule_request");
+    // ask_for_available_times ("I'll check available times … and follow up") and the default arrival
+    // ack ("I'll check that time and follow up") DEFER without booking → leave an owner task so the
+    // request isn't silently dropped. accept_tentative is a lock-in QUESTION, not a deferral (no task).
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: action !== "accept_tentative_appointment",
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase:
+          action === "ask_for_available_times"
+            ? customerAckActionSchedulePhrase(customerAckActionParse)
+            : customerAckActionRequestedPhrase(customerAckActionParse)
+      },
+      event.body,
+      event.providerMessageId
+    );
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (
@@ -56587,6 +60197,29 @@ if (authToken && signature) {
       checkedCalendar: checked?.checkedCalendar ?? false,
       alternativeCount: checked?.alternatives.length ?? 0
     });
+    // After the resolve sweep above (so it isn't immediately closed): if we deferred the requested
+    // time without booking or offering alternatives, leave an owner follow-up task (+17167506588).
+    // A tentative window that named a CONCRETE day+time carries the same silent-drop risk but has no
+    // calendar-check result to flag it — so gate it on the parser's resolved day+time (+17168303999).
+    const tentativeConcreteDefer =
+      appointmentTimingIntent === "tentative_time_window" &&
+      tentativeWindowNeedsOwnerFollowUp({
+        hasRequestedDay: !!appointmentTimingParse?.requested?.day,
+        hasRequestedTime: !!appointmentTimingParse?.requested?.timeText
+      });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: !!checked?.needsOwnerFollowUpTask || tentativeConcreteDefer,
+        booked: false,
+        offeredAlternatives: (checked?.alternatives.length ?? 0) > 0,
+        requestedPhrase:
+          checked?.requestedPhrase ??
+          (tentativeConcreteDefer ? appointmentTimingRequestedPhrase(appointmentTimingParse) : "")
+      },
+      event.body,
+      event.providerMessageId
+    );
     if (appointmentTimingIntent === "tentative_time_window") {
       const cfg = await getSchedulerConfigHot();
       await applySoftVisitCadenceWindow(
@@ -57206,6 +60839,24 @@ if (authToken && signature) {
     }
     if (effectiveNoResponseAction === "skip") {
       if (noResponseSmallTalkQuestion) {
+        // Watch opt-out: pause the watch (stop the alerts) on a confident opt-out before composing a
+        // pleasantry. Parser-first + fail-safe (null => existing behavior). Same resolver in regenerate.
+        const watchOptOutReply = await resolveWatchOptOutReply(conv, noResponseInboundText, "live");
+        if (watchOptOutReply) {
+          return publishLiveTwilioReply(watchOptOutReply);
+        }
+        // Rescue a deal/progress status check ("how are we looking", "any update?") that the
+        // small-talk classifier read as banter, BEFORE composing a pleasantry. Parser-first +
+        // fail-safe (null => existing small-talk behavior). Same resolver runs in regenerate.
+        const dealStatusReply = await resolveDealStatusCheckReply(
+          conv,
+          noResponseInboundText,
+          event.providerMessageId,
+          "live"
+        );
+        if (dealStatusReply) {
+          return publishLiveTwilioReply(dealStatusReply, undefined, { draftOnly: true });
+        }
         const noResponseStyleReply = buildActionableStylePreferenceReply({
           conv,
           inboundText: noResponseInboundText
@@ -57218,6 +60869,24 @@ if (authToken && signature) {
             family: noResponseStyleReply.family
           });
           return publishLiveTwilioReply(noResponseStyleReply.reply);
+        }
+        // Conversation closeout: a warm closer ("have a good weekend!") gets ONE terminal warm
+        // reciprocation (no bike pivot, no question) and then we stop; a bare echo after we already
+        // signed off gets silence. Parser-first + fail-safe (null => existing small-talk reply).
+        // Same resolver runs in regenerate (route parity). Scope = immediate exchange only.
+        const closeout = await resolveConversationCloseoutReply(conv, noResponseInboundText, "live");
+        if (closeout?.kind === "silent") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout");
+          discardPendingDrafts(conv, "conversation_closeout_silent");
+          delete conv.emailDraft;
+          saveConversation(conv);
+          const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+          return res.status(200).type("text/xml").send(twiml);
+        }
+        if (closeout?.kind === "reciprocate") {
+          resetSmallTalkStreakIfNeeded(conv, event.receivedAt, "conversation_closeout");
+          setDialogState(conv, "small_talk");
+          return publishLiveTwilioReply(closeout.reply);
         }
         const chit = await buildNoResponseChitChatReplyWithLLM({
           text: noResponseInboundText,
@@ -57283,6 +60952,9 @@ if (authToken && signature) {
         shouldSkipNoResponse: noResponseContextDecision.shouldSkipNoResponse,
         policyReason: policyNoResponseDecision.reason
       });
+      // Shadow: the live path definitively chose silence on this turn — judge whether it warranted
+      // a reply (the wrongful-silence blind spot the draft judge can't see).
+      void runNoResponseJudgeShadow(conv, noResponseInboundText, "live");
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }
@@ -57407,7 +61079,7 @@ if (authToken && signature) {
     logRouteOutcome("manual_quote_details_received", {
       turnPrimaryIntent: routeExecutionIntent
     });
-    return publishLiveTwilioReply(buildManualQuoteDetailsReceivedReply(), {
+    return publishLiveTwilioReply(await buildManualQuoteDetailsReceivedReplyWithFinanceOffer(conv), {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
@@ -57447,6 +61119,7 @@ if (authToken && signature) {
           item?.condition ?? conv.lead?.vehicle?.condition,
           item?.year ?? conv.lead?.vehicle?.year
         );
+        persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
         const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
         reply =
           buildDownPaymentTermOptionsReply({
@@ -57513,6 +61186,7 @@ if (authToken && signature) {
           item?.condition ?? conv.lead?.vehicle?.condition,
           item?.year ?? conv.lead?.vehicle?.year
         );
+        persistDiscussedUnit(conv, item); // keep its VDP url + photos for a "send me the pics/link?" follow-up
         const taxRate = normalizeTaxRate((await getDealerProfileHot())?.taxRate ?? 8);
         const paymentBand = estimateMonthlyPaymentBandFromPrice({
           price: itemPrice,
@@ -60051,6 +63725,7 @@ if (authToken && signature) {
   const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
     appointment: conv.appointment,
     followUp: conv.followUp,
+    disposition: conv.dialogState?.name ?? null,
     leadSource: conv.lead?.source ?? null,
     bucket: liveClassificationForTurn.bucket,
     cta: liveClassificationForTurn.cta,
@@ -61569,10 +65244,40 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
                 );
               }
             } else {
-              recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
-                convId: conv.id,
-                leadKey: conv.leadKey
-              });
+              // Joe-approved 2026-07-02 (Brian Serena class, +17166021492: "marked called and
+              // left voicemail... there should probably be a follow up for 2nd attempt"): a
+              // voicemail-only outbound call on ANY conversation gets a 2nd-attempt call task
+              // (due next morning, same schedule the finance flow uses) so the lead can't fall
+              // through the cracks. Only the finance-specific cadence restart stays finance-only.
+              const cfg = await getSchedulerConfigHot();
+              const timezone = cfg.timezone || "America/New_York";
+              const existing = listOpenTodos().some(
+                t =>
+                  t.convId === conv.id &&
+                  t.status === "open" &&
+                  (t.taskClass === "followup" || t.reason === "call")
+              );
+              if (!existing) {
+                const schedule = buildDefaultCallbackFallbackSchedule(timezone);
+                addTodo(
+                  conv,
+                  "call",
+                  `Call customer (follow-up) — ${nextContactAttemptLabel(conv)}: left a voicemail, no contact on the last call.`,
+                  recordingSid || bodyCallSid || callbackCallSid || undefined,
+                  undefined,
+                  schedule,
+                  "followup"
+                );
+                recordRouteOutcome("manual", "voicemail_second_attempt_task_created", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey
+                });
+              } else {
+                recordRouteOutcome("manual", "voicemail_call_todo_suppressed_outbound", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey
+                });
+              }
             }
           }
           pauseFollowUpCadence(
@@ -61737,6 +65442,7 @@ const server = app.listen(port, () => {
   console.log("   - GET    /todos");
   console.log("   - POST   /todos");
   console.log("   - POST   /todos/:convId/:todoId/done");
+  console.log("   - POST   /todos/:convId/:todoId/snooze");
   console.log("   - GET    /suppressions");
   console.log("   - POST   /suppressions");
   console.log("   - DELETE /suppressions/:phone");

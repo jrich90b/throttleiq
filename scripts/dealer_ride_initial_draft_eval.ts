@@ -1,3 +1,7 @@
+// POLICY FLIP (Joe-approved 2026-07-02, Angelo Balistrieri +17169123294): a DLA demo-ride ADF now
+// ALWAYS yields one customer thank-you draft (guarded: appointment-outcome wins, confirmed-demo
+// check, already-thanked dedupe) while the outcome + follow-up stay with the salesperson. The
+// assertions below pin the NEW behavior; the old "no customer reply by design" policy is retired.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -24,7 +28,7 @@ const liveDealerRideLeadStart = apiRoute.indexOf("const dealerLeadAppConfirmedDe
 const liveDealerRideLeadBlock =
   liveDealerRideLeadStart >= 0 ? apiRoute.slice(liveDealerRideLeadStart, liveDealerRideLeadStart + 900) : "";
 const noDemoOverrideBlock = apiRoute.includes("dealerLeadAppWithoutConfirmedDemoRide")
-  ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 1200)
+  ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 2000)
   : "";
 const regenDealerRideLeadStart = apiIndex.indexOf("const regenDealerRideEventLead");
 const regenDealerRideLeadBlock =
@@ -47,7 +51,7 @@ const generalDealerRideWaitsForOutcome =
   generalDealerRideBlock.includes('reason: "dealer_ride_outcome_pending"');
 const regenPendingDrafts =
   regenPendingBlock.includes("buildDealerLeadAppPostRideReply") &&
-  regenPendingBlock.includes("respondWithSmsRegeneratedDraft(reply)");
+  regenPendingBlock.includes("respondWithSmsRegeneratedDraft(thankYou)");
 const regenPendingSkips =
   regenPendingBlock.includes('respondRegenerateSkipped("dealer_ride_outcome_pending")') &&
   !regenPendingDrafts;
@@ -87,33 +91,34 @@ const checks: Check[] = [
       !regenDealerRideLeadBlock.includes("/source:\\s*dealer lead app"),
     true
   ),
-  check("no_purchase_dla_initial_path_does_not_publish_customer_draft", noPurchasePublishesDraft, false),
-  check("no_purchase_dla_initial_path_waits_for_outcome", noPurchaseWaitsForOutcome, true),
-  check("general_dla_initial_path_does_not_publish_customer_draft", generalDealerRidePublishesDraft, false),
-  check("general_dla_initial_path_waits_for_outcome", generalDealerRideWaitsForOutcome, true),
-  check("regenerate_pending_dla_path_does_not_publish_customer_draft", regenPendingDrafts, false),
-  check("regenerate_pending_dla_path_skips_until_outcome", regenPendingSkips, true),
+  check("no_purchase_dla_initial_path_publishes_thank_you_draft", noPurchasePublishesDraft, true),
+  check("no_purchase_dla_initial_path_no_longer_withholds_the_thank_you", noPurchaseWaitsForOutcome, false),
+  check("general_dla_initial_path_publishes_thank_you_draft", generalDealerRidePublishesDraft, true),
+  check("general_dla_initial_path_no_longer_withholds_the_thank_you", generalDealerRideWaitsForOutcome, false),
+  check("regenerate_pending_dla_path_publishes_thank_you_draft", regenPendingDrafts, true),
+  check("regenerate_pending_dla_path_no_longer_skips", regenPendingSkips, false),
   check("initial_dla_thank_you_prefers_lead_owner_name", initialBuilderPrefersLeadOwner, true),
   check("regen_dla_thank_you_prefers_lead_owner_name", regenBuilderPrefersLeadOwner, true),
   check(
-    "pending_dla_uses_no_customer_reply_note",
-    apiRoute.includes("dealer_ride_outcome_pending_no_customer_reply"),
+    "pending_dla_notes_the_customer_draft",
+    apiRoute.includes("dealer_ride_outcome_pending_customer_draft") &&
+      !apiRoute.includes("dealer_ride_outcome_pending_no_customer_reply"),
     true
   ),
   check(
-    "regenerate_skips_pending_dla",
+    "regenerate_no_longer_skips_pending_dla",
     apiIndex.includes('respondRegenerateSkipped("dealer_ride_outcome_pending")'),
-    true
-  ),
-  check(
-    "shadow_replay_treats_pending_dla_as_expected_no_response",
-    shadowReplay.includes("Dealer Lead App demo-ride ADF should produce a customer thank-you draft"),
     false
   ),
   check(
-    "shadow_replay_expects_pending_dla_no_customer_reply",
-    shadowReplay.includes("Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"),
+    "shadow_replay_expects_the_thank_you_draft",
+    shadowReplay.includes("Dealer Lead App demo-ride ADF should produce a customer thank-you draft"),
     true
+  ),
+  check(
+    "shadow_replay_dropped_the_no_reply_expectation",
+    shadowReplay.includes("Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"),
+    false
   )
 ];
 

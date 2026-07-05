@@ -321,12 +321,18 @@ function parseFromComment(comment?: string) {
     /\b(value my trade|sell my bike|sell your bike|sell your vehicle|trade options)\b/i.test(clean) ||
     (/\boptions\s*:\s*(?:open|cash|trade)\b/i.test(clean) &&
       /\b(?:model|make|year|mileage|price)\s*:/i.test(clean));
+  // Bare "model year"/"model" are ambiguous outside a confirmed sell/trade context — e.g. an HDFS
+  // credit-application comment uses "Model Year: 2020, Model: Low Rider S" to describe the vehicle
+  // being FINANCED, not a trade-in. Only "manufacturer year"/"model type" are unambiguous enough to
+  // read as trade-vehicle fields without sellVehicleFieldContext (mirrors the existing bare-"year" gate).
   const sellYear = firstStructuredValue(
     clean,
-    sellVehicleFieldContext ? ["manufacturer year", "model year", "year"] : ["manufacturer year", "model year"]
+    sellVehicleFieldContext ? ["manufacturer year", "model year", "year"] : ["manufacturer year"]
   );
   const sellMake = normalizeMake(firstStructuredValue(clean, ["manufacturer", "make"]));
-  const sellModel = normalizeSellVehicleModel(firstStructuredValue(clean, ["model type", "model"]));
+  const sellModel = normalizeSellVehicleModel(
+    firstStructuredValue(clean, sellVehicleFieldContext ? ["model type", "model"] : ["model type"])
+  );
   const sellColor = firstStructuredValue(clean, ["color"]);
   const preferredDateMatch = clean.match(/preferred date:\s*([^\n\r]+)/i);
   const preferredTimeMatch = clean.match(/preferred time:\s*([^\n\r]+)/i);

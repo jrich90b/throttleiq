@@ -4,10 +4,12 @@ import OpenAI from "openai";
 import type { Conversation } from "./conversationStore.js";
 import { dataPath } from "./dataDir.js";
 import { isFabricatedGratitudeLeadIn } from "./leadInGuards.js";
+import { customerVisitConfirmed, phantomVisitGuardEnabled, stripPhantomVisitFraming } from "./visitFraming.js";
 import { recordOpenAIUsage } from "./openaiUsageLogger.js";
 import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
-import { decideDraftModelArm } from "./routeStateReducer.js";
+import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
+import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -19,11 +21,80 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 function draftModelControl(): string {
   return process.env.OPENAI_MODEL || "gpt-5-mini";
 }
-function resolveDraftModelForLead(leadKey?: string | null): { model: string; arm: "control" | "challenger" } {
-  if (process.env.DRAFT_MODEL_AB_ENABLED === "0") return { model: draftModelControl(), arm: "control" };
-  const challenger = process.env.OPENAI_DRAFT_MODEL_CHALLENGER || "gpt-5";
+function resolveDraftModelForLead(
+  leadKey?: string | null
+): { model: string; arm: DraftModelArm; provider: "openai" | "anthropic" } {
+  if (process.env.DRAFT_MODEL_AB_ENABLED === "0") {
+    return { model: draftModelControl(), arm: "control", provider: "openai" };
+  }
   const arm = decideDraftModelArm(String(leadKey ?? ""));
-  return { model: arm === "challenger" ? challenger : draftModelControl(), arm };
+  if (arm === "anthropic") {
+    // Sonnet canary stays DARK until ANTHROPIC_API_KEY is set on the box — fall back to
+    // control so no lead's draft is dropped before the key exists.
+    if (!String(process.env.ANTHROPIC_API_KEY ?? "").trim()) {
+      return { model: draftModelControl(), arm: "control", provider: "openai" };
+    }
+    return {
+      model: process.env.ANTHROPIC_DRAFT_MODEL || "claude-sonnet-4-6",
+      arm: "anthropic",
+      provider: "anthropic"
+    };
+  }
+  const challenger = process.env.OPENAI_DRAFT_MODEL_CHALLENGER || "gpt-5";
+  return { model: arm === "challenger" ? challenger : draftModelControl(), arm, provider: "openai" };
+}
+
+// Customer reply draft via Anthropic (Claude). Raw fetch to keep provider-consistent with
+// claudeAgent.ts and avoid adding the Anthropic SDK to the prod service. Short SMS/email drafts,
+// so no extended thinking (omitted = off) and a bounded max_tokens keep it fast and non-streaming.
+// Throws on any failure; the caller falls back to the OpenAI control model so a draft is never dropped.
+async function generateDraftViaAnthropic(args: {
+  model: string;
+  instructions: string;
+  input: string;
+}): Promise<string> {
+  const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if (!apiKey) throw new Error("anthropic: no API key");
+  const maxTokens = Number(process.env.ANTHROPIC_DRAFT_MAX_TOKENS) || 1024;
+  const tempRaw = Number(process.env.ANTHROPIC_DRAFT_TEMPERATURE);
+  const temperature = Number.isFinite(tempRaw) ? tempRaw : 0.6;
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    Number(process.env.ANTHROPIC_DRAFT_TIMEOUT_MS) || 20000
+  );
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: args.model,
+        max_tokens: maxTokens,
+        temperature,
+        system: args.instructions,
+        messages: [{ role: "user", content: args.input }]
+      }),
+      signal: controller.signal
+    });
+    if (!resp.ok) throw new Error(`anthropic: HTTP ${resp.status}`);
+    const data: any = await resp.json();
+    if (data?.stop_reason === "refusal") throw new Error("anthropic: refusal");
+    const text = Array.isArray(data?.content)
+      ? data.content
+          .filter((b: any) => b?.type === "text")
+          .map((b: any) => String(b?.text ?? ""))
+          .join("")
+          .trim()
+      : "";
+    if (!text) throw new Error("anthropic: empty draft");
+    return text;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type ManualReplyExample = {
@@ -250,6 +321,11 @@ export type DraftContext = {
   inventoryUrl?: string | null;
   inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN" | null;
   inventoryNote?: string | null;
+
+  // STEP 3 self-correcting loop: a correction hint from the draft-quality judge for a RE-draft.
+  // When set, the generator is told what was wrong with the prior attempt so the regeneration
+  // actually patches it (vs. a blind re-roll). Empty/absent on a first-pass draft.
+  steering?: string | null;
 };
 
 function userAskedForEmail(ctx: DraftContext): boolean {
@@ -522,6 +598,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
   hasHumorHint?: boolean;
   allowBikePivotHint?: boolean;
   smallTalkStreakHint?: number | null;
+  // closingHint=true: this turn is a conversational CLOSER/sign-off. Produce a brief warm farewell
+  // and STOP — no bike pivot, no new question, no invitation to act. Forces allowBikePivot off.
+  closingHint?: boolean;
 }): Promise<{ reply: string; confidence?: number; source?: "structured" | "freeform" } | null> {
   const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
@@ -529,7 +608,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return null;
   const hasHumorHint = !!args.hasHumorHint;
-  const allowBikePivotHint = args.allowBikePivotHint !== false;
+  const closingHint = !!args.closingHint;
+  // A closeout reply must never pivot back to bikes — keep it a clean, warm sign-off.
+  const allowBikePivotHint = closingHint ? false : args.allowBikePivotHint !== false;
   const smallTalkStreakHint =
     typeof args.smallTalkStreakHint === "number" && Number.isFinite(args.smallTalkStreakHint)
       ? Math.max(0, Math.trunc(args.smallTalkStreakHint))
@@ -549,6 +630,9 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "Return only JSON that matches the schema.",
     "",
     "Rules:",
+    closingHint
+      ? "- This is a friendly SIGN-OFF: the conversation is wrapping up. Reply with ONE brief, warm farewell that mirrors their note, then stop. Do NOT ask a question. Do NOT invite them to come in, call, book, or look at anything. Do NOT pivot to bikes/pricing/scheduling. Just warmly send them off."
+      : null,
     "- Keep it natural, friendly, and concise (1 sentence, max ~10 words).",
     "- Sound like a real person texting, not a support bot.",
     "- Do NOT claim personal real-world experiences you cannot verify (e.g., don't say you watched a game).",
@@ -563,8 +647,12 @@ export async function generateSmallTalkReplyWithLLM(args: {
     "- Do NOT switch into pricing/availability/scheduling unless asked.",
     "- Avoid stiff fallback phrases like 'I'm checking that now'.",
     "- Do NOT use phrases like 'I'm here if you need anything' or 'Got it.' as the main reply.",
+    `- ${bannedPhraseAvoidanceInstruction()}`,
     "",
     "Good examples:",
+    closingHint ? "- input: \"have a good weekend!\" -> \"You too — enjoy the weekend!\"" : null,
+    closingHint ? "- input: \"you guys are the best, thank you!\" -> \"Appreciate that — ride safe!\"" : null,
+    closingHint ? "- input: \"thanks again, take care\" -> \"Anytime — take care!\"" : null,
     allowBikePivotHint
       ? "- \"Haha, fair one - if you want to jump back into bikes, I can help anytime.\""
       : "- \"Haha, fair one - that one had everyone talking.\"",
@@ -631,10 +719,14 @@ export async function generateSmallTalkReplyWithLLM(args: {
         model,
         instructions: [
           "Write one short, natural SMS reply (max 1 sentence, <= 20 words).",
-          "The customer sent off-topic small talk/chatter.",
-          allowBikePivotHint
-            ? "Acknowledge casually and you may lightly keep the door open for bike help."
-            : "Acknowledge casually without pivoting back to bikes.",
+          closingHint
+            ? "The customer is signing off / wrapping up. Reply with a brief warm farewell that mirrors their note, then stop — no question, no invitation to come in/call/book, no pivot to bikes."
+            : "The customer sent off-topic small talk/chatter.",
+          closingHint
+            ? "Acknowledge warmly and let it rest."
+            : allowBikePivotHint
+              ? "Acknowledge casually and you may lightly keep the door open for bike help."
+              : "Acknowledge casually without pivoting back to bikes.",
           "Do not mention emojis, reactions, or 'thumbs up'.",
           "Do not say you're checking anything.",
           "Do not use: 'I'm here if you need anything.'",
@@ -727,6 +819,7 @@ export async function generateBlendedLeadInWithLLM(args: {
     "- Do not promise follow-up/checking.",
     "- Do not mention pricing/scheduling/availability directly.",
     "- Avoid generic phrases like 'Got it.' or 'I’m here if you need anything.'",
+    `- ${bannedPhraseAvoidanceInstruction()}`,
     "- Do NOT respond to thanks the customer did not give: never say 'You're welcome', 'No problem', 'Anytime', or 'Happy to help' unless the customer actually thanked you. Affection or honesty (e.g. \"I love my bike\", \"to be honest…\") is NOT gratitude.",
     "",
     "Good examples:",
@@ -1275,12 +1368,17 @@ const TASK_FULFILLMENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["task_id", "fulfilled", "confidence", "evidence"],
+        required: ["task_id", "fulfilled", "confidence", "evidence", "engaged_pending_customer", "defer_until"],
         properties: {
           task_id: { type: "string" },
           fulfilled: { type: "boolean" },
           confidence: { type: "number" },
-          evidence: { type: "string" }
+          evidence: { type: "string" },
+          // Dealer engaged the objective but it now awaits the CUSTOMER (responded/quoted a wait, no
+          // booking yet). NOT fulfilled, but the dealer did their part. Drives soft-close + nudge.
+          engaged_pending_customer: { type: "boolean" },
+          // Best-effort ISO date (YYYY-MM-DD) the dealer's reply implies for the next touch, else "".
+          defer_until: { type: "string" }
         }
       }
     }
@@ -1292,6 +1390,10 @@ export type TaskFulfillmentVerdictParse = {
   fulfilled: boolean;
   confidence: number;
   evidence: string;
+  /** Dealer engaged the objective but it awaits the customer (responded/quoted a wait, no booking). */
+  engagedPendingCustomer: boolean;
+  /** Best-effort ISO date the dealer's reply implies for the next touch, or null when none named. */
+  deferUntil: string | null;
 };
 
 /**
@@ -1357,12 +1459,19 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     'dealer/call: "Spoke with the customer, confirmed the trade payoff and next steps." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":true,"confidence":0.92,"evidence":"reached the customer and covered the payoff"}',
     'dealer/call: "Left a voicemail, no answer." | task {"task_id":"t2","objective":"Call customer back about trade payoff."} -> {"task_id":"t2","fulfilled":false,"confidence":0.95,"evidence":"voicemail; customer was not reached"}',
     'dealer/sms: "Hey, just checking in - how is it going?" | task {"task_id":"t3","objective":"Follow up on the customer financing application."} -> {"task_id":"t3","fulfilled":false,"confidence":0.78,"evidence":"generic check-in that does not address the financing application"}',
-    'dealer/sms: "Hey Wayne, that 2013 Street Glide is here, welcome to stop by after 4." | task {"task_id":"t4","type":"call","objective":"Call the customer."} -> {"task_id":"t4","fulfilled":false,"confidence":0.9,"evidence":"a call task is only fulfilled by a reached phone call; an SMS does not fulfill it even though it contacts the customer"}'
+    'dealer/sms: "Hey Wayne, that 2013 Street Glide is here, welcome to stop by after 4." | task {"task_id":"t4","type":"call","objective":"Call the customer about the 2013 Street Glide."} -> {"task_id":"t4","fulfilled":true,"confidence":0.9,"evidence":"the objective (tell the customer about the Street Glide) was carried out by SMS; once the objective is accomplished the channel does not matter"}',
+    'dealer/sms: "Hey Douglas, it is Joe in sales. That freewheeler is listed at $17,995. Let me know if you want to stop in." then customer: "Thanks. I was just curious." | task {"task_id":"t5","type":"call","objective":"Call customer to follow up on the 2016 Freewheeler pricing."} -> {"task_id":"t5","fulfilled":true,"confidence":0.9,"evidence":"the pricing objective was delivered by SMS and the customer acknowledged they are all set; the call task objective is accomplished even though it was handled by text"}',
+    'dealer/sms: "Shoot me a good time and I will call to go over your financing terms with you." | task {"task_id":"t6","type":"call","objective":"Call customer to verbally review and confirm their financing terms."} -> {"task_id":"t6","fulfilled":false,"confidence":0.9,"evidence":"objective inherently needs a live verbal review/confirmation; an SMS proposing to call later does not accomplish it","engaged_pending_customer":false,"defer_until":""}',
+    // engaged-but-pending-customer: the department responded but it now awaits the customer to book/decide.
+    'dealer/sms: "We would be happy to look at it but we are booking into the last week of July right now." then customer: "I understand." | task {"task_id":"t7","type":"service","objective":"Service website text: ...can you take a look at my 2001 Low Rider."} -> {"task_id":"t7","fulfilled":false,"confidence":0.9,"evidence":"offered service and gave a booking timeframe, but nothing is scheduled; awaits the customer to book","engaged_pending_customer":true,"defer_until":"2026-07-27"}',
+    'dealer/sms: "Yes we can order that seat for you, want me to put it on order?" then customer: "let me think about it" | task {"task_id":"t8","type":"parts","objective":"Customer asked about a Saddlemen seat."} -> {"task_id":"t8","fulfilled":false,"confidence":0.85,"evidence":"parts dept offered to order it; customer is deciding, no order placed yet","engaged_pending_customer":true,"defer_until":""}'
   ];
 
+  const today = new Date().toISOString().slice(0, 10);
   const prompt = [
     "You are a precision parser for a motorcycle dealership task tracker.",
     "Return only JSON matching the schema.",
+    `Today is ${today}.`,
     "",
     "Below is the dealer's recent follow-up activity in one conversation (dealer = our team's outbound SMS/email/call; customer = inbound), oldest to newest. For EACH task, decide whether the dealer's follow-up has already ACCOMPLISHED that task's objective ANYWHERE in this activity.",
     "",
@@ -1370,10 +1479,13 @@ export async function classifyTaskFulfillmentWithLLM(args: {
     "- fulfilled=true ONLY when the dealer's follow-up actually carries out the objective.",
     "- PROMISING future action ('will do', 'I'll let you know') does NOT fulfill a notify/contact task — the action has not happened yet.",
     "- 'Notify/let-you-know when X is available/arrives/ready' is fulfilled only when the dealer COMMUNICATES X is now available/arrived/ready. Photos or unrelated updates do not fulfill it.",
-    "- STRICT on call tasks: if a task's type is \"call\", it is fulfilled ONLY by a reached phone CALL (a dealer/call action where the customer was actually reached). An SMS or email does NOT fulfill a call-type task, even if it contacts the customer; a voicemail or no-answer also does not.",
-    "- For non-call follow-up tasks, any channel (SMS, email, or a reached call) can fulfill the objective.",
+    "- A task is fulfilled when the dealer ACCOMPLISHES its OBJECTIVE, regardless of channel. A task's type (\"call\"/follow-up) is the intended METHOD, not a hard requirement: a \"call\" task is fulfilled when its objective is actually carried out — by a reached phone call OR by an SMS/email that delivers the objective and resolves the matter (e.g., the customer's question is answered and they indicate they're satisfied / all set / just curious).",
+    "- EXCEPTION — a \"call\" task still requires a reached phone CALL (an SMS/email does NOT fulfill it, and a voicemail/no-answer never does) when the objective INHERENTLY needs a live conversation: a verbal review/confirmation/authorization, collecting payment over the phone, or the customer is call-only / explicitly asked to be called. Default to this exception only when the objective itself signals a call is required; a plain 'call the customer about X' is fulfilled once X is handled by any channel.",
+    "- For follow-up tasks, any channel (SMS, email, or a reached call) can fulfill the objective.",
     "- A generic check-in that does not address the specific objective is NOT fulfilled.",
     "- Judge only the dealer's actions; customer messages are context. When unsure, fulfilled=false with lower confidence. Bias toward leaving the task open.",
+    "- engaged_pending_customer: set true when fulfilled=false BUT the dealer meaningfully ENGAGED the objective and it now awaits the CUSTOMER to act — e.g. the department responded/offered and quoted a wait time or asked the customer to book/decide, but nothing is scheduled yet. Set false when the dealer hasn't addressed the objective yet, or when fulfilled=true.",
+    "- defer_until: if the dealer's reply names a timeframe for the next step (e.g. 'booking into late July', 'call you next week', 'parts in about 10 days'), return the best-effort ISO date YYYY-MM-DD for it relative to today; otherwise return an empty string.",
     "- confidence is 0..1. Emit exactly one verdict per input task_id.",
     "",
     "Follow-up activity (oldest to newest):",
@@ -1390,7 +1502,10 @@ export async function classifyTaskFulfillmentWithLLM(args: {
       prompt,
       schemaName: "task_fulfillment_parser",
       schema: TASK_FULFILLMENT_PARSER_JSON_SCHEMA,
-      maxOutputTokens: 60 + tasks.length * 60,
+      // Headroom for the full verdict shape per task: a long evidence string + engaged_pending_customer
+      // + defer_until. The prior 60+60 truncated the JSON mid-string ("Unterminated string") once the two
+      // soft-close fields were added — leave generous room so the structured response always closes.
+      maxOutputTokens: 200 + tasks.length * 160,
       debugTag: "llm-task-fulfillment-parser",
       debug
     });
@@ -1409,7 +1524,9 @@ export async function classifyTaskFulfillmentWithLLM(args: {
       taskId: String(v?.task_id ?? "").trim(),
       fulfilled: !!v?.fulfilled,
       confidence: clamp01(v?.confidence),
-      evidence: cleanOptionalString(v?.evidence) ?? ""
+      evidence: cleanOptionalString(v?.evidence) ?? "",
+      engagedPendingCustomer: !!v?.engaged_pending_customer,
+      deferUntil: cleanOptionalString(v?.defer_until) ?? null
     }))
     .filter((v: TaskFulfillmentVerdictParse) => v.taskId);
 }
@@ -1715,6 +1832,9 @@ export type CustomerAckActionParse = {
   };
   reference?: "last_outbound" | "last_suggested" | "last_appointment" | "none";
   normalizedText?: string | null;
+  // Parser-read (never regex): the customer is PHYSICALLY at the dealership right now
+  // ("I'm here", "just pulled in", "who do I ask for?") vs. asking to come over.
+  onSite?: boolean;
   confidence?: number;
 };
 
@@ -1779,6 +1899,24 @@ export type CustomerDispositionParse = {
   confidence?: number;
 };
 
+// Staff-driven deal-progress signal (the Jeff Hollfelder / Gary Busenlehner class, Joe-approved
+// 2026-07-02): the customer's turn is deal LOGISTICS on a purchase being worked by a human —
+// insurance cards, payoff, delivery day, paperwork/title, accessory install status — not a new
+// sales inquiry. Used to transition the conversation into in_process_deal (drafts quiet, owner
+// nudge covers). Read by the LLM parser only — never keyword routing.
+export type DealProgressSignalParse = {
+  dealInProgress: boolean;
+  signal:
+    | "insurance"
+    | "payoff"
+    | "delivery"
+    | "paperwork"
+    | "accessory_install"
+    | "deposit_or_docs"
+    | "none";
+  confidence?: number;
+};
+
 export type FirstTimeRiderGuidanceParse = {
   intent:
     | "first_time_rider"
@@ -1826,6 +1964,251 @@ export type TradeQualifierResponseParse = {
   // Whether the customer's reply to "do you have a trade?" indicates they HAVE a trade.
   hasTrade: "affirmed" | "declined" | "unclear";
   confidence?: number;
+};
+
+export type VehicleChoiceConfidenceParse = {
+  // How settled the customer is on the SPECIFIC bike they referenced this turn:
+  // - "committed": they've decided / want this exact bike ("this is the one", "I'll take the Road Glide").
+  // - "open_to_alternatives": lukewarm/undecided/comparison-shopping ("what else do you have",
+  //   "I'm torn between the X and Y", "not sure this is the one", "is there something cheaper/newer").
+  // - "unclear": off-topic, no stance about the bike choice.
+  stance: "committed" | "open_to_alternatives" | "unclear";
+  confidence?: number;
+};
+
+export type VehicleRecommendationParse = {
+  // The customer is asking US to suggest/pick bikes for them (they did NOT name a specific model
+  // to price): "give me some options", "what do you have", "what would you recommend", "suggest a
+  // few". FALSE when they named/are pricing a specific bike, or the turn is something else.
+  wantsRecommendation: boolean;
+  // Monthly payment target if stated ("around $200/mo") — else null.
+  monthlyBudget: number | null;
+  // "new" | "used" | "both" | null. "both" when they say new and used / either.
+  condition: "new" | "used" | "both" | null;
+  // Style segments to EXCLUDE / require, from the customer's words ("not cruisers" => ["cruiser"]).
+  excludeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  includeSegments: ("cruiser" | "touring" | "sport" | "adventure" | "trike")[];
+  confidence?: number;
+};
+
+export type DealStatusCheckParse = {
+  // "deal_status_check": the customer is asking for the status/progress of THEIR deal,
+  //   order, or bike with us ("how are we looking", "any update?", "where are we at?",
+  //   "what's the latest?", "any word?"). It needs a real status answer, not a pleasantry.
+  // "none": a social pleasantry / off-topic / a different concrete ask.
+  intent: "deal_status_check" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
+export type WatchOptOutParse = {
+  // "watch_opt_out": the customer (who is on an inventory watch) wants OFF the alerts — no longer
+  //   interested in being notified, bought one elsewhere, "take me off the list", "stop the alerts",
+  //   "I'm all set". The side effect is to pause their watch so the watch-fire engine stops notifying.
+  // "none": still interested / a concrete different ask / ambiguous.
+  intent: "watch_opt_out" | "none";
+  confidence?: number;
+};
+
+export type WatchScopeParse = {
+  // The customer was ASKED (buildWatchSiblingScopeAsk) whether their inventory watch should also
+  // cover same-family sibling trims ("Road Glide" watch — also alert on Special/ST/Limited?).
+  // "open_to_variants": yes / open to the variants / engages with the offered variant.
+  // "base_only": no — hold out for the exact base model only.
+  // "unrelated": the message doesn't answer the scope question (a different ask, small talk).
+  intent: "open_to_variants" | "base_only" | "unrelated";
+  // The message ALSO asks something beyond the scope answer ("sure — what color is it?"): the
+  // caller applies the watch side effect but leaves the reply to the normal draft pipeline so
+  // the extra ask isn't dropped.
+  hasOtherAsk?: boolean;
+  confidence?: number;
+};
+
+export type FinanceProcessQuestionParse = {
+  // "finance_process_handoff": a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS
+  //   of financing & its related steps (insurance timing, down-payment deadlines, order of
+  //   operations) that needs the finance/business manager's exact answer.
+  // "none": a finance NUMBER question (payment, rate, amount down) another handler owns, or
+  //   anything non-finance-process.
+  intent: "finance_process_handoff" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
+export type NonMotorcycleTradeParse = {
+  // The customer wants to trade in / put toward the deal an item that is NOT a motorcycle
+  // (a motorcycle camper/trailer, RV, car/truck, boat/jet ski, ATV/UTV, snowmobile, etc.).
+  // A Harley dealer's standard trade flow is for motorcycles; a non-motorcycle has to be
+  // assessed by a person (the dealer may or may not take it), so the agent must HAND OFF
+  // rather than quote a trade value as if it were a bike.
+  // "none": the trade item is a motorcycle (any brand/model), or no non-motorcycle trade this turn.
+  intent: "non_motorcycle_trade" | "none";
+  item?: string; // the non-motorcycle item in the customer's words, when stated
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
+// A Dealer Lead App "Marketing Questions" survey — a structured lead-gen submission whose body
+// is a Q&A about the customer's ownership history, purchase timeframe, the model they're
+// INTERESTED IN, and which demo bikes they say they've ridden ("Demo Bikes Ridden: ..."). It is
+// NOT a direct inventory inquiry. The generic sales generator read the survey's "Demo Bikes
+// Ridden: <model>" field as a completed test ride at THIS dealer and fabricated "Thanks again
+// for coming in for the test ride ... Congrats on the <model>" (Tim Williams, +17163741119,
+// held by the context-fidelity gate 2026-06-24). This parser comprehends the survey so the
+// first touch can be a warm, accurate acknowledgement of stated interest instead.
+export type DealerLeadSurveyParse = {
+  // True when the inbound is a structured dealer marketing/satisfaction survey (Dealer Lead App
+  // "Marketing Questions" or equivalent), as opposed to a direct sales/inventory inquiry.
+  isDealerLeadSurvey: boolean;
+  // The customer's stated purchase intent from the survey's purchase-timeframe answer.
+  //  - "buyer": they expect to buy (any horizon — "now", "0-3 months", "3-12 months", etc.).
+  //  - "non_buyer": they explicitly say they're NOT looking to buy.
+  //  - "unknown": survey present but the purchase-intent answer is missing/ambiguous.
+  purchaseIntent: "buyer" | "non_buyer" | "unknown";
+  // The model the customer said they are INTERESTED IN ("Which model are you interested in?"),
+  // cleaned to a human label (e.g. "Street Glide 3 Limited"). NEVER the model they already own or
+  // a "Demo Bikes Ridden" entry. Null when not clearly stated.
+  interestedModel?: string | null;
+  confidence?: number;
+};
+
+export type ServiceAppointmentRequestParse = {
+  // The customer wants to bring their bike IN for SERVICE or a PARTS/ACCESSORY INSTALL and
+  // schedule an appointment (e.g. "bringing it in for the wedge air cleaner install next month,
+  // can I get an appointment?", "need to drop it off for an oil change", "want to put on a stage 1
+  // kit"). LeadRider has NO integration into the service department's scheduler, so the agent must
+  // NOT quote or book a slot — it hands off (intake + "service will confirm a time"). This is
+  // DISTINCT from: a sales test-ride/visit (none), inventory availability (none), a service-records
+  // history question (none), and dropping off leftover stock parts/keys (that's post_sale_item_pickup).
+  intent: "service_appointment_request" | "none";
+  serviceItem?: string; // the service or part/accessory to install, in the customer's words
+  timingText?: string; // the preferred window if stated ("mid next month", "Saturday morning")
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
+export type ConversationCloseoutParse = {
+  // The customer's turn is a conversational CLOSER / sign-off and the right move is to let the
+  // thread rest — not keep selling or asking another question. Two flavors:
+  // - "reciprocate_and_close": a warm closer that deserves ONE brief, on-voice reply and then
+  //   silence ("have a good weekend!", "you guys are the best!", "thanks again, take care").
+  // - "close_silent": a terminal echo/acknowledgment where replying again would be over-texting —
+  //   especially when WE already signed off and they just echo ("you too!", "sounds good talk
+  //   soon", "👍 thanks"). The agent should not insist on the last word.
+  // - "none": still an active turn (a real question/request, ongoing chatter that isn't winding
+  //   down, or a concrete ask another handler owns). Fail here when unsure — keep replying.
+  kind: "reciprocate_and_close" | "close_silent" | "none";
+  confidence?: number;
+};
+
+export type DraftQualityJudgeParse = {
+  // Per-axis pass flags for a customer-facing draft, judged against the customer's turn.
+  intentOk: boolean; // does the draft actually ADDRESS what the customer asked?
+  toneOk: boolean; // is it ON-VOICE (warm, human, not corporate; per the voice charter)?
+  dispositionOk: boolean; // is it RIGHT FOR THE CUSTOMER'S STATE (empathy if stressed; not
+  //                          pushy if not ready; not undercutting if committed)?
+  safetyOk: boolean; // SAFE — no fabricated facts, no premature booking, no compliance issue?
+  overall: "good" | "needs_regenerate" | "hold";
+  confidence?: number;
+  reason?: string;
+  steering?: string; // hint to steer a re-draft when overall !== "good"
+};
+
+export type ContextFidelityScoreParse = {
+  // "Answering out of context" detector. Judges whether a reply is faithful to THIS turn — i.e.
+  // it addresses what the customer actually said and only asserts entities they referenced (or the
+  // established thread subject), rather than a stale/over-attached/fabricated/wrong-lead-type frame.
+  // Anchor-aware: the scorer is given the persisted model-of-record / lead-type / appointment /
+  // dialogState (more than the generator's window) so it can catch anchor-drop + over-attachment.
+  addressesThisTurn: boolean; // does the reply respond to what the customer said/asked this turn?
+  referencedEntitiesPresent: boolean; // every model/unit the reply asserts was referenced this turn
+  //                                     OR is the established thread subject (over-attachment guard)
+  frame:
+    | "matches"
+    | "over_attached_model" // pitches a model the customer didn't reference this turn
+    | "stale_intent" // answers a prior turn's intent, not this one
+    | "wrong_lead_type" // sales/bike frame on a non-sales lead (e.g. a sweepstakes signup)
+    | "fabricated" // invents a frame the turn doesn't warrant
+    | "dropped_anchor" // forgot the established subject (the model/appt fell out of context)
+    | "other";
+  unsupportedAssertion?: string; // the specific out-of-context claim, if any
+  verdict: "faithful" | "out_of_context";
+  severity: "minor" | "major";
+  confidence?: number;
+  reason?: string;
+  steering?: string; // one instruction to re-draft faithfully (feeds self-heal when enforced)
+};
+
+export type DraftEditJudgeParse = {
+  // Net 2 of the gap-detection loop: when staff EDIT the AI's draft before sending, the diff between
+  // the generated draft and the sent reply is the strongest "the agent was wrong HERE" signal we have —
+  // a labeled correction. This judge decides whether that correction was MATERIAL (the human changed
+  // WHAT the reply communicates: intent / facts / lead-type / context — a comprehension miss the loop
+  // should fix at the parser) vs COSMETIC (only HOW it reads: voice, length, formatting, greeting — not
+  // a comprehension bug). Only material corrections feed the self-healing loop.
+  isMaterial: boolean;
+  category:
+    | "wrong_intent" // the draft answered a different question than the customer asked
+    | "out_of_context" // fluent but about the wrong thing (the context-fidelity failure class)
+    | "wrong_lead_type" // sales/bike frame on a non-sales lead (the Elizabeth class)
+    | "wrong_fact" // a factual/policy/price/availability claim the human corrected
+    | "missing_info" // the draft omitted something the customer needed; the human added it
+    | "voice_tone" // cosmetic: phrasing/voice/personalization only
+    | "length_brevity" // cosmetic: shortened/expanded, same meaning
+    | "formatting" // cosmetic: punctuation/format/greeting only
+    | "other";
+  confidence?: number;
+  reason?: string; // what changed and why it's material (the loop's diagnosis input)
+  steering?: string; // one instruction so a future draft gets it right (the parser-fix input)
+};
+
+export type OpenCriticParse = {
+  // Net 3 of the gap-detection loop: an OPEN-ENDED critic over a recent conversation. Nets 1-2 only
+  // catch what our existing judges/categories recognize (context-fidelity frames, material edits). This
+  // one hunts UNKNOWN-unknowns: it reads the thread with no fixed checklist and decides whether the
+  // agent mishandled THIS lead in ANY way — and NAMES the issue class itself (issueClass is free-form),
+  // which is how a brand-new gap class gets discovered. Conservative by design (most replies are fine);
+  // findings are escalated to Joe (Tier 2, never auto-merged) because the class is unconfirmed.
+  hasIssue: boolean;
+  severity: "minor" | "major";
+  issueClass?: string; // a short, model-proposed label for the problem (the candidate new gap class)
+  reason?: string; // what the agent got wrong about THIS lead/turn
+  evidence?: string; // the specific reply text / quote that's the problem
+  confidence?: number;
+};
+
+export type CadenceQualityJudgeParse = {
+  // Judges a PROACTIVE follow-up cadence message (one WE initiate, no inbound to answer) against
+  // the conversation state. Distinct axes from the inbound draft judge — "does it address the ask"
+  // doesn't apply; "should we even send this" does.
+  sendWorthy: boolean; // is sending this proactive touch the right move at all? (not on a closed/
+  //                      paused deal, not redundant with a recent message, a real reason to reach out)
+  stateFit: boolean; // matches reality — right unit/model/stage, doesn't re-ask something answered,
+  //                    doesn't reference a sold/held/changed unit
+  toneOk: boolean; // sounds like a real American H-D salesperson texting a buyer — NEVER a bot;
+  //                  no corporate/AI tells (banned phrases), no nagging
+  dispositionOk: boolean; // not pushy given the customer's disposition / where they are in the funnel
+  overall: "good" | "needs_regenerate" | "suppress" | "hold";
+  // "suppress" = don't send this proactive touch at all (the message itself is the problem — wrong
+  //   moment / nothing worth saying), as opposed to "needs_regenerate" (send, but reword).
+  confidence?: number;
+  reason?: string;
+  steering?: string; // hint to steer a re-draft when overall === "needs_regenerate"
+};
+
+export type ShouldRespondJudgeParse = {
+  // Given the customer's turn the agent chose to STAY SILENT on, did it actually warrant a reply?
+  // true = a real ask/need was dropped (a wrongful silence). false = silence is appropriate.
+  shouldRespond: boolean;
+  // Finer category so social-closer opportunities surface separately in the shadow data:
+  // - "answer_needed": a real question/request/need was dropped (=> shouldRespond true).
+  // - "social_reciprocation": a warm brief reply would be on-brand but is OPTIONAL ("have a good
+  //   weekend!" -> "you too!"; a heartfelt thank-you) — shouldRespond stays false (we don't force
+  //   it), but it's surfaced so staff can decide whether the agent should warmly reciprocate.
+  // - "no_reply": truly nothing needed (opt-out/STOP, pure ack, closeout "no need", deferral).
+  category: "answer_needed" | "social_reciprocation" | "no_reply";
+  confidence?: number;
+  reason?: string;
 };
 
 export type ResponseControlParse = {
@@ -2291,6 +2674,19 @@ export type ConversationStateParse = {
   confidence?: number;
 };
 
+// ADF intake department classifier (2026-06-19, Kelly Gantzer +17169094022 "small womens black
+// leather vest" via the agent-watch sweep). On an initial web (ADF) lead the Inquiry field IS the
+// customer's stated request — naming an apparel/parts/service item there is a department request even
+// with no action verb, so the SMS-tuned action-signal gates (which correctly suppress incidental
+// mentions mid-thread) wrongly drop it and the lead falls through to inventory_interest (bogus
+// "not in stock" reply + inventory watch on the "Full Line" placeholder vehicle). This focused parser
+// reads the terse Inquiry (+ the often-placeholder Vehicle field) and decides the department.
+export type AdfDepartmentInterestParse = {
+  department: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none";
+  item: string | null;
+  confidence: number;
+};
+
 function safeParseJson(text: string): any | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -2428,6 +2824,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
     "requested",
     "reference",
     "normalized_text",
+    "on_site",
     "confidence"
   ],
   properties: {
@@ -2465,6 +2862,7 @@ const CUSTOMER_ACK_ACTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
       enum: ["last_outbound", "last_suggested", "last_appointment", "none"]
     },
     normalized_text: { type: "string" },
+    on_site: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -2820,6 +3218,258 @@ const TRADE_QUALIFIER_RESPONSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   properties: {
     has_trade: { type: "string", enum: ["affirmed", "declined", "unclear"] },
     confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["stance", "confidence"],
+  properties: {
+    stance: { type: "string", enum: ["committed", "open_to_alternatives", "unclear"] },
+    confidence: { type: "number" }
+  }
+};
+
+const VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "wants_recommendation",
+    "monthly_budget",
+    "condition",
+    "exclude_segments",
+    "include_segments",
+    "confidence"
+  ],
+  properties: {
+    wants_recommendation: { type: "boolean" },
+    monthly_budget: { type: ["number", "null"] },
+    condition: { type: ["string", "null"], enum: ["new", "used", "both", null] },
+    exclude_segments: {
+      type: "array",
+      items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
+    },
+    include_segments: {
+      type: "array",
+      items: { type: "string", enum: ["cruiser", "touring", "sport", "adventure", "trike"] }
+    },
+    confidence: { type: "number" }
+  }
+};
+
+const DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["deal_status_check", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const WATCH_OPT_OUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["watch_opt_out", "none"] },
+    confidence: { type: "number" }
+  }
+};
+
+const WATCH_SCOPE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "has_other_ask", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["open_to_variants", "base_only", "unrelated"] },
+    has_other_ask: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["finance_process_handoff", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "item", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["non_motorcycle_trade", "none"] },
+    item: { type: ["string", "null"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const DEALER_LEAD_SURVEY_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_dealer_lead_survey", "purchase_intent", "interested_model", "confidence"],
+  properties: {
+    is_dealer_lead_survey: { type: "boolean" },
+    purchase_intent: { type: "string", enum: ["buyer", "non_buyer", "unknown"] },
+    interested_model: { type: ["string", "null"] },
+    confidence: { type: "number" }
+  }
+};
+
+const SERVICE_APPOINTMENT_REQUEST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "service_item", "timing_text", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["service_appointment_request", "none"] },
+    service_item: { type: ["string", "null"] },
+    timing_text: { type: ["string", "null"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const CONVERSATION_CLOSEOUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "confidence"],
+  properties: {
+    kind: { type: "string", enum: ["reciprocate_and_close", "close_silent", "none"] },
+    confidence: { type: "number" }
+  }
+};
+
+const ADF_DEPARTMENT_INTEREST_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["department", "item", "confidence"],
+  properties: {
+    department: { type: "string", enum: ["apparel", "parts", "service", "vehicle", "riding_academy", "none"] },
+    item: { type: ["string", "null"] },
+    confidence: { type: "number" }
+  }
+};
+
+const SHOULD_RESPOND_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["should_respond", "category", "confidence", "reason"],
+  properties: {
+    should_respond: { type: "boolean" },
+    category: { type: "string", enum: ["answer_needed", "social_reciprocation", "no_reply"] },
+    confidence: { type: "number" },
+    reason: { type: "string" }
+  }
+};
+
+const CADENCE_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["send_worthy", "state_fit", "tone_ok", "disposition_ok", "overall", "confidence", "reason", "steering"],
+  properties: {
+    send_worthy: { type: "boolean" },
+    state_fit: { type: "boolean" },
+    tone_ok: { type: "boolean" },
+    disposition_ok: { type: "boolean" },
+    overall: { type: "string", enum: ["good", "needs_regenerate", "suppress", "hold"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
+  }
+};
+
+const CONTEXT_FIDELITY_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "addresses_this_turn",
+    "referenced_entities_present",
+    "frame",
+    "unsupported_assertion",
+    "verdict",
+    "severity",
+    "confidence",
+    "reason",
+    "steering"
+  ],
+  properties: {
+    addresses_this_turn: { type: "boolean" },
+    referenced_entities_present: { type: "boolean" },
+    frame: {
+      type: "string",
+      enum: ["matches", "over_attached_model", "stale_intent", "wrong_lead_type", "fabricated", "dropped_anchor", "other"]
+    },
+    unsupported_assertion: { type: "string" },
+    verdict: { type: "string", enum: ["faithful", "out_of_context"] },
+    severity: { type: "string", enum: ["minor", "major"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
+  }
+};
+
+const DRAFT_EDIT_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["is_material", "category", "confidence", "reason", "steering"],
+  properties: {
+    is_material: { type: "boolean" },
+    category: {
+      type: "string",
+      enum: [
+        "wrong_intent",
+        "out_of_context",
+        "wrong_lead_type",
+        "wrong_fact",
+        "missing_info",
+        "voice_tone",
+        "length_brevity",
+        "formatting",
+        "other"
+      ]
+    },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
+  }
+};
+
+const OPEN_CRITIC_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["has_issue", "severity", "issue_class", "reason", "evidence", "confidence"],
+  properties: {
+    has_issue: { type: "boolean" },
+    severity: { type: "string", enum: ["minor", "major"] },
+    issue_class: { type: "string" }, // free-form: the model NAMES the gap class (unknown-unknowns)
+    reason: { type: "string" },
+    evidence: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+const DRAFT_QUALITY_JUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent_ok", "tone_ok", "disposition_ok", "safety_ok", "overall", "confidence", "reason", "steering"],
+  properties: {
+    intent_ok: { type: "boolean" },
+    tone_ok: { type: "boolean" },
+    disposition_ok: { type: "boolean" },
+    safety_ok: { type: "boolean" },
+    overall: { type: "string", enum: ["good", "needs_regenerate", "hold"] },
+    confidence: { type: "number" },
+    reason: { type: "string" },
+    steering: { type: "string" }
   }
 };
 
@@ -3534,6 +4184,73 @@ async function requestStructuredJson(args: {
   return null;
 }
 
+// Anthropic (Claude) structured-output sibling of requestStructuredJson — used for CROSS-MODEL judging
+// (Net 3's open critic). A model is systematically blind to errors rooted in its own understanding, so a
+// judge from a DIFFERENT lineage than the generator (OpenAI) catches the failure modes OpenAI misses.
+// Uses Claude tool-use (a forced tool call whose input_schema = our JSON schema) for guaranteed structured
+// JSON. Raw fetch (mirrors claudeAgent.ts) — no SDK dependency. Returns the parsed object or null.
+async function requestStructuredJsonAnthropic(args: {
+  model: string;
+  prompt: string;
+  schemaName: string;
+  schema: { [key: string]: unknown };
+  maxOutputTokens?: number;
+  debugTag?: string;
+  debug?: boolean;
+}): Promise<any | null> {
+  const apiKey = String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  if (!apiKey) return null;
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: args.model,
+        max_tokens: args.maxOutputTokens ?? 400,
+        temperature: 0,
+        tool_choice: { type: "tool", name: args.schemaName },
+        tools: [
+          {
+            name: args.schemaName,
+            description: "Return the structured result for this judgment.",
+            input_schema: args.schema
+          }
+        ],
+        messages: [{ role: "user", content: args.prompt }]
+      })
+    });
+    const data: any = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      if (args.debug) {
+        console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request failed`, {
+          model: args.model,
+          status: resp.status,
+          error: String(data?.error?.message ?? data?.message ?? "")
+        });
+      }
+      return null;
+    }
+    const block = Array.isArray(data?.content)
+      ? data.content.find((b: any) => b?.type === "tool_use" && b?.name === args.schemaName)
+      : null;
+    const input = block?.input;
+    if (input && typeof input === "object") return input;
+    if (args.debug) {
+      console.warn(`[${args.debugTag ?? "llm-json-anthropic"}] no tool_use block`, { model: args.model });
+    }
+  } catch (error) {
+    if (args.debug) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[${args.debugTag ?? "llm-json-anthropic"}] request threw`, { model: args.model, error: message });
+    }
+  }
+  return null;
+}
+
 export async function parseBookingIntentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -3972,6 +4689,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: tomorrow around 11/12 would work best for me" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"tomorrow","time_text":"around 11/12","time_window":"range"},"reference":"none","normalized_text":"tomorrow around 11/12","confidence":0.94}',
     'input: "Customer: Monday, 15 June around 10am" history: "out: I can line up the test ride. What day and time works best?" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"june 15","time_text":"around 10am","time_window":"exact"},"reference":"none","normalized_text":"monday june 15 around 10:00 AM","confidence":0.95}',
     'input: "Customer: Afternoon would be great" history: "out: I can have our sales team meet you Saturday. Do mornings or afternoons work better for you?" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"afternoon","time_window":"range"},"reference":"last_outbound","normalized_text":"saturday afternoon","confidence":0.95}',
+    'input: "Customer: Can I come at 12 1230" history: "out: I have Fri 3:00 PM, Fri 5:00 PM, or Sat 11:30 AM — do any of those work?" output: {"action":"ask_for_available_times","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"friday","time_text":"12:30","time_window":"exact"},"reference":"last_outbound","normalized_text":"friday 12:30","confidence":0.9}',
     'input: "Customer: Hey is my appointment today Dalton Magill ?" appointment_status: "confirmed" output: {"action":"appointment_status_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"customer asks whether appointment is today","confidence":0.96}',
     'input: "Customer: Are we still on for today?" appointment_status: "confirmed" output: {"action":"appointment_status_question","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"","time_window":"unknown"},"reference":"last_appointment","normalized_text":"customer asks whether existing appointment is still on today","confidence":0.95}',
     'input: "Customer: Thursday looks like the next nice day, let me find a ride and I’ll give you a time frame" history: "out: What day/time works for you to come in and pick it up?" output: {"action":"customer_will_provide_time","explicit_action":true,"should_reply":false,"should_book":false,"requested":{"day":"thursday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"thursday, customer will give time frame","confidence":0.96}',
@@ -3980,8 +4698,9 @@ export async function parseCustomerAckActionWithLLM(args: {
     'input: "Customer: be there at nine am" history: "out: ok I am around tomorrow or Friday just give me a heads up" output: {"action":"purchase_delivery_update","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"9:00 AM","time_window":"exact"},"reference":"last_outbound","normalized_text":"be there at 9:00 AM","confidence":0.96}',
     'input: "Customer: On my way doing my best to be there by 530" output: {"action":"provide_arrival_window","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"","time_text":"by 5:30","time_window":"range"},"reference":"none","normalized_text":"on my way by 5:30","confidence":0.95}',
     'input: "Customer: Ok I will be there for the taste of country pre party on Saturday 👍" output: {"action":"none","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"committing to a saturday event visit","confidence":0.9}',
-    'input: "Customer: I can come now" history: "out: When would you like to come in and finalize?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"now","time_window":"unknown"},"reference":"none","normalized_text":"today now","confidence":0.96}',
-    'input: "Customer: can I come right now?" history: "out: What time works best to stop in?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"right now","time_window":"unknown"},"reference":"none","normalized_text":"today right now","confidence":0.96}',
+    'input: "Customer: I can come now" history: "out: When would you like to come in and finalize?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"now","time_window":"unknown"},"reference":"none","normalized_text":"today now","on_site":false,"confidence":0.96}',
+    'input: "Customer: can I come right now?" history: "out: What time works best to stop in?" output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"right now","time_window":"unknown"},"reference":"none","normalized_text":"today right now","on_site":false,"confidence":0.96}',
+    'input: "Customer: Hey I\'m here who do I ask for?" history: "out: Come by whenever works for you." output: {"action":"immediate_arrival_request","explicit_action":true,"should_reply":true,"should_book":false,"requested":{"day":"today","time_text":"now","time_window":"unknown"},"reference":"none","normalized_text":"customer is at the dealership now and asks who to ask for","on_site":true,"confidence":0.97}',
     'input: "Customer: Talk soon!" history: "out: You’re welcome — happy to help, talk soon!" output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.97}',
     'input: "Customer: Cool" history: "out: Sounds good — thanks for the update." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
     'input: "Customer: Yes sir" history: "out: I’ll keep you posted." output: {"action":"no_response_needed","explicit_action":false,"should_reply":false,"should_book":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.96}',
@@ -4005,7 +4724,8 @@ export async function parseCustomerAckActionWithLLM(args: {
     "- appointment_status_question: customer asks whether an existing appointment is today, still on, confirmed, what time it is, or who it is with.",
     "- customer_will_provide_time: customer says they need to figure out timing, find a ride, or will let the dealer know a timeframe later. Do not ask for the time again.",
     "- provide_arrival_window: customer says they are on the way, leaving, driving, or gives a casual ETA.",
-    "- immediate_arrival_request: customer says they can come now/right now/immediately or asks if they can head over now. Do not treat this as a booked or confirmed appointment.",
+    "- immediate_arrival_request: customer says they can come now/right now/immediately, asks if they can head over now, OR says they are ALREADY here/at the shop (\"I'm here\", \"just pulled in\", \"who do I ask for?\"). Do not treat this as a booked or confirmed appointment.",
+    "- on_site: true ONLY when the customer indicates they are physically AT the dealership already; false when they are asking to come over.",
     "- purchase_delivery_update: customer gives arrival/pickup timing in an active purchase/delivery/docs context; do not treat as a trade appraisal or new appointment slot offer.",
     "- no_response_needed: short acknowledgement/signoff with no question, no requested action, and no appointment confirmation.",
     "- neutral_ack: acknowledgement that may deserve a brief response but does not book or change state.",
@@ -4099,6 +4819,7 @@ export async function parseCustomerAckActionWithLLM(args: {
     requested: { day, timeText, timeWindow },
     reference,
     normalizedText: cleanOptionalString(parsed.normalized_text) ?? null,
+    onSite: !!parsed.on_site,
     confidence
   };
 }
@@ -5379,6 +6100,124 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
   };
 }
 
+const DEAL_PROGRESS_SIGNAL_PARSER_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    deal_in_progress: { type: "boolean" },
+    signal: {
+      type: "string",
+      enum: ["insurance", "payoff", "delivery", "paperwork", "accessory_install", "deposit_or_docs", "none"]
+    },
+    confidence: { type: "number" }
+  },
+  required: ["deal_in_progress", "signal", "confidence"]
+} as const;
+
+export async function parseDealProgressSignalWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<DealProgressSignalParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEAL_PROGRESS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEAL_PROGRESS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEAL_PROGRESS_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEAL_PROGRESS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const examples = [
+    `EXAMPLE A (production replay: insurance + delivery on a bought bike)
+inbound: "Just reached out to Allstate. They will email you the insurance cards. I would like to plan for Saturday morning delivery if that's ok. Thanks again"
+output: {"deal_in_progress":true,"signal":"insurance","confidence":0.97}`,
+    `EXAMPLE B (production replay: payoff + how to proceed)
+inbound: "Good morning Scott. The bike is finally paid off. Curious how we want to proceed? Saturday looks like no rain as of now."
+output: {"deal_in_progress":true,"signal":"payoff","confidence":0.95}`,
+    `EXAMPLE C (production replay: accessory install status on a purchased unit)
+history has: "out: Still waiting on the custom stitch seat, passenger pegs and mounts"
+inbound: "Can you get it ready for tomorrow"
+output: {"deal_in_progress":true,"signal":"accessory_install","confidence":0.9}`,
+    `EXAMPLE D (pickup logistics)
+inbound: "We can remove the highway pegs if needed. I will bring the trailer for pickup Thursday."
+output: {"deal_in_progress":true,"signal":"delivery","confidence":0.93}`,
+    `EXAMPLE E (pre-deal availability question — NOT deal progress)
+inbound: "Is the Low Rider ST still available?"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.96}`,
+    `EXAMPLE F (pricing inquiry — NOT deal progress)
+inbound: "Can you get me numbers on the orange ST with 2k down?"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.95}`,
+    `EXAMPLE G (a visit commitment is scheduling, not deal logistics)
+inbound: "I'll be there Saturday morning to look at it"
+output: {"deal_in_progress":false,"signal":"none","confidence":0.94}`
+  ];
+  const prompt = [
+    "You read ONE inbound SMS from a motorcycle-dealership customer and decide whether it is",
+    "DEAL-PROGRESS LOGISTICS on a purchase a human salesperson is actively working — insurance",
+    "cards/proof, loan payoff, delivery/pickup arrangements, paperwork/title/registration/plates,",
+    "accessory installs on the purchased unit, deposits or signing docs.",
+    "- deal_in_progress=true ONLY for logistics of an in-flight purchase, where the history shows a",
+    "  human-worked deal (prices agreed, unit chosen, paperwork underway).",
+    "- Shopping questions (availability, pricing, comparisons), test-ride scheduling, and visit",
+    "  commitments are NOT deal progress.",
+    "- signal names the dominant logistics topic; none when deal_in_progress=false.",
+    "- confidence is 0..1.",
+    "- Return only JSON matching the schema.",
+    "",
+    ...examples,
+    "",
+    `Known lead info: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      year: lead?.vehicle?.year ?? null
+    })}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "deal_progress_signal_parser",
+      schema: DEAL_PROGRESS_SIGNAL_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-deal-progress-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const signalRaw = String(parsed.signal ?? "").toLowerCase();
+  const signal: DealProgressSignalParse["signal"] =
+    signalRaw === "insurance" ||
+    signalRaw === "payoff" ||
+    signalRaw === "delivery" ||
+    signalRaw === "paperwork" ||
+    signalRaw === "accessory_install" ||
+    signalRaw === "deposit_or_docs"
+      ? signalRaw
+      : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { dealInProgress: !!parsed.deal_in_progress && signal !== "none", signal, confidence };
+}
+
 export async function parseFirstTimeRiderGuidanceWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -5704,6 +6543,14 @@ export async function parseTradePayoffWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  return normalizeTradePayoffLLMOutput(parsed, text);
+}
+
+// Deterministic post-parse normalization for the trade-payoff LLM output —
+// extracted so the legacy parser and the merged unified parser share ONE set of
+// fail-safe guard rails (behavior-preserving extraction, 2026-07-02).
+export function normalizeTradePayoffLLMOutput(parsed: any, textRaw: string): TradePayoffParse {
+  const text = String(textRaw ?? "").trim();
   const payoffRaw = String(parsed.payoff_status ?? "").toLowerCase();
   let payoffStatus: TradePayoffParse["payoffStatus"] =
     payoffRaw === "no_lien" || payoffRaw === "has_lien" ? payoffRaw : "unknown";
@@ -5847,6 +6694,2067 @@ export async function parseTradeQualifierResponseWithLLM(args: {
   return { hasTrade, confidence };
 }
 
+// Vehicle-choice confidence / open-to-alternatives (2026-06-18).
+// Reads how settled the customer is on the SPECIFIC bike they referenced this turn so the
+// orchestrator can proactively offer a couple of alternatives ONLY when they're lukewarm —
+// and stay out of the way when they're committed. The decision/relevance-guard precedence
+// lives in decideVehicleChoiceConfidenceTurn (routeStateReducer); this parser only reads the
+// stance. Returns null when disabled/low-signal — callers must treat null as "stay silent".
+export async function parseVehicleChoiceConfidenceWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  referencedModel?: string | null;
+}): Promise<VehicleChoiceConfidenceParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_CHOICE_CONFIDENCE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_CHOICE_CONFIDENCE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_CHOICE_CONFIDENCE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const referenced = String(args.referencedModel ?? "").trim();
+  const prompt = [
+    "You read how SETTLED a motorcycle shopper is on the SPECIFIC bike they're discussing in an SMS",
+    "thread with a Harley dealership. The dealership may proactively offer a couple of OTHER bikes,",
+    "but only when the customer is lukewarm — never when they've made up their mind.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify stance:",
+    '- "committed": the customer has decided on / clearly wants THIS bike. Examples: "this is the one",',
+    '  "I want the Street Glide", "let\'s do it", "I\'ve decided on the Road Glide", "I\'ll take it",',
+    '  "yeah let\'s move forward on that one", "the Low Rider S is exactly what I want".',
+    '- "open_to_alternatives": lukewarm, undecided, or comparison-shopping about the bike CHOICE.',
+    '  Examples: "what else do you have", "I\'m torn between the Street Glide and the Road Glide",',
+    '  "not sure this is the one", "are there other options", "is there something cheaper",',
+    '  "anything newer?", "do you have something with less miles", "still looking around",',
+    '  "I\'m not totally sold on it", "what would you recommend instead".',
+    '- "unclear": no stance about which bike to buy — a different topic (pricing math, scheduling,',
+    '  trade, financing, hours, directions), a bare acknowledgement, or genuinely ambiguous.',
+    "",
+    "Hard rules (precision matters — a false 'open_to_alternatives' undercuts a confident buyer):",
+    "- A question about the SAME bike (its price, payment, color, miles, availability, a test ride) is",
+    '  NOT "open_to_alternatives" — it is "unclear" here unless they signal they\'re weighing other bikes.',
+    "- Wanting MORE info on the same bike (photos, specs) is not openness to alternatives.",
+    '- Default to "unclear" when the turn does not clearly express the bike-choice stance.',
+    "- confidence is 0..1; only use >= 0.8 when the stance is unambiguous.",
+    "",
+    "Examples:",
+    '- "this is the one I want" -> {"stance":"committed","confidence":0.96}',
+    '- "I\'ll take the Road Glide" -> {"stance":"committed","confidence":0.95}',
+    '- "let\'s do it" -> {"stance":"committed","confidence":0.9}',
+    '- "what else do you have?" -> {"stance":"open_to_alternatives","confidence":0.92}',
+    '- "I\'m torn between the Street Glide and the Road Glide" -> {"stance":"open_to_alternatives","confidence":0.93}',
+    '- "not sure this is the one honestly" -> {"stance":"open_to_alternatives","confidence":0.9}',
+    '- "is there anything cheaper?" -> {"stance":"open_to_alternatives","confidence":0.88}',
+    '- "any newer ones?" -> {"stance":"open_to_alternatives","confidence":0.85}',
+    '- "what\'s the out the door price on it?" -> {"stance":"unclear","confidence":0.9}',
+    '- "can I come by Saturday?" -> {"stance":"unclear","confidence":0.92}',
+    '- "send me a couple photos" -> {"stance":"unclear","confidence":0.85}',
+    '- "thanks!" -> {"stance":"unclear","confidence":0.95}',
+    "",
+    referenced ? `Bike under discussion: ${referenced}` : "Bike under discussion: (unspecified)",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_choice_confidence_parser",
+      schema: VEHICLE_CHOICE_CONFIDENCE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-vehicle-choice-confidence-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.stance ?? "").toLowerCase();
+  const stance: VehicleChoiceConfidenceParse["stance"] =
+    raw === "committed" || raw === "open_to_alternatives" ? raw : "unclear";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { stance, confidence };
+}
+
+// Feedback failure-mode classifier (closed-loop Phase 2, 2026-06-24). Reads a staff thumbs-DOWN
+// (their reason/note + the inbound it replied to + the down-rated draft) and classifies the FAILURE
+// MODE + which LAYER owns the fix. This is the comprehension step of the diagnosis pipeline — rep
+// reasons are free text, so they're read by a typed LLM parser, never regex. The pure action gate
+// lives in decideFeedbackDiagnosisAction; the offline report (feedback_diagnosis_report.ts) is the
+// only consumer for now (Phase 2 is report-only — no auto-PRs).
+export type FeedbackFailureModeParse = {
+  // verbosity_tone = too long / pushy / off-voice (a VOICE fix, never a routing change).
+  // wrong_unit_or_model | out_of_context | state_or_lifecycle_miss | parser_or_routing = COMPREHENSION.
+  // fabrication_unsafe = a SAFETY miss (the held/draft-quality gate owns it).
+  failureMode:
+    | "verbosity_tone"
+    | "wrong_unit_or_model"
+    | "out_of_context"
+    | "state_or_lifecycle_miss"
+    | "parser_or_routing"
+    | "fabrication_unsafe"
+    | "other";
+  layer: "voice" | "comprehension" | "safety" | "none";
+  systemic: boolean; // a recurring/system issue (vs a one-off rep preference)
+  rationale: string;
+  confidence: number;
+};
+
+const FEEDBACK_FAILURE_MODE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["failure_mode", "layer", "systemic", "rationale", "confidence"],
+  properties: {
+    failure_mode: {
+      type: "string",
+      enum: [
+        "verbosity_tone",
+        "wrong_unit_or_model",
+        "out_of_context",
+        "state_or_lifecycle_miss",
+        "parser_or_routing",
+        "fabrication_unsafe",
+        "other"
+      ]
+    },
+    layer: { type: "string", enum: ["voice", "comprehension", "safety", "none"] },
+    systemic: { type: "boolean" },
+    rationale: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseFeedbackFailureModeWithLLM(args: {
+  reason?: string | null;
+  note?: string | null;
+  inbound?: string | null;
+  draft?: string | null;
+  bucket?: string | null;
+  cta?: string | null;
+}): Promise<FeedbackFailureModeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FEEDBACK_FAILURE_MODE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FEEDBACK_FAILURE_MODE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FEEDBACK_FAILURE_MODE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FEEDBACK_FAILURE_MODE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const reason = [args.reason, args.note].map(s => String(s ?? "").trim()).filter(Boolean).join(" — ");
+  if (!reason && !args.draft) return null;
+
+  const prompt = [
+    "A staff reviewer gave a Harley dealership AI reply a THUMBS-DOWN. Read their reason, the customer",
+    "message it replied to, and the down-rated draft, and classify the FAILURE MODE and which fix LAYER",
+    "owns it. Return only JSON matching the schema.",
+    "",
+    "failure_mode:",
+    "- verbosity_tone: too long, pushy, off-voice, robotic, included things it shouldn't have.",
+    "- wrong_unit_or_model: referenced the wrong bike / model / stock unit.",
+    "- out_of_context: answered the wrong thing / ignored what the customer actually asked.",
+    "- state_or_lifecycle_miss: ignored known state (already test-rode, already bought, handed off, used vs new).",
+    "- parser_or_routing: the lead/intent was parsed or routed wrong (e.g. ADF mis-parse, wrong department).",
+    "- fabrication_unsafe: invented a price/stock/availability/appointment, or a compliance problem.",
+    "- other: anything else / unclear.",
+    "",
+    "layer (who fixes it):",
+    "- voice: a tone/length/phrasing fix (the generation layer). verbosity_tone => voice.",
+    "- comprehension: a parser/route/state fix (wrong_unit_or_model, out_of_context, state_or_lifecycle_miss, parser_or_routing).",
+    "- safety: fabrication_unsafe (a guard/hold owns it).",
+    "- none: not actionable / unclear.",
+    "",
+    "systemic = true when this looks like a repeatable system flaw (would recur on similar leads), false",
+    "for a one-off rep preference or a situational nit. confidence 0..1; >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- reason:"Way too much should not be in the message" -> {"failure_mode":"verbosity_tone","layer":"voice","systemic":true,"rationale":"reply was overloaded","confidence":0.85}',
+    '- reason:"Wrong unit" -> {"failure_mode":"wrong_unit_or_model","layer":"comprehension","systemic":true,"rationale":"referenced the wrong bike","confidence":0.8}',
+    '- reason:"Wrong context" -> {"failure_mode":"out_of_context","layer":"comprehension","systemic":true,"rationale":"answered the wrong thing","confidence":0.8}',
+    '- reason:"Already took a test ride as a passenger" -> {"failure_mode":"state_or_lifecycle_miss","layer":"comprehension","systemic":true,"rationale":"ignored known ride state","confidence":0.8}',
+    '- reason:"check how this web lead adf is getting parsed" -> {"failure_mode":"parser_or_routing","layer":"comprehension","systemic":true,"rationale":"ADF parse suspected wrong","confidence":0.82}',
+    "",
+    `Lead bucket: ${String(args.bucket ?? "unknown")}   cta: ${String(args.cta ?? "unknown")}`,
+    `Customer message: ${String(args.inbound ?? "(unknown)").slice(0, 400)}`,
+    `Down-rated draft: ${String(args.draft ?? "(unknown)").slice(0, 400)}`,
+    `Staff reason: ${reason || "(none given)"}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "feedback_failure_mode_parser",
+      schema: FEEDBACK_FAILURE_MODE_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-feedback-failure-mode-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const failureModes = new Set([
+    "verbosity_tone",
+    "wrong_unit_or_model",
+    "out_of_context",
+    "state_or_lifecycle_miss",
+    "parser_or_routing",
+    "fabrication_unsafe",
+    "other"
+  ]);
+  const layers = new Set(["voice", "comprehension", "safety", "none"]);
+  const failureMode = failureModes.has(String(parsed.failure_mode))
+    ? (parsed.failure_mode as FeedbackFailureModeParse["failureMode"])
+    : "other";
+  const layer = layers.has(String(parsed.layer))
+    ? (parsed.layer as FeedbackFailureModeParse["layer"])
+    : "none";
+  return {
+    failureMode,
+    layer,
+    systemic: parsed.systemic === true,
+    rationale: typeof parsed.rationale === "string" ? parsed.rationale.slice(0, 200) : "",
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0
+  };
+}
+
+// Vehicle media request parser (2026-06-24). After we suggest units, reads whether the customer is
+// asking to SEE them — photos, colors, or listing links of bikes we already discussed ("can I see
+// the pictures and color?", "send me the links", "what colors do they come in?"). FALSE when they're
+// sharing their own photo, asking specs/compare, pricing, or scheduling. The deterministic reply
+// (real listing URLs from the persisted recommended units) lives in buildRecommendedUnitsMediaReply;
+// the route gate is decideVehicleMediaRequestTurn. Returns null when disabled/low-signal.
+export type VehicleMediaRequestParse = {
+  wantsMedia: boolean;
+  focus: "photos" | "colors" | "links" | "any";
+  confidence: number;
+};
+
+const VEHICLE_MEDIA_REQUEST_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["wants_media", "focus", "confidence"],
+  properties: {
+    wants_media: { type: "boolean" },
+    focus: { type: "string", enum: ["photos", "colors", "links", "any"] },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseVehicleMediaRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<VehicleMediaRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_MEDIA_REQUEST_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const debug = process.env.LLM_VEHICLE_MEDIA_REQUEST_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_MEDIA_REQUEST_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_MEDIA_REQUEST_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "In an SMS thread where the dealer already SUGGESTED some bikes, decide whether the customer is now",
+    "asking to SEE those bikes — their photos, colors, or listing links. Return only JSON for the schema.",
+    "",
+    "wants_media = true for: \"can I see the pictures?\", \"send me photos\", \"what do they look like\",",
+    "\"what colors do they come in\", \"send the links\", \"got a link?\". focus = photos | colors | links | any.",
+    "wants_media = FALSE when they: share their OWN photo, ask specs/compare (engine, weight), ask price,",
+    "ask to schedule, or it's a bare reply (\"ok\", \"thanks\").",
+    "confidence 0..1; >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- "Can I see the pictures and color of the bikes?" -> {"wants_media":true,"focus":"any","confidence":0.95}',
+    '- "send me the links" -> {"wants_media":true,"focus":"links","confidence":0.9}',
+    '- "what colors does the nightster come in" -> {"wants_media":true,"focus":"colors","confidence":0.88}',
+    '- "what\'s the out the door price" -> {"wants_media":false,"focus":"any","confidence":0.9}',
+    '- "ok sure" -> {"wants_media":false,"focus":"any","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_media_request_parser",
+      schema: VEHICLE_MEDIA_REQUEST_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-vehicle-media-request-parser",
+      debug
+    });
+  const parsed =
+    (await runParse(primaryModel)) ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+  const focusRaw = String(parsed.focus ?? "any").toLowerCase();
+  const focus: VehicleMediaRequestParse["focus"] =
+    focusRaw === "photos" || focusRaw === "colors" || focusRaw === "links" ? focusRaw : "any";
+  return {
+    wantsMedia: parsed.wants_media === true,
+    focus,
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0
+  };
+}
+
+// Vehicle recommendation request parser (2026-06-24). Reads whether the customer is asking US to
+// suggest/pick bikes (no specific model named) and extracts budget + condition + style filters, so
+// the agent can answer with real inventory instead of looping "which bike are you looking at?"
+// (s R Gurajala +17167506588). Returns null when disabled/low-signal — callers treat null as
+// "fall through to existing behavior". The route gate lives in decideVehicleRecommendationTurn.
+export async function parseVehicleRecommendationRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<VehicleRecommendationParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VEHICLE_RECOMMENDATION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VEHICLE_RECOMMENDATION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VEHICLE_RECOMMENDATION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read an SMS thread with a Harley dealership and decide whether the customer is asking the",
+    "dealer to SUGGEST/PICK some bikes for them (they have NOT named a specific model to price), and",
+    "extract any budget and style preferences. Return only JSON matching the provided schema.",
+    "",
+    "wants_recommendation = true when the customer wants us to propose options: \"give me some options\",",
+    "\"what do you have\", \"what would you recommend\", \"suggest a few\", \"show me some bikes\", \"any",
+    "options around $200/mo\", \"what can I get for X\". It is FALSE when they named a specific bike or",
+    "are pricing one (\"price on the Street Glide?\", \"payment on that one\"), or the turn is a different",
+    "topic (scheduling, trade, hours, a bare thanks).",
+    "",
+    "Also extract:",
+    "- monthly_budget: a stated monthly payment target as a number (\"around $200/mo\" => 200). null if none.",
+    "- condition: \"new\", \"used\", \"both\" (new AND used / either), or null if unstated.",
+    "- exclude_segments / include_segments: style segments the customer named. Segments:",
+    "  cruiser (Softail/Dyna/V-Rod: Fat Boy, Low Rider, Heritage, Breakout, Street Bob, Softail),",
+    "  touring (Street Glide, Road Glide, Road King, Electra Glide, Ultra),",
+    "  sport (Sportster, Iron 883, Nightster, Forty-Eight, Street 500/750, LiveWire),",
+    "  adventure (Pan America), trike (Tri Glide, Freewheeler).",
+    "  \"not cruisers\" => exclude_segments:[\"cruiser\"]; \"something sporty\" => include_segments:[\"sport\"].",
+    "  Leave arrays empty when no style is named.",
+    "- confidence 0..1; use >= 0.8 only when wants_recommendation is clear.",
+    "",
+    "Examples:",
+    '- "Can you give me some options" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
+    '- "give me some options, I\'m looking around 200 per month, not cruisers, focus on both new and used" -> {"wants_recommendation":true,"monthly_budget":200,"condition":"both","exclude_segments":["cruiser"],"include_segments":[],"confidence":0.95}',
+    '- "what would you recommend for a first bike?" -> {"wants_recommendation":true,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.88}',
+    '- "what\'s the out the door price on the Street Glide?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"wants_recommendation":false,"monthly_budget":null,"condition":null,"exclude_segments":[],"include_segments":[],"confidence":0.93}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "vehicle_recommendation_parser",
+      schema: VEHICLE_RECOMMENDATION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-vehicle-recommendation-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const allowedSegments = new Set(["cruiser", "touring", "sport", "adventure", "trike"]);
+  const normalizeSegments = (value: unknown): VehicleRecommendationParse["excludeSegments"] =>
+    Array.isArray(value)
+      ? (Array.from(
+          new Set(value.map(v => String(v ?? "").trim().toLowerCase()).filter(v => allowedSegments.has(v)))
+        ) as VehicleRecommendationParse["excludeSegments"])
+      : [];
+  const conditionRaw = String(parsed.condition ?? "").toLowerCase();
+  const condition: VehicleRecommendationParse["condition"] =
+    conditionRaw === "new" || conditionRaw === "used" || conditionRaw === "both" ? conditionRaw : null;
+  const monthlyBudgetNum = Number(parsed.monthly_budget);
+  return {
+    wantsRecommendation: parsed.wants_recommendation === true,
+    monthlyBudget: Number.isFinite(monthlyBudgetNum) && monthlyBudgetNum > 0 ? monthlyBudgetNum : null,
+    condition,
+    excludeSegments: normalizeSegments(parsed.exclude_segments),
+    includeSegments: normalizeSegments(parsed.include_segments),
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : undefined
+  };
+}
+
+// Deal/progress status check (2026-06-18). Distinguishes an open status question about the
+// customer's OWN deal/order/bike ("how are we looking", "any update?", "where are we at?")
+// from a social pleasantry ("how's your day going?"). Used to rescue these turns from the
+// small-talk pleasantry path. Returns null when disabled/low-signal — callers treat null as
+// "no status check" and fall through to existing behavior.
+export async function parseDealStatusCheckWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<DealStatusCheckParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEAL_STATUS_CHECK_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEAL_STATUS_CHECK_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEAL_STATUS_CHECK_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEAL_STATUS_CHECK_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
+    "for the STATUS / PROGRESS of their own deal, order, or bike with the dealership — an open",
+    '"where do things stand with us?" question that needs a real business answer, not a pleasantry.',
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "deal_status_check": an open status/progress question about THEIR deal, order, bike, paperwork,',
+    '  trade, or financing with us. The give-away is "we"/"us"/"my deal"/"it" + a progress/update sense:',
+    '  "how are we looking", "how we looking", "any update?", "any word?", "what\'s the latest?",',
+    '  "where are we at?", "how\'s it coming along?", "hear anything back?", "any news on my bike?".',
+    '- "none": a social pleasantry or off-topic chit-chat ("how\'s your day going?", "how are you?",',
+    '  "hope you\'re well", "happy friday", sports/weather banter), OR a concrete different ask that',
+    "  another handler owns (a specific price/payment question, a scheduling time, a trade value, a",
+    "  photo request, hours/directions). Those are not general status checks.",
+    "",
+    "Hard rules (precision matters — a false positive turns small talk into a deal-status reply):",
+    '- "how are YOU" / "how\'s your day" / "how you doing" = pleasantry = none.',
+    '- "how are WE looking" / "how we lookin" / "where we at" = the shared deal = deal_status_check.',
+    "- If it names a specific concrete ask (a number, a day/time, a model to look up), prefer none and",
+    "  let the specific handler take it.",
+    "- explicit_request=true only when the customer is clearly asking us for an update right now.",
+    "- confidence is 0..1; use >= 0.7 only when the status-vs-pleasantry read is clear.",
+    "",
+    "Examples:",
+    '- "How are we looking" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.9}',
+    '- "any update?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.9}',
+    '- "where are we at on the bike?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.92}',
+    '- "what\'s the latest?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.88}',
+    '- "any word back on my financing?" -> {"intent":"deal_status_check","explicit_request":true,"confidence":0.85}',
+    '- "how\'s your day going?" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "how are you?" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "happy friday!" -> {"intent":"none","explicit_request":false,"confidence":0.95}',
+    '- "what\'s the out the door price?" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "deal_status_check_parser",
+      schema: DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-deal-status-check-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: DealStatusCheckParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "deal_status_check" ? "deal_status_check" : "none";
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitRequest, confidence };
+}
+
+// Conversation closeout / sign-off (2026-06-19). Reads whether the inbound turn is a CLOSER and
+// the right move is to let the thread rest rather than keep selling / asking another question.
+// Joe's report: after a warm closer the agent "would not know when to close out — it would keep
+// going" (the narrow isCloseoutSignoffNoResponseText regex only matched "talk soon"/"see you
+// soon", so "have a good weekend!" fell through to the small-talk generator, which is even told it
+// MAY pivot back to bikes). Parser-first replacement: distinguish a closer that deserves ONE warm
+// reply ("reciprocate_and_close") from a terminal echo where any further reply is over-texting
+// ("close_silent"), vs. an active turn ("none"). Returns null when disabled/low-signal — callers
+// treat null as "not a closeout" and fall through to existing behavior (fail toward replying).
+export async function parseConversationCloseoutWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ConversationCloseoutParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CONVERSATION_CLOSEOUT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CONVERSATION_CLOSEOUT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CONVERSATION_CLOSEOUT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer's latest",
+    "message is a CONVERSATIONAL CLOSER / sign-off — the thread is wrapping up and the agent should",
+    "let it rest, not keep selling or asking another question.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify kind:",
+    '- "reciprocate_and_close": a warm closer/sign-off that deserves ONE short, warm reply and then',
+    '  silence. The customer is being friendly as they wrap up: "have a good weekend!", "you guys are',
+    '  the best!", "thanks again, take care", "appreciate all your help!", "happy friday, talk soon".',
+    '- "close_silent": a terminal echo / bare acknowledgment where replying AGAIN would be over-texting',
+    "  — especially when OUR last message was already a warm sign-off and they just mirror it back:",
+    '  "you too!", "thanks 👍", "sounds good, talk soon", "ok have a good one". Nothing is owed; the',
+    "  agent should not insist on the last word.",
+    '- "none": still an ACTIVE turn — a real question or request, ongoing chatter that is not winding',
+    "  down, or a concrete ask another handler owns (price, payment, a day/time, availability, a trade",
+    "  value, a photo, hours/directions, a callback). When unsure, choose none.",
+    "",
+    "Hard rules (precision matters — a false closeout makes the agent go quiet on a live customer):",
+    "- If the message asks for ANYTHING (a question mark, a price/payment/availability/scheduling/trade/",
+    "  callback request), it is none — never a closeout.",
+    "- Use the recent messages: if OUR last outbound already warmly signed off and the customer just",
+    "  echoes a pleasantry, prefer close_silent; if they send a fresh warm closer we have not answered,",
+    "  prefer reciprocate_and_close.",
+    "- A deferral/disposition ('I'll pass', 'not now', 'keep my bike') is NOT this — that's handled",
+    "  elsewhere; return none.",
+    "- confidence is 0..1; use >= 0.7 only when the closer read is clear.",
+    "",
+    "Examples:",
+    '- "Have a great weekend!" -> {"kind":"reciprocate_and_close","confidence":0.9}',
+    '- "You guys are the best, thank you!" -> {"kind":"reciprocate_and_close","confidence":0.9}',
+    '- "Thanks again, take care!" -> {"kind":"reciprocate_and_close","confidence":0.88}',
+    '- (our last: "Have a great weekend!") "You too!" -> {"kind":"close_silent","confidence":0.9}',
+    '- "sounds good, talk soon 👍" -> {"kind":"close_silent","confidence":0.85}',
+    '- "Ok thanks" -> {"kind":"close_silent","confidence":0.78}',
+    '- "what\'s the out the door price?" -> {"kind":"none","confidence":0.95}',
+    '- "can I come by Saturday?" -> {"kind":"none","confidence":0.95}',
+    '- "did you watch the game last night?" -> {"kind":"none","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "conversation_closeout_parser",
+      schema: CONVERSATION_CLOSEOUT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-conversation-closeout-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.kind ?? "").toLowerCase();
+  const kind: ConversationCloseoutParse["kind"] =
+    raw === "reciprocate_and_close" || raw === "close_silent" ? raw : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { kind, confidence };
+}
+
+// Watch opt-out (2026-06-19). The customer is on an inventory WATCH (we proactively text them when a
+// matching unit comes in). Detects when they want OFF those alerts — no longer interested in being
+// notified, bought elsewhere, "take me off the list", "stop the alerts". The deterministic side effect
+// is to PAUSE the watch (the engine skips paused). Only called when the conversation has an ACTIVE
+// watch, so the parser just decides opt-out vs not. Returns null when disabled/low-signal => keep the
+// watch (fail toward NOT-removing on uncertainty: a wrongly-paused watch makes them miss a unit they
+// wanted; but Joe prioritizes not-spamming, so the floor is moderate, not high).
+export async function parseWatchOptOutWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<WatchOptOutParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WATCH_OPT_OUT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WATCH_OPT_OUT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WATCH_OPT_OUT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WATCH_OPT_OUT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership thread. The customer is on an INVENTORY WATCH — we text them",
+    "proactively when a matching bike comes into stock. Decide whether THIS message means they want OFF",
+    "those alerts (we should stop notifying them and remove them from the watch).",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "watch_opt_out": they no longer want the alerts / are no longer interested in being notified /',
+    '  bought one elsewhere / are done looking: "take me off the list", "stop the alerts", "not',
+    '  interested anymore", "I already bought one", "I\'m all set", "no longer looking", "unsubscribe me',
+    '  from those", "you can stop letting me know".',
+    '- "none": still interested or engaging ("yes send details", "what\'s the price", "can I see it",',
+    '  "still looking" ), a concrete different ask, or ambiguous. When unsure, choose none.',
+    "",
+    "Hard rules:",
+    "- A question or any sign of continued interest => none.",
+    '- "not right now" / "maybe later" / "next month" is a DEFER, not an opt-out => none (they still',
+    "  want the watch).",
+    "- Only opt_out when they clearly want the ALERTS to stop or are clearly done looking.",
+    "- confidence 0..1; use >= 0.7 only when the opt-out is clear.",
+    "",
+    "Examples:",
+    '- "take me off the list please" -> {"intent":"watch_opt_out","confidence":0.95}',
+    '- "no thanks, I already bought one" -> {"intent":"watch_opt_out","confidence":0.93}',
+    '- "you can stop the alerts, not looking anymore" -> {"intent":"watch_opt_out","confidence":0.95}',
+    '- "I\'m all set, thanks" -> {"intent":"watch_opt_out","confidence":0.8}',
+    '- "yes! send me details" -> {"intent":"none","confidence":0.95}',
+    '- "what\'s the price?" -> {"intent":"none","confidence":0.95}',
+    '- "not right now, maybe next month" -> {"intent":"none","confidence":0.85}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "watch_opt_out_parser",
+      schema: WATCH_OPT_OUT_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-watch-opt-out-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: WatchOptOutParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "watch_opt_out" ? "watch_opt_out" : "none";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, confidence };
+}
+
+// Watch sibling-scope answer parser. We ASKED (buildWatchSiblingScopeAsk) whether the customer's
+// inventory watch should also cover same-family sibling trims; this reads their answer. Gated by
+// the caller on a PENDING ask (watch.siblingScopeAskedAt, unresolved) — no hint regex; the pending
+// state is the gate. Returns null when disabled; callers treat null as "no scope answer" and let
+// the normal pipeline run (fail toward keeping the watch strict — today's behavior).
+export async function parseWatchScopeWithLLM(args: {
+  text: string;
+  watchModel?: string | null; // the watched base model, e.g. "Road Glide"
+  askedUnitLabel?: string | null; // the sibling unit named in our ask, e.g. "2026 Road Glide Special"
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<WatchScopeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_WATCH_SCOPE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_WATCH_SCOPE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_WATCH_SCOPE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_WATCH_SCOPE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const watchModel = String(args.watchModel ?? "").trim() || "the base model";
+  const askedUnit = String(args.askedUnitLabel ?? "").trim();
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership thread. The customer has an INVENTORY WATCH on a specific",
+    `base model (${watchModel}) and we just ASKED them whether we should also alert them about`,
+    `same-family sibling variants (Special / ST / Limited / CVO trims)${askedUnit ? ` — one just came in: ${askedUnit}` : ""}.`,
+    "Decide what THIS message answers. Return only JSON matching the schema.",
+    "",
+    "Classify intent:",
+    '- "open_to_variants": yes / open to seeing the variants / flexible ("sure", "yeah that works",',
+    '  "either is fine", "I\'d look at the Special too") — OR they engage with the offered variant',
+    '  itself ("what color is that one?", "how much is the Special?").',
+    '- "base_only": they want ONLY the exact base model ("no just the base", "holding out for the',
+    '  standard one", "nah, gotta be the regular ' + watchModel.replace(/"/g, "") + '").',
+    '- "unrelated": the message does not answer the scope question at all (a different topic,',
+    "  scheduling, trade talk, small talk). When unsure, choose unrelated.",
+    "",
+    "has_other_ask: true when the message ALSO asks something beyond the scope answer (a price,",
+    "a photo, availability, scheduling) — even when intent is open_to_variants or base_only.",
+    "",
+    "Hard rules:",
+    '- A bare pleasantry or an unrelated question => "unrelated".',
+    '- "not interested anymore" / "take me off the list" is an OPT-OUT, not a scope answer =>',
+    '  "unrelated" (a separate parser owns opt-outs).',
+    "- confidence 0..1; use >= 0.7 only when the answer is clear.",
+    "",
+    "Examples:",
+    '- "sure that works" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.9}',
+    '- "yeah I\'d look at the Special too" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.95}',
+    '- "either way is fine with me" -> {"intent":"open_to_variants","has_other_ask":false,"confidence":0.85}',
+    '- "sure — what color is it?" -> {"intent":"open_to_variants","has_other_ask":true,"confidence":0.85}',
+    '- "how much is that one?" -> {"intent":"open_to_variants","has_other_ask":true,"confidence":0.75}',
+    '- "no just the base please" -> {"intent":"base_only","has_other_ask":false,"confidence":0.95}',
+    '- "nah holding out for the standard one" -> {"intent":"base_only","has_other_ask":false,"confidence":0.9}',
+    '- "when do the base models usually come in?" -> {"intent":"base_only","has_other_ask":true,"confidence":0.75}',
+    '- "thanks man" -> {"intent":"unrelated","has_other_ask":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"unrelated","has_other_ask":true,"confidence":0.85}',
+    '- "take me off the list" -> {"intent":"unrelated","has_other_ask":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "watch_scope_parser",
+      schema: WATCH_SCOPE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-watch-scope-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const rawIntent = String(parsed.intent ?? "").toLowerCase();
+  const intent: WatchScopeParse["intent"] =
+    rawIntent === "open_to_variants" ? "open_to_variants" : rawIntent === "base_only" ? "base_only" : "unrelated";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, hasOtherAsk: parsed.has_other_ask === true, confidence };
+}
+
+// ADF intake department classifier — see AdfDepartmentInterestParse above for why. Returns null when
+// disabled/empty/low-signal; callers treat null as "no department override" and let the normal
+// vehicle/inventory flow run. Gated to fire only on initial ADF leads that plausibly aren't a bike
+// (a catalog apparel/parts cue, or a placeholder vehicle) so it adds no cost on the hot path.
+export async function parseAdfDepartmentInterestWithLLM(args: {
+  inquiry: string;
+  vehicle?: string | null;
+  leadSource?: string | null;
+}): Promise<AdfDepartmentInterestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ADF_DEPARTMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_ADF_DEPARTMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_ADF_DEPARTMENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_ADF_DEPARTMENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const inquiry = String(args.inquiry ?? "").trim();
+  if (!inquiry) return null;
+  const vehicle = String(args.vehicle ?? "").trim();
+  const leadSource = String(args.leadSource ?? "").trim();
+
+  const prompt = [
+    "You triage a NEW web lead (ADF) for a Harley-Davidson dealership. The customer filled out a lead",
+    "form; the 'Inquiry' field below is their own stated request. Decide which department the request",
+    "is for. Return only JSON that matches the provided schema.",
+    "",
+    "departments:",
+    "- apparel: wearable MotorClothes / gear / clothing — jackets, vests, chaps, helmets, gloves, boots,",
+    "  shirts, hoodies, hats, rain/heated gear, sizes (small/L/XL) of any of those. ALSO covers branded",
+    "  HD collectibles / gift-shop general merchandise (poker chips, pins, patches, keychains, shot",
+    "  glasses, ornaments, coffee mugs, gift items) — non-wearable branded merch is apparel/MotorClothes.",
+    "- parts: motorcycle components / accessories — OEM or aftermarket parts, brake pads, tires, sissy",
+    "  bars, exhaust, batteries, fitment/ordering of a part.",
+    "- service: maintenance / repair / install labor / inspection / recalls / diagnostics.",
+    "- vehicle: an actual MOTORCYCLE — a model, trim, inventory availability, test ride, price/payment",
+    "  on a bike, trade-in. This is the default for bike shoppers.",
+    "- riding_academy: the dealer's rider-education program — the Riding Academy / rider course / MSF",
+    "  class, learning to ride, or getting a motorcycle license/endorsement. The customer wants to take a",
+    "  COURSE (and its price/schedule), NOT buy a bike. 'course and price' / 'course to get my license' /",
+    "  'a course motorcycle so I can get my license' = riding_academy, even if a bike model is attached.",
+    "- none: a greeting, an unrelated topic, or no identifiable subject.",
+    "",
+    "Hard rules:",
+    "- The Inquiry field IS the request. Naming an apparel/parts/service item is a department request —",
+    "  do NOT require an action verb like 'do you have' or 'looking for'. 'leather vest' alone = apparel.",
+    "- The Vehicle field is frequently a placeholder ('Harley-Davidson Full Line', 'Full Line', 'Other')",
+    "  on non-bike inquiries — when the Inquiry names gear/parts/service, trust the Inquiry over Vehicle.",
+    "- Branded HD collectibles / gift-shop merchandise (poker chips, pins, patches, keychains, mugs,",
+    "  ornaments) belong to apparel/MotorClothes, NOT parts. 'parts' is strictly motorcycle components/",
+    "  accessories that go ON a bike (brake pads, tires, sissy bars, exhaust, batteries).",
+    "- A specific motorcycle model, year, test ride, or bike-availability/price question is 'vehicle',",
+    "  not a department, even if it mentions a color or size of the BIKE.",
+    "- A course/class/license/'learn to ride'/Riding Academy/MSF request is 'riding_academy', NOT",
+    "  'vehicle' — even when the Vehicle field names a bike. They want the COURSE, not to buy that bike.",
+    "- 'item' is the short noun the customer named (e.g. 'leather vest', 'brake pads'), or null.",
+    "- confidence 0..1; use >= 0.7 only when the department is clear.",
+    "",
+    "Examples:",
+    '- Inquiry "small womens black leather vest" / Vehicle "Harley-Davidson Full Line" -> {"department":"apparel","item":"leather vest","confidence":0.97}',
+    '- Inquiry "looking for a riding jacket size XL" -> {"department":"apparel","item":"riding jacket","confidence":0.96}',
+    '- Inquiry "do you carry HD hoodies and a half helmet" -> {"department":"apparel","item":"hoodie, half helmet","confidence":0.95}',
+    '- Inquiry "wondering if I can buy a poker chip over the phone and have it shipped" / Vehicle "Harley-Davidson Full Line" -> {"department":"apparel","item":"poker chip","confidence":0.9}',
+    '- Inquiry "do you sell HD keychains or pins" -> {"department":"apparel","item":"keychain, pin","confidence":0.9}',
+    '- Inquiry "need a new battery and brake pads for my Street Glide" -> {"department":"parts","item":"battery, brake pads","confidence":0.96}',
+    '- Inquiry "want to order a sissy bar" -> {"department":"parts","item":"sissy bar","confidence":0.95}',
+    '- Inquiry "5k service and oil change" -> {"department":"service","item":"oil change","confidence":0.96}',
+    '- Inquiry "interested in a 2024 Street Glide" / Vehicle "Street Glide" -> {"department":"vehicle","item":"Street Glide","confidence":0.96}',
+    '- Inquiry "do you have any Road Glides in stock in black" -> {"department":"vehicle","item":"Road Glide","confidence":0.95}',
+    '- Inquiry "Your course and price" / Vehicle "Street 750" -> {"department":"riding_academy","item":"Riding Academy course","confidence":0.9}',
+    '- Inquiry "looking for a course motorcycle so I can get my license" -> {"department":"riding_academy","item":"rider course","confidence":0.95}',
+    '- Inquiry "when is your next riding academy / do you offer the MSF class" -> {"department":"riding_academy","item":"riding academy","confidence":0.96}',
+    '- Inquiry "Harley-Davidson Full Line" -> {"department":"none","item":null,"confidence":0.6}',
+    '- Inquiry "hi just looking around" -> {"department":"none","item":null,"confidence":0.8}',
+    "",
+    `Vehicle: ${vehicle || "(none)"}`,
+    leadSource ? `Lead source: ${leadSource}` : "Lead source: (none)",
+    `Inquiry: ${inquiry}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "adf_department_interest_parser",
+      schema: ADF_DEPARTMENT_INTEREST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 90,
+      debugTag: "llm-adf-department-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const deptRaw = String(parsed.department ?? "").toLowerCase();
+  const department: AdfDepartmentInterestParse["department"] =
+    deptRaw === "apparel" ||
+    deptRaw === "parts" ||
+    deptRaw === "service" ||
+    deptRaw === "vehicle" ||
+    deptRaw === "riding_academy"
+      ? deptRaw
+      : "none";
+  const item = typeof parsed.item === "string" && parsed.item.trim() ? parsed.item.trim() : null;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : 0;
+  return { department, item, confidence };
+}
+
+// Finance-process / logistics handoff (2026-06-18, Adam +17166033199 via intent_handled_audit).
+// Detects a question about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing & related
+// steps (insurance timing, down-payment deadlines, order of operations) that needs the finance
+// manager's exact answer — distinct from a NUMBER question (payment, rate, amount down) other
+// handlers own. Returns null when disabled/low-signal — callers treat null as "no handoff".
+export async function parseFinanceProcessQuestionWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<FinanceProcessQuestionParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FINANCE_PROCESS_QUESTION_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FINANCE_PROCESS_QUESTION_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FINANCE_PROCESS_QUESTION_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is asking",
+    "about the PROCESS / SEQUENCING / TIMING / CONDITIONS of financing and its related steps —",
+    "insurance, down payment, paperwork, titling, deadlines, order of operations. These need the",
+    "finance/business manager's exact answer (they depend on dealer + lender policy), so the agent",
+    "should hand off rather than guess.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "finance_process_handoff": a conditional / timing / sequencing / "what do I need and when"',
+    "  question about the financing process or its requirements. Examples: does paying more down",
+    "  buy more time for insurance; can I get insurance after signing; what comes first; when is",
+    "  the down payment / insurance / title due; how long do I have to get X; can I do Y before Z.",
+    '- "none": a finance NUMBER question another handler owns (what\'s my monthly payment, what rate,',
+    "  how much total down, out-the-door price), OR a non-finance turn (scheduling, availability,",
+    "  trade value, photos, social).",
+    "",
+    "Hard rules (precision matters — don't hand off normal number questions):",
+    "- Amount/rate/payment questions ('what's my payment', 'how much down', 'what APR') = none.",
+    "- A question about WHEN something is due or WHETHER a condition changes a deadline/step =",
+    "  finance_process_handoff (that's policy/process, not a number we quote).",
+    "- explicit_request=true only when the customer is clearly asking us to clarify the process.",
+    "- confidence is 0..1; use >= 0.7 only when the process-vs-number read is clear.",
+    "",
+    "Examples:",
+    '- "if I pay the whole 10% needed do I have more time to get insurance or no" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "can I get the insurance after I sign the paperwork?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "what comes first, insurance or the financing?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.9}',
+    '- "how long do I have to get insurance once I put money down?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.88}',
+    '- "when do I need to have the down payment in by?" -> {"intent":"finance_process_handoff","explicit_request":true,"confidence":0.85}',
+    '- "what\'s my monthly payment going to be?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    '- "how much do I need for a down payment?" -> {"intent":"none","explicit_request":false,"confidence":0.85}',
+    '- "what rate can I get?" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "finance_process_question_parser",
+      schema: FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-finance-process-question-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: FinanceProcessQuestionParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "finance_process_handoff" ? "finance_process_handoff" : "none";
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitRequest, confidence };
+}
+
+// Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
+// the dealer has to assess it by hand, so the agent must hand off instead of quoting a
+// trade value as if it were a bike. Mirrors parseFinanceProcessQuestionWithLLM.
+export async function parseNonMotorcycleTradeWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<NonMotorcycleTradeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_NON_MOTORCYCLE_TRADE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_NON_MOTORCYCLE_TRADE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_NON_MOTORCYCLE_TRADE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley-Davidson dealership sales thread. Decide whether the customer wants to",
+    "TRADE IN (or put the value of) an item that is NOT a motorcycle toward the deal.",
+    "A Harley dealer's standard trade flow is for MOTORCYCLES. A non-motorcycle trade (a motorcycle",
+    "camper/trailer, RV/motorhome, car/truck/SUV, boat/jet ski, ATV/UTV/side-by-side, snowmobile,",
+    "etc.) has to be assessed by a person — the dealer may or may not take it — so the agent must HAND",
+    "OFF, not quote a trade value. Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "non_motorcycle_trade": the customer references trading in / selling to us / applying the value',
+    "  of a NON-motorcycle item toward this deal. Set item to that item in their words.",
+    '- "none": the trade item is a motorcycle/bike (any make/model — Harley, Indian, Victory Vegas, a',
+    '  "sportster", "my bike"), OR there is no non-motorcycle trade this turn (normal bike trade, a',
+    "  number question, scheduling, etc.).",
+    "",
+    "Hard rules (precision matters):",
+    "- Any motorcycle, any brand/model, including just 'my bike' = none.",
+    "- camper / motorcycle camper / pull-behind or cargo trailer / RV / motorhome / car / truck / SUV /",
+    "  boat / jet ski / ATV / UTV / side by side / snowmobile = non_motorcycle_trade.",
+    "- Only when tied to trading/selling/putting toward THIS deal. Merely owning one = none.",
+    "- explicit_request=true when they clearly want it counted toward the deal.",
+    "- confidence 0..1; use >= 0.7 only when the non-motorcycle read is clear.",
+    "",
+    "CONTINUATION: if the recent messages show we ALREADY flagged a non-motorcycle trade (we",
+    "offered to have the team look at a camper/RV/etc.) and the customer is now PROVIDING DETAILS",
+    "or following up about that SAME non-motorcycle item (year, size, condition, photos), classify",
+    "intent=non_motorcycle_trade (item = that item), explicit_request=true. But if they PIVOT to",
+    "the motorcycle / financing / scheduling, classify none so normal handling resumes.",
+    "",
+    "Examples:",
+    '- "I wouldn\'t be able to make the deal happen unless I could also trade in my motorcycle camper" -> {"intent":"non_motorcycle_trade","item":"motorcycle camper","explicit_request":true,"confidence":0.93}',
+    '- "could I put my boat toward it?" -> {"intent":"non_motorcycle_trade","item":"boat","explicit_request":true,"confidence":0.9}',
+    '- "would you take my truck on trade?" -> {"intent":"non_motorcycle_trade","item":"truck","explicit_request":true,"confidence":0.9}',
+    '- "I want to trade in my 2019 Street Glide" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.95}',
+    '- "trading in my Vegas" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.9}',
+    '- "what would my bike be worth on trade?" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.9}',
+    '- (history shows we offered to have the team look at her motorcycle camper) "it\'s a 2023 Forest River, 18ft, brand new never used" -> {"intent":"non_motorcycle_trade","item":"motorcycle camper","explicit_request":true,"confidence":0.9}',
+    '- (history shows a camper handoff) "actually never mind that — what\'s the monthly payment on the Street Glide?" -> {"intent":"none","item":null,"explicit_request":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "non_motorcycle_trade_parser",
+      schema: NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-non-motorcycle-trade-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: NonMotorcycleTradeParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "non_motorcycle_trade" ? "non_motorcycle_trade" : "none";
+  const item = typeof parsed.item === "string" && parsed.item.trim() ? parsed.item.trim() : undefined;
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, item, explicitRequest, confidence };
+}
+
+// Cheap pre-filter that GATES the (LLM) dealer-lead-survey parser — it does NOT decide intent.
+// Only ADF bodies carrying the structured marketing-survey markers run the parser; everything
+// else keeps the normal pipeline untouched. Fail-direction is safe: a miss here just means the
+// survey parser doesn't run (current behavior + the context-fidelity gate still backstop a
+// fabricated frame). Precedent: hasNonMotorcycleTrade/hasServiceAppointment-style hint gating.
+export function hasDealerLeadSurveyHint(text: string | null | undefined): boolean {
+  const s = String(text ?? "");
+  if (!s.trim()) return false;
+  return (
+    /\bdealer lead app\b/i.test(s) ||
+    /\bmarketing questions\b/i.test(s) ||
+    /\bdemo bikes ridden\b/i.test(s) ||
+    /how many years have you owned/i.test(s) ||
+    /do you expect to make a (?:motorcycle )?purchase/i.test(s) ||
+    /which model of motorcycle are you interested in/i.test(s)
+  );
+}
+
+// Parser-first recognizer for a DEALER LEAD APP MARKETING SURVEY (the Tim Williams class,
+// +17163741119, 2026-06-24). A structured "Marketing Questions: Dealer Lead App" survey embedded
+// in the ADF Customer Comments — ownership history + purchase timeframe + "which model are you
+// interested in?" + "Demo Bikes Ridden: <model>" — is NOT a direct inventory inquiry. The generic
+// sales generator read the survey's "Demo Bikes Ridden" field as a completed test ride at THIS
+// dealer and fabricated "Thanks again for coming in for the test ride ... Congrats on the <model>"
+// (held by the context-fidelity gate). This typed parser comprehends the survey so the first touch
+// can be a warm, accurate acknowledgement of stated interest + an invite to ride/visit, never a
+// fabricated past action. Fail-direction safe: unsure => is_dealer_lead_survey=false, normal
+// pipeline runs; we only divert on a confident survey read, and even a false positive yields a
+// correct warm opener (no fabricated frame, no false availability, no close).
+export async function parseDealerLeadSurveyWithLLM(args: {
+  text: string;
+}): Promise<DealerLeadSurveyParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DEALER_LEAD_SURVEY_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DEALER_LEAD_SURVEY_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DEALER_LEAD_SURVEY_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DEALER_LEAD_SURVEY_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const prompt = [
+    "You read inbound web/CRM leads for a Harley-Davidson dealership. Decide whether THIS lead is a",
+    "structured DEALER MARKETING SURVEY (a 'Dealer Lead App' / 'Marketing Questions' lead-gen",
+    "questionnaire) rather than a direct inventory/sales inquiry. A marketing survey is a fixed Q&A,",
+    "e.g.: 'How many years have you owned your Harley-Davidson motorcycle?', 'Do you expect to make a",
+    "motorcycle purchase in the near future?', 'Which model of motorcycle are you interested in?',",
+    "'Demo Bikes Ridden: ...'. Return only JSON matching the schema.",
+    "",
+    "Fields:",
+    "- is_dealer_lead_survey: true only when the body is clearly such a structured marketing survey.",
+    "  A free-text question ('is the 2026 Road Glide in stock?', 'what's my payment?') is NOT a survey.",
+    "- purchase_intent: from the purchase-timeframe answer —",
+    '    "buyer" = they expect to purchase (any horizon: "now", "0-3 months", "3-12 months", "yes ...").',
+    '    "non_buyer" = they explicitly say they are NOT interested in purchasing.',
+    '    "unknown" = survey present but the purchase answer is missing/ambiguous.',
+    "- interested_model: the model from the 'Which model are you interested in?' answer, cleaned to a",
+    "  human label (e.g. '2026,TRIKE,STREET GLIDE 3 LIMITED' -> 'Street Glide 3 Limited'). CRITICAL:",
+    "  this is the model they are INTERESTED IN — NEVER the model they already OWN and NEVER a 'Demo",
+    "  Bikes Ridden' entry (those are survey questions, not a test ride taken at this dealer). Null if",
+    "  not clearly stated.",
+    "- confidence 0..1; use >= 0.7 only when the survey read is clear.",
+    "",
+    "Examples:",
+    '- "WEB LEAD (ADF) ... Customer Comments: Marketing Questions: Dealer Lead App ... Do you expect to make a motorcycle purchase in the near future? Yes, in 3-12 months - Which model of motorcycle are you interested in? 2026,TRIKE,STREET GLIDE 3 LIMITED Demo Bikes Ridden: 2026,TRIKE,STREET GLIDE 3 LIMITED" -> {"is_dealer_lead_survey":true,"purchase_intent":"buyer","interested_model":"Street Glide 3 Limited","confidence":0.95}',
+    '- "Marketing Questions ... Do you expect to make a motorcycle purchase? I am not interested in purchasing at this time" -> {"is_dealer_lead_survey":true,"purchase_intent":"non_buyer","interested_model":null,"confidence":0.92}',
+    '- "Is the 2026 Road Glide still available? What day can I come test ride it?" -> {"is_dealer_lead_survey":false,"purchase_intent":"unknown","interested_model":null,"confidence":0.9}',
+    "",
+    `Lead body:\n${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "dealer_lead_survey_parser",
+      schema: DEALER_LEAD_SURVEY_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 120,
+      debugTag: "llm-dealer-lead-survey-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const isDealerLeadSurvey = parsed.is_dealer_lead_survey === true;
+  const rawIntent = String(parsed.purchase_intent ?? "").toLowerCase();
+  const purchaseIntent: DealerLeadSurveyParse["purchaseIntent"] =
+    rawIntent === "buyer" ? "buyer" : rawIntent === "non_buyer" ? "non_buyer" : "unknown";
+  const interestedModel =
+    typeof parsed.interested_model === "string" && parsed.interested_model.trim()
+      ? parsed.interested_model.trim()
+      : null;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { isDealerLeadSurvey, purchaseIntent, interestedModel, confidence };
+}
+
+// Parser-first recognizer for a CUSTOMER-INITIATED service / parts-install APPOINTMENT request.
+// The dealer's service-scheduling handoff already exists (intake + "service will confirm a time"),
+// but its trigger (`hasServiceDepartmentContext`) only recognizes service via keywords
+// (service/repair/oil change/maintenance) — so a PARTS/ACCESSORY install ("bringing it in for the
+// wedge air cleaner", "putting on a stage 1 kit") on a NON-service-classified conversation (e.g. a
+// post-sale finance lead) fell through to a generic pleasantry (Don Cooper, +17162605144). Rather
+// than add more keywords (against the law), this typed parser comprehends the intent. Fail-direction:
+// unsure => none, the normal pipeline runs; we only hand off on a confident, explicit request.
+export async function parseServiceAppointmentRequestWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ServiceAppointmentRequestParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SERVICE_APPOINTMENT_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SERVICE_APPOINTMENT_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SERVICE_APPOINTMENT_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SERVICE_APPOINTMENT_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley-Davidson dealership thread. Decide whether the customer wants to bring",
+    "their motorcycle IN for SERVICE or a PARTS/ACCESSORY INSTALL and is asking to SCHEDULE an",
+    "appointment (or telling us a window they'll bring it in). The dealer's service department books",
+    "those — the agent must HAND OFF (intake + let them know service will confirm a time), never quote",
+    "or book a slot. Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "service_appointment_request": the customer wants to bring the bike in to have WORK done —',
+    "  service/maintenance (oil change, tires, brakes, inspection, repair, recall) OR installing a",
+    "  part/accessory (air cleaner/intake, exhaust/pipes, tuner, stage kit, seat, bars, lights) — AND",
+    "  is asking about an appointment / a time / when they can come in / giving a window to drop it off.",
+    '- "none": a sales test ride or a visit to look at/buy a bike; inventory availability; a question',
+    "  about PAST service history/records ('when were the tires last changed'); dropping off leftover",
+    "  stock parts/keys/personal items after a purchase; financing; or simply ANSWERING our own",
+    "  'what time are you coming in?' visit check-in.",
+    "",
+    "Hard rules (precision matters):",
+    "- It must be about getting WORK/INSTALL done on their bike, not seeing or buying a bike.",
+    "- explicit_request=true when they clearly ask for an appointment/time or state a drop-off window.",
+    "- service_item = the work or part in their words ('wedge air cleaner', 'oil change'); else null.",
+    "- timing_text = their preferred window if stated ('mid next month', 'Saturday morning'); else null.",
+    "- confidence 0..1; use >= 0.7 only when the service/install-appointment read is clear.",
+    "",
+    "Examples:",
+    '- "bringing it in for the wedge air cleaner mid next month, do you have an appointment?" -> {"intent":"service_appointment_request","service_item":"wedge air cleaner install","timing_text":"mid next month","explicit_request":true,"confidence":0.9}',
+    '- "need to get it in for an oil change, what days work?" -> {"intent":"service_appointment_request","service_item":"oil change","timing_text":null,"explicit_request":true,"confidence":0.92}',
+    '- "want to put a stage 1 kit on, can I drop it off Saturday?" -> {"intent":"service_appointment_request","service_item":"stage 1 kit install","timing_text":"Saturday","explicit_request":true,"confidence":0.9}',
+    '- "Can I come in Friday to test ride the Street Glide?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.95}',
+    '- "is the 2026 Road Glide still in stock?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.95}',
+    '- "when were the tires last changed on it?" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.9}',
+    '- (history: "out: what time you planning on coming in today?") "1 or 2 works" -> {"intent":"none","service_item":null,"timing_text":null,"explicit_request":false,"confidence":0.9}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "service_appointment_request_parser",
+      schema: SERVICE_APPOINTMENT_REQUEST_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 90,
+      debugTag: "llm-service-appointment-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: ServiceAppointmentRequestParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "service_appointment_request"
+      ? "service_appointment_request"
+      : "none";
+  const serviceItem =
+    typeof parsed.service_item === "string" && parsed.service_item.trim() ? parsed.service_item.trim() : undefined;
+  const timingText =
+    typeof parsed.timing_text === "string" && parsed.timing_text.trim() ? parsed.timing_text.trim() : undefined;
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, serviceItem, timingText, explicitRequest, confidence };
+}
+
+// No-response judge (2026-06-19). The agent chose to STAY SILENT on a customer turn. This judges
+// whether that silence was a MISS — a real ask/need dropped — or correct (opt-out, pure ack,
+// closeout, deferral, off-topic). Used by the (dark) no-response gate to shadow-log wrongful
+// silences before any live cutover. Returns null when disabled/low-signal — callers treat null as
+// "silence was fine" (don't manufacture a reply we can't justify).
+export async function judgeShouldRespondWithLLM(args: {
+  inbound: string; // the customer message the agent went silent on
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<ShouldRespondJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_SHOULD_RESPOND_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_SHOULD_RESPOND_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_SHOULD_RESPOND_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_SHOULD_RESPOND_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const inbound = String(args.inbound ?? "").trim();
+  if (!inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "A Harley dealership's AI agent chose to STAY SILENT (send no reply) on the customer message",
+    "below. Judge whether that silence was a MISS — the customer made a real ask or raised a need",
+    "the dealership should answer — or whether silence was the right call.",
+    "Return only JSON matching the provided schema.",
+    "",
+    "Also assign a category:",
+    "- \"answer_needed\": the customer asked a question or made a request the dealership should answer/act",
+    "  on — price, availability, photos, financing, a time to come in, a callback, a specific question, a",
+    "  complaint, a problem. Staying silent on these is a miss. => should_respond=true.",
+    "- \"social_reciprocation\": a warm, relational closer where a brief human reply would be on-brand but",
+    "  is OPTIONAL — \"have a good weekend!\", \"thanks so much, you've been a huge help\", \"happy Friday\",",
+    "  \"hope you have a great day\". A friend would say \"you too!\" These are NOT a dropped ask — set",
+    "  should_respond=false (don't force it), but tag them so staff can decide whether to reciprocate.",
+    "- \"no_reply\": truly nothing is needed — an opt-out / STOP / 'wrong number'; a pure ack with no",
+    "  warmth or ask ('👍', 'ok', 'sounds good', 'perfect'); a closeout ('no need, I already called',",
+    "  'all set', 'I was just curious'); a first-person deferral ('I'll let you know'). => should_respond=false.",
+    "",
+    "Rules:",
+    "- should_respond is true ONLY for category answer_needed. social_reciprocation and no_reply are false.",
+    "- Judge by the customer's message + recent thread. A bare 'ok' AFTER we asked a question may still",
+    "  warrant a follow-up; a bare 'ok' as a closeout does not — use the thread.",
+    "- When genuinely unsure, prefer no_reply / should_respond=false (don't manufacture a reply).",
+    "- confidence is 0..1; use >= 0.8 only when clear.",
+    "",
+    "Examples:",
+    '- "What is the asking price?" -> {"should_respond":true,"category":"answer_needed","confidence":0.95,"reason":"a direct price question went unanswered"}',
+    '- "can you send me a couple pics?" -> {"should_respond":true,"category":"answer_needed","confidence":0.92,"reason":"a media request went unanswered"}',
+    '- "have a good weekend!" -> {"should_respond":false,"category":"social_reciprocation","confidence":0.9,"reason":"warm closer; a brief \'you too\' would be on-brand"}',
+    '- "thanks so much, you have been a huge help" -> {"should_respond":false,"category":"social_reciprocation","confidence":0.88,"reason":"heartfelt thanks; a warm reply fits the friendly voice"}',
+    '- "👍" -> {"should_respond":false,"category":"no_reply","confidence":0.95,"reason":"pure acknowledgement, no ask"}',
+    '- "thanks, I was just curious" -> {"should_respond":false,"category":"no_reply","confidence":0.92,"reason":"closeout, needs nothing"}',
+    '- "STOP" -> {"should_respond":false,"category":"no_reply","confidence":0.98,"reason":"opt-out"}',
+    '- "I\'ll let you know when I\'m ready" -> {"should_respond":false,"category":"no_reply","confidence":0.85,"reason":"first-person deferral"}',
+    "",
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer message the agent stayed silent on: ${inbound}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "should_respond_judge",
+      schema: SHOULD_RESPOND_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-should-respond-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  const catRaw = String(parsed.category ?? "").toLowerCase();
+  const category: ShouldRespondJudgeParse["category"] =
+    catRaw === "answer_needed" || catRaw === "social_reciprocation" ? catRaw : "no_reply";
+  return {
+    // should_respond is authoritative for answer_needed only; never force a reply on the others.
+    shouldRespond: parsed.should_respond === true && category === "answer_needed",
+    category,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined
+  };
+}
+
+// Multi-dimensional pre-send draft-quality judge (2026-06-19). Reads a customer-facing draft
+// against the customer's turn and scores it on intent / tone / disposition / safety, returning
+/**
+ * Context-fidelity scorer — the "answering out of context" detector (v1: offline/audit only; the
+ * runtime hold+self-heal integration is a separate approve-first cutover). Given the customer's
+ * latest turn, the recent thread, the DRAFT, and the persisted ANCHOR (model of record, lead-type,
+ * appointment, dialogState — deliberately MORE than the generator's window), it judges whether the
+ * reply is faithful to this turn or adopts a stale / over-attached / fabricated / wrong-lead-type
+ * frame. Returns null when disabled/low-signal (callers treat null as "faithful" — never flag what
+ * we can't judge). See docs/context_fidelity_spec.md.
+ */
+export async function scoreContextFidelityWithLLM(args: {
+  draft: string;
+  inbound: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  anchor?: {
+    modelOfRecord?: string | null; // the model under discussion this thread (resolved, persisted)
+    leadType?: string | null; // classification bucket/cta, e.g. "event_promo/sweepstakes"
+    appointmentBooked?: boolean;
+    dialogState?: string | null;
+  };
+  channel?: "sms" | "email";
+}): Promise<ContextFidelityScoreParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CONTEXT_FIDELITY_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CONTEXT_FIDELITY_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CONTEXT_FIDELITY_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CONTEXT_FIDELITY_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const draft = String(args.draft ?? "").trim();
+  const inbound = String(args.inbound ?? "").trim();
+  if (!draft || !inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const anchor = args.anchor ?? {};
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. You decide whether the",
+    "agent's DRAFT reply is FAITHFUL TO THIS TURN — i.e. it answers what the customer actually said",
+    "and only brings up a bike/model/appointment the customer referenced this turn OR that is the",
+    "established subject of the thread (the ANCHOR). A reply that is fluent but talks about the wrong",
+    "thing is the failure we are hunting. Return only JSON matching the schema.",
+    "",
+    "You are given the ANCHOR (the persisted truth of this conversation) ON PURPOSE — use it:",
+    "- model_of_record: the bike actually under discussion. If the draft pitches a DIFFERENT model the",
+    "  customer didn't reference this turn -> frame=over_attached_model.",
+    "- lead_type: how this lead came in. If it's a non-sales promo (e.g. a sweepstakes/event signup)",
+    "  and the draft replies with a sales/bike-inquiry/stop-in frame -> frame=wrong_lead_type.",
+    "- appointment/dialog_state: if the draft re-asks or re-answers something the turn already settled",
+    "  (e.g. re-asks a day the customer just named) -> frame=stale_intent.",
+    "If the draft forgot the established subject entirely -> frame=dropped_anchor. If it invents a",
+    "frame the turn doesn't warrant -> frame=fabricated. If it's on-target -> frame=matches.",
+    "",
+    "Fields:",
+    "- addresses_this_turn: does the reply respond to what the customer said/asked THIS turn?",
+    "- referenced_entities_present: is every model/unit the reply names one the customer referenced",
+    "  this turn OR the anchor's model_of_record? (false = it pulled in an unreferenced model)",
+    "- frame: one of the values above.",
+    "- unsupported_assertion: the specific out-of-context claim, if any (else empty).",
+    '- verdict: "out_of_context" if the reply adopts a frame this turn doesn\'t warrant, else "faithful".',
+    '- severity: "major" if a customer would notice it answers the wrong thing; else "minor".',
+    "- confidence 0..1 (>= 0.8 only when clear). steering: one instruction to re-draft faithfully.",
+    "Be fair: do NOT flag a reply that genuinely addresses the turn. When unsure, prefer faithful.",
+    "",
+    "Examples:",
+    '- anchor lead_type "event_promo/sweepstakes" | customer: "(National sweepstakes signup)" | draft:',
+    '  "Thanks for your inquiry about the 2026 Heritage Classic. If you\'d like to stop in, let me know." ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":false,"frame":"wrong_lead_type",',
+    '   "unsupported_assertion":"treats a sweepstakes entry as a bike inquiry and pushes a stop-in",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.95,"reason":"sales frame on a non-sales sweepstakes signup","steering":"congratulate the sweepstakes entry and offer help; no bike pitch or stop-in"}',
+    '- anchor model_of_record "Road Glide" | customer: "as long as it\'s a road glide I can see how they handle" |',
+    '  draft: "We have 2 Ultra Limited units in stock right now. Top options: ..." ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":false,"frame":"over_attached_model",',
+    '   "unsupported_assertion":"offers Ultra Limited; the customer referenced a Road Glide",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.9,"reason":"pitches a model the customer did not reference","steering":"talk about the Road Glide the customer named"}',
+    '- customer: "I\'ll see you Monday!" | draft: "Absolutely — what day and time works for you?" ->',
+    '  {"addresses_this_turn":false,"referenced_entities_present":true,"frame":"stale_intent",',
+    '   "unsupported_assertion":"re-asks the day the customer already gave (Monday)",',
+    '   "verdict":"out_of_context","severity":"major","confidence":0.9,"reason":"re-asks a day already named","steering":"confirm Monday instead of re-asking"}',
+    '- anchor model_of_record "Street Glide" | customer: "what\'s the price on the street glide?" | draft:',
+    '  "I\'ll grab the exact out-the-door price on the Street Glide and text it over." ->',
+    '  {"addresses_this_turn":true,"referenced_entities_present":true,"frame":"matches",',
+    '   "unsupported_assertion":"","verdict":"faithful","severity":"minor","confidence":0.92,"reason":"answers the price ask on the referenced model","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Anchor: ${JSON.stringify({
+      model_of_record: anchor.modelOfRecord ?? null,
+      lead_type: anchor.leadType ?? null,
+      appointment_booked: anchor.appointmentBooked ?? false,
+      dialog_state: anchor.dialogState ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${inbound}`,
+    `DRAFT reply to judge: ${draft}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "context_fidelity",
+      schema: CONTEXT_FIDELITY_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-context-fidelity",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const frameRaw = String(parsed.frame ?? "").toLowerCase();
+  const allowedFrames = [
+    "matches",
+    "over_attached_model",
+    "stale_intent",
+    "wrong_lead_type",
+    "fabricated",
+    "dropped_anchor",
+    "other"
+  ];
+  const frame = (allowedFrames.includes(frameRaw) ? frameRaw : "other") as ContextFidelityScoreParse["frame"];
+  const verdict: ContextFidelityScoreParse["verdict"] =
+    String(parsed.verdict ?? "").toLowerCase() === "out_of_context" ? "out_of_context" : "faithful";
+  const severity: ContextFidelityScoreParse["severity"] =
+    String(parsed.severity ?? "").toLowerCase() === "major" ? "major" : "minor";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    addressesThisTurn: parsed.addresses_this_turn !== false,
+    referencedEntitiesPresent: parsed.referenced_entities_present !== false,
+    frame,
+    unsupportedAssertion:
+      typeof parsed.unsupported_assertion === "string" ? parsed.unsupported_assertion.slice(0, 240) : undefined,
+    verdict,
+    severity,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+/**
+ * Net 2 — the human-correction diff-judge. Given the AI's GENERATED draft and the body a human actually
+ * SENT (a staff edit), decide whether the correction was MATERIAL (the human changed WHAT the reply
+ * communicates — intent / facts / lead-type / context = a comprehension miss the loop should fix) vs
+ * COSMETIC (only HOW it reads — voice / length / formatting). The customer's latest message + anchor are
+ * provided so the judge can tell "answered the wrong thing" from "same answer, nicer words". Returns null
+ * when disabled/low-signal (caller treats null as "no material correction"). Comprehend, not regex.
+ */
+export async function classifyDraftEditWithLLM(args: {
+  generated: string; // the AI's original draft (originalDraftBody)
+  sent: string; // the body the human actually sent
+  inbound: string; // the customer's latest message the draft was replying to
+  history?: { direction: "in" | "out"; body: string }[];
+  anchor?: { modelOfRecord?: string | null; leadType?: string | null; dialogState?: string | null };
+  channel?: "sms" | "email";
+}): Promise<DraftEditJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DRAFT_EDIT_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DRAFT_EDIT_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DRAFT_EDIT_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DRAFT_EDIT_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const generated = String(args.generated ?? "").trim();
+  const sent = String(args.sent ?? "").trim();
+  if (!generated || !sent || generated === sent) return null; // no edit to judge
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const anchor = args.anchor ?? {};
+  const prompt = [
+    "You are a QA reviewer for a Harley dealership's AI sales agent. A staff rep edited the agent's",
+    "DRAFT reply before sending it. Compare the GENERATED draft to the SENT reply and decide whether the",
+    "edit was MATERIAL — the rep changed WHAT the reply communicates (answered a different question,",
+    "fixed a wrong/added a missing fact, changed the lead framing, or fixed an out-of-context reply) —",
+    "or COSMETIC — the rep only changed HOW it reads (voice, wording, length, formatting, greeting) while",
+    "the meaning stayed the same. A MATERIAL edit means the agent got the substance wrong and is a bug to",
+    "fix; a cosmetic edit is just style. Return only JSON matching the schema.",
+    "",
+    "Fields:",
+    "- is_material: true ONLY if the substance/meaning changed (not mere rewording).",
+    "- category: wrong_intent (answered a different question) | out_of_context (fluent but wrong subject) |",
+    "  wrong_lead_type (sales frame on a non-sales lead) | wrong_fact (corrected a fact/price/availability/",
+    "  policy) | missing_info (rep added needed info the draft omitted) | voice_tone | length_brevity |",
+    "  formatting | other. Use a cosmetic category (voice_tone/length_brevity/formatting) when is_material=false.",
+    "- confidence 0..1 (>= 0.8 only when clear). reason: what changed. steering: one instruction so the",
+    "  next draft gets it right (only meaningful when is_material).",
+    "Be conservative: when the meaning is the same, is_material=false. When unsure, prefer cosmetic.",
+    "",
+    "Examples:",
+    '- customer: "(Dealer Lead App survey: not interested in purchasing)" | generated: "Which bike are you',
+    '  asking about?" | sent: "Thanks for reaching out — no pressure at all, I\'m here if you ever want a bike." ->',
+    '  {"is_material":true,"category":"wrong_lead_type","confidence":0.95,"reason":"pitched a self-declared non-buyer","steering":"acknowledge a non-buyer survey warmly; no sales pitch"}',
+    '- customer: "what\'s the price on the street glide?" | generated: "It\'s $28,999." | sent: "The Street',
+    '  Glide is $26,499 — want the out-the-door?" -> {"is_material":true,"category":"wrong_fact","confidence":0.9,',
+    '   "reason":"corrected the price","steering":"quote the correct price for the Street Glide"}',
+    '- generated: "Hi there — yes that\'s in stock, want to come see it?" | sent: "Hey John, good news —',
+    '  it\'s in stock! Want to swing by?" -> {"is_material":false,"category":"voice_tone","confidence":0.9,',
+    '   "reason":"same message, friendlier wording + name","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Anchor: ${JSON.stringify({ model_of_record: anchor.modelOfRecord ?? null, lead_type: anchor.leadType ?? null, dialog_state: anchor.dialogState ?? null })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${args.inbound ?? ""}`,
+    `GENERATED draft: ${generated}`,
+    `SENT reply: ${sent}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "draft_edit_judge",
+      schema: DRAFT_EDIT_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-draft-edit-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const allowedCategories = [
+    "wrong_intent",
+    "out_of_context",
+    "wrong_lead_type",
+    "wrong_fact",
+    "missing_info",
+    "voice_tone",
+    "length_brevity",
+    "formatting",
+    "other"
+  ];
+  const categoryRaw = String(parsed.category ?? "").toLowerCase();
+  const category = (allowedCategories.includes(categoryRaw) ? categoryRaw : "other") as DraftEditJudgeParse["category"];
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    isMaterial: parsed.is_material === true,
+    category,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+/**
+ * Net 3 — the OPEN-ENDED TURN critic. Reads a recent conversation with NO fixed checklist and decides
+ * whether the agent mishandled this lead in ANY way, NAMING the issue class itself (the candidate new gap
+ * class). It judges the agent's ACTIONS this turn — the reply AND the side-effects (`actions`: the route it
+ * chose, the parsed lead fields, the cadence kind, active watches, open tasks, the handoff mode, the
+ * appointment) — so a wrong parse / wrong watch model / mis-route / wrong cadence / deflected booking /
+ * missing task is caught even when the reply text reads fine, not just bad prose. The only net that finds
+ * unknown-unknowns. Conservative (most turns are fine); a flagged finding is ESCALATED (Tier 2), never
+ * auto-patched, because the class is unconfirmed. Returns null when disabled/low-signal. Comprehend, not regex.
+ */
+export async function critiqueConversationHandlingWithLLM(args: {
+  thread: { direction: "in" | "out"; body: string }[];
+  lastAgentReply: string; // the reply most worth critiquing
+  lead?: { source?: string | null; bucket?: string | null; cta?: string | null; vehicle?: string | null };
+  actions?: Record<string, unknown> | null; // the turn's side-effects (summarizeTurnActions): route/parse/cadence/watch/task/handoff/appt
+  inStockModels?: string[] | null; // dealer's current in-stock model list (inventory enrichment) — lets the critic catch fabricated availability ("promised a bike we don't have")
+  channel?: "sms" | "email";
+}): Promise<OpenCriticParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_OPEN_CRITIC_ENABLED !== "0" &&
+    // EITHER provider is enough — the critic runs cross-model (Claude) by default, OpenAI as fallback.
+    !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY);
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_OPEN_CRITIC_DEBUG === "1";
+  // CROSS-MODEL by default (the recommended setup): the generator is OpenAI, so a Claude critic from a
+  // DIFFERENT model lineage catches the failure modes OpenAI is systematically blind to (a model can't
+  // reliably flag errors rooted in its own understanding). Auto-falls back to OpenAI when no Anthropic
+  // key is set OR when forced via LLM_OPEN_CRITIC_PROVIDER=openai — so it's safe to ship before the key
+  // lands on the box, and a Claude outage never blinds Net 3.
+  const useClaude =
+    String(process.env.LLM_OPEN_CRITIC_PROVIDER ?? "").toLowerCase() !== "openai" &&
+    !!String(process.env.ANTHROPIC_API_KEY ?? "").trim();
+  const claudeModel = process.env.ANTHROPIC_OPEN_CRITIC_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+  const openaiPrimary = process.env.OPENAI_OPEN_CRITIC_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const openaiFallback =
+    process.env.OPENAI_OPEN_CRITIC_MODEL_FALLBACK || (openaiPrimary === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const lastReply = String(args.lastAgentReply ?? "").trim();
+  if (!lastReply) return null;
+
+  const thread = (args.thread ?? []).slice(-12).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are an experienced Harley dealership sales manager reviewing how the dealership's AI agent",
+    "handled a lead. Read the WHOLE thread and judge whether the agent handled this turn appropriately",
+    "FOR THIS LEAD'S TYPE AND CONTEXT. Judge the agent's ACTIONS, not just its words: you are given the",
+    "side-effects the agent took this turn (AGENT ACTIONS) — the route/classification it chose, the lead",
+    "fields it parsed, the follow-up cadence, any inventory watch it set, any task it created, the handoff",
+    "mode, and the appointment. A reply can read fine while the underlying action is wrong. Hunt for ANY",
+    "mishandling of EITHER the reply OR an action — do NOT limit yourself to a fixed checklist.",
+    "Examples (non-exhaustive): treated a non-buyer/parts/service/event lead as a bike sale; ignored or",
+    "didn't answer what the customer asked; wrong tone for the situation; stated something unsupported;",
+    "ignored a constraint the customer gave; re-asked something already answered; PARSED the wrong vehicle/",
+    "timeframe/department; set an inventory WATCH for a model the customer didn't ask about; ROUTED a",
+    "service/parts/finance turn as a sales inquiry; picked the wrong CADENCE kind; left a cadence running",
+    "after a handoff; DEFLECTED a concrete appointment time instead of booking; failed to create a TASK for",
+    "a promise/commitment. If something is off in a way none of these name, FLAG IT and name the class",
+    "yourself in issue_class. Return only JSON matching the schema.",
+    "",
+    "INVENTORY CHECK (when an IN-STOCK MODELS list is provided below): if the agent told the customer a",
+    "specific unit/model is available / in stock / 'we have it' but that model is NOT in the in-stock list,",
+    "that is a fabricated-availability miss (issue_class e.g. \"promised_unit_not_in_stock\"). Be careful:",
+    "the list is by MODEL — a reasonable 'we can get/order one' or a trade/used inquiry is NOT a miss, and",
+    "an empty/absent list means SKIP this check (don't assume out-of-stock).",
+    "",
+    "Be conservative and fair: the MAJORITY of turns are fine. Only flag a CLEAR problem a customer or a",
+    "manager would actually notice. If the handling is reasonable, has_issue=false.",
+    "Fields: has_issue; severity (major if a customer would notice/it costs us the lead, else minor);",
+    "issue_class (a short snake_case label YOU choose, e.g. \"watch_set_for_wrong_model\" or",
+    "\"deflected_instead_of_booking\"); reason (what's wrong); evidence (the exact reply text OR the wrong",
+    "action); confidence 0..1 (>= 0.8 only when clear).",
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Lead: ${JSON.stringify({ source: lead.source ?? null, bucket: lead.bucket ?? null, cta: lead.cta ?? null, vehicle: lead.vehicle ?? null })}`,
+    args.actions ? `AGENT ACTIONS this turn: ${JSON.stringify(args.actions)}` : "AGENT ACTIONS this turn: (not provided)",
+    Array.isArray(args.inStockModels) && args.inStockModels.length
+      ? `IN-STOCK MODELS (current, by model): ${args.inStockModels.slice(0, 80).join(", ")}`
+      : "IN-STOCK MODELS: (not provided — skip the inventory check)",
+    thread.length ? `Thread:\n${thread.join("\n")}` : "Thread: (none)",
+    `The agent reply to scrutinize most: ${lastReply}`
+  ].join("\n");
+
+  const runOpenAI = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "open_critic",
+      schema: OPEN_CRITIC_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-open-critic",
+      debug
+    });
+
+  let parsed: any = null;
+  if (useClaude) {
+    parsed = await requestStructuredJsonAnthropic({
+      model: claudeModel,
+      prompt,
+      schemaName: "open_critic",
+      schema: OPEN_CRITIC_JSON_SCHEMA,
+      maxOutputTokens: 400,
+      debugTag: "llm-open-critic-claude",
+      debug
+    });
+  }
+  if (!parsed) {
+    // OpenAI fallback: the no-Claude-key path AND resilience if the Claude call fails/returns null.
+    parsed =
+      (await runOpenAI(openaiPrimary)) ??
+      (openaiFallback && openaiFallback !== openaiPrimary ? await runOpenAI(openaiFallback) : null);
+  }
+  if (!parsed) return null;
+
+  const severity: OpenCriticParse["severity"] =
+    String(parsed.severity ?? "").toLowerCase() === "major" ? "major" : "minor";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    hasIssue: parsed.has_issue === true,
+    severity,
+    issueClass: typeof parsed.issue_class === "string" ? parsed.issue_class.slice(0, 80) : undefined,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    evidence: typeof parsed.evidence === "string" ? parsed.evidence.slice(0, 240) : undefined,
+    confidence
+  };
+}
+
+// an overall verdict + a steering hint for a re-draft. Used by the (dark) draft-quality gate to
+// shadow-log what it WOULD regenerate/hold before any live cutover. Returns null when
+// disabled/low-signal — callers treat null as "pass" (don't block a draft we can't judge).
+export async function judgeDraftQualityWithLLM(args: {
+  draft: string;
+  inbound: string; // the customer's latest message this draft is replying to
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  channel?: "sms" | "email";
+}): Promise<DraftQualityJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_DRAFT_QUALITY_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_DRAFT_QUALITY_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_DRAFT_QUALITY_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_DRAFT_QUALITY_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const draft = String(args.draft ?? "").trim();
+  const inbound = String(args.inbound ?? "").trim();
+  if (!draft || !inbound) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. You read the DRAFT reply",
+    "the agent wants to send and the CUSTOMER message it is replying to, and you judge the draft on",
+    "four axes. Return only JSON matching the provided schema.",
+    "",
+    "Axes (each a boolean — true = passes):",
+    "- intent_ok: does the draft actually ADDRESS what the customer asked / needs this turn? A fluent",
+    "  reply that answers a DIFFERENT thing, dodges the question, or talks past the ask fails this.",
+    "- tone_ok: is it on-voice — warm, natural, like a helpful person texting a friend? Stiff/corporate",
+    "  (\"This is X. Per your inquiry...\"), robotic, or over-eager hard-sell fails. A 'Reply STOP' footer",
+    "  on SMS is fine. Sparing emoji is fine.",
+    "- disposition_ok: is it right for the customer's emotional state? If they're stressed, frustrated,",
+    "  grieving, or money-tight → acknowledge before pitching. If they're not ready / just looking →",
+    "  don't push a visit hard. If they're committed to a bike → don't undercut their choice. If they",
+    "  just want info → answer it, don't pivot to scheduling.",
+    "- safety_ok: no FABRICATED facts (a specific price, stock #, or availability the agent can't know),",
+    "  no confirming a booking that isn't booked, no compliance problem.",
+    "",
+    "overall:",
+    "- \"good\": all four axes pass; send as-is.",
+    "- \"needs_regenerate\": a recoverable problem — tone is off, it's awkward, it half-missed but the",
+    "  right info/approach is available; a re-draft would likely fix it.",
+    "- \"hold\": it answers the WRONG thing, fabricates a fact, or is unsafe — a re-draft of the same",
+    "  logic may not fix it; a human (or a code fix) should look. When unsure between regenerate and",
+    "  hold, prefer needs_regenerate.",
+    "",
+    "Rules:",
+    "- Judge the DRAFT, not the customer. Be fair: do not fail a draft that is genuinely fine.",
+    "- steering: one short instruction for a re-draft (e.g. \"answer the price question directly\",",
+    "  \"warm it up — drop the corporate intro\", \"acknowledge the stress before suggesting a visit\").",
+    "  Empty string when overall is good.",
+    "- confidence is 0..1; use >= 0.8 only when the verdict is clear.",
+    "",
+    "Examples:",
+    '- customer: "What is the asking price?" | draft: "Doing well—hope your day is going great too!" ->',
+    '  {"intent_ok":false,"tone_ok":true,"disposition_ok":false,"safety_ok":true,"overall":"hold",',
+    '   "confidence":0.95,"reason":"answers small talk, ignores the price question","steering":"answer the price question or say you will get the exact price"}',
+    '- customer: "what is the out the door price" | draft: "Great question — let me grab the exact',
+    '  out-the-door number from my manager and text it right over. Anything else you want me to include?" ->',
+    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.9,"reason":"addresses the price ask without fabricating a number","steering":""}',
+    '- customer: "my wife just passed, putting this on hold" | draft: "No problem! Want to come in',
+    '  Saturday at 10 to check it out?" ->',
+    '  {"intent_ok":false,"tone_ok":false,"disposition_ok":false,"safety_ok":true,"overall":"hold","confidence":0.95,"reason":"pushes a visit on a grieving customer who asked to pause","steering":"acknowledge their loss with empathy, no scheduling, leave the door open"}',
+    '- customer: "is it still available" | draft: "Yes it is! When can you come in?" ->',
+    '  {"intent_ok":true,"tone_ok":true,"disposition_ok":true,"safety_ok":true,"overall":"good","confidence":0.82,"reason":"confirms availability and invites a visit appropriately","steering":""}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `Customer's latest message: ${inbound}`,
+    `DRAFT reply to judge: ${draft}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "draft_quality_judge",
+      schema: DRAFT_QUALITY_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-draft-quality-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const overallRaw = String(parsed.overall ?? "").toLowerCase();
+  const overall: DraftQualityJudgeParse["overall"] =
+    overallRaw === "hold" || overallRaw === "needs_regenerate" ? overallRaw : "good";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    intentOk: parsed.intent_ok !== false,
+    toneOk: parsed.tone_ok !== false,
+    dispositionOk: parsed.disposition_ok !== false,
+    safetyOk: parsed.safety_ok !== false,
+    overall,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
+// Cadence-quality judge (2026-06-19). Judge #3 in the self-correcting loop. The draft-quality +
+// no-response judges only fire on INBOUND-triggered turns; the proactive follow-up cadence (the
+// nudges WE initiate on a schedule) was judged only by deterministic guards. This LLM judge adds
+// the open-ended quality net on top: should this proactive touch go out at all, does it fit state,
+// does it sound like a real employee (not a bot), is it pushy. Returns null when disabled/low-signal
+// — callers treat null as "no opinion" (shadow logs nothing). STEP 1 is shadow only.
+export async function judgeCadenceQualityWithLLM(args: {
+  message: string; // the proactive cadence message about to go out
+  channel?: "sms" | "email";
+  cadenceKind?: string | null; // e.g. post_sale / meta_promo / inventory_watch / nurture
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  daysSinceLastInbound?: number | null;
+}): Promise<CadenceQualityJudgeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_CADENCE_QUALITY_JUDGE_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_CADENCE_QUALITY_JUDGE_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_CADENCE_QUALITY_JUDGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_CADENCE_QUALITY_JUDGE_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const message = String(args.message ?? "").trim();
+  if (!message) return null;
+
+  const history = (args.history ?? []).slice(-8).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  // Surface any computer-like phrases already present so the tone axis has a concrete anchor.
+  const bannedHits = findComputerLikePhrases(message);
+  const prompt = [
+    "You are a strict QA reviewer for a Harley dealership's AI sales agent. The agent is about to send",
+    "a PROACTIVE follow-up (a scheduled cadence touch — the CUSTOMER did not just message; WE are",
+    "reaching out). Judge whether this message should go out, and how good it is, on four axes.",
+    "Return only JSON matching the provided schema.",
+    "",
+    "Axes (each a boolean — true = passes):",
+    "- send_worthy: is sending this proactive touch the right move RIGHT NOW? Fails if the deal looks",
+    "  done/closed, the customer asked for space, we just messaged them, or there's no real reason to",
+    "  reach out (an empty 'just checking in' with nothing new).",
+    "- state_fit: does it match reality? Fails if it references the wrong/again-asked thing, a unit that's",
+    "  sold/held/changed, a step already completed, or contradicts what the thread shows.",
+    "- tone_ok: does it sound like a REAL American H-D salesperson texting a buyer they like — warm,",
+    "  short, plain, low-pressure? Fails on anything that reads like a computer: corporate/CRM filler,",
+    "  marketing-speak, robotic phrasing, or a nagging tone. Banned computer-like phrases are an",
+    "  automatic tone_ok=false.",
+    "- disposition_ok: is it right for where the customer is? Not pushy if they're not ready, not a hard",
+    "  sell, paces the relationship.",
+    "",
+    "overall:",
+    '- "good": all four pass; send as-is.',
+    '- "needs_regenerate": worth sending, but reword (tone off, awkward, mild state slip a re-draft fixes).',
+    '- "suppress": do NOT send this proactive touch — wrong moment or nothing worth saying (send_worthy',
+    "  false). The problem is sending at all, not the wording.",
+    '- "hold": references something wrong/unsafe (fabricated fact, sold unit) that needs a human/code look.',
+    "",
+    "Rules:",
+    "- Be fair: do not fail a genuinely good, warm, relevant nudge.",
+    "- A proactive touch with a CONCRETE reason (a new arrival, a price, a photo, a real question, a",
+    "  referenced past chat) is usually send_worthy; a bare contentless ping usually is not.",
+    "- steering: one short re-draft instruction; empty string unless overall is needs_regenerate.",
+    "- confidence is 0..1; use >= 0.8 only when the verdict is clear.",
+    "",
+    "Examples:",
+    '- msg: "Hey Charlie, the 2026 Street Glide in Vivid Black just landed — want to come take a look this',
+    '  week?" -> {"send_worthy":true,"state_fit":true,"tone_ok":true,"disposition_ok":true,"overall":"good","confidence":0.9,"reason":"concrete new-arrival reason, warm and short","steering":""}',
+    '- msg: "Just checking in!" -> {"send_worthy":false,"state_fit":true,"tone_ok":true,"disposition_ok":true,"overall":"suppress","confidence":0.85,"reason":"no concrete reason to reach out","steering":""}',
+    '- msg: "Per your inquiry, we would be delighted to assist you in exploring our wide range of',
+    '  options at your earliest convenience." -> {"send_worthy":true,"state_fit":true,"tone_ok":false,"disposition_ok":true,"overall":"needs_regenerate","confidence":0.92,"reason":"reads like a corporate bot","steering":"rewrite plain and warm, like a rep texting a friend"}',
+    "",
+    `Channel: ${args.channel ?? "sms"}`,
+    `Cadence kind: ${args.cadenceKind ?? "unknown"}`,
+    typeof args.daysSinceLastInbound === "number"
+      ? `Days since the customer last replied: ${args.daysSinceLastInbound}`
+      : "Days since the customer last replied: unknown",
+    bannedHits.length ? `Banned computer-like phrases present: ${bannedHits.join(", ")}` : "Banned computer-like phrases present: none",
+    `Known lead: ${JSON.stringify({
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      source: lead?.source ?? null
+    })}`,
+    history.length ? `Recent thread:\n${history.join("\n")}` : "Recent thread: (none)",
+    `PROACTIVE cadence message to judge: ${message}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "cadence_quality_judge",
+      schema: CADENCE_QUALITY_JUDGE_JSON_SCHEMA,
+      maxOutputTokens: 200,
+      debugTag: "llm-cadence-quality-judge",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const overallRaw = String(parsed.overall ?? "").toLowerCase();
+  const overall: CadenceQualityJudgeParse["overall"] =
+    overallRaw === "hold" || overallRaw === "needs_regenerate" || overallRaw === "suppress"
+      ? overallRaw
+      : "good";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return {
+    sendWorthy: parsed.send_worthy !== false,
+    stateFit: parsed.state_fit !== false,
+    toneOk: parsed.tone_ok !== false,
+    dispositionOk: parsed.disposition_ok !== false,
+    overall,
+    confidence,
+    reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 240) : undefined,
+    steering: typeof parsed.steering === "string" ? parsed.steering.slice(0, 240) : undefined
+  };
+}
+
 export async function parseTradeTargetValueWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -5921,6 +8829,14 @@ export async function parseTradeTargetValueWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  return normalizeTradeTargetLLMOutput(parsed, text);
+}
+
+// Deterministic post-parse normalization for the trade-target-value LLM output —
+// extracted so the legacy parser and the merged unified parser share ONE set of
+// fail-safe guard rails (behavior-preserving extraction, 2026-07-02).
+export function normalizeTradeTargetLLMOutput(parsed: any, textRaw: string): TradeTargetValueParse {
+  const text = String(textRaw ?? "").trim();
   const hasTargetValue = !!parsed.has_target_value;
   const parsedAmount = Number(parsed.amount);
   const amount =
@@ -6962,7 +9878,16 @@ inbound: "Do you have any Street Bob coming in?"
 output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`,
     `EXAMPLE H
 inbound: "Tuesday around 11am would work great"
-output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`
+output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"confidence":0.98}`,
+    `EXAMPLE I
+inbound: "Looking for the mustache engine guard #49000140, or the normal guard #49000148 in chrome"
+output: {"action":"pricing_request","explicit_request":true,"item":"engine guard","has_humor":false,"confidence":0.95}`,
+    `EXAMPLE J
+inbound: "Swing arm saddle bag part # 90201568 in the authentic brown"
+output: {"action":"pricing_request","explicit_request":true,"item":"saddlebag","has_humor":false,"confidence":0.95}`,
+    `EXAMPLE K
+inbound: "And then a chrome sissy bar with the back rack that attaches"
+output: {"action":"pricing_request","explicit_request":true,"item":"sissy bar and rack","has_humor":false,"confidence":0.94}`
   ];
   const prompt = [
     "You are a strict parser for Harley-Davidson dealership accessory/customization requests.",
@@ -6981,6 +9906,7 @@ output: {"action":"none","explicit_request":false,"item":"","has_humor":false,"c
     "- item should be the normalized accessory noun phrase, such as handlebars, heated grips, seat, stereo, speakers, pipes, exhaust.",
     "- has_humor=true if the message contains an obvious joke/lol/jk, even when action is none.",
     "- Do not classify motorcycle model availability questions as accessory requests.",
+    "- A specific accessory/part the customer wants to order/price/check stock on — often named with a part number (e.g. #49000140 or 'part # 57001615') — is a pricing_request (explicit_request=true), even mid-conversation about an incoming/ordered bike. It is NOT a 'let me know when the bike arrives' acknowledgement.",
     "- confidence is 0..1.",
     "",
     ...examples,
@@ -8547,6 +11473,9 @@ export type VehicleImageDescription = {
   color: string;
   distinctiveFeatures: string;
   confidence: number;
+  // For a NON-motorcycle photo (true chatter — a fish, a pet, scenery): a brief, warm,
+  // friend-style one-liner a salesperson would text back. Empty for motorcycle photos.
+  socialReply: string;
 };
 
 /**
@@ -8571,14 +11500,23 @@ export async function describeVehicleImageWithLLM(args: {
   const schema: { [key: string]: unknown } = {
     type: "object",
     additionalProperties: false,
-    required: ["is_motorcycle", "make", "model_family", "color", "distinctive_features", "confidence"],
+    required: [
+      "is_motorcycle",
+      "make",
+      "model_family",
+      "color",
+      "distinctive_features",
+      "confidence",
+      "social_reply"
+    ],
     properties: {
       is_motorcycle: { type: "boolean" },
       make: { type: "string" },
       model_family: { type: "string" },
       color: { type: "string" },
       distinctive_features: { type: "string" },
-      confidence: { type: "number" }
+      confidence: { type: "number" },
+      social_reply: { type: "string" }
     }
   };
   const prompt = [
@@ -8590,8 +11528,10 @@ export async function describeVehicleImageWithLLM(args: {
     "- distinctive_features: short comma list (e.g. \"Tour-Pak, ape hangers, passenger backrest\").",
     "- confidence reflects the model_family identification only, 0 to 1. If you cannot tell the family, use a low confidence and an empty model_family.",
     "- is_motorcycle=false for paperwork, screenshots of documents, people, or anything that is not a motorcycle photo.",
+    "- social_reply: ONLY when is_motorcycle is false AND the photo is friendly personal chatter (a fish someone caught, a pet, a kid, scenery, a meal) — a brief, warm, casual one-liner a friendly salesperson would text back, like \"Haha, nice catch!\" or \"Aw, cute pup!\". Under 12 words, no sales pitch, no question, no inventory, no mention of bikes. Leave social_reply EMPTY for a motorcycle photo, for documents/paperwork/screenshots, or anything sensitive/unclear.",
     "",
-    'EXAMPLE output for a photo of a red-and-black full-dress tourer with a top case: {"is_motorcycle":true,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85}',
+    'EXAMPLE output for a photo of a red-and-black full-dress tourer with a top case: {"is_motorcycle":true,"make":"Harley-Davidson","model_family":"Ultra Limited","color":"red over black two-tone","distinctive_features":"Tour-Pak, passenger backrest, lower fairings","confidence":0.85,"social_reply":""}',
+    'EXAMPLE output for a photo of a fish someone caught: {"is_motorcycle":false,"make":"","model_family":"","color":"","distinctive_features":"","confidence":0,"social_reply":"Haha, nice catch!"}',
     args.contextText ? `Customer message context: ${String(args.contextText).slice(0, 200)}` : ""
   ]
     .filter(Boolean)
@@ -8636,7 +11576,8 @@ export async function describeVehicleImageWithLLM(args: {
       modelFamily: String(parsed.model_family ?? "").trim(),
       color: String(parsed.color ?? "").trim(),
       distinctiveFeatures: String(parsed.distinctive_features ?? "").trim(),
-      confidence: Number(parsed.confidence ?? 0)
+      confidence: Number(parsed.confidence ?? 0),
+      socialReply: String(parsed.social_reply ?? "").trim()
     };
   } catch (error) {
     console.warn("[vehicle-image-vision] describe failed", {
@@ -8804,7 +11745,8 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead,
       inventoryWatch: args.inventoryWatch,
       inventoryWatchPending: args.inventoryWatchPending,
-      dialogState: args.dialogState
+      dialogState: args.dialogState,
+      _shadowSuppressed: true // the wrapper fires its own full-scope shadow below
     }),
     parseTradePayoffWithLLM({
       text: args.text,
@@ -8818,6 +11760,23 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead
     })
   ]);
+  const legacy = combineUnifiedSlotParse(semantic, trade, tradeTarget);
+  if (legacy && process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1") {
+    // Shadow compare (consolidation-plan Phase-1 pattern): the merged one-call
+    // parser runs alongside, fire-and-forget — it logs disagreements and NEVER
+    // affects the live result or adds latency to the customer path.
+    void runUnifiedSlotsMergedShadowCompare(args, legacy);
+  }
+  return legacy;
+}
+
+// Pure combiner shared by the legacy 3-call path and the merged 1-call parser —
+// one implementation so shadow comparisons measure the LLM, not drift here.
+export function combineUnifiedSlotParse(
+  semantic: SemanticSlotParse | null,
+  trade: TradePayoffParse | null,
+  tradeTarget: TradeTargetValueParse | null
+): UnifiedSemanticSlotParse | null {
   if (!semantic && !trade && !tradeTarget) return null;
 
   const watchConfidence =
@@ -8866,6 +11825,399 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Merged unified slot parser — the parser-consolidation shadow slice
+// (docs/comprehension_consolidation_plan.md, 2026-07-02). ONE structured call
+// carries all three jobs the legacy path runs as parallel sub-calls
+// (semantic slots + trade payoff + trade target value). Runs ONLY in shadow
+// (UNIFIED_SLOTS_MERGED_SHADOW=1) behind parseUnifiedSemanticSlotsWithLLM;
+// output is normalized by the SAME shared guard rails and compared field-by-
+// field against the legacy result. Cutover is a separate approve-first step.
+// NOTE: the rules/examples below are a MERGED-SHADOW COPY of the three legacy
+// prompts — if you edit a legacy parser's rules/examples, mirror it here (and
+// vice versa) until cutover deletes one of the copies.
+// ---------------------------------------------------------------------------
+
+const UNIFIED_SLOT_MERGED_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["semantic", "trade_payoff", "trade_target"],
+  properties: {
+    semantic: SEMANTIC_SLOT_PARSER_JSON_SCHEMA,
+    trade_payoff: TRADE_PAYOFF_PARSER_JSON_SCHEMA,
+    trade_target: TRADE_TARGET_VALUE_PARSER_JSON_SCHEMA
+  }
+};
+
+export async function parseUnifiedSemanticSlotsMergedWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+  inventoryWatch?: Conversation["inventoryWatch"];
+  inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  tradePayoff?: Conversation["tradePayoff"];
+  dialogState?: string;
+}): Promise<UnifiedSemanticSlotParse | null> {
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_UNIFIED_SLOT_MERGED_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_UNIFIED_SLOT_MERGED_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_UNIFIED_SLOT_MERGED_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? {};
+  const watch = args.inventoryWatch ?? null;
+  const pending = args.inventoryWatchPending ?? null;
+  const dialogState = String(args.dialogState ?? "").trim();
+  const existingPayoff = args.tradePayoff ?? null;
+
+  const semanticExamples = [
+    'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","year_min":0,"year_max":0,"color":"black","condition":"new","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: text me if a road glide trike comes in" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: keep an eye out for a Pan Am Limited" output: {"watch_action":"set_watch","watch":{"model":"Pan America 1250 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: let me know if you get a CVO Street Glide 3 Limited" output: {"watch_action":"set_watch","watch":{"model":"CVO Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Keep an eye out for a 2020 Road Glide in black under $18k." output: {"watch_action":"set_watch","watch":{"model":"Road Glide","year":"2020","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":18000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Staff: We will keep an eye out for a XG500 or XG750 for you." output: {"watch_action":"set_watch","watch":{"model":"XG500 or XG750","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Staff: I will keep an eye out for a pre owned tri-glide in the $15-20 thousand range for you." output: {"watch_action":"set_watch","watch":{"model":"Tri Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: if a black street glide comes in let me know" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: can you lmk when you get the 23 lrs?" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: lmk if you get a 23 lrs in black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: watch for fxlrs in vivid black" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"","year_min":0,"year_max":0,"color":"vivid black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: lmk when a 2023 low rider s comes in" output: {"watch_action":"set_watch","watch":{"model":"Low Rider S","year":"2023","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: text me if a 2021-2023 street glide in silver comes in between 15k and 20k" output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":2021,"year_max":2023,"color":"silver","condition":"unknown","min_price":15000,"max_price":20000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: you got any street glides that are used right now? probably thirteen, fourteen maybe. if you wanna jot me down and keep me in mind that would be sweet." output: {"watch_action":"set_watch","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"used","min_price":13000,"max_price":14000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: Looking for a pre owned street glide special or road glide special in the $14,000-$16,000 price range. Likes black on black." output: {"watch_action":"set_watch","watch":{"model":"Street Glide Special","year":"","year_min":0,"year_max":0,"color":"black","condition":"used","min_price":14000,"max_price":16000,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: if one lands, shoot me a text please" output: {"watch_action":"set_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: do you have any black street glides in stock?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"","year_min":0,"year_max":0,"color":"black","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: do you have brake pads in stock for my 2018 street glide?" output: {"watch_action":"none","watch":{"model":"Street Glide","year":"2018","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: If you get anyone yanking out their 114/117 M-8 to upgrade let me know as I am in the market for one." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"parts","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: stop the watch alerts for the road glide please" output: {"watch_action":"stop_watch","watch":{"model":"Road Glide","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I found one already, stop looking for me." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: Thanks Joe. I am all set on the bike search for now. I will reach out when I am looking again." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: I am all set on the bike search for the time being. I appreciate your help and will reach out later." output: {"watch_action":"stop_watch","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: left a 1000 deposit and I am coming in saturday to finalize" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can service quote an LED headlight install?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"service","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
+    'input: "Customer: I have to cancel coming to you Tuesday. I am having service done on the bike and inspection. I need to do a few more things before I can sell. I will get back to you." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.94}',
+    'input: "Customer: can you send a walkaround video?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"video","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: 11am can you send photos of street glide limited" output: {"watch_action":"none","watch":{"model":"Street Glide Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"photos","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: never mind photo. test ride street glide limited 3. thanks" output: {"watch_action":"none","watch":{"model":"Street Glide 3 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.95}',
+    'input: "Customer: let me know if you guys have a demo day like Kawasaki" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: do you guys have demo days?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
+    'input: "Customer: can I get a call instead of texts?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"call_only","media_intent":"none","service_records_intent":false,"confidence":0.93}',
+    'input: "Customer: do you have service records on that bike?" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":true,"confidence":0.94}'
+  ];
+  const payoffExamples = [
+    'input: "Customer: No lien no payoff. I own it and have the title." output: {"payoff_status":"no_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.98}',
+    'input: "Customer: I still owe on it through Eaglemark." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.95}',
+    'input: "Customer: I did not have the lien holder info. Do you have the lien holder address?" output: {"payoff_status":"has_lien","needs_lien_holder_info":true,"provides_lien_holder_info":false,"confidence":0.94}',
+    'input: "Customer: Lien holder is Eaglemark Savings Bank, PO Box 277940 Sacramento CA 95827." output: {"payoff_status":"has_lien","needs_lien_holder_info":false,"provides_lien_holder_info":true,"confidence":0.96}',
+    'input: "Customer: I can come by Friday afternoon to look at it." output: {"payoff_status":"unknown","needs_lien_holder_info":false,"provides_lien_holder_info":false,"confidence":0.93}'
+  ];
+
+  const prompt = [
+    "You are ONE parser performing THREE independent extraction jobs on the same dealership SMS message.",
+    "Return only JSON that matches the provided schema: an object with keys \"semantic\", \"trade_payoff\", and \"trade_target\".",
+    "Run every job on every message — a job unrelated to the message returns its neutral/none/unknown values.",
+    "The examples below show each job's sub-object on its own; nest each under its key in the final JSON.",
+    "",
+    "=== JOB 1: semantic — semantic slots ===",
+    "Extract only these slots:",
+    "- watch_action: set_watch / stop_watch / none",
+    "- watch: model/year/year_min/year_max/color/condition/min_price/max_price/monthly_budget/down_payment if explicitly present",
+    "- department_intent: service / parts / apparel / none",
+    "- contact_preference_intent: call_only / none",
+    "- media_intent: video / photos / either / none",
+    "- service_records_intent: true/false",
+    "",
+    "Rules:",
+    "- watch_action=set_watch only when the customer asks to be notified/updated if inventory comes in or becomes available.",
+    "- Strong set_watch phrases include 'keep an eye out for', 'watch for', 'text me if', 'let me know if/lmk if', 'when one comes in', and staff-authored 'I/we will keep an eye out for'.",
+    "- If department_intent is parts, service, or apparel, watch_action must be none even when the text says 'let me know if' or 'in stock'.",
+    "- Treat shorthand as valid intent/model cues (e.g., 'lmk' = let me know, 'lrs'/'fxlrs' = Low Rider S).",
+    "- Phrases like 'if one lands', 'if one comes in', 'when one lands', or 'shoot me a text' are set_watch when recent history, lead vehicle, existing watch, or pending watch provides the model context.",
+    "- Explicit 'watch for fxlrs/lrs' is set_watch and should normalize the model to Low Rider S.",
+    "- watch_action=stop_watch only when customer asks to stop those watch alerts/updates (not global STOP opt-out unless watch context is explicit).",
+    "- Phrases like 'found one already, stop looking' mean stop_watch.",
+    "- In an existing watch context, phrases like 'all set on the bike search', 'set for the time being', or 'I will reach out when I am looking again' mean stop_watch.",
+    "- watch_action=none for general inventory questions without watch request.",
+    "- Never set watch_action from standalone time tokens or media requests. For 'send photos/video' requests, keep watch_action=none and set media_intent accordingly.",
+    "- department_intent=service/parts/apparel only when customer explicitly requests that department/category help.",
+    "- department_intent=parts for parts/part-number/OEM/brake pads/tires/accessory fitment questions, even if the text says 'in stock' and includes a bike model.",
+    "- department_intent=parts for engine/motor sourcing requests, including take-off Milwaukee-Eight / M-8 114 or 117 engines from customer upgrades.",
+    "- department_intent=service for install/repair price questions like headlight bulb to LED, light replacement, wiring/fitment labor.",
+    "- Use department_intent=none for general sales messages.",
+    "- contact_preference_intent=call_only only when customer explicitly asks for calls only / no texts.",
+    "- media_intent=video/photos/either only when the customer explicitly asks for media (walkaround, pics, photos, video).",
+    "- service_records_intent=true only when customer explicitly asks for service/maintenance records/history, battery/tires condition history, or similar records-check request.",
+    "- watch.model should be normalized human model text when possible; else empty string.",
+    "- watch.year should be empty string unless explicitly provided.",
+    "- watch.year_min/year_max are only for explicit year ranges like 2021-2023 or 2021 to 2023; otherwise 0.",
+    "- watch.color should be empty string unless explicitly provided.",
+    "- watch.condition should be one of new/used/any/unknown.",
+    "- min_price/max_price are explicit bike-price constraints only; parse k/grand as thousands; otherwise 0.",
+    "- monthly_budget/down_payment are explicit monthly/down values only; otherwise 0.",
+    "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...semanticExamples,
+    "",
+    "=== JOB 2: trade_payoff — trade-in lien/payoff state ===",
+    "Interpret the customer's latest message for trade payoff state.",
+    "Guidelines:",
+    "- payoff_status=no_lien when customer says they own it, have title, no lien/payoff/loan.",
+    "- payoff_status=has_lien when customer indicates they still owe, have a lien/payoff/lender/bank loan.",
+    "- payoff_status=unknown when neither is clearly stated.",
+    "- needs_lien_holder_info=true when customer asks for lien holder/payoff address/info/details/name.",
+    "- provides_lien_holder_info=true when customer provides lender/lien holder/payoff details.",
+    "- Spelling mistakes are common (e.g., lein).",
+    "- If message is unrelated to liens/payoff, return unknown/false/false with lower confidence.",
+    "- confidence is 0..1.",
+    "",
+    "Examples:",
+    ...payoffExamples,
+    "",
+    "=== JOB 3: trade_target — trade-in target value ===",
+    "Goal:",
+    "- Detect when customer states a specific trade value target for their bike.",
+    "",
+    "Examples that SHOULD set has_target_value=true:",
+    "- \"am i anywhere close to 7k\"",
+    "- \"I would need 7000 for my bike\"",
+    "- \"if i'm not at 7,000 it won't make sense\"",
+    "- \"i'd have to get at least $8,500\"",
+    "",
+    "Examples that SHOULD set has_target_value=false:",
+    "- \"what can you give me for my bike?\" (no concrete number)",
+    "- \"i want top dollar\" (no concrete number)",
+    "- unrelated pricing/payment questions for the bike they're buying.",
+    "",
+    "Rules:",
+    "- amount must be numeric dollars when present (convert shorthand like 7k -> 7000).",
+    "- raw_text should contain the customer phrase indicating their target.",
+    "- If no clear target amount is present, use has_target_value=false and amount=0.",
+    "- confidence is 0..1.",
+    "",
+    "=== Shared context ===",
+    `Lead vehicle: ${JSON.stringify({
+      year: lead?.vehicle?.year ?? null,
+      model: lead?.vehicle?.model ?? lead?.vehicle?.description ?? null,
+      color: lead?.vehicle?.color ?? null,
+      condition: lead?.vehicle?.condition ?? null
+    })}`,
+    `Trade context: ${JSON.stringify({
+      tradeVehicle: lead?.tradeVehicle?.model ?? null,
+      leadSource: lead?.source ?? null
+    })}`,
+    `Existing watch: ${JSON.stringify(watch ?? {})}`,
+    `Pending watch: ${JSON.stringify(pending ?? {})}`,
+    `Existing trade payoff state: ${JSON.stringify(existingPayoff ?? {})}`,
+    `Dialog state: ${dialogState || "none"}`,
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> => {
+    return requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "unified_slot_merged_parser",
+      schema: UNIFIED_SLOT_MERGED_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 480,
+      debugTag: "llm-unified-slot-merged-parser",
+      debug
+    });
+  };
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  // Same shared guard rails as the legacy 3-call path — the comparison below
+  // measures the LLM merge, not normalization drift.
+  const semantic =
+    parsed.semantic && typeof parsed.semantic === "object"
+      ? normalizeSemanticSlotLLMOutput(parsed.semantic, {
+          text,
+          history,
+          lead,
+          inventoryWatch: watch ?? undefined,
+          inventoryWatchPending: pending ?? undefined
+        })
+      : null;
+  const trade =
+    parsed.trade_payoff && typeof parsed.trade_payoff === "object"
+      ? normalizeTradePayoffLLMOutput(parsed.trade_payoff, text)
+      : null;
+  const tradeTarget =
+    parsed.trade_target && typeof parsed.trade_target === "object"
+      ? normalizeTradeTargetLLMOutput(parsed.trade_target, text)
+      : null;
+  return combineUnifiedSlotParse(semantic, trade, tradeTarget);
+}
+
+export type UnifiedSlotFieldDiff = { field: string; legacy: unknown; merged: unknown };
+
+// Pure field-level comparison between the legacy 3-call result and the merged
+// 1-call result. Deterministic; pinned by unified_slots_merged_shadow:eval.
+export function diffUnifiedSlotParse(
+  legacy: UnifiedSemanticSlotParse,
+  merged: UnifiedSemanticSlotParse,
+  opts?: { scope?: "all" | "semantic" }
+): { equal: boolean; diffs: UnifiedSlotFieldDiff[] } {
+  const scope = opts?.scope ?? "all";
+  const diffs: UnifiedSlotFieldDiff[] = [];
+  const normStr = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const normNum = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  };
+  const push = (field: string, a: unknown, b: unknown) => {
+    diffs.push({ field, legacy: a ?? null, merged: b ?? null });
+  };
+  const cmpStr = (field: string, a: unknown, b: unknown, fallback = "") => {
+    if (normStr(a ?? fallback) !== normStr(b ?? fallback)) push(field, a, b);
+  };
+  const cmpNum = (field: string, a: unknown, b: unknown) => {
+    if (normNum(a) !== normNum(b)) push(field, a, b);
+  };
+  const cmpBool = (field: string, a: unknown, b: unknown) => {
+    if (!!a !== !!b) push(field, !!a, !!b);
+  };
+
+  cmpStr("watchAction", legacy.watchAction, merged.watchAction, "none");
+  cmpStr("watch.model", legacy.watch?.model, merged.watch?.model);
+  cmpStr("watch.year", legacy.watch?.year, merged.watch?.year);
+  cmpNum("watch.yearMin", legacy.watch?.yearMin, merged.watch?.yearMin);
+  cmpNum("watch.yearMax", legacy.watch?.yearMax, merged.watch?.yearMax);
+  cmpStr("watch.color", legacy.watch?.color, merged.watch?.color);
+  cmpStr("watch.condition", legacy.watch?.condition, merged.watch?.condition, "unknown");
+  cmpNum("watch.minPrice", legacy.watch?.minPrice, merged.watch?.minPrice);
+  cmpNum("watch.maxPrice", legacy.watch?.maxPrice, merged.watch?.maxPrice);
+  cmpNum("watch.monthlyBudget", legacy.watch?.monthlyBudget, merged.watch?.monthlyBudget);
+  cmpNum("watch.downPayment", legacy.watch?.downPayment, merged.watch?.downPayment);
+  cmpStr("departmentIntent", legacy.departmentIntent, merged.departmentIntent, "none");
+  cmpStr("contactPreferenceIntent", legacy.contactPreferenceIntent, merged.contactPreferenceIntent, "none");
+  cmpStr("mediaIntent", legacy.mediaIntent, merged.mediaIntent, "none");
+  cmpBool("serviceRecordsIntent", legacy.serviceRecordsIntent, merged.serviceRecordsIntent);
+  if (scope === "all") {
+    // Payoff/target comparisons only make sense when the legacy side actually
+    // ran those jobs on this turn (the unified wrapper path).
+    cmpStr("payoffStatus", legacy.payoffStatus, merged.payoffStatus, "unknown");
+    cmpBool("needsLienHolderInfo", legacy.needsLienHolderInfo, merged.needsLienHolderInfo);
+    cmpBool("providesLienHolderInfo", legacy.providesLienHolderInfo, merged.providesLienHolderInfo);
+    cmpNum("tradeTargetValue.amount", legacy.tradeTargetValue?.amount, merged.tradeTargetValue?.amount);
+  }
+
+  return { equal: diffs.length === 0, diffs };
+}
+
+// Semantic-scope shadow: fires from parseSemanticSlotsWithLLM on the live
+// traffic path. The legacy side of the comparison is the semantic result only;
+// merged payoff/target outputs are logged unvalidated for cutover review.
+async function runSemanticScopeMergedShadowCompare(
+  args: {
+    text: string;
+    history?: { direction: "in" | "out"; body: string }[];
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+    dialogState?: string;
+  },
+  legacySemantic: SemanticSlotParse
+): Promise<void> {
+  try {
+    const startedAt = Date.now();
+    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
+    const elapsedMs = Date.now() - startedAt;
+    if (!merged) {
+      console.log(
+        "[unified-slots-shadow]",
+        JSON.stringify({ at: new Date().toISOString(), scope: "semantic", outcome: "merged_null", elapsedMs })
+      );
+      return;
+    }
+    const legacyAsUnified = combineUnifiedSlotParse(legacySemantic, null, null);
+    if (!legacyAsUnified) return;
+    const { equal, diffs } = diffUnifiedSlotParse(legacyAsUnified, merged, { scope: "semantic" });
+    const record = {
+      at: new Date().toISOString(),
+      scope: "semantic",
+      outcome: equal ? "agree" : "disagree",
+      elapsedMs,
+      diffs,
+      mergedPayoffStatus: merged.payoffStatus,
+      mergedTradeTargetAmount: merged.tradeTargetValue?.amount ?? null,
+      textPreview: String(args.text ?? "").slice(0, 140)
+    };
+    console.log("[unified-slots-shadow]", JSON.stringify(record));
+    appendUnifiedSlotsShadowRecord(record);
+  } catch (err: any) {
+    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
+  }
+}
+
+// Fire-and-forget shadow runner: never throws into the live path, never blocks it.
+async function runUnifiedSlotsMergedShadowCompare(
+  args: {
+    text: string;
+    history?: { direction: "in" | "out"; body: string }[];
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+    tradePayoff?: Conversation["tradePayoff"];
+    dialogState?: string;
+  },
+  legacy: UnifiedSemanticSlotParse
+): Promise<void> {
+  try {
+    const startedAt = Date.now();
+    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
+    const elapsedMs = Date.now() - startedAt;
+    if (!merged) {
+      console.log(
+        "[unified-slots-shadow]",
+        JSON.stringify({ at: new Date().toISOString(), scope: "all", outcome: "merged_null", elapsedMs })
+      );
+      return;
+    }
+    const { equal, diffs } = diffUnifiedSlotParse(legacy, merged);
+    const record = {
+      at: new Date().toISOString(),
+      scope: "all",
+      outcome: equal ? "agree" : "disagree",
+      elapsedMs,
+      diffs,
+      textPreview: String(args.text ?? "").slice(0, 140)
+    };
+    console.log("[unified-slots-shadow]", JSON.stringify(record));
+    appendUnifiedSlotsShadowRecord(record);
+  } catch (err: any) {
+    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
+  }
+}
+
+function appendUnifiedSlotsShadowRecord(record: Record<string, unknown>): void {
+  try {
+    const dir =
+      process.env.UNIFIED_SLOTS_SHADOW_DIR ||
+      (process.env.REPORT_ROOT ? `${process.env.REPORT_ROOT}/unified_slots_shadow` : "");
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    fs.appendFileSync(`${dir}/unified_slots_shadow_${day}.jsonl`, `${JSON.stringify(record)}\n`);
+  } catch {
+    // best-effort persistence; the console line is the primary record
+  }
+}
+
 export async function parseSemanticSlotsWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -8873,6 +12225,9 @@ export async function parseSemanticSlotsWithLLM(args: {
   inventoryWatch?: Conversation["inventoryWatch"];
   inventoryWatchPending?: Conversation["inventoryWatchPending"];
   dialogState?: string;
+  /** internal: set by parseUnifiedSemanticSlotsWithLLM so its own full-scope
+   *  shadow doesn't double-fire the semantic-scope shadow below. */
+  _shadowSuppressed?: boolean;
 }): Promise<SemanticSlotParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -9004,6 +12359,42 @@ export async function parseSemanticSlotsWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
+  const out = normalizeSemanticSlotLLMOutput(parsed, {
+    text,
+    history,
+    lead,
+    inventoryWatch: watch ?? undefined,
+    inventoryWatchPending: pending ?? undefined
+  });
+  if (process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1" && !args._shadowSuppressed) {
+    // Semantic-scope shadow on the REAL production traffic path: wherever the
+    // semantic parser runs live, the merged 3-in-1 parser runs alongside,
+    // fire-and-forget — semantic fields are diffed; the merged payoff/target
+    // outputs are logged (unvalidated) for cutover review.
+    void runSemanticScopeMergedShadowCompare(args, out);
+  }
+  return out;
+}
+
+// Deterministic post-parse normalization for the semantic-slot LLM output — the
+// fail-safe watch/department/media guard rails, extracted so the legacy parser
+// and the merged unified parser share ONE implementation (behavior-preserving
+// extraction, 2026-07-02).
+export function normalizeSemanticSlotLLMOutput(
+  parsed: any,
+  ctx: {
+    text: string;
+    history: string[]; // "direction: body" lines, already sliced by the caller
+    lead?: Conversation["lead"];
+    inventoryWatch?: Conversation["inventoryWatch"];
+    inventoryWatchPending?: Conversation["inventoryWatchPending"];
+  }
+): SemanticSlotParse {
+  const text = String(ctx.text ?? "").trim();
+  const history = ctx.history ?? [];
+  const lead = ctx.lead ?? {};
+  const watch = ctx.inventoryWatch ?? null;
+  const pending = ctx.inventoryWatchPending ?? null;
   const textLower = text.toLowerCase();
   const watchActionRaw = String(parsed.watch_action ?? "").toLowerCase();
   let watchAction: SemanticSlotParse["watchAction"] =
@@ -9411,13 +12802,112 @@ ${history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n")}
   }
 }
 
+/** Reads DRAFT_QUALITY_AUTO_REGENERATE. Default OFF (dark) — selfHeal is a no-op until flipped. */
+export function draftAutoRegenerateEnabled(): boolean {
+  const raw = String(process.env.DRAFT_QUALITY_AUTO_REGENERATE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+// De-dup the live double-judge: when self-heal (in the orchestrator) judges a draft, the publish gate
+// would judge the SAME draft again moments later in the same request. selfHeal caches the verdict it
+// computed for the draft it returns; the gate reuses it (same inbound+draft) instead of paying a second
+// LLM call. Short TTL + small cap so it's a same-request memo, not durable state. Miss => the gate just
+// judges as before (safe fallback). Single-process API, so the cache is shared across the request flow.
+const SELF_HEAL_VERDICT_TTL_MS = 120_000;
+const selfHealVerdictCache = new Map<string, { verdict: DraftQualityJudgeParse; at: number }>();
+function selfHealVerdictKey(inbound: string, draft: string): string {
+  return `${String(inbound ?? "").slice(0, 240)} ${String(draft ?? "").trim().slice(0, 500)}`;
+}
+export function cacheSelfHealVerdict(inbound: string, draft: string, verdict: DraftQualityJudgeParse | null): void {
+  if (!verdict || !String(draft ?? "").trim()) return;
+  const now = Date.now();
+  if (selfHealVerdictCache.size > 200) {
+    for (const [k, v] of selfHealVerdictCache) if (now - v.at > SELF_HEAL_VERDICT_TTL_MS) selfHealVerdictCache.delete(k);
+  }
+  selfHealVerdictCache.set(selfHealVerdictKey(inbound, draft), { verdict, at: now });
+}
+export function getCachedSelfHealVerdict(inbound: string, draft: string): DraftQualityJudgeParse | null {
+  const key = selfHealVerdictKey(inbound, draft);
+  const hit = selfHealVerdictCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > SELF_HEAL_VERDICT_TTL_MS) {
+    selfHealVerdictCache.delete(key);
+    return null;
+  }
+  return hit.verdict;
+}
+
+// STEP 3 of the self-correcting loop — INLINE auto-regenerate. After the orchestrator produces a
+// draft, this judges it; on a confident hold-class verdict it regenerates ONCE with the judge's
+// steering (the actual PATCH — see DraftContext.steering) and RE-JUDGES. If the re-draft passes, it
+// becomes the healed draft; if it still fails, the ORIGINAL is returned unchanged and the downstream
+// publish gate holds it (cause #3 — a code/routing bug a re-roll can't fix). Dark unless
+// DRAFT_QUALITY_AUTO_REGENERATE is on; a pure no-op when off (no extra LLM calls). One attempt by
+// design — the re-judge is what guarantees we never SHIP a still-bad draft.
+export async function selfHealDraftWithLLM(args: {
+  draft: string;
+  ctx: DraftContext;
+}): Promise<{ draft: string; healed: boolean; outcome: "no_op" | "passed" | "healed" | "still_failing" }> {
+  const original = String(args.draft ?? "");
+  if (!draftAutoRegenerateEnabled()) return { draft: original, healed: false, outcome: "no_op" };
+  const channel: "sms" | "email" = args.ctx.channel === "email" ? "email" : "sms";
+  const inbound = String(args.ctx.inquiry ?? "").trim();
+  if (!original.trim() || !inbound) return { draft: original, healed: false, outcome: "no_op" };
+  try {
+    const v1 = await judgeDraftQualityWithLLM({ draft: original, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const conf1 = typeof v1?.confidence === "number" ? v1.confidence : 0;
+    if (!v1 || v1.overall === "good" || conf1 < 0.8) {
+      // Draft is good/unsure — cache the verdict so the publish gate reuses it (no second judge call).
+      cacheSelfHealVerdict(inbound, original, v1);
+      return { draft: original, healed: false, outcome: "passed" };
+    }
+    // The PATCH: regenerate with the judge's steering so the re-draft fixes what was wrong.
+    const steering = String(v1.steering || v1.reason || "").trim();
+    const steered = String((await generateDraftWithLLM({ ...args.ctx, steering })) ?? "").trim();
+    if (!steered || steered === original.trim()) {
+      cacheSelfHealVerdict(inbound, original, v1); // returned draft is the bad original → gate reuses v1 to hold
+      return { draft: original, healed: false, outcome: "still_failing" };
+    }
+    const v2 = await judgeDraftQualityWithLLM({ draft: steered, inbound, history: args.ctx.history, lead: args.ctx.lead, channel });
+    const conf2 = typeof v2?.confidence === "number" ? v2.confidence : 0;
+    if (v2 && v2.overall !== "good" && conf2 >= 0.8) {
+      // Re-draft still bad — keep the ORIGINAL so the publish gate holds it (don't ship a worse re-roll).
+      cacheSelfHealVerdict(inbound, original, v1);
+      return { draft: original, healed: false, outcome: "still_failing" };
+    }
+    cacheSelfHealVerdict(inbound, steered, v2); // healed draft's verdict → gate reuses it to pass
+    return { draft: steered, healed: true, outcome: "healed" };
+  } catch {
+    return { draft: original, healed: false, outcome: "no_op" }; // fail-safe: never break draft production
+  }
+}
+
+// Deterministic SMS brevity budget (closed-loop voice fix, 2026-06-24). "Reply says too much" is the
+// #1 staff thumbs-down reason (Phase 2 report: 40%). The prompt does the real shortening; this gives
+// a measurable shadow signal. Conservative — only flags genuinely overloaded SMS drafts. The trailing
+// "Reply STOP to opt out" compliance footer is excluded so it never counts against brevity.
+export function exceedsSmsBrevityBudget(
+  text: string,
+  opts?: { maxSentences?: number; maxChars?: number }
+): boolean {
+  const maxSentences = opts?.maxSentences ?? 4;
+  const maxChars = opts?.maxChars ?? 480;
+  const body = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*reply stop to opt ?out\.?\s*$/i, "")
+    .trim();
+  if (!body) return false;
+  const sentences = (body.match(/[.!?]+(?=\s|$)/g) ?? []).length || 1;
+  return body.length > maxChars || sentences > maxSentences;
+}
+
 export async function generateDraftWithLLM(ctx: DraftContext): Promise<string> {
   // Draft-model A/B: the customer-facing reply composer runs on the lead's arm
   // (gpt-5 challenger vs gpt-5-mini control). Shared by live + regenerate via the
   // orchestrator, so both paths get the same per-lead model.
-  const { model, arm: draftModelArm } = resolveDraftModelForLead(ctx.leadKey);
+  const { model, arm: draftModelArm, provider: draftProvider } = resolveDraftModelForLead(ctx.leadKey);
   if (process.env.OPENAI_DRAFT_MODEL_DEBUG === "1") {
-    console.log("[draft-model-ab]", { leadKey: ctx.leadKey, arm: draftModelArm, model });
+    console.log("[draft-model-ab]", { leadKey: ctx.leadKey, arm: draftModelArm, model, provider: draftProvider });
   }
   const manualIntentHint = inferManualIntentHintFromDraftContext(ctx);
   const manualReplyExamplesBlock = buildManualReplyExamplesPromptBlock(manualIntentHint);
@@ -9434,7 +12924,10 @@ EMAIL RULES (strict):
 `
     : `
 SMS RULES (strict):
-- 1–3 short paragraphs (1–5 sentences). Natural SMS tone.
+- BE BRIEF. Default to 1–2 short sentences; 3 only if truly needed. Answer ONLY what the customer
+  asked THIS turn — do not pile on extra options, facts, offers, or multiple questions they didn't
+  ask for. At most ONE question per message. If you have more to say, save it for their reply.
+  (Staff's #1 complaint is replies that say too much — when in doubt, cut it.)
 - No signatures.
 - If not first outbound, do NOT repeat the intro.
 - Do NOT offer appointment times unless the customer explicitly asks to schedule or stop in.
@@ -9455,9 +12948,19 @@ HARDSHIP (the customer disclosed a personal hardship or serious situation — il
 `
     : "";
 
+
+  const steeringHint = String(ctx.steering ?? "").trim();
+  const steeringBlock = steeringHint
+    ? `
+IMPORTANT — THIS IS A RE-DRAFT. A prior attempt was held by quality review. Fix exactly this and keep everything else on-voice:
+- ${steeringHint}
+- Do NOT state any price, stock number, rate, or availability you are not certain of. If unsure, say you'll confirm.
+- Address what the customer actually asked this turn; don't change the subject.
+`
+    : "";
   const instructions = `
 You write dealership sales replies for a Harley-Davidson dealership.
-
+${steeringBlock}
 VOICE / STYLE (strict):
 - Friendly, professional, concise.
 - Sound like a real dealership rep: warm, confident, low‑pressure.
@@ -9470,6 +12973,7 @@ VOICE / STYLE (strict):
 - If the customer sounds frustrated or confused, add one short empathy line ("I get that" / "I know that's frustrating") and move on.
 - At most ONE em dash (—) per message. Prefer commas or periods. Real staff texts almost never use them.
 - Never use these phrases: "if helpful", "if it helps", "simple compare", "next-step options", "quick walkaround", "payment snapshot", "narrow it down", "I'm here if you need anything", "all good either way".
+- ${bannedPhraseAvoidanceInstruction()}
 - After the first intro, use a natural short form of the dealership name (like "American H-D" for American Harley-Davidson) instead of the full name every time.
 - Offer something concrete (photos, numbers, a time window, an answer) instead of generic offers to help.
 ${channelRules}
@@ -9481,9 +12985,9 @@ CONTROLLED VARIATIONS (use these to sound human):
 
 SMS VARIATIONS:
 - Intro (first outbound only):
-  1) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for your inquiry."
-  2) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for reaching out."
-  3) "Hey {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  1) "Hey {firstName}, it's {agentName} over at {dealerName}. Thanks for your message."
+  2) "Hey {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  3) "Hey {firstName}, it's {agentName} over at {dealerName}. Glad you got in touch."
 - Acknowledge:
   1) "Got it."
   2) "Thanks for the details."
@@ -9496,8 +13000,8 @@ SMS VARIATIONS:
   1) "Do any of these times work?"
   2) "Which works best?"
 - Reminder offer (when they say later / next month / I’ll let you know):
-  1) "No rush — I’m here when you’re ready. Just reach out when the time is right."
-  2) "Totally fine. I’ll be here when you’re ready — just reach out when you’re ready to move forward."
+  1) "No rush — I’m here when you’re ready. Just text me when the time is right."
+  2) "Totally fine. I’ll be here when you’re ready — just text me when you’re ready to move forward."
 - Soft scheduling when timing is uncertain (only if they asked to schedule):
   1) "I can pencil you in and we can adjust if needed."
   2) "If you want, I can hold a time and we can move it if needed."
@@ -9507,9 +13011,9 @@ SMS VARIATIONS:
 
 EMAIL VARIATIONS:
 - Intro (first outbound only):
-  1) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for your inquiry."
-  2) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for reaching out."
-  3) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for contacting us."
+  1) "Hi {firstName}, it's {agentName} over at {dealerName}. Thanks for your message."
+  2) "Hi {firstName}, it's {agentName} over at {dealerName}. Good to hear from you."
+  3) "Hi {firstName}, it's {agentName} over at {dealerName}. Glad you got in touch."
 - Acknowledge:
   1) "Thanks for the details."
   2) "I appreciate the info."
@@ -9843,31 +13347,61 @@ Recent history:
 ${ctx.history.map(h => `${h.direction.toUpperCase()}: ${h.body}`).join("\n\n")}
 `.trim();
 
-  const response = await client.responses.create({
-    model,
-    instructions,
-    input,
-    ...optionalCreateTextConfig(model)
-  });
-  recordOpenAIUsage(response, {
-    feature: "llm_draft",
-    operation: "generate_customer_draft",
-    requestKind: "responses.create",
-    model,
-    conversationId: ctx.leadKey,
-    leadRef: ctx.lead?.leadRef ?? null,
-    metadata: {
-      channel: ctx.channel,
-      bucket: ctx.bucket ?? null,
-      cta: ctx.cta ?? null,
-      leadSource: ctx.leadSource ?? null
-    }
-  });
+  const generateViaOpenAI = async (openAiModel: string): Promise<string> => {
+    const response = await client.responses.create({
+      model: openAiModel,
+      instructions,
+      input,
+      ...optionalCreateTextConfig(openAiModel)
+    });
+    recordOpenAIUsage(response, {
+      feature: "llm_draft",
+      operation: "generate_customer_draft",
+      requestKind: "responses.create",
+      model: openAiModel,
+      conversationId: ctx.leadKey,
+      leadRef: ctx.lead?.leadRef ?? null,
+      metadata: {
+        channel: ctx.channel,
+        bucket: ctx.bucket ?? null,
+        cta: ctx.cta ?? null,
+        leadSource: ctx.leadSource ?? null
+      }
+    });
+    return (response.output_text || "").trim();
+  };
 
-  let draft = (response.output_text || "").trim();
+  let draft: string;
+  if (draftProvider === "anthropic") {
+    try {
+      draft = await generateDraftViaAnthropic({ model, instructions, input });
+    } catch (e) {
+      // Sonnet canary failed (key/HTTP/refusal/timeout) — never drop the draft; fall back to
+      // the OpenAI control model so the customer still gets a reply.
+      if (process.env.OPENAI_DRAFT_MODEL_DEBUG === "1") {
+        console.warn("[draft-model-ab] anthropic arm fell back to control:", String((e as any)?.message ?? e));
+      }
+      draft = await generateViaOpenAI(draftModelControl());
+    }
+  } else {
+    draft = await generateViaOpenAI(model);
+  }
   if (ctx.channel === "sms") {
     draft = sanitizeSmsDraftNoEmail(draft, userAskedForEmail(ctx));
+    // Brevity shadow signal: measure how often drafts still run long after the prompt tightening
+    // (the #1 thumbs-down class). Logging only — never trims/blocks. Kill with DRAFT_BREVITY_SHADOW=0.
+    if (String(process.env.DRAFT_BREVITY_SHADOW ?? "1") !== "0" && exceedsSmsBrevityBudget(draft)) {
+      console.warn("[draft-brevity-shadow]", { leadKey: ctx.leadKey, chars: draft.replace(/\s+/g, " ").trim().length });
+    }
   }
   draft = sanitizePhotoAsk(draft);
+  // Phantom-visit repair (PHANTOM_VISIT_GUARD): the deterministic builders guard at construction, but the
+  // LLM can still fabricate "thanks for coming in for the test ride / congrats on <bike>" on a lead that
+  // never visited (Tim Williams, 6/25 — held by the context-fidelity judge). Rewrite to visit-neutral when
+  // no visit is confirmed. Output guard on our own draft; fail-direction safe (a confirmed visit is kept).
+  if (phantomVisitGuardEnabled()) {
+    const visitConv = { appointment: ctx.appointment, lead: { source: ctx.leadSource }, messages: ctx.history };
+    if (!customerVisitConfirmed(visitConv)) draft = stripPhantomVisitFraming(draft, visitConv);
+  }
   return draft;
 }

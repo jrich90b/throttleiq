@@ -95,8 +95,9 @@ const question = appendOutbound(
 assert.ok(question, "question outbound should be stored");
 assert.match(question!.body, /^Sure\./);
 
-// Whole-body "Got it." with an unmatched inbound keeps the original text rather
-// than inventing an agreement that nothing in the inbound supports.
+// Whole-body "Got it." with an unmatched inbound: the curt ack is never shipped
+// (Joe, 2026-06-20). With no contextual lead-in to substitute, it falls back to a
+// warm "Sounds good." instead of echoing "Got it."
 const wholeBodyConv = convWithInbound("I'll be there around noon.");
 const wholeBody = appendOutbound(
   wholeBodyConv,
@@ -107,7 +108,8 @@ const wholeBody = appendOutbound(
   "SM_eval_whole_body"
 );
 assert.ok(wholeBody, "whole-body outbound should be stored");
-assert.match(wholeBody!.body, /^Got it\./);
+assert.match(wholeBody!.body, /^Sounds good\./);
+assert.doesNotMatch(wholeBody!.body, /\bGot it\b/);
 
 // A draft that natively opens with "Sounds good." gets the same treatment as a
 // "Got it." opener — no blind agreement when the customer shared a photo.

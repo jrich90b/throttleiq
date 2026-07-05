@@ -33,6 +33,44 @@ assert.ok(!/i have you on/i.test(mid), "mid-conversation ack does NOT use the co
 const noBike = buildTradeAdfAck({ bikeLabel: "", midConversation: false });
 assert.ok(/your bike/i.test(noBike), "missing bike label falls back to 'your bike'");
 
+// TRADE-TOWARD-BUY (steven osipovitch, 2026-06-26): a trade lead that ALSO names a DISTINCT purchase
+// vehicle must acknowledge the bike they want, not just the trade.
+const towardBuy = buildTradeAdfAck({
+  bikeLabel: "2023 Can-Am Ryker Rally 900 ACE",
+  purchaseLabel: "2016 Trike Freewheeler",
+  midConversation: false
+});
+assert.ok(/2023 Can-Am Ryker Rally 900 ACE/.test(towardBuy), "trade-toward-buy ack still names the trade");
+assert.ok(/2016 Trike Freewheeler/.test(towardBuy), "trade-toward-buy ack names the bike they WANT (the miss this fixes)");
+assert.ok(/toward the/i.test(towardBuy), "trade-toward-buy ack frames it as trading toward the purchase");
+assert.ok(/firm number after a quick in-person appraisal/i.test(towardBuy), "trade-toward-buy ack still offers the appraisal");
+const towardBuyMid = buildTradeAdfAck({ bikeLabel: "2008 Suzuki Boulevard", purchaseLabel: "2024 Street Glide", midConversation: true });
+assert.ok(/2024 Street Glide/.test(towardBuyMid) && /already working on/i.test(towardBuyMid), "mid-conversation trade-toward-buy names the purchase + ties to the relationship");
+
+// DUPLICATE-FIELD GUARD: when the ADF duplicates the trade into the vehicle field (purchase == trade),
+// do NOT produce "trade your X toward the X" — fall back to the plain trade ack. (Protects against the
+// open-critic false-positive class where vehicle and tradeVehicle are the same unit.)
+const dup = buildTradeAdfAck({ bikeLabel: "2000 Dyna Wide Glide", purchaseLabel: "2000 Dyna Wide Glide", midConversation: false });
+assert.ok(!/toward the/i.test(dup), "duplicate purchase==trade => no 'toward the' weave");
+assert.ok(/trade-in request for 2000 Dyna Wide Glide/.test(dup), "duplicate field => plain trade ack");
+// A blank/your-bike purchase label never weaves.
+const blankPurchase = buildTradeAdfAck({ bikeLabel: "2008 Suzuki Boulevard", purchaseLabel: "", midConversation: false });
+assert.ok(!/toward the/i.test(blankPurchase), "no purchase label => plain trade ack (unchanged behavior)");
+
+// PLACEHOLDER-TARGET GUARD (Gene Campana, Ref 11551, 2026-06-26 — human_correction_material wrong_fact):
+// a Trade Accelerator ADF whose `vehicle` field is the placeholder "Harley-Davidson Other" must NOT be
+// woven in as a concrete trade target ("trade your Road King toward the 2026 Harley-Davidson Other").
+// It falls through to the plain trade ack — exactly the staff correction.
+for (const placeholder of ["2026 Harley-Davidson Other", "Harley-Davidson Other", "Other", "Harley-Davidson Full Line", "harley-davidson"]) {
+  const ph = buildTradeAdfAck({ bikeLabel: "2013 FLHRSE5 CVO Road King", purchaseLabel: placeholder, midConversation: false });
+  assert.ok(!/toward the/i.test(ph), `placeholder target "${placeholder}" => no 'toward the' weave`);
+  assert.ok(!/other/i.test(ph), `placeholder target "${placeholder}" => never names the placeholder`);
+  assert.ok(/trade-in request for 2013 FLHRSE5 CVO Road King/.test(ph), `placeholder target "${placeholder}" => plain trade ack naming the real trade-in`);
+}
+// A REAL purchase target alongside a real make is still woven (the guard is placeholder-only, not make-wide).
+const realTarget = buildTradeAdfAck({ bikeLabel: "2013 CVO Road King", purchaseLabel: "2026 Road Glide Limited", midConversation: false });
+assert.ok(/toward the 2026 Road Glide Limited/.test(realTarget), "a real, specific target is still woven (placeholder guard does not over-suppress)");
+
 // Orchestrator wiring: the trade template branches on the ADF provider + uses the builder,
 // and keeps the "Totally fair question" opener only for non-ADF (customer-SMS) trade questions.
 const orch = fs.readFileSync(path.resolve("services/api/src/domain/orchestrator.ts"), "utf8");
@@ -42,5 +80,11 @@ assert.ok(
 );
 assert.ok(/midConversation: hasPriorOutbound/.test(orch), "orchestrator must pass hasPriorOutbound as the mid-conversation signal");
 assert.ok(/"Totally fair question\. "/.test(orch), "the customer-question opener must stay for non-ADF trade SMS");
+assert.ok(/purchaseLabel/.test(orch), "orchestrator passes the purchase vehicle to the trade ack");
 
-console.log("PASS adf-trade-reply eval (builder + orchestrator wiring)");
+// Both-paths: the live Trade-Accelerator intake routes through the SAME builder (centralized) with the
+// purchase label — no divergent inline trade ack.
+const sg = fs.readFileSync(path.resolve("services/api/src/routes/sendgridInbound.ts"), "utf8");
+assert.ok(/buildTradeAdfAck\(\{ bikeLabel, purchaseLabel/.test(sg), "the live ADF trade intake uses the shared builder with the purchase label");
+
+console.log("PASS adf-trade-reply eval (builder + trade-toward-buy + dup-guard + placeholder-target guard + both-path wiring)");

@@ -154,7 +154,7 @@ function extractColor(item: Record<string, any>): string | undefined {
   return undefined;
 }
 
-function normalizeModel(s: string): string {
+export function normalizeModel(s: string): string {
   const raw = s
     .toLowerCase()
     // common model-word cleanup for user-entered text
@@ -170,7 +170,7 @@ function normalizeModel(s: string): string {
   return raw;
 }
 
-function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
+export function modelMatches(candidateRaw: string | undefined, targetRaw: string): boolean {
   if (!candidateRaw) return false;
   const candidate = normalizeModel(candidateRaw);
   const target = normalizeModel(targetRaw);
@@ -183,6 +183,29 @@ function modelMatches(candidateRaw: string | undefined, targetRaw: string): bool
   // Keep matching directional so trim-specific asks do not collapse to base families:
   // target="street glide limited" should NOT match candidate="street glide".
   return candidate.includes(target);
+}
+
+// Suffix tokens that denote a DISTINCT Harley model, not a trim/color of a base
+// model: "Road Glide Limited"/"...ST"/CVO etc. are separate models (often ~$10k
+// apart), so a base-model watch ("Road Glide") must NOT be satisfied by them.
+// (The directional `candidate.includes(target)` above otherwise lets "road glide
+// limited" satisfy a "road glide" watch.) Generalizes the existing CVO guard.
+const DISTINCT_MODEL_TOKENS = new Set(["limited", "special", "st", "cvo", "ultra", "classic"]);
+
+/**
+ * True when the in-stock UNIT carries a distinct-model token the WATCH does not —
+ * i.e. the unit is a separate sibling model, not a trim/color of the watched base.
+ * Token-level (not substring) so "street" never trips "st". Used by the watch
+ * matchers to block a base-model watch from firing on a distinct sibling unless
+ * the watch is explicitly `openToOtherTrims`. Production case (Joe 2026-06-30):
+ * Joseph Mackmin's "Road Glide" watch fired a "Road Glide Limited" alert.
+ */
+export function unitIsDistinctModelFromWatch(unitModelRaw: string | undefined, watchModelRaw: string | undefined): boolean {
+  if (!unitModelRaw || !watchModelRaw) return false;
+  const unitTokens = normalizeModel(unitModelRaw).split(" ").filter(t => DISTINCT_MODEL_TOKENS.has(t));
+  if (!unitTokens.length) return false;
+  const watchTokens = new Set(normalizeModel(watchModelRaw).split(" ").filter(t => DISTINCT_MODEL_TOKENS.has(t)));
+  return unitTokens.some(t => !watchTokens.has(t));
 }
 
 export function extractImageDate(url: string): Date | null {

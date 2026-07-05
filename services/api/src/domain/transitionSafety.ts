@@ -108,6 +108,10 @@ export function shouldSuppressDispositionCloseout(
   if (hasActiveDealCloseoutBlockers(conv, opts)) return true;
   if (isLogisticsProgressUpdateText(text)) return true;
   if (isStructuredFinanceInfoText(text)) return true;
+  // KEEP (fail-direction): an affordability / ride-confidence objection is a LIVE, engaged
+  // concern — not a closeout signal — so suppressing disposition here prevents a WRONGFUL CLOSE.
+  // This fail-UNSAFE usage is why the detector stays deterministic and is NOT migrated to a parser
+  // (a disabled-LLM/low-confidence false negative would fail toward closing a live lead).
   if (isAffordabilityRideConfidenceObjectionText(text)) return true;
   if (hasCompetingActiveIntentText(text)) return true;
   if (!hasPostSaleOrOwnershipContext(conv)) return false;

@@ -4,6 +4,8 @@ import twilio from "twilio";
 import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
+import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
+import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import {
   upsertConversationByLeadKey,
   createConversationForLeadKey,
@@ -17,6 +19,7 @@ import {
   confirmAppointmentIfMatchesSuggested,
   startFollowUpCadence,
   applyMetaPromoInitialCadence,
+  resolveInitialAdfCadencePlan,
   isNearTermMetaTimeframe,
   scheduleLongTermFollowUp,
   discardPendingDrafts,
@@ -44,7 +47,11 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
+import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
+import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
@@ -72,7 +79,10 @@ import {
   parseVehicleInfoRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
   parseFirstTimeRiderGuidanceWithLLM,
-  parseWalkInOutcomeWithLLM
+  parseWalkInOutcomeWithLLM,
+  parseAdfDepartmentInterestWithLLM,
+  parseDealerLeadSurveyWithLLM,
+  hasDealerLeadSurveyHint
 } from "../domain/llmDraft.js";
 import type {
   CompositeSalesInquiryParse,
@@ -115,7 +125,7 @@ import {
   isResponseControlParserAccepted
 } from "../domain/transitionSafety.js";
 import { applyDraftStateInvariants } from "../domain/draftStateInvariants.js";
-import { resolveRoutingParserDecision } from "../domain/routerV2.js";
+import { resolveRoutingParserDecision, decideAdfDepartmentRoute } from "../domain/routerV2.js";
 import { listUsers } from "../domain/userStore.js";
 import { formatEmailLayout } from "../domain/tone.js";
 import {
@@ -140,6 +150,7 @@ import {
   buildHiringManagerInquiryReply,
   buildMarketplaceSellMyBikeReviewReply,
   buildRideChallengeSignupReply,
+  hasPriorCustomerFacingOutbound,
   cleanCatalogModelNameForDisplay,
   hasRideChallengeSignupAcknowledgement,
   isHiringManagerInquiryText,
@@ -824,7 +835,9 @@ function normalizeInventoryColorForMatch(colorRaw?: string | null): string {
 
 function isGenericLeadModel(modelText: string): boolean {
   const t = modelText.trim().toLowerCase();
-  return !t || /^(other|full line|full lineup|null)$/.test(t);
+  // A placeholder "Full Line" / "Other" is never a real bookable model — match it even when a make
+  // prefixes it ("Harley-Davidson Full Line"), so we never build an inventory watch on the placeholder.
+  return !t || /^(other|full line|full lineup|null)$/.test(t) || /\bfull line(up)?$/.test(t);
 }
 
 const MODEL_NOISE_TOKENS = new Set([
@@ -1610,9 +1623,17 @@ function buildDealerLeadAppPostRideReply(args: {
       args.conv?.lead?.vehicle?.year ?? args.conv?.lead?.year ?? null,
       args.conv?.lead?.vehicle?.model ?? args.conv?.lead?.vehicle?.description ?? null
     ) || "that bike";
-  const intro = `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`;
+  // Phantom-visit guard (dark behind PHANTOM_VISIT_GUARD): only thank for a past ride when one actually
+  // happened; otherwise an initial-touch intro. Mirror of the index.ts twin (route-parity).
+  const visited = customerVisitConfirmed(args.conv);
+  const useVisitFraming = !phantomVisitGuardEnabled() || visited;
+  const intro = useVisitFraming
+    ? `${greeting}This is ${senderFirst} at ${dealerName}. Thanks again for coming in for the test ride on the ${modelLabel}.`
+    : `${greeting}This is ${senderFirst} at ${dealerName}. Thanks for your interest in the ${modelLabel}.`;
   if (args.inventoryStatus === "in_stock") {
-    return `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`;
+    return useVisitFraming
+      ? `${intro} If any questions come up or you want to come back in and go over options, just text me anytime.`
+      : `${intro} It's in stock — want to set up a time to come ride it? Any questions, just text me anytime.`;
   }
   if (args.inventoryStatus === "on_hold") {
     return `${intro} That ${modelLabel} is on hold right now. If it opens back up, I can text you first, or I can help you compare similar options.`;
@@ -1633,27 +1654,11 @@ function isTestRideSeason(profile: any, now: Date): boolean {
   return months.includes(current);
 }
 
+// Delegates to the shared, DD/MM-aware structured-ADF date parser. Was a MM/DD-only private copy that
+// dropped Room58 "Book test ride" dates like 29/6/2026 (month=29 → null) → the lead fell through to a
+// generic "not in stock" deflection that ignored the requested test-ride date/time.
 function parsePreferredDateOnly(value: string | null | undefined): Date | null {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  let year = m[3] ? Number(m[3]) : new Date().getUTCFullYear();
-  if (m[3] && m[3].length === 2) year = 2000 + year;
-  if (
-    !Number.isFinite(month) ||
-    !Number.isFinite(day) ||
-    !Number.isFinite(year) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+  return parsePreferredAdfDate(value);
 }
 
 function formatPreferredDateForReply(value: string | null | undefined): string | null {
@@ -2999,14 +3004,6 @@ function parseTimeframeMonths(raw?: string): { start?: number; end?: number } | 
     if (!Number.isNaN(a)) return { start: a };
   }
   return null;
-}
-
-function buildLongTermMessage(timeframe?: string, hasLicense?: boolean) {
-  const tf = timeframe ? timeframe.trim() : "a future";
-  if (hasLicense === true) {
-    return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Just reach out when the time is right.`;
-  }
-  return `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${tf} timeline. I’m happy to help when you’re ready. Just reach out when the time is right.`;
 }
 
 function isPricingPaymentInquiry(text?: string | null): boolean {
@@ -4988,6 +4985,64 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     catalogApparelIntent ||
     /\b(apparel|motorclothes|merch|jacket|helmet|gloves|boots|shirt|hoodie)\b/i.test(inquiryText) ||
     /\bapparel|motorclothes\b/i.test(leadSourceLower);
+  // ADF intake department override (2026-06-19, Kelly Gantzer "small womens black leather vest").
+  // On an initial ADF lead the Inquiry field IS the customer's request, so the SMS-tuned action-signal
+  // gates above (catalog*Intent / *IntentFromText, which need a verb like "do you have") wrongly drop a
+  // terse, verb-less apparel/parts/service item and the lead falls through to inventory_interest (a
+  // bogus "not in stock" reply + an inventory watch on the placeholder vehicle). When those signals all
+  // missed but the lead plausibly isn't a bike (a catalog apparel/parts cue OR a placeholder vehicle),
+  // ask the focused ADF department parser and let a confident verdict steer the bucket. Gated so it adds
+  // no LLM cost on clean bike leads or anything the existing signals already routed.
+  const adfDepartmentVehicleContext = String(
+    lead.vehicleModel ?? lead.vehicleDescription ?? ""
+  ).trim();
+  const adfDepartmentExistingSignal =
+    semanticPartsIntent ||
+    semanticApparelIntent ||
+    semanticServiceIntent ||
+    partsIntentFromText ||
+    apparelIntentFromText ||
+    serviceSupportIntentFromParser;
+  // A short, free-text inquiry is where a bare item NAME lives (a department item or a bike model).
+  // Run the parser on any terse inquiry too — that closes the only gap the catalog/placeholder cues
+  // leave: an item that's BOTH absent from the lexicon AND arrives with a concrete bike model in the
+  // Vehicle field (e.g. inquiry "sunglasses", vehicle "Street Glide"). The parser returns vehicle/none
+  // for real bike leads, so the worst case is a cheap first-touch call, never a misroute. Long detailed
+  // inquiries already carry their own vehicle signals and stay on the existing path.
+  const adfDepartmentInquiryWords = String(effectiveInquiry ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const adfDepartmentTerseInquiry =
+    adfDepartmentInquiryWords > 0 &&
+    adfDepartmentInquiryWords <= Number(process.env.ADF_DEPARTMENT_TERSE_INQUIRY_MAX_WORDS ?? 8);
+  const adfDepartmentCue =
+    catalogMatch.apparelTerms.length > 0 ||
+    catalogMatch.partsTerms.length > 0 ||
+    isGenericLeadModel(adfDepartmentVehicleContext) ||
+    adfDepartmentTerseInquiry;
+  let adfDepartmentRoute: { kind: "apparel" | "parts" | "service" | "riding_academy" | "none" } = { kind: "none" };
+  if (isInitialAdf && !!effectiveInquiry && !adfDepartmentExistingSignal && adfDepartmentCue) {
+    const adfDepartmentParse = await parseAdfDepartmentInterestWithLLM({
+      inquiry: effectiveInquiry,
+      vehicle: adfDepartmentVehicleContext || null,
+      leadSource
+    });
+    adfDepartmentRoute = decideAdfDepartmentRoute({
+      parserAccepted: !!adfDepartmentParse,
+      department: adfDepartmentParse?.department ?? null,
+      confidence: adfDepartmentParse?.confidence ?? 0,
+      confidenceMin: Number(process.env.ADF_DEPARTMENT_CONFIDENCE_MIN ?? 0.7)
+    });
+    if (adfDepartmentRoute.kind !== "none") {
+      console.log("[sendgrid inbound] adf department override", {
+        department: adfDepartmentRoute.kind,
+        item: adfDepartmentParse?.item ?? null,
+        confidence: adfDepartmentParse?.confidence ?? null,
+        vehicle: adfDepartmentVehicleContext || null
+      });
+    }
+  }
   const jumpStartExperienceLead =
     isJumpStartExperienceText(effectiveInquiry) ||
     isJumpStartExperienceText(lead.comment ?? null) ||
@@ -5023,16 +5078,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
   let inferredBucket = rule.bucket;
   let inferredCta = rule.cta;
-  if (initialAdfRiderCourseDecision) {
+  if (initialAdfRiderCourseDecision || adfDepartmentRoute.kind === "riding_academy") {
+    // Rider-education (Riding Academy / rider course / "get my license") is NOT a bike sale — keep it out
+    // of inventory_interest/test_ride so the lead isn't given a bike-sale task or pushed to test-ride
+    // before they're licensed. The deterministic detector handles explicit phrasings; the ADF department
+    // parser catches the terse ones it missed (Rafael Morales, "Your course and price" -> request_a_quote
+    // on a Street 750).
     inferredBucket = "general_inquiry";
     inferredCta = "contact_us";
-  } else if (semanticPartsIntent || partsIntentFromText) {
+  } else if (adfDepartmentRoute.kind === "parts" || semanticPartsIntent || partsIntentFromText) {
     inferredBucket = "parts";
     inferredCta = "parts_request";
-  } else if (semanticApparelIntent || apparelIntentFromText) {
+  } else if (adfDepartmentRoute.kind === "apparel" || semanticApparelIntent || apparelIntentFromText) {
     inferredBucket = "apparel";
     inferredCta = "apparel_request";
-  } else if (semanticServiceIntent || serviceSupportIntentFromParser) {
+  } else if (adfDepartmentRoute.kind === "service" || semanticServiceIntent || serviceSupportIntentFromParser) {
     inferredBucket = "service";
     inferredCta = "service_request";
   } else if (!leadSource || rule.ruleName === "default") {
@@ -5189,7 +5249,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     bucket: inferredBucket,
     cta: inferredCta,
     channel,
-    ruleName: forcedTestRide ? "room58_book_test_ride_forced" : rule.ruleName
+    ruleName: forcedTestRide
+      ? "room58_book_test_ride_forced"
+      : adfDepartmentRoute.kind !== "none"
+        ? `adf_department_${adfDepartmentRoute.kind}`
+        : rule.ruleName
   });
   const inferredBucketKey = String(inferredBucket ?? "").trim().toLowerCase();
   const inferredCtaKey = String(inferredCta ?? "").trim().toLowerCase();
@@ -5354,7 +5418,60 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     stopFollowUpCadence(conv, "manual_handoff");
   }
 
+  // Re-submission guard (Jerill White class, Joe-approved 2026-07-02): the SAME structured form
+  // re-submitted (only the CRM Ref changes) must not restart the first-touch script. Detected
+  // BEFORE append (compares against prior inbounds) and returned BEFORE discardPendingDrafts so
+  // a burst re-submission keeps the original pending first-touch draft for staff. A todo tells
+  // the owner the customer is knocking twice; an ack draft goes out only when the previous
+  // outbound is old enough (>=24h) that silence would read as being ignored.
+  const adfResubmission = detectAdfFormResubmission({
+    messages: conv.messages,
+    newBody: event.body,
+    nowMs: Date.now()
+  });
   appendInbound(conv, event);
+  if (adfResubmission.resubmission) {
+    addTodo(
+      conv,
+      "other",
+      `Customer re-submitted the ${adfResubmission.source || "web"} form (${adfResubmission.priorCount + 1}x) — they're waiting on a person; reach out.`,
+      event.providerMessageId
+    );
+    let resubmissionAck: string | null = null;
+    if (adfResubmission.hoursSinceLastOutbound == null || adfResubmission.hoursSinceLastOutbound >= 24) {
+      const profile = await getDealerProfile();
+      const agentName = String(profile?.agentName ?? "").trim() || "Alexandra";
+      const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+      // Same controlled publication boundary as every other ADF draft — the draft-state
+      // invariant guard decides whether the text may publish (reply_path:audit enforces this).
+      const invariant = applyDraftStateInvariants({
+        inboundText: event.body ?? "",
+        draftText: buildAdfResubmissionAck(firstName, agentName, dealerName),
+        followUpMode: conv.followUp?.mode ?? null,
+        followUpReason: conv.followUp?.reason ?? null,
+        dialogState: conv.dialogState?.name ?? null,
+        classificationBucket: conv.classification?.bucket ?? null,
+        classificationCta: conv.classification?.cta ?? null
+      });
+      if (invariant.allow) {
+        resubmissionAck = invariant.draftText;
+        appendOutbound(conv, "dealership", leadKey, invariant.draftText, "draft_ai");
+      }
+    }
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    return res.status(200).json({
+      ok: true,
+      parsed: true,
+      leadKey,
+      lead,
+      leadSource,
+      note: "adf_resubmission",
+      resubmissionCount: adfResubmission.priorCount + 1,
+      draft: resubmissionAck
+    });
+  }
   discardPendingDrafts(conv, "new_inbound");
   confirmAppointmentIfMatchesSuggested(conv, event.body, event.providerMessageId);
   updateHoldingFromInbound(conv, event.body);
@@ -5580,7 +5697,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Alexandra";
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
-    const ack = buildRideChallengeSignupReply({ firstName, agentName, dealerName });
+    const ack = buildRideChallengeSignupReply({
+      firstName,
+      agentName,
+      dealerName,
+      established: hasPriorCustomerFacingOutbound(conv.messages)
+    });
     const dueAt = await applyRideChallengeReminderCadence();
     await publishEarlyAdfSmsDraft(ack);
     return res.status(200).json({
@@ -5696,7 +5818,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isDealerRideEventLead && isNoPurchaseNow) {
     conv.dialogState = { name: "test_ride_booked", updatedAt: new Date().toISOString() };
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Joe-approved 2026-07-02 (Angelo Balistrieri, +17169123294): even when no follow-up is
+    // needed and the salesperson owns the lead, the customer still gets ONE thank-you draft
+    // for coming in for the ride. The publisher carries its own guards (appointment-outcome
+    // wins, DLA ride confirmation, already-thanked dedupe) — manual handoff below is unchanged.
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
         conv,
@@ -5780,14 +5906,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou,
       staffSms
     });
   }
   if (isDealerRideEventLead) {
-    const dealerRideInitialThankYou = { ok: false as const, reason: "dealer_ride_outcome_pending" };
+    // Same Joe-approved thank-you as the no-purchase arm — the ride happened; thank them once
+    // while the outcome stays with the salesperson (publisher guards prevent duplicates).
+    const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     setFollowUpMode(conv, "manual_handoff", "dealer_ride_outcome_pending");
     stopFollowUpCadence(conv, "manual_handoff");
     return res.status(200).json({
@@ -5801,7 +5929,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       intent: "GENERAL",
       stage: "ENGAGED",
-      note: "dealer_ride_outcome_pending_no_customer_reply",
+      note: "dealer_ride_outcome_pending_customer_draft",
       draft: getPublishedDraftText(dealerRideInitialThankYou),
       draftStatus: dealerRideInitialThankYou
     });
@@ -7352,9 +7480,6 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     (marketplaceSellSignal || /sell/.test(leadSourceLower) || isPrivatePartyMarketplaceSellLead);
   const isSellLead = inferredBucket === "trade_in_sell" || inferredCta === "sell_my_bike";
   if (isInitialAdf && isTradeAcceleratorLead && isSellLead) {
-    const profile = await getDealerProfile();
-    const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
     const tradeModel = normalizeVehicleModel(
       activeAdfLeadProfile?.tradeVehicle?.model ??
         activeAdfLeadProfile?.tradeVehicle?.description ??
@@ -7365,11 +7490,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     );
     const tradeYear = activeAdfLeadProfile?.tradeVehicle?.year ?? activeAdfLeadProfile?.vehicle?.year ?? null;
     const bikeLabel = [tradeYear, tradeModel].filter(Boolean).join(" ").trim() || "your bike";
-    let ack =
-      `Thanks — I got your trade-in request for ${bikeLabel}. ` +
-      `This is ${agentName} at ${dealerName}. ` +
-      "We can give you a firm number after a quick in-person appraisal. " +
-      "What day and time works best to stop in?";
+    // Trade-toward-buy: a Trade Accelerator lead that ALSO names a distinct purchase vehicle (the
+    // structured `vehicle` field) should have its ack acknowledge the bike they want, not just the trade
+    // (steven osipovitch, 2026-06-26). buildTradeAdfAck weaves it in only when distinct. Routing through
+    // the shared builder also centralizes this path with the orchestrator's (the inline "This is {agent}
+    // at {dealer}" was stripped by applyInitialAdfPrefix anyway — behavior-preserving).
+    const purchaseLabel = [activeAdfLeadProfile?.vehicle?.year, activeAdfLeadProfile?.vehicle?.model ?? activeAdfLeadProfile?.vehicle?.description]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    let ack = buildTradeAdfAck({ bikeLabel, purchaseLabel, midConversation: false });
     ack = await applyInitialAdfPrefix(ack);
     addTodo(conv, "other", event.body, event.providerMessageId);
     if (
@@ -8783,6 +8914,95 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   draft = await withInitialOffersLine(draft);
 
+  // Non-sales marketing lead (sweepstakes / event RSVP / bare event_promo): a friendly
+  // acknowledgement, never the sales-inquiry / "stop in and check it out" draft this would
+  // otherwise be (2026-06-20 context-fidelity audit). Overrides the finalized sales draft so
+  // the customer-facing reply matches the lead type. Demo-ride events keep their own handling
+  // (decideEventPromoTurn excludes cta=demo_ride_event).
+  if (
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind === "event_promo_ack"
+  ) {
+    const epAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+  }
+
+  // Corporate/GLA demo-ride program lead (bucket=event_promo, cta=demo_ride_event): the ride
+  // does NOT happen at the dealership, so the finalized sales draft ("which bike are you asking
+  // about?" / scheduling times / availability+photo appends) is out of context. Override with
+  // ONE soft invite; the event_promo bucket close below (`event_promo_no_cadence`) guarantees
+  // no follow-up cadence (operator-reported, Joe 2026-07-02). Mirrors the orchestrator's
+  // demo_ride_event branch — same builder, both paths. Pinned by event_promo_ack:eval.
+  if (conv.classification?.bucket === "event_promo" && conv.classification?.cta === "demo_ride_event") {
+    const drAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const drDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const drFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    const drVehicle = conv.lead?.vehicle ?? {};
+    const drYear = String(drVehicle.year ?? "").trim();
+    const drModel = String(drVehicle.model ?? drVehicle.description ?? "").trim();
+    const drBikeLabel = [drYear, drModel].filter(Boolean).join(" ").trim() || null;
+    draft = buildDemoRideEventSoftInvite(drFirstName, drAgentName, drDealerName, drBikeLabel);
+  }
+
+  // Non-buyer / passenger survey lead (Elizabeth Klapa, 2026-06-25): a Dealer Lead App survey
+  // whose STRUCTURED purchase-timeframe field says they are explicitly NOT a buyer ("I am not
+  // interested in purchasing at this time") was getting a sales pitch ("Which bike are you
+  // asking about?" / "want me to send photos or price and payment numbers?") on the first
+  // touch. Override that opener with a warm, no-pressure acknowledgement (the reply-side twin
+  // of resolveInitialAdfCadencePlan's "suppress", which already silences the nagging
+  // follow-ups). INITIAL ADF only — once the customer engages with a real question, normal
+  // routing answers it. event_promo wins if both somehow match (handled above first).
+  if (
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    decideNonBuyerSurveyTurn({ purchaseTimeframe: conv.lead?.purchaseTimeframe }).kind ===
+      "non_buyer_survey_ack"
+  ) {
+    const nbAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+    const nbDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+    const nbFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+    draft = buildNonBuyerSurveyAck(nbFirstName, nbAgentName, nbDealerName);
+  } else if (
+    // Dealer Lead App MARKETING SURVEY lead (Tim Williams, +17163741119, 2026-06-24) — the
+    // buyer-side twin of the non-buyer branch above. The survey Q&A lives in the free-text
+    // Customer Comments (not the structured purchase-timeframe field), so it fell through to the
+    // generic sales generator, which read the survey's "Demo Bikes Ridden: <model>" field as a
+    // completed test ride here and fabricated "Thanks again for coming in for the test ride ...
+    // Congrats on the <model>" (held by the context-fidelity gate). Comprehend the survey and
+    // override the opener with a warm, accurate acknowledgement of stated interest + an invite to
+    // ride/visit — never a fabricated past action. INITIAL ADF only; event_promo and the explicit
+    // non-buyer ack (above) win. The hint pre-filter gates the LLM call to actual survey bodies.
+    isInitialAdf &&
+    decideEventPromoTurn({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    }).kind !== "event_promo_ack" &&
+    hasDealerLeadSurveyHint(effectiveInquiry)
+  ) {
+    const dlsParse = await parseDealerLeadSurveyWithLLM({ text: effectiveInquiry });
+    const dlsDecision = decideDealerLeadSurveyTurn({
+      isDealerLeadSurvey: dlsParse?.isDealerLeadSurvey ?? false,
+      purchaseIntent: dlsParse?.purchaseIntent ?? "unknown",
+      confidence: dlsParse?.confidence ?? null
+    });
+    if (dlsDecision.kind !== "none") {
+      const dlsAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
+      const dlsDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
+      const dlsFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
+      draft =
+        dlsDecision.kind === "buyer_survey_ack"
+          ? buildBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName, dlsParse?.interestedModel ?? null)
+          : buildNonBuyerSurveyAck(dlsFirstName, dlsAgentName, dlsDealerName);
+    }
+  }
+
   const emailTo = lead.email?.trim();
   const useEmail = channel === "email" && !!emailTo && lead.emailOptIn === true;
 
@@ -8823,7 +9043,19 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   const monthsStart = Number.isFinite(storedMonthsStart) && storedMonthsStart > 0
     ? storedMonthsStart
     : Number(parsedTimeframe?.start ?? NaN);
-  const hasLongTermTimeframe = Number.isFinite(monthsStart) && monthsStart >= 1;
+  // Centralized policy (resolveInitialAdfCadencePlan, pinned by initial_adf_cadence_timeframe:eval):
+  // 0-3mo / unsure / unparseable => STANDARD day-1 ramp; 4+mo or multi-year => gentle long_term
+  // nurture. Replaces a divergent inline `monthsStart >= 1` gate that pushed even a 3-12mo
+  // marketplace lead's FIRST touch ~3 months out (Richard Tait, +17162893849, 6/25) — the centralized
+  // rule already powered the Meta path, so this just unifies all ADF sources onto one policy.
+  const cadencePlan = resolveInitialAdfCadencePlan({
+    purchaseTimeframe: conv.lead?.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: Number.isFinite(monthsStart) ? monthsStart : null
+  });
+  const hasLongTermTimeframe = cadencePlan === "long_term";
+  // Horizon for the deferred long-term nurture message: the lead's own start-month when known,
+  // else a sensible default (e.g. a bare "year"/multi-year label parses to no monthsStart).
+  const longTermDeferMonths = Number.isFinite(monthsStart) ? Math.max(1, Math.round(monthsStart)) : 6;
   const hasExistingCadence =
     conv.followUpCadence?.status === "active" || conv.followUpCadence?.status === "stopped";
   const existingCadenceKind = String(conv.followUpCadence?.kind ?? "").toLowerCase();
@@ -8851,9 +9083,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     !shouldForceRideChallengeCadence;
   if (canRealignExistingCadenceToLongTerm && hasLongTermTimeframe) {
     const due = new Date();
-    due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
+    due.setMonth(due.getMonth() + longTermDeferMonths);
     due.setHours(10, 30, 0, 0);
-    const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+    const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
   }
   const shouldStartCadence =
@@ -8875,9 +9107,9 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const cfg = await getSchedulerConfig();
     if (hasLongTermTimeframe) {
       const due = new Date();
-      due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
+      due.setMonth(due.getMonth() + longTermDeferMonths);
       due.setHours(10, 30, 0, 0);
-      const msg = buildLongTermMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+      const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
       scheduleLongTermFollowUp(conv, due.toISOString(), msg);
     } else {
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);

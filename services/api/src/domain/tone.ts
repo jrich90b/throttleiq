@@ -327,9 +327,36 @@ export function normalizeSalesToneBase(text: string): string {
   return out;
 }
 
+/**
+ * Joe (2026-06-20): the curt "Got it" acknowledgment must never ship in any customer-facing
+ * outbound — follow-up cadence, Twilio SMS, or email. On the SMS/draft path the lead-in
+ * normalizer (`normalizeGotItLeadIn` in conversationStore) already rewrites it to a contextual
+ * opener; this is the UNIVERSAL backstop at the tone sink, so the email path (which bypasses that
+ * normalizer) and any future deterministic template are covered in one place.
+ *
+ * Scoped to the sentence-initial / post-greeting ACK only. The possessive "we've got it in stock"
+ * and the affirmation "You got it" carry different meaning and are deliberately preserved — they
+ * never present as a capitalized "Got it" token at a boundary, so the matcher leaves them intact.
+ */
+export function stripGotItAcknowledgement(text: string): string {
+  let out = String(text ?? "");
+  if (!out.trim()) return out;
+  // Whole message is just the bare ack → a warm one-word replacement.
+  if (/^\s*got it\s*[.!]*\s*$/i.test(out)) return "Sounds good.";
+  // Drop a "Got it" ack that opens the message, a line (email greeting block), or a sentence,
+  // then promote and capitalize the clause that followed it. Capital "Got it" only, so the
+  // lowercase possessive "we've got it" / affirmation "you got it" are untouched.
+  out = out.replace(
+    /(^|\n[^\S\n]*|[.!?]\s+)Got it\s*(?:[—–-]\s*|[,.:]\s+|\s+)(\S)/g,
+    (_m, boundary, ch) => `${boundary}${ch.toUpperCase()}`
+  );
+  return out.trim();
+}
+
 export function applyDeterministicToneOverrides(text: string): string {
   let out = String(text ?? "").trim();
   if (!out) return out;
+  out = stripGotItAcknowledgement(out);
   out = applyDeterministicToneRules(out);
   out = repairDanglingAcknowledgements(out);
   out = repairIncompleteSentence(out);

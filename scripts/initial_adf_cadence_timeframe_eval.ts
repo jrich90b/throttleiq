@@ -2,8 +2,11 @@
  * Initial-ADF cadence-plan-by-purchase-timeframe eval.
  *
  * resolveInitialAdfCadencePlan (services/api/src/domain/conversationStore.ts) maps a lead's
- * STRUCTURED ADF purchase-timeframe field to the follow-up plan applied at the Meta promo
- * initial-ADF cadence start (services/api/src/routes/sendgridInbound.ts):
+ * STRUCTURED ADF purchase-timeframe field to the follow-up plan applied at EVERY initial-ADF
+ * cadence start — the Meta promo path (applyMetaPromoInitialCadence) AND the general ADF intake
+ * (services/api/src/routes/sendgridInbound.ts), which were unified onto this one policy on 6/25
+ * (the general intake previously used a divergent inline `monthsStart >= 1` gate that pushed a
+ * 3-12mo marketplace lead's first touch ~3 months out — Richard Tait):
  *   - "suppress"  — explicit "not interested at this time": opener only, no follow-ups
  *                   (the caller sets a deliberate paused_indefinite state).
  *   - "long_term" — 4+ months out / multi-year: gentle [30,90,180] nurture (soft-invite
@@ -12,6 +15,7 @@
  * Rows cover every purchase-timeframe value seen in American Harley production traffic.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { resolveInitialAdfCadencePlan } from "../services/api/src/domain/conversationStore.ts";
 
 type Row = {
@@ -50,4 +54,11 @@ for (const r of rows) {
   assert.equal(got, r.plan, `"${r.label}" expected ${r.plan}, got ${got}`);
   passed += 1;
 }
-console.log(`PASS initial-ADF cadence timeframe eval (${passed} rows)`);
+// Source guard: the GENERAL ADF intake routes its cadence through the centralized plan, NOT the old
+// divergent inline `monthsStart >= 1` long-term gate (Richard Tait 3-month-deferral fix, 6/25).
+const intake = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+assert.match(intake, /const cadencePlan = resolveInitialAdfCadencePlan\(\{/, "general ADF intake computes the centralized cadence plan");
+assert.match(intake, /const hasLongTermTimeframe = cadencePlan === "long_term";/, "long-term decision is the centralized plan, not monthsStart>=1");
+assert.doesNotMatch(intake, /hasLongTermTimeframe = Number\.isFinite\(monthsStart\) && monthsStart >= 1/, "the divergent inline >=1 gate is gone");
+
+console.log(`PASS initial-ADF cadence timeframe eval (${passed} rows + intake source guard)`);

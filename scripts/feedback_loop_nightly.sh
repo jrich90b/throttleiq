@@ -17,6 +17,7 @@ VOICE_FEEDBACK_OUT_DIR="${VOICE_FEEDBACK_OUT_DIR:-$REPORT_ROOT/voice_feedback}"
 OUTCOME_QA_OUT_DIR="${OUTCOME_QA_OUT_DIR:-$REPORT_ROOT/outcome_qa}"
 VEHICLE_WATCH_QA_OUT_DIR="${VEHICLE_WATCH_QA_OUT_DIR:-$REPORT_ROOT/vehicle_watch_qa}"
 INBOUND_SHADOW_OUT_DIR="${INBOUND_SHADOW_OUT_DIR:-$REPORT_ROOT/inbound_shadow}"
+FEEDBACK_DIAGNOSIS_OUT_DIR="${FEEDBACK_DIAGNOSIS_OUT_DIR:-$REPORT_ROOT/feedback_diagnosis}"
 DETERMINISTIC_TONE_RULES_PATH="${DETERMINISTIC_TONE_RULES_PATH:-$DATA_DIR/deterministic_tone_rules.json}"
 MANUAL_REPLY_EXAMPLES_PATH="${MANUAL_REPLY_EXAMPLES_PATH:-$DATA_DIR/manual_reply_examples.json}"
 TONE_QUALITY_OUT_DIR="${TONE_QUALITY_OUT_DIR:-$REPORT_ROOT/tone_quality}"
@@ -42,7 +43,18 @@ if [[ -f "$FEEDBACK_LOOP_ENV_PATH" ]]; then
   set +a
 fi
 
-mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$OUTCOME_QA_OUT_DIR" "$VEHICLE_WATCH_QA_OUT_DIR" "$INBOUND_SHADOW_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$VOICE_CHARTER_OUT_DIR" "$RELEASE_GATE_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
+# Loop-wide OPENAI_API_KEY: the loop's LLM steps (voice_charter_audit, tone_quality, feedback
+# diagnosis, …) need it, but it lives in the dealer api.env (next to the loop env), not the loop env —
+# so without this they hit "OpenAIError: Missing credentials". Pull JUST that one var (not a whole-file
+# source, which would clobber the loop's DATA_DIR/REPORT_ROOT) and export it. Override the source with
+# FEEDBACK_LOOP_API_ENV; if the key is already in the environment we keep it.
+FEEDBACK_LOOP_API_ENV="${FEEDBACK_LOOP_API_ENV:-$(dirname "$FEEDBACK_LOOP_ENV_PATH")/api.env}"
+if [[ -z "${OPENAI_API_KEY:-}" && -f "$FEEDBACK_LOOP_API_ENV" ]]; then
+  OPENAI_API_KEY="$(grep -E '^OPENAI_API_KEY=' "$FEEDBACK_LOOP_API_ENV" | head -1 | cut -d= -f2- | tr -d '\r')"
+  export OPENAI_API_KEY
+fi
+
+mkdir -p "$REPORT_ROOT" "$EDIT_FEEDBACK_OUT_DIR" "$LANGUAGE_CORPUS_OUT_DIR" "$VOICE_FEEDBACK_OUT_DIR" "$OUTCOME_QA_OUT_DIR" "$VEHICLE_WATCH_QA_OUT_DIR" "$INBOUND_SHADOW_OUT_DIR" "$FEEDBACK_DIAGNOSIS_OUT_DIR" "$TONE_QUALITY_OUT_DIR" "$VOICE_CHARTER_OUT_DIR" "$RELEASE_GATE_OUT_DIR" "$AGENT_MANAGER_OUT_DIR" "$LOG_DIR"
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -181,6 +193,19 @@ trap 'record_closed_loop_run "$?"' EXIT
   echo "[feedback-loop] step=voice_feedback_mine"
   VOICE_FEEDBACK_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run voice_feedback:mine -- --out-dir "$VOICE_FEEDBACK_OUT_DIR"
 
+  # Closed-loop Phase 2: classify + aggregate staff thumbs-down into a diagnosis digest (which failure
+  # modes recur, which would be parser-first fix candidates). REPORT-ONLY — never opens PRs. Non-fatal
+  # (|| true) so a transient LLM hiccup never breaks the nightly loop.
+  echo "[feedback-loop] step=feedback_diagnosis_report -> $FEEDBACK_DIAGNOSIS_OUT_DIR"
+  FEEDBACK_DIAGNOSIS_OUT="$FEEDBACK_DIAGNOSIS_OUT_DIR/feedback_diagnosis_$TS.txt"
+  # OPENAI_API_KEY is loaded loop-wide above; the report just needs LLM_ENABLED=1. Non-fatal so a
+  # transient LLM hiccup never breaks the loop. REPORT-ONLY — never opens PRs.
+  if LLM_ENABLED=1 npm run -s feedback_diagnosis:report -- "$CONVERSATIONS_DB_PATH" > "$FEEDBACK_DIAGNOSIS_OUT" 2>&1; then
+    cp -f "$FEEDBACK_DIAGNOSIS_OUT" "$FEEDBACK_DIAGNOSIS_OUT_DIR/latest.txt" 2>/dev/null || true
+  else
+    echo "[feedback-loop] feedback_diagnosis_report skipped/failed (non-fatal); see $FEEDBACK_DIAGNOSIS_OUT"
+  fi
+
   echo "[feedback-loop] step=fabricated_frame_audit"
   FABRICATED_FRAME_OUT_DIR="$FABRICATED_FRAME_OUT_DIR" npm run fabricated_frame:audit -- --since-hours "${CHANGED_MESSAGES_SINCE_HOURS}" || true
 
@@ -273,6 +298,24 @@ trap 'record_closed_loop_run "$?"' EXIT
 
   echo "[feedback-loop] step=stale_handoff_todo_audit"
   npm run stale_handoff_todo:audit || true
+
+  # Stale-fulfilled tasks: open call/follow-up tasks whose objective a recent follow-up already
+  # accomplished but that are still Open (the Douglas Kellner class). With TASK_FULFILLMENT_AUTOCLOSE=1
+  # live this set should be ~empty in the happy path; anything in it is auto-close UNDER-firing and is
+  # surfaced to the agent-watch monitor. Read-only; never blocks the loop.
+  echo "[feedback-loop] step=task_autoclose_stale_report"
+  mkdir -p "$REPORT_ROOT/task_autoclose"
+  LLM_ENABLED=1 CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" \
+    npx tsx scripts/task_fulfillment_autoclose_report.ts --limit=200 \
+    > "$REPORT_ROOT/task_autoclose/task_autoclose_report.txt" 2>&1 || true
+
+  # THE BRIDGE: drafts the quality gate held (and self-heal couldn't fix) are candidate code/
+  # comprehension bugs. Surface them with diagnosis context so the agent-watch loop can fix the CODE
+  # parser-first (approve-first PR), then re-regenerate to release the hold. Read-only; never blocks.
+  echo "[feedback-loop] step=draft_held_report"
+  mkdir -p "$REPORT_ROOT/draft_held"
+  CONVERSATIONS_DB_PATH="$CONVERSATIONS_DB_PATH" DRAFT_HELD_REPORT_OUT="$REPORT_ROOT/draft_held/draft_held_report.txt" \
+    npx tsx scripts/draft_held_report.ts > /dev/null 2>&1 || true
 
   echo "[feedback-loop] step=soft_visit_miss_audit"
   SOFT_VISIT_MISS_SINCE_HOURS="${CHANGED_MESSAGES_SINCE_HOURS}" npm run soft_visit_miss:audit || true

@@ -158,7 +158,7 @@ export function auditConversations(
 
     const appt = conv.appointment ?? null;
     const apptStatus = String(appt?.status ?? "");
-    if ((apptStatus === "booked" || apptStatus === "confirmed") && !appt?.staffNotify?.outcome?.note) {
+    if ((apptStatus === "booked" || apptStatus === "confirmed") && !appointmentOutcomeRecorded(appt)) {
       const startMs = parseMs(appt?.matchedSlot?.start ?? appt?.start);
       if (startMs != null && nowMs - startMs > 3 * DAY_MS) {
         apptMissing.push({
@@ -206,6 +206,26 @@ export function auditConversations(
   ];
 }
 
+/**
+ * An appointment outcome is "recorded" when staff set ANY outcome status, not
+ * only when they typed a free-text note. The console's outcome buttons write
+ * `staffNotify.outcome.status` / `.primaryStatus` / `.secondaryStatus` (e.g.
+ * no_show / showed / hold / sold) and frequently leave `.note` empty — keying
+ * the check on `.note` alone false-flagged every status-only outcome as
+ * "missing" (Saul Torres no_show, Louis Magnano showed/hold, 2026-06-29; 11 of
+ * them live). Treat any recorded status as a recorded outcome.
+ */
+function appointmentOutcomeRecorded(appt: AnyObj | null): boolean {
+  const o = appt?.staffNotify?.outcome;
+  if (!o || typeof o !== "object") return false;
+  return Boolean(
+    String(o.note ?? "").trim() ||
+      String(o.status ?? "").trim() ||
+      String(o.primaryStatus ?? "").trim() ||
+      String(o.secondaryStatus ?? "").trim()
+  );
+}
+
 function selfTest() {
   const nowMs = Date.parse("2026-06-12T00:00:00.000Z");
   const convs: AnyObj[] = [
@@ -245,6 +265,19 @@ function selfTest() {
       status: "open",
       lead: { firstName: "Abe" },
       appointment: { status: "confirmed", matchedSlot: { start: "2026-06-07T15:00:00.000Z" } }
+    },
+    // Appointment 5 days past WITH a status-only outcome (no free-text note) —
+    // the Saul Torres / Louis Magnano class. A recorded status IS an outcome, so
+    // this must NOT be flagged.
+    {
+      id: "+5b",
+      status: "open",
+      lead: { firstName: "Sol" },
+      appointment: {
+        status: "confirmed",
+        matchedSlot: { start: "2026-06-07T15:00:00.000Z" },
+        staffNotify: { outcome: { status: "no_show", primaryStatus: "did_not_show", secondaryStatus: "needs_follow_up" } }
+      }
     },
     // Unactioned draft, 3 days old.
     {
