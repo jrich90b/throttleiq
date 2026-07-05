@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 
-export type InboxDealFilter = "all" | "hot" | "sold" | "hold";
+export type InboxDealFilter = "all" | "active" | "hot" | "sold" | "hold";
+export type InboxTaskFilter = "all" | "open_task" | "overdue" | "no_task";
+
+export type ConversationTaskState = { hasOpenTask: boolean; hasOverdueTask: boolean };
 
 type ConversationLike = any;
 type TodoLike = any;
@@ -12,6 +15,8 @@ type UseInboxSectionDataArgs = {
   inboxQuery: string;
   inboxOwnerFilter: string;
   inboxDealFilter: InboxDealFilter;
+  inboxTaskFilter: InboxTaskFilter;
+  getConversationTaskState: (conversation: ConversationLike) => ConversationTaskState;
   canFilterOwners: boolean;
   canonicalizeOwnerName: (rawName: string, ownerId?: string | null) => string;
   inferOwnerDepartment: (
@@ -41,6 +46,8 @@ export function useInboxSectionData({
   inboxQuery,
   inboxOwnerFilter,
   inboxDealFilter,
+  inboxTaskFilter,
+  getConversationTaskState,
   canFilterOwners,
   canonicalizeOwnerName,
   inferOwnerDepartment,
@@ -110,6 +117,17 @@ export function useInboxSectionData({
       if (inboxDealFilter === "hot" && !isHotDealConversation(c)) return false;
       if (inboxDealFilter === "sold" && !isSoldDealConversation(c)) return false;
       if (inboxDealFilter === "hold" && !isConversationOnHold(c)) return false;
+      // "active" = a deal still in play: not sold, not parked on hold.
+      if (inboxDealFilter === "active" && (isSoldDealConversation(c) || isConversationOnHold(c))) {
+        return false;
+      }
+
+      if (inboxTaskFilter !== "all") {
+        const taskState = getConversationTaskState(c);
+        if (inboxTaskFilter === "open_task" && !taskState.hasOpenTask) return false;
+        if (inboxTaskFilter === "overdue" && !taskState.hasOverdueTask) return false;
+        if (inboxTaskFilter === "no_task" && taskState.hasOpenTask) return false;
+      }
 
       if (canFilterOwners && inboxOwnerFilter !== "all") {
         const leadOwner = canonicalizeOwnerName(
@@ -167,6 +185,8 @@ export function useInboxSectionData({
     canFilterOwners,
     inboxOwnerFilter,
     inboxDealFilter,
+    inboxTaskFilter,
+    getConversationTaskState,
     inboxDepartmentTeamsByConv,
     canonicalizeOwnerName,
     inferOwnerDepartment,
@@ -176,16 +196,33 @@ export function useInboxSectionData({
   ]);
 
   const inboxDealCounts = useMemo(() => {
+    let active = 0;
     let hot = 0;
     let sold = 0;
     let hold = 0;
     for (const c of visibleConversations) {
-      if (isSoldDealConversation(c)) sold += 1;
-      if (isConversationOnHold(c)) hold += 1;
+      const isSold = isSoldDealConversation(c);
+      const isHold = isConversationOnHold(c);
+      if (isSold) sold += 1;
+      if (isHold) hold += 1;
+      if (!isSold && !isHold) active += 1;
       if (isHotDealConversation(c)) hot += 1;
     }
-    return { hot, sold, hold };
+    return { active, hot, sold, hold };
   }, [visibleConversations, isSoldDealConversation, isConversationOnHold, isHotDealConversation]);
+
+  const inboxTaskCounts = useMemo(() => {
+    let openTask = 0;
+    let overdue = 0;
+    let noTask = 0;
+    for (const c of visibleConversations) {
+      const state = getConversationTaskState(c);
+      if (state.hasOpenTask) openTask += 1;
+      else noTask += 1;
+      if (state.hasOverdueTask) overdue += 1;
+    }
+    return { openTask, overdue, noTask };
+  }, [visibleConversations, getConversationTaskState]);
 
   const groupedConversations = useMemo(() => {
     if (view === "campaigns") {
@@ -261,6 +298,7 @@ export function useInboxSectionData({
     inboxTodoOwnerByConv,
     filteredConversations,
     inboxDealCounts,
+    inboxTaskCounts,
     groupedConversations
   };
 }

@@ -47,7 +47,31 @@ const douglas: Act[] = [
   { direction: "in", channel: "sms", text: "Thanks. I was just curious." }
 ];
 
-const cases: { id: string; activity: Act[]; summary: string; want: boolean }[] = [
+const cases: { id: string; activity: Act[]; summary: string; want: boolean; reason?: string }[] = [
+  // Paul Foley (6/22): a PARTS availability question answered by text must close; an ORDER
+  // task with only a promise must stay open. Pins the broadened eligibility (any reason; the
+  // classifier judges accomplished-vs-promise) as safe.
+  {
+    id: "parts_availability_answered",
+    reason: "parts",
+    activity: [
+      { direction: "in", channel: "sms", text: "Do you have a Saddlemen Road Sofa seat for a 2025 Harley-Davidson Road Glide available?" },
+      { direction: "out", channel: "sms", text: "Hey Paul, ya we have some road sofas here." },
+      { direction: "in", channel: "sms", text: "Great. Thank you" }
+    ],
+    summary: "Parts website text: Do you have a Saddlemen Road Sofa seat for a 2025 Harley-Davidson Road Glide available?",
+    want: true
+  },
+  {
+    id: "parts_order_promise_stays_open",
+    reason: "parts",
+    activity: [
+      { direction: "in", channel: "sms", text: "Can you order me a Saddlemen Road Sofa seat?" },
+      { direction: "out", channel: "sms", text: "Sure, I'll get that part ordered for you and follow up." }
+    ],
+    summary: "Order the Saddlemen Road Sofa seat the customer requested.",
+    want: false
+  },
   // Positives — a call task's objective accomplished by SMS now closes.
   { id: "douglas_price_followup", activity: douglas, summary: "Call customer to follow up on the 2016 Freewheeler pricing.", want: true },
   {
@@ -83,7 +107,7 @@ const cases: { id: string; activity: Act[]; summary: string; want: boolean }[] =
 let ran = 0;
 for (const c of cases) {
   const verdicts = await classifyTaskFulfillmentWithLLM({
-    tasks: [{ id: "t", reason: "call", summary: c.summary }],
+    tasks: [{ id: "t", reason: c.reason ?? "call", summary: c.summary }],
     activity: c.activity
   });
   if (!verdicts) continue; // parser disabled / transient null — skip, don't red the gate

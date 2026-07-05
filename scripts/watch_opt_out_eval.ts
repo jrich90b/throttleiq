@@ -37,8 +37,12 @@ assert.ok(callSites >= 2, `the resolver must be wired in BOTH paths; found ${cal
 // Belt-and-suspenders: explicit STOP + disposition closeout also pause the watch.
 assert.ok(/async function applySmsOptOut[\s\S]{0,400}pauseInventoryWatches\(conv\)/.test(index), "explicit STOP must also pause watches");
 assert.ok(/function applyCustomerDispositionCloseout[\s\S]{0,400}pauseInventoryWatches\(conv\)/.test(index), "disposition closeout must also pause watches");
-// The watch notification now invites opt-out.
-assert.ok(/stop these alerts/.test(index), "the watch notification must tell customers they can opt out");
+// The watch notification now invites opt-out — via the shared buildWatchAvailableReply (agentVoice.ts),
+// which both watch-fire sites route through. It also ASKS whether they're still looking (Joe, 2026-06-26).
+const agentVoice = fs.readFileSync("services/api/src/domain/agentVoice.ts", "utf8");
+assert.ok(/take you off the list/.test(agentVoice), "the watch notification (buildWatchAvailableReply) must tell customers they can opt out");
+assert.ok(/still looking/i.test(agentVoice), "the watch notification must ask whether they're still looking");
+assert.ok(/buildWatchAvailableReply\(/.test(index), "the watch-fire notification must route through buildWatchAvailableReply");
 
 // --- 2) Decision-table coverage (pure). ---
 type Row = { id: string; input: Parameters<typeof decideWatchOptOutTurn>[0]; kind: "pause_watch" | "none" };

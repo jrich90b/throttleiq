@@ -2,6 +2,44 @@ import React from "react";
 import Image from "next/image";
 import { SideNavIcon } from "./UiIcon";
 import type { SideNavIconName } from "./UiIcon";
+import {
+  dueBucketFor,
+  dueBucketLabel,
+  dueBucketRank,
+  parseSaneTaskDateMs,
+  relativeDueLabel,
+  taskEffectiveDueMs
+} from "../lib/taskTriage";
+import type { DueBucket } from "../lib/taskTriage";
+import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
+
+// Snooze presets, computed in the user's local time. Each pushes the task's due
+// time to 9am on the target day so it resurfaces at the start of the workday.
+function snoozeTargets(nowMs: number): Array<{ label: string; iso: string }> {
+  const base = new Date(nowMs);
+  const at9 = (year: number, month: number, day: number) =>
+    new Date(year, month, day, 9, 0, 0, 0);
+  const y = base.getFullYear();
+  const m = base.getMonth();
+  const d = base.getDate();
+  const tomorrow = at9(y, m, d + 1);
+  const in3 = at9(y, m, d + 3);
+  const daysUntilMonday = ((8 - base.getDay()) % 7) || 7;
+  const nextWeek = at9(y, m, d + daysUntilMonday);
+  return [
+    { label: "Tomorrow", iso: tomorrow.toISOString() },
+    { label: "In 3 days", iso: in3.toISOString() },
+    { label: "Next week", iso: nextWeek.toISOString() }
+  ];
+}
+
+const BUCKET_ICON: Record<DueBucket, SideNavIconName> = {
+  overdue: "bolt",
+  today: "clock",
+  this_week: "calendar",
+  later: "calendar",
+  no_date: "bell"
+};
 
 function followUpTickerStartIso(todo: any): string | null {
   return String(todo?.dueAt ?? "").trim() || String(todo?.createdAt ?? "").trim() || null;
@@ -46,8 +84,10 @@ function formatWhenIso(iso: string, withWeekday = false): string {
 }
 
 function daysAgoLabel(iso: string, nowMs: number): string | null {
-  const ms = new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms >= nowMs) return null;
+  // parseSaneTaskDateMs guards V8's year-less parse quirk ("Thu, Jul 2, 9:00 AM" → year 2001),
+  // which rendered a fresh call reminder as "9130 days ago" (Henry Cole, 2026-07-01).
+  const ms = parseSaneTaskDateMs(iso, nowMs);
+  if (ms == null || ms >= nowMs) return null;
   const days = Math.floor((nowMs - ms) / 86_400_000);
   if (days <= 0) return "earlier today";
   return days === 1 ? "yesterday" : `${days} days ago`;
@@ -116,9 +156,11 @@ export function TaskInboxSection(props: any) {
     renderDealTemperatureIcon,
     getDealTemperature,
     loading,
-    filteredTodos
+    filteredTodos,
+    snoozeTodo
   } = props;
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const [snoozeOpenId, setSnoozeOpenId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -190,25 +232,64 @@ export function TaskInboxSection(props: any) {
       <div className="mt-3 space-y-3">
         {(() => {
           // One card per customer with every open task inside it (Joe,
-          // 2026-06-12: "no doubles — keep it under the same card").
-          // Customers appear at the position of their highest-priority task;
-          // tasks within a card keep section-priority order.
-          const orderedTodos: any[] = [];
-          for (const sectionDef of todoSectionDefs) {
-            for (const t of groupedTodos[sectionDef.key] ?? []) orderedTodos.push(t);
-          }
-          const groups: Array<{ convId: string; tasks: any[] }> = [];
+          // 2026-06-12: "no doubles — keep it under the same card"). Each card is
+          // filed under the due-time bucket of its MOST-URGENT task, and tasks
+          // within a card sort by urgency — so overdue work rises to the top
+          // without ever splitting a customer across two cards.
+          const TYPE_RANK: Record<string, number> = {
+            appointment: 0,
+            reminder: 1,
+            followup: 2,
+            todo: 3
+          };
           const byConv = new Map<string, { convId: string; tasks: any[] }>();
-          for (const t of orderedTodos) {
+          for (const t of filteredTodos) {
             let g = byConv.get(t.convId);
             if (!g) {
               g = { convId: t.convId, tasks: [] };
               byConv.set(t.convId, g);
-              groups.push(g);
             }
             g.tasks.push(t);
           }
-          return groups.map(group => {
+          const groups: Array<{
+            convId: string;
+            tasks: any[];
+            bucket: DueBucket;
+            urgencyMs: number;
+            salesCritical: boolean;
+          }> = [];
+          for (const g of byConv.values()) {
+            g.tasks.sort((a: any, b: any) => {
+              const ra = dueBucketRank(dueBucketFor(a, nowMs));
+              const rb = dueBucketRank(dueBucketFor(b, nowMs));
+              if (ra !== rb) return ra - rb;
+              const da = taskEffectiveDueMs(a);
+              const db = taskEffectiveDueMs(b);
+              if (da != null && db != null && da !== db) return da - db;
+              if (da == null && db != null) return 1;
+              if (da != null && db == null) return -1;
+              return (TYPE_RANK[todoInboxSection(a)] ?? 9) - (TYPE_RANK[todoInboxSection(b)] ?? 9);
+            });
+            const primary = g.tasks[0];
+            groups.push({
+              convId: g.convId,
+              tasks: g.tasks,
+              bucket: dueBucketFor(primary, nowMs),
+              urgencyMs: taskEffectiveDueMs(primary) ?? Number.POSITIVE_INFINITY,
+              salesCritical: g.tasks.some((t: any) => salesCriticalKind(t) != null)
+            });
+          }
+          groups.sort((a, b) => {
+            const ra = dueBucketRank(a.bucket);
+            const rb = dueBucketRank(b.bucket);
+            if (ra !== rb) return ra - rb;
+            // Within a due bucket, the money tasks (pricing/financing/availability) rise.
+            if (a.salesCritical !== b.salesCritical) return a.salesCritical ? -1 : 1;
+            return a.urgencyMs - b.urgencyMs;
+          });
+          const bucketCounts = new Map<DueBucket, number>();
+          for (const g of groups) bucketCounts.set(g.bucket, (bucketCounts.get(g.bucket) ?? 0) + 1);
+          return groups.map((group, groupIdx) => {
             const rowConv = conversationsById.get(group.convId);
             const first = group.tasks[0];
             const vehicleLine = String(rowConv?.vehicleDescription ?? "").trim();
@@ -225,8 +306,27 @@ export function TaskInboxSection(props: any) {
             const callTask = group.tasks.find(
               (t: any) => !/(^|\b)note(\b|$)/.test(String(t.reason ?? "").toLowerCase())
             );
+            const isNewBucket =
+              groupIdx === 0 || groups[groupIdx - 1].bucket !== group.bucket;
+            const cardUrgencyClass = group.salesCritical
+              ? " lr-task-card--priority"
+              : group.bucket === "overdue"
+                ? " lr-task-card--overdue"
+                : group.bucket === "today"
+                  ? " lr-task-card--today"
+                  : "";
             return (
-              <div key={group.convId} className="lr-task-card">
+              <React.Fragment key={group.convId}>
+                {isNewBucket ? (
+                  <div className={`lr-task-bucket-h lr-task-bucket-h--${group.bucket}`}>
+                    <span aria-hidden className="inline-flex">
+                      <SideNavIcon name={BUCKET_ICON[group.bucket]} className="w-3.5 h-3.5" />
+                    </span>
+                    <span>{dueBucketLabel(group.bucket)}</span>
+                    <span className="lr-task-bucket-count">{bucketCounts.get(group.bucket) ?? 0}</span>
+                  </div>
+                ) : null}
+              <div className={`lr-task-card${cardUrgencyClass}`}>
                 <div className="min-w-0">
                   <div className="flex items-start justify-between gap-2">
                     <div
@@ -292,7 +392,7 @@ export function TaskInboxSection(props: any) {
                             ? "Due"
                             : "Created";
                     const requestedCallPretty =
-                      requestedCallTime && Number.isFinite(new Date(requestedCallTime).getTime())
+                      requestedCallTime && parseSaneTaskDateMs(requestedCallTime, nowMs) != null
                         ? formatWhenIso(requestedCallTime, true)
                         : requestedCallTime;
                     const whenValue =
@@ -330,15 +430,57 @@ export function TaskInboxSection(props: any) {
                             : "lr-task-card-pill--todo";
                     const pillIcon: SideNavIconName =
                       sectionType === "appointment" ? "calendar" : sectionType === "reminder" ? "clock" : "bell";
+                    // Money tasks (pricing/financing/availability) get a typed reason
+                    // badge + a Priority flag. For a generic "To Do", the reason badge
+                    // replaces the bland pill; for richer classes it sits alongside.
+                    const salesKind = salesCriticalKind(t);
+                    const reasonMeta = salesKind ? SALES_REASON_META[salesKind] : null;
+                    const showClassPill = !(reasonMeta && sectionType === "todo");
+                    const taskBucket = dueBucketFor(t, nowMs);
+                    const taskDueMs = taskEffectiveDueMs(t);
+                    const taskIsUrgent = taskBucket === "overdue" || taskBucket === "today";
+                    const dueChipLabel = taskDueMs != null && taskIsUrgent ? relativeDueLabel(taskDueMs, nowMs) : null;
+                    const canSnooze =
+                      typeof snoozeTodo === "function" &&
+                      sectionType !== "appointment" &&
+                      !appointmentReminderSent &&
+                      !dealerRideOutcomeNeeded &&
+                      !isApprovalTodoTask;
                     return (
                       <div key={t.id} className="lr-task-card-task">
                         <div className="lr-task-card-pillrow">
-                          <span className={`lr-task-card-pill ${pillVariant}`}>
-                            <span aria-hidden className="inline-flex">
-                              <SideNavIcon name={pillIcon} className="w-3.5 h-3.5" />
+                          {showClassPill ? (
+                            <span className={`lr-task-card-pill ${pillVariant}`}>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name={pillIcon} className="w-3.5 h-3.5" />
+                              </span>
+                              {taskLabel}
                             </span>
-                            {taskLabel}
-                          </span>
+                          ) : null}
+                          {reasonMeta ? (
+                            <span className={`lr-task-card-pill lr-task-card-pill--${reasonMeta.variant}`}>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name={reasonMeta.icon as SideNavIconName} className="w-3.5 h-3.5" />
+                              </span>
+                              {reasonMeta.label}
+                            </span>
+                          ) : null}
+                          {reasonMeta ? (
+                            <span className="lr-task-prio-flag">
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name="flame" className="w-3 h-3" />
+                              </span>
+                              Priority
+                            </span>
+                          ) : null}
+                          {dueChipLabel ? (
+                            <span className={`lr-task-due-chip lr-task-due-chip--${taskBucket}`}>
+                              <span aria-hidden className="inline-flex">
+                                <SideNavIcon name="clock" className="w-3 h-3" />
+                              </span>
+                              {taskBucket === "overdue" ? `Overdue · ${dueChipLabel}` : dueChipLabel}
+                            </span>
+                          ) : null}
                           {appointmentReminderSent || dealerRideOutcomeNeeded ? (
                             <button
                               type="button"
@@ -358,7 +500,7 @@ export function TaskInboxSection(props: any) {
                               Outcome needed
                             </button>
                           ) : null}
-                          {followUpTicker ? (
+                          {followUpTicker && !dueChipLabel ? (
                             <span
                               className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300/50 bg-[#06140f] px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums tracking-wide text-emerald-200 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.12),0_0_12px_rgba(52,211,153,0.16)]"
                               title={String(t.dueAt ?? "").trim() ? "How long since this follow-up became due" : "How long this follow-up has been open"}
@@ -368,6 +510,36 @@ export function TaskInboxSection(props: any) {
                             </span>
                           ) : null}
                           <span className="ml-auto" />
+                          {canSnooze ? (
+                            <div className="lr-task-snooze" data-actions-menu>
+                              <button
+                                className="lr-task-btn"
+                                onClick={() =>
+                                  setSnoozeOpenId(prev => (prev === t.id ? null : t.id))
+                                }
+                                title="Snooze this task to a later day"
+                              >
+                                <SideNavIcon name="clock" className="w-3.5 h-3.5 inline-block align-[-3px] mr-1" />
+                                Snooze
+                              </button>
+                              {snoozeOpenId === t.id ? (
+                                <div className="lr-task-snooze-menu">
+                                  {snoozeTargets(nowMs).map(opt => (
+                                    <button
+                                      key={opt.label}
+                                      className="lr-task-snooze-opt"
+                                      onClick={() => {
+                                        setSnoozeOpenId(null);
+                                        void snoozeTodo(t, opt.iso);
+                                      }}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {appointmentReminderSent || dealerRideOutcomeNeeded ? null : isApprovalTodoTask ? (
                             <button
                               className="lr-task-btn"
@@ -419,6 +591,21 @@ export function TaskInboxSection(props: any) {
                             <div className="lr-task-card-box-value">{actionDisplay}</div>
                           </div>
                         </div>
+                        {t.autoCloseCheck && t.autoCloseCheck.decision !== "closed" ? (
+                          <div
+                            className="lr-task-autoclose-check"
+                            title="Why this task hasn't auto-closed yet"
+                          >
+                            <span aria-hidden className="inline-flex">
+                              <SideNavIcon name="bolt" className="w-3 h-3" />
+                            </span>
+                            Auto-close: held
+                            {typeof t.autoCloseCheck.confidence === "number"
+                              ? ` · ${Math.round(t.autoCloseCheck.confidence * 100)}%`
+                              : ""}
+                            {t.autoCloseCheck.evidence ? ` — ${t.autoCloseCheck.evidence}` : ""}
+                          </div>
+                        ) : null}
                         {!summaryDuplicatesAction || showRequestedCallTime || appointmentOutcomeLabel ? (
                           <div className="lr-task-card-summary">
                             <div className="flex items-center justify-between gap-2">
@@ -556,6 +743,7 @@ export function TaskInboxSection(props: any) {
                   </div>
                 </div>
               </div>
+              </React.Fragment>
             );
           });
         })()}

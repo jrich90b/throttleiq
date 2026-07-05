@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { spreadsheetFileToText } from "../services/api/src/domain/mdfAssistant.ts";
+import { spreadsheetFileToText, sumInvoiceSpend, invoiceCandidateFiles } from "../services/api/src/domain/mdfAssistant.ts";
 
 // Pin the upload whitelist (buildMdfPacketFromUploads in index.ts) so the xlsx/csv
 // mime types + the .csv/.xlsx extension fallback can't be narrowed back out — that
@@ -72,6 +72,56 @@ assert.equal(
   ),
   null,
   "corrupt xlsx degrades to null instead of throwing"
+);
+
+// --- Multi-invoice claim total: headline spend = SUM of all invoices, not the primary
+// (Taste of Country 6/22: two invoices $2446.88 + $61.40 mirrored only $2446.88). ---
+assert.equal(
+  sumInvoiceSpend([{ amount: "2446.88" }, { amount: "61.40" }]),
+  "2508.28",
+  "two invoices sum to the full claim total"
+);
+assert.equal(
+  sumInvoiceSpend([{ amount: "$2,446.88" }, { amount: "$61.40" }]),
+  "2508.28",
+  "amounts with $ and commas still sum"
+);
+assert.equal(sumInvoiceSpend([{ amount: "2446.88" }]), null, "single invoice keeps the extracted value (no override)");
+assert.equal(sumInvoiceSpend([]), null, "no invoices => no override");
+assert.equal(
+  sumInvoiceSpend([{ amount: "100.00" }, { amount: "" }]),
+  null,
+  "only one parseable amount => no override (don't fabricate a partial total)"
+);
+
+// --- Multi-invoice EXTRACTION: per-file so two same-event invoices never merge into one
+// (Taste of Country: two jpeg invoices intermittently extracted as one). ---
+const mkFile = (name: string, mimeType: string, providedRole?: string): any => ({
+  name,
+  mimeType,
+  providedRole,
+  buffer: Buffer.from(""),
+  size: 0
+});
+assert.equal(
+  invoiceCandidateFiles([mkFile("IMG_1479.jpeg", "image/jpeg"), mkFile("IMG_1484.jpeg", "image/jpeg")]).length,
+  2,
+  "two untagged invoice images are both per-file candidates"
+);
+assert.equal(invoiceCandidateFiles([mkFile("inv.pdf", "application/pdf")]).length, 1, "a pdf is a candidate");
+assert.equal(invoiceCandidateFiles([mkFile("flyer.jpg", "image/jpeg")]).length, 0, "a creative/flyer image is not an invoice candidate");
+assert.equal(
+  invoiceCandidateFiles([mkFile("photo.png", "image/png", "proof_of_performance")]).length,
+  0,
+  "a proof file is excluded from invoice candidates"
+);
+assert.equal(invoiceCandidateFiles([mkFile("data.csv", "text/csv")]).length, 0, "a spreadsheet is not a per-file invoice image");
+
+const mdfSrc = fs.readFileSync("services/api/src/domain/mdfAssistant.ts", "utf8");
+assert.ok(/async function extractInvoicesPerFile/.test(mdfSrc), "the per-file invoice extractor must exist");
+assert.ok(
+  /const perFile = await extractInvoicesPerFile\(files, model\)/.test(mdfSrc),
+  "invoices must come authoritatively from the per-file (role-respecting) pass, not a count-gated fallback"
 );
 
 console.log("PASS mdf spreadsheet extract eval");

@@ -151,6 +151,43 @@ DEPLOY_BUILD_MODE="${DEPLOY_BUILD_MODE:-local}"
 DEPLOY_REMOTE_BUILD_HEAP_MB="${DEPLOY_REMOTE_BUILD_HEAP_MB:-1408}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-0}"
 
+# --- Single-deploy mutex -------------------------------------------------------
+# Two routines can deploy the API (the supervised morning routine + the unattended
+# loop-runner), possibly on the same machine, and they share the SAME remote target
+# (rsync of dist + `pm2 restart`). A concurrent deploy races on the artifact and the
+# process restart. Serialize with an atomic mkdir lock (portable — macOS has no
+# `flock`); a real deploy aborts cleanly if another holds it. A stale lock whose
+# holder PID is gone is reclaimed. Skipped for --dry-run (read-only). Override the
+# path with DEPLOY_LOCK_DIR.
+DEPLOY_LOCK_DIR="${DEPLOY_LOCK_DIR:-${TMPDIR:-/tmp}/throttleiq-deploy-api.lock}"
+acquire_deploy_lock() {
+  if mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; then
+    echo "$$" >"$DEPLOY_LOCK_DIR/pid" 2>/dev/null || true
+    trap 'rm -rf "$DEPLOY_LOCK_DIR" 2>/dev/null || true' EXIT
+    echo "Acquired deploy lock ($DEPLOY_LOCK_DIR)."
+    return 0
+  fi
+  local holder
+  holder="$(cat "$DEPLOY_LOCK_DIR/pid" 2>/dev/null || echo "")"
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    echo "ERROR: another API deploy (pid $holder) is already running — lock: $DEPLOY_LOCK_DIR." >&2
+    echo "Aborting to avoid a concurrent rsync/pm2 restart race. Wait for it to finish, or if you're certain none is running, remove the lock dir and retry." >&2
+    exit 1
+  fi
+  echo "WARN: reclaiming a stale deploy lock (holder pid ${holder:-unknown} not running)." >&2
+  rm -rf "$DEPLOY_LOCK_DIR"
+  if ! mkdir "$DEPLOY_LOCK_DIR" 2>/dev/null; then
+    echo "ERROR: could not acquire the deploy lock after reclaiming a stale one — another deploy raced in. Aborting." >&2
+    exit 1
+  fi
+  echo "$$" >"$DEPLOY_LOCK_DIR/pid" 2>/dev/null || true
+  trap 'rm -rf "$DEPLOY_LOCK_DIR" 2>/dev/null || true' EXIT
+  echo "Acquired deploy lock ($DEPLOY_LOCK_DIR) after reclaiming a stale one."
+}
+if [[ "$DEPLOY_DRY_RUN" != "1" ]]; then
+  acquire_deploy_lock
+fi
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "Missing required command: $1" >&2

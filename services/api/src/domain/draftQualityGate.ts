@@ -174,6 +174,24 @@ export function cadenceQualityJudgeShadowEnabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
+/**
+ * Reads CADENCE_QUALITY_ENFORCE. Default OFF (shadow). When ON, a PROACTIVE cadence touch the judge
+ * verdicts `suppress` at >= the enforce floor is HELD BACK (not drafted/sent) and the cadence advances.
+ * Justified by a 45-day backtest: ~40% of proactive touches were low-value repeats/contentless pings,
+ * and the judge reliably kept the concrete ones (a re-sent new-arrival to a stepped-back lead was
+ * correctly suppressed). First flip enforces `suppress` only (hold/regenerate stay shadow). Reversible.
+ */
+export function isCadenceQualityEnforceEnabled(): boolean {
+  const raw = String(process.env.CADENCE_QUALITY_ENFORCE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/** The confidence floor for cadence-quality ENFORCE (suppress). Default 0.90 — the backtest breakpoint. */
+export function cadenceQualityEnforceFloor(): number {
+  const raw = Number(process.env.CADENCE_QUALITY_ENFORCE_MIN_CONFIDENCE ?? 0.9);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.9;
+}
+
 /** Reads NO_RESPONSE_JUDGE_ENABLED. Default OFF (dark). */
 export function isNoResponseJudgeEnabled(): boolean {
   const raw = String(process.env.NO_RESPONSE_JUDGE_ENABLED ?? "").trim().toLowerCase();

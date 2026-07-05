@@ -10,7 +10,11 @@
       "Bash(git -C /Users/joehartrich/throttleiq log *)",
       "Bash(git -C /Users/joehartrich/throttleiq diff *)",
       "Bash(git -C /Users/joehartrich/throttleiq show *)",
-      "Bash(git -C /Users/joehartrich/throttleiq grep *)"
+      "Bash(git -C /Users/joehartrich/throttleiq grep *)",
+      "Bash(node ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit)",
+      "Bash(node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit)",
+      "Bash(node --max-old-space-size=4096 node_modules/typescript/bin/tsc --noEmit -p apps/web/tsconfig.json)",
+      "mcp__scheduled-tasks__list_scheduled_tasks"
     ]
   },
   "hooks": {

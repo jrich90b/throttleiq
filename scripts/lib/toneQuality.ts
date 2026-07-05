@@ -196,6 +196,62 @@ function hasTradeSignal(text: string): boolean {
   );
 }
 
+// Known ADF structured-field labels. Used to bound a field's value (it runs
+// until the next label) so we can read a field even on single-line ADF bodies
+// where the per-line marker is absent.
+const ADF_FIELD_LABELS =
+  "source|ref|name|email|phone|stock|vin|year|vehicle|trade-?in|inquiry|your inquiry|customer comments?|comments?|preferred date|preferred time";
+
+function adfFieldValue(inboundText: string, label: string): string {
+  const re = new RegExp(
+    `${label}:[ \\t]*([^\\n]*?)(?=[ \\t]+(?:${ADF_FIELD_LABELS})[ \\t]*:|[ \\t]*(?:\\n|$))`,
+    "i"
+  );
+  const m = String(inboundText ?? "").match(re);
+  return m ? m[1].trim() : "";
+}
+
+function normalizeVehicleHint(s: string): string {
+  return String(s ?? "")
+    .toLowerCase()
+    .replace(/harley-?davidson/g, "")
+    .replace(/\b(?:19|20)\d{2}\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * "Book test ride" ADF forms commonly auto-populate the structured `Trade-In:`
+ * field with the SAME model the customer wants to ride (a form-mapping
+ * artifact, e.g. Vehicle "Harley-Davidson Sportster S" / Trade-In "Sportster
+ * S"). The raw `hasTradeSignal` then fires on the `Trade-In:` field LABEL and
+ * flags a phantom `adf_direct_ask: trade` that the reply could never have been
+ * expected to address. A trade ask is GENUINE only when (a) trade language
+ * appears in the inquiry body (e.g. Dante Turello "...I'd be looking to trade
+ * in as well"), or (b) the structured Trade-In field names a DISTINCT vehicle
+ * (not a mirror of the bike of interest). Mirrors are dropped; real trades —
+ * body-stated or distinct-structured — stay flagged.
+ */
+function adfTradeAskIsGenuine(inboundText: string, customerText: string): boolean {
+  const t = String(customerText ?? "").toLowerCase();
+  const tradeIn = adfFieldValue(inboundText, "trade-?in");
+  // Trade language anywhere OTHER than the structured Trade-In field (e.g. the
+  // inquiry body) is always a genuine ask.
+  const outsideField = (tradeIn ? t.replace(tradeIn.toLowerCase(), " ") : t).replace(
+    /trade-?in:/i,
+    " "
+  );
+  if (hasTradeSignal(outsideField)) return true;
+  if (!tradeIn) return hasTradeSignal(t);
+  const vehicle = normalizeVehicleHint(adfFieldValue(inboundText, "vehicle"));
+  const trade = normalizeVehicleHint(tradeIn);
+  if (!trade) return false;
+  const mirrorsVehicle =
+    trade === vehicle || (!!vehicle && (vehicle.includes(trade) || trade.includes(vehicle)));
+  return !mirrorsVehicle;
+}
+
 function hasStatusUpdateSignal(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   return /\b(received|got|paperwork|dmv|notary|title|lien filed|i'?ll keep you posted|just wanted to update|update)\b/.test(
@@ -287,7 +343,7 @@ export function detectAdfDirectAsks(inboundText: string): AdfDirectAskKind[] {
   ) {
     asks.push("scheduling");
   }
-  if (hasTradeSignal(t)) asks.push("trade");
+  if (hasTradeSignal(t) && adfTradeAskIsGenuine(inboundText, t)) asks.push("trade");
   if (hasServiceSignal(t)) asks.push("service");
   if (hasPartsSignal(t)) asks.push("parts");
   if (hasApparelSignal(t)) asks.push("apparel");

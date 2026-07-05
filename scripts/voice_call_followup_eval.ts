@@ -99,4 +99,26 @@ assert.ok(
   "voice recording handler registers reached vs missed contact attempt up front"
 );
 
+
+
+// --- Voicemail 2nd-attempt generalization (Joe-approved 2026-07-02, Brian Serena class): a
+//     voicemail-only OUTBOUND call creates a 2nd-attempt call task on ANY conversation — the
+//     old behavior suppressed it for every non-finance-handoff conv. Source guard: the
+//     non-finance branch must create the scheduled task and only suppress on an existing one.
+{
+  const fs = await import("node:fs");
+  const index = fs.readFileSync("services/api/src/index.ts", "utf8");
+  const start = index.indexOf("voicemail_second_attempt_task_created");
+  assert.ok(start > 0, "the non-finance voicemail branch must create the 2nd-attempt call task");
+  const branch = index.slice(Math.max(0, start - 2200), start + 400);
+  assert.ok(
+    /buildDefaultCallbackFallbackSchedule\(timezone\)/.test(branch),
+    "the 2nd-attempt task carries the scheduled dueAt/reminder (same schedule as the finance flow)"
+  );
+  assert.ok(
+    /voicemail_call_todo_suppressed_outbound/.test(index.slice(start)),
+    "suppression remains ONLY for convs that already have an open call/follow-up task"
+  );
+}
+
 console.log("PASS voice call follow-up eval");

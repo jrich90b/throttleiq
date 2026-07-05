@@ -3,18 +3,19 @@ import "./globals.css";
 
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Space_Grotesk, Plus_Jakarta_Sans } from "next/font/google";
+import localFont from "next/font/local";
 
-const displayFont = Space_Grotesk({
-  subsets: ["latin"],
+// The LeadRider pairing: Barlow Condensed (display) + Geist Sans (body).
+// Vendored woff2s keep builds hermetic (no Google Fonts fetch), matching the
+// landing page's approach. --font-body is bound to Geist in globals.css.
+const displayFont = localFont({
+  src: [
+    { path: "./fonts/barlow-condensed-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/barlow-condensed-600.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/barlow-condensed-700.woff2", weight: "700", style: "normal" }
+  ],
   variable: "--font-display",
-  weight: ["500", "600", "700"]
-});
-
-const bodyFont = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-body",
-  weight: ["400", "500", "600", "700"]
+  display: "swap"
 });
 
 export const metadata: Metadata = {
@@ -29,7 +30,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${GeistSans.variable} ${GeistMono.variable} ${displayFont.variable} ${bodyFont.variable} antialiased`}>
+      <body className={`${GeistSans.variable} ${GeistMono.variable} ${displayFont.variable} antialiased`}>
         {children}
       </body>
     </html>

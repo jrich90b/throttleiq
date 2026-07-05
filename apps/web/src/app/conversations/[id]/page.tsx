@@ -32,6 +32,10 @@ type Conversation = {
   draftHeld?: {
     at: string;
     reason: string;
+    // "context_fidelity" => the AI answered out of context; the rep must reply (reply box stays enabled,
+    // sending clears the hold). Otherwise (draft-quality) => "being fixed", reply box disabled.
+    heldKind?: string | null;
+    steering?: string | null;
     judgeReason?: string;
     channel: "sms" | "email";
   } | null;
@@ -209,7 +213,18 @@ export default function ConversationPage() {
       </div>
       {modeError ? <div className="text-xs text-red-600 mt-1">{modeError}</div> : null}
 
-      {conv.draftHeld ? (
+      {conv.draftHeld && conv.draftHeld.heldKind === "context_fidelity" ? (
+        <div className="mt-4 border rounded-lg p-3 text-sm border-amber-300 bg-amber-50 text-amber-900">
+          <div className="font-medium">Needs your reply — the AI couldn&apos;t answer this in context</div>
+          <div className="mt-1">
+            The agent&apos;s draft didn&apos;t address what the customer actually asked, so it was held back.
+            Please reply to the customer below — sending clears this flag.
+            {conv.draftHeld.steering ? (
+              <div className="mt-1 text-amber-800">Suggested angle: {conv.draftHeld.steering}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : conv.draftHeld ? (
         <div className="mt-4 border rounded-lg p-3 text-sm border-amber-300 bg-amber-50 text-amber-900">
           <div className="font-medium">Draft held — being fixed</div>
           <div className="mt-1">
@@ -249,7 +264,7 @@ export default function ConversationPage() {
         })}
       </div>
 
-      {conv.draftHeld ? (
+      {conv.draftHeld && conv.draftHeld.heldKind !== "context_fidelity" ? (
         <div className="mt-6 border rounded-lg p-4 text-sm border-amber-300 bg-amber-50 text-amber-900">
           <div className="font-medium">No draft to send — held for quality</div>
           <div className="mt-1">

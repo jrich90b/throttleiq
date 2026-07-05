@@ -27,6 +27,10 @@ import {
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
+import {
+  isPendingIncomingInventoryNotifyTodoSummary,
+  planPendingIncomingNotifyDedup
+} from "./pendingIncomingInventory.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -334,6 +338,20 @@ export type TodoTask = {
   reminderSentAt?: string;
   escalatedAt?: string;
   taskClass?: TodoTaskClass;
+  // Last task-fulfillment auto-close check (visibility into WHY a task did/didn't close).
+  autoCloseCheck?: {
+    at: string;
+    fulfilled: boolean;
+    confidence: number | null;
+    evidence?: string;
+    decision: string; // e.g. "closed" | "shadow_would_close" | "below_confidence" | "not_fulfilled"
+    channel: string;
+  };
+  // Set ONCE when a department-handoff task soft-closes (dept responded, customer not booked): the task
+  // is snoozed to nudgeAt (dueAt) and re-surfaces then as a staff follow-up. Presence also guards
+  // against re-soft-closing on the re-surface. See domain/taskFulfillmentAutoClose.ts.
+  autoSoftCloseAt?: string;
+  autoSoftClose?: { at: string; nudgeAt: string; reason: string; evidence?: string };
 };
 
 export type TodoTaskClass = "followup" | "appointment" | "todo" | "reminder";
@@ -542,10 +560,26 @@ export type InventoryWatch = {
   downPayment?: number;
   note?: string;
   exactness?: "exact" | "year_model" | "model_range" | "model_only";
+  // When true, a base-model watch may fire on a DISTINCT sibling model (e.g. a
+  // "Road Glide" watch on a "Road Glide Limited") — set only when the customer is
+  // known to be open to other trims (typically used inventory). Default/undefined
+  // = strict: a base watch fires only on the exact base model. See
+  // unitIsDistinctModelFromWatch (inventoryFeed) + the distinct-model guard.
+  openToOtherTrims?: boolean;
+  // Sibling-variant scope clarification (watchSiblingScope.ts): when a same-family
+  // sibling trim lands during a strict watch, we ASK ONCE whether they're open to
+  // variants. askedAt records the one ask (never re-ask); declinedAt records a
+  // "just the base" answer (stays strict, never re-ask); a yes sets openToOtherTrims.
+  siblingScopeAskedAt?: string;
+  siblingScopeDeclinedAt?: string;
+  siblingScopeResolvedAt?: string;
+  siblingScopeAskModel?: string; // the unit model that prompted the ask (audit + parser context)
+  siblingScopeAskStockId?: string;
   status?: "active" | "paused";
   createdAt: string;
   lastNotifiedAt?: string;
   lastNotifiedStockId?: string;
+  lastNotifiedModel?: string; // the MODEL of the unit last notified — lets a read-only audit catch a watch that fired on the wrong model (watch_fired_wrong_model) without re-reading the inventory feed
 };
 
 export type InventoryWatchPending = {
@@ -765,6 +799,30 @@ export type Conversation = {
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;
   pendingIncomingInventory?: PendingIncomingInventory;
+  // Units the recommender last suggested (with listing url + color), so a "show me pics/links/colors"
+  // follow-up can answer with the REAL links instead of punting (2026-06-24).
+  recommendedUnits?: {
+    year?: string | null;
+    model?: string | null;
+    color?: string | null;
+    price?: number | null;
+    stockId?: string | null;
+    url?: string | null;
+    images?: string[];
+  }[];
+  recommendedUnitsAt?: string;
+  // Offer-once-per-value marker: the down payment we last sent a disclaimed payment ESTIMATE for, so
+  // we don't re-fire on later "ok"/"thanks" turns but DO re-estimate if they change it (2026-06-24).
+  paymentEstimateSentForDown?: number;
+  // Offer-once marker: when we sent the finance pre-qual/credit-app + visit offer to a payment-
+  // focused lead (after they engaged with numbers), so we don't repeat it (2026-06-24).
+  financeAppInviteSentAt?: string;
+  // Dedup marker: when the maintenance reconcile last flagged a scheduling LEAK (a visit time discussed
+  // but never booked) so a rep gets ONE "book this" todo, not a flood; re-flags after a window (6/25).
+  schedulingLeakFlaggedAt?: string;
+  // Dedup marker: when the reconcile last surfaced a "first touch was drafted but never sent" staff
+  // todo for a NEVER-contacted lead (the email-first-touch silence pool, 6/25); re-nudges after a window.
+  firstTouchSurfacedAt?: string;
   inventoryContext?: {
     model?: string;
     year?: string;
@@ -828,6 +886,54 @@ export type Conversation = {
     // code/comprehension bug; these previews let the monitor diagnose it without re-running anything.
     inboundPreview?: string;
     draftPreview?: string;
+  } | null;
+  // Context-fidelity SHADOW marker (Net 1 of the gap-detection loop): the scorer runs on every draft
+  // and, in SHADOW mode, does not hold — but a MAJOR would-hold means this draft answered out of
+  // context. The in-memory decision trace is ephemeral, so we persist the verdict here for the
+  // read-only outcome-audit sweep to surface to the self-healing loop (so a human doesn't have to
+  // catch it). Detection only — no reply behavior changes. A passing/operator draft clears it; the
+  // audit detector treats a DIFFERENT reply going out after as resolved (corrected).
+  contextFidelityShadow?: {
+    at: string;
+    frame?: string | null;
+    severity?: string | null;
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    inboundPreview?: string;
+    draftPreview?: string;
+  } | null;
+  // Human-correction marker (Net 2 of the gap-detection loop): when staff EDIT the AI's draft before
+  // sending and the diff-judge (classifyDraftEditWithLLM) finds the change MATERIAL (the human fixed
+  // WHAT the reply said — intent / facts / lead-type / context, not just voice/length), we persist the
+  // labeled correction here so the read-only outcome-audit sweep turns it into a comprehension anomaly
+  // the loop fixes at the parser. The strongest "the agent was wrong here" signal — a human already
+  // corrected it. Cosmetic edits are NOT recorded. Recorded async (never blocks a send); recent ones
+  // surface, then age out by the detector's window.
+  humanCorrection?: {
+    at: string;
+    category?: string | null;
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    messageId?: string | null;
+    generatedPreview?: string;
+    sentPreview?: string;
+  } | null;
+  // Cadence-quality SHADOW marker (folded from the cadence-quality judge): a PROACTIVE follow-up message
+  // judged suppress/hold (a bad unprompted send). Persisted so the read-only outcome-audit sweep surfaces
+  // it as a comprehension gap. Detection only — the draft is not altered (STEP 1 shadow).
+  cadenceQualityShadow?: {
+    at: string;
+    overall?: string | null; // "suppress" | "hold"
+    confidence?: number | null;
+    reason?: string | null;
+    steering?: string | null;
+    channel?: "sms" | "email";
+    cadenceKind?: string | null;
+    messagePreview?: string;
   } | null;
   contactPreference?: "call_only";
   voiceContext?: VoiceContext;
@@ -1840,6 +1946,22 @@ export function setContactPreference(
   scheduleSave();
 }
 
+// A bare acknowledgement with no content — the ONLY inbound class that must not pull a
+// staff-ARCHIVED conversation back into the active inbox (Deborah Kranz-Mitchell,
+// +17166280459, operator-reported 2026-07-01: she was told "if anything changes, give me a
+// shout", replied "Will do", and the archive was wiped). Deliberately deterministic and
+// NARROW: this gates a STATE side-effect (reopen), not comprehension — and the fail
+// direction is "reopen" (anything not unambiguously a bare ack, or any media, reopens).
+export function isBareAckInboundText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (t.length > 40) return false;
+  if (/^[\p{Extended_Pictographic}\s]+$/u.test(t)) return true; // emoji-only
+  return /^(ok(ay)?|k|will do|sure( thing)?|thanks?( so much| a lot)?|thank you( so much)?|sounds good|got it|no problem|you too|same to you|anytime|yes sir|yup|yep|have a (good|great) (day|one|weekend)|take care|👍)[.!\s]*$/i.test(
+    t
+  );
+}
+
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     const closedReason = String(conv.closedReason ?? "").toLowerCase();
@@ -1851,7 +1973,13 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
       /\b(unit_hold|order_hold|manual_hold|post_sale)\b/.test(
         String(conv.followUp?.reason ?? "").toLowerCase()
       );
-    if (!stickyClosed) {
+    // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
+    // question, or attachment still reopens (fail-safe toward reopening).
+    const archivedAckHold =
+      /archive/.test(closedReason) &&
+      !(evt.mediaUrls && evt.mediaUrls.length) &&
+      isBareAckInboundText(evt.body);
+    if (!stickyClosed && !archivedAckHold) {
       conv.status = "open";
       conv.closedAt = undefined;
       conv.closedReason = undefined;
@@ -1975,6 +2103,10 @@ export function isDuplicateInboundEvent(
   return nowMs - atMs <= windowMs;
 }
 
+/** Marker substring in the context-fidelity "needs your reply" held task — lets the producer (index.ts)
+ *  dedup it and the clear-on-reply hook below recognize + close it class-agnostically. */
+export const CONTEXT_FIDELITY_HELD_TODO_MARKER = "AI couldn't answer this in context";
+
 export function appendOutbound(
   conv: Conversation,
   from: string,
@@ -2002,6 +2134,24 @@ export function appendOutbound(
     conv.updatedAt = nowIso();
     scheduleSave();
     return;
+  }
+  // Clear-on-reply: a real reply to the customer means the held turn is handled — clear the
+  // context-fidelity held marker (so the inbox card tag + banner vanish) and close the "needs your
+  // reply" task. A reply counts whether it was logged in the console (provider "human"), sent as a live
+  // SMS ("twilio"), or emailed ("sendgrid") — but NOT a draft_ai re-publish (that's the same AI that
+  // couldn't answer; it must not self-clear the flag). Placed AFTER the internal-action-log guard so a
+  // blocked system/log entry never clears it. (Fix: a real Twilio reply — Nicholas Braun, 2026-06-24 —
+  // left the flag stuck because only provider "human" cleared it.)
+  if (
+    (providerKey === "human" || providerKey === "twilio" || providerKey === "sendgrid") &&
+    (conv.draftHeld as any)?.heldKind === "context_fidelity"
+  ) {
+    conv.draftHeld = null;
+    for (const t of listOpenTodos()) {
+      if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+        markTodoDone(conv.id, t.id);
+      }
+    }
   }
   const isEmailThread = String(from ?? "").includes("@") || String(to ?? "").includes("@");
   const salesToneProvider = provider === "draft_ai" || provider === "twilio" || provider === "sendgrid";
@@ -2405,12 +2555,51 @@ export function finalizeDraftAsSent(
     trackFinanceDocsRequestFromOutbound(conv, stateSignalBody);
     trackTradePayoffFromOutbound(conv, stateSignalBody);
     lockPersonaToStaffSender(conv, actor, tonedFinalBody);
+    // A sent reply handles the held turn — clear the "needs reply" flag + its todo. The console "Send"
+    // of a pending draft comes through HERE (not appendOutbound), so the clear must live here too,
+    // else the flag stays stuck after a real reply (s R Gurajala, 2026-06-25).
+    if ((conv as any).draftHeld) {
+      (conv as any).draftHeld = null;
+      for (const t of listOpenTodos()) {
+        if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+          markTodoDone(conv.id, t.id);
+        }
+      }
+    }
   }
 
   conv.updatedAt = new Date().toISOString();
   scheduleSave();
 
   return { usedDraft: true, originalDraftBody: original };
+}
+
+/**
+ * Reconcile a stale held / "needs reply" flag (closed-loop cron check, 2026-06-25): if a real reply
+ * (human/twilio/sendgrid) was sent AFTER the hold, the turn was handled — clear conv.draftHeld and
+ * close its "needs reply" todo. Deterministic safety net for any flag that slipped past the clear-on-
+ * reply at the send chokepoints (e.g. a send path that bypassed it). Returns true if it healed one.
+ */
+export function healStaleHeldFlag(conv: Conversation): boolean {
+  const held: any = (conv as any).draftHeld;
+  const heldMs = held?.at ? Date.parse(String(held.at)) : NaN;
+  if (!Number.isFinite(heldMs)) return false;
+  const repliedAfter = (conv.messages ?? []).some(m => {
+    if (m.direction !== "out") return false;
+    if (m.provider !== "human" && m.provider !== "twilio" && m.provider !== "sendgrid") return false;
+    const at = Date.parse(String(m.at ?? ""));
+    return Number.isFinite(at) && at > heldMs;
+  });
+  if (!repliedAfter) return false;
+  (conv as any).draftHeld = null;
+  for (const t of listOpenTodos()) {
+    if (t.convId === conv.id && String(t.summary ?? "").includes(CONTEXT_FIDELITY_HELD_TODO_MARKER)) {
+      markTodoDone(conv.id, t.id);
+    }
+  }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
 }
 
 export function setMessageFeedback(
@@ -2608,6 +2797,53 @@ export function discardAllDrafts(conv: Conversation, reason?: string) {
   scheduleSave();
 }
 
+/**
+ * Save an operator-authored reply as a reviewable DRAFT in the same console approval box the LLM
+ * pipeline uses (the customer-reply operator skill: a human handling ONE hard case). It supersedes
+ * any prior pending draft and shows as the pending draft — a human still hits Send in the console.
+ *
+ * This NEVER sends: it only marks prior drafts stale and appends a draft_ai pending message (SMS)
+ * or sets conv.emailDraft (email). It is the verbatim text the operator authored — no draft-quality
+ * / context-fidelity gate or substitution runs here (that's for the autonomous pipeline; this text
+ * was authored and will be reviewed by staff). The send path is the separate /conversations/:id/send.
+ */
+export function saveOperatorDraft(
+  conv: Conversation,
+  args: {
+    body: string;
+    channel: "sms" | "email";
+    mediaUrls?: string[];
+    actor?: { userId?: string | null; userName?: string | null };
+  }
+): { draft: string; channel: "sms" | "email" } {
+  const body = String(args.body ?? "").trim();
+  discardPendingDrafts(conv, "operator_draft_replaced");
+  // An operator-authored draft resolves any prior held state (draft-quality / context-fidelity) —
+  // mirror publishCustomerReplyDraft, where a passing draft supersedes the held marker. Otherwise the
+  // console keeps showing "being fixed" over a real draft (seen on s R Gurajala, 2026-06-24).
+  if ((conv as any).draftHeld) (conv as any).draftHeld = null;
+  if ((conv as any).contextFidelityShadow) (conv as any).contextFidelityShadow = null;
+  if (args.channel === "email") {
+    conv.emailDraft = body;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return { draft: body, channel: "email" };
+  }
+  const to = String(conv.leadKey ?? "").trim();
+  const media = args.mediaUrls?.filter(u => /^https?:\/\//i.test(String(u))) ?? [];
+  const msg = appendOutbound(
+    conv,
+    "salesperson",
+    to,
+    body,
+    "draft_ai",
+    undefined,
+    media.length ? media : undefined,
+    args.actor
+  );
+  return { draft: msg?.body ?? body, channel: "sms" };
+}
+
 function normalizePostSaleCloseoutText(text: string): string {
   return String(text ?? "")
     .toLowerCase()
@@ -2667,6 +2903,75 @@ export function getLatestPendingDraft(conv: Conversation): Message | null {
 
   if (lastDraftIdx > lastSentIdx) return conv.messages[lastDraftIdx] ?? null;
   return null;
+}
+
+/**
+ * Closed-loop "no reply" detector (Phase 2.5, 2026-06-24). The customer spoke LAST and there's
+ * nothing for the rep to act on — no pending draft and no held marker. This is wrongful silence the
+ * thumbs-down loop is blind to (there's no draft to rate). Held drafts (conv.draftHeld) are a SEPARATE
+ * category (the agent tried but a gate blocked it) — excluded here so the two are counted distinctly.
+ * Pure + conservative: skips closed/sold conversations (no reply expected there).
+ * (Live example: s R Gurajala said "Ok sure" to running numbers and got no draft, 2026-06-24.)
+ */
+export function isUnansweredInboundConversation(
+  conv: Pick<Conversation, "messages" | "closedAt" | "closedReason"> & { sale?: { soldAt?: string | null } | null; draftHeld?: unknown }
+): boolean {
+  if (!conv) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  if ((conv as any).draftHeld) return false; // held is its own bucket
+  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  let last: any = null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (String(m?.body ?? "").trim() || (Array.isArray(m?.mediaUrls) && m.mediaUrls.length)) {
+      last = m;
+      break;
+    }
+  }
+  if (!last || last.direction !== "in") return false; // the customer must have spoken last
+  return !getLatestPendingDraft(conv as Conversation); // nothing waiting for the rep => silence
+}
+
+// Scheduling-leak detector (2026-06-25): a visit/time was being arranged but no appointment ever got
+// booked, and it went idle. Catches the agent failing to offer times / confirm / book (Nicholas Braun
+// +17166286477: said he'd come ~10 in the morning, Joe confirmed, but dialogState stuck at
+// schedule_request with appointment status never "confirmed"). Deterministic: a scheduling-pending
+// dialog state + appointment not confirmed + idle + not closed. Conservative idle gate so an in-
+// progress back-and-forth (e.g. mid-offer) isn't flagged.
+const SCHEDULING_PENDING_STATES = new Set(["schedule_soft", "schedule_request", "schedule_offer_sent"]);
+
+export function isSchedulingLeakConversation(
+  conv:
+    | (Pick<Conversation, "messages" | "closedAt" | "closedReason" | "dialogState" | "appointment"> & {
+        sale?: { soldAt?: string | null } | null;
+      })
+    | null
+    | undefined,
+  now: Date = new Date(),
+  opts?: { minIdleHours?: number; maxIdleHours?: number }
+): boolean {
+  if (!conv) return false;
+  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
+  const state = String(conv.dialogState?.name ?? "").trim().toLowerCase();
+  if (!SCHEDULING_PENDING_STATES.has(state)) return false; // mid-scheduling only (not booked / other)
+  if (String(conv.appointment?.status ?? "none").trim().toLowerCase() === "confirmed") return false; // already booked
+  const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+  if (!msgs.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  let lastMs = 0;
+  for (const m of msgs) {
+    const t = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(t) && t > lastMs) lastMs = t;
+  }
+  if (!lastMs) return false;
+  const idleHours = (now.getTime() - lastMs) / 3_600_000;
+  // Window: idle enough that it's STALLED (not mid-exchange), but RECENT enough to still be worth
+  // chasing. A scheduling thread idle for weeks is a cold/dead lead, NOT an actionable "agreed but
+  // never booked" leak — most candidates skew old (age-distribution sweep 6/25: 26 of 34 were 7+
+  // days idle), so flagging them all floods the task inbox. Mirrors the stale-handoff min/max
+  // windowing; same state-invariants lesson (model the engine's hold conditions, not just "past due").
+  const minIdle = opts?.minIdleHours ?? 2;
+  const maxIdle = opts?.maxIdleHours ?? 24 * 7; // 7 days
+  return idleHours >= minIdle && idleHours <= maxIdle;
 }
 
 const WALK_IN_SOURCE_RE = /traffic log pro|walk[\s_-]*in|dealer lead app/i;
@@ -3108,7 +3413,21 @@ function normalizeModelInterestText(value?: string | null): string {
     .trim();
 }
 
-function isGenericModelInterest(value?: string | null): boolean {
+// Strip the verbose inventory tail off a model name for DISPLAY. Feed/ADF models arrive
+// like "CVO Road Glide ST 2026 FLTRXSTSE C6-26 Citrus Heat Re-Entry"; staff just want
+// "CVO Road Glide ST". Cut at the first model-year token (19xx/20xx) — the year, stock
+// code, and color always trail it. Real numeric model suffixes (Iron 883, Sportster 1200,
+// Fat Bob 114, Road Glide 3, Pan America 1250) are NOT 19xx/20xx, so they survive.
+// Cosmetic / display-only — never used for matching or watch keys.
+export function cleanModelDisplayName(model?: string | null): string {
+  const raw = normalizeModelInterestText(model);
+  if (!raw) return raw;
+  const tokens = raw.split(" ");
+  const yearIdx = tokens.findIndex(t => /^(19|20)\d{2}$/.test(t));
+  return yearIdx > 0 ? tokens.slice(0, yearIdx).join(" ").trim() : raw;
+}
+
+export function isGenericModelInterest(value?: string | null): boolean {
   const raw = normalizeModelInterestText(value);
   if (!raw) return true;
   const normalized = raw
@@ -3178,11 +3497,16 @@ function latestModelInterestLabel(conv: Conversation): string | null {
           conv.inventoryWatch?.condition
       ) ||
       toModelConditionLabel(conv.lead?.vehicle?.condition);
-    return `${conditionLabel ? `${conditionLabel} ` : ""}${model}`.trim();
+    return `${conditionLabel ? `${conditionLabel} ` : ""}${cleanModelDisplayName(model)}`.trim();
   }
 
-  if (!isGenericModelInterest(leadDescription)) return leadDescription;
-  if (!isGenericModelInterest(leadModel)) return leadModel;
+  if (!isGenericModelInterest(leadDescription)) return cleanModelDisplayName(leadDescription);
+  if (!isGenericModelInterest(leadModel)) return cleanModelDisplayName(leadModel);
+  // A placeholder vehicle ("Other" / "Full Line" / "Harley-Davidson Other" — common on
+  // Meta promo / prequal ADFs) is not a real bike. The lead is still active, so keep
+  // the card and show the model of interest as "N/A" instead of the junk placeholder
+  // (Joe, 2026-06-21). Truly empty leads (no vehicle at all) still show nothing.
+  if (leadDescription || leadModel) return "N/A";
   return null;
 }
 
@@ -3225,10 +3549,11 @@ export function listConversations() {
         status: c.status ?? "open",
         closedAt: c.closedAt ?? null,
         closedReason: c.closedReason ?? null,
-        // STEP 2: the agent's draft was held by the quality gate (being fixed) — surfaced as a flag
-        // so the inbox can show a "Held" state instead of an empty/no-draft row. Boolean only (the
-        // held reason stays server-side).
-        draftHeld: c.draftHeld ? true : null,
+        // STEP 2: the agent's draft was held — surfaced so the inbox shows a held state instead of an
+        // empty row. Carry heldKind so the card tag can be reason-aware ("Needs reply" for a
+        // context-fidelity hold vs the draft-quality "being fixed"); the rest of the reason stays
+        // server-side. (Truthy object => existing "held" checks still fire.)
+        draftHeld: c.draftHeld ? { heldKind: (c.draftHeld as any).heldKind ?? null } : null,
         createdAt: c.createdAt,
         updatedAt,
         lastMessage: lastNonCall,
@@ -3717,6 +4042,28 @@ export function computeFollowUpDueAt(anchorAtIso: string, offsetDays: number, ti
   }).toISOString();
 }
 
+// No-show follow-up timing (Joe-approved 2026-07-02: "a did-not-show + needs-follow-up should get
+// its first touch in 1-2 business days, not a week out"). Next BUSINESS day at the standard
+// morning send window — Fri/Sat outcomes land Monday (2 calendar days max), never a Sunday.
+// Pinned by no_show_followup_timing:eval.
+export function resolveNoShowFollowUpDueAt(nowIso: string, timeZone: string): string {
+  const now = new Date(nowIso);
+  const parts = getZonedParts(now, timeZone);
+  const base = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  base.setUTCDate(base.getUTCDate() + 1);
+  // getUTCDay on the local-date proxy: 0=Sun, 6=Sat → roll forward to Monday.
+  while (base.getUTCDay() === 0 || base.getUTCDay() === 6) {
+    base.setUTCDate(base.getUTCDate() + 1);
+  }
+  return localPartsToUtcDate(timeZone, {
+    year: base.getUTCFullYear(),
+    month: base.getUTCMonth() + 1,
+    day: base.getUTCDate(),
+    hour24: 10,
+    minute: 30
+  }).toISOString();
+}
+
 export function computePostSaleDueAt(anchorAtIso: string, offsetDays: number, timeZone: string) {
   const anchor = new Date(anchorAtIso);
   const anchorParts = getZonedParts(anchor, timeZone);
@@ -3833,6 +4180,52 @@ export function applyMetaPromoInitialCadence(conv: Conversation, timeZone: strin
   }
 }
 
+// Re-align a cadence that was wrongly deferred to long_term when the lead's STRUCTURED purchase
+// timeframe actually resolves to the STANDARD day-1 ramp (resolveInitialAdfCadencePlan). Heals leads
+// that came in before the ADF intake was unified onto the centralized policy — e.g. Richard Tait
+// (+17162893849, 6/25): a "3-12 Months" (start=3) marketplace lead pushed ~3 months out by a divergent
+// inline `monthsStart >= 1` gate. Tight gate so it can only ever fire on the genuine mis-deferral:
+// an ACTIVE long_term cadence, on an OPEN, never-contacted, non-handoff/-watch/-booked lead, whose
+// timeframe is standard. Fail direction is safe — it only ever moves the next touch SOONER. Returns
+// true if it re-anchored. (Same hold conditions modeled as the sendgrid initial-ADF shouldStartCadence
+// gate, per the [[conversation-state-invariants]] reconcile-heal pattern.)
+export function realignMisdeferredLongTermCadence(
+  conv: Conversation,
+  timeZone: string,
+  now: Date = new Date()
+): boolean {
+  const cad = conv?.followUpCadence;
+  if (!cad || cad.status !== "active" || cad.kind !== "long_term") return false;
+  // Only BEFORE any long_term nurture step has fired (stepIndex 0) — re-anchoring a cadence that's
+  // already mid-nurture would be disruptive. The INITIAL first touch is SEPARATE from the cadence, so
+  // a lead can have been contacted (opener sent) while its deferred nurture hasn't started yet — that's
+  // exactly the Richard Tait case (email opener sent, but the long_term nurture still pinned 3mo out).
+  if (Number(cad.stepIndex ?? 0) !== 0) return false;
+  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
+  if (conv.appointment?.bookedEventId) return false;
+  const mode = String(conv.followUp?.mode ?? "");
+  if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
+  if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
+  const plan = resolveInitialAdfCadencePlan({
+    purchaseTimeframe: conv.lead?.purchaseTimeframe,
+    purchaseTimeframeMonthsStart: conv.lead?.purchaseTimeframeMonthsStart
+  });
+  if (plan !== "standard") return false; // genuinely far-out (4+/multi-year) — leave it deferred
+  const anchorAtIso = now.toISOString();
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: anchorAtIso,
+    nextDueAt: computeFollowUpDueAt(anchorAtIso, FOLLOW_UP_DAY_OFFSETS[0], timeZone),
+    stepIndex: 0,
+    kind: "standard",
+    scheduleInviteCount: 0,
+    scheduleMuted: false
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
+}
+
 // Soft-visit OUTCOME: a customer who committed to coming in on a day/event ("I'll be there
 // Saturday") needs a showed-up/no-show outcome once the visit day passes — booked appointments
 // + dealer rides have this, soft visits didn't. Pure decision (nowMs passed in) so it's
@@ -3943,9 +4336,12 @@ export function scheduleLongTermFollowUp(
 export function stopFollowUpCadence(conv: Conversation, reason: string) {
   if (!conv.followUpCadence) return;
   // Post-sale and long-term cadences should continue even when sales flow triggers
-  // manual handoff (for example, service requests or internal coordination).
+  // manual handoff (for example, service requests or internal coordination), or when
+  // post-sale pickup/delivery-logistics chatter ("I'll be there in 10 minutes") routes
+  // through applyPurchaseDeliveryLogisticsDecision — that's expected post-sale small talk,
+  // not a reason to kill the cadence the sale itself just started.
   if (
-    reason === "manual_handoff" &&
+    (reason === "manual_handoff" || reason === "purchase_delivery") &&
     (conv.followUpCadence.kind === "post_sale" || conv.followUpCadence.kind === "long_term")
   ) {
     return;
@@ -4022,6 +4418,17 @@ export function registerScheduleInviteSent(conv: Conversation, threshold = 3) {
   scheduleSave();
 }
 
+// All inventory watches on a conversation, unioning the legacy single `inventoryWatch` AND the newer
+// `inventoryWatches` array (deduped). They are NOT mutually exclusive — a conv can carry an active single
+// watch alongside a paused array, so "array-if-present-else-single" silently ignored the active single
+// (the watch_active_on_closed leak the outcome auditor surfaced, 6/25). One source of truth so the heal,
+// the close guard, and the detector all enumerate watches the same way.
+export function collectInventoryWatches(conv: any): InventoryWatch[] {
+  const arr: InventoryWatch[] = Array.isArray(conv?.inventoryWatches) ? conv.inventoryWatches : [];
+  const single: InventoryWatch | undefined = conv?.inventoryWatch ?? undefined;
+  return single && !arr.includes(single) ? [...arr, single] : arr;
+}
+
 export function closeConversation(conv: Conversation, reason?: string) {
   conv.status = "closed";
   conv.closedAt = nowIso();
@@ -4031,6 +4438,13 @@ export function closeConversation(conv: Conversation, reason?: string) {
     conv.followUpCadence.status = "stopped";
     conv.followUpCadence.stopReason = reason ?? "closed";
     conv.followUpCadence.nextDueAt = undefined;
+  }
+  // A closed conversation must not keep an ACTIVE inventory watch — a reopen could refire
+  // "it's available again!" to a customer who already closed/bought. Pause every active watch
+  // (reversible; the watch-fire engine skips paused). Write-time guard; the reconcile tick is the
+  // catch-all for close paths that don't route through here (e.g. applyOutcomeSold).
+  for (const w of collectInventoryWatches(conv)) {
+    if (w && w.status !== "paused") w.status = "paused";
   }
   conv.updatedAt = nowIso();
   scheduleSave();
@@ -4648,6 +5062,13 @@ export function setFollowUpMode(
 ) {
   conv.followUp = { mode, reason, updatedAt: nowIso() };
   conv.updatedAt = nowIso();
+  // Invariant: a handed-off lead must not keep an ACTIVE customer cadence — otherwise it
+  // can auto-text the customer mid-handoff (audited contradiction class). Enforce it on the
+  // mode-setter so EVERY handoff path is covered, not just the ones that remember to call
+  // stopFollowUpCadence. stopFollowUpCadence preserves post_sale/long_term internally.
+  if (mode === "manual_handoff" && conv.followUpCadence?.status === "active") {
+    stopFollowUpCadence(conv, "manual_handoff");
+  }
   scheduleSave();
 }
 
@@ -4880,6 +5301,70 @@ export function addCallTodoIfMissing(conv: Conversation, summary: string): TodoT
 }
 
 /**
+ * Collapse duplicate pending-incoming "Notify when the trade arrives" tasks on a conversation
+ * to a single survivor. These piled up because addTodo dedups by taskClass, but the identical
+ * objective lands in different class buckets ("followup" from the producer vs "todo" from
+ * inferTodoTaskClass) and so never merged (Nicholas Braun: 4 open copies, 2026-06-23). Class-
+ * agnostic by template match. Returns the number of redundant copies retired. Idempotent: a
+ * conversation with 0 or 1 such task is left untouched.
+ */
+export function healPendingIncomingNotifyTodoDuplicates(conv: Conversation): number {
+  const open = todos.filter(t => t.convId === conv.id && t.status === "open");
+  const plan = planPendingIncomingNotifyDedup(open);
+  if (!plan.retireIds.length) return 0;
+  const retire = new Set(plan.retireIds);
+  const doneAt = nowIso();
+  let retired = 0;
+  for (const t of todos) {
+    if (!retire.has(t.id)) continue;
+    t.status = "done";
+    t.doneAt = doneAt;
+    retired += 1;
+  }
+  if (retired) {
+    conv.updatedAt = nowIso();
+    scheduleSave();
+  }
+  return retired;
+}
+
+/**
+ * Upsert the pending-incoming "Notify when the trade arrives" task as a per-conversation
+ * SINGLETON, independent of taskClass. Used by applyPendingIncomingInventoryState in BOTH the
+ * live and regenerate paths (they funnel through that one producer). Replaces a bare addTodo,
+ * whose class-keyed merge let the same objective duplicate across class buckets. First collapses
+ * any prior duplicates, then refreshes the survivor (preserving its richest summary so an
+ * appended ask isn't dropped) or creates one if none exists.
+ */
+export function upsertPendingIncomingInventoryNotifyTodo(
+  conv: Conversation,
+  summary: string,
+  sourceMessageId?: string,
+  owner?: { id?: string | null; name?: string | null }
+): TodoTask | null {
+  healPendingIncomingNotifyTodoDuplicates(conv);
+  const survivor = todos.find(
+    t =>
+      t.convId === conv.id &&
+      t.status === "open" &&
+      isPendingIncomingInventoryNotifyTodoSummary(t.summary)
+  );
+  if (survivor) {
+    survivor.reason = "call";
+    survivor.taskClass = "followup";
+    if (sourceMessageId) survivor.sourceMessageId = sourceMessageId;
+    const ownerId = String(owner?.id ?? conv?.leadOwner?.id ?? "").trim();
+    const ownerName = String(owner?.name ?? conv?.leadOwner?.name ?? "").trim();
+    if (ownerId) survivor.ownerId = ownerId;
+    if (ownerName) survivor.ownerName = ownerName;
+    conv.updatedAt = nowIso();
+    scheduleSave();
+    return survivor;
+  }
+  return addTodo(conv, "call", summary, sourceMessageId, owner, undefined, "followup");
+}
+
+/**
  * A lead handed to a human/department (manual_handoff) has its AI cadence
  * stopped by design — but if the human then goes quiet, the lead dies with no
  * safety net (Mike +17163686204, 2026-06-13: web-widget sales lead, priced +
@@ -4893,11 +5378,18 @@ export function shouldNudgeStaleHandoffLead(
   conv: Conversation,
   hasOpenTodo: boolean,
   now: Date = new Date(),
-  opts?: { minIdleDays?: number; maxIdleDays?: number }
+  opts?: { minIdleDays?: number; maxIdleDays?: number; reNudgeDays?: number }
 ): boolean {
   if (!conv || hasOpenTodo) return false;
   if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
-  if (conv.staleHandoffNudgedAt) return false;
+  // Dedup, but not forever: a lead nudged once whose to-do was later closed while it's STILL
+  // handed off + idle is a permanent orphan. Re-surface it after reNudgeDays (default 14) so
+  // it never falls through the cracks. The per-tick cap still prevents any flood.
+  if (conv.staleHandoffNudgedAt) {
+    const nudgedMs = Date.parse(conv.staleHandoffNudgedAt);
+    const reNudgeMs = (opts?.reNudgeDays ?? 14) * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(nudgedMs) || now.getTime() - nudgedMs < reNudgeMs) return false;
+  }
   if (conv.followUp?.mode !== "manual_handoff") return false;
   if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
   const messages = Array.isArray(conv.messages) ? conv.messages : [];
@@ -4912,6 +5404,70 @@ export function shouldNudgeStaleHandoffLead(
   const minIdleMs = (opts?.minIdleDays ?? 3) * 24 * 60 * 60 * 1000;
   const maxIdleMs = (opts?.maxIdleDays ?? 21) * 24 * 60 * 60 * 1000;
   return idleMs >= minIdleMs && idleMs <= maxIdleMs;
+}
+
+// Unsent first-touch safety net (2026-06-25): a NEVER-contacted lead whose initial outreach was DRAFTED
+// but never sent (e.g. an email-preferred / email-only ADF lead whose `conv.emailDraft` sits in the
+// Email tab, in suggest mode, with no cadence and no todo — the silence pool of 8 old AutoDealers.Digital
+// inventory leads). DISTINCT from the stale-handoff nudge: that's for a lead we DID reply to then went
+// quiet (hence its 21-day max — don't chase a dead conversation), whereas a missed FIRST touch means the
+// customer never heard from us at all, so it should be surfaced regardless of age (NO max-idle cap).
+// Returns true iff a deduped staff todo should be created. Fail direction is safe — it only ever asks a
+// human to send a drafted reply / make a call.
+// A REAL customer-facing outreach actually reached (or was placed to) the customer — a sent text/email
+// or a phone call. Excludes draft_ai (unsent) and inbound/internal logs. Used to tell "we've made
+// contact" from "drafted but never sent" for the unsent-first-touch net AND the auto-close backfill.
+export const REAL_OUTBOUND_CONTACT_PROVIDERS = new Set([
+  "twilio",
+  "sendgrid",
+  "voice_call",
+  "voice_summary",
+  "voice_transcript"
+]);
+
+export function shouldSurfaceUnsentFirstTouch(
+  conv: Conversation,
+  hasOpenTodo: boolean,
+  now: Date = new Date(),
+  opts?: { minIdleHours?: number; reNudgeDays?: number }
+): boolean {
+  if (!conv || hasOpenTodo) return false;
+  if (conv.closedAt || conv.closedReason || conv.sale?.soldAt) return false;
+  // Never contacted: no real customer-facing outreach EVER on ANY channel — a sent text/email
+  // (twilio/sendgrid) OR a phone call (voice_*). A pending draft / inbound ADF echo doesn't count. A
+  // lead already worked by phone is NOT awaiting a first touch (Cody/Ron were called by Scott).
+  const messages = Array.isArray(conv.messages) ? conv.messages : [];
+  const contacted = messages.some(
+    m => m?.direction === "out" && REAL_OUTBOUND_CONTACT_PROVIDERS.has(String(m?.provider ?? ""))
+  );
+  if (contacted) return false;
+  // Must have a pending first-touch we'd want a human to send: an email draft, or a non-stale draft_ai.
+  const hasPendingDraft =
+    !!String(conv.emailDraft ?? "").trim() ||
+    messages.some(m => m?.direction === "out" && m.provider === "draft_ai" && (m as any).draftStatus !== "stale");
+  if (!hasPendingDraft) return false;
+  // A real inbound lead (not an internal/echo-only thread).
+  if (!messages.some(m => m?.direction === "in" && String(m?.body ?? "").trim())) return false;
+  // Skip leads handled by other surfacing: an active cadence already nudges; paused_indefinite is a
+  // deliberate "not now"; event_promo gets a friendly ack, not a sales chase.
+  if (String(conv.followUpCadence?.status ?? "").toLowerCase() === "active") return false;
+  if (conv.followUp?.mode === "paused_indefinite") return false;
+  if (conv.classification?.bucket === "event_promo") return false;
+  // Dedup with re-nudge so a persistent orphan re-surfaces but never floods.
+  if (conv.firstTouchSurfacedAt) {
+    const t = Date.parse(conv.firstTouchSurfacedAt);
+    const reNudgeMs = (opts?.reNudgeDays ?? 7) * 24 * 60 * 60 * 1000;
+    if (!Number.isFinite(t) || now.getTime() - t < reNudgeMs) return false;
+  }
+  // Idle a beat since the last message (don't fire instantly — let the normal flow / a human act first).
+  let lastMs = NaN;
+  for (const m of messages) {
+    const ms = Date.parse(String(m?.at ?? ""));
+    if (Number.isFinite(ms) && (!Number.isFinite(lastMs) || ms > lastMs)) lastMs = ms;
+  }
+  if (!Number.isFinite(lastMs)) return false;
+  const minIdleMs = (opts?.minIdleHours ?? 4) * 60 * 60 * 1000;
+  return now.getTime() - lastMs >= minIdleMs; // NO max-idle: a missed first touch is always worth surfacing
 }
 
 function businessDaysBetween(fromMs: number, toMs: number): number {
@@ -4940,7 +5496,7 @@ function businessDaysBetween(fromMs: number, toMs: number): number {
 export function isInProcessDealLead(conv: Conversation): boolean {
   if (!conv) return false;
   if (conv.followUpCadence?.kind === "post_sale") return false;
-  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold/.test(
+  return /finance_no_contact|credit_app|prequal|finance_prequal|unit_hold|order_hold|in_process_deal/.test(
     String(conv.followUp?.reason ?? "").toLowerCase()
   );
 }
@@ -5028,6 +5584,52 @@ export function markTodoDone(convId: string, todoId: string): TodoTask | null {
   if (!task) return null;
   task.status = "done";
   task.doneAt = nowIso();
+  scheduleSave();
+  return task;
+}
+
+// Persist the latest task-fulfillment auto-close verdict on a task, so staff can see
+// WHY it did / didn't auto-close (confidence + evidence + decision).
+export function setTodoAutoCloseCheck(
+  convId: string,
+  todoId: string,
+  check: NonNullable<TodoTask["autoCloseCheck"]>
+): void {
+  const task = todos.find(t => t.id === todoId && t.convId === convId);
+  if (!task) return;
+  task.autoCloseCheck = check;
+  scheduleSave();
+}
+
+// Mark a department-handoff task as soft-closed (records WHY + the nudge date). Set once; its presence
+// guards against re-soft-closing when the task re-surfaces. The actual soft-close (snooze to nudgeAt)
+// is applied by the caller via snoozeTodo.
+export function setTodoAutoSoftClose(
+  convId: string,
+  todoId: string,
+  info: NonNullable<TodoTask["autoSoftClose"]>
+): void {
+  const task = todos.find(t => t.id === todoId && t.convId === convId);
+  if (!task) return;
+  task.autoSoftClose = info;
+  task.autoSoftCloseAt = info.at;
+  scheduleSave();
+}
+
+// Push an open task's due time forward (staff "snooze"). Keeps the reminder lead
+// consistent and re-arms the reminder so it fires again before the new due time.
+export function snoozeTodo(convId: string, todoId: string, dueAtIso: string): TodoTask | null {
+  const task = todos.find(t => t.id === todoId && t.convId === convId && t.status === "open");
+  if (!task) return null;
+  const at = new Date(String(dueAtIso ?? "").trim());
+  if (Number.isNaN(at.getTime())) return null;
+  task.dueAt = at.toISOString();
+  const lead =
+    Number.isFinite(task.reminderLeadMinutes) && (task.reminderLeadMinutes as number) > 0
+      ? (task.reminderLeadMinutes as number)
+      : 30;
+  task.reminderAt = new Date(at.getTime() - lead * 60 * 1000).toISOString();
+  task.reminderSentAt = undefined;
   scheduleSave();
   return task;
 }

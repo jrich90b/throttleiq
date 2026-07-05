@@ -22,6 +22,7 @@ type ReplayArgs = {
   modeMatrix: boolean;
   modes: ReplayMode[];
   caseNumbers: number[];
+  lastTurnOnly: boolean;
 };
 
 type ConversationMessage = {
@@ -123,6 +124,7 @@ function parseArgs(argv: string[]): ReplayArgs {
     limit: 20,
     sinceDays: 14,
     outDir: "reports/inbound-shadow",
+    lastTurnOnly: false,
     twilioTo: "+17164032516",
     keepTemp: false,
     fullDataCopy: false,
@@ -148,6 +150,7 @@ function parseArgs(argv: string[]): ReplayArgs {
     } else if (arg === "--limit") out.limit = Math.max(1, Number.parseInt(next(), 10) || 20);
     else if (arg === "--since-days") out.sinceDays = Math.max(1, Number.parseInt(next(), 10) || 14);
     else if (arg === "--out-dir") out.outDir = next();
+    else if (arg === "--last-turn-only") out.lastTurnOnly = true;
     else if (arg === "--twilio-to") out.twilioTo = next();
     else if (arg === "--case-numbers") {
       out.caseNumbers = next()
@@ -411,7 +414,19 @@ function selectCandidates(snapshot: any, args: ReplayArgs): Candidate[] {
       });
     }
   }
-  const sorted = candidates.sort((a, b) => Date.parse(b.messageAt ?? "") - Date.parse(a.messageAt ?? ""));
+  // --last-turn-only: the sandbox replays against the conversation's FINAL snapshot state, so
+  // only the LAST inbound per conversation sees state that matches its original moment — earlier
+  // turns replay against future context (anachronism) and can't be judged fairly downstream.
+  const pool = args.lastTurnOnly
+    ? [...candidates
+        .reduce((acc, c) => {
+          const prev = acc.get(c.conversationId);
+          if (!prev || Date.parse(c.messageAt ?? "") > Date.parse(prev.messageAt ?? "")) acc.set(c.conversationId, c);
+          return acc;
+        }, new Map<string, Candidate>())
+        .values()]
+    : candidates;
+  const sorted = pool.sort((a, b) => Date.parse(b.messageAt ?? "") - Date.parse(a.messageAt ?? ""));
   if (args.provider !== "all") return sorted.slice(0, args.limit);
 
   const byProvider = new Map<Provider, Candidate[]>();
@@ -865,8 +880,8 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   if (!draftText) {
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
-        verdict: "expected_no_response",
-        reasons: ["Dealer Lead App outcome/task ADF has no customer-facing auto-reply by design"]
+        verdict: "missing_response",
+        reasons: ["Dealer Lead App demo-ride ADF should produce a customer thank-you draft (Joe-approved 2026-07-02); staff keep the outcome"]
       };
     }
     if (

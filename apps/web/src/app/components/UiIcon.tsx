@@ -29,7 +29,9 @@ export type SideNavIconName =
   | "snowflake"
   | "clock"
   | "bell"
-  | "bolt";
+  | "bolt"
+  | "tag"
+  | "creditCard";
 
 export function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIconName; className?: string }) {
   const commonProps = {
@@ -276,6 +278,22 @@ export function SideNavIcon({ name, className = "w-5 h-5" }: { name: SideNavIcon
     return (
       <svg {...commonProps}>
         <path d="M13.2 3 5.5 13.4h5L10.8 21l7.7-10.4h-5z" />
+      </svg>
+    );
+  }
+  if (name === "tag") {
+    return (
+      <svg {...commonProps}>
+        <path d="M3.5 12.3 11 4.8a2 2 0 0 1 1.4-.6l4.6.1a2 2 0 0 1 2 2l.1 4.6a2 2 0 0 1-.6 1.4l-7.5 7.5a1.8 1.8 0 0 1-2.6 0l-4.4-4.4a1.8 1.8 0 0 1 0-2.6z" />
+        <circle cx="15.4" cy="8.6" r="1.1" />
+      </svg>
+    );
+  }
+  if (name === "creditCard") {
+    return (
+      <svg {...commonProps}>
+        <rect x="3" y="5.5" width="18" height="13" rx="2.2" />
+        <path d="M3 9.5h18M6.5 14.5h3" />
       </svg>
     );
   }
