@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import os from "node:os";
 import * as path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 
 /**
  * Placeholder-model display eval — ADF forms often attach a non-bike "model"
@@ -68,5 +68,8 @@ assert.ok(
   "formatModelLabelForFollowUp must treat full line AND other as 'the bike'"
 );
 
-await fs.rm(tmpDir, { recursive: true, force: true });
+// rmSync (not async fs.rm): a synchronous remove can't yield the event loop
+// mid-delete, so the conversation store's pending async flush can't re-write
+// conversations.json between the unlink and rmdir and race us to ENOTEMPTY.
+rmSync(tmpDir, { recursive: true, force: true });
 console.log("placeholder_model_display:eval ok");
