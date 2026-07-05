@@ -384,14 +384,82 @@ export function sumInvoiceSpend(invoices: Array<{ amount?: string }>): string | 
   return amounts.reduce((sum, n) => sum + n, 0).toFixed(2);
 }
 
+// Files that could each be a distinct invoice/receipt: an image or PDF that isn't tagged as
+// creative / proof / support-only. Used to drive PER-FILE invoice extraction so two invoices
+// for the same event can never be merged into one (root cause of "two invoices, only one
+// parsed" — the single-call extractor non-deterministically collapsed two same-event images).
+export function invoiceCandidateFiles(files: MdfUploadedFile[]): MdfUploadedFile[] {
+  return (files ?? []).filter(file => {
+    const role = file.providedRole || inferRoleFromName(file.name);
+    if (role === "creative" || role === "proof_of_performance" || role === "supporting_only") return false;
+    const mime = file.mimeType || "";
+    return mime.startsWith("image/") || mime === "application/pdf";
+  });
+}
+
+const MONTH_INDEX: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
+  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
+};
+
+// Parse month/day (and an optional 2- or 4-digit year) from the common invoice date formats: "6/15",
+// "6-15-26", "June 15", "Dec 20th, 2026", "15 June". Returns null for anything else (incl. ISO
+// yyyy-mm-dd, which already has a year and is left untouched). Deterministic structured-field parsing.
+function parseMonthDay(text: string): { month: number; day: number; year?: number } | null {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return null;
+  const valid = (mo: number, d: number) => mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+  const yr = (s?: string) => (s ? (s.length === 2 ? 2000 + Number(s) : Number(s)) : undefined);
+  let m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](\d{2}|\d{4}))?$/);
+  if (m) {
+    const month = Number(m[1]);
+    const day = Number(m[2]);
+    return valid(month, day) ? { month, day, year: yr(m[3]) } : null;
+  }
+  m = t.match(/^([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{2,4}))?$/);
+  if (m && MONTH_INDEX[m[1]]) {
+    const day = Number(m[2]);
+    return valid(MONTH_INDEX[m[1]], day) ? { month: MONTH_INDEX[m[1]], day, year: yr(m[3]) } : null;
+  }
+  m = t.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?(?:,?\s+(\d{2,4}))?$/);
+  if (m && MONTH_INDEX[m[2]]) {
+    const day = Number(m[1]);
+    return valid(MONTH_INDEX[m[2]], day) ? { month: MONTH_INDEX[m[2]], day, year: yr(m[3]) } : null;
+  }
+  return null;
+}
+
+// Normalize an extracted date string, inferring a MISSING year. Deterministic structured-field cleanup
+// (the LLM already identified this as a date) — NOT customer comprehension. Rule: if the date has no
+// year, pick the year that makes it the most recent date NOT in the future — so a Dec invoice processed
+// in January resolves to LAST year, while a current-month date stays this year (and a Jan date in January
+// is NOT wrongly pushed back). A date that already carries a year is normalized to MM/DD/YYYY; an
+// unparseable string (incl. ISO yyyy-mm-dd) is returned unchanged. Pure.
+export function inferDateYear(raw: string | null | undefined, now: Date): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const parsed = parseMonthDay(text);
+  if (!parsed) return text;
+  let year = parsed.year;
+  if (!year) {
+    const y = now.getUTCFullYear();
+    const candidateMs = Date.UTC(y, parsed.month - 1, parsed.day);
+    const graceMs = 2 * 86_400_000; // tolerate same-day / minor clock skew
+    year = candidateMs > now.getTime() + graceMs ? y - 1 : y;
+  }
+  return `${String(parsed.month).padStart(2, "0")}/${String(parsed.day).padStart(2, "0")}/${year}`;
+}
+
 function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
   const fallback = fallbackPacket(files, "Extractor returned incomplete data.");
   const packet = raw && typeof raw === "object" ? raw : {};
+  const now = new Date();
   const invoices = Array.isArray(packet.invoices)
     ? packet.invoices
         .map((row: any) => ({
           vendorName: String(row?.vendorName ?? row?.vendor ?? "").trim(),
-          invoiceDate: String(row?.invoiceDate ?? row?.invoice_date ?? "").trim(),
+          invoiceDate: inferDateYear(String(row?.invoiceDate ?? row?.invoice_date ?? "").trim(), now),
           invoiceNumber: String(row?.invoiceNumber ?? row?.invoice_number ?? "").trim(),
           amount: String(row?.amount ?? row?.spend ?? row?.invoiceAmount ?? "").trim(),
           fileNames: Array.isArray(row?.fileNames)
@@ -406,11 +474,11 @@ function normalizePacket(raw: any, files: MdfUploadedFile[]): MdfClaimPacket {
     campaignName: String(packet.extractedFields?.campaignName ?? ""),
     eventName: String(packet.extractedFields?.eventName ?? ""),
     vendorName: String(packet.extractedFields?.vendorName ?? ""),
-    invoiceDate: String(packet.extractedFields?.invoiceDate ?? ""),
+    invoiceDate: inferDateYear(String(packet.extractedFields?.invoiceDate ?? ""), now),
     invoiceNumber: String(packet.extractedFields?.invoiceNumber ?? ""),
     spend: String(packet.extractedFields?.spend ?? ""),
-    activityStartDate: String(packet.extractedFields?.activityStartDate ?? ""),
-    activityEndDate: String(packet.extractedFields?.activityEndDate ?? ""),
+    activityStartDate: inferDateYear(String(packet.extractedFields?.activityStartDate ?? ""), now),
+    activityEndDate: inferDateYear(String(packet.extractedFields?.activityEndDate ?? ""), now),
     totalLeads: String(packet.extractedFields?.totalLeads ?? ""),
     attendance: String(packet.extractedFields?.attendance ?? ""),
     motorcyclesSold: String(packet.extractedFields?.motorcyclesSold ?? ""),
@@ -510,76 +578,71 @@ function parsedResponsePayload(resp: any): any | null {
   return parseJsonObject(resp?.output_text);
 }
 
-function mergeInvoiceFields(packet: MdfClaimPacket, invoicePacket: MdfClaimPacket): MdfClaimPacket {
-  const invoiceKeys: Array<keyof MdfClaimPacket["extractedFields"]> = [
-    "vendorName",
-    "invoiceDate",
-    "invoiceNumber",
-    "spend"
-  ];
-  const extractedFields = { ...packet.extractedFields };
-  for (const key of invoiceKeys) {
-    const value = String(invoicePacket.extractedFields[key] ?? "").trim();
-    if (value) extractedFields[key] = value;
+// Mirror the headline extractedFields (vendor / date / number / spend) from the AUTHORITATIVE invoice
+// set: the primary invoice's vendor/date/number and the SUM of all invoice amounts. Blank them when
+// there are no invoices yet (e.g. only creative uploaded so far) so a creative/proof file's numbers
+// can never surface as invoice facts or spend. Pure. (Replaces the old single-call invoice-only
+// fallback + merge path — invoices are now always extracted per-file by extractInvoicesPerFile.)
+export function syncExtractedInvoiceFields(packet: MdfClaimPacket): void {
+  const invoices = packet.invoices ?? [];
+  if (!invoices.length) {
+    packet.extractedFields.vendorName = "";
+    packet.extractedFields.invoiceDate = "";
+    packet.extractedFields.invoiceNumber = "";
+    packet.extractedFields.spend = "";
+    return;
   }
-  const missingFields = packet.missingFields.filter(field => {
-    const normalized = field.toLowerCase();
-    if (extractedFields.vendorName && normalized.includes("vendor")) return false;
-    if (extractedFields.invoiceDate && normalized.includes("invoice date")) return false;
-    if (extractedFields.invoiceNumber && normalized.includes("invoice number")) return false;
-    if (extractedFields.spend && normalized.includes("spend")) return false;
-    return true;
-  });
-  return {
-    ...packet,
-    confidence: Math.max(packet.confidence || 0, invoicePacket.confidence || 0),
-    extractedFields,
-    invoices: invoicePacket.invoices.length ? invoicePacket.invoices : packet.invoices,
-    missingFields
-  };
+  const primary = invoices[0];
+  packet.extractedFields.vendorName = primary.vendorName || "";
+  packet.extractedFields.invoiceDate = primary.invoiceDate || "";
+  packet.extractedFields.invoiceNumber = primary.invoiceNumber || "";
+  packet.extractedFields.spend = sumInvoiceSpend(invoices) ?? (primary.amount || "");
 }
 
-async function extractInvoiceFields(files: MdfUploadedFile[], model: string): Promise<MdfClaimPacket | null> {
-  const invoiceFiles = files.filter(file => {
-    const role = file.providedRole || inferRoleFromName(file.name);
-    return role === "invoice" || role === "receipt";
+// Fallback when the per-file pass comes back empty: keep the main-pass invoices that are supported by at
+// least one invoice-eligible file, dropping any sourced SOLELY from creative/proof/support-only files (so
+// a creative still can't leak in). Unattributed invoices (no fileNames) are kept — can't prove they're
+// creative-sourced, and dropping a real invoice is the worse failure. Pure.
+export function invoicesFromInvoiceRoleFiles(
+  invoices: MdfInvoicePacket[] | undefined,
+  files: MdfUploadedFile[]
+): MdfInvoicePacket[] {
+  const nonInvoice = new Set(
+    (files ?? [])
+      .filter(file => {
+        const role = file.providedRole || inferRoleFromName(file.name);
+        return role === "creative" || role === "proof_of_performance" || role === "supporting_only";
+      })
+      .map(file => file.name)
+  );
+  return (invoices ?? []).filter(inv => {
+    const names = (inv.fileNames ?? []).filter(Boolean);
+    if (!names.length) return true;
+    return names.some(name => !nonInvoice.has(name)); // drop only if EVERY supporting file is non-invoice
   });
-  if (!invoiceFiles.length) return null;
-  const inputs = await fileContentInputs(invoiceFiles);
-  if (!inputs.length) return null;
-  const prompt = [
-    "Extract ONLY invoice/payment fields from these MDF invoice or receipt files.",
-    "Return the same MDF claim packet schema.",
-    "Create one invoices[] item for every distinct invoice or receipt. Do not merge multiple invoices into one invoice.",
-    "Fill each invoice item with vendorName, invoiceDate, invoiceNumber, amount, and the matching uploaded file name(s).",
-    "Also mirror the first/primary invoice into extractedFields.vendorName, invoiceDate, invoiceNumber, and spend for backwards compatibility.",
-    "Do not use artwork, tear sheets, magazine cover dates, or proof screenshots as invoice facts.",
-    "Leave unknown fields blank and list missing invoice fields in missingFields.",
-    "Set uploadedFiles roles to invoice or receipt based on the provided role."
-  ].join("\n");
-  const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 2400);
-  recordOpenAIUsage(resp, {
-    feature: "mdf_assistant",
-    operation: "extract_invoice_fields",
-    requestKind: "responses.create",
-    model,
-    metadata: { fileCount: invoiceFiles.length }
-  });
-  return normalizePacket(parsedResponsePayload(resp), invoiceFiles);
 }
 
-function shouldRunInvoiceOnlyPass(packet: MdfClaimPacket, files: MdfUploadedFile[]): boolean {
-  const hasInvoiceFiles = files.some(file => {
-    const role = file.providedRole || inferRoleFromName(file.name);
-    return role === "invoice" || role === "receipt";
-  });
-  if (!hasInvoiceFiles) return false;
-  if (!packet.invoices.length) return true;
-  const anyIncompleteInvoice = packet.invoices.some(invoice => {
-    return !invoice.vendorName || !invoice.invoiceDate || !invoice.invoiceNumber || !invoice.amount;
-  });
-  if (anyIncompleteInvoice) return true;
-  return !packet.extractedFields.vendorName || !packet.extractedFields.invoiceDate || !packet.extractedFields.invoiceNumber || !packet.extractedFields.spend;
+// Watchdog on packet generation: structural anomalies worth surfacing to the rep (and logging) rather
+// than failing silently. The main one: invoice-eligible files were uploaded but no invoice came out
+// (extraction miss). Pure — returns human-readable warnings.
+export function auditMdfExtraction(packet: MdfClaimPacket, files: MdfUploadedFile[]): string[] {
+  const warnings: string[] = [];
+  const candidates = invoiceCandidateFiles(files);
+  const invoices = packet.invoices ?? [];
+  if (candidates.length && !invoices.length) {
+    warnings.push(
+      `Couldn't read invoice details from ${candidates.length} uploaded file${candidates.length === 1 ? "" : "s"} — please review or re-upload the invoice.`
+    );
+  }
+  const missingAmount = invoices.filter(inv => !String(inv?.amount ?? "").trim()).length;
+  if (missingAmount) {
+    warnings.push(`${missingAmount} invoice${missingAmount === 1 ? "" : "s"} extracted without an amount — confirm the spend.`);
+  }
+  const missingVendor = invoices.filter(inv => !String(inv?.vendorName ?? "").trim()).length;
+  if (missingVendor) {
+    warnings.push(`${missingVendor} invoice${missingVendor === 1 ? "" : "s"} extracted without a vendor — add the vendor name.`);
+  }
+  return warnings;
 }
 
 async function createMdfJsonResponse(
@@ -609,6 +672,60 @@ async function createMdfJsonResponse(
   });
 }
 
+// Extract invoices ONE FILE AT A TIME — the AUTHORITY for invoices[]. Each call sees a single
+// invoice-candidate file (invoiceCandidateFiles already excludes creative/proof/support-only) and
+// returns at most one invoice, or none if THAT file isn't actually an invoice/receipt. This is what
+// guarantees (a) a creative/flyer can never become an invoice or inflate spend, and (b) two distinct
+// invoices never collapse into one. Runs for ANY invoice-candidate file (1+), not just 2+.
+async function extractInvoicesPerFile(files: MdfUploadedFile[], model: string): Promise<MdfInvoicePacket[]> {
+  const candidates = invoiceCandidateFiles(files);
+  if (!candidates.length) return [];
+  const out: MdfInvoicePacket[] = [];
+  for (const file of candidates) {
+    const inputs = await fileContentInputs([file]);
+    if (!inputs.length) continue;
+    const prompt = [
+      "Extract the SINGLE invoice or receipt contained in THIS one file.",
+      "Return the MDF claim packet schema. invoices[] must contain AT MOST ONE entry — for this file only.",
+      "Fill vendorName, invoiceDate, invoiceNumber, amount for that one invoice.",
+      "vendorName is the business that ISSUED the invoice to the dealership (the seller/supplier doing the billing — usually the letterhead / 'from' / 'remit to'), NOT 'American Harley-Davidson' or the dealership's own name, which is the buyer / 'bill to'.",
+      "If this file is NOT an invoice or receipt (e.g. a flyer, creative, screenshot, proof, or photo), return invoices: [] and leave the invoice fields blank.",
+      "Do not invent values; leave unknown fields blank.",
+      `This file: ${file.name}.`
+    ].join("\n");
+    // The per-file call returns the FULL (strict) MDF_SCHEMA, so it needs real headroom or the JSON
+    // truncates and the invoice is silently lost — the truncation class that blanked invoices once this
+    // pass became authoritative. 3000 leaves room for the whole packet shape.
+    const resp = await createMdfJsonResponse(model, prompt, inputs, "mdf_invoice_fields", 3000).catch(() => null);
+    if (!resp) continue;
+    recordOpenAIUsage(resp, {
+      feature: "mdf_assistant",
+      operation: "extract_invoice_per_file",
+      requestKind: "responses.create",
+      model
+    });
+    const raw = parsedResponsePayload(resp);
+    const rawInvoices = Array.isArray(raw?.invoices) ? raw.invoices : [];
+    const first = rawInvoices[0];
+    if (!first) continue;
+    const vendorName = String(first.vendorName ?? first.vendor ?? "").trim();
+    const amount = String(first.amount ?? first.spend ?? first.invoiceAmount ?? "").trim();
+    const invoiceNumber = String(first.invoiceNumber ?? first.invoice_number ?? "").trim();
+    const invoiceDate = String(first.invoiceDate ?? first.invoice_date ?? "").trim();
+    if (vendorName || invoiceNumber || amount) {
+      out.push({
+        vendorName,
+        invoiceDate: inferDateYear(invoiceDate, new Date()),
+        invoiceNumber,
+        amount,
+        fileNames: [file.name],
+        description: String(first.description ?? "").trim()
+      });
+    }
+  }
+  return out;
+}
+
 export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: string): Promise<MdfClaimPacket> {
   if (!files.length) return fallbackPacket(files, "Upload at least one invoice, receipt, creative, or proof file.");
   const supportedInputs = await fileContentInputs(files);
@@ -633,11 +750,13 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
     "Use this file manifest and respect the user-selected roles:",
     fileManifest(files),
     "- Extract vendor, invoice date, invoice number, and spend only from files marked invoice or receipt.",
+    "- vendorName is the SELLER/supplier that billed the dealership (the 'from' / 'remit to' party) — never 'American Harley-Davidson' or the dealer's own name, which is the buyer / 'bill to'.",
     "- Create one invoices[] entry for every distinct invoice or receipt. Multiple invoices for the same claim are allowed and should stay separate.",
     "- For each invoices[] entry, include the invoice/receipt file names that support that invoice. Do not assign proof, creative, tear sheet, or support-only files to invoices[].",
     "- Mirror the first/primary invoice into extractedFields.vendorName, extractedFields.invoiceDate, extractedFields.invoiceNumber, and extractedFields.spend so older draft views still show a summary.",
     "- Use files marked creative, proof_of_performance, or supporting_only only for campaign description, proof, eligibility, documentation, and concerns.",
     "- If a magazine cover, tear sheet, screenshot, artwork, or proof file contains unrelated dates/prices/numbers, do not treat those as invoice fields.",
+    `- Today is ${new Date().toISOString().slice(0, 10)}. If an invoice or activity date shows no year, infer the most recent PAST year (use the prior year if assuming this year would put the date in the future). Output dates as MM/DD/YYYY.`,
     "- If no invoice or receipt is provided, leave invoice/spend fields blank and list them as missing.",
     "- If evidence is missing or uncertain, do not guess. Put it in missingFields or eligibility.concerns.",
     "- Do not put missing fields, proof gaps, review notes, or internal concerns in descriptionDraft. descriptionDraft must contain only clean claim/activity description text that is safe to enter into the MDF portal.",
@@ -655,10 +774,33 @@ export async function extractMdfClaimPacket(files: MdfUploadedFile[], notes: str
       metadata: { fileCount: files.length }
     });
     const packet = normalizePacket(parsedResponsePayload(resp), files);
-    const invoicePacket = shouldRunInvoiceOnlyPass(packet, files)
-      ? await extractInvoiceFields(files, model).catch(() => null)
-      : null;
-    return invoicePacket ? mergeInvoiceFields(packet, invoicePacket) : packet;
+    // INVOICES: per-file (role-respecting) extraction is the authority — it excludes creative/proof so a
+    // creative can't become an invoice, and reads each file alone so two invoices never merge. BUT a
+    // per-file miss (truncation / transient error) must NOT silently blank an invoice the customer
+    // uploaded: if per-file comes back empty while invoice-eligible files exist, fall back to the main
+    // pass's invoices filtered to role-eligible files (creative still excluded). No invoice-eligible files
+    // (e.g. only creative) -> no invoices, blank spend.
+    const candidates = invoiceCandidateFiles(files);
+    if (candidates.length) {
+      const perFile = await extractInvoicesPerFile(files, model).catch(() => []);
+      packet.invoices = perFile.length ? perFile : invoicesFromInvoiceRoleFiles(packet.invoices, files);
+    } else {
+      packet.invoices = [];
+    }
+    syncExtractedInvoiceFields(packet);
+    // WATCHDOG: surface (don't fail silently) when packet generation produced no/incomplete invoices
+    // despite invoice-eligible uploads. Logged + added as a visible eligibility concern so the UI flags it.
+    const watch = auditMdfExtraction(packet, files);
+    if (watch.length) {
+      packet.eligibility.concerns = [...watch, ...packet.eligibility.concerns].slice(0, 10);
+      console.warn("[mdf-extract-watchdog]", {
+        files: files.length,
+        invoiceCandidates: candidates.length,
+        invoices: packet.invoices.length,
+        warnings: watch
+      });
+    }
+    return packet;
   } catch (err: any) {
     return fallbackPacket(files, err?.message ? `Extractor failed: ${err.message}` : "Extractor failed.");
   }

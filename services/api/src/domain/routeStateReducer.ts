@@ -272,6 +272,7 @@ export function buildRouteDecisionSnapshot(input: {
 // ---------------------------------------------------------------------------
 
 export type SchedulingTurnKind =
+  | "confirm_appointment"
   | "accept_tentative"
   | "ask_available_times"
   | "appointment_status_question"
@@ -288,6 +289,9 @@ export type SchedulingTurnInput = {
   // Block A — customer-ack parser (action string + whether the parse was accepted).
   customerAckActionAccepted: boolean;
   customerAckAction?: string | null;
+  // The customer confirmed a CONCRETE proposed time and the parser cleared it to book
+  // (CustomerAckActionParse.shouldBook). Only then does a confirm route to the auto-book arm.
+  customerAckShouldBook?: boolean;
   // Block B — appointment-timing parser (intent string + whether accepted).
   appointmentTimingAccepted: boolean;
   appointmentTimingIntent?: string | null;
@@ -317,6 +321,13 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
   // for these actions and (once entered) always returns, so it has top precedence.
   if (input.customerAckActionAccepted && !input.pricingOrPaymentsIntent) {
     switch (input.customerAckAction) {
+      case "confirm_proposed_appointment":
+        // Customer confirmed a concrete time the agent didn't pre-offer ("Ya 10 will work",
+        // "Around 1pm"). Only route to the auto-book arm when the parser cleared it to book;
+        // otherwise fall through (the appointment-timing / lock-in arms handle the soft cases),
+        // so we never auto-book on a vague signal.
+        if (input.customerAckShouldBook) return { kind: "confirm_appointment", visitCommitment };
+        break;
       case "accept_tentative_appointment":
         return { kind: "accept_tentative", visitCommitment };
       case "ask_for_available_times":
@@ -370,6 +381,93 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
 // is applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
 export function isExplicitSchedulingAskIntent(intent?: string | null): boolean {
   return intent === "ask_for_times" || intent === "provide_new_time";
+}
+
+// The customer-ack CONFIRM-BOOKING outcome — the pure branching behind
+// resolveCustomerAckConfirmBooking (index.ts), which decides what happens when a customer confirms a
+// concrete time the agent didn't pre-offer ("Ya 10 will work"). The IO (service check, scheduler
+// config, day/time resolution, calendar availability + the actual insertEvent write) stays in
+// index.ts; this owns the DECISION given those resolved results. Extracted so the risk branches are
+// unit-testable WITHOUT booting index.ts or hitting Google Calendar — especially:
+//   - a calendar write that FAILED must NOT produce a "you're all set" confirm (booked=false => fall_back),
+//   - a TAKEN slot must offer alternatives, never a fabricated confirm,
+//   - the regen draft path (book=false) must never claim a booking.
+// `fall_back` => the caller returns null and asks the customer to lock in (no false confirm).
+export type ConfirmBookingDecisionInput = {
+  serviceContext: boolean; // a service-dept scheduling ask must not book a sales visit
+  hasConfig: boolean; // scheduler config resolved
+  hasExistingBooking: boolean; // appointment already has bookedEventId + whenText (reflect it)
+  requestedResolved: boolean; // a concrete day+time resolved from the turn
+  availabilityChecked: boolean; // the calendar availability lookup returned a result (not null)
+  slotFree: boolean; // availability.available AND an exact slot is open
+  book: boolean; // true = live (write the calendar); false = regenerate draft preview (no write)
+  bookSucceeded: boolean; // the insertEvent write succeeded (only meaningful when book && slotFree)
+  hasAlternatives: boolean; // alternative slots exist when the requested time is taken
+};
+
+export type ConfirmBookingOutcome =
+  | { kind: "fall_back" } // caller returns null → lock-in ask (no fabricated confirm)
+  | { kind: "already_booked" } // reflect the existing confirmed appointment
+  | { kind: "regen_lock_in" } // regen preview on a free slot — "I'll get you locked in" (no write)
+  | { kind: "booked" } // live write succeeded — "you're all set for X"
+  | { kind: "offer_alternatives"; hasAlternatives: boolean }; // requested time taken
+
+export function decideCustomerAckConfirmBooking(input: ConfirmBookingDecisionInput): ConfirmBookingOutcome {
+  if (input.serviceContext) return { kind: "fall_back" };
+  if (!input.hasConfig) return { kind: "fall_back" };
+  if (input.hasExistingBooking) return { kind: "already_booked" };
+  if (!input.requestedResolved) return { kind: "fall_back" };
+  if (!input.availabilityChecked) return { kind: "fall_back" };
+  if (input.slotFree) {
+    if (!input.book) return { kind: "regen_lock_in" };
+    return input.bookSucceeded ? { kind: "booked" } : { kind: "fall_back" }; // write failed => NO false confirm
+  }
+  return { kind: "offer_alternatives", hasAlternatives: input.hasAlternatives };
+}
+
+// A scheduling turn where the agent DEFERRED ("I'll check / I'll confirm that time and follow up")
+// but did NOT book this turn and did NOT offer alternative slots is a silent promise with nothing
+// behind it — the salesperson never sees the requested time. That turn MUST leave an owner follow-up
+// task. Operator-reported 4× on +17167506588 ("next Saturday same time around 1" → "I'll check that
+// time and follow up", no task). FAIL DIRECTION = create the task whenever unsure: an extra owner
+// task is safe; a silently-dropped reschedule request is the bug. The booking arm (decideCustomerAck-
+// ConfirmBooking) and the offer-alternatives branch are excluded — they already act for the customer.
+export type SchedulingDeferralFollowUpInput = {
+  deferred: boolean; // this turn produced a deferral ack (no concrete slot resolved/booked this turn)
+  booked: boolean; // the booking arm actually wrote/locked the appointment this turn
+  offeredAlternatives: boolean; // we offered concrete alternative slots (not a silent defer)
+  hasRequestedPhrase: boolean; // a concrete requested day/time was carried (for the summary, NOT a gate)
+};
+export type SchedulingDeferralFollowUpDecision = { createTask: boolean };
+
+export function decideSchedulingDeferralFollowUpTask(
+  input: SchedulingDeferralFollowUpInput
+): SchedulingDeferralFollowUpDecision {
+  if (input.booked) return { createTask: false }; // auto-book already handled it
+  if (input.offeredAlternatives) return { createTask: false }; // we gave the customer times to pick
+  if (!input.deferred) return { createTask: false }; // not a deferral turn
+  return { createTask: true }; // deferred, not booked, no alternatives => owner must follow up
+}
+
+// The tentative-time-window arm ("probably about 11 o'clock on Monday", "maybe Saturday around 3")
+// acks softly ("that can work — give me a heads up on the exact time") and never books. It carries
+// the SAME silent-drop risk as the deferral arms above (decideSchedulingDeferralFollowUpTask), but it
+// escaped that net: the tentative arm computes no calendar-check result, so `needsOwnerFollowUpTask`
+// was always null → no owner task. When the customer named a CONCRETE day AND time (not a vague
+// "sometime next week"), the salesperson must still SEE that requested slot or it's silently dropped —
+// Peter Meredith +17168303999 (2026-07-03): a bike-on-hold sales deal (deposit left on stock U894-13,
+// which needs prep before the sale finalizes). "probably about 11 o'clock on Monday" is a HEDGED
+// concrete time → the parser reads it as tentative (shouldBook=false), so the agent soft-acks and
+// never books — but the Monday-11 visit-to-finalize was silently dropped: NO owner task; only saved
+// because a salesperson booked it manually. FAIL DIRECTION = leave the task whenever a concrete
+// day+time is present; an extra owner
+// task is safe, a dropped requested time is the bug. Gated on day AND time (not day-only) so vague
+// windows keep going to the soft-visit cadence, not a task. Feeds decideSchedulingDeferralFollowUpTask.
+export function tentativeWindowNeedsOwnerFollowUp(input: {
+  hasRequestedDay: boolean;
+  hasRequestedTime: boolean;
+}): boolean {
+  return input.hasRequestedDay && input.hasRequestedTime;
 }
 
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
@@ -501,6 +599,12 @@ export type VehicleChoiceConfidenceTurnInput = {
   hasReferencedModel: boolean;
   // passesModelRelevanceGuard(referencedModel, inboundText) — the over-attachment guard.
   modelRelevanceGuardPassed: boolean;
+  // An ACCEPTED concrete parsed action already owns this turn (dealer_location_question /
+  // inventory_watch_acknowledgement) — the alternatives offer must yield (corpus flywheel,
+  // 2026-07-03, +12399612259: "remind me again what address is this at?" drew the "Totally
+  // fair — happy to line up options" reply because this arm runs ~3k lines before the
+  // location arm).
+  concreteParsedActionThisTurn?: boolean;
 };
 
 export type VehicleChoiceConfidenceTurnDecision = {
@@ -511,6 +615,7 @@ export function decideVehicleChoiceConfidenceTurn(
   input: VehicleChoiceConfidenceTurnInput
 ): VehicleChoiceConfidenceTurnDecision {
   // FAIL DIRECTION = stay_silent. Each guard below, when it trips, keeps us quiet.
+  if (input.concreteParsedActionThisTurn) return { kind: "stay_silent" }; // the parsed action owns the turn
   if (!input.parserAccepted) return { kind: "stay_silent" };
   if (input.stance !== "open_to_alternatives") return { kind: "stay_silent" }; // committed/unclear => quiet
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
@@ -519,6 +624,161 @@ export function decideVehicleChoiceConfidenceTurn(
   if (!input.hasReferencedModel) return { kind: "stay_silent" }; // no referenced bike => nothing to compare
   if (!input.modelRelevanceGuardPassed) return { kind: "stay_silent" }; // over-attachment guard
   return { kind: "offer_alternatives" };
+}
+
+// --- Vehicle recommendation by budget/style (2026-06-24) -------------------
+//
+// When a customer asks us to PICK bikes for them ("give me some options", "~$200/mo",
+// "not cruisers") with NO specific model in play, answer with real inventory suggestions instead
+// of looping "which bike are you looking at so I can run it correctly?" (s R Gurajala
+// +17167506588). The parser signal (parseVehicleRecommendationRequestWithLLM) is computed at the
+// call site and fed in; this owns ONLY the precedence. The reply (and inventory query) stay in
+// index.ts / inventoryRecommender.
+//
+// FAIL DIRECTION = `none`: any miss falls through to the existing finance/pricing "which bike?"
+// behavior. We only recommend on a confident, explicit request AND when no specific model is
+// already in play (a customer pricing a known bike is NOT asking for suggestions).
+// ---------------------------------------------------------------------------
+export type VehicleRecommendationTurnKind = "recommend" | "none";
+
+export type VehicleRecommendationTurnInput = {
+  // The parser returned a non-null result (LLM enabled + usable parse).
+  parserAccepted: boolean;
+  // Parser: the customer wants us to suggest/pick bikes.
+  wantsRecommendation: boolean;
+  // Parser confidence 0..1 (0 when no parse).
+  confidence: number;
+  // Confidence floor to act on (default 0.7).
+  confidenceMin: number;
+  // No specific model is in play this turn/context (recommendation is for the "no model yet" case).
+  modelUnknown: boolean;
+};
+
+export type VehicleRecommendationTurnDecision = {
+  kind: VehicleRecommendationTurnKind;
+};
+
+export function decideVehicleRecommendationTurn(
+  input: VehicleRecommendationTurnInput
+): VehicleRecommendationTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!input.wantsRecommendation) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  if (!input.modelUnknown) return { kind: "none" }; // they're on a specific bike => let pricing handle it
+  return { kind: "recommend" };
+}
+
+// When the customer NAMES a model on a turn where no model is yet in play for pricing, should the
+// recommender bow out to the finance/pricing flow? Naming a model is normally "price THIS bike"
+// (finance owns it). EXCEPTION: when the customer has given a budget profile (a monthly cap and/or a
+// down payment) and there is still no concrete unit to price, naming a model CLASS is "find me a
+// <model> that fits my budget", not "price the exact unit I'm on" — keep the recommender and let the
+// typed parser scope it. Without that exception the agent loops "Which bike are you looking at so I
+// can run it correctly?" forever (Tyrone Woods +13179357913, 2026-06-22: gave used-cruiser + $1.8–2k
+// down + $450–550/mo, narrowed to "road king or street glider", and got re-asked which bike).
+//
+// FAIL DIRECTION = bow out (true): a named model with no budget context falls through to the existing
+// finance/pricing behavior, never a wrong-target recommendation. The caller has already established
+// model-unknown-for-payments before invoking this (so there is genuinely no unit to price).
+export function shouldBowOutRecommenderForNamedModel(input: {
+  namedModelThisTurn: boolean;
+  hasBudgetProfile: boolean;
+}): boolean {
+  return input.namedModelThisTurn && !input.hasBudgetProfile;
+}
+
+// --- Vehicle media request (photos/links/colors of suggested units, 2026-06-24) ----------------
+// After the recommender suggests units, the customer asks to SEE them. Fire ONLY when the parser is
+// confident AND we actually have persisted units that carry a listing URL — otherwise fall through
+// (the deterministic reply needs real links; never fabricate one). FAIL DIRECTION: none => existing
+// behavior (commit-to-follow-up), never a made-up link.
+export type VehicleMediaRequestTurnInput = {
+  parserAccepted: boolean;
+  wantsMedia: boolean;
+  confidence: number;
+  confidenceMin: number;
+  hasUnitsWithUrl: boolean;
+};
+export type VehicleMediaRequestTurnDecision = { kind: "send_media" | "none" };
+
+export function decideVehicleMediaRequestTurn(input: VehicleMediaRequestTurnInput): VehicleMediaRequestTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!input.wantsMedia) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return { kind: "none" };
+  if (!input.hasUnitsWithUrl) return { kind: "none" }; // nothing real to send => existing handling
+  return { kind: "send_media" };
+}
+
+// --- Feedback-driven redraft (2026-06-24) -----------------------------------
+// Phase 1 of the closed-loop feedback system: a staff thumbs-DOWN on a still-PENDING AI draft
+// triggers an immediate steered re-draft into the same console box (suggest mode — a human still
+// hits Send). The rep's thumbs-down reason becomes generator STEERING. This is the generation/voice
+// layer (LLM, allowed by the de-tangle program), NOT a routing change — code-level misses are the
+// approve-first parser-first fix path (Phases 2-3), never patched from a single thumbs-down.
+//
+// FAIL DIRECTION: anything other than "down on a live draft" → record_only (today's behavior). We
+// only redraft what can still be edited; a thumbs-down on an already-SENT message is feedback only.
+export type FeedbackRedraftTurnInput = {
+  enabled: boolean; // the FEEDBACK_DOWN_REDRAFT_ENABLED kill switch
+  rating: string; // "up" | "down"
+  ratedIsPendingDraft: boolean; // the rated message is a non-stale draft_ai (still editable)
+  reason?: string | null;
+  note?: string | null;
+};
+
+export type FeedbackRedraftTurnDecision = { kind: "redraft" | "record_only"; steering?: string };
+
+export function buildFeedbackRedraftSteering(reason?: string | null, note?: string | null): string {
+  const detail = [reason, note]
+    .map(s => String(s ?? "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join(" — ");
+  return (
+    `A staff reviewer gave the previous draft a thumbs-down${detail ? `: ${detail}` : ""}. ` +
+    `Revise the reply to fix that specific issue. Keep it on-voice (like texting a friend), answer ` +
+    `what the customer actually asked, and never fabricate a price, availability, stock, or appointment.`
+  );
+}
+
+export function decideFeedbackRedraftTurn(input: FeedbackRedraftTurnInput): FeedbackRedraftTurnDecision {
+  if (!input.enabled) return { kind: "record_only" };
+  if (String(input.rating ?? "").trim().toLowerCase() !== "down") return { kind: "record_only" };
+  if (!input.ratedIsPendingDraft) return { kind: "record_only" }; // can't redraft an already-sent message
+  return { kind: "redraft", steering: buildFeedbackRedraftSteering(input.reason, input.note) };
+}
+
+// --- Feedback diagnosis action (closed-loop Phase 2, 2026-06-24) -------------
+// Maps a classified thumbs-down (parseFeedbackFailureModeWithLLM) onto the action its LAYER warrants,
+// honoring the de-tangle split: VOICE issues are refined at the generation layer (never a routing
+// change); COMPREHENSION issues become parser-first fix candidates (Phase 3 turns a recurring class
+// into an approve-first PR — never auto-merged); SAFETY is already owned by the held/draft-quality
+// gate. Pure + eval'd so the report (Phase 2) and any future auto-PR step (Phase 3) share one policy.
+//
+// FAIL DIRECTION: unsure / low-confidence / non-systemic → record_only. We only escalate a confident,
+// SYSTEMIC comprehension miss to a fix candidate, so a one-off rep preference never proposes code.
+export type FeedbackDiagnosisAction =
+  | "voice_refinement"
+  | "parser_fix_candidate"
+  | "already_gated"
+  | "record_only";
+
+export type FeedbackDiagnosisActionInput = {
+  parserAccepted: boolean;
+  layer?: "voice" | "comprehension" | "safety" | "none" | null;
+  systemic: boolean;
+  confidence: number;
+  confidenceMin: number; // default 0.7 at the call site
+};
+
+export function decideFeedbackDiagnosisAction(input: FeedbackDiagnosisActionInput): FeedbackDiagnosisAction {
+  if (!input.parserAccepted) return "record_only";
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return "record_only";
+  if (input.layer === "safety") return "already_gated"; // the held/draft-quality gate owns fabrication
+  if (input.layer === "voice") return "voice_refinement"; // generation layer; never a routing change
+  if (input.layer === "comprehension" && input.systemic) return "parser_fix_candidate";
+  return "record_only";
 }
 
 // --- Deal/progress status check (2026-06-18) -------------------------------
@@ -605,6 +865,44 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
   return { kind: "pause_watch" };
 }
 
+// --- Watch sibling-scope answer (2026-07-04) --------------------------------
+// After the one-time "open to variants?" ask (buildWatchSiblingScopeAsk — a same-family sibling
+// trim landed during a strict base-model watch), the customer's answer either BROADENS the watch
+// (openToOtherTrims — same-family trims now fire) or pins it BASE-ONLY (never re-ask). The side
+// effect is watch state ONLY — the reply stays with the normal draft pipeline, which sees the ask
+// + answer in history and responds naturally (so an answer carrying another question never gets a
+// canned ack that drops it). Centralized + pure; the parser signal + the pending-ask gate are fed in.
+//
+// FAIL DIRECTION: unsure => none (the watch stays strict — today's behavior; no state change).
+// A wrongly-broadened watch texts the customer about bikes they didn't ask for — the exact
+// over-attachment class we just fixed on the create side — so only a confident answer acts.
+// ---------------------------------------------------------------------------
+export type WatchScopeTurnKind = "broaden_watch" | "keep_base_only" | "none";
+
+export type WatchScopeTurnInput = {
+  /** A sibling-scope ask is pending on a watch (asked, unresolved, not already open/declined). */
+  scopeAskPending: boolean;
+  parserAccepted: boolean;
+  intent?: string | null; // "open_to_variants" | "base_only" | "unrelated"
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type WatchScopeTurnDecision = {
+  kind: WatchScopeTurnKind;
+};
+
+export function decideWatchScopeTurn(input: WatchScopeTurnInput): WatchScopeTurnDecision {
+  if (!input.scopeAskPending) return { kind: "none" }; // nothing was asked
+  if (!input.parserAccepted) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  if (input.intent === "open_to_variants") return { kind: "broaden_watch" };
+  if (input.intent === "base_only") return { kind: "keep_base_only" };
+  return { kind: "none" }; // "unrelated" or anything else — the normal pipeline owns the turn
+}
+
 // --- ADF intake department route (2026-06-19) ------------------------------
 //
 // On an initial web (ADF) lead, the Inquiry field is the customer's stated request, so naming an
@@ -620,11 +918,11 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
 // shopper to the apparel desk is worse than the current miss, so we only act on a confident
 // apparel/parts/service verdict; a "vehicle" or "none" verdict, low confidence, or no parser => none.
 // ---------------------------------------------------------------------------
-export type AdfDepartmentRouteKind = "apparel" | "parts" | "service" | "none";
+export type AdfDepartmentRouteKind = "apparel" | "parts" | "service" | "riding_academy" | "none";
 
 export type AdfDepartmentRouteInput = {
   parserAccepted: boolean;
-  department?: "apparel" | "parts" | "service" | "vehicle" | "none" | null;
+  department?: "apparel" | "parts" | "service" | "vehicle" | "riding_academy" | "none" | null;
   confidence: number;
   confidenceMin: number;
 };
@@ -638,7 +936,12 @@ export function decideAdfDepartmentRoute(input: AdfDepartmentRouteInput): AdfDep
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  if (input.department === "apparel" || input.department === "parts" || input.department === "service") {
+  if (
+    input.department === "apparel" ||
+    input.department === "parts" ||
+    input.department === "service" ||
+    input.department === "riding_academy"
+  ) {
     return { kind: input.department };
   }
   return { kind: "none" };
@@ -727,6 +1030,39 @@ export function decideNonMotorcycleTradeTurn(
   return { kind: "non_motorcycle_trade_handoff" };
 }
 
+// --- Service / parts-install appointment request (2026-06-27) ---------------
+// A customer wanting to bring their bike IN for service or a parts/accessory install + an
+// appointment needs the service-department HANDOFF (intake + "service will confirm a time"),
+// because LeadRider has no service-scheduler integration — never quote/book a slot. Centralized +
+// pure; the parser signal is fed in. FAIL DIRECTION: unsure => none, normal pipeline runs. We only
+// hand off on a confident, explicit service/install-appointment request.
+// ---------------------------------------------------------------------------
+export type ServiceAppointmentTurnKind = "service_appointment_handoff" | "none";
+
+export type ServiceAppointmentTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "service_appointment_request" | "none"
+  explicitRequest: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type ServiceAppointmentTurnDecision = {
+  kind: ServiceAppointmentTurnKind;
+};
+
+export function decideServiceAppointmentTurn(
+  input: ServiceAppointmentTurnInput
+): ServiceAppointmentTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "service_appointment_request") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "service_appointment_handoff" };
+}
+
 // --- Conversation closeout / sign-off (2026-06-19) -------------------------
 //
 // A warm closer ("have a good weekend!", "you guys are the best!", "thanks again,
@@ -809,7 +1145,7 @@ export function decideCadenceInviteArm(conversationId: string): CadenceInviteArm
 // intentionally NOT on this arm, so the experiment isolates the draft model and
 // can't perturb route decisions (or the measurement). Uses a distinct salt from
 // the cadence arm so the two experiments don't correlate.
-export type DraftModelArm = "control" | "challenger";
+export type DraftModelArm = "control" | "challenger" | "anthropic";
 
 export function decideDraftModelArm(leadKey: string): DraftModelArm {
   if (!String(leadKey ?? "")) return "control";
@@ -819,11 +1155,15 @@ export function decideDraftModelArm(leadKey: string): DraftModelArm {
     h ^= key.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  // Use a well-mixed range (NOT the low bit): FNV-1a's `% 2` depends only on the
-  // XOR of byte low bits, which a fixed salt can't decorrelate from the cadence
-  // arm and buckets weakly. `% 100` uses well-mixed bits — a fair 50/50 split
-  // that's independent of decideCadenceInviteArm's low-bit split.
-  return (h >>> 0) % 100 < 50 ? "control" : "challenger";
+  // Well-mixed range (NOT the low bit): FNV-1a's `% 2` depends only on the XOR of
+  // byte low bits, which a fixed salt can't decorrelate from the cadence arm and
+  // buckets weakly. `% 100` uses well-mixed bits, independent of decideCadenceInviteArm.
+  // 3-way (2026-06-24): a ~15% Sonnet canary (anthropic) takes the first slice; the
+  // remaining ~85% keeps the gpt-5-mini (control) vs gpt-5 (challenger) split roughly
+  // even. The anthropic arm resolves to control when ANTHROPIC_API_KEY is unset (dark).
+  const bucket = (h >>> 0) % 100;
+  if (bucket < 15) return "anthropic";
+  return bucket < 57 ? "control" : "challenger";
 }
 
 export function resolveRoutingParserDecision(input: RoutingParserDecisionInput): RoutingParserDecision {
@@ -1215,4 +1555,145 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
     return { kind: "event_promo_ack" };
   }
   return { kind: "none" };
+}
+
+// Indefinite customer defer while still engaged (the Chuck Bailey class, +17163197142,
+// 2026-07-01, operator-reported: "this probably should not have a follow up after the customer
+// saying [still interested... but tied up with family concerns, will get back to you]").
+//
+// The disposition parser reads such a turn as `defer_no_window`, but the terminal closeout is
+// (CORRECTLY) suppressed by the competing-active-intent guard — the lead said they're still
+// interested, so we must not close them. Before this decision existed, the turn then fell
+// through the short-window deferral resolver (which only knows concrete "a few days" windows)
+// and landed in the general draft path with the CADENCE STILL ACTIVE — so the agent kept
+// nudging someone who explicitly asked for space.
+//
+// Decision: an accepted `defer_no_window` that neither closed out nor resolved a concrete
+// short window PAUSES the follow-up cadence for a default window (14 days) — the conversation
+// stays OPEN, watches stay, and cadence resumes automatically after the window. Fail-direction:
+// a false negative keeps today's behavior (nudges continue — annoying but recoverable); a false
+// positive pauses two weeks on a live lead (bounded by the parser-acceptance gate).
+export type IndefiniteDeferTurnKind = "pause_cadence_default_window" | "none";
+
+export type IndefiniteDeferTurnInput = {
+  parserAccepted: boolean;
+  disposition?: string | null;
+  // true when the with-window/short-window resolver already produced a concrete deferral —
+  // that path wins (it carries the customer's own timeframe).
+  shortWindowResolved: boolean;
+};
+
+export type IndefiniteDeferTurnDecision =
+  | { kind: "pause_cadence_default_window"; pauseDays: number }
+  | { kind: "none" };
+
+export const INDEFINITE_DEFER_PAUSE_DAYS = 14;
+
+// In-process deal entry (the Jeff Hollfelder / Gary Busenlehner class, Joe-approved 2026-07-02):
+// a customer's turn is deal LOGISTICS on a staff-worked purchase (insurance/payoff/delivery/
+// paperwork/accessory-install), read by the typed deal-progress parser — the per-turn auto-draft
+// stops for these conversations (staff answer with off-system deal facts; the agent's generic
+// "I'll check and follow up" was rewritten by staff on 5/7 corrections in the 7/2 audit) and the
+// owner-nudge + stale-handoff nets keep coverage. Conservative gates: parser acceptance at a high
+// floor; already-protected modes stay untouched; a sold/closed conv is post-sale machinery's job.
+export type InProcessDealTurnKind = "enter_in_process_deal" | "none";
+
+export type InProcessDealTurnInput = {
+  parserAccepted: boolean;
+  dealInProgress: boolean;
+  confidence?: number | null;
+  followUpMode?: string | null;
+  saleRecorded?: boolean;
+  conversationClosed?: boolean;
+};
+
+export type InProcessDealTurnDecision = { kind: InProcessDealTurnKind };
+
+export const IN_PROCESS_DEAL_CONFIDENCE_FLOOR = 0.8;
+
+export function decideInProcessDealTurn(input: InProcessDealTurnInput): InProcessDealTurnDecision {
+  if (!input.parserAccepted || !input.dealInProgress) return { kind: "none" };
+  if ((input.confidence ?? 0) < IN_PROCESS_DEAL_CONFIDENCE_FLOOR) return { kind: "none" };
+  if (input.conversationClosed || input.saleRecorded) return { kind: "none" };
+  const mode = String(input.followUpMode ?? "").toLowerCase();
+  if (mode === "manual_handoff" || mode === "paused_indefinite") return { kind: "none" };
+  return { kind: "enter_in_process_deal" };
+}
+
+export function decideIndefiniteDeferTurn(input: IndefiniteDeferTurnInput): IndefiniteDeferTurnDecision {
+  if (input.shortWindowResolved) return { kind: "none" };
+  if (!input.parserAccepted) return { kind: "none" };
+  if (String(input.disposition ?? "") !== "defer_no_window") return { kind: "none" };
+  return { kind: "pause_cadence_default_window", pauseDays: INDEFINITE_DEFER_PAUSE_DAYS };
+}
+
+// Non-buyer / passenger survey lead (the Elizabeth Klapa class, 2026-06-25). A Dealer Lead
+// App "Passenger" / survey submission whose STRUCTURED purchase-timeframe field says the
+// person is explicitly NOT a buyer ("I am not interested in purchasing at this time") was
+// answered as if it were a sales inquiry — "Which bike are you asking about?" / "want me to
+// send photos or price and payment numbers?". That's out of context: they told us up front
+// they don't want to buy. Like decideEventPromoTurn, this keys ONLY on a fixed ADF/lead-gen
+// enum field (purchaseTimeframe), so it is structured routing, NOT free-text comprehension.
+// The SAME signal already drives resolveInitialAdfCadencePlan -> "suppress" (no nagging
+// follow-ups); this is its reply-side twin so the FIRST touch is a warm, no-pressure
+// acknowledgement instead of a pitch. Applied at the INITIAL ADF draft only (both paths) —
+// once the customer engages with a real sales question, normal routing answers it.
+// Fail-direction: a false positive merely under-sells one opener (the customer can still
+// reply and gets routed normally); the current bug pitches a self-declared non-buyer.
+export type NonBuyerSurveyTurnKind = "non_buyer_survey_ack" | "none";
+
+export type NonBuyerSurveyTurnInput = {
+  purchaseTimeframe?: string | null;
+};
+
+export type NonBuyerSurveyTurnDecision = { kind: NonBuyerSurveyTurnKind };
+
+export function decideNonBuyerSurveyTurn(input: NonBuyerSurveyTurnInput): NonBuyerSurveyTurnDecision {
+  const timeframe = String(input.purchaseTimeframe ?? "").toLowerCase();
+  // Mirrors resolveInitialAdfCadencePlan's "suppress" trigger (one source of truth for the
+  // "explicit non-buyer" signal). Kept inline (no cross-module import) to match the other
+  // self-contained reducers here.
+  if (timeframe.includes("not interested")) {
+    return { kind: "non_buyer_survey_ack" };
+  }
+  return { kind: "none" };
+}
+
+// Dealer Lead App MARKETING SURVEY lead (the Tim Williams class, +17163741119, 2026-06-24) — the
+// buyer-side twin of decideNonBuyerSurveyTurn. Where that keys on the STRUCTURED purchase-timeframe
+// field, many DLA surveys embed the whole Q&A in the free-text Customer Comments (ownership history +
+// "do you expect to make a purchase?" + "which model are you interested in?" + "Demo Bikes Ridden"),
+// so the structured field is empty and the lead falls through to the generic sales generator — which
+// read the survey's "Demo Bikes Ridden: <model>" field as a completed test ride at THIS dealer and
+// fabricated "Thanks again for coming in for the test ride ... Congrats on the <model>" (held by the
+// context-fidelity gate). The survey is comprehended by `parseDealerLeadSurveyWithLLM`; this pure
+// decision maps the parse to the FIRST-touch reply: a confident non-buyer reuses the existing
+// no-pressure ack, a buyer (or a confident survey of unknown horizon) gets the warm buyer ack
+// (acknowledge stated model interest + invite a ride/visit), and anything else routes normally.
+// Like decideNonBuyerSurveyTurn this is structured routing off a typed parse, applied at the INITIAL
+// ADF draft only (both paths). Fail-direction safe: a false positive on a real inventory lead still
+// yields a correct warm opener (no fabricated frame, no false availability claim, no close), and a
+// false negative just keeps current behavior (the context-fidelity gate still backstops fabrication).
+export type DealerLeadSurveyTurnKind = "buyer_survey_ack" | "non_buyer_survey_ack" | "none";
+
+export type DealerLeadSurveyTurnInput = {
+  isDealerLeadSurvey: boolean;
+  purchaseIntent?: "buyer" | "non_buyer" | "unknown" | null;
+  confidence?: number | null;
+};
+
+export type DealerLeadSurveyTurnDecision = { kind: DealerLeadSurveyTurnKind };
+
+export function decideDealerLeadSurveyTurn(
+  input: DealerLeadSurveyTurnInput
+): DealerLeadSurveyTurnDecision {
+  if (!input.isDealerLeadSurvey) return { kind: "none" };
+  // Only divert on a confident survey read (mirrors the >= 0.7 floors used by the other ADF
+  // parser-driven reducers). Unsure => normal routing answers the lead.
+  const confidence =
+    typeof input.confidence === "number" && Number.isFinite(input.confidence) ? input.confidence : 0;
+  if (confidence < 0.7) return { kind: "none" };
+  if (input.purchaseIntent === "non_buyer") return { kind: "non_buyer_survey_ack" };
+  // "buyer" or a confident-but-unspecified survey => warm buyer acknowledgement.
+  return { kind: "buyer_survey_ack" };
 }

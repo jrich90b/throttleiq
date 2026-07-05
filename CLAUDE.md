@@ -50,8 +50,15 @@ load-bearing KEEPs (safety/side-effect/state gates) or structured-extraction hel
 `isTouringRequestText` = model detection feeding a payment calc), which AGENTS.md allows as
 deterministic. Further ratchet reduction now requires real **approve-first** work, NOT auto-merge
 regex-picking: the ~4 "needs-fixtures" MIGRATE candidates (6/17 map) as typed parsers + replay
-fixtures, the parser-consolidation round-trip win (collapse `parseUnifiedSemanticSlotsWithLLM`'s
-sub-calls; shadow-compared), and trade-cluster route-decision centralization in `routeStateReducer`.
+fixtures, and trade-cluster route-decision centralization in `routeStateReducer`. The
+parser-consolidation round-trip slice is **IN SHADOW as of 7/2** (`e5cf7068`,
+`UNIFIED_SLOTS_MERGED_SHADOW=1` live on the box): `parseUnifiedSemanticSlotsMergedWithLLM`
+carries the semantic+trade-payoff+trade-target jobs in ONE call, fire-and-forget alongside the
+live semantic parser (both paths + sendgrid); diffs logged as `[unified-slots-shadow]` + JSONL,
+read via `npm run unified_slots_shadow:report`. Prod reality: the unified wrapper itself stays
+DORMANT (`LLM_UNIFIED_SLOT_PARSER_ENABLED` unset — prod runs sub-parsers individually), so the
+cutover is per-call-site, **Tier 2 approve-first** on the shadow data. The merged prompt mirrors
+the legacy rules until cutover (pinned by `unified_slots_merged_shadow:eval`'s tripwire).
 
 **Consolidation is evidence-scoped, NOT a big-bang rewrite (880-turn judged backfill).**
 The consolidated pass's gross disagreement (~25%) is ~80% LLM *over-attachment* (a thread
@@ -66,8 +73,11 @@ So:
   active** (watch `answer_correctness` `owned_bike_offered`=0). The broad taxonomy/clarify/
   slot-fill rewrite is RULED OUT (sub-5% ceiling); gate cutovers on customer-facing
   correctness, not shadow-disagreement.
-Make it evidence-led; any core-comprehension cutover is approve-first (open a PR, don't
-auto-build it).
+Make it evidence-led. A core-comprehension cutover is **Tier 2** under the autonomous-loop
+auto-patch contract (AGENTS.md "Autonomous Self-Healing Loop") = approve-first: open a PR +
+notify, never auto-merge. Eval-gated **Tier 1** work (additive parser fixtures, fail-safe
+reconcile heals, behavior-preserving de-tangle refactors) may auto-merge once its category
+has graduated — see `docs/autonomous_coding_loop.md`. When unsure which tier, it's Tier 2.
 
 ## Before you ship
 - Gates (must be green): `(cd services/api && node ../../node_modules/typescript/bin/tsc -p
@@ -83,7 +93,10 @@ auto-build it).
   the old "confirm every push" rule): once both gates above are green, push and deploy
   eval-gated work without asking each time. Still required: `git fetch` first; do the work
   on a branch off `main`; and if another author's commit is unpushed locally, note it in
-  your summary (surface it, don't block on it).
+  your summary (surface it, don't block on it). (This is the SUPERVISED-session rule — you,
+  working with Joe. The UNSUPERVISED self-healing loop is narrower: it auto-merges only
+  graduated **Tier 1** changes and escalates **Tier 2** — AGENTS.md "Autonomous Self-Healing
+  Loop" + `docs/autonomous_coding_loop.md`. A behavioral cutover is Tier 2 in either mode.)
 - **DEPLOY THE API ONLY VIA `npm run deploy:api` — NEVER `bash scripts/deploy_api_lightsail.sh`
   raw (footgun, hit 2026-06-16).** The npm script passes
   `--profile infra/deploy/americanharley.api.env(.example)`, which sets the dealer's repo dir

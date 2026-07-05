@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import os from "node:os";
 import * as path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 
 /**
  * Model display-name eval — feed/ADF models arrive with a verbose inventory tail
@@ -57,5 +57,8 @@ assert.ok(
   "normalizeDisplayModelForYear (follow-up label) must clean the model"
 );
 
-await fs.rm(tmpDir, { recursive: true, force: true });
+// rmSync (not async fs.rm): a synchronous remove can't yield the event loop
+// mid-delete, so the conversation store's pending async flush can't re-write
+// conversations.json between the unlink and rmdir and race us to ENOTEMPTY.
+rmSync(tmpDir, { recursive: true, force: true });
 console.log("model_display_name:eval ok");

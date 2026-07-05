@@ -165,10 +165,42 @@ const completeParenTradeAdf = `<?xml version="1.0" encoding="UTF-8"?>
  </prospect>
 </adf>`;
 
+// HDFS credit-application comment describes the vehicle being FINANCED ("Model Year: 2020, Model: Low
+// Rider S"), not a trade-in — no sell/trade context markers anywhere in the comment. The bare "model
+// year"/"model" labels used to leak through regardless, fabricating a tradeVehicle that was never in
+// the source ADF (a Harley Financial Services credit app, Ref-equivalent case).
+const hdfsCreditAppAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-06-29T15:00:00+00:00</requestdate>
+   <id sequence="1" source="HDFS COA Online">11700</id>
+   <vehicle interest="buy" status="NEW">
+     <year>2020</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Low Rider S</model>
+     <vin></vin>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Test</name>
+       <name part="last">Applicant</name>
+       <email>test.applicant@example.com</email>
+       <phone type="cellphone">7160000001</phone>
+       <comment><![CDATA[App ID: 1014003463, Model Year: 2020, Model: Low Rider S]]></comment>
+     </contact>
+   </customer>
+   <provider>
+     <name part="full" type="individual">HDFS COA Online</name>
+   </provider>
+ </prospect>
+</adf>`;
+
 const markLead = parseAdfXml(markNicholsTradeAcceleratorAdf);
 const matthewLead = parseAdfXml(matthewWallValueMyTradeAdf);
 const laricussLead = parseAdfXml(laricussTruncatedTradeAdf);
 const completeParenLead = parseAdfXml(completeParenTradeAdf);
+const hdfsCreditAppLead = parseAdfXml(hdfsCreditAppAdf);
 
 const checks: Check[] = [
   { id: "mark_lead_ref", actual: markLead.leadRef, expected: "11310" },
@@ -202,7 +234,11 @@ const checks: Check[] = [
   // Same strip applied to the active/buy vehicle model
   { id: "laricuss_buy_model_sanitized", actual: laricussLead.vehicleModel, expected: "Road Glide" },
   // Complete parenthetical preserved — only UNCLOSED fragments are stripped
-  { id: "complete_paren_trade_model_preserved", actual: completeParenLead.tradeVehicle?.model, expected: "Boulevard (Two-Tone)" }
+  { id: "complete_paren_trade_model_preserved", actual: completeParenLead.tradeVehicle?.model, expected: "Boulevard (Two-Tone)" },
+  // HDFS credit-app comment ("Model Year: 2020, Model: Low Rider S") describes the FINANCED vehicle, not
+  // a trade-in — no sellVehicleFieldContext markers present, so no tradeVehicle should be fabricated.
+  { id: "hdfs_credit_app_no_fabricated_trade", actual: hdfsCreditAppLead.tradeVehicle, expected: undefined },
+  { id: "hdfs_credit_app_buy_model_intact", actual: hdfsCreditAppLead.vehicleModel, expected: "Low Rider S" }
 ];
 
 let passed = 0;

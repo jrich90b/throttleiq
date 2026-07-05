@@ -9,7 +9,7 @@
  * rewording a live cadence touch is a later, approve-first step.
  *
  * Layers: (1) source guard (judge + gate + flags exist; the shadow hook is wired at the cadence
- * emit; STEP-1-shadow-only assertion), (2) pure decision table (pass on good / low-confidence /
+ * emit; enforce is flag-gated + default-off), (2) pure decision table (pass on good / low-confidence /
  * no-verdict; act only on a confident non-good verdict; live only when the flag is on), (3) LLM
  * coverage — a concrete warm nudge is good; a bare "just checking in" is suppress; a corporate-bot
  * message fails tone_ok.
@@ -36,9 +36,16 @@ assert.ok(
 );
 const callSites = (index.match(/void runCadenceQualityJudgeShadow\(/g) || []).length;
 assert.ok(callSites >= 1, `the shadow hook must be wired at the cadence emit; found ${callSites}`);
+// ENFORCE (STEP 2) is flag-gated and default OFF: when off, the shadow hook runs and the cadence draft
+// is NOT altered (byte-identical behavior); enforcement only holds a `suppress` touch under the flag.
+// The suppress-only enforce + flag defaults are pinned behaviorally by cadence_quality_enforce:eval.
 assert.ok(
-  /STEP 1 is shadow-only: never suppress\/alter the cadence draft/.test(index),
-  "STEP 1 must be shadow-only (never suppress/alter the live cadence draft)"
+  /if \(isCadenceQualityEnforceEnabled\(\)\)/.test(index) && /enfDecision\?\.action === "suppress"/.test(index),
+  "cadence enforce must be wired behind the CADENCE_QUALITY_ENFORCE flag (suppress-only)"
+);
+assert.ok(
+  /export function isCadenceQualityEnforceEnabled/.test(gate) && /CADENCE_QUALITY_ENFORCE\b/.test(gate),
+  "the enforce flag helper must exist and default off (shadow), so the flip is opt-in and reversible"
 );
 
 // --- 2) Decision-table coverage (pure). ---

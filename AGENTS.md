@@ -49,6 +49,36 @@ A turn's route among competing intents in a cluster (e.g. scheduling: arrival-ac
 - Pin every centralized decision with a deterministic decision-table eval in `scripts/` (e.g. `scheduling_turn_decision_eval.ts`) wired into `ci:eval`.
 - A new cluster arm = extend the reducer function + its decision table; do not add a new inline precedence gate.
 
+## Autonomous Self-Healing Loop: auto-patch vs escalate (Joe, 2026-06-25; graduated autonomy)
+The self-healing loop (`docs/autonomous_coding_loop.md`) DETECTs gaps across every aspect of a turn —
+reply correctness, task create/close, watch create/trigger, cadence kind+timing, ADF/email intake routing,
+appointment booking, sticky/held state, tone — and DECIDES per gap whether it may auto-patch or must
+escalate. The contract (full version in the loop doc):
+- **Tier 0 — deterministic invariant** → the 60s reconcile tick auto-heals it. No PR. (e.g. cadence-active-
+  while-handoff, mis-deferred cadence.)
+- **Tier 1 — safe auto-patch** (may auto-merge + deploy ONLY after the CATEGORY has graduated — see ladder):
+  an ADDITIVE parser few-shot/replay fixture (no change to an already-accepted case), a NEW reconcile heal
+  in the fail-safe direction, a fail-safe gate-window tightening, a behavior-PRESERVING de-tangle
+  extraction/centralization (eval-proven equivalent), or test/eval/doc-only changes. Required before any
+  merge: `tsc` + `ci:eval` green + a NEW deterministic eval pinning the case (+ a shadow replay for
+  parser/reply changes showing no net regression).
+- **Tier 2 — escalate (PR + notify Joe), NEVER auto-merge**: new customer-facing behavior, a routing
+  cutover, a new reply class, a flag shadow→enforce flip, ANY change to an already-accepted parser/decision
+  case, or anything where "correct" is a judgment call. **Conservative default: when unsure, Tier 2.**
+- **De-tangle constraint (hard):** a patch that would ADD an inline `parser || regex` precedence gate is
+  Tier 2 by definition. Prefer extending a `decide*Turn` reducer / a typed parser over a new inline gate;
+  centralization-preserving refactors are favored Tier-1 work.
+- **Graduated-autonomy ladder:** every Tier-1 CATEGORY starts at "auto-write + run gates + open PR +
+  notify" (human merges). A category graduates to true auto-merge+deploy only after a clean track record
+  (≥5 consecutive human-approved merges in that category, zero post-deploy rollbacks). New/unproven
+  categories never auto-merge. The `ci:eval` green gate is non-negotiable for every tier.
+- Behavioral changes always notify Joe; he is involved ONLY for Tier 2.
+- **Re-read this law every iteration (mandatory):** the loop's PLAN step MUST re-read `CLAUDE.md` +
+  `AGENTS.md` before proposing any patch — but reading is necessary, not sufficient. The load-bearing
+  rules are ENFORCED by gates that run regardless (the comprehension-debt ratchet, `eval_suite_manifest`,
+  decision-table + parity evals, `tsc` + `ci:eval`). The .md is the spec; the gate is the enforcement —
+  a patch that violates an encoded rule cannot merge even if the agent misread the prose.
+
 ## Fallback Policy
 - Low-confidence parser, disabled LLM, or orchestrator failure must not fall back to regex-written semantic customer-facing answers.
 - Allowed fallbacks: suppress/no-response, create a todo/manual handoff, ask a narrow clarification, or use an approved known template.
@@ -306,6 +336,17 @@ Env vars:
 - Use suggested slots only if customer asked to schedule.
 - Do not confirm unless booked.
 - Avoid offering times if “holding_inventory” or “manual_handoff”.
+- **Auto-book on a concrete confirm (live).** When the customer confirms/proposes a concrete day+time
+  the agent did NOT pre-offer ("Ya 10 will work", "Around 1pm", "Is 10:45 good?"), do NOT deflect with
+  "I'll check that time and follow up." The route decision `decideSchedulingTurn` → `confirm_appointment`
+  (gated on `CustomerAckActionParse.shouldBook`, suppressed by pricing/payments) drives
+  `resolveCustomerAckConfirmBooking` in BOTH paths: check that exact time against the calendar and, if
+  free, ACTUALLY book it (`bookConfirmedAppointmentSlot` creates the event, sets `bookedEventId` +
+  `confirmedBy:customer`; the staff-notify sweep texts the rep) then confirm "you're all set for X"; if
+  taken, offer the nearest alternatives. Never fabricate a confirm — if no concrete time resolves or the
+  calendar can't be reached, fall back to a lock-in ask. The calendar WRITE is live-only: regenerate
+  (`book:false`) availability-checks and drafts but never writes (reflects an already-booked slot). This
+  honors "do not confirm unless booked" (the confirm follows a real `bookedEventId`).
 - Test-ride scheduling weather gate:
   - Pass dealer weather status into orchestrator for ADF/email inbound paths.
   - Treat sustained rain as bad weather (in addition to snow/cold) for test-ride slot gating.
@@ -1474,6 +1515,7 @@ Standing directive: the agent must read like a real American Harley-Davidson emp
 - `services/api/src/domain/scoringExclusions.ts` is the shared exclusion module for all quality scorers (tone QA, voice charter audit, route watchdog): shadow-replay traffic (`SMshadow*`/`MMshadow*`/`adf_shadow_*` providerMessageIds, `shadow-replay@` senders), automated senders (`autosender@`/`noreply@`/etc. and "This email contains HTML formatted content" bodies), and non-sales threads (followUp.reason `hiring_manager_inquiry`/`vendor_inquiry`/`spam`). New exclusion classes go in this module, never inline in one scorer. Gate: `npm run scoring_exclusions:eval`.
 - **Production lesson:** the nightly `inbound_shadow_replay` step's replayed turns transiently appeared in the LIVE conversations.json (verified 2026-06-11: tone scorer read live file at 08:18:33 containing replayed inbounds stamped 08:15:55-08:16:06; file was clean again later). Until the leak is fixed, scorers are immune via the shadow markers — but shadow traffic must never touch the live store (tracked as a P1: it could generate real drafts).
 - **Production lesson (2026-06-14):** deterministic scorer keyword sets must not collide with Harley **model trim names**. `hasPricingSignal` in `scripts/lib/toneQuality.ts` matched the trim word "Special" (Road Glide Special, Heritage Softail Special) via its `specials?` token, so a plain test-ride ADF for a "Special" was scored as an unanswered *pricing* ask (Todd Herian +15673079691: score 70, `adf_direct_ask_unanswered`), inflating the release gate's tone-miss count. Fix: strip `glide special`/`softail special` trim usage before the pricing regex (standalone "specials"/"deals" still flag). When adding intent/ask keywords to any deterministic scorer, sanity-check them against the model catalog — trim words (Special, Limited, Ultra, Custom, Classic, Sport) double as ordinary English. Gate: `npm run tone_quality:fixture_eval` (fixtures `adf_model_trim_special_not_pricing` + `adf_genuine_specials_ask_still_pricing`).
+- **Production lesson (2026-06-30):** the tone scorer must not grade the AGENT on a reply a **staff member hand-rewrote** before sending. In this dealer staff actively work leads and rewrite most sends, so the scorer was grading the agent on human words (Gary Busenlehner +17163168664 6/29: agent drafted "Sure. what time on tomorrow works best?" answering "Can you get it ready for tomorrow"; Scott sent "You can take the bike but it wont have the accessories installed"; scorer flagged the AGENT `intent_mismatch` + `question_not_answered_first`, tanking the release-gate tone pass rate to 66.67%). `isHumanRewrittenOutbound` (scoringExclusions.ts) detects this via a non-empty `originalDraftBody` that DIFFERS from the sent body (`originalDraftBody` is stamped ONLY on an edit, so this can never misfire on an agent's own send). `tone_quality_eval` then grades the agent's `originalDraftBody` (its actual output — `gradedAgentDraft:true` on the row) rather than the human's text: this measures what the agent WOULD have sent (autopilot-readiness), keeps the turn in the denominator (skipping collapsed it to 0/0 in this dealer — all responded turns were human-rewritten), and stays fail-safe (a bad draft still scores bad). Live: respondedPassRate 66.67%→100% with denominator preserved. Gate: `npm run scoring_exclusions:eval`.
 - **Production lesson (2026-06-18):** the ADF "direct ask" detector must not treat **deal-progression / Traffic Log Pro CRM notes as customer asks**. These leads arrive as ADF but the `Inquiry` body is a staff-authored, third-person note about an in-store event ("came in", "showed him the bike", "Left a $2,000 deposit ... finalize deal. (Step 6)", "Sold/Delivered ... Sold by Scott") — not a question the customer typed. `hasPricingSignal` matched `deal` in "finalize deal" (and `hasQuestionShape` matched "will"), so Dana Carr +17162607633's correct soft re-engagement reply scored 70 with a phantom `adf_direct_ask_unanswered: pricing`. Fix: `isAdfDealProgressionNote` in `scripts/lib/toneQuality.ts` short-circuits `detectAdfDirectAsks` for any ADF body carrying the explicit `(Step N)` progression fingerprint (customers don't type "(Step 6)"; 31 such notes in the AH store). This mirrors the runtime rule ("Traffic Log Pro ... salesperson-authored context notes, not direct customer chat turns") — the scorer must honor the same distinction. Fail-safe scorer de-noise only (no agent-behavior change). Gate fixture: `adf_deal_progression_step_note_not_pricing_ask`.
 
 ## Customer Vehicle Photo Share Routing (2026-06-11)

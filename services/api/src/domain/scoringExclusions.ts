@@ -56,10 +56,17 @@ const CLOSING_ACK_ACTIONABLE_CUE_RE =
 // A single closer phrase: an info-ack, a thanks, or a sign-off.
 const CLOSING_ACK_PHRASE =
   "(?:ok(?:ay)?|kk?|got it|sounds good|thank you(?: so| very)?(?: much)?|thanks(?: so| very)?(?: much)?|thx|ty|perfect|awesome|cool|great|will do|good to know|good to hear(?: that)?|good deal|makes sense|noted|understood|appreciate (?:it|that|you)|much appreciated|no problem|np|all good|all set|fair enough|you too|you as well|same to you|cheers|have a (?:good|great) (?:one|day|weekend|night))";
+// A familiar term of address that may trail a closer ("thanks man", "appreciate
+// it brother", "thanks battle buddy"). These never carry an ask on their own —
+// they are vocatives — so a closer followed by one stays a no-reply-needed
+// closer. The actionable-cue / question-mark guards below still apply, so
+// "thanks man call me" is unaffected (it trips the cue guard before this runs).
+const CLOSING_ACK_VOCATIVE =
+  "(?:man|bud(?:dy|y)?|bro(?:ther|tha)?|dude|sir|ma'?am|boss|pal|friend|champ|chief|mate|fam|homie|hun|hon|partner|amigo|guys?|battle bud(?:dy|y)|my (?:friend|man|guy))";
 // Separator between stacked closers: punctuation/whitespace, optional "and"/"&".
 const CLOSING_ACK_SEP = "(?:[\\s.!,]+(?:and |& )?)";
 const CLOSING_ACK_FULL_RE = new RegExp(
-  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_PHRASE}${CLOSING_ACK_SEP}?)+$`,
+  `^${CLOSING_ACK_SEP}?(?:${CLOSING_ACK_PHRASE}(?:\\s+${CLOSING_ACK_VOCATIVE})?${CLOSING_ACK_SEP}?)+$`,
   "i"
 );
 // Requires at least one substantive gratitude/acknowledgment, so a bare "ok" /
@@ -83,11 +90,110 @@ export function isClosingAckNoAction(text: string | null | undefined): boolean {
   return CLOSING_ACK_SUBSTANTIVE_RE.test(normalized);
 }
 
+/**
+ * A bare ASCII-emoticon reaction — ":)", ";-)", ":D", "=)", "<3", "^_^" — is a
+ * pure no-reply-needed reaction, the ASCII twin of the Unicode-emoji-only turn
+ * the tone scorer's short-ack matcher already skips. That matcher's emoji branch
+ * is Unicode-only (`\p{Emoji}`), so a customer who texts a typed ":)" leaks
+ * through and is wrongly graded `missing_response` (a phantom miss). Bounded
+ * length and a strict emoticon-token shape keep this fail-safe: a turn that
+ * carries any real word (an ask, a model, a question) cannot match.
+ */
+const ASCII_EMOTICON_TOKEN_RE =
+  /^(?:[:;=8xX]['"`]?[-o^*]?[)\]}>(\[{<dDpP3cC|/\\]+|<3+|\^_?\^|x[dD])$/;
+export function isBareEmoticonReaction(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (t.length > 24) return false;
+  const tokens = t.split(/\s+/);
+  if (tokens.length === 0 || tokens.length > 4) return false;
+  return tokens.every(tok => ASCII_EMOTICON_TOKEN_RE.test(tok));
+}
+
 export function isNonSalesConversation(conv: {
   followUp?: { reason?: string | null } | null;
 }): boolean {
   const reason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
   return NON_SALES_FOLLOWUP_REASONS.has(reason);
+}
+
+/**
+ * A placeholder / test-harness lead identity. The Dealer Lead App (DLA) ships
+ * canned test submissions the dealer fires to sanity-check the pipeline — e.g.
+ * `test@hotmail.com` / `test@icloud.com` ("KEVIN Test 111 Dla Cooper"). The
+ * runtime correctly declines to draft a first touch for these, but the tone
+ * scorer then counted each as a `missing_response`, inflating the release
+ * gate's tone-missing failure (2026-07-01: 3 of 6 "missing" turns were DLA
+ * `test@` submissions). The pre-existing inline `@example.com` skip missed them
+ * because they use real consumer domains.
+ *
+ * Fail-direction is safe: a genuine sales lead never uses the bare local-part
+ * `test` (or a `test+tag` / `test.<n>` variant), and `@example.com` /
+ * `@example.*` are reserved test domains — so this can never hide a real
+ * customer miss. Deliberately narrow: it matches the local-part shape, NOT any
+ * email merely containing "test" (e.g. `contestwinner@…` stays a real lead).
+ */
+const TEST_LEAD_LOCALPART_RE = /^test(?:[+._-]\w+)?$/i;
+const RESERVED_TEST_DOMAIN_RE = /@example\.(?:com|net|org)$/i;
+export function isTestLeadEmail(email: string | null | undefined): boolean {
+  const e = String(email ?? "").trim().toLowerCase();
+  if (!e || !e.includes("@")) return false;
+  if (RESERVED_TEST_DOMAIN_RE.test(e)) return true;
+  const localPart = e.slice(0, e.indexOf("@"));
+  return TEST_LEAD_LOCALPART_RE.test(localPart);
+}
+
+/**
+ * A standalone carrier opt-out keyword — "STOP", "STOPALL", "UNSUBSCRIBE",
+ * "CANCEL", "END", "QUIT" (Twilio's default STOP-keyword set). When a customer
+ * texts one of these, Twilio itself opts the number out, sends the compliance
+ * confirmation, and BLOCKS further outbound — so the agent staying silent is
+ * the only legal behavior, not a miss. The tone scorer graded Tom Kraft
+ * (+17165237203, 2026-07-01: bare "Stop") as a `missing_response`; a reply
+ * there would be a compliance violation, and the platform wouldn't have
+ * delivered it anyway.
+ *
+ * Fail-direction is safe: it matches ONLY a message that IS the bare keyword
+ * (optional trailing punctuation), mirroring Twilio's own whole-message match —
+ * "stop texting me about the road glide" is NOT an opt-out and still scores.
+ */
+const OPT_OUT_KEYWORD_RE = /^(?:stop|stopall|unsubscribe|cancel|end|quit|opt[\s-]?out)[.!\s]*$/i;
+export function isOptOutKeywordInbound(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return OPT_OUT_KEYWORD_RE.test(t);
+}
+
+/**
+ * A human-rewritten outbound — the agent drafted X (captured in
+ * `originalDraftBody`) but a staff member SENT a different body — is not the
+ * agent's customer-facing reply. Quality scorers (tone QA) measure the AGENT, so
+ * grading it on a staff member's hand-typed text is a phantom miss.
+ *
+ * Production case (2026-06-29, Gary Busenlehner +17163168664): the agent drafted
+ * "Sure. what time on tomorrow works best?" — a clean scheduling answer to "Can
+ * you get it ready for tomorrow" — but Scott sent "You can take the bike but
+ * unfortunately it wont have the accessories installed". The tone scorer flagged
+ * the AGENT with `intent_mismatch` + `question_not_answered_first` on Scott's
+ * words, tanking the release-gate tone pass rate on a turn the agent handled
+ * correctly.
+ *
+ * `originalDraftBody` is stamped ONLY when a human EDITS a draft before sending
+ * (verbatim-approved drafts and automated agent sends carry no
+ * `originalDraftBody`), so requiring a NON-EMPTY draft that DIFFERS from the sent
+ * body makes this fail-safe: it can never misfire on an agent's own send and so
+ * cannot hide a real agent miss. The agent's draft-quality on edited sends is
+ * already measured by the edit-feedback miner, so skipping here loses no signal.
+ */
+export function isHumanRewrittenOutbound(msg: {
+  body?: string | null;
+  originalDraftBody?: string | null;
+}): boolean {
+  const draft = String(msg?.originalDraftBody ?? "").replace(/\s+/g, " ").trim();
+  if (!draft) return false;
+  const sent = String(msg?.body ?? "").replace(/\s+/g, " ").trim();
+  if (!sent) return false;
+  return sent.toLowerCase() !== draft.toLowerCase();
 }
 
 /**

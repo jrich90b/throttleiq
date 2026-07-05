@@ -64,6 +64,41 @@ export function isSalesPhotoShareConversation(conv: {
   return isSalesPhotoShareContext(conv?.dialogState?.name ?? null);
 }
 
+const TRADE_INTENT_CTAS = new Set(["value_my_trade", "sell_my_bike", "trade_in_value", "trade_in_sell"]);
+const TRADE_DIALOG_STATES = new Set(["trade_init", "trade_cash", "trade_trade", "trade_either"]);
+
+/**
+ * Is this a TRADE-in conversation — the customer is showing us THEIR unit to value, not a bike
+ * they like that we'd match against our inventory? A photo here is the trade unit, so the buy-intent
+ * "let me match it against what we've got in stock" reply (and its "reply with matching in-stock
+ * units" todo) is the wrong frame (Jessica Ornce +17167134728, 2026-06-23: a Trade-Accelerator lead
+ * sent photos of her Victory Vegas + camper trailer and drew the inventory-match draft + todo).
+ *
+ * Reads ALREADY-classified structured state (bucket / CTA / handoff reason / dialog / lead source) —
+ * the comprehension that set these ran earlier via the intent parsers, so this is a deterministic
+ * route read, not a re-comprehension of the customer's text.
+ */
+export function isTradePhotoShareConversation(conv: {
+  classification?: { bucket?: string | null; cta?: string | null } | null;
+  followUp?: { reason?: string | null } | null;
+  dialogState?: { name?: string | null } | null;
+  lead?: { source?: string | null } | null;
+}): boolean {
+  const bucket = String(conv?.classification?.bucket ?? "").trim().toLowerCase();
+  if (bucket === "trade_in_sell") return true;
+  const cta = String(conv?.classification?.cta ?? "").trim().toLowerCase();
+  if (TRADE_INTENT_CTAS.has(cta)) return true;
+  const followReason = String(conv?.followUp?.reason ?? "").trim().toLowerCase();
+  if (followReason === "non_motorcycle_trade" || followReason.includes("trade")) return true;
+  const dialog = String(conv?.dialogState?.name ?? "").trim().toLowerCase();
+  if (TRADE_DIALOG_STATES.has(dialog)) return true;
+  // Trade-IN intent specifically — not a "Trade Show" booth lead. Jessica's source is
+  // "Trade Accelerator - Trade In".
+  const source = String(conv?.lead?.source ?? "").trim().toLowerCase();
+  if (/\btrade[\s-]?in\b|trade accelerator/.test(source)) return true;
+  return false;
+}
+
 export function buildCustomerVehiclePhotoShareReply(args: {
   firstName?: string | null;
   mentionedModel?: string | null;
@@ -75,6 +110,48 @@ export function buildCustomerVehiclePhotoShareReply(args: {
     return `${opener} That ${model} is a great look. Let me check what we've got in stock and coming in that matches it, and I'll text you what I find today.`;
   }
   return `${opener} Let me match it against what we've got in stock and coming in, and I'll text you what I find today.`;
+}
+
+/**
+ * Trade-in photo reply. The customer is showing us a unit they want to trade — acknowledge and
+ * route to the appraiser. NEVER claim to "match it against our stock" (that's the buy-intent miss)
+ * and NEVER quote a trade number (we value in person; AGENTS.md). Unit-agnostic on purpose: vision
+ * is Harley-biased, so naming the make (a Victory, an Indian) risks fabrication — the appraiser
+ * confirms from the photos in the thread.
+ */
+export function buildTradePhotoShareReply(firstName?: string | null): string {
+  const name = String(firstName ?? "").trim();
+  const opener = name ? `Thanks for sending those over, ${name}!` : "Thanks for sending those over!";
+  return `${opener} I'll get these in front of our appraiser and follow up with numbers.`;
+}
+
+/**
+ * Appraisal-handoff todo for a trade-in photo. Seeds the human with a best-effort vision hint
+ * (observational only — color/features or "non-motorcycle item" — never an asserted make/model).
+ */
+export function buildTradePhotoShareTodoSummary(args: {
+  firstName?: string | null;
+  visionHint?: string | null;
+}): string {
+  const who = String(args.firstName ?? "").trim() || "Customer";
+  const hint = String(args.visionHint ?? "").trim();
+  const core = `${who} sent photo(s) of their trade-in. Open the thread, confirm the unit(s), and get them to the appraiser for a firm number.`;
+  return hint ? `${core} Vision (unconfirmed): ${hint}.` : core;
+}
+
+// Observational, brand-free hint for the appraiser. Vision's make/model_family is Harley-biased
+// and unreliable on a trade (could be a Victory/Indian), so we surface only color + features, or
+// flag a non-motorcycle item (which the non_motorcycle_trade handoff already routes separately).
+function tradeUnitVisionHint(d: {
+  isMotorcycle: boolean;
+  color?: string | null;
+  distinctiveFeatures?: string | null;
+}): string {
+  if (!d.isMotorcycle) return "the photo looks like a non-motorcycle item (e.g. a trailer or vehicle)";
+  const color = String(d.color ?? "").trim();
+  const features = String(d.distinctiveFeatures ?? "").trim();
+  const base = [color, "motorcycle"].filter(Boolean).join(" ");
+  return features ? `a ${base} (${features})` : `a ${base}`;
 }
 
 /**
@@ -241,6 +318,39 @@ export function buildNonMotorcyclePhotoShareReply(
  * any miss — never guesses a model to a rider. When vision recognizes the
  * image is NOT a motorcycle, diverts to a clarification (never the match reply).
  */
+async function buildTradePhotoShareResult(args: {
+  conv: { messages?: any[]; lead?: any };
+  firstName?: string | null;
+  anchorAtIso?: string | null;
+  dataDir: string;
+}): Promise<{ reply: string; identifiedFamily: string | null; todoSummary: string }> {
+  let visionHint = "";
+  try {
+    const urls = findNearestInboundImageUrls(args.conv as any, args.anchorAtIso ?? null);
+    const localPath = urls.map(u => resolveUploadLocalPath(u, args.dataDir)).find(p => p && fs.existsSync(p));
+    if (localPath) {
+      const stat = fs.statSync(localPath);
+      if (stat.isFile() && stat.size > 0 && stat.size <= MAX_VISION_IMAGE_BYTES) {
+        const mime = /\.png$/i.test(localPath) ? "image/png" : "image/jpeg";
+        const imageBase64 = fs.readFileSync(localPath).toString("base64");
+        const description = await describeVehicleImageWithLLM({
+          imageBase64,
+          mimeType: mime,
+          contextText: "Customer is showing a unit they want to trade in."
+        });
+        if (description) visionHint = tradeUnitVisionHint(description);
+      }
+    }
+  } catch {
+    // best-effort — the trade frame + appraisal todo stand without a vision hint
+  }
+  return {
+    reply: buildTradePhotoShareReply(args.firstName),
+    identifiedFamily: null,
+    todoSummary: buildTradePhotoShareTodoSummary({ firstName: args.firstName, visionHint })
+  };
+}
+
 export async function buildPhotoShareReplyWithVision(args: {
   conv: { messages?: any[]; lead?: any };
   firstName?: string | null;
@@ -254,6 +364,14 @@ export async function buildPhotoShareReplyWithVision(args: {
   todoSummary: string;
   kind?: "bike_match" | "part" | "non_motorcycle";
 }> {
+  // Trade-in photo: the customer is showing us their unit to appraise, not a bike they like to
+  // match against our stock. Divert to the trade frame + appraisal handoff (covers all photo-share
+  // convergence points + both live and regenerate paths, which all funnel through this function).
+  // Wins over the part branch below: a part photo from a trade lead still goes to the appraiser
+  // (fail-safe — a human sees it).
+  if (isTradePhotoShareConversation(args.conv as any)) {
+    return buildTradePhotoShareResult(args);
+  }
   const fallback = {
     reply: buildCustomerVehiclePhotoShareReply({
       firstName: args.firstName,

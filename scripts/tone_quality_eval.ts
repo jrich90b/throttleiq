@@ -3,9 +3,13 @@ import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
 import {
   isAutomatedSenderInbound,
+  isBareEmoticonReaction,
   isClosingAckNoAction,
+  isHumanRewrittenOutbound,
   isNonSalesConversation,
-  isShadowReplayMessage
+  isOptOutKeywordInbound,
+  isShadowReplayMessage,
+  isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
@@ -36,6 +40,9 @@ type EvalRow = {
   issueCodes: string[];
   issueDetails: Array<{ code: string; detail: string }>;
   status: "responded" | "missing_response";
+  // True when staff rewrote the agent's draft before sending and we graded the
+  // agent's `originalDraftBody` (its actual output) rather than the human's text.
+  gradedAgentDraft?: boolean;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -97,6 +104,7 @@ function isShortAckNoAction(text: string): boolean {
     .toLowerCase();
   if (!t) return false;
   if (/^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
+  if (isBareEmoticonReaction(t)) return true;
   return /^(ok|okay|k|kk|got it|sounds good|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do)[.!?\s]*$/i.test(
     t
   );
@@ -142,7 +150,8 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   }
   if (isNonSalesConversation(conv)) return "non_sales_thread";
   if (provider === "voice_transcript") return "provider_voice_transcript";
-  if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
+  if (isTestLeadEmail(leadEmail) || isTestLeadEmail(conv?.id)) return "test_lead_email";
+  if (isOptOutKeywordInbound(inboundText)) return "opt_out_no_reply";
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";
@@ -236,7 +245,16 @@ function main() {
         continue;
       }
 
-      const outboundText = normalizeText(matchedOut?.body);
+      // When a staff member rewrote the agent's draft before sending, the SENT
+      // body is the human's words, not the agent's — grading the agent on it is a
+      // phantom miss. Grade the agent's own draft (`originalDraftBody`) instead:
+      // this measures what the agent WOULD have sent (the autopilot-readiness
+      // signal the release gate wants) and is fail-safe (a bad draft still scores
+      // bad), while keeping the turn in the denominator. In this dealer staff
+      // rewrite most sends, so skipping these instead would collapse the sample.
+      const outboundWasHumanRewritten = isHumanRewrittenOutbound(matchedOut);
+      const gradedBody = outboundWasHumanRewritten ? matchedOut?.originalDraftBody : matchedOut?.body;
+      const outboundText = normalizeText(gradedBody);
       const tone = evaluateTurnToneQuality({ inboundText, outboundText });
       const outAtIso = String(matchedOut?.at ?? "");
       const outAtMs = toMs(outAtIso);
@@ -260,7 +278,8 @@ function main() {
         intent: tone.intent,
         issueCodes: tone.issues.map(x => x.code),
         issueDetails: tone.issues.map(x => ({ code: x.code, detail: x.detail })),
-        status: "responded"
+        status: "responded",
+        gradedAgentDraft: outboundWasHumanRewritten || undefined
       });
     }
   }
