@@ -14,7 +14,18 @@ const FINANCING_RE =
   /\b(financ\w*|credit|prequal|pre-?qual|apr|payment options?|monthly payment|hdfs|business manager|down payment|lease|loan)\b/i;
 const AVAILABILITY_RE = /\b(availab\w*|in[- ]?stock|inventory|on the lot)\b/i;
 
+// Internal "review a blocked/held draft" tasks are NOT customer buy-signals — they're a system prompt
+// for a rep to review the agent's OWN draft. Their summaries frequently borrow inventory/pricing words
+// from a guard name (e.g. "unsupported_inventory_hold_promise_guard" -> action "Verify inventory and
+// follow up"), which would otherwise mis-badge them as a hot customer availability/pricing request and
+// pollute the sales-critical priority rail. (Armando Cortes, 2026-06-24: a guard-blocked dealer-ride-
+// outcome review task was badged "Availability".)
+const INTERNAL_REVIEW_RE =
+  /(draft guard blocked|before sending|couldn'?t answer this in context|being fixed)/i;
+
 export function salesCriticalKind(todo: any): SalesCriticalKind | null {
+  // A system review/held-draft task is never a customer buy-signal — don't sales-badge it.
+  if (INTERNAL_REVIEW_RE.test(String(todo?.summary ?? ""))) return null;
   const reason = String(todo?.reason ?? "").toLowerCase();
   // `action` is the backend-derived label (deriveTodoActionLabel), not raw customer text.
   const text = `${reason} ${String(todo?.action ?? "")}`.toLowerCase();

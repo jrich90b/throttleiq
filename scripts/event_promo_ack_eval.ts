@@ -22,7 +22,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import { decideEventPromoTurn } from "../services/api/src/domain/routeStateReducer.ts";
-import { buildEventPromoAck } from "../services/api/src/domain/agentVoice.ts";
+import { buildDemoRideEventSoftInvite, buildEventPromoAck } from "../services/api/src/domain/agentVoice.ts";
+import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 // --- 1) Decision table (pure). ---
 type Row = { id: string; bucket: string | null; cta: string | null; ack: boolean };
@@ -48,6 +49,72 @@ for (const r of rows) {
     r.ack,
     `decideEventPromoTurn[${r.id}] expected ack=${r.ack}, got kind=${kind}`
   );
+}
+
+// --- 1b) Classification: the event-marketing SOURCES must resolve to event_promo so the ack even gets
+//         a chance to fire. ROOT CAUSE of the top wrong_lead_type misses (7-day audit): these sources
+//         aren't in the catalog, so resolveLeadRule fell through to general_inquiry -> a sales
+//         first-touch ("that stock number is still available, what day to stop in?"). ---
+for (const src of ["National Event Dealer Sweeps", "Room58 - National Event RSVP", "National Event RSVP", "Ride Challenge"]) {
+  const r = resolveLeadRule(src);
+  assert.equal(r.bucket, "event_promo", `source "${src}" must classify as event_promo, got ${r.bucket}/${r.cta}`);
+  assert.equal(
+    decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind,
+    "event_promo_ack",
+    `"${src}" must flow through to the event-promo ack`
+  );
+}
+// The name inference must NOT sweep a real sales source into event_promo.
+assert.notEqual(resolveLeadRule("Facebook - RAQ").bucket, "event_promo", "a sales source must stay out of event_promo");
+
+// --- 1c) GLA demo-ride leads: corporate demo-ride program rides that do NOT happen at the dealership
+//         (operator-reported, Joe, 2026-07-02). They must classify event_promo/demo_ride_event —
+//         NOT the sweepstakes ack (Jennifer Adam, 2026-07-01, got "thanks for entering — good luck!"
+//         via inferFromCatalog's `/event|rsvp|demo ride/` catch-all as event_rsvp), and NOT a
+//         dealership test-ride booking. They get ONE soft invite + no follow-up cadence (the
+//         event_promo bucket closes `event_promo_no_cadence`). ---
+for (const src of [
+  "GLA - DEMO RIDE",
+  "GLA - Demo Ride", // case-insensitive match of the same source
+  "GLA - Demo Ride - DAT",
+  "HDMC GLA - Road to Your Ride DAT Dealer Demo Ride",
+  "GLA - Road to Your Ride Event Dealer Demo Ride"
+]) {
+  const r = resolveLeadRule(src);
+  assert.equal(r.bucket, "event_promo", `GLA demo-ride "${src}" must classify as event_promo, got ${r.bucket}/${r.cta}`);
+  assert.equal(r.cta, "demo_ride_event", `GLA demo-ride "${src}" must carry cta=demo_ride_event, got ${r.cta}`);
+  assert.notEqual(
+    decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind,
+    "event_promo_ack",
+    `"${src}" must NOT be diverted to the sweepstakes ack (demo_ride_event has its own soft invite)`
+  );
+}
+// A DEALERSHIP demo/test-ride request keeps its real scheduling handling.
+assert.equal(resolveLeadRule("DEALER DEMO RIDE").bucket, "test_ride", "a dealership demo-ride request stays test_ride");
+
+// --- 1d) Soft-invite safety (pure): the demo_ride_event reply is a SOFT INVITE — it must identify the
+//         agent + dealer and carry NO scheduling push/appointment times, NO availability claim, and NO
+//         fabricated completed-ride frame ("thanks for your recent demo ride" — the source alone doesn't
+//         prove the ride happened). ---
+const softInvite = buildDemoRideEventSoftInvite("Jennifer", "Alexandra", "American Harley-Davidson", "2026 Low Rider ST");
+assert.ok(
+  /Jennifer/.test(softInvite) && /Alexandra/.test(softInvite) && /American Harley-Davidson/.test(softInvite),
+  "soft invite must identify lead + agent + dealer"
+);
+assert.ok(/2026 Low Rider ST/.test(softInvite), "soft invite should reference the bike when known");
+const SOFT_INVITE_BANNED: { label: string; re: RegExp }[] = [
+  { label: "scheduling push / appointment times", re: /\b(what day|what time|which works|get you scheduled|set up a time|schedule|appointment|book)\b/i },
+  { label: "availability claim", re: /\b(still available|in stock|available)\b/i },
+  { label: "fabricated completed-ride frame", re: /\b(your recent demo ride|thanks for (coming|riding)|enjoyed? your (demo )?ride)\b/i },
+  { label: "sweepstakes frame", re: /\b(entering|good luck|winner|sweepstake)\b/i }
+];
+for (const b of SOFT_INVITE_BANNED) {
+  assert.ok(!b.re.test(softInvite), `demo-ride soft invite must not contain a ${b.label}: "${softInvite}"`);
+}
+const softInviteBare = buildDemoRideEventSoftInvite(null, "Alexandra", "American Harley-Davidson", null);
+assert.ok(!/undefined|null/.test(softInviteBare), "soft invite must handle missing name/bike cleanly");
+for (const b of SOFT_INVITE_BANNED) {
+  assert.ok(!b.re.test(softInviteBare), `bare demo-ride soft invite must not contain a ${b.label}: "${softInviteBare}"`);
 }
 
 // --- 2) Ack safety (pure). ---
@@ -83,6 +150,21 @@ assert.ok(
 assert.ok(
   /decideEventPromoTurn/.test(sendgrid) && /buildEventPromoAck/.test(sendgrid),
   "the initial-ADF draft must divert a non-sales event_promo lead to the ack"
+);
+
+// Demo-ride soft invite wired at BOTH draft chokepoints (orchestrator + initial-ADF), and the
+// no-cadence close still keys on the whole event_promo bucket (covers demo_ride_event).
+assert.ok(
+  /buildDemoRideEventSoftInvite/.test(orchestrator),
+  "orchestrateInbound must draft a demo_ride_event lead with the shared soft invite"
+);
+assert.ok(
+  /buildDemoRideEventSoftInvite/.test(sendgrid) && /cta === "demo_ride_event"/.test(sendgrid),
+  "the initial-ADF draft must override a demo_ride_event lead with the shared soft invite"
+);
+assert.ok(
+  /closeConversation\(conv, "event_promo_no_cadence"\)/.test(sendgrid),
+  "the event_promo bucket (incl. demo_ride_event) must close with no follow-up cadence"
 );
 
 const ackCount = rows.filter(r => r.ack).length;

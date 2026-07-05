@@ -108,6 +108,81 @@ real regression surfaces within a day:
 45 8 * * * cd /home/ubuntu/leadrider-api/americanharley && CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports SWEEP_WINDOW_HOURS=48 npm run auto_loop:sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/auto_loop_sweep_cron.log 2>&1
 ```
 
+### Outcome-audit detection feed cron (Phase 2/2.5, LIVE on americanharley 2026-06-25)
+The unified anomaly feed (Layer 1) refreshes daily, read-only, into `reports/outcome_audit/latest.json`:
+
+```
+# 8:50 AM ET — unified outcome-audit detection feed (state + comprehension + feedback)
+50 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run conversation_outcome_audit >> /home/ubuntu/leadrider-runtime/americanharley/reports/outcome_audit_cron.log 2>&1"
+```
+
+It reads the store FILE directly (the store module hydrates async, so a sync accessor read would race
+it) and never mutates anything. A healthy store ⇒ 0 anomalies; `byCategory` (state/comprehension/feedback)
+and the per-dimension `healed` flag let DETECT route each by tier. The cron repo is kept at HEAD by
+`deploy:api` (or a manual `git pull --ff-only`) so it always runs the latest detectors. For dealer #2,
+point the same cron at that dealer's runtime store.
+
+### Open-critic sweep cron (Net 3, unknown-unknowns) — runs BETWEEN the feed and DETECT
+The open-ended critic (Net 3) refreshes its sibling feed `reports/open_critic/latest.json` a couple of
+minutes after the deterministic feed and BEFORE DETECT, so DETECT merges it. UNLIKE the deterministic
+sweep, this one is LLM-backed, so its cron MUST load the OpenAI key (source the runtime env file):
+
+```
+# 8:52 AM ET — open-ended critic over recent convs → discovery findings (needs OPENAI_API_KEY)
+52 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; CONVERSATIONS_DB_PATH=/home/ubuntu/leadrider-runtime/americanharley/data/conversations.json REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run open_critic_sweep >> /home/ubuntu/leadrider-runtime/americanharley/reports/open_critic_cron.log 2>&1"
+```
+
+Conservative + capped (OPEN_CRITIC_MAX, OPEN_CRITIC_WINDOW_DAYS); kill with LLM_OPEN_CRITIC_ENABLED=0.
+Findings are category=`discovery` → DETECT escalates them (Tier 2, notify, never auto-merge).
+
+### Anomaly-loop DETECT → CLASSIFY cron (Phase 3, LIVE on americanharley 2026-06-25)
+Five minutes after the feed refreshes, classify it into a tier-tagged WORK ORDER (`reports/anomaly_loop/
+next.json`) via `classifyOutcomeAnomaly` (the tier contract as code). It also MERGES the Net 3
+`reports/open_critic/latest.json` sibling feed when present. Read-only; nothing auto-merges —
+graduated autonomy starts every work order at PR + (when behavioral) notify.
+
+```
+# 8:55 AM ET — classify the feed into a tier-tagged work order (DETECT → CLASSIFY)
+55 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports npm run anomaly_loop_detect >> /home/ubuntu/leadrider-runtime/americanharley/reports/anomaly_loop_cron.log 2>&1"
+```
+
+`next.json` carries `stop:true` when healthy, else the ranked work orders (Tier 2 first), each with its
+action (parser_fix_candidate / add_invariant_or_heal / redraft_or_diagnose / heal_regression / escalate),
+`notify`, and `autoMergeEligible` (from the category ledger).
+
+### Loop digest mailer (the SURFACE step) — runs after DETECT
+DETECT writes `next.json` but nothing read it; findings piled up unseen. The digest mailer formats the work
+order (`formatLoopDigest`, pure) and EMAILS the operator so findings actually reach a human — the precision
+review of the cross-model turn-critic + the graduation signal, until the autonomous ACT runner lands. Tier 2
+(needs review) is listed first. Only emails when there ARE findings (LOOP_DIGEST_FORCE=1 sends an all-clear
+too). Reuses the existing `sendEmail` (SendGrid) — no new infra. Recipient LOOP_DIGEST_EMAIL (default
+integrations@leadrider.ai); kill with LOOP_DIGEST_ENABLED=0. Needs SENDGRID_API_KEY (the cron sources api.env).
+
+```
+# 8:56 AM ET — email the operator the day's findings (the SURFACE step; needs SENDGRID_API_KEY)
+56 8 * * * /bin/bash -lc "cd /home/ubuntu/leadrider-api/americanharley && set -a; . /home/ubuntu/leadrider-runtime/americanharley/api.env; set +a; REPORT_ROOT=/home/ubuntu/leadrider-runtime/americanharley/reports DEALER_LABEL=americanharley npm run loop_digest >> /home/ubuntu/leadrider-runtime/americanharley/reports/loop_digest_cron.log 2>&1"
+```
+
+**ACT** = `scripts/act_runner.ts` (PR-only): `list` work orders → `prep` a fix brief (finding + conv +
+turn-actions + the parser-first contract) → the coding agent writes the patch on a branch → `review`/`open-pr`.
+
+### Cross-model PRE-SHIP review gate (`act_runner review`) — the independent check before merge
+The safety premise of the loop applied to its OWN output: before a loop change merges, an INDEPENDENT model
+(Claude, a different lineage than the OpenAI generation runtime — `domain/preShipReview.ts`
+`reviewLoopFixWithLLM`) adversarially reviews the actual DIFF against the finding + the law (on_target,
+law_ok = parser-first/both-paths/eval, customer-facing risk, blocking defects). `decidePreShipGate` (pure)
+ships ONLY on a clean approve with green gates; **any** doubt — no review, hold, blocking, off-target, law
+violation, high risk, or red gates — does NOT ship. **Conservative default: no review available ⇒ escalate,
+never silently ship.** `act_runner review --ship`: runs the gates → the cross-model review → opens an
+auditable PR → MERGES it only when the gate says SHIP, else leaves the PR OPEN and escalates to a human.
+This replaces "a human eyeballs every change" with "a model that didn't write it checks every change"; only
+genuine disagreement / judgment calls reach a human. Pinned by `pre_ship_review:eval` + `act_runner:eval`.
+
+In a SUPERVISED session the merge/deploy is the operator's standing pre-authorization (eval-gated work) —
+so the loop owns detect→fix→eval→**review→merge→deploy**, escalating only what the cross-model gate holds.
+For the UNATTENDED box loop the same gate applies, plus the graduated ladder: fail-safe Tier-1 auto-merges
+once a category earns it; behavioral changes open a PR + notify (no human is in the session there at all).
+
 The loop reads the resulting `reports/auto_loop/next_task.json`: `stop:true`
 means nothing new to code; otherwise it carries the next task + a production
 repro. For dealer #2, point the same cron at that dealer's runtime store.
@@ -130,3 +205,161 @@ access live only on the box — so the loop runs in two complementary halves:
 
 The common case is a no-op (sweep → `stop:true`), so the runner only does real
 work when a genuinely new, unguarded, concrete regression appears.
+
+---
+
+## The self-healing program (Joe, 2026-06-25): detect every aspect, auto-patch the safe tier, escalate the rest
+
+Goal: Joe stops being the monitor. The system watches itself across **every aspect of a turn**, diagnoses
+gaps, and either auto-patches them (gated) or hands Joe a ready decision — while pushing de-tangle and
+commercial-grade reliability. Autonomy is **graduated/earned**, not day-one full-auto (graduated posture
+chosen 2026-06-25). Build order chosen: **law first, then detection, then close the loop.**
+
+### Layer 1 — per-turn OUTCOME auditor (the detection feed)
+Today the live judges only grade the *reply* (draft-quality / no-response / context-fidelity / cadence-
+quality). Extend that to **every side-effect of every turn**, each as a structured "did we do the right
+thing?" verdict, logged as an anomaly when not (shadow; never blocks a turn):
+- reply correctness + tone (in-charter) + fabrication/safety
+- task: created when it should be, NOT created when it shouldn't, closed correctly
+- inventory watch: created/triggered/opted-out correctly
+- follow-up cadence: right kind (standard/long_term/post_sale/engaged) + right timing + not running while held/handed-off
+- ADF/email intake: routed to the right department/bucket; initial first-touch fired (right channel)
+- appointment: booked vs deflected correctly; confirmed only with a real `bookedEventId`
+- sticky/held state: still valid for this turn (no stale service/handoff/closed contradictions)
+- live/regen parity: the two paths agree
+This feed replaces Joe watching. It unifies the scattered nightly audits + the agent-watch sweep + the
+closed-loop 👎 feed into ONE anomaly store the loop consumes.
+
+**Why Joe was still catching gaps, and the fix (three nets).** A gap is auto-catchable ONLY if something
+emits a machine-readable "this was wrong" signal. There are exactly three sources: (a) the model
+critiquing itself (LLM judges), (b) a human acting (👎 / edit / takeover), (c) a deterministic invariant.
+The feed already wired (c) and the 👎 half of (b). The Elizabeth Klapa ADF misroute slipped through
+because her bad draft wasn't *held* and Joe corrected it *manually* (no 👎). The two highest-value unwired
+signals already EXIST as computed-but-unfed data — so we wire them:
+- **Net 1 (DONE) — proactive: context-fidelity SHADOW verdict → feed.** The scorer already runs on every
+  reply draft in shadow and knows when it's out of context (wrong_lead_type / over_attached_model /
+  stale_intent / dropped_anchor). That verdict went only to the in-memory decision trace (ephemeral). Now
+  `publishCustomerReplyDraft` PERSISTS a MAJOR would-hold on the conversation (`conv.contextFidelityShadow`),
+  and `auditConversationOutcome` emits `context_fidelity_shadow_unresolved` (comprehension, P2) when no
+  corrective reply followed. Catches the out-of-context class AT DRAFT TIME, before a human sees it.
+  Detection only — the draft still publishes exactly as before. A passing/operator draft clears it; the
+  detector treats a DIFFERENT reply after the flag as resolved. Pinned by `conversation_outcome_audit:eval`.
+- **Net 2 (DONE) — backstop: human edit-corrections → feed.** When staff EDIT the AI draft before sending
+  (`finalizeDraftAsSent` records `originalDraftBody` ≠ sent), the send path fires a fire-and-forget typed
+  LLM diff-judge (`classifyDraftEditWithLLM`, material vs cosmetic — comprehend, not the old regex
+  edit-labeler). A MATERIAL correction (intent / facts / lead-type / context changed, conf ≥ 0.6) is
+  persisted on `conv.humanCorrection`; cosmetic edits (voice/length/formatting) are dropped. The read-only
+  sweep emits `human_correction_material` (comprehension P2, recent ≤ 21d) → parser_fix_candidate (Tier 1,
+  notify). The strongest "the agent was wrong here" signal — a human already corrected it — turned into the
+  loop's parser-fix input. Wired at both successful send sites (email + twilio); never blocks a send. Pinned
+  by `conversation_outcome_audit:eval`. (Follow-on: a material correction the scorer DIDN'T flag is also a
+  signal to add a context-fidelity fixture — Net 2 self-improves Net 1.)
+- **Net 3 (DONE) — unknown-unknowns: open-ended TURN critic (CROSS-MODEL).** `critiqueConversationHandlingWithLLM`
+  reads a recent conversation with NO fixed checklist and decides whether the agent mishandled the lead in
+  ANY way, NAMING the issue class itself (`issue_class` is free-form) — that's how a brand-new gap class
+  surfaces. It judges the agent's **ACTIONS**, not just the reply text: `summarizeTurnActions(conv, todos)`
+  hands the critic the turn's side-effects (the route/classification chosen, the parsed lead fields, the
+  cadence kind, active inventory watches, open tasks, the handoff mode, the appointment), so a wrong
+  parse / watch-for-the-wrong-model / mis-route / wrong-cadence / deflected-booking / missing-task is
+  caught even when the reply reads fine — covering watches, ADF parse, cadence, routing, handoffs,
+  scheduling, and tasks in one critic instead of a per-dimension checklist. (Inventory/policy enrichment —
+  feeding the dealer's stock + rules so it can catch "promised a bike we don't have" — is a clean
+  follow-on.) The critic runs on **Claude (a different model lineage than the OpenAI generator)** by default,
+  because a model is systematically blind to errors rooted in its own understanding — a cross-model judge
+  catches what OpenAI misses. Claude via raw fetch + tool-use (`requestStructuredJsonAnthropic`, no SDK);
+  auto-falls back to OpenAI when `ANTHROPIC_API_KEY` is unset or `LLM_OPEN_CRITIC_PROVIDER=openai`, and on
+  any Claude error (so it's safe to ship before the key lands and a Claude outage never blinds Net 3). The
+  open-critic cron must therefore have `ANTHROPIC_API_KEY` in the env it sources (the runtime api.env).
+  Model: `ANTHROPIC_OPEN_CRITIC_MODEL || ANTHROPIC_MODEL || claude-sonnet-4-6`.
+  `scripts/open_critic_sweep.ts` runs it over RECENT convs (deterministic prefilter: open, ≤ OPEN_CRITIC_
+  WINDOW_DAYS=2 days, has a customer msg + a real reply; capped at OPEN_CRITIC_MAX=40), keeps only CLEAR
+  MAJOR conf≥0.8 findings (`decideOpenCriticAnomaly`), and writes `reports/open_critic/latest.json` in the
+  OutcomeAnomaly shape (category=`discovery`). `anomaly_loop_detect` MERGES that sibling feed; the
+  classifier ALWAYS escalates `discovery` (Tier 2, notify, never auto-merge — the class is unconfirmed).
+  A confirmed discovery then earns a real detector + eval (and, if it's an out-of-context type, a
+  context-fidelity fixture — so Net 3 feeds Nets 1-2). Conservative + capped (the noisiest net). Pinned by
+  `conversation_outcome_audit:eval` + `anomaly_classifier:eval`. Kill: LLM_OPEN_CRITIC_ENABLED=0.
+
+Honest limit: a residual (a novel class the model can't flag AND no human touches) never fully reaches
+zero, but Net 3 shrinks it and each instance permanently teaches the loop instead of relying on Joe.
+
+**Folded standalone detectors (into the one feed).** Beyond the nets, previously-standalone detectors now
+emit into the unified `auditConversationOutcome` feed so the loop sees them too:
+- `task_autoclose_regression` (state, healed) — an open task whose `autoCloseCheck.decision==="closed"` but
+  it's still open (the auto-close decided to close it and the close didn't apply). Deterministic; reads the
+  persisted task verdict.
+- `cadence_quality_suppressed` (comprehension) — a PROACTIVE follow-up message the cadence-quality judge
+  flagged suppress/hold; persisted on `conv.cadenceQualityShadow` at the (shadow) judge call site (Net-1
+  pattern), recency-gated in the detector.
+- `watch_fire_miss` (state; DONE) — a watch that should have fired (matching unit in stock, never
+  notified). Needs the inventory feed, so it folds as a SIBLING sweep (`scripts/watch_fire_miss_sweep.ts`,
+  like open_critic) reading the on-disk `inventory_snapshot.json` + `findWatchFireMisses`, merged by DETECT.
+- **Inventory enrichment for the open critic (DONE)** — the open-critic sweep loads the in-stock model
+  list from `inventory_snapshot.json` and passes it to `critiqueConversationHandlingWithLLM`, so the critic
+  can catch fabricated availability ("promised a unit we don't have"). Empty/missing list ⇒ the critic
+  SKIPS the inventory check (never assumes out-of-stock).
+- **live/regen PARITY — deliberately NOT folded.** Parity is enforced at DEV time by the decision-table
+  evals (every decide*Turn is pinned in both paths) + the shared-pure-function structure; there is no
+  runtime signal to fold, and adding one would mean running both paths or storing a baseline decision per
+  turn (expensive, net-new) for a property the eval net already guarantees. Keep it eval-time.
+
+### Layer 2 — DECIDE: the auto-patch tier contract (graduated)
+For each confirmed, de-duplicated gap the loop routes by tier (the AGENTS.md "Autonomous Self-Healing
+Loop" law is the binding short form; this is the working detail):
+
+- **Tier 0 — deterministic invariant** → already auto-healed by the 60s reconcile tick. The loop only
+  ADDS a new heal (that addition is itself Tier 1).
+- **Tier 1 — SAFE AUTO-PATCH** (eligible for auto-merge+deploy once the category has graduated):
+  - additive parser few-shot / replay fixture — must NOT change an already-accepted case (verified by
+    re-running the parser eval on the prior fixtures: all still pass).
+  - a new reconcile heal whose fail-direction is safe (only ever moves toward contacting / not-closing /
+    repairing an invariant), tightly gated against the engine's hold conditions.
+  - a fail-safe gate-window tightening (e.g. a max-idle bound) that only narrows over-firing.
+  - a behavior-PRESERVING de-tangle extraction/centralization, proven equivalent by ci:eval.
+  - test / eval / doc-only changes.
+  Gate (all required): tsc + `ci:eval` green + a NEW deterministic eval pinning the repro + (parser/reply)
+  a shadow replay over recent live traffic showing no net regression.
+- **Tier 2 — ESCALATE (open a PR + notify Joe), never auto-merge:**
+  new customer-facing behavior, a routing cutover, a new reply class, a flag shadow→enforce flip, ANY
+  change to an already-accepted parser/decision case, or any "what should it say / do" judgment call.
+  **Conservative default: unsure ⇒ Tier 2.** The PR carries the repro + shadow data + before/after.
+- **De-tangle is an optimization constraint, not just a hope:** a patch that would add an inline
+  `parser || regex` precedence gate is Tier 2 by construction; the loop prefers extending a `decide*Turn`
+  reducer or a typed parser. Source-string `assert.match` guards are a smell — prefer a behavioral eval on
+  an extracted pure decision (the 2026-06-25 confirm-booking extraction is the template).
+
+### Graduated-autonomy ladder (how a category EARNS auto-merge)
+Each Tier-1 **category** (e.g. "additive scheduling-parser fixture", "new state-invariant reconcile heal")
+climbs:
+1. **Shadow/PR** — loop writes the patch, runs all gates, opens a PR, notifies. Human merges. (default for
+   a new category.)
+2. **Auto-merge** — after ≥5 consecutive clean human-approved merges in that category with zero
+   post-deploy rollbacks, the loop may auto-merge+deploy that category on a green gate. Track the per-
+   category record in `reports/auto_loop/category_ledger.json`.
+A post-deploy rollback in any category demotes it to step 1. `ci:eval` green is non-negotiable at every step.
+
+### Law compliance — re-read every iteration AND encode it as gates
+Two layers; the second is the real guarantee:
+1. **Mandatory re-read (intent):** every loop iteration MUST re-read `CLAUDE.md` + `AGENTS.md` (and the
+   section nearest the gap) in its PLAN block before proposing a patch — non-skippable. This carries the
+   JUDGMENT rules that can't be unit-tested: the de-tangle direction, the fail-direction test, "prefer a
+   `decide*Turn` reducer/parser over a new inline gate", the tier classification itself. (In supervised
+   sessions a `UserPromptSubmit` hook already injects Rule 0 every turn.)
+2. **Deterministic gates (enforcement):** an LLM can re-read the law and still misjudge, so the load-
+   bearing rules are encoded as checks that run REGARDLESS of what the agent understood, and a violating
+   patch cannot merge: the `twilio_comprehension_debt` ratchet (no new comprehension regex), the
+   `eval_suite_manifest` guard (every behavior change has an eval), the decision-table + parity evals
+   (centralized, both paths), and the non-negotiable `tsc` + `ci:eval`. **The .md is the spec; the gate is
+   the enforcement.**
+   - Hardening backlog (convert prose law → gate, so autonomy doesn't rely on the model obeying prose):
+     extend the comprehension-debt ratchet beyond the twilio handler (orchestrator + sendgrid), a
+     structural lint for "no new inline `parser||regex` precedence gate", a both-paths-parity lint, and a
+     pre-commit check for staged-paths-only + the commit trailer. Each converted rule is itself Tier-1 work.
+
+### Consolidation — one loop, one skill (the endgame)
+The pieces exist but are fragmented: the reconcile tick (Tier 0), the live reply judges (partial Layer 1),
+the nightly comprehension audits, the `agent-watch` skill (Tier-2 PRs), and the closed-loop feedback
+(👎→fix). Unify them: ONE skill owns DETECT(all aspects)→CLASSIFY(tier)→ACT(auto-patch | PR+notify),
+reusing the existing detection audits + the gate. The `agent-watch` and `customer-reply`/feedback skills
+become callers of this contract, not separate policies. Notifications to Joe fire ONLY on Tier 2 (a
+behavioral decision) or a hard-stop halt.

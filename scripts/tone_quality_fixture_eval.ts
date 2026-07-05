@@ -191,6 +191,38 @@ const FIXTURES: Fixture[] = [
     inboundText: "Can I come in Saturday at 9:30?",
     outboundText: "Saturday at 9:30 can work. Want me to lock that in now?",
     expect: { minScore: 85, mustNotIncludeIssues: ["intent_mismatch", "question_not_answered_first"] }
+  },
+  {
+    // "Book test ride" forms auto-populate the structured Trade-In field with
+    // the SAME model the customer wants to ride (Sanjeev Goms, 2026-06-29).
+    // That mirror is a form artifact, not a customer trade ask — the scheduling
+    // reply must NOT be dinged for an unanswered trade.
+    id: "adf_mirrored_tradein_is_not_a_trade_ask",
+    inboundText:
+      "WEB LEAD (ADF) Source: Room58 - Book test ride Ref: 11546 Name: Sanjeev Goms Email: x@x.com Phone: 18610167776 Year: 2026 Vehicle: Harley-Davidson Sportster S Trade-In: Sportster S Inquiry: Test ride request for Sportster S. Preferred date: 29/6/2026. Preferred time: 12 pm.",
+    outboundText:
+      "Hey Sanjeev, it's Alexandra over at American Harley-Davidson. Thanks — I saw you’re interested in a test ride on the 2026 Sportster S. I’m not seeing that exact bike available right now, but I can help pick an in-stock bike to ride.",
+    expect: { mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    // A DISTINCT structured trade vehicle (not a mirror) IS a genuine trade ask
+    // — leaving it unaddressed must still flag.
+    id: "adf_distinct_structured_trade_must_flag",
+    inboundText:
+      "WEB LEAD (ADF) Source: Room58 - Book test ride Ref: 20010 Name: Real Trade Email: x@x.com Phone: 17160000000 Year: 2026 Vehicle: Harley-Davidson Road Glide Trade-In: 2019 Indian Chief Inquiry: Test ride request for Road Glide. Preferred date: 7/1/2026.",
+    outboundText:
+      "Hey there, it's Alexandra over at American Harley-Davidson. Thanks — I saw you’re interested in a test ride on the 2026 Road Glide. I can help line that up.",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    // Trade language in the inquiry BODY (Dante Turello, 2026-06-29) is a real
+    // trade ask even with no structured Trade-In field — must still flag.
+    id: "adf_body_stated_trade_must_flag",
+    inboundText:
+      "WEB LEAD (ADF) Source: Room58 Ref: 11549 Name: Dante Turello Email: x@x.com Phone: 17169085899 Stock: U588-23 Year: 2023 Vehicle: Harley-Davidson Low Rider S Inquiry: Checking on the price, have a 2022 Suzuki gsx-s750 I'd be looking to trade in as well.",
+    outboundText:
+      "Hey Dante, it's Alexandra over at American Harley-Davidson. I’ll have our team confirm the out-the-door number on the 2023 Low Rider S and follow up with exact numbers.",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
   }
 ];
 

@@ -16,10 +16,15 @@ const {
   buildCustomerPhotoShareTodoSummary,
   buildCustomerVehiclePhotoShareReply,
   buildIdentifiedPhotoShareReply,
+  buildNonMotorcyclePhotoShareReply,
+  sanitizeSocialPhotoReply,
   detectCustomerVehiclePhotoShareText,
   findNearestInboundImageUrls,
   isSalesPhotoShareContext,
   isSalesPhotoShareConversation,
+  isTradePhotoShareConversation,
+  buildTradePhotoShareReply,
+  buildTradePhotoShareTodoSummary,
   resolveUploadLocalPath,
   shouldUseVisionIdentification,
   visionFamilyCandidates
@@ -235,5 +240,111 @@ assert.match(
   /Here is a photo of the HD I like\./,
   "parser few-shots must include the Mustafa production fixture"
 );
+
+// Non-motorcycle photo: NEVER claim to match it against inventory; respond like a human.
+// (a) True chatter — vision composed a warm one-liner ("Haha, nice catch!") -> reciprocate it.
+const chatterReply = buildNonMotorcyclePhotoShareReply("Bobby", "Haha, nice catch!");
+assert.match(chatterReply, /nice catch/i, "a friendly fish/pet photo gets the warm vision ack, not a sales pivot");
+// (b) Document / unclear image — no safe social line -> a neutral acknowledgement (not gushing, not sales).
+const neutralReply = buildNonMotorcyclePhotoShareReply("Bobby");
+assert.match(neutralReply, /Bobby/, "neutral non-motorcycle reply greets by name");
+assert.match(neutralReply, /thanks for sending/i, "neutral reply just acknowledges");
+// (c) The guard drops a vision line that pivots to sales/bikes or asks a question.
+assert.equal(sanitizeSocialPhotoReply("Haha, nice catch!"), "Haha, nice catch!", "a clean social ack passes");
+assert.equal(sanitizeSocialPhotoReply("Let me match it against what we've got in stock"), "", "sales pivot is dropped");
+assert.equal(sanitizeSocialPhotoReply("Is that a bike you're interested in?"), "", "a bike question is dropped");
+assert.equal(sanitizeSocialPhotoReply(""), "", "empty stays empty");
+assert.equal(
+  buildNonMotorcyclePhotoShareReply("Bobby", "Let me match it against stock"),
+  "Thanks for sending that over, Bobby!",
+  "an unsafe vision line falls back to the neutral acknowledgement"
+);
+// No non-motorcycle reply ever claims to match inventory.
+for (const reply of [chatterReply, neutralReply]) {
+  for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i]) {
+    assert.ok(!banned.test(reply), `non-motorcycle reply must not claim to match inventory (${banned})`);
+  }
+}
+
+// Source guard: the vision flow diverts an is_motorcycle=false image away from the bike-match
+// reply (only on an explicit false — fail-safe), passing the vision social line through.
+const photoShareSource = await fs.readFile(
+  path.resolve("services/api/src/domain/customerPhotoShare.ts"),
+  "utf8"
+);
+assert.match(
+  photoShareSource,
+  /description\.isMotorcycle === false[\s\S]{0,260}buildNonMotorcyclePhotoShareReply\(args\.firstName, description\.socialReply\)/,
+  "buildPhotoShareReplyWithVision must divert an is_motorcycle=false image to the social/neutral reply with the vision line"
+);
+
+// --- Trade-in photo framing (Jessica Ornce +17167134728, 2026-06-23). ---
+// A photo in a TRADE conversation is the customer's trade unit to appraise, not a bike to match
+// against our stock. Each of these signals (any one) must flip the conversation to the trade frame.
+for (const tradeConv of [
+  { classification: { bucket: "trade_in_sell", cta: "value_my_trade" } }, // Jessica's exact shape
+  { classification: { cta: "sell_my_bike" } },
+  { followUp: { reason: "non_motorcycle_trade" } },
+  { dialogState: { name: "trade_init" } },
+  { lead: { source: "Trade Accelerator - Trade In" } }
+]) {
+  assert.equal(
+    isTradePhotoShareConversation(tradeConv as any),
+    true,
+    `trade signal must flip to the trade frame: ${JSON.stringify(tradeConv)}`
+  );
+}
+// A buyer sharing a bike they like is NOT a trade — keep the inventory-match path.
+assert.equal(
+  isTradePhotoShareConversation({ dialogState: { name: "small_talk" }, classification: { bucket: "inventory_interest" } } as any),
+  false,
+  "a buyer photo-share must stay on the inventory-match path"
+);
+assert.equal(isTradePhotoShareConversation({} as any), false, "no trade signal = not a trade frame");
+assert.equal(
+  isTradePhotoShareConversation({ lead: { source: "Trade Show Booth" } } as any),
+  false,
+  "a 'Trade Show' lead is not a trade-IN — must not flip to the trade frame"
+);
+
+// Trade reply: warm, routes to the appraiser, and NEVER pivots to an inventory match or a number.
+const tradeReply = buildTradePhotoShareReply("Jessica");
+assert.match(tradeReply, /Thanks for sending those over, Jessica!/);
+assert.match(tradeReply, /appraiser/i, "trade reply routes to appraisal");
+{
+  const violations = checkMessage(tradeReply, { firstOutbound: false, smsLike: true, staffHasSent: false });
+  assert.deepEqual(violations, [], `trade reply must be charter-clean: "${tradeReply}"`);
+}
+for (const banned of [/match it against/i, /in stock/i, /coming in/i, /what we'?ve got/i, /\$\d/]) {
+  assert.ok(!banned.test(tradeReply), `trade reply must not pivot to inventory/price (${banned})`);
+}
+
+// Trade todo: appraisal handoff, not "reply with matching in-stock units"; vision hint is optional.
+const tradeTodoBare = buildTradePhotoShareTodoSummary({ firstName: "Jessica" });
+assert.match(tradeTodoBare, /^Jessica sent photo\(s\) of their trade-in/);
+assert.match(tradeTodoBare, /appraiser/i);
+assert.ok(!/matching in-stock|in-stock or incoming units/i.test(tradeTodoBare), "trade todo must not say to match inventory");
+const tradeTodoHint = buildTradePhotoShareTodoSummary({ firstName: "Jessica", visionHint: "a black motorcycle (spoke wheels)" });
+assert.match(tradeTodoHint, /Vision \(unconfirmed\): a black motorcycle \(spoke wheels\)\./);
+
+// Source guards: the vision flow diverts a trade conversation, and none of the 3 convergence
+// points set the inventory dialog/agent context for a trade-in photo.
+assert.match(
+  photoShareSource,
+  /isTradePhotoShareConversation\(args\.conv as any\)[\s\S]{0,120}buildTradePhotoShareResult/,
+  "buildPhotoShareReplyWithVision must divert a trade conversation to the trade frame"
+);
+assert.equal(
+  (apiSource.match(/isTradePhotoShareConversation\(/g) ?? []).length >= 3,
+  true,
+  "all 3 photo-share convergence points must gate inventory framing on the trade check"
+);
+for (const guard of [
+  /tradePhotoContext = isTradePhotoShareConversation\(args\.conv\)[\s\S]{0,160}if \(!tradePhotoContext\) \{[\s\S]{0,140}setDialogState\(args\.conv, "inventory_init"\)/,
+  /regenTradePhotoContext = isTradePhotoShareConversation\(conv\)[\s\S]{0,160}if \(!regenTradePhotoContext\) \{[\s\S]{0,140}setDialogState\(conv, "inventory_init"\)/,
+  /liveTradePhotoContext = isTradePhotoShareConversation\(conv\)[\s\S]{0,160}if \(!liveTradePhotoContext\) \{[\s\S]{0,140}setDialogState\(conv, "inventory_init"\)/
+]) {
+  assert.match(apiSource, guard, `a trade-in photo must not set the inventory dialog/agent context (${guard})`);
+}
 
 console.log("PASS customer photo share eval");

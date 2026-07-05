@@ -6,6 +6,7 @@ import {
   dueBucketFor,
   dueBucketLabel,
   dueBucketRank,
+  parseSaneTaskDateMs,
   relativeDueLabel,
   taskEffectiveDueMs
 } from "../lib/taskTriage";
@@ -83,8 +84,10 @@ function formatWhenIso(iso: string, withWeekday = false): string {
 }
 
 function daysAgoLabel(iso: string, nowMs: number): string | null {
-  const ms = new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms >= nowMs) return null;
+  // parseSaneTaskDateMs guards V8's year-less parse quirk ("Thu, Jul 2, 9:00 AM" → year 2001),
+  // which rendered a fresh call reminder as "9130 days ago" (Henry Cole, 2026-07-01).
+  const ms = parseSaneTaskDateMs(iso, nowMs);
+  if (ms == null || ms >= nowMs) return null;
   const days = Math.floor((nowMs - ms) / 86_400_000);
   if (days <= 0) return "earlier today";
   return days === 1 ? "yesterday" : `${days} days ago`;
@@ -389,7 +392,7 @@ export function TaskInboxSection(props: any) {
                             ? "Due"
                             : "Created";
                     const requestedCallPretty =
-                      requestedCallTime && Number.isFinite(new Date(requestedCallTime).getTime())
+                      requestedCallTime && parseSaneTaskDateMs(requestedCallTime, nowMs) != null
                         ? formatWhenIso(requestedCallTime, true)
                         : requestedCallTime;
                     const whenValue =
@@ -588,6 +591,21 @@ export function TaskInboxSection(props: any) {
                             <div className="lr-task-card-box-value">{actionDisplay}</div>
                           </div>
                         </div>
+                        {t.autoCloseCheck && t.autoCloseCheck.decision !== "closed" ? (
+                          <div
+                            className="lr-task-autoclose-check"
+                            title="Why this task hasn't auto-closed yet"
+                          >
+                            <span aria-hidden className="inline-flex">
+                              <SideNavIcon name="bolt" className="w-3 h-3" />
+                            </span>
+                            Auto-close: held
+                            {typeof t.autoCloseCheck.confidence === "number"
+                              ? ` · ${Math.round(t.autoCloseCheck.confidence * 100)}%`
+                              : ""}
+                            {t.autoCloseCheck.evidence ? ` — ${t.autoCloseCheck.evidence}` : ""}
+                          </div>
+                        ) : null}
                         {!summaryDuplicatesAction || showRequestedCallTime || appointmentOutcomeLabel ? (
                           <div className="lr-task-card-summary">
                             <div className="flex items-center justify-between gap-2">

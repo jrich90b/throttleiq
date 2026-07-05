@@ -4,8 +4,10 @@ import { dataPath } from "./dataDir.js";
 
 export type OpsAnomalyType =
   | "routing"
-  | "task_inbox"
   | "cadence"
+  | "appointment"
+  | "task_inbox"
+  | "handoff"
   | "inventory"
   | "integration"
   | "ui"
