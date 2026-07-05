@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import os from "node:os";
 import * as path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 
 /**
  * Task snooze eval — staff "I'll deal with it later" pushes a task's due time
@@ -68,5 +68,8 @@ assert.equal(
   "unknown todo id returns null"
 );
 
-await fs.rm(tmpDir, { recursive: true, force: true });
+// rmSync (not async fs.rm): a synchronous remove can't yield the event loop
+// mid-delete, so the conversation store's pending async flush can't re-write
+// conversations.json between the unlink and rmdir and race us to ENOTEMPTY.
+rmSync(tmpDir, { recursive: true, force: true });
 console.log("task_snooze:eval ok");
