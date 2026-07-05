@@ -804,6 +804,11 @@ import {
   parseBusinessMinutes,
   resolveEscalationCandidates
 } from "./domain/taskEscalation.js";
+import {
+  buildGateBlockerDigestMessage,
+  collectGateBlockers,
+  shouldSendGateBlockerDigest
+} from "./domain/gateBlockerDigest.js";
 import { logTuningRow } from "./domain/tuningLogger.js";
 import {
   addSuppression,
@@ -6202,7 +6207,8 @@ const WORKER_TICK_DISPATCH: Record<WorkerTickTask, () => Promise<unknown> | unkn
   "appt-questions": () => processAppointmentQuestions(),
   "inventory-watch": () => processInventoryWatchlist(),
   "inventory-holds": () => processInventoryHolds(),
-  "task-escalations": () => processTaskEscalations()
+  "task-escalations": () => processTaskEscalations(),
+  "gate-blocker-digest": () => processGateBlockerDigest()
 };
 
 function canUseWorkerInternal(req: any) {
@@ -6250,6 +6256,7 @@ if (isWorkerDrivenTicks()) {
     runBackgroundTask("staff-appt-notify", processStaffAppointmentNotifications);
     runBackgroundTask("appt-questions", processAppointmentQuestions);
     runBackgroundTask("task-escalations", processTaskEscalations);
+    runBackgroundTask("gate-blocker-digest", processGateBlockerDigest);
   }, 60_000);
 
   setTimeout(() => {
@@ -16675,6 +16682,62 @@ async function processTaskEscalations() {
     count: candidates.length,
     thresholdMinutes,
     convIds: candidates.map(c => c.todo.convId)
+  });
+}
+
+let lastGateBlockerDigestDayKey: string | null = null;
+
+/**
+ * End-of-day clean-day blocker digest (Joe, 2026-07-05): once daily at/after
+ * 17:00 dealership time (while still open), text the manager exactly which
+ * pending drafts / unrecorded appointment outcomes will grade TODAY as DIRTY
+ * on the dealer-rollout release gate — the same-day checklist version of the
+ * two staff-process metrics that block the 7-clean-day streak. Decision logic
+ * in domain/gateBlockerDigest.ts (mirrors agent_actions_audit windows).
+ * Internal staff SMS only — never a customer send. Kill switch:
+ * GATE_BLOCKER_DIGEST_ENABLED=0. Send hour: GATE_BLOCKER_DIGEST_HOUR (default 17).
+ */
+async function processGateBlockerDigest() {
+  if (String(process.env.GATE_BLOCKER_DIGEST_ENABLED ?? "1").trim() !== "1") return;
+  const nowMs = Date.now();
+  const cfg = await getSchedulerConfigHot();
+  const tz = cfg.timezone || "America/New_York";
+  const now = new Date(nowMs);
+  const dayKey = now.toLocaleDateString("en-US", { weekday: "long", timeZone: tz }).toLowerCase();
+  const parts = getLocalDateParts(now, tz);
+  const todayKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+  if (lastGateBlockerDigestDayKey === todayKey) return;
+  const dayHours = (cfg.businessHours as any)?.[dayKey] ?? null;
+  const sendHour = Number(process.env.GATE_BLOCKER_DIGEST_HOUR ?? 17);
+  const report = collectGateBlockers(getAllConversations() as any[], nowMs);
+  const send = shouldSendGateBlockerDigest({
+    gateDirty: report.gateDirty,
+    minutesSinceMidnight: (parts.hour % 24) * 60 + parts.minute,
+    closeMinutes: parseBusinessMinutes(dayHours?.close),
+    sendAtMinutes: Number.isFinite(sendHour) ? sendHour * 60 : undefined,
+    todayKey,
+    lastSentDayKey: lastGateBlockerDigestDayKey
+  });
+  if (!send) return;
+  let phone = normalizePhone(
+    String(
+      process.env.GATE_BLOCKER_DIGEST_NOTIFY_PHONE ?? process.env.TASK_ESCALATION_NOTIFY_PHONE ?? ""
+    ).trim()
+  );
+  if (!phone) {
+    const users = await listUsers();
+    const manager = users.find(u => u.role === "manager" && pickUserSmsPhone(u));
+    phone = manager ? pickUserSmsPhone(manager) : "";
+  }
+  if (!phone) return;
+  const message = buildGateBlockerDigestMessage(report);
+  const sent = await sendInternalSms(phone, message);
+  if (!sent) return;
+  lastGateBlockerDigestDayKey = todayKey;
+  recordRouteOutcome("live", "gate_blocker_digest_sent", {
+    drafts: report.drafts.length,
+    outcomes: report.outcomes.length,
+    convIds: [...report.drafts, ...report.outcomes].map(b => b.convId)
   });
 }
 

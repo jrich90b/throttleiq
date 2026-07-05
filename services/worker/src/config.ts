@@ -23,7 +23,7 @@ export const WORKER_SCHEDULES: WorkerSchedule[] = [
   {
     queue: "tick-followups",
     cron: "* * * * *",
-    tasks: ["follow-ups", "appt-confirm", "staff-appt-notify", "appt-questions", "task-escalations"],
+    tasks: ["follow-ups", "appt-confirm", "staff-appt-notify", "appt-questions", "task-escalations", "gate-blocker-digest"],
     requestTimeoutMs: 5 * 60_000
   },
   {
