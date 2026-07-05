@@ -54499,7 +54499,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null,
     dealerProfile,
-    agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke")
+    agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke"),
+    needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null
   });
 
   if (!result?.draft || result.shouldRespond === false) {
@@ -63808,7 +63809,8 @@ if (authToken && signature) {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null,
     dealerProfile: weatherProfile,
-    agentNameOverride: resolveConversationAgentName(conv, weatherProfile?.agentName ?? "Brooke")
+    agentNameOverride: resolveConversationAgentName(conv, weatherProfile?.agentName ?? "Brooke"),
+    needsEmpathy: acceptedAffect?.needsEmpathy ?? null
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {
     turnPrimaryIntent: routeExecutionIntent
