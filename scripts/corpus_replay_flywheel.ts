@@ -169,8 +169,13 @@ export function isAcceptedClarify(row: ReplayRow, judge: IntentVerdict | null | 
   if (!judge || judge.addressed) return false;
   const draft = String(row.draft ?? "");
   const asksOneQuestion = (draft.match(/\?/g) ?? []).length >= 1 && draft.length < 260;
-  const judgeSaysClarify = /clarif/i.test(String(judge.why ?? ""));
-  return asksOneQuestion && judgeSaysClarify;
+  // Keyed on the DRAFT's clarify shape, not the judge's phrasing (a re-rolled verdict that says
+  // "asked which bike" instead of "clarifying question" was flipping this turn sweep-to-sweep).
+  const clarifyShape =
+    /\b(which (?:bike|model|one|unit)|do you mean|are you (?:looking|referring|asking)|what (?:bike|model|year)|a specific)\b/i.test(
+      draft
+    ) || /clarif/i.test(String(judge.why ?? ""));
+  return asksOneQuestion && clarifyShape;
 }
 
 // Finance-policy BY DESIGN: no fabricated rates/payments — the credit-app path or a
@@ -505,27 +510,29 @@ async function main() {
     }
     if (Number.isFinite(last)) lastInboundAt.set(convId, last);
   }
-  const lastOutboundAt = new Map<string, number>();
+  const outboundAtByConv = new Map<string, number[]>();
   for (const [convId, msgs] of contextByConv) {
-    let last = NaN;
+    const outs: number[] = [];
     for (const m of msgs) {
       if ((m as any)?.direction !== "out") continue;
       const t = Date.parse(String(m?.at ?? ""));
-      if (Number.isFinite(t) && (!Number.isFinite(last) || t > last)) last = t;
+      if (Number.isFinite(t)) outs.push(t);
     }
-    if (Number.isFinite(last)) lastOutboundAt.set(convId, last);
+    outboundAtByConv.set(convId, outs);
   }
   const isAnachronistic = (row: ReplayRow): boolean => {
     const rowAt = Date.parse(String(row.messageAt ?? ""));
     if (!Number.isFinite(rowAt)) return false; // can't prove → score it
     const lastIn = lastInboundAt.get(String(row.conversationId ?? ""));
     if (Number.isFinite(lastIn) && rowAt < (lastIn as number) - 1000) return true;
-    // The conversation materially moved PAST this turn (staff answered days later, deal advanced —
-    // Peter Massaro "forty eight": live-June-16 answered correctly, but the replay ran against
-    // July state where the price was long since sent). An outbound >24h after the turn means the
-    // snapshot state no longer resembles the turn-time state.
-    const lastOut = lastOutboundAt.get(String(row.conversationId ?? ""));
-    if (Number.isFinite(lastOut) && (lastOut as number) - rowAt > 24 * 60 * 60 * 1000) return true;
+    // The conversation materially moved PAST this turn only when a real staff BACK-AND-FORTH
+    // followed it (Peter Massaro "forty eight": price sent + follow-ups within days — replaying
+    // against July state is unfair). TWO OR MORE outbounds within 7 days of the turn = the deal
+    // advanced; a LONE outbound after it is a cadence drip and the turn is still fair to score
+    // (the 24h single-outbound rule over-excluded 302 of 617 fair turns — every cadence tail).
+    const outs = outboundAtByConv.get(String(row.conversationId ?? "")) ?? [];
+    const withinWeek = outs.filter(t => t > rowAt + 1000 && t - rowAt <= 7 * 24 * 60 * 60 * 1000);
+    if (withinWeek.length >= 2) return true;
     return false;
   };
   const adjustedAll = rows.map(row => {
