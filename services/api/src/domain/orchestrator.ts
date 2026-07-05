@@ -823,6 +823,9 @@ function buildMonthlyPaymentLine(opts: {
   const round10 = (v: number) => Math.round(v / 10) * 10;
   const payLow = nf.format(round10(low));
   const payHigh = nf.format(round10(high));
+  // Degenerate band: low/high can round into the same $10 bucket and render
+  // "$250–$250/mo" (Ryan Tower +15857278545, LEA-238) — collapse to one number.
+  const payLabel = payLow === payHigh ? payLow : `${payLow}–${payHigh}`;
   const priceLabel =
     opts.priceMin === opts.priceMax
       ? nf.format(opts.priceMin)
@@ -834,7 +837,7 @@ function buildMonthlyPaymentLine(opts: {
 
   return (
     `Ballpark, on about ${priceLabel}, ${downLabel}` +
-    `you’re around ${payLow}–${payHigh}/mo at ${opts.termMonths} months ` +
+    `you’re around ${payLabel}/mo at ${opts.termMonths} months ` +
     `before taxes and fees, based on your APR.`
   );
 }

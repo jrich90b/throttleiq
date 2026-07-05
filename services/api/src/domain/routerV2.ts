@@ -19,6 +19,7 @@ export {
   decideServiceAppointmentTurn,
   decideWatchOptOutTurn,
   decideWatchScopeTurn,
+  decideLeadUnitAvailabilityDisclosure,
   decideSchedulingTurn,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
