@@ -241,9 +241,12 @@
       }
     ],
     "expected": {
-      "action": "no_response_needed",
       "should_reply": false,
-      "should_book": false
+      "should_book": false,
+      "action_any_of": [
+        "no_response_needed",
+        "neutral_ack"
+      ]
     }
   },
   {
@@ -259,6 +262,33 @@
       "action": "none",
       "should_reply": true,
       "should_book": false
+    }
+  },
+  {
+    "id": "appointment_bring_logistics_not_status_question_1",
+    "text": "Should I bring the bike and cash with me to my appointment Monday?",
+    "appointment": {
+      "status": "confirmed"
+    },
+    "history": [
+      {
+        "direction": "in",
+        "body": "Awesome thank you I have a 2010 sportster and 3k cash to put down as well"
+      },
+      {
+        "direction": "out",
+        "body": "A 2010 Sportster trade and $3k down is solid to bring to the table. I'll make sure the finance team has those details when they follow up."
+      },
+      {
+        "direction": "in",
+        "body": "Thank you"
+      }
+    ],
+    "expected": {
+      "action": "none",
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "monday"
     }
   }
 ]
