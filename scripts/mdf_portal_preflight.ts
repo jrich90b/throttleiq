@@ -110,3 +110,77 @@ export function marketingActivityOptionIssue(
 export function ansiraMarketingOptionSummary(detail: string): string {
   return preflightFailureSummary(detail);
 }
+
+// ---------------------------------------------------------------------------
+// CDP browser-health preflight (runs before chromium.connectOverCDP).
+//
+// Production failure 2026-07-06 (task agent_mr9o31de_1i5y8h): the runner Chrome's
+// CDP endpoint answered HTTP instantly, but `connectOverCDP` hung 30s and died with
+// a generic "Timeout 30000ms exceeded". Root cause: the dedicated runner Chrome had
+// drifted into daily-browsing use — 119 debug targets (35 tabs + 64 iframes +
+// workers, incl. chrome:// pages) — and Playwright attaches to EVERY target on
+// connect, so one hung tab stalls the whole attach. The generic timeout told the
+// operator nothing; the fix (restart the runner Chrome) took a live debugging
+// session to find. These helpers classify the failure up front so the blocked-task
+// summary says exactly which of the known causes hit and what to do about it.
+// Browser-free + pure on purpose (same rule as the form preflight above): the eval
+// imports this module, never the runner.
+// ---------------------------------------------------------------------------
+
+export type CdpTargetStats = {
+  /** CDP HTTP endpoint (`/json`) answered. False = Chrome down / no debug port. */
+  reachable: boolean;
+  /** Count of `type === "page"` targets (tabs). */
+  pages?: number;
+  /** Total debug targets (tabs + iframes + workers + …) — what attach must walk. */
+  targets?: number;
+  /** `chrome://` pages open (sync prompts etc. — common hung-target culprits). */
+  chromePages?: number;
+  /** Probe error text when unreachable. */
+  error?: string;
+};
+
+// Healthy runner Chrome ≈ 14 targets / 2 tabs; the 2026-07-06 hang had 119 / 35.
+// Thresholds sit far above healthy and safely below the observed failure, so the
+// classifier neither cries wolf on a normal session nor shrugs at a real pile-up.
+export const CDP_BLOAT_PAGE_LIMIT = 15;
+export const CDP_BLOAT_TARGET_LIMIT = 60;
+
+/** True when the target pile-up is big enough to explain a hung CDP attach. */
+export function cdpLooksBloated(stats: CdpTargetStats): boolean {
+  return (stats.pages ?? 0) > CDP_BLOAT_PAGE_LIMIT || (stats.targets ?? 0) > CDP_BLOAT_TARGET_LIMIT;
+}
+
+const RUNNER_CHROME_RESTART_HINT =
+  "Restart the runner Chrome (launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome) and keep that window for portal work only, then run the portal draft again.";
+
+/**
+ * Classified, operator-actionable summary for a CDP connect failure. Wording is
+ * load-bearing: it must keep matching the mdf-portal-health detector's
+ * LOAD_FAILURE_RE ("not reachable" / "timed out" / "failed to load" classes) so a
+ * blocked run still surfaces in the anomaly feed — pinned by the eval.
+ */
+export function cdpConnectFailureSummary(stats: CdpTargetStats, attachError?: string): string {
+  if (!stats.reachable) {
+    return (
+      "The MDF runner's Chrome is not reachable at its CDP debug port — the runner Chrome is down (or was started without remote debugging). " +
+      RUNNER_CHROME_RESTART_HINT +
+      (stats.error ? ` Probe error: ${stats.error}` : "")
+    );
+  }
+  if (cdpLooksBloated(stats)) {
+    const chromePages = stats.chromePages ?? 0;
+    return (
+      `The MDF runner's Chrome is unhealthy: the CDP attach timed out with ${stats.targets ?? "?"} debug targets across ` +
+      `${stats.pages ?? "?"} tabs${chromePages ? ` (${chromePages} chrome:// page${chromePages === 1 ? "" : "s"})` : ""} — ` +
+      "the dedicated runner Chrome has drifted into daily-browsing use, and one hung tab stalls Playwright's attach to every target. " +
+      RUNNER_CHROME_RESTART_HINT +
+      (attachError ? ` Original error: ${attachError}` : "")
+    );
+  }
+  return (
+    "The MDF runner could not attach to its Chrome over CDP (the attach timed out even though the debug port answered). " +
+    RUNNER_CHROME_RESTART_HINT +
+    (attachError ? ` Original error: ${attachError}` : "")
+  );
+}

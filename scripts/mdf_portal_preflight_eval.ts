@@ -15,10 +15,14 @@ import {
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
+  cdpConnectFailureSummary,
+  cdpLooksBloated,
   findMissingFormControls,
   formatMissingControls,
   marketingActivityOptionIssue
 } from "./mdf_portal_preflight.ts";
+
+const { findMdfPortalFailures } = await import("../services/api/src/domain/mdfPortalHealth.ts");
 
 // 1) The guard must cover the controls the filler actually reads/writes — including
 //    the Save button, the only persistence point, whose absence is the worst case.
@@ -115,5 +119,66 @@ const optionSummary = ansiraMarketingOptionSummary(rollover!);
 assert.ok(/no draft was created/i.test(optionSummary), "option summary states no draft was created");
 assert.ok(/ansira/i.test(optionSummary), "option summary points at Ansira");
 assert.ok(optionSummary.includes("2026 Media Claim"), "option summary carries the detail");
+
+// ---------------------------------------------------------------------------
+// 9) CDP browser-health classification — pins the 2026-07-06 production failure
+//    (task agent_mr9o31de_1i5y8h): connectOverCDP died with a generic "Timeout
+//    30000ms exceeded" because the dedicated runner Chrome had drifted into
+//    daily-browsing use (119 debug targets / 35 tabs, incl. chrome:// pages) and
+//    one hung target stalled Playwright's attach. The classifier must (a) not cry
+//    wolf on a healthy session, (b) name the pile-up + the restart fix on the
+//    observed failure shape, (c) classify a down Chrome distinctly, and (d) keep
+//    every summary detectable by the mdf-portal-health anomaly feed.
+// ---------------------------------------------------------------------------
+
+// (a) The healthy post-restart shape (observed 2026-07-06: 14 targets / 2 tabs) is not bloated.
+assert.equal(cdpLooksBloated({ reachable: true, targets: 14, pages: 2, chromePages: 0 }), false, "healthy runner Chrome is not classified bloated");
+
+// (b) THE production failure shape: bloated, and the summary names the counts, the
+//     drift cause, and the exact restart command — the operator's whole fix.
+const bloatedStats = { reachable: true, targets: 119, pages: 35, chromePages: 2 };
+assert.equal(cdpLooksBloated(bloatedStats), true, "the 2026-07-06 target pile-up is classified bloated");
+const bloatedSummary = cdpConnectFailureSummary(bloatedStats, "browserType.connectOverCDP: Timeout 30000ms exceeded.");
+assert.ok(bloatedSummary.includes("119 debug targets"), "bloated summary names the target count");
+assert.ok(bloatedSummary.includes("35 tabs"), "bloated summary names the tab count");
+assert.ok(/daily-browsing/i.test(bloatedSummary), "bloated summary names the drift cause");
+assert.ok(bloatedSummary.includes("launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome"), "bloated summary carries the restart command");
+assert.ok(bloatedSummary.includes("Timeout 30000ms exceeded"), "bloated summary preserves the original error");
+
+// (c) Chrome down / no debug port → a distinct "not reachable" class with the same fix.
+const downSummary = cdpConnectFailureSummary({ reachable: false, error: "fetch failed" });
+assert.ok(/not reachable/i.test(downSummary), "down-Chrome summary says the port is not reachable");
+assert.ok(downSummary.includes("launchctl kickstart"), "down-Chrome summary carries the restart command");
+
+// A non-bloated attach failure (the unknown-cause residue) still gets the restart
+// runbook rather than a bare stack trace.
+const otherSummary = cdpConnectFailureSummary({ reachable: true, targets: 14, pages: 2 }, "kaboom");
+assert.ok(/timed out/i.test(otherSummary), "non-bloated failure is described as a timed-out attach");
+assert.ok(otherSummary.includes("launchctl kickstart"), "non-bloated failure carries the restart command");
+assert.ok(otherSummary.includes("kaboom"), "non-bloated failure preserves the original error");
+
+// (d) CONSOLE-PARITY with the anomaly feed: every classified summary — wrapped the
+//     way the runner's catch block wraps it into the blocked task — must still trip
+//     the mdf-portal-health detector (LOAD_FAILURE_RE), or classification would
+//     silently drop these runs from the daily review.
+for (const [label, summary] of [
+  ["bloated", bloatedSummary],
+  ["down", downSummary],
+  ["other", otherSummary]
+] as const) {
+  const flagged = findMdfPortalFailures({
+    tasks: [
+      {
+        id: `eval_${label}`,
+        kind: "mdf_portal",
+        status: "needs_approval",
+        updatedAt: new Date().toISOString(),
+        output: { summary: `Automatic MDF portal runner failed before completion: ${summary}` }
+      }
+    ] as any
+  });
+  assert.equal(flagged.length, 1, `${label} classified summary is still detected by mdf-portal-health`);
+  assert.equal(flagged[0].dimension, "mdf_assistant_failure", `${label} summary maps to mdf_assistant_failure`);
+}
 
 console.log("PASS mdf portal preflight eval");

@@ -10,8 +10,10 @@ import {
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
+  cdpConnectFailureSummary,
   findMissingFormControls,
-  marketingActivityOptionIssue
+  marketingActivityOptionIssue,
+  type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
 
 type AgentTaskStatus = "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
@@ -1320,10 +1322,50 @@ async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions)
   return { page, blocker: null };
 }
 
+/**
+ * Best-effort CDP target census via the debug port's HTTP endpoint (fast — answers
+ * even when the websocket attach would hang). Feeds cdpConnectFailureSummary so a
+ * connect failure is classified (Chrome down vs tab-bloated vs other) instead of
+ * dying with Playwright's generic "Timeout 30000ms exceeded" (2026-07-06,
+ * agent_mr9o31de_1i5y8h: 119 targets from daily-browsing drift hung the attach).
+ */
+async function fetchCdpTargetStats(cdpUrl: string): Promise<CdpTargetStats> {
+  try {
+    const res = await fetch(new URL("/json", cdpUrl), { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return { reachable: false, error: `CDP /json HTTP ${res.status}` };
+    const targets = (await res.json()) as Array<{ type?: string; url?: string }>;
+    return {
+      reachable: true,
+      targets: targets.length,
+      pages: targets.filter(t => t?.type === "page").length,
+      chromePages: targets.filter(t => t?.type === "page" && String(t?.url ?? "").startsWith("chrome://")).length
+    };
+  } catch (err: any) {
+    return { reachable: false, error: String(err?.message ?? err) };
+  }
+}
+
+/**
+ * connectOverCDP with a classified failure path. Unreachable endpoint fails fast
+ * (the attach could never succeed); otherwise the attach is always ATTEMPTED — the
+ * census only enriches the error, never pre-empts a connect that might work (the
+ * fail-safe direction: a false "unhealthy" verdict would send a human to do manual
+ * portal work needlessly).
+ */
+async function connectRunnerBrowser(cdpUrl: string): Promise<import("playwright").Browser> {
+  const stats = await fetchCdpTargetStats(cdpUrl);
+  if (!stats.reachable) throw new Error(cdpConnectFailureSummary(stats));
+  const { chromium } = await import("playwright");
+  try {
+    return await chromium.connectOverCDP(cdpUrl);
+  } catch (err: any) {
+    throw new Error(cdpConnectFailureSummary(stats, String(err?.message ?? err).split("\n")[0]));
+  }
+}
+
 async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
   if (!options.cdpUrl) return { code: 2, summary: "H-DNet login opener needs MDF_PORTAL_CDP_URL for the runner browser." };
-  const { chromium } = await import("playwright");
-  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const browser = await connectRunnerBrowser(options.cdpUrl);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   const page =
     context
@@ -1381,8 +1423,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     };
   }
 
-  const { chromium } = await import("playwright");
-  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const browser = await connectRunnerBrowser(options.cdpUrl);
   let page =
     browser
       .contexts()
