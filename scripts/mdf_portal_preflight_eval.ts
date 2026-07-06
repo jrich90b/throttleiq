@@ -20,6 +20,8 @@ import {
   findMissingFormControls,
   formatMissingControls,
   marketingActivityOptionIssue,
+  missingActivityDatesSummary,
+  portalFormDidNotExpandSummary,
   portalRunDeadlineSummary
 } from "./mdf_portal_preflight.ts";
 
@@ -169,6 +171,47 @@ const deadlineSummary = portalRunDeadlineSummary(10);
 assert.ok(/timed out after 10 minutes/i.test(deadlineSummary), "deadline summary states the run timed out and after how long");
 assert.ok(deadlineSummary.includes("launchctl kickstart"), "deadline summary carries the restart command");
 assert.ok(/claims list/i.test(deadlineSummary) && /duplicate/i.test(deadlineSummary), "deadline summary tells the operator to verify the claims list against a duplicate draft");
+
+// (c3) Activity-dates + expansion gates — pins the 2026-07-06 Promotional-apparel
+//      blocker (task agent_mr9qnn3k_96w3kv): the packet had no activity dates, the
+//      Ansira form keeps its whole body hidden until BOTH dates are set (verified by
+//      live inspection — this was NOT form drift), and the fill died 30s later on a
+//      hidden #activity-sub-detail. The missing-dates summary must name the claim,
+//      the date-gate mechanism, that nothing was saved, and the human fix; the
+//      no-expansion summary must distinguish "dates set but form stayed hidden".
+const datesSummary = missingActivityDatesSummary("Promotional apparel — customer giveaway");
+assert.ok(datesSummary.includes("Promotional apparel — customer giveaway"), "missing-dates summary names the claim");
+assert.ok(/no activity start\/end dates/i.test(datesSummary), "missing-dates summary states the packet has no dates");
+assert.ok(/hidden until both dates/i.test(datesSummary), "missing-dates summary explains the date-gate mechanism");
+assert.ok(/no draft was created/i.test(datesSummary), "missing-dates summary states nothing was saved");
+assert.ok(/add the activity dates/i.test(datesSummary), "missing-dates summary tells the operator the fix");
+
+const noExpandSummary = portalFormDidNotExpandSummary();
+assert.ok(/set both activity dates/i.test(noExpandSummary), "no-expansion summary says the dates WERE set (distinct from the missing-dates class)");
+assert.ok(/did not expand/i.test(noExpandSummary), "no-expansion summary names the failure");
+assert.ok(/no draft was created/i.test(noExpandSummary), "no-expansion summary states nothing was saved");
+
+// Both are blocked-path summaries: the runner emits them under the rescue/blocked
+// shell ("... blocked before completion"), which the detector's LOAD_FAILURE_RE
+// keys on — assert that parity the way the runner actually emits them.
+for (const [label, blockedSummary] of [
+  ["missing-dates", datesSummary],
+  ["no-expansion", noExpandSummary]
+] as const) {
+  const flagged = findMdfPortalFailures({
+    tasks: [
+      {
+        id: `eval_${label}`,
+        kind: "mdf_portal",
+        status: "needs_approval",
+        updatedAt: new Date().toISOString(),
+        output: { summary: `Deterministic MDF portal runner blocked before completion.\n\n${blockedSummary}` }
+      }
+    ] as any
+  });
+  assert.equal(flagged.length, 1, `${label} summary is still detected by mdf-portal-health`);
+  assert.equal(flagged[0].dimension, "mdf_assistant_failure", `${label} summary maps to mdf_assistant_failure`);
+}
 
 // (d) CONSOLE-PARITY with the anomaly feed: every classified summary — wrapped the
 //     way the runner's catch block wraps it into the blocked task — must still trip

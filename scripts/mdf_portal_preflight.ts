@@ -204,3 +204,35 @@ export function portalRunDeadlineSummary(deadlineMinutes: number): string {
     " Before re-running, check the Ansira claims list for a draft from this run — a hung run normally never reaches Save for Later, but verify so a re-run can't create a duplicate."
   );
 }
+
+// ---------------------------------------------------------------------------
+// Activity-dates gate. Production 2026-07-06 (Promotional apparel event claim,
+// task agent_mr9qnn3k_96w3kv): the Ansira create form keeps its ENTIRE body
+// (#app-wrapper-form — sub-detail, claim name, invoices, Save button) hidden until
+// BOTH Activity dates are accepted. That claim's packet had no extractable dates,
+// the runner's date fill is conditional (`if (startDate)`), so the form never
+// expanded and the fill died 30s later on a hidden #activity-sub-detail with a
+// generic "element is not visible" — which read like form drift and burned a live
+// inspection to disprove (the form had NOT changed). These two summaries make the
+// real causes loud: a packet with no dates fails BEFORE the form is touched, and a
+// form that doesn't expand after the dates fails AT the gate, named as such.
+// ---------------------------------------------------------------------------
+
+/** Packet-level blocker: no activity dates → the form can never expand. */
+export function missingActivityDatesSummary(claimTitle: string): string {
+  return (
+    `The MDF packet for "${claimTitle}" has no Activity start/end dates, and the Ansira create form keeps every other field ` +
+    "hidden until both dates are set — so there is nothing the runner can fill. No draft was created (nothing was saved). " +
+    "Add the activity dates to the claim (or fix the packet extraction) and run the portal draft again."
+  );
+}
+
+/** The dates were filled but Ansira did not expand the form body. */
+export function portalFormDidNotExpandSummary(): string {
+  return (
+    "The runner selected the Marketing Activity and set both Activity dates, but the rest of the Ansira form did not expand " +
+    "(Ansira keeps it hidden until it accepts those inputs) — most likely a rejected date value/format or a new gating question " +
+    "on the create form. No draft was created (nothing was saved). " +
+    "Open the Create MDF Recap form in the runner's Chrome, check what it asks for after the dates, and update the runner if the form changed."
+  );
+}

@@ -13,6 +13,8 @@ import {
   cdpConnectFailureSummary,
   findMissingFormControls,
   marketingActivityOptionIssue,
+  missingActivityDatesSummary,
+  portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
   type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
@@ -1508,8 +1510,18 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
 
   const startDate = toUsDate(extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]));
   const endDate = toUsDate(extractedField(claim, ["activityEndDate", "activity_end_date", "endDate"]));
-  if (startDate) await fillText(page, "#app-claim-start-date", startDate);
-  if (endDate) await fillText(page, "#app-claim-end-date", endDate);
+  // DATES GATE (live-inspected 2026-07-06): Ansira keeps the ENTIRE form body
+  // (#app-wrapper-form — sub-detail, claim name, invoices, Save) hidden until BOTH
+  // Activity dates are accepted. A packet with no dates can therefore fill nothing —
+  // fail it loud here, before the form is touched, instead of dying 30s later on a
+  // hidden #activity-sub-detail with a generic "element is not visible" (the
+  // Promotional-apparel blocker, task agent_mr9qnn3k_96w3kv — misread as form drift).
+  if (!startDate || !endDate) {
+    await browser.close();
+    return { code: 2, summary: missingActivityDatesSummary(claim.title) };
+  }
+  await fillText(page, "#app-claim-start-date", startDate);
+  await fillText(page, "#app-claim-end-date", endDate);
   await page.waitForTimeout(2500);
 
   const standalone = page.locator("#app-radio-btn-standalone-claim");
@@ -1520,6 +1532,20 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
         el.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
+  }
+
+  // EXPANSION GATE: with the activity, both dates, and the pre-approval answer in,
+  // the form body must actually expand before anything inside it is fillable. If it
+  // stays hidden (a rejected date value/format, or a new gating question), name that
+  // — don't let the first hidden-field fill produce a cryptic visibility timeout.
+  const formExpanded = await page
+    .locator("#activity-sub-detail")
+    .waitFor({ state: "visible", timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!formExpanded) {
+    await browser.close();
+    return { code: 2, summary: portalFormDidNotExpandSummary() };
   }
 
   const invoices = invoiceRecordsForClaim(claim);
