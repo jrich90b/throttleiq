@@ -164,6 +164,58 @@ check("semantic: media video cue preserved; call_only without cue stripped", () 
   assert.equal(out.contactPreferenceIntent, "none");
 });
 
+check("semantic: connective-word watch model lifted from the agent's question is rejected + recovered (+15857552622)", () => {
+  // Prod +15857552622 (2026-07-04): the parser copied the agent's own "new or
+  // used trike" question into watch.model="Or New Trike", which rendered
+  // customer-facing as "I'll keep an eye out for Or New Trike". The fail-safe
+  // sanitizer must blank the connective-word garbage; the set_watch
+  // context-recovery back-fills the real model (Tri Glide) from thread history.
+  const out = normalizeSemanticSlotLLMOutput(
+    {
+      watch_action: "set_watch",
+      watch: { model: "Or New Trike", year: "", year_min: 0, year_max: 0, color: "", condition: "new", min_price: 0, max_price: 0, monthly_budget: 0, down_payment: 0 },
+      department_intent: "none",
+      contact_preference_intent: "none",
+      media_intent: "none",
+      service_records_intent: false,
+      confidence: 0.9
+    },
+    {
+      ...semanticCtx,
+      text: "keep an eye out for a used tri glide",
+      history: [
+        "are you looking at any particular trike model (Freewheeler, Tri Glide, or open to either)?",
+        "I'll keep an eye out for a used tri glide and text you as soon as one comes in."
+      ]
+    }
+  );
+  assert.equal(out.watchAction, "set_watch");
+  assert.notEqual(out.watch?.model, "Or New Trike");
+  assert.ok(!/^\s*(?:or|and|either|both)\b/i.test(String(out.watch?.model ?? "")), `leading-connective garbage survived: ${out.watch?.model}`);
+  assert.ok(!/\b(?:new|used|open|either|both)\b/i.test(String(out.watch?.model ?? "")), `qualifier garbage survived: ${out.watch?.model}`);
+  assert.match(String(out.watch?.model ?? ""), /tri glide/i);
+});
+
+check("semantic: a legitimate two-model 'X or Y' watch list is NOT blanked by the sanitizer", () => {
+  // Non-regression for the garbage guard: "XG500 or XG750" is a real two-model
+  // list a rep genuinely watches for — 'or' mid-string with no leading connective
+  // and no condition word must survive (contrast with lifted "Or New Trike").
+  const out = normalizeSemanticSlotLLMOutput(
+    {
+      watch_action: "set_watch",
+      watch: { model: "XG500 or XG750", year: "", year_min: 0, year_max: 0, color: "", condition: "unknown", min_price: 0, max_price: 0, monthly_budget: 0, down_payment: 0 },
+      department_intent: "none",
+      contact_preference_intent: "none",
+      media_intent: "none",
+      service_records_intent: false,
+      confidence: 0.95
+    },
+    { ...semanticCtx, text: "keep an eye out for a XG500 or XG750 for me" }
+  );
+  assert.equal(out.watchAction, "set_watch");
+  assert.equal(out.watch?.model, "XG500 or XG750");
+});
+
 // ── 4. combiner ─────────────────────────────────────────────────────────────
 check("combine: all-null input returns null", () => {
   assert.equal(combineUnifiedSlotParse(null, null, null), null);
