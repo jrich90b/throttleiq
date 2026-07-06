@@ -184,3 +184,23 @@ export function cdpConnectFailureSummary(stats: CdpTargetStats, attachError?: st
     (attachError ? ` Original error: ${attachError}` : "")
   );
 }
+
+/**
+ * Run-level watchdog summary — the POST-connect hang class. Production 2026-07-06
+ * (Radio advertising claim, first attempt): the attach succeeded, but the run then
+ * wedged 20+ minutes on a browser-level CDP call that Playwright gives NO default
+ * timeout (newPage/bringToFront — unlike goto/selectOption, which cap at 30s), with
+ * no output, no fallback, and a console task stuck looking "in progress". The
+ * watchdog turns that silent wedge into this classified, operator-actionable
+ * summary. Honest about partial state: a hung run has almost always not reached
+ * "Save for Later" (the only persistence point), but the operator must VERIFY in
+ * the claims list before re-running so a rare post-save hang can't double-draft.
+ */
+export function portalRunDeadlineSummary(deadlineMinutes: number): string {
+  return (
+    `The MDF portal run timed out after ${deadlineMinutes} minutes and was abandoned — the runner Chrome stopped responding mid-run ` +
+    "(a browser call hung with no timeout; the attach itself had succeeded). " +
+    RUNNER_CHROME_RESTART_HINT +
+    " Before re-running, check the Ansira claims list for a draft from this run — a hung run normally never reaches Save for Later, but verify so a re-run can't create a duplicate."
+  );
+}

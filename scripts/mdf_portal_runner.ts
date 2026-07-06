@@ -13,6 +13,7 @@ import {
   cdpConnectFailureSummary,
   findMissingFormControls,
   marketingActivityOptionIssue,
+  portalRunDeadlineSummary,
   type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
 
@@ -1363,6 +1364,36 @@ async function connectRunnerBrowser(cdpUrl: string): Promise<import("playwright"
   }
 }
 
+/**
+ * Run-level watchdog for the portal-draft fill. Playwright's per-action 30s default
+ * does NOT cover browser-level CDP calls (newPage/bringToFront), so a hung one wedges
+ * the tick forever with no output and no fallback (2026-07-06: the Radio advertising
+ * run sat 20+ minutes, silent, no Ansira tab, until manually killed). The deadline
+ * converts that wedge into the classified blocker path (guided-packet rescue + a
+ * summary saying exactly what happened and what to do). Sized generously ABOVE any
+ * legitimate run (~3-4 min observed; default 10 min, MDF_PORTAL_RUN_DEADLINE_MS to
+ * override) so the watchdog can only fire on a genuinely stuck run — the fail-safe
+ * direction; it never cuts short a slow-but-working fill. The abandoned Playwright
+ * work is torn down when this tick's process exits (each daemon tick is its own
+ * process), so no orphaned automation keeps driving the form.
+ */
+async function withPortalRunDeadline<T>(run: Promise<T>): Promise<T> {
+  const deadlineMs = Math.max(60_000, Number(process.env.MDF_PORTAL_RUN_DEADLINE_MS ?? 10 * 60_000));
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(portalRunDeadlineSummary(Math.round(deadlineMs / 60_000)))),
+      deadlineMs
+    );
+    timer.unref();
+  });
+  try {
+    return await Promise.race([run, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
   if (!options.cdpUrl) return { code: 2, summary: "H-DNet login opener needs MDF_PORTAL_CDP_URL for the runner browser." };
   const browser = await connectRunnerBrowser(options.cdpUrl);
@@ -1792,7 +1823,7 @@ async function runMain(options: RunnerOptions) {
   let result: { code: number; summary: string; links?: string[] };
   try {
     result = playwrightAvailable
-      ? await runPlaywrightPortalDraft(claim, options)
+      ? await withPortalRunDeadline(runPlaywrightPortalDraft(claim, options))
       : await runBrowserUse(promptPath, resultPath, options, localFiles.length ? filesDir : undefined);
   } catch (err: any) {
     result = {

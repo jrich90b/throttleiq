@@ -19,7 +19,8 @@ import {
   cdpLooksBloated,
   findMissingFormControls,
   formatMissingControls,
-  marketingActivityOptionIssue
+  marketingActivityOptionIssue,
+  portalRunDeadlineSummary
 } from "./mdf_portal_preflight.ts";
 
 const { findMdfPortalFailures } = await import("../services/api/src/domain/mdfPortalHealth.ts");
@@ -157,6 +158,18 @@ assert.ok(/timed out/i.test(otherSummary), "non-bloated failure is described as 
 assert.ok(otherSummary.includes("launchctl kickstart"), "non-bloated failure carries the restart command");
 assert.ok(otherSummary.includes("kaboom"), "non-bloated failure preserves the original error");
 
+// (c2) Run-level watchdog — pins the 2026-07-06 POST-connect hang (Radio advertising
+//      claim: attach succeeded, then a browser-level CDP call with no Playwright
+//      default timeout wedged the tick 20+ min, silent, until manually killed). The
+//      deadline summary must say the run timed out, carry the restart runbook, and
+//      — because a watchdog abandonment cannot PROVE zero partial state the way the
+//      form preflight can — tell the operator to verify the claims list before
+//      re-running so a rare post-save hang can't double-draft.
+const deadlineSummary = portalRunDeadlineSummary(10);
+assert.ok(/timed out after 10 minutes/i.test(deadlineSummary), "deadline summary states the run timed out and after how long");
+assert.ok(deadlineSummary.includes("launchctl kickstart"), "deadline summary carries the restart command");
+assert.ok(/claims list/i.test(deadlineSummary) && /duplicate/i.test(deadlineSummary), "deadline summary tells the operator to verify the claims list against a duplicate draft");
+
 // (d) CONSOLE-PARITY with the anomaly feed: every classified summary — wrapped the
 //     way the runner's catch block wraps it into the blocked task — must still trip
 //     the mdf-portal-health detector (LOAD_FAILURE_RE), or classification would
@@ -164,7 +177,8 @@ assert.ok(otherSummary.includes("kaboom"), "non-bloated failure preserves the or
 for (const [label, summary] of [
   ["bloated", bloatedSummary],
   ["down", downSummary],
-  ["other", otherSummary]
+  ["other", otherSummary],
+  ["deadline", deadlineSummary]
 ] as const) {
   const flagged = findMdfPortalFailures({
     tasks: [
