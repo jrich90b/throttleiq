@@ -12852,6 +12852,26 @@ export function getCachedSelfHealVerdict(inbound: string, draft: string): DraftQ
 // publish gate holds it (cause #3 — a code/routing bug a re-roll can't fix). Dark unless
 // DRAFT_QUALITY_AUTO_REGENERATE is on; a pure no-op when off (no extra LLM calls). One attempt by
 // design — the re-judge is what guarantees we never SHIP a still-bad draft.
+// Durable capture of self-heal WINS (before→after pairs the judge confirmed fixed the draft).
+// The pm2 console line truncates at 160 chars and rotates away — this JSONL is the input the
+// offline miner (scripts/self_heal_harvest.ts) turns into APPROVE-FIRST few-shot/fixture
+// candidates, so a heal the system already solved once becomes durable learning instead of
+// being re-solved from scratch on the next occurrence. Best-effort, never throws into the
+// draft path (same contract as appendUnifiedSlotsShadowRecord above).
+function appendSelfHealWinRecord(record: Record<string, unknown>): void {
+  try {
+    const dir =
+      process.env.SELF_HEAL_WINS_DIR ||
+      (process.env.REPORT_ROOT ? `${process.env.REPORT_ROOT}/draft_self_heal` : "");
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    fs.appendFileSync(`${dir}/heal_wins_${day}.jsonl`, `${JSON.stringify(record)}\n`);
+  } catch {
+    // best-effort persistence; the console line is the primary record
+  }
+}
+
 export async function selfHealDraftWithLLM(args: {
   draft: string;
   ctx: DraftContext;
@@ -12884,6 +12904,18 @@ export async function selfHealDraftWithLLM(args: {
       return { draft: original, healed: false, outcome: "still_failing" };
     }
     cacheSelfHealVerdict(inbound, steered, v2); // healed draft's verdict → gate reuses it to pass
+    // A confirmed WIN (v1 held the original, v2 passed the steered re-draft): persist the full
+    // before→after pair for the approve-first harvest (scripts/self_heal_harvest.ts).
+    appendSelfHealWinRecord({
+      at: new Date().toISOString(),
+      channel,
+      leadKey: String(args.ctx.leadKey ?? ""),
+      inbound: inbound.slice(0, 600),
+      before: original.trim().slice(0, 600),
+      after: steered.slice(0, 600),
+      judgeReason: String(v1.reason ?? "").slice(0, 300),
+      judgeSteering: steering.slice(0, 300)
+    });
     return { draft: steered, healed: true, outcome: "healed" };
   } catch {
     return { draft: original, healed: false, outcome: "no_op" }; // fail-safe: never break draft production
