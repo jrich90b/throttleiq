@@ -152,6 +152,39 @@ assert.ok(
   "lead_unit_hold_disclosure:eval is wired into ci:eval"
 );
 
+// --- Payment band render (the second Ryan Tower defect on this thread) ---
+// Nearest-$10 rounding pulled both endpoints of the APR/fee spread into one bucket and
+// rendered "$250–$250/mo". Joe (2026-07-06): keep it a RANGE depending on the calculation
+// — endpoints round OUTWARD (low floors, high ceils to $10) so the rendered band always
+// contains the computed spread; a lone number only when the endpoints are truly identical.
+const { buildMonthlyPaymentLine } = await import("../services/api/src/domain/orchestrator.ts");
+
+// Ryan's shape: one used price, APR 8–9% + fee spread → a tight band that must STAY a band.
+const ryan = buildMonthlyPaymentLine({ priceMin: 10995, priceMax: 10995, isUsed: true, termMonths: 60, taxRate: 0.0875 });
+const ryanBand = ryan.match(/\$(\d+)–\$(\d+)\/mo/);
+assert.ok(ryanBand, `a tight computed spread renders as a range, got: ${ryan}`);
+assert.ok(Number(ryanBand![1]) < Number(ryanBand![2]), "the rendered range has distinct low<high endpoints");
+assert.ok(!/\$(\d+)–\$\1\/mo/.test(ryan), "no degenerate $X–$X/mo render");
+// Outward rounding: endpoints land on $10 buckets.
+assert.equal(Number(ryanBand![1]) % 10, 0, "low endpoint floors to $10");
+assert.equal(Number(ryanBand![2]) % 10, 0, "high endpoint ceils to $10");
+
+// A wide band stays wide and ordered.
+const wide = buildMonthlyPaymentLine({ priceMin: 9995, priceMax: 15995, isUsed: true, termMonths: 60, taxRate: 0.0875 });
+const wideBand = wide.match(/\$([\d,]+)–\$([\d,]+)\/mo/);
+assert.ok(wideBand, `a wide price spread renders as a range, got: ${wide}`);
+assert.ok(
+  Number(wideBand![1].replace(/,/g, "")) < Number(wideBand![2].replace(/,/g, "")),
+  "wide band ordered low<high"
+);
+
+// Fully-covered principal (down >= total) is the ONLY lone-number case ($0/mo edge).
+const covered = buildMonthlyPaymentLine({ priceMin: 5000, priceMax: 5000, isUsed: true, termMonths: 60, taxRate: 0, downPayment: 6000 });
+assert.ok(
+  /\$0\/mo/.test(covered) && !/\$0–/.test(covered),
+  `identical endpoints collapse to one number, got: ${covered}`
+);
+
 console.log(
-  "PASS lead-unit hold disclosure eval (decision table 8 rows + composer/append safety + both-funnel source guards)"
+  "PASS lead-unit hold disclosure eval (decision table 8 rows + composer/append safety + both-funnel source guards + outward-rounded payment band)"
 );

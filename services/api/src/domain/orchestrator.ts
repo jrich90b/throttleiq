@@ -797,7 +797,7 @@ function estimateDownNeededForTargetPayment(opts: {
   return Math.max(0, total - Math.max(0, affordablePrincipal));
 }
 
-function buildMonthlyPaymentLine(opts: {
+export function buildMonthlyPaymentLine(opts: {
   priceMin: number;
   priceMax: number;
   isUsed: boolean;
@@ -820,11 +820,15 @@ function buildMonthlyPaymentLine(opts: {
   const aprMax = opts.isUsed ? 0.09 : 0.08;
   const low = calcMonthlyPayment(totalMin, aprMin, opts.termMonths);
   const high = calcMonthlyPayment(totalMax, aprMax, opts.termMonths);
-  const round10 = (v: number) => Math.round(v / 10) * 10;
-  const payLow = nf.format(round10(low));
-  const payHigh = nf.format(round10(high));
-  // Degenerate band: low/high can round into the same $10 bucket and render
-  // "$250–$250/mo" (Ryan Tower +15857278545, LEA-238) — collapse to one number.
+  // Round the band OUTWARD (low floors, high ceils to $10) so the rendered range always
+  // contains the computed APR/fee spread and stays a genuine range. Nearest-$10 rounding
+  // could pull both endpoints into the same bucket and render "$250–$250/mo" (Ryan Tower
+  // +15857278545, LEA-238). Joe (2026-07-06): keep it a range depending on the calculation
+  // — a single number only when the endpoints are genuinely identical after rounding.
+  const floor10 = (v: number) => Math.floor(v / 10) * 10;
+  const ceil10 = (v: number) => Math.ceil(v / 10) * 10;
+  const payLow = nf.format(floor10(low));
+  const payHigh = nf.format(ceil10(high));
   const payLabel = payLow === payHigh ? payLow : `${payLow}–${payHigh}`;
   const priceLabel =
     opts.priceMin === opts.priceMax
