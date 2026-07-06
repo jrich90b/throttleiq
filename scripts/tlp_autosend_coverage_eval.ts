@@ -44,11 +44,19 @@ assert.match(
   "the manual /send queueTlpLog must delegate to the serialized queueTlpLogForConversation"
 );
 
-// The webhook path logs only genuine AUTOPILOT sends (not suggest-mode forceSend compliance acks).
+// The webhook path gates the CRM log on the MESSAGE KIND, not the mode (2026-07-06): every
+// non-compliance reply that actually reached the customer logs, and forceSend compliance acks
+// (opt-out confirmations) never do — in EITHER mode. The old autopilot-only gate both logged
+// compliance acks in autopilot and would silently skip any future suggest-mode live send.
 assert.match(
   src,
+  /if \(!options\?\.forceSend\) \{\s*queueTlpLogForConversation\(conv\);/,
+  "the webhook auto-send TLP log must exclude forceSend compliance acks (and only those)"
+);
+assert.doesNotMatch(
+  src,
   /if \(webhookMode === "autopilot"\) \{\s*queueTlpLogForConversation\(conv\);/,
-  "the webhook auto-send TLP log must be gated to autopilot mode"
+  "the old autopilot-only TLP gate must not reappear (it logged compliance acks and skipped suggest-mode sends)"
 );
 
 // The draft_ai (suggest-mode, never sent) cadence branch must NOT log to TLP — guard against logging

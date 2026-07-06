@@ -16,6 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
+import { findTlpLogCatchupCandidates } from "./domain/tlpLogCatchup.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
@@ -55505,9 +55506,13 @@ if (authToken && signature) {
       String(options?.providerMessageId ?? "").trim() || undefined,
       mediaUrls
     );
-    // [tlp-autosend-log] A genuine AUTOPILOT agent reply is a customer contact → log to CRM. Gated to
-    // autopilot so suggest-mode forceSend compliance acks (opt-out confirmations) don't spam TLP.
-    if (webhookMode === "autopilot") {
+    // [tlp-autosend-log] ANY agent reply that actually reached the customer is a contact → log to
+    // CRM. Gate on the MESSAGE KIND, not the mode: compliance forceSend acks (opt-out
+    // confirmations) are excluded so they don't spam TLP — which was the old autopilot-only
+    // gate's real purpose, except that gate also LOGGED forceSend compliance acks in autopilot
+    // and would silently skip any future suggest-mode live send. (Reaching here in suggest mode
+    // requires forceSend today — the draft branch above catches the rest.)
+    if (!options?.forceSend) {
       queueTlpLogForConversation(conv);
     }
     saveConversation(conv);
@@ -65606,6 +65611,37 @@ const server = app.listen(port, () => {
     setTimeout(runKeepalive, 10_000).unref?.();
     const interval = setInterval(runKeepalive, keepaliveMinutes * 60 * 1000);
     (interval as any).unref?.();
+  }
+
+  // TLP CRM-log catch-up sweep (crm_log_stale self-heal, 2026-07-06). The serialized TLP
+  // queue is in-memory fire-and-forget: a restart between "send" and "log" drops queued
+  // jobs with no failure recorded (Kellen +17167995197's 7/3 Custom Coverage reminder;
+  // Chuck +17163197142's 7/1 second console send). This sweep re-queues conversations
+  // whose latest REAL outbound is newer than their last CRM log — idempotent because
+  // logTlpForConversation logs only messages since crm.lastLoggedAt and skips on none.
+  // Pure candidate decision + caps in domain/tlpLogCatchup.ts; TLP_LOG_CATCHUP_MINUTES=0
+  // is the kill switch.
+  const tlpCatchupMinutes = Number.isFinite(Number(process.env.TLP_LOG_CATCHUP_MINUTES))
+    ? Number(process.env.TLP_LOG_CATCHUP_MINUTES)
+    : 30;
+  if (tlpCatchupMinutes > 0) {
+    console.log(`[tlp-catchup] CRM-log catch-up sweep enabled (${tlpCatchupMinutes} min interval)`);
+    const runTlpCatchup = () => {
+      try {
+        const ids = findTlpLogCatchupCandidates(getAllConversations() as any[], Date.now());
+        for (const id of ids) {
+          const conv = getConversation(id);
+          if (!conv) continue;
+          console.log("[tlp-catchup] re-queueing unlogged conversation", { convId: id });
+          queueTlpLogForConversation(conv);
+        }
+      } catch (err: any) {
+        console.warn("[tlp-catchup] sweep failed:", err?.message ?? err);
+      }
+    };
+    setTimeout(runTlpCatchup, 90_000).unref?.();
+    const tlpCatchupInterval = setInterval(runTlpCatchup, tlpCatchupMinutes * 60 * 1000);
+    (tlpCatchupInterval as any).unref?.();
   }
 
   const supportMailAutoPollEnabled =
