@@ -45,4 +45,16 @@ assert.ok(/self-test OK/.test(nightlyOut), `nightly self-test must pass, got: ${
 const detect = fs.readFileSync("scripts/anomaly_loop_detect.ts", "utf8");
 assert.ok(/corpus_replay", "latest\.json"/.test(detect), "anomaly_loop_detect must fold the corpus_replay sibling feed into next.json");
 
-console.log("PASS corpus replay flywheel eval (self-test + shared-judge + cost-cap + finding-shape guards)");
+// Confirm-on-refail (2026-07-06): one unlucky sample of a NONDETERMINISTIC pipeline must not
+// block the release gate — a candidate regression re-replays its conversation and only a repeat
+// failure counts (7/6 sweep: 2 phantom "regressions" from LLM routing flips, 0/6 reproducible;
+// ~13 more from the Brooke→Alexandra rename). Pinned so a future edit can't quietly go back to
+// single-sample gating or let persona renames read as code changes.
+assert.ok(/resolveRefailOutcome/.test(flywheel) && /confirmedRegressions/.test(flywheel), "the gate counts CONFIRMED regressions only (confirm-on-refail)");
+assert.ok(/gate_regressions_zero: regressionsZero/.test(flywheel) && /regressionsZero = confirmedRegressions\.length === 0/.test(flywheel), "the blocking regression bar reads the confirmed set");
+assert.ok(/stripAgentIntro/.test(flywheel), "persona renames normalize out of draft signatures");
+assert.ok(/FLYWHEEL_REFAIL/.test(flywheel), "refail keeps its kill switch");
+const shadowReplay = fs.readFileSync("scripts/inbound_shadow_replay.ts", "utf8");
+assert.ok(/--conv/.test(shadowReplay) && /convIds/.test(shadowReplay), "the replay harness supports the per-conversation filter refail depends on");
+
+console.log("PASS corpus replay flywheel eval (self-test + shared-judge + cost-cap + finding-shape + refail guards)");

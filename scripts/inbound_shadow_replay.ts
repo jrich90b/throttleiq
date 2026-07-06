@@ -23,6 +23,9 @@ type ReplayArgs = {
   modes: ReplayMode[];
   caseNumbers: number[];
   lastTurnOnly: boolean;
+  /** Optional conversation-id/leadKey filter (--conv a,b,c) — the flywheel's confirm-on-refail
+   *  re-replays ONLY the regressed conversations instead of the whole cohort. */
+  convIds: string[];
 };
 
 type ConversationMessage = {
@@ -109,6 +112,7 @@ Options:
   --out-dir <path>        Report directory. Default: reports/inbound-shadow.
   --twilio-to <phone>     Fallback dealer Twilio number for replay. Default: +17164032516.
   --case-numbers <list>   Optional 1-based case numbers after filtering, e.g. 5,25,38.
+  --conv <list>           Optional conversation ids/leadKeys to replay, e.g. +15551234567,+15559876543.
   --mode-matrix           Replay every case in human, suggest, and autopilot modes.
   --modes <list>          Optional replay modes, e.g. human,suggest,autopilot. Implies --mode-matrix.
   --full-data-copy        Copy every DATA_DIR folder/file. Default skips uploads/backups for safe replay.
@@ -130,7 +134,8 @@ function parseArgs(argv: string[]): ReplayArgs {
     fullDataCopy: false,
     modeMatrix: false,
     modes: ["human", "suggest", "autopilot"],
-    caseNumbers: []
+    caseNumbers: [],
+    convIds: []
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -158,6 +163,13 @@ function parseArgs(argv: string[]): ReplayArgs {
         .map(part => Number.parseInt(part.trim(), 10))
         .filter(num => Number.isFinite(num) && num > 0);
       if (!out.caseNumbers.length) usage();
+    }
+    else if (arg === "--conv") {
+      out.convIds = next()
+        .split(",")
+        .map(part => part.trim())
+        .filter(Boolean);
+      if (!out.convIds.length) usage();
     }
     else if (arg === "--mode-matrix") out.modeMatrix = true;
     else if (arg === "--modes") {
@@ -375,7 +387,9 @@ function selectCandidates(snapshot: any, args: ReplayArgs): Candidate[] {
   const conversations: Conversation[] = Array.isArray(snapshot.conversations) ? snapshot.conversations : [];
   const cutoffMs = Date.now() - args.sinceDays * 24 * 60 * 60 * 1000;
   const candidates: Candidate[] = [];
+  const convFilter = new Set(args.convIds);
   for (const conv of conversations) {
+    if (convFilter.size && !convFilter.has(conv.id) && !convFilter.has(String(conv.leadKey ?? ""))) continue;
     const messages = Array.isArray(conv.messages) ? conv.messages : [];
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];

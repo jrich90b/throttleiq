@@ -23,7 +23,9 @@
  *   tone-gate floor) — judge-minor quality nits inform voice work but cannot block a release
  *   (blocking on an LLM judge's taste invites Goodharting the voice charter).
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -266,7 +268,8 @@ export type ScoreAdjustment =
   | "excluded_test_lead"
   | "excluded_anachronistic"
   | "design_accepted_handoff"
-  | "deflection_downgraded";
+  | "deflection_downgraded"
+  | "nondeterministic_recovered";
 
 /**
  * Apply the design-policy post-classification to a raw score (fidelity v2). Pure + auditable:
@@ -317,11 +320,39 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
 
 export type BaselineEntry = { pass: boolean; critical: boolean; at: string; draftSig?: string };
 
+// Agent self-intro clauses ("it's Alexandra over at American Harley-Davidson", "this is Scott
+// at ...", "Giovanni here from ...") normalize to one token: a persona/rep RENAME rewrites every
+// opener's text with zero routing/content change — without this, a rename flips every opener
+// into a "changed draft" and floods the regression gate (7/6 sweep: ~13 of 16 "regressions"
+// were the Brooke→Alexandra rename). Runs on OUR OWN drafts inside an offline scorer — not
+// customer-intent comprehension, so a deterministic pattern is the right tool (AGENTS.md:
+// structured extraction). Idempotent, so legacy baseline sigs renormalize at compare time.
+export function stripAgentIntro(text: string): string {
+  return (
+    text
+      // "this is Giovanni at American Harley-Davidson" (bare at/from is the this-is idiom)
+      .replace(
+        /\bthis is\s+[a-z][a-z.’'-]*(?:\s+[a-z][a-z.’'-]*)?\s+(?:over at|here at|here from|at|from)\s+[^.!?]{0,60}/g,
+        "<agent-intro>"
+      )
+      // "it's Alexandra over at American Harley-Davidson" — bare at/from EXCLUDED here so
+      // content-bearing phrases ("it's available at the dealership") keep their content
+      .replace(
+        /\bit[’']?s\s+[a-z][a-z.’'-]*(?:\s+[a-z][a-z.’'-]*)?\s+(?:over at|here at|here from)\s+[^.!?]{0,60}/g,
+        "<agent-intro>"
+      )
+      // "Scott here from American H-D"
+      .replace(/\b[a-z][a-z.’'-]*\s+here\s+(?:at|from)\s+[^.!?]{0,60}/g, "<agent-intro>")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
 // Normalized draft signature: strips dates/times/numbers/URLs so time-sensitive content (slot
-// offers, "Wed, Mar 11", prices) doesn't read as a code change between sweeps.
+// offers, "Wed, Mar 11", prices) doesn't read as a code change between sweeps, and strips the
+// agent self-intro so persona renames don't.
 export function draftSignature(draft: string | null | undefined): string {
-  return String(draft ?? "")
-    .toLowerCase()
+  return stripAgentIntro(String(draft ?? "").toLowerCase())
     .replace(/https?:\/\/\S+/g, "<url>")
     .replace(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+[a-z]{3,9}\s+\d{1,2}\b/g, "<date>")
     .replace(/\b\d{1,2}:\d{2}\s*(am|pm)?\b/g, "<time>")
@@ -346,11 +377,29 @@ export function diffAgainstBaseline(
   for (const s of scores) {
     const prev = baseline[s.turnKey];
     if (!prev || prev.pass !== true || s.pass) continue;
-    const sigChanged = prev.draftSig != null && prev.draftSig !== draftSignature(s.draft);
-    if (sigChanged || prev.draftSig == null) regressions.push(s);
+    // Renormalize the STORED sig too (stripAgentIntro is idempotent): baselines written before
+    // the intro normalization — or before a persona rename — must not read as changed drafts.
+    const prevSig = prev.draftSig == null ? null : stripAgentIntro(prev.draftSig);
+    const sigChanged = prevSig != null && prevSig !== draftSignature(s.draft);
+    if (sigChanged || prevSig == null) regressions.push(s);
     else flaky.push(s);
   }
   return { regressions, flaky };
+}
+
+/**
+ * Confirm-on-refail decision (pure). One replay sample of a nondeterministic pipeline is weak
+ * evidence: LLM routing parsers flip on borderline turns, and a single unlucky sample would
+ * BLOCK the release gate with a phantom regression (7/6 sweep: the appointment-status and
+ * compliment-hijack "regressions" reproduced 0/6 on re-runs). A candidate regression stays a
+ * regression only when a SECOND, independent replay of the same turn also fails.
+ * FAIL DIRECTION: a missing or unscoreable rerun CONFIRMS the regression — we never silently
+ * drop a potential code regression because the confirmation pass couldn't reproduce the turn.
+ */
+export type RefailOutcome = "confirmed" | "recovered";
+export function resolveRefailOutcome(args: { rerunFound: boolean; rerunPass: boolean }): RefailOutcome {
+  if (!args.rerunFound) return "confirmed";
+  return args.rerunPass ? "recovered" : "confirmed";
 }
 
 export function mergeBaseline(prev: Baseline | null | undefined, scores: TurnScore[], atIso: string): Baseline {
@@ -410,6 +459,8 @@ export type FlywheelSummary = {
   criticals: number;
   regressions: number;
   flakyJudgeFlips: number;
+  /** Candidate regressions whose confirmation re-replay PASSED — parser nondeterminism, not code. */
+  nondeterministicRecovered: number;
   passRate: number;
   thresholds: {
     gate_criticals_zero: boolean; // BLOCKING
@@ -477,12 +528,11 @@ async function main() {
     : {};
   let judged = 0;
   let cacheHits = 0;
-  for (const row of toJudge) {
+  const judgeWithCache = async (row: ReplayRow): Promise<IntentVerdict | null> => {
     const ck = draftHash(row);
     if (ck in cache) {
-      verdicts.set(turnKeyOf(row), cache[ck]);
       cacheHits += 1;
-      continue;
+      return cache[ck];
     }
     const candidate: IntentJudgeCandidate = {
       convId: row.conversationId,
@@ -494,13 +544,16 @@ async function main() {
     };
     try {
       const v = await realJudge(candidate);
-      verdicts.set(turnKeyOf(row), v);
       cache[ck] = v;
       judged += 1;
+      return v;
     } catch (err: any) {
       console.warn(`[flywheel] judge failed for ${turnKeyOf(row)}: ${err?.message ?? err}`);
-      verdicts.set(turnKeyOf(row), null);
+      return null;
     }
+  };
+  for (const row of toJudge) {
+    verdicts.set(turnKeyOf(row), await judgeWithCache(row));
   }
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
@@ -562,7 +615,83 @@ async function main() {
     ? JSON.parse(fs.readFileSync(baselinePath, "utf8"))
     : null;
   const { regressions, flaky } = diffAgainstBaseline(scores, prevBaseline);
-  const findings = buildFindings(scores, regressions, atIso);
+
+  // Confirm-on-refail: re-replay ONLY the regressed conversations against the SAME snapshot
+  // (still on disk — the nightly removes it after this process exits). A candidate regression
+  // survives only if the second, independent sample also fails (resolveRefailOutcome). Passing
+  // reruns replace the unlucky sample in `scores` so passRate/criticals/baseline reflect the
+  // CONFIRMED state, and are counted honestly as nondeterministicRecovered — never dropped
+  // silently. FLYWHEEL_REFAIL=0 is the kill switch.
+  let nondeterministicRecovered = 0;
+  let confirmedRegressions = regressions;
+  const refailEnabled =
+    regressions.length > 0 && !!snapPath && fs.existsSync(snapPath) && process.env.FLYWHEEL_REFAIL !== "0";
+  if (refailEnabled) {
+    const convIds = [...new Set(regressions.map(r => r.conversationId))];
+    console.log(`[flywheel] confirm-on-refail: re-replaying ${convIds.length} regressed conversation(s)`);
+    const rerunDir = fs.mkdtempSync(path.join(os.tmpdir(), "flywheel-refail-"));
+    try {
+      execFileSync(
+        "npx",
+        [
+          "tsx",
+          "scripts/inbound_shadow_replay.ts",
+          "--data-dir",
+          dataDir,
+          "--since-days",
+          "3650",
+          "--limit",
+          String(Math.max(convIds.length, 1)),
+          "--last-turn-only",
+          "--conv",
+          convIds.join(","),
+          "--out-dir",
+          rerunDir
+        ],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], maxBuffer: 64 * 1024 * 1024 }
+      );
+      const rerunFile = fs
+        .readdirSync(rerunDir)
+        .filter(f => f.startsWith("inbound-shadow-") && f.endsWith(".json"))
+        .sort()
+        .pop();
+      const rerunRows: ReplayRow[] = rerunFile
+        ? (JSON.parse(fs.readFileSync(path.join(rerunDir, rerunFile), "utf8"))?.cases ?? [])
+        : [];
+      const rerunByKey = new Map(rerunRows.map(r => [turnKeyOf(r), r] as const));
+      const stillRegressed: typeof regressions = [];
+      for (const reg of regressions) {
+        const rr = rerunByKey.get(reg.turnKey);
+        let rerunScore: (TurnScore & { adjustment: ScoreAdjustment; excluded?: boolean }) | null = null;
+        if (rr) {
+          const verdict = isJudgeWorthy(rr) && !isTestLeadRow(rr) ? await judgeWithCache(rr) : null;
+          rerunScore = adjustScore(scoreTurn(rr, verdict), rr);
+        }
+        // An excluded rerun (test-lead/design classifier) counts as recovered — exclusion means
+        // the turn shouldn't gate at all, which is not evidence of a code regression.
+        const rerunPass = !!rerunScore && (rerunScore.excluded === true || rerunScore.pass);
+        if (resolveRefailOutcome({ rerunFound: !!rerunScore, rerunPass }) === "recovered") {
+          nondeterministicRecovered += 1;
+          const idx = scores.findIndex(s => s.turnKey === reg.turnKey);
+          if (idx >= 0 && rerunScore) {
+            scores[idx] = { ...rerunScore, adjustment: "nondeterministic_recovered", excluded: undefined };
+          }
+        } else {
+          stillRegressed.push(reg);
+        }
+      }
+      confirmedRegressions = stillRegressed;
+      fs.writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
+      console.log(
+        `[flywheel] confirm-on-refail: ${nondeterministicRecovered}/${regressions.length} candidate regression(s) did not reproduce (nondeterministic) — ${confirmedRegressions.length} confirmed`
+      );
+    } finally {
+      // Sync teardown — an async rm races the store's flush and flakes (temp-store lesson, 7/4).
+      fs.rmSync(rerunDir, { recursive: true, force: true });
+    }
+  }
+
+  const findings = buildFindings(scores, confirmedRegressions, atIso);
 
   const failed = scores.filter(s => !s.pass);
   const summary: FlywheelSummary = {
@@ -578,12 +707,13 @@ async function main() {
     passed: scores.length - failed.length,
     failed: failed.length,
     criticals: scores.filter(s => s.critical).length,
-    regressions: regressions.length,
+    regressions: confirmedRegressions.length,
     flakyJudgeFlips: flaky.length,
+    nondeterministicRecovered,
     passRate: scores.length ? Math.round(((scores.length - failed.length) / scores.length) * 1000) / 1000 : 1,
     thresholds: (() => {
       const criticalsZero = scores.every(s => !s.critical);
-      const regressionsZero = regressions.length === 0;
+      const regressionsZero = confirmedRegressions.length === 0;
       const rate = scores.length ? (scores.length - failed.length) / scores.length : 1;
       return {
         gate_criticals_zero: criticalsZero,
@@ -665,6 +795,48 @@ function selfTest() {
   assert(diffAgainstBaseline([major], { [key]: { pass: false, critical: false, at: "t0" } }).regressions.length === 0, "fail→fail is not a regression");
   assert(diffAgainstBaseline([major], null).regressions.length === 0, "no baseline → no regressions (first run)");
   assert(draftSignature("See you Wed, Mar 11 at 9:30 AM — $12,499") === draftSignature("See you Thu, Jul 3 at 1:00 PM — $13,999"), "time/price content normalizes to the same signature");
+
+  // greeting normalization — a persona/rep RENAME is not a changed draft (7/6: Brooke→Alexandra
+  // flipped ~13 openers into phantom regressions)
+  const brookeOpener = "Hey Rex, it's Brooke over at American Harley-Davidson. I got your request — which model?";
+  const alexandraOpener = "Hey Rex, it's Alexandra over at American Harley-Davidson. I got your request — which model?";
+  assert(draftSignature(brookeOpener) === draftSignature(alexandraOpener), "rep rename normalizes to the same signature");
+  assert(
+    draftSignature("Hey Kevin - Scott here from American H-D. Your bike arrives this week.") ===
+      draftSignature("Hey Kevin - Giovanni here from American H-D. Your bike arrives this week."),
+    "the NAME-here-from intro shape normalizes too"
+  );
+  assert(
+    draftSignature("Hi Plinio — this is Giovanni at American Harley-Davidson. Quick reminder about Custom Coverage.") ===
+      draftSignature("Hi Plinio — this is Scott at American Harley-Davidson. Quick reminder about Custom Coverage."),
+    "the this-is-NAME-at intro shape normalizes too"
+  );
+  assert(draftSignature(brookeOpener) !== draftSignature("a completely different draft"), "intro-strip does not collapse distinct drafts");
+  assert(
+    draftSignature("Yes — it's available at the dealership today.") !== draftSignature("Yes — it's sold at the dealership today."),
+    "content-bearing it's-X-at phrases keep their content (only the intro idiom strips)"
+  );
+  // legacy baseline sigs (written before intro normalization) renormalize at compare time
+  const renamedRow = mk({ draft: alexandraOpener });
+  const renamedScore = scoreTurn(renamedRow, { addressed: false, customerAsk: "model", why: "judge strictness", severity: "minor" });
+  const legacySigBase: Baseline = {
+    [turnKeyOf(renamedRow)]: {
+      pass: true,
+      critical: false,
+      at: "t0",
+      draftSig: "hey rex, it's brooke over at american harley-davidson. i got your request — which model?"
+    }
+  };
+  const legacyDiff = diffAgainstBaseline([renamedScore], legacySigBase);
+  assert(
+    legacyDiff.regressions.length === 0 && legacyDiff.flaky.length === 1,
+    "a rename-only change vs a LEGACY unnormalized sig is a flaky judge flip, not a regression"
+  );
+
+  // confirm-on-refail decision table — fail direction: only a passing rerun recovers
+  assert(resolveRefailOutcome({ rerunFound: false, rerunPass: false }) === "confirmed", "missing rerun fails toward confirming the regression");
+  assert(resolveRefailOutcome({ rerunFound: true, rerunPass: false }) === "confirmed", "a re-failing rerun confirms the regression");
+  assert(resolveRefailOutcome({ rerunFound: true, rerunPass: true }) === "recovered", "a passing rerun is parser nondeterminism, not code");
 
   // findings shape for the next.json fold
   const findings = buildFindings([major, passScore], [major], "2026-07-02T23:00:00.000Z");
