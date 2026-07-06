@@ -183,9 +183,22 @@ function isShortAck(text: string): boolean {
   );
 }
 
+// A draftStatus "stale" draft was dismissed/superseded (discardPendingDrafts /
+// retireSupersededPostSaleCloseoutDrafts) and the console hides it
+// (getLatestPendingDraft). It is NOT the customer's response: counting it as the
+// reply masks a slow_or_missing_response and — worse for a corpus that feeds
+// few-shots — harvests a superseded draft's text as an observed specimen. Skip
+// it in reply selection (parity with #160 / agent_actions_audit).
+function isStaleDraft(msg: AnyObj): boolean {
+  return (
+    String(msg?.provider ?? "").trim().toLowerCase() === "draft_ai" &&
+    String(msg?.draftStatus ?? "").trim().toLowerCase() === "stale"
+  );
+}
+
 function findNextOutbound(messages: AnyObj[], fromIndex: number): AnyObj | null {
   for (let i = fromIndex + 1; i < messages.length; i += 1) {
-    if (String(messages[i]?.direction) === "out") return messages[i];
+    if (String(messages[i]?.direction) === "out" && !isStaleDraft(messages[i])) return messages[i];
   }
   return null;
 }
@@ -341,6 +354,7 @@ function run() {
         for (let j = i + 1; j < messages.length; j += 1) {
           const out = messages[j];
           if (String(out?.direction ?? "").toLowerCase() !== "out") continue;
+          if (isStaleDraft(out)) continue;
           if (!isTrainingOutboundProvider(out?.provider)) continue;
           nextOutbound = out;
           break;
