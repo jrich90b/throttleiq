@@ -50,8 +50,12 @@ export function postSaleAccessoryOrEnjoyMessage(args: {
   isNewBike: boolean;
 }): string {
   const { firstName, repName, dealerName, bikeModel, isNewBike } = args;
+  // Charter: a post-sale follow-up is NOT a first touch, so the full dealer brand name
+  // must be framed as a light re-intro ("this is {rep} at {dealer}") — a bare
+  // "{rep} at {dealer}" trips the voice-charter long_brand_repeat check. The re-intro also
+  // reads naturally weeks after purchase, when the customer may not have the rep saved.
   if (isNewBike) {
-    return `Hi ${firstName} — ${repName} at ${dealerName}. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`;
+    return `Hi ${firstName} — this is ${repName} at ${dealerName}. Quick reminder about Custom Coverage. Any Harley-Davidson accessory we install will go under your full factory warranty on the bike. If you have questions, just let me know.`;
   }
-  return `Hi ${firstName} — ${repName} at ${dealerName}. Hope you're enjoying the ${bikeModel}! If there's anything you need for it, just let me know.`;
+  return `Hi ${firstName} — this is ${repName} at ${dealerName}. Hope you're enjoying the ${bikeModel}! If there's anything you need for it, just let me know.`;
 }

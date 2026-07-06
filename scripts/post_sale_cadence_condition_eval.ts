@@ -43,4 +43,10 @@ assert.ok(/enjoying the Street Glide/i.test(preownedMsg) && /just let me know/i.
 // charter: at most one em-dash in the message (the intro), no doubled em-dash list
 assert.ok((preownedMsg.match(/—/g) || []).length <= 1, "pre-owned message keeps the em-dash diet (<=1)");
 
+// charter long_brand_repeat: a post-sale touch is NOT a first outbound, so the full brand
+// name must be framed as a re-intro ("this is {rep} at {dealer}") to clear the check.
+// Origin: Weston (+17167439566) 2026-07-05 — "Giovanni at American Harley-Davidson" tripped it.
+assert.ok(/this is Giovanni at American Harley-Davidson/.test(preownedMsg), "PRE-OWNED => re-intro phrasing clears charter long_brand_repeat");
+assert.ok(/this is Giovanni at American Harley-Davidson/.test(newMsg), "NEW => re-intro phrasing clears charter long_brand_repeat");
+
 console.log("PASS post-sale cadence condition eval");
