@@ -106,16 +106,19 @@ export function selectIntentJudgeCandidates(
       if (!inboundText || isNonActionableInbound(inboundText)) continue;
       if (m.t < opts.windowStartMs) continue;
 
-      // Find the reply: first SENT outbound or pending draft before the next
-      // customer inbound, within the window. Silence (no reply) is the route
-      // watchdog's job, not this judge's.
+      // Find the reply: first SENT outbound or LIVE pending draft before the next
+      // customer inbound, within the window. A draftStatus "stale" draft was
+      // dismissed/superseded — the console hides it (getLatestPendingDraft), so
+      // it is not "the reply"; counting it would judge a phantom the customer
+      // never got and mask a real no-response (Zachary Bushey class, 2026-07-05).
+      // Silence (no reply) is the route watchdog's job, not this judge's.
       let reply: any = null;
       for (let j = i + 1; j < msgs.length; j++) {
         const n = msgs[j];
         if (n.t - m.t > REPLY_WINDOW) break;
         if (n.direction === "in" && CUSTOMER_IN.has(n.provider) && String(n.body ?? "").trim()) break;
         if (isShadowReplayMessage(n)) continue;
-        if (n.direction === "out" && (SENT_OUT.has(n.provider) || n.provider === "draft_ai")) {
+        if (n.direction === "out" && (SENT_OUT.has(n.provider) || (n.provider === "draft_ai" && n.draftStatus !== "stale"))) {
           if (String(n.body ?? "").trim()) {
             reply = n;
             break;
@@ -305,13 +308,36 @@ function selfTest() {
         { direction: "in", provider: "twilio", at: t(0), body: "Can I reserve one?", providerMessageId: "SMshadow_1" },
         { direction: "out", provider: "draft_ai", at: t(1), body: "shadow", providerMessageId: "SMshadow_2" }
       ]
+    },
+    {
+      // Dismissed (stale) draft with nothing sent after -> the console hides it,
+      // so this is a NO-reply turn (route watchdog's job), NOT a judged reply
+      // (Zachary Bushey class, 2026-07-05).
+      id: "dismissed",
+      messages: [
+        { direction: "in", provider: "twilio", at: t(0), body: "What do I have to do to reserve one" },
+        { direction: "out", provider: "draft_ai", at: t(1), body: "Ok, will do.", draftStatus: "stale" }
+      ]
+    },
+    {
+      // Staff takeover: the AI draft was dismissed (stale) and staff sent their
+      // own reply. Judge the SENT reply the customer got, not the phantom draft.
+      id: "takeover",
+      messages: [
+        { direction: "in", provider: "twilio", at: t(0), body: "Is the bike in store?" },
+        { direction: "out", provider: "draft_ai", at: t(1), body: "phantom dismissed draft", draftStatus: "stale" },
+        { direction: "out", provider: "twilio", at: t(2), body: "Yes, it's on the floor right now — want to swing by today?" }
+      ]
     }
   ];
 
   const { candidates, eligibleTotal } = selectIntentJudgeCandidates(convs, { windowStartMs: Date.parse(base) - 1000 });
   const ids = candidates.map(c => c.convId).sort();
-  assert(JSON.stringify(ids) === JSON.stringify(["good", "nicholas"]), `candidates should be [good, nicholas], got ${JSON.stringify(ids)}`);
-  assert(eligibleTotal === 2, `eligibleTotal should be 2, got ${eligibleTotal}`);
+  assert(JSON.stringify(ids) === JSON.stringify(["good", "nicholas", "takeover"]), `candidates should be [good, nicholas, takeover], got ${JSON.stringify(ids)}`);
+  assert(eligibleTotal === 3, `eligibleTotal should be 3, got ${eligibleTotal}`);
+  assert(!candidates.some(c => c.convId === "dismissed"), "a dismissed (stale) draft with no send is not a judged reply");
+  const take = candidates.find(c => c.convId === "takeover")!;
+  assert(take.replyKind === "sent" && /on the floor/.test(take.replyText), "takeover judges the SENT reply, not the dismissed draft");
   const nick = candidates.find(c => c.convId === "nicholas")!;
   assert(nick.replyKind === "draft", "nicholas reply is a draft");
   assert(buildIntentJudgePrompt(nick).includes("reserve one") && buildIntentJudgePrompt(nick).includes("2026 Other trade"), "prompt carries inbound + reply");
@@ -339,7 +365,10 @@ async function main() {
       if (v) findings.push({ ...c, verdict: v });
     }
     const summary = summarizeFindings(findings);
-    if (summary.judged !== 2 || summary.unaddressed !== 1 || summary.major !== 1 || summary.draftMisses !== 1) {
+    // 3 judged (good, nicholas, takeover); only nicholas is unaddressed. The
+    // takeover's SENT reply is judged (addressed); the dismissed stale draft it
+    // superseded is never judged. The "dismissed" conv yields no candidate.
+    if (summary.judged !== 3 || summary.unaddressed !== 1 || summary.major !== 1 || summary.draftMisses !== 1) {
       console.error(`SELF-TEST FAIL: summary ${JSON.stringify(summary)}`);
       process.exit(1);
     }

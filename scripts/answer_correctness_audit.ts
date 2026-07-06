@@ -109,10 +109,17 @@ function isCustomerInbound(m: AnyObj): boolean {
   );
 }
 function isAgentReply(m: AnyObj): boolean {
-  // Drafts count — a wrong draft is a wrong answer staff might send.
+  // Drafts count — a live pending draft is a wrong answer staff might send — BUT
+  // a draftStatus "stale" draft was dismissed/superseded and the console hides it
+  // (getLatestPendingDraft), so it can no longer be sent. Grading it would flag a
+  // wrong answer the customer never got and staff already replaced, and (because
+  // the reply is the FIRST match in the turn window) it would mask the delivered
+  // send that stands (Zachary Bushey class, 2026-07-05).
   return (
     m?.direction === "out" &&
-    (m?.provider === "draft_ai" || m?.provider === "twilio" || m?.provider === "human") &&
+    ((m?.provider === "draft_ai" && m?.draftStatus !== "stale") ||
+      m?.provider === "twilio" ||
+      m?.provider === "human") &&
     String(m?.body ?? "").trim().length > 0
   );
 }
@@ -227,6 +234,27 @@ function selfTest() {
     now, now - 24 * 60 * 60 * 1000
   );
   if (ambiguous.length !== 0) fail(`multi-option disambiguation must not flag, got ${ambiguous.length}`);
+  // A dismissed (stale) draft that offered the owned bike must NOT flag — the
+  // console hides it and staff already moved on (Zachary Bushey class, 7/5).
+  const staleOwned = auditConversations(
+    [{ id: "stale", lead: {}, messages: [
+      { direction: "in", provider: "twilio", at: "2026-06-13T13:00:00.000Z", body: "as long as it's a roadglide compared to my current ultra limited" },
+      { direction: "out", provider: "draft_ai", at: "2026-06-13T13:00:00.000Z", body: "We have 2 Ultra Limited units in stock right now.", draftStatus: "stale" }
+    ] }],
+    now, now - 24 * 60 * 60 * 1000
+  );
+  if (staleOwned.length !== 0) fail(`a dismissed (stale) draft must not be graded, got ${staleOwned.length}`);
+  // Staff takeover: dismissed wrong draft + a clean human send -> grade the SENT
+  // reply the customer got, not the phantom draft.
+  const takeover = auditConversations(
+    [{ id: "takeover", lead: {}, messages: [
+      { direction: "in", provider: "twilio", at: "2026-06-13T14:00:00.000Z", body: "as long as it's a roadglide compared to my current ultra limited" },
+      { direction: "out", provider: "draft_ai", at: "2026-06-13T14:00:00.000Z", body: "We have 2 Ultra Limited units in stock right now.", draftStatus: "stale" },
+      { direction: "out", provider: "twilio", at: "2026-06-13T14:01:00.000Z", body: "We've got a dozen Road Glides on the floor — want to set up a ride?" }
+    ] }],
+    now, now - 24 * 60 * 60 * 1000
+  );
+  if (takeover.length !== 0) fail(`staff takeover must be graded on the SENT reply, not the dismissed draft, got ${takeover.length}`);
   console.log("PASS answer correctness audit self-test");
 }
 

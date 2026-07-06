@@ -25,10 +25,15 @@ function arg(name: string, fallback: string): string {
 
 const CUSTOMER_IN = (m: any) =>
   m?.direction === "in" && (m?.provider === "twilio" || m?.provider === "web_widget") && String(m?.body ?? "").trim();
-// Agent replies that reached / are queued for the customer. Exclude ADF-form echoes + internal.
+// Agent replies that reached / are queued for the customer. Exclude ADF-form
+// echoes + internal, AND draftStatus "stale" drafts: a stale draft was
+// dismissed/superseded and the console hides it (getLatestPendingDraft), so it
+// never reached the customer — flagging its frame is a phantom (Zachary Bushey
+// class, 2026-07-05). A live pending draft still counts (staff may send it).
 const AGENT_OUT = (m: any) =>
   m?.direction === "out" &&
-  (m?.provider === "twilio" || m?.provider === "human" || m?.provider === "sendgrid" || m?.provider === "draft_ai") &&
+  (m?.provider === "twilio" || m?.provider === "human" || m?.provider === "sendgrid" ||
+    (m?.provider === "draft_ai" && m?.draftStatus !== "stale")) &&
   String(m?.body ?? "").trim();
 
 type Finding = {
@@ -115,7 +120,29 @@ function selfTest(): void {
   assert.equal(anomalies[0].category, "comprehension", "fabricated frame classifies as comprehension (→ parser_fix_candidate)");
   assert.equal(fabricatedFrameAnomalies([{ ...found[0], replyKind: "draft" }]).length, 0, "a DRAFT fabricated frame is NOT promoted to the feed");
 
-  console.log("PASS fabricated-frame audit self-test (gratitude + question detection + scan/pairing + window + unified-feed adapter)");
+  // A dismissed (stale) draft that fabricated a frame must NOT be scanned — the
+  // console hides it, so it never reached the customer (Zachary Bushey class, 7/5).
+  const staleConv = {
+    id: "+stale", lead: { firstName: "z" },
+    messages: [
+      { direction: "in", provider: "twilio", at: "2026-06-16T13:56:00Z", body: "I absolutely love my bike, was more curiosity of what the value is" },
+      { direction: "out", provider: "draft_ai", at: "2026-06-16T14:23:00Z", body: "You're welcome. Which bike are you looking at so I can run it correctly?", draftStatus: "stale" }
+    ]
+  };
+  assert.equal(scanConversation(staleConv, Date.parse("2026-06-16T00:00:00Z")).length, 0, "a dismissed (stale) draft frame must not be flagged");
+  // A LIVE (non-stale) draft with the same frame is still flagged, as a draft.
+  const liveDraftConv = {
+    id: "+live", lead: { firstName: "z" },
+    messages: [
+      { direction: "in", provider: "twilio", at: "2026-06-16T13:56:00Z", body: "I absolutely love my bike, was more curiosity of what the value is" },
+      { direction: "out", provider: "draft_ai", at: "2026-06-16T14:23:00Z", body: "You're welcome. Which bike are you looking at so I can run it correctly?" }
+    ]
+  };
+  const liveFound = scanConversation(liveDraftConv, Date.parse("2026-06-16T00:00:00Z"));
+  assert.equal(liveFound.length, 1, "a live pending draft frame is still flagged");
+  assert.equal(liveFound[0].replyKind, "draft", "live pending draft frame flagged as a draft");
+
+  console.log("PASS fabricated-frame audit self-test (gratitude + question detection + scan/pairing + window + stale-draft exclusion + unified-feed adapter)");
 }
 
 // Adapter: SENT fabricated-frame replies → OutcomeAnomaly entries for the unified
