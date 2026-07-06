@@ -53977,18 +53977,18 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }
       return respondWithSmsRegeneratedDraft(reply);
     }
-    const complimentRegex =
-      /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
-      /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
-      /\b(v&h|short shots?)\b/.test(t) ||
-      (/\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) &&
-        /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t));
+    // Compliment detection is COMPREHENSION → LLM classifier only (AGENTS.md: comprehend,
+    // never regex). The old keyword regex hijacked any service-routed question containing
+    // "like/great/nice" — "the only thing I would LIKE to do is upgrade my exhaust, is that
+    // covered?" got "Totally — glad you like it." (Plinio +17162280349, 7/6 corpus sweep).
+    // Fail direction on LLM-null: fall through to the service handoff (a todo + real answer
+    // path), never a canned compliment ack.
     const complimentLLM =
       (await classifyComplimentWithLLM({
         text: event.body ?? "",
         history: buildHistory(conv, 6)
       })) ?? false;
-    if (complimentRegex || complimentLLM) {
+    if (complimentLLM) {
       const reply = "Totally — glad you like it.";
       if (channel === "email") {
         return respondWithEmailRegeneratedDraft(reply);
@@ -57559,18 +57559,15 @@ if (authToken && signature) {
       const reply = buildServiceStatusUpdateHandoffReply();
       return publishLiveTwilioReply(reply);
     }
-    const complimentRegex =
-      /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t) ||
-      /\b(looks great|looks amazing|looks awesome|sounds great)\b/.test(t) ||
-      /\b(v&h|short shots?)\b/.test(t) ||
-      (/\b(wheels?|exhaust|pipes?|paint|color|trim|bars?|seat)\b/.test(t) &&
-        /\b(love|like|awesome|amazing|great|cool|nice|sweet|beautiful|killer|badass|sick|clean)\b/.test(t));
+    // Compliment detection is COMPREHENSION → LLM classifier only (AGENTS.md: comprehend,
+    // never regex) — same as the regenerate path; see the mirror site there. Fail direction
+    // on LLM-null: fall through to the service handoff, never a canned compliment ack.
     const complimentLLM =
       (await classifyComplimentWithLLM({
         text: event.body ?? "",
         history: buildHistory(conv, 6)
       })) ?? false;
-    if (complimentRegex || complimentLLM) {
+    if (complimentLLM) {
       const reply = "Totally — glad you like it.";
       return publishLiveTwilioReply(reply);
     }
