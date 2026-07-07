@@ -1247,7 +1247,22 @@ async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{
       'input[name="username"]',
       'input[name="UserName"]'
     ]);
-    const passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+    let passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+    if (!passwordReady && !staySignedIn && !accountPicker) {
+      // COAX AUTOFILL (2026-07-06): Chrome deliberately defers filling a saved
+      // password on some pages until the field gets a user gesture (anti-scraping),
+      // so a saved credential can still present as an empty box. A single CLICK into
+      // the field — focus only, nothing typed or read — lets Chrome fill natively;
+      // then re-check. If Chrome still doesn't fill (no saved credential, or it
+      // offers only its browser-UI dropdown, which page automation can't drive), we
+      // fall through to the same stop-for-a-human as before.
+      const passwordField = page.locator('input[type="password"]:visible').first();
+      if (await passwordField.count().catch(() => 0)) {
+        await passwordField.click({ timeout: 5_000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+      }
+    }
     let clicked = false;
     if (staySignedIn) {
       clicked = await clickLoginAction(page, ["Yes", "Continue"]);
