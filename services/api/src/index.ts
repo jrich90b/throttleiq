@@ -5675,6 +5675,20 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   ) {
     return false;
   }
+  // REVERSE distinct-model guard (+17165104578, 2026-07-03): a MORE-specific watch
+  // ("Street Glide Special") must NOT fire on a LESS-specific unit ("Street Glide").
+  // detectGenericWatchFamilyLabel classifies a trim-bearing label like "Street Glide
+  // Special" as its BASE family ("street_glide"), so familyMatch turns true and the
+  // forward guard above (gated on !genericWatchFamily && !familyMatch) is bypassed —
+  // a base unit then wrongly satisfies a trim-specific watch (base "Street Glide"
+  // stock U902-24 fired a "Street Glide Special" watch). This mirror of the forward
+  // guard is deliberately NOT gated on familyMatch, so the family-umbrella branch
+  // can't slip a distinct-trim watch past it. Purely subtractive (only ever blocks a
+  // fire), so its worst case is a missed fire the watch_fire_miss detector re-surfaces;
+  // it can never create a false notification. openToOtherTrims relaxes it.
+  if (!watch.openToOtherTrims && unitIsDistinctModelFromWatch(watch.model, item.model)) {
+    return false;
+  }
   const itemModelIsCodeOnly = modelTextLooksLikeCatalogCode(item.model);
   if (
     genericWatchFamily &&

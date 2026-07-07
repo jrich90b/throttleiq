@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { inventoryItemMatchesWatch } from "../services/api/src/domain/watchFireMiss.ts";
+import { unitIsDistinctModelFromWatch } from "../services/api/src/domain/inventoryFeed.ts";
 
 const m = (itemModel: string, watchModel: string) =>
   inventoryItemMatchesWatch({ model: itemModel } as any, { model: watchModel, status: "active", createdAt: "" } as any);
@@ -47,11 +48,29 @@ assert.equal(m("Street Glide Special", "Street Glide Special"), true, "exact tri
 assert.equal(m("Breakout", "Breakout"), true, "exact model match still matches");
 assert.equal(m("Street Glide Special Black", "Street Glide Special"), true, "a more-specific COLOR unit still satisfies the trim watch (color is not a distinct model)");
 
-// Source guard: the ENGINE's matcher (index.ts) is directional AND carries the
-// distinct-model guard, so it stays in sync with the detector matcher here.
+// REVERSE distinct-model direction (+17165104578, 2026-07-03): the ENGINE matcher
+// (index.ts) misclassified a trim-bearing watch "Street Glide Special" as its BASE
+// family "street_glide" (detectGenericWatchFamilyLabel), so familyMatch turned true
+// and the FORWARD guard above (gated on !genericWatchFamily && !familyMatch) was
+// bypassed — a base "Street Glide" unit (stock U902-24) fired the "Street Glide
+// Special" watch. The detector matcher `m()` never hit this (no family umbrella), so
+// the assertions above stayed green while the engine drifted. Pin the reverse-direction
+// semantics the engine guard relies on, plus a source guard that the engine applies it.
+assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide"), true, "a 'Special' watch vs a base unit → watch is distinct → engine must block the fire");
+assert.equal(unitIsDistinctModelFromWatch("CVO Street Glide", "Street Glide"), true, "a CVO watch vs a base unit → distinct → block");
+assert.equal(unitIsDistinctModelFromWatch("Touring", "Street Glide"), false, "a true umbrella watch carries no distinct token → still fires on family units");
+assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide Special"), false, "exact-trim watch → not distinct from itself → still fires");
+assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide Special Black"), false, "a 'Special' watch vs a more-specific COLOR unit → not distinct → still fires");
+assert.equal(unitIsDistinctModelFromWatch("Street Glide", "Street Glide Special"), false, "base watch vs specific unit → forward direction (handled by the other guard), not this one");
+
+// Source guard: the ENGINE's matcher (index.ts) is directional AND carries BOTH the
+// forward and the reverse distinct-model guards, so it stays in sync with the detector
+// matcher here — a family-umbrella misclassification can no longer slip a trim-specific
+// watch onto a base unit.
 const idx = fs.readFileSync("services/api/src/index.ts", "utf8");
 assert.match(idx, /const directMatch = itemModel\.includes\(watchModel\);/, "engine directMatch must be directional (unit includes watch)");
 assert.ok(!/itemModel\.includes\(watchModel\) \|\| watchModel\.includes\(itemModel\)/.test(idx), "the bidirectional matcher (the bug) must be gone");
-assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the distinct-model guard");
+assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the forward distinct-model guard");
+assert.match(idx, /unitIsDistinctModelFromWatch\(watch\.model, item\.model\)/, "engine matcher must apply the REVERSE distinct-model guard (a trim-specific watch must not fire on a base unit)");
 
-console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units; base/exact matches preserved; engine matcher guarded.");
+console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; engine matcher guarded.");
