@@ -152,8 +152,7 @@ assert.ok(
   "the initial-ADF draft must divert a non-sales event_promo lead to the ack"
 );
 
-// Demo-ride soft invite wired at BOTH draft chokepoints (orchestrator + initial-ADF), and the
-// no-cadence close still keys on the whole event_promo bucket (covers demo_ride_event).
+// Demo-ride soft invite wired at BOTH draft chokepoints (orchestrator + initial-ADF).
 assert.ok(
   /buildDemoRideEventSoftInvite/.test(orchestrator),
   "orchestrateInbound must draft a demo_ride_event lead with the shared soft invite"
@@ -162,9 +161,21 @@ assert.ok(
   /buildDemoRideEventSoftInvite/.test(sendgrid) && /cta === "demo_ride_event"/.test(sendgrid),
   "the initial-ADF draft must override a demo_ride_event lead with the shared soft invite"
 );
+// GLA demo-ride leads are NOT auto-closed (Joe, 2026-07-07): genuine sweepstakes/RSVP
+// (event_promo, cta !== demo_ride_event) still close with no cadence, but a demo_ride_event
+// lead stays OPEN and visible so staff can work it. The terminal close must exclude it.
 assert.ok(
-  /closeConversation\(conv, "event_promo_no_cadence"\)/.test(sendgrid),
-  "the event_promo bucket (incl. demo_ride_event) must close with no follow-up cadence"
+  /bucket === "event_promo" && conv\.classification\?\.cta !== "demo_ride_event"[\s\S]*?closeConversation\(conv, "event_promo_no_cadence"\)/.test(
+    sendgrid
+  ),
+  "the event_promo close must EXCLUDE demo_ride_event — GLA demo rides stay open/visible; genuine sweepstakes/RSVP still close"
+);
+// "Soft invite, then NO follow-up" holds independently of the close: cadence stays
+// suppressed for the WHOLE event_promo bucket (incl. demo_ride_event) via the
+// shouldStartCadence gate, so keeping the demo-ride lead open does not start a cadence.
+assert.ok(
+  /shouldStartCadence[\s\S]*?bucket !== "event_promo"/.test(sendgrid),
+  "cadence must stay suppressed for the whole event_promo bucket (incl. demo_ride_event) independent of the close"
 );
 
 const ackCount = rows.filter(r => r.ack).length;

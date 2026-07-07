@@ -8937,9 +8937,11 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // Corporate/GLA demo-ride program lead (bucket=event_promo, cta=demo_ride_event): the ride
   // does NOT happen at the dealership, so the finalized sales draft ("which bike are you asking
   // about?" / scheduling times / availability+photo appends) is out of context. Override with
-  // ONE soft invite; the event_promo bucket close below (`event_promo_no_cadence`) guarantees
-  // no follow-up cadence (operator-reported, Joe 2026-07-02). Mirrors the orchestrator's
-  // demo_ride_event branch — same builder, both paths. Pinned by event_promo_ack:eval.
+  // ONE soft invite. No follow-up cadence is guaranteed by the shouldStartCadence gate below
+  // (bucket !== "event_promo"). The event_promo close below is narrowed to EXCLUDE
+  // demo_ride_event, so — unlike a genuine sweepstakes/RSVP — a GLA lead stays OPEN and visible
+  // for staff to work (Joe, 2026-07-02 soft-invite; 2026-07-07 keep-open). Mirrors the
+  // orchestrator's demo_ride_event branch — same builder, both paths. Pinned by event_promo_ack:eval.
   if (conv.classification?.bucket === "event_promo" && conv.classification?.cta === "demo_ride_event") {
     const drAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
     const drDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
@@ -9032,7 +9034,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // Store the draft as an outbound message (suggest-only for now)
     queueInitialDraftForPreferredContact(draft, initialMediaUrls);
   }
-  if (conv.classification?.bucket === "event_promo") {
+  // Event-promo/sweepstakes/RSVP ADFs are one-and-done: draft the ack, then close with
+  // no cadence. EXCEPT GLA demo-ride leads (cta "demo_ride_event"): those are corporate
+  // Harley-event demo rides, not sweepstakes — staff need to see and work them (Joe,
+  // 2026-07-07). They get the soft-invite draft (buildDemoRideEventSoftInvite, above) and
+  // then stay OPEN and visible. Cadence is already suppressed for the whole event_promo
+  // bucket independently, by the shouldStartCadence gate below (bucket !== "event_promo"),
+  // so keeping demo-ride open does NOT start a follow-up cadence — the spec is: soft
+  // invite, then no follow-up. Only the terminal close is narrowed here.
+  if (conv.classification?.bucket === "event_promo" && conv.classification?.cta !== "demo_ride_event") {
     closeConversation(conv, "event_promo_no_cadence");
     stopFollowUpCadence(conv, "manual_handoff");
   }
