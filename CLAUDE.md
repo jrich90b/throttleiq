@@ -13,6 +13,22 @@ inbound handler `index.ts`), `apps/web` (Next.js dealer console), `packages/` (s
 Persistence: JSON files today, Postgres in dual-write shadow. Prod runs in **suggest
 mode** (staff approve every draft).
 
+## How to talk to Joe (communication style — Joe, 2026-07-06)
+Joe runs the dealership and is **not a programmer**. Explain everything in plain English,
+as if to a smart teenager with zero coding experience:
+- Lead with what it means for the business / the agent / his day — not the code.
+- No jargon without an instant plain-words translation, e.g. "the parser (the piece that
+  reads what the customer meant)" or "CDP (the remote-control connection to Chrome)".
+- Prefer everyday phrasing: "the form stays hidden until both dates are filled in," not
+  "the selector resolved but failed the visibility check."
+- Analogies are good. Short sentences are good.
+- File paths, function names, and technical detail go AFTER the plain-English version —
+  as supporting detail, never as the explanation itself.
+- When Joe has to make a decision, state the choice in plain terms, what each option
+  means for him, and your recommendation.
+This changes HOW you explain, not WHAT you do — every engineering rule in this file and
+AGENTS.md still applies at full strictness.
+
 ## The non-negotiables (full detail in AGENTS.md)
 1. **Comprehend, never regex.** Customer intent is read by typed LLM parsers
    (`requestStructuredJson` + `*_JSON_SCHEMA`, strict structured outputs), never by
