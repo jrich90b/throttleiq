@@ -126,5 +126,26 @@
       "model_contains": "cvo road glide st",
       "year": 2026
     }
+  },
+  {
+    "id": "era_early_2000s_low_rider_1",
+    "text": "Any early 2000s lowriders?",
+    "expected": {
+      "is_availability_question": true,
+      "model_contains": "low rider",
+      "year": null,
+      "year_min": 2000,
+      "year_max": 2005
+    }
+  },
+  {
+    "id": "era_2015_or_older_street_glide_1",
+    "text": "do you have any street glides 2015 or older?",
+    "expected": {
+      "is_availability_question": true,
+      "model_contains": "street glide",
+      "year": null,
+      "year_max": 2015
+    }
   }
 ]

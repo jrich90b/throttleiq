@@ -15,6 +15,8 @@ type Example = {
     model_contains?: string | null;
     model_not_contains?: string | null;
     year?: number | null;
+    year_min?: number | null;
+    year_max?: number | null;
     color_contains?: string | null;
     stock_id?: string | null;
     condition?: "new" | "used" | "unknown" | null;
@@ -88,6 +90,12 @@ for (const ex of examples) {
   }
   if (Object.hasOwn(expected, "year")) {
     checks.push((result.year ?? null) === expected.year);
+  }
+  if (Object.hasOwn(expected, "year_min")) {
+    checks.push((result.yearMin ?? null) === expected.year_min);
+  }
+  if (Object.hasOwn(expected, "year_max")) {
+    checks.push((result.yearMax ?? null) === expected.year_max);
   }
   if (Object.hasOwn(expected, "color_contains")) {
     checks.push(
