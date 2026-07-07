@@ -14,6 +14,7 @@ import {
   findMissingFormControls,
   marketingActivityOptionIssue,
   missingActivityDatesSummary,
+  pickAccountTileLabel,
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
   type CdpTargetStats
@@ -1207,15 +1208,38 @@ async function clickLoginAction(page: any, labels: string[]): Promise<boolean> {
   }, labels).catch(() => false);
 }
 
+/**
+ * Click the sole dealer account tile on Microsoft's "Pick an account" screen —
+ * credential-free (it only chooses the account; autofill/sign-in continues after).
+ * Tile choice is the pure pickAccountTileLabel (sole @h-dnet.com tile, else the
+ * sole account tile; ambiguity → no click → stop for a human).
+ */
+async function clickAccountPickerTile(page: any): Promise<boolean> {
+  const tiles = await page
+    .locator('[role="listitem"] [role="button"], [data-test-id], div.table[role="button"], button')
+    .allTextContents()
+    .catch(() => [] as string[]);
+  const label = pickAccountTileLabel(tiles);
+  if (!label) return false;
+  const email = (label.match(/[\w.+-]+@[\w.-]+/) ?? [])[0];
+  if (!email) return false;
+  const tile = page.getByText(email, { exact: false }).first();
+  if (!(await tile.count().catch(() => 0))) return false;
+  await tile.click({ timeout: 10_000 }).catch(() => {});
+  return true;
+}
+
 async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{ attempted: boolean; advanced: boolean }> {
   if (!options.useSavedChromeLogin) return { attempted: false, advanced: false };
   let attempted = false;
-  for (let step = 0; step < 3; step += 1) {
+  // 4 steps: account picker → autofilled password → "Stay signed in" → landing.
+  for (let step = 0; step < 4; step += 1) {
     const text = await pageBodyText(page);
     const url = page.url();
     if (!isLoginPage(text) && !/login\.microsoftonline\.com/i.test(url)) {
       return { attempted, advanced: attempted };
     }
+    const accountPicker = /pick an account/i.test(text);
     const staySignedIn = /stay signed in|keep me signed in/i.test(text);
     const emailReady = await hasChromeAutofilledInput(page, [
       'input[type="email"]',
@@ -1227,6 +1251,10 @@ async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{
     let clicked = false;
     if (staySignedIn) {
       clicked = await clickLoginAction(page, ["Yes", "Continue"]);
+    } else if (accountPicker) {
+      // 2026-07-06: a fresh sign-in opens on the tile picker; the click-through
+      // stopped one credential-free click short of the autofilled-password step.
+      clicked = await clickAccountPickerTile(page);
     } else if (passwordReady) {
       clicked = await clickLoginAction(page, ["Sign in", "Log in", "Continue", "Submit"]);
     } else if (emailReady) {

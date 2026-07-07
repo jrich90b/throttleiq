@@ -236,3 +236,22 @@ export function portalFormDidNotExpandSummary(): string {
     "Open the Create MDF Recap form in the runner's Chrome, check what it asks for after the dates, and update the runner if the form changed."
   );
 }
+
+/**
+ * Microsoft "Pick an account" tile selection (saved-login click-through). Clicking
+ * an account TILE is credential-free — it only chooses which account the ordinary
+ * autofill/sign-in flow continues with — so it sits on the allowed side of the
+ * runner's login rule (click Next/Sign-in: yes; read/type credentials: never).
+ * Deterministic + conservative: pick the sole dealer-domain (@h-dnet.com) tile, or
+ * the sole account-looking tile ("Use another account" / "Open menu" have no @ and
+ * never match). ANY ambiguity → null → the runner stops for a human, the same
+ * fail-direction as an unfillable password. (Production 2026-07-06: the fresh
+ * sign-in flow opened on this picker and the click-through stopped one tile short.)
+ */
+export function pickAccountTileLabel(tileLabels: string[]): string | null {
+  const candidates = tileLabels.map(t => String(t ?? "").trim()).filter(t => /@/.test(t));
+  const dealer = candidates.filter(t => /@h-?dnet\.com/i.test(t));
+  if (dealer.length === 1) return dealer[0];
+  if (!dealer.length && candidates.length === 1) return candidates[0];
+  return null;
+}

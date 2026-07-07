@@ -21,6 +21,7 @@ import {
   formatMissingControls,
   marketingActivityOptionIssue,
   missingActivityDatesSummary,
+  pickAccountTileLabel,
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary
 } from "./mdf_portal_preflight.ts";
@@ -237,5 +238,47 @@ for (const [label, summary] of [
   assert.equal(flagged.length, 1, `${label} classified summary is still detected by mdf-portal-health`);
   assert.equal(flagged[0].dimension, "mdf_assistant_failure", `${label} summary maps to mdf_assistant_failure`);
 }
+
+// ---------------------------------------------------------------------------
+// 10) Account-picker tile choice (saved-login click-through) — pins the 2026-07-06
+//     gap: a fresh Microsoft sign-in opens on "Pick an account" and the credential-
+//     free click-through stopped one tile short of the autofilled-password step.
+//     Tile choice must be deterministic and conservative: sole dealer tile wins,
+//     ambiguity NEVER auto-picks (fail toward the human, like an unfillable
+//     password), and non-account chrome ("Use another account") never matches.
+// ---------------------------------------------------------------------------
+
+// The live 2026-07-06 picker: one dealer tile + Microsoft's chrome buttons.
+assert.equal(
+  pickAccountTileLabel(["Sign in with j.hartri3@h-dnet.com work or school account.", "Open menu", "Use another account"]),
+  "Sign in with j.hartri3@h-dnet.com work or school account.",
+  "the sole @h-dnet.com tile is picked"
+);
+// A personal account alongside the dealer tile → dealer wins.
+assert.equal(
+  pickAccountTileLabel(["Sign in with joe@gmail.com personal account.", "Sign in with j.hartri3@h-dnet.com work or school account.", "Use another account"]),
+  "Sign in with j.hartri3@h-dnet.com work or school account.",
+  "the dealer-domain tile wins over a personal account"
+);
+// No dealer tile but exactly one account → that one (single-account machine).
+assert.equal(
+  pickAccountTileLabel(["Sign in with joe@example.com work or school account.", "Use another account"]),
+  "Sign in with joe@example.com work or school account.",
+  "a sole account tile is picked when no dealer tile exists"
+);
+// TWO dealer tiles (or two accounts, none dealer) = ambiguous → null → human.
+assert.equal(
+  pickAccountTileLabel(["a@h-dnet.com", "b@h-dnet.com"]),
+  null,
+  "two dealer tiles is ambiguous — never auto-pick"
+);
+assert.equal(
+  pickAccountTileLabel(["a@example.com", "b@example.com"]),
+  null,
+  "two non-dealer accounts is ambiguous — never auto-pick"
+);
+// Only chrome buttons (no @) → null.
+assert.equal(pickAccountTileLabel(["Use another account", "Open menu", "Back"]), null, "non-account buttons never match");
+assert.equal(pickAccountTileLabel([]), null, "empty picker → null");
 
 console.log("PASS mdf portal preflight eval");
