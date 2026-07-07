@@ -27,7 +27,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isJustifiedLongTermCadencePark } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isCadenceHeldByIndefiniteDeferral,
+  isJustifiedLongTermCadencePark
+} from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -123,13 +126,18 @@ export function auditConversations(
         // Stalled: due in the past beyond the scheduler's normal catch-up.
         // Holds, handoffs, and open staff todos intentionally park the
         // cadence (the scheduler skips them by design) — those are staff
-        // queues, not scheduler failures.
+        // queues, not scheduler failures. The engine ALSO holds when the last
+        // inbound is an indefinite deferral ("I'll let you know") — that hold
+        // is re-derived from the message text each tick, never persisted, so
+        // model it here with the engine's own predicate or a correctly-held
+        // cadence dirties the gate every day (John Miller +15857657010).
         const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
         const intentionallyParked =
           followUpMode === "holding_inventory" ||
           followUpMode === "manual_handoff" ||
           followUpMode === "paused_indefinite" ||
-          openTodoConvIds.has(String(conv.id));
+          openTodoConvIds.has(String(conv.id)) ||
+          isCadenceHeldByIndefiniteDeferral(conv);
         const daysLate = (nowMs - dueMs) / DAY_MS;
         if (daysLate > 2 && !intentionallyParked) {
           stalled.push({
@@ -406,6 +414,30 @@ function selfTest() {
         nextDueAt: "2027-03-10T12:34:00.000Z",
         anchorAt: "2026-04-01T00:00:00.000Z"
       }
+    },
+    // Overdue cadence whose LAST inbound is an indefinite deferral ("I'll let
+    // you know…"): the tick holds it by design (John Miller class) — NOT stalled.
+    {
+      id: "+14",
+      status: "open",
+      lead: { firstName: "Deferred" },
+      messages: [
+        { direction: "out", body: "Thanks for signing up for this year's ride challenge!" },
+        { direction: "in", body: "Thank you for reaching out Alexander I will let you know if I need anything" }
+      ],
+      followUpCadence: { status: "active", kind: "standard", nextDueAt: "2026-06-07T00:00:00.000Z" }
+    },
+    // Overdue cadence whose last inbound is an ENGAGED question: the hold does
+    // NOT apply — this must stay flagged (guards against over-excluding).
+    {
+      id: "+15",
+      status: "open",
+      lead: { firstName: "Engaged" },
+      messages: [
+        { direction: "in", body: "That sounds great, what colors do you have in stock?" },
+        { direction: "out", body: "We have Vivid Black and Whiskey Fever." }
+      ],
+      followUpCadence: { status: "active", kind: "standard", nextDueAt: "2026-06-07T00:00:00.000Z" }
     }
   ];
   const results = auditConversations(convs, { nowMs, openTodoConvIds: new Set(["+10"]) });
@@ -422,8 +454,12 @@ function selfTest() {
   if (farFutureIds.includes("+11")) fail("far_future must exclude the justified long_term park (+11)");
   if (!farFutureIds.includes("+12")) fail("far_future must still flag a long_term park on the rollover fingerprint (+12)");
   if (!farFutureIds.includes("+13")) fail("far_future must still flag a long_term park with no deferred message (+13)");
-  if (byCheck.cadence_stalled.total !== 1 || byCheck.cadence_stalled.offenders[0].convId !== "+3") {
-    fail("stalled flags the overdue cadence only");
+  const stalledIds = byCheck.cadence_stalled.offenders.map((o: Offender) => o.convId);
+  if (byCheck.cadence_stalled.total !== 2 || !stalledIds.includes("+3") || !stalledIds.includes("+15")) {
+    fail(`stalled expected +3 and +15 only, got: ${stalledIds.join(",")}`);
+  }
+  if (stalledIds.includes("+14")) {
+    fail("stalled must exclude a cadence held by an indefinite deferral last inbound (+14)");
   }
   if (byCheck.watch_orphaned.total !== 1 || byCheck.watch_orphaned.offenders[0].convId !== "+4") {
     fail("watch_orphaned flags the closed conv watch");

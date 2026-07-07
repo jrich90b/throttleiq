@@ -16,6 +16,7 @@ import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
+import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates } from "./domain/tlpLogCatchup.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
@@ -29762,11 +29763,9 @@ async function processDueFollowUpsUnlocked() {
 
   const parsePauseUntil = (text: string, base: Date): { until?: Date; indefinite?: boolean } => {
     const t = text.toLowerCase();
-    if (
-      /((i|we)('| )?ll let you know|(i|we) will let you know|(i|we)('| )?ll reach out|(i|we) will reach out|(i|we)('| )?ll get back to you|(i|we) will get back to you)/.test(
-        t
-      )
-    ) {
+    // Shared with the actions audit's cadence_stalled exclusion (scoringExclusions.ts) so the
+    // detector models the exact hold this gate applies — one predicate, no drift.
+    if (isIndefiniteFollowUpDeferralText(t)) {
       return { indefinite: true };
     }
 

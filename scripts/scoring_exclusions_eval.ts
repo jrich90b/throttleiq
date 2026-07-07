@@ -9,8 +9,10 @@ import path from "node:path";
 import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
+  isCadenceHeldByIndefiniteDeferral,
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
+  isIndefiniteFollowUpDeferralText,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
   isOptOutKeywordInbound,
@@ -18,6 +20,41 @@ import {
   isTestLeadEmail,
   isYearRolloverParkFingerprint
 } from "../services/api/src/domain/scoringExclusions.ts";
+
+// Indefinite follow-up deferral (the engine's cadence-tick hold; John Miller
+// +15857657010 dirtied the gate daily 7/1-7/7 because the stalled detector
+// couldn't see this hold).
+assert.equal(
+  isIndefiniteFollowUpDeferralText("Thank you for reaching out Alexander I will let you know if I need anything"),
+  true
+); // live case
+assert.equal(isIndefiniteFollowUpDeferralText("I'll let you know"), true);
+assert.equal(isIndefiniteFollowUpDeferralText("We will reach out when we're ready"), true);
+assert.equal(isIndefiniteFollowUpDeferralText("I'll get back to you next week"), true);
+assert.equal(isIndefiniteFollowUpDeferralText("Can you let me know when it arrives?"), false); // customer asks US to reach out
+assert.equal(isIndefiniteFollowUpDeferralText("What colors do you have?"), false);
+assert.equal(isIndefiniteFollowUpDeferralText(""), false);
+// Conversation level: only the LAST non-empty inbound counts (a new customer
+// message clears the hold by becoming the new last inbound).
+assert.equal(
+  isCadenceHeldByIndefiniteDeferral({
+    messages: [
+      { direction: "out", body: "Thanks for signing up!" },
+      { direction: "in", body: "I will let you know if I need anything" }
+    ]
+  }),
+  true
+);
+assert.equal(
+  isCadenceHeldByIndefiniteDeferral({
+    messages: [
+      { direction: "in", body: "I will let you know if I need anything" },
+      { direction: "in", body: "Actually — is the Fat Boy still available?" }
+    ]
+  }),
+  false
+);
+assert.equal(isCadenceHeldByIndefiniteDeferral({ messages: [] }), false);
 
 // Shadow replay markers (scripts/inbound_shadow_replay.ts id formats).
 assert.equal(isShadowReplayMessage({ providerMessageId: "SMshadow1781172955abc123" }), true);
@@ -209,7 +246,12 @@ const wiring: Array<[string, RegExp[]]> = [
   [
     "scripts/route_audit_watchdog.ts",
     [/isShadowReplayMessage\(m\)/, /isAutomatedSenderInbound\(/, /isNonSalesConversation\(conv\)/]
-  ]
+  ],
+  // The engine's cadence tick and the actions audit must share ONE indefinite-
+  // deferral predicate — if either side re-inlines its own copy they drift and
+  // the John Miller class (correct hold flagged "stalled" daily) comes back.
+  ["services/api/src/index.ts", [/isIndefiniteFollowUpDeferralText\(t\)/]],
+  ["scripts/agent_actions_audit.ts", [/isCadenceHeldByIndefiniteDeferral\(conv\)/]]
 ];
 for (const [file, patterns] of wiring) {
   const src = await fs.readFile(path.resolve(file), "utf8");

@@ -245,3 +245,44 @@ export function isJustifiedLongTermCadencePark(cadence: {
   if (isYearRolloverParkFingerprint(cadence.nextDueAt)) return false;
   return true;
 }
+
+/**
+ * Indefinite follow-up deferral: the customer said THEY will re-initiate
+ * ("I'll let you know", "we'll reach out", "I'll get back to you").
+ *
+ * KEEP-class deterministic safety gate (fail-direction: toward NOT contacting).
+ * The cadence tick (index.ts parsePauseUntil) holds every proactive touch while
+ * the conversation's LAST inbound matches this — correct behavior per Joe's
+ * policy (don't nag an opted-down customer; any new inbound clears the hold by
+ * becoming the new last inbound). This is the ENGINE's live gate, exported so
+ * detectors share the exact predicate and can never drift from it.
+ */
+export function isIndefiniteFollowUpDeferralText(text: string | null | undefined): boolean {
+  const t = String(text ?? "").toLowerCase();
+  return /((i|we)('| )?ll let you know|(i|we) will let you know|(i|we)('| )?ll reach out|(i|we) will reach out|(i|we)('| )?ll get back to you|(i|we) will get back to you)/.test(
+    t
+  );
+}
+
+/**
+ * The engine's indefinite-deferral hold, at conversation level: the LAST
+ * inbound message says the customer will re-initiate, so the cadence tick
+ * skips this conversation every pass — by design — while nextDueAt stays
+ * frozen in the past. The actions audit's "cadence_stalled" check must model
+ * this hold or a correctly-held cadence dirties the release gate every day
+ * (John Miller +15857657010, flagged 2026-07-01→07-07). Mirrors the tick's
+ * getLastInbound: newest message with direction "in" and a non-empty body.
+ */
+export function isCadenceHeldByIndefiniteDeferral(conv: {
+  messages?: Array<{ direction?: string | null; body?: string | null }> | null;
+} | null | undefined): boolean {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.direction !== "in") continue;
+    const body = String(m?.body ?? "").trim();
+    if (!body) continue;
+    return isIndefiniteFollowUpDeferralText(body);
+  }
+  return false;
+}
