@@ -10,8 +10,14 @@ import {
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
+  cdpConnectFailureSummary,
   findMissingFormControls,
-  marketingActivityOptionIssue
+  marketingActivityOptionIssue,
+  missingActivityDatesSummary,
+  pickAccountTileLabel,
+  portalFormDidNotExpandSummary,
+  portalRunDeadlineSummary,
+  type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
 
 type AgentTaskStatus = "queued" | "needs_approval" | "running" | "completed" | "failed" | "blocked";
@@ -1202,15 +1208,38 @@ async function clickLoginAction(page: any, labels: string[]): Promise<boolean> {
   }, labels).catch(() => false);
 }
 
+/**
+ * Click the sole dealer account tile on Microsoft's "Pick an account" screen —
+ * credential-free (it only chooses the account; autofill/sign-in continues after).
+ * Tile choice is the pure pickAccountTileLabel (sole @h-dnet.com tile, else the
+ * sole account tile; ambiguity → no click → stop for a human).
+ */
+async function clickAccountPickerTile(page: any): Promise<boolean> {
+  const tiles = await page
+    .locator('[role="listitem"] [role="button"], [data-test-id], div.table[role="button"], button')
+    .allTextContents()
+    .catch(() => [] as string[]);
+  const label = pickAccountTileLabel(tiles);
+  if (!label) return false;
+  const email = (label.match(/[\w.+-]+@[\w.-]+/) ?? [])[0];
+  if (!email) return false;
+  const tile = page.getByText(email, { exact: false }).first();
+  if (!(await tile.count().catch(() => 0))) return false;
+  await tile.click({ timeout: 10_000 }).catch(() => {});
+  return true;
+}
+
 async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{ attempted: boolean; advanced: boolean }> {
   if (!options.useSavedChromeLogin) return { attempted: false, advanced: false };
   let attempted = false;
-  for (let step = 0; step < 3; step += 1) {
+  // 4 steps: account picker → autofilled password → "Stay signed in" → landing.
+  for (let step = 0; step < 4; step += 1) {
     const text = await pageBodyText(page);
     const url = page.url();
     if (!isLoginPage(text) && !/login\.microsoftonline\.com/i.test(url)) {
       return { attempted, advanced: attempted };
     }
+    const accountPicker = /pick an account/i.test(text);
     const staySignedIn = /stay signed in|keep me signed in/i.test(text);
     const emailReady = await hasChromeAutofilledInput(page, [
       'input[type="email"]',
@@ -1218,10 +1247,29 @@ async function trySavedChromeLogin(page: any, options: RunnerOptions): Promise<{
       'input[name="username"]',
       'input[name="UserName"]'
     ]);
-    const passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+    let passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+    if (!passwordReady && !staySignedIn && !accountPicker) {
+      // COAX AUTOFILL (2026-07-06): Chrome deliberately defers filling a saved
+      // password on some pages until the field gets a user gesture (anti-scraping),
+      // so a saved credential can still present as an empty box. A single CLICK into
+      // the field — focus only, nothing typed or read — lets Chrome fill natively;
+      // then re-check. If Chrome still doesn't fill (no saved credential, or it
+      // offers only its browser-UI dropdown, which page automation can't drive), we
+      // fall through to the same stop-for-a-human as before.
+      const passwordField = page.locator('input[type="password"]:visible').first();
+      if (await passwordField.count().catch(() => 0)) {
+        await passwordField.click({ timeout: 5_000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        passwordReady = await hasChromeAutofilledInput(page, ['input[type="password"]']);
+      }
+    }
     let clicked = false;
     if (staySignedIn) {
       clicked = await clickLoginAction(page, ["Yes", "Continue"]);
+    } else if (accountPicker) {
+      // 2026-07-06: a fresh sign-in opens on the tile picker; the click-through
+      // stopped one credential-free click short of the autofilled-password step.
+      clicked = await clickAccountPickerTile(page);
     } else if (passwordReady) {
       clicked = await clickLoginAction(page, ["Sign in", "Log in", "Continue", "Submit"]);
     } else if (emailReady) {
@@ -1320,10 +1368,80 @@ async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions)
   return { page, blocker: null };
 }
 
+/**
+ * Best-effort CDP target census via the debug port's HTTP endpoint (fast — answers
+ * even when the websocket attach would hang). Feeds cdpConnectFailureSummary so a
+ * connect failure is classified (Chrome down vs tab-bloated vs other) instead of
+ * dying with Playwright's generic "Timeout 30000ms exceeded" (2026-07-06,
+ * agent_mr9o31de_1i5y8h: 119 targets from daily-browsing drift hung the attach).
+ */
+async function fetchCdpTargetStats(cdpUrl: string): Promise<CdpTargetStats> {
+  try {
+    const res = await fetch(new URL("/json", cdpUrl), { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return { reachable: false, error: `CDP /json HTTP ${res.status}` };
+    const targets = (await res.json()) as Array<{ type?: string; url?: string }>;
+    return {
+      reachable: true,
+      targets: targets.length,
+      pages: targets.filter(t => t?.type === "page").length,
+      chromePages: targets.filter(t => t?.type === "page" && String(t?.url ?? "").startsWith("chrome://")).length
+    };
+  } catch (err: any) {
+    return { reachable: false, error: String(err?.message ?? err) };
+  }
+}
+
+/**
+ * connectOverCDP with a classified failure path. Unreachable endpoint fails fast
+ * (the attach could never succeed); otherwise the attach is always ATTEMPTED — the
+ * census only enriches the error, never pre-empts a connect that might work (the
+ * fail-safe direction: a false "unhealthy" verdict would send a human to do manual
+ * portal work needlessly).
+ */
+async function connectRunnerBrowser(cdpUrl: string): Promise<import("playwright").Browser> {
+  const stats = await fetchCdpTargetStats(cdpUrl);
+  if (!stats.reachable) throw new Error(cdpConnectFailureSummary(stats));
+  const { chromium } = await import("playwright");
+  try {
+    return await chromium.connectOverCDP(cdpUrl);
+  } catch (err: any) {
+    throw new Error(cdpConnectFailureSummary(stats, String(err?.message ?? err).split("\n")[0]));
+  }
+}
+
+/**
+ * Run-level watchdog for the portal-draft fill. Playwright's per-action 30s default
+ * does NOT cover browser-level CDP calls (newPage/bringToFront), so a hung one wedges
+ * the tick forever with no output and no fallback (2026-07-06: the Radio advertising
+ * run sat 20+ minutes, silent, no Ansira tab, until manually killed). The deadline
+ * converts that wedge into the classified blocker path (guided-packet rescue + a
+ * summary saying exactly what happened and what to do). Sized generously ABOVE any
+ * legitimate run (~3-4 min observed; default 10 min, MDF_PORTAL_RUN_DEADLINE_MS to
+ * override) so the watchdog can only fire on a genuinely stuck run — the fail-safe
+ * direction; it never cuts short a slow-but-working fill. The abandoned Playwright
+ * work is torn down when this tick's process exits (each daemon tick is its own
+ * process), so no orphaned automation keeps driving the form.
+ */
+async function withPortalRunDeadline<T>(run: Promise<T>): Promise<T> {
+  const deadlineMs = Math.max(60_000, Number(process.env.MDF_PORTAL_RUN_DEADLINE_MS ?? 10 * 60_000));
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(portalRunDeadlineSummary(Math.round(deadlineMs / 60_000)))),
+      deadlineMs
+    );
+    timer.unref();
+  });
+  try {
+    return await Promise.race([run, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function runPlaywrightOpenHNet(options: RunnerOptions): Promise<{ code: number; summary: string; links?: string[] }> {
   if (!options.cdpUrl) return { code: 2, summary: "H-DNet login opener needs MDF_PORTAL_CDP_URL for the runner browser." };
-  const { chromium } = await import("playwright");
-  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const browser = await connectRunnerBrowser(options.cdpUrl);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   const page =
     context
@@ -1381,8 +1499,7 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
     };
   }
 
-  const { chromium } = await import("playwright");
-  const browser = await chromium.connectOverCDP(options.cdpUrl);
+  const browser = await connectRunnerBrowser(options.cdpUrl);
   let page =
     browser
       .contexts()
@@ -1436,8 +1553,18 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
 
   const startDate = toUsDate(extractedField(claim, ["activityStartDate", "activity_start_date", "startDate"]));
   const endDate = toUsDate(extractedField(claim, ["activityEndDate", "activity_end_date", "endDate"]));
-  if (startDate) await fillText(page, "#app-claim-start-date", startDate);
-  if (endDate) await fillText(page, "#app-claim-end-date", endDate);
+  // DATES GATE (live-inspected 2026-07-06): Ansira keeps the ENTIRE form body
+  // (#app-wrapper-form — sub-detail, claim name, invoices, Save) hidden until BOTH
+  // Activity dates are accepted. A packet with no dates can therefore fill nothing —
+  // fail it loud here, before the form is touched, instead of dying 30s later on a
+  // hidden #activity-sub-detail with a generic "element is not visible" (the
+  // Promotional-apparel blocker, task agent_mr9qnn3k_96w3kv — misread as form drift).
+  if (!startDate || !endDate) {
+    await browser.close();
+    return { code: 2, summary: missingActivityDatesSummary(claim.title) };
+  }
+  await fillText(page, "#app-claim-start-date", startDate);
+  await fillText(page, "#app-claim-end-date", endDate);
   await page.waitForTimeout(2500);
 
   const standalone = page.locator("#app-radio-btn-standalone-claim");
@@ -1448,6 +1575,20 @@ async function runPlaywrightPortalDraft(claim: MdfClaimEntry, options: RunnerOpt
         el.dispatchEvent(new Event("change", { bubbles: true }));
       });
     });
+  }
+
+  // EXPANSION GATE: with the activity, both dates, and the pre-approval answer in,
+  // the form body must actually expand before anything inside it is fillable. If it
+  // stays hidden (a rejected date value/format, or a new gating question), name that
+  // — don't let the first hidden-field fill produce a cryptic visibility timeout.
+  const formExpanded = await page
+    .locator("#activity-sub-detail")
+    .waitFor({ state: "visible", timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!formExpanded) {
+    await browser.close();
+    return { code: 2, summary: portalFormDidNotExpandSummary() };
   }
 
   const invoices = invoiceRecordsForClaim(claim);
@@ -1751,7 +1892,7 @@ async function runMain(options: RunnerOptions) {
   let result: { code: number; summary: string; links?: string[] };
   try {
     result = playwrightAvailable
-      ? await runPlaywrightPortalDraft(claim, options)
+      ? await withPortalRunDeadline(runPlaywrightPortalDraft(claim, options))
       : await runBrowserUse(promptPath, resultPath, options, localFiles.length ? filesDir : undefined);
   } catch (err: any) {
     result = {

@@ -110,3 +110,148 @@ export function marketingActivityOptionIssue(
 export function ansiraMarketingOptionSummary(detail: string): string {
   return preflightFailureSummary(detail);
 }
+
+// ---------------------------------------------------------------------------
+// CDP browser-health preflight (runs before chromium.connectOverCDP).
+//
+// Production failure 2026-07-06 (task agent_mr9o31de_1i5y8h): the runner Chrome's
+// CDP endpoint answered HTTP instantly, but `connectOverCDP` hung 30s and died with
+// a generic "Timeout 30000ms exceeded". Root cause: the dedicated runner Chrome had
+// drifted into daily-browsing use — 119 debug targets (35 tabs + 64 iframes +
+// workers, incl. chrome:// pages) — and Playwright attaches to EVERY target on
+// connect, so one hung tab stalls the whole attach. The generic timeout told the
+// operator nothing; the fix (restart the runner Chrome) took a live debugging
+// session to find. These helpers classify the failure up front so the blocked-task
+// summary says exactly which of the known causes hit and what to do about it.
+// Browser-free + pure on purpose (same rule as the form preflight above): the eval
+// imports this module, never the runner.
+// ---------------------------------------------------------------------------
+
+export type CdpTargetStats = {
+  /** CDP HTTP endpoint (`/json`) answered. False = Chrome down / no debug port. */
+  reachable: boolean;
+  /** Count of `type === "page"` targets (tabs). */
+  pages?: number;
+  /** Total debug targets (tabs + iframes + workers + …) — what attach must walk. */
+  targets?: number;
+  /** `chrome://` pages open (sync prompts etc. — common hung-target culprits). */
+  chromePages?: number;
+  /** Probe error text when unreachable. */
+  error?: string;
+};
+
+// Healthy runner Chrome ≈ 14 targets / 2 tabs; the 2026-07-06 hang had 119 / 35.
+// Thresholds sit far above healthy and safely below the observed failure, so the
+// classifier neither cries wolf on a normal session nor shrugs at a real pile-up.
+export const CDP_BLOAT_PAGE_LIMIT = 15;
+export const CDP_BLOAT_TARGET_LIMIT = 60;
+
+/** True when the target pile-up is big enough to explain a hung CDP attach. */
+export function cdpLooksBloated(stats: CdpTargetStats): boolean {
+  return (stats.pages ?? 0) > CDP_BLOAT_PAGE_LIMIT || (stats.targets ?? 0) > CDP_BLOAT_TARGET_LIMIT;
+}
+
+const RUNNER_CHROME_RESTART_HINT =
+  "Restart the runner Chrome (launchctl kickstart -k gui/501/ai.leadrider.hdnet-chrome) and keep that window for portal work only, then run the portal draft again.";
+
+/**
+ * Classified, operator-actionable summary for a CDP connect failure. Wording is
+ * load-bearing: it must keep matching the mdf-portal-health detector's
+ * LOAD_FAILURE_RE ("not reachable" / "timed out" / "failed to load" classes) so a
+ * blocked run still surfaces in the anomaly feed — pinned by the eval.
+ */
+export function cdpConnectFailureSummary(stats: CdpTargetStats, attachError?: string): string {
+  if (!stats.reachable) {
+    return (
+      "The MDF runner's Chrome is not reachable at its CDP debug port — the runner Chrome is down (or was started without remote debugging). " +
+      RUNNER_CHROME_RESTART_HINT +
+      (stats.error ? ` Probe error: ${stats.error}` : "")
+    );
+  }
+  if (cdpLooksBloated(stats)) {
+    const chromePages = stats.chromePages ?? 0;
+    return (
+      `The MDF runner's Chrome is unhealthy: the CDP attach timed out with ${stats.targets ?? "?"} debug targets across ` +
+      `${stats.pages ?? "?"} tabs${chromePages ? ` (${chromePages} chrome:// page${chromePages === 1 ? "" : "s"})` : ""} — ` +
+      "the dedicated runner Chrome has drifted into daily-browsing use, and one hung tab stalls Playwright's attach to every target. " +
+      RUNNER_CHROME_RESTART_HINT +
+      (attachError ? ` Original error: ${attachError}` : "")
+    );
+  }
+  return (
+    "The MDF runner could not attach to its Chrome over CDP (the attach timed out even though the debug port answered). " +
+    RUNNER_CHROME_RESTART_HINT +
+    (attachError ? ` Original error: ${attachError}` : "")
+  );
+}
+
+/**
+ * Run-level watchdog summary — the POST-connect hang class. Production 2026-07-06
+ * (Radio advertising claim, first attempt): the attach succeeded, but the run then
+ * wedged 20+ minutes on a browser-level CDP call that Playwright gives NO default
+ * timeout (newPage/bringToFront — unlike goto/selectOption, which cap at 30s), with
+ * no output, no fallback, and a console task stuck looking "in progress". The
+ * watchdog turns that silent wedge into this classified, operator-actionable
+ * summary. Honest about partial state: a hung run has almost always not reached
+ * "Save for Later" (the only persistence point), but the operator must VERIFY in
+ * the claims list before re-running so a rare post-save hang can't double-draft.
+ */
+export function portalRunDeadlineSummary(deadlineMinutes: number): string {
+  return (
+    `The MDF portal run timed out after ${deadlineMinutes} minutes and was abandoned — the runner Chrome stopped responding mid-run ` +
+    "(a browser call hung with no timeout; the attach itself had succeeded). " +
+    RUNNER_CHROME_RESTART_HINT +
+    " Before re-running, check the Ansira claims list for a draft from this run — a hung run normally never reaches Save for Later, but verify so a re-run can't create a duplicate."
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Activity-dates gate. Production 2026-07-06 (Promotional apparel event claim,
+// task agent_mr9qnn3k_96w3kv): the Ansira create form keeps its ENTIRE body
+// (#app-wrapper-form — sub-detail, claim name, invoices, Save button) hidden until
+// BOTH Activity dates are accepted. That claim's packet had no extractable dates,
+// the runner's date fill is conditional (`if (startDate)`), so the form never
+// expanded and the fill died 30s later on a hidden #activity-sub-detail with a
+// generic "element is not visible" — which read like form drift and burned a live
+// inspection to disprove (the form had NOT changed). These two summaries make the
+// real causes loud: a packet with no dates fails BEFORE the form is touched, and a
+// form that doesn't expand after the dates fails AT the gate, named as such.
+// ---------------------------------------------------------------------------
+
+/** Packet-level blocker: no activity dates → the form can never expand. */
+export function missingActivityDatesSummary(claimTitle: string): string {
+  return (
+    `The MDF packet for "${claimTitle}" has no Activity start/end dates, and the Ansira create form keeps every other field ` +
+    "hidden until both dates are set — so there is nothing the runner can fill. No draft was created (nothing was saved). " +
+    "Add the activity dates to the claim (or fix the packet extraction) and run the portal draft again."
+  );
+}
+
+/** The dates were filled but Ansira did not expand the form body. */
+export function portalFormDidNotExpandSummary(): string {
+  return (
+    "The runner selected the Marketing Activity and set both Activity dates, but the rest of the Ansira form did not expand " +
+    "(Ansira keeps it hidden until it accepts those inputs) — most likely a rejected date value/format or a new gating question " +
+    "on the create form. No draft was created (nothing was saved). " +
+    "Open the Create MDF Recap form in the runner's Chrome, check what it asks for after the dates, and update the runner if the form changed."
+  );
+}
+
+/**
+ * Microsoft "Pick an account" tile selection (saved-login click-through). Clicking
+ * an account TILE is credential-free — it only chooses which account the ordinary
+ * autofill/sign-in flow continues with — so it sits on the allowed side of the
+ * runner's login rule (click Next/Sign-in: yes; read/type credentials: never).
+ * Deterministic + conservative: pick the sole dealer-domain (@h-dnet.com) tile, or
+ * the sole account-looking tile ("Use another account" / "Open menu" have no @ and
+ * never match). ANY ambiguity → null → the runner stops for a human, the same
+ * fail-direction as an unfillable password. (Production 2026-07-06: the fresh
+ * sign-in flow opened on this picker and the click-through stopped one tile short.)
+ */
+export function pickAccountTileLabel(tileLabels: string[]): string | null {
+  const candidates = tileLabels.map(t => String(t ?? "").trim()).filter(t => /@/.test(t));
+  const dealer = candidates.filter(t => /@h-?dnet\.com/i.test(t));
+  if (dealer.length === 1) return dealer[0];
+  if (!dealer.length && candidates.length === 1) return candidates[0];
+  return null;
+}
