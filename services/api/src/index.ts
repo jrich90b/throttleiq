@@ -65761,6 +65761,12 @@ const server = app.listen(port, () => {
           const conv = getConversation(id);
           if (!conv) continue;
           console.log("[tlp-catchup] re-queueing unlogged conversation", { convId: id });
+          // Attempt stamp = the retry back-off clock (domain/tlpLogCatchup.ts): a
+          // permanently-failing log (e.g. lead missing in the CRM) retries on a doubling
+          // schedule instead of pinning the batch every sweep. Sweep-path only.
+          conv.crm = conv.crm ?? {};
+          conv.crm.lastCatchupAttemptAt = new Date().toISOString();
+          saveConversation(conv);
           queueTlpLogForConversation(conv);
         }
       } catch (err: any) {

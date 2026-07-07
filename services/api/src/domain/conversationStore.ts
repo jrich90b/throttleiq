@@ -794,7 +794,14 @@ export type Conversation = {
   inProcessNudgedAt?: string;
   manualContext?: ManualContextState;
   objections?: ObjectionState;
-  crm?: { lastLoggedAt?: string; lastLoggedAtByLeadRef?: Record<string, string> };
+  crm?: {
+    lastLoggedAt?: string;
+    lastLoggedAtByLeadRef?: Record<string, string>;
+    /** Last time the TLP catch-up sweep enqueued this conversation. Sweep-path bookkeeping
+     *  ONLY — drives the retry back-off in domain/tlpLogCatchup.ts so a permanently-failing
+     *  log can't pin the batch; never written by the normal send-path logger. */
+    lastCatchupAttemptAt?: string;
+  };
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
   inventoryWatchPending?: InventoryWatchPending;

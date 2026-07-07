@@ -11,8 +11,14 @@
  * Pins:
  *   1. Decision table — findTlpLogCatchupCandidates (pure): candidate/skip per the
  *      fail-direction contract (unsure => skip; a missed catch-up self-heals next sweep).
- *   2. Source guards — the interval is registered behind TLP_LOG_CATCHUP_MINUTES (0 = kill
- *      switch) and re-queues through the SAME serialized logger (no second Chromium path).
+ *   2. Retry back-off (2026-07-07) — a permanently-failing log (lead missing in the CRM —
+ *      refs 10966/11252/10937) must not pin the oldest-gap-first batch every sweep. The
+ *      sweep stamps crm.lastCatchupAttemptAt; retries double away (~30m→1h→2h→…→daily).
+ *      FAIL DIRECTION: back-off never blocks a conv whose log SUCCEEDED since the attempt
+ *      or that has a NEW outbound since — and an unparseable stamp counts as no stamp.
+ *   3. Source guards — the interval is registered behind TLP_LOG_CATCHUP_MINUTES (0 = kill
+ *      switch), re-queues through the SAME serialized logger (no second Chromium path),
+ *      and the attempt stamp is written by the sweep path ONLY.
  *
  * Run: npx tsx scripts/tlp_log_catchup_eval.ts
  */
@@ -118,6 +124,109 @@ const batch = findTlpLogCatchupCandidates(many, NOW);
 assert.equal(batch.length, 5, "sweep batch is capped (backlog drains over multiple sweeps)");
 assert.equal(batch[0], "+15550000007", "oldest gap drains first");
 
+// --- 1b) Retry back-off (2026-07-07): permanently-failing logs must not pin the batch ---
+
+// The 10966/11252/10937 shape: attempted 10 min ago, gap already days old (=> back-off
+// capped at a day), log never landed => skip this sweep instead of burning Chromium again.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: iso(NOW - min(10)) }, messages: [out(NOW - day(3))] })],
+    NOW
+  ),
+  [],
+  "a just-attempted still-failing log waits out its back-off"
+);
+
+// Back-off is CAPPED at a day: even a permanently-failing log retries daily, so a lead
+// created late in the CRM still heals without manual action (never blocked for good).
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: iso(NOW - day(1) - min(1)) }, messages: [out(NOW - day(3))] })],
+    NOW
+  ),
+  ["+15550000001"],
+  "back-off is capped at a day — a stuck gap keeps retrying daily, never permanently blocked"
+);
+
+// Floor: a FRESH failure (gap ~25 min old at attempt) retries on the next sweep (~30 min) —
+// transient portal hiccups shouldn't wait hours.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: iso(NOW - min(35)) }, messages: [out(NOW - min(60))] })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a fresh failure retries after the ~one-sweep back-off floor"
+);
+
+// Doubling: the wait grows with how long the gap has persisted — attempted 1h ago on a gap
+// that was already 2h old => the next try waits ~2h, so this sweep skips.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: iso(NOW - min(60)) }, messages: [out(NOW - min(180))] })],
+    NOW
+  ),
+  [],
+  "the retry wait grows with the age of the gap (graduated back-off)"
+);
+
+// FAIL DIRECTION: a NEW outbound after the attempt resets the back-off — a fresh customer
+// send must never wait out a stale failure's clock.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: iso(NOW - min(50)) }, messages: [out(NOW - day(2)), out(NOW - min(25))] })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a newer send resets the back-off (fresh contact must not inherit a stale failure's wait)"
+);
+
+// FAIL DIRECTION: the log SUCCEEDED since the attempt (lastLoggedAt advanced past it) and a
+// newer outbound landed => the old attempt stamp is stale, catch up normally.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({
+      crm: { lastCatchupAttemptAt: iso(NOW - day(2)), lastLoggedAt: iso(NOW - day(1)) },
+      messages: [out(NOW - day(3)), out(NOW - min(30))]
+    })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a log that succeeded since the attempt clears the back-off for the next gap"
+);
+
+// FAIL DIRECTION: an unparseable attempt stamp counts as NO stamp — fail toward retrying,
+// never toward a silent permanent CRM gap.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({ crm: { lastCatchupAttemptAt: "garbage" }, messages: [out(NOW - day(2))] })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a garbage attempt stamp never blocks a catch-up"
+);
+
+// The pinning scenario end-to-end: 3 permanently-blocked convs with the OLDEST gaps (they'd
+// win the oldest-first sort) are backed off, so the 5 batch slots go to healable gaps.
+const pinned = [
+  ...Array.from({ length: 3 }, (_, i) =>
+    conv({
+      id: `+1666000000${i}`, // blocked: oldest gaps — they'd win the sort without back-off
+      crm: { lastCatchupAttemptAt: iso(NOW - min(10)) },
+      messages: [out(NOW - day(7 + i))]
+    })
+  ),
+  ...Array.from({ length: 6 }, (_, i) =>
+    conv({ id: `+1777000000${i}`, messages: [out(NOW - day(1) - min(i))] })
+  )
+];
+const unpinnedBatch = findTlpLogCatchupCandidates(pinned, NOW);
+assert.equal(unpinnedBatch.length, 5, "backed-off convs free their batch slots");
+assert.ok(
+  unpinnedBatch.every(id => id.startsWith("+1777")),
+  "permanently-blocked convs no longer pin the oldest-first batch"
+);
+
 // --- 2) Source guards ---
 const indexSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(
@@ -127,8 +236,29 @@ assert.match(
 );
 assert.match(
   indexSrc,
-  /findTlpLogCatchupCandidates\(getAllConversations\(\)[\s\S]{0,400}queueTlpLogForConversation\(conv\)/,
+  /findTlpLogCatchupCandidates\(getAllConversations\(\)[\s\S]{0,900}queueTlpLogForConversation\(conv\)/,
   "the sweep must re-queue through the SAME serialized TLP logger (no second Chromium path)"
+);
+// The attempt stamp (the back-off clock) is written+persisted BEFORE the re-queue…
+assert.match(
+  indexSrc,
+  /findTlpLogCatchupCandidates\(getAllConversations\(\)[\s\S]{0,900}lastCatchupAttemptAt[\s\S]{0,200}saveConversation\(conv\);?[\s\S]{0,100}queueTlpLogForConversation\(conv\)/,
+  "the sweep must stamp+persist crm.lastCatchupAttemptAt before re-queueing"
+);
+// …and by the sweep path ONLY — the send-path logger must never touch the back-off clock.
+assert.equal(
+  (indexSrc.match(/lastCatchupAttemptAt\s*=/g) ?? []).length,
+  1,
+  "crm.lastCatchupAttemptAt is written by the sweep path only"
+);
+const storeSrc = fs.readFileSync(
+  path.resolve("services/api/src/domain/conversationStore.ts"),
+  "utf8"
+);
+assert.equal(
+  (storeSrc.match(/lastCatchupAttemptAt\s*=/g) ?? []).length,
+  0,
+  "the conversation store declares the stamp but never writes it (sweep-path only)"
 );
 
 // ci:eval wiring.
@@ -138,4 +268,6 @@ assert.ok(
   "tlp_log_catchup:eval is wired into ci:eval"
 );
 
-console.log("PASS tlp log catch-up eval (decision table 10 rows + serialized-queue + kill-switch source guards)");
+console.log(
+  "PASS tlp log catch-up eval (decision table 18 rows incl. retry back-off + serialized-queue/kill-switch/sweep-only-stamp source guards)"
+);
