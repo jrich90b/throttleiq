@@ -1,7 +1,11 @@
 // POLICY FLIP (Joe-approved 2026-07-02, Angelo Balistrieri +17169123294): a DLA demo-ride ADF now
-// ALWAYS yields one customer thank-you draft (guarded: appointment-outcome wins, confirmed-demo
-// check, already-thanked dedupe) while the outcome + follow-up stay with the salesperson. The
+// ALWAYS yields one customer thank-you draft (guarded: confirmed-demo check, already-thanked
+// dedupe, draft-state invariant) while the outcome + follow-up stay with the salesperson. The
 // assertions below pin the NEW behavior; the old "no customer reply by design" policy is retired.
+// 2026-07-07 (agent-watch, corpus replay Refs 11182/11251): a CONFIRMED APPOINTMENT must NOT
+// suppress the customer thank-you — the appointment-outcome flow only messages staff, so the
+// old appointment_outcome_wins early-return left booked-appointment riders with total silence
+// (and broke live/regen parity: regen always drafted). The guard still dedupes STAFF prompts.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,6 +34,9 @@ const liveDealerRideLeadBlock =
 const noDemoOverrideBlock = apiRoute.includes("dealerLeadAppWithoutConfirmedDemoRide")
   ? apiRoute.slice(apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide"), apiRoute.indexOf("dealerLeadAppWithoutConfirmedDemoRide") + 2000)
   : "";
+const thankYouHelperStart = apiRoute.indexOf("const publishDealerRideInitialThankYouDraft");
+const thankYouHelperBlock =
+  thankYouHelperStart >= 0 ? apiRoute.slice(thankYouHelperStart, thankYouHelperStart + 2200) : "";
 const regenDealerRideLeadStart = apiIndex.indexOf("const regenDealerRideEventLead");
 const regenDealerRideLeadBlock =
   regenDealerRideLeadStart >= 0 ? apiIndex.slice(regenDealerRideLeadStart, regenDealerRideLeadStart + 400) : "";
@@ -66,6 +73,18 @@ const regenBuilderPrefersLeadOwner =
 
 const checks: Check[] = [
   check("initial_adf_has_guarded_customer_thank_you_helper", initialRouteBlock, true),
+  check(
+    "initial_thank_you_not_blocked_by_confirmed_appointment",
+    thankYouHelperBlock.includes("publishEarlyAdfSmsDraft(draft)") &&
+      !thankYouHelperBlock.includes('reason: "appointment_outcome_wins"'),
+    true
+  ),
+  check(
+    "staff_outcome_prompt_still_defers_to_appointment_outcome",
+    apiRoute.includes("if (!appointmentOutcomeWins && !hasDealerRideOutcomeRecordedOrRequested(conv))") &&
+      apiRoute.includes("if (!appointmentOutcomeWins && !dealerRideOutcomeAlreadyRequested)"),
+    true
+  ),
   check(
     "initial_publish_blocks_unconfirmed_dla_demo",
     apiRoute.includes('reason: "dealer_ride_no_confirmed_demo"') &&
