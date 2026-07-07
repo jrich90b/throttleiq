@@ -5662,9 +5662,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       return /thanks again for coming in/i.test(body) && /\b(?:test ride|ride|demo)\b/i.test(body);
     });
   const publishDealerRideInitialThankYouDraft = async () => {
-    if (appointmentOutcomeWinsDealerRideOutcome(conv)) {
-      return { ok: false, reason: "appointment_outcome_wins" };
-    }
+    // Deliberately NOT gated on appointmentOutcomeWinsDealerRideOutcome: the appointment-outcome
+    // flow only messages STAFF (attendance question + outcome prompt), so suppressing here left
+    // booked-appointment riders with no post-ride customer message at all (corpus replay Refs
+    // 11182/11251, agent-watch 2026-07-07) — the opposite of the Joe-approved 2026-07-02 policy.
+    // The regen path already drafts the thank-you unconditionally (both-paths parity), and the
+    // guard keeps its real job below: deduping the STAFF outcome prompt against the appointment flow.
     const dealerLeadAppText = [
       leadSource,
       effectiveInquiry,
@@ -5820,8 +5823,8 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const appointmentOutcomeWins = appointmentOutcomeWinsDealerRideOutcome(conv);
     // Joe-approved 2026-07-02 (Angelo Balistrieri, +17169123294): even when no follow-up is
     // needed and the salesperson owns the lead, the customer still gets ONE thank-you draft
-    // for coming in for the ride. The publisher carries its own guards (appointment-outcome
-    // wins, DLA ride confirmation, already-thanked dedupe) — manual handoff below is unchanged.
+    // for coming in for the ride. The publisher carries its own guards (DLA ride confirmation,
+    // already-thanked dedupe, draft-state invariant) — manual handoff below is unchanged.
     const dealerRideInitialThankYou = await publishDealerRideInitialThankYouDraft();
     if (!appointmentOutcomeWins) {
       addCallTodoIfMissing(
