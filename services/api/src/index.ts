@@ -510,6 +510,7 @@ import {
   clearInventorySold,
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
+import { appendLeadUnitAvailabilityDisclosure } from "./domain/leadUnitAvailabilityDisclosure.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
@@ -533,6 +534,7 @@ import {
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
   decideWatchScopeTurn,
+  decideLeadUnitAvailabilityDisclosure,
   decideEventPromoTurn,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
@@ -4866,7 +4868,14 @@ async function publishCustomerReplyDraft(args: {
       (args.conv as any).contextFidelityShadow = null;
     }
   }
-  const publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
+  let publishText = contextFidelityEnforced ? CONTEXT_FIDELITY_HANDOFF_ACK : invariant.draftText;
+  // Lead-unit hold/sold disclosure (LEA-238): if the lead's exact unit is held for another
+  // customer (or sold), the reply carries a one-time disclosure. Skipped on the substituted
+  // context-fidelity handoff ack (protected reply). Covers the main pipeline + regenerate.
+  publishText = await maybeApplyLeadUnitAvailabilityDisclosure(args.conv, publishText, {
+    protectedReply: contextFidelityEnforced,
+    scope: args.routeScope === "regen" ? "regen" : args.routeScope === "manual" ? "manual" : "live"
+  });
   if (contextFidelityEnforced) {
     // Legacy enforcement (surfacing flag off / future autopilot): substitute the safe handoff ack + task.
     addTodo(
@@ -11674,6 +11683,111 @@ function isCadencePreferenceClarifierMessage(message: string): boolean {
     /\b(which bike are you most interested|which style|leaning (?:more )?toward|short list)\b/.test(text) ||
     /\b(grand american touring|cruiser|sport|adventure touring|trike)\b/.test(text)
   );
+}
+
+// READ-ONLY twin of buildCadenceLeadUnitAvailabilityOverride's lookup for the LIVE reply paths
+// (the Ryan Tower class, +15857278545, LEA-238): resolve whether the lead's EXACT unit (stock#/VIN)
+// is currently on hold or sold, and whether the hold belongs to THIS conversation. No side effects —
+// no watch creation, no heal; the cadence override keeps owning those.
+type LeadUnitAvailabilityForReply = {
+  kind: "hold" | "sold";
+  key: string;
+  unitLabel: string;
+  ownedByThisConv: boolean;
+};
+
+async function resolveLeadUnitAvailabilityForReply(
+  conv: any
+): Promise<LeadUnitAvailabilityForReply | null> {
+  if (!conv) return null;
+  const stockId =
+    String(conv?.lead?.vehicle?.stockId ?? conv?.lead?.vehicle?.stock ?? conv?.lead?.stockId ?? "")
+      .trim() || null;
+  const vin = String(conv?.lead?.vehicle?.vin ?? conv?.lead?.vin ?? "").trim() || null;
+  if (!stockId && !vin) return null;
+  const holds = await listInventoryHolds();
+  const solds = await listInventorySolds();
+  const holdKey = normalizeInventoryHoldKey(stockId, vin);
+  const soldKey = normalizeInventorySoldKey(stockId, vin);
+  const hold = holdKey ? holds?.[holdKey] : null;
+  const sold = soldKey ? solds?.[soldKey] : null;
+  if (!hold && !sold) return null;
+  // formatModelLabelForFollowUp can return "the <model>"; strip it so the disclosure's own
+  // "the ${unitLabel}" can't render "the the <model>" (same fix as the test-ride override).
+  const modelLabel = (
+    formatModelLabelForFollowUp(conv?.lead?.vehicle?.year ?? null, conv?.lead?.vehicle?.model ?? null) ||
+    formatModelToken(conv?.lead?.vehicle?.model) ||
+    ""
+  ).replace(/^the\s+/i, "");
+  const unitLabel =
+    String((sold as any)?.label ?? (hold as any)?.label ?? "").trim() ||
+    modelLabel ||
+    (stockId ? `stock ${stockId}` : vin ? `VIN ${vin}` : "");
+  if (sold) {
+    return { kind: "sold", key: soldKey ?? String(stockId ?? vin), unitLabel, ownedByThisConv: false };
+  }
+  const holdConvId = String((hold as any)?.convId ?? "").trim();
+  const holdLeadKey = String((hold as any)?.leadKey ?? "").trim();
+  const ownedByThisConv =
+    (!!holdConvId && holdConvId === String(conv.id ?? "").trim()) ||
+    (!!holdLeadKey && holdLeadKey === String(conv.leadKey ?? "").trim());
+  return { kind: "hold", key: holdKey ?? String(stockId ?? vin), unitLabel, ownedByThisConv };
+}
+
+// Weave the one-time hold/sold disclosure into an outgoing customer reply. Decision centralized in
+// decideLeadUnitAvailabilityDisclosure (routeStateReducer); dedup persisted on the conversation
+// (leadUnitAvailabilityDisclosed, re-arms when the unit key or kind changes). Wired at BOTH publish
+// funnels — publishLiveTwilioReply (/webhooks/twilio) and publishCustomerReplyDraft (main pipeline +
+// regenerate) — so live and regen stay in parity. Fail-safe: any resolver error returns the reply
+// unchanged (never block or mangle a reply over a disclosure lookup).
+async function maybeApplyLeadUnitAvailabilityDisclosure(
+  conv: any,
+  text: string,
+  opts: { protectedReply?: boolean; scope: "live" | "regen" | "manual" }
+): Promise<string> {
+  try {
+    const body = String(text ?? "").trim();
+    if (!body || !conv) return text;
+    const availability = await resolveLeadUnitAvailabilityForReply(conv);
+    const marker = (conv as any)?.leadUnitAvailabilityDisclosed as
+      | { key?: string; kind?: string }
+      | undefined;
+    const decision = decideLeadUnitAvailabilityDisclosure({
+      unavailableKind: availability?.kind ?? null,
+      holdOwnedByThisConv: !!availability?.ownedByThisConv,
+      alreadyDisclosedForThisUnit: !!(
+        availability &&
+        marker &&
+        marker.key === availability.key &&
+        marker.kind === availability.kind
+      ),
+      isProtectedReplyKind: !!opts.protectedReply
+    });
+    if (decision.kind === "none" || !availability) return text;
+    const applied = appendLeadUnitAvailabilityDisclosure(text, {
+      kind: availability.kind,
+      unitLabel: availability.unitLabel
+    });
+    // Mark disclosed either way — if the text already carried the disclosure (e.g. the cadence
+    // override composed it), repeating it on the next turn is exactly what the marker prevents.
+    (conv as any).leadUnitAvailabilityDisclosed = {
+      key: availability.key,
+      kind: availability.kind,
+      at: new Date().toISOString()
+    };
+    if (applied.appended) {
+      recordRouteOutcome(opts.scope, "lead_unit_availability_disclosed", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        kind: availability.kind,
+        unitKey: availability.key
+      });
+    }
+    return applied.text;
+  } catch (e: any) {
+    console.warn("[lead-unit-disclosure] failed:", e?.message ?? e);
+    return text;
+  }
 }
 
 async function buildCadenceLeadUnitAvailabilityOverride(args: {
@@ -26031,6 +26145,15 @@ function buildTermPaymentBandsFromPrice(opts: {
   return bands;
 }
 
+// Render a rounded monthly-payment band. Low/high can round into the same $10
+// bucket and read as a broken calculator ("$250–$250/mo" — Ryan Tower
+// +15857278545, LEA-238); collapse the degenerate band to a single number.
+function formatMonthlyPaymentBandLabel(lowRounded: number, highRounded: number): string {
+  const low = `$${lowRounded.toLocaleString("en-US")}`;
+  const high = `$${highRounded.toLocaleString("en-US")}`;
+  return lowRounded === highRounded ? low : `${low}–${high}`;
+}
+
 function formatTermChoiceList(terms: number[]): string {
   const unique = Array.from(new Set(terms.filter(t => Number.isFinite(t) && t > 0)));
   if (!unique.length) return "";
@@ -26066,10 +26189,7 @@ function buildDownPaymentTermOptionsReply(opts: {
     downValue <= 0 ? "$0 down" : `$${Math.round(downValue).toLocaleString("en-US")} down`;
   const priceLabel = `$${Math.round(price).toLocaleString("en-US")}`;
   const bandsLabel = bands
-    .map(
-      band =>
-        `${band.termMonths} mo ~$${band.low.toLocaleString("en-US")}–$${band.high.toLocaleString("en-US")}/mo`
-    )
+    .map(band => `${band.termMonths} mo ~${formatMonthlyPaymentBandLabel(band.low, band.high)}/mo`)
     .join(", ");
   let reply = `Ballpark, with ${downLabel} on about ${priceLabel}: ${bandsLabel} before taxes, fees, and final APR.`;
 
@@ -26862,7 +26982,7 @@ function buildFinancePriorityInvariantFallbackReply(
         const priceLabel = `$${Math.round(hintedPrice).toLocaleString("en-US")}`;
         return (
           `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
-          `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+          `you’re around ${formatMonthlyPaymentBandLabel(lowRounded, highRounded)}/mo ` +
           `before taxes and fees, based on your APR. ` +
           "If that range works for you, want to set a time to stop in or fill out the online credit app?"
         );
@@ -54116,7 +54236,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
             const priceLabel = `$${Math.round(anchor.price).toLocaleString("en-US")}`;
             reply =
               `Ballpark, with ${downLabel} on about ${priceLabel} at ${regenTermMonths} months, ` +
-              `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+              `you’re around ${formatMonthlyPaymentBandLabel(lowRounded, highRounded)}/mo ` +
               `before taxes and fees, based on your APR. ` +
               "If that range works for you, want to set a time to stop in or fill out the online credit app?";
           } else {
@@ -55470,6 +55590,14 @@ if (authToken && signature) {
     }
 
     let publishedText = invariant.draftText;
+    // Lead-unit hold/sold disclosure (LEA-238): the early live-reply funnel (deterministic
+    // templates like the ballpark payment quote — the path that priced Ryan Tower's held
+    // Street Glide without disclosing the hold) carries the one-time disclosure too.
+    // forceSend marks compliance messages (opt-out confirmations) — never touch those.
+    publishedText = await maybeApplyLeadUnitAvailabilityDisclosure(conv, publishedText, {
+      protectedReply: !!options?.forceSend,
+      scope: "live"
+    });
     const outboundFrom = event.to;
     const outboundTo = event.from;
     const mediaUrls = Array.isArray(options?.mediaUrls) && options.mediaUrls.length
@@ -61291,7 +61419,7 @@ if (authToken && signature) {
           const priceLabel = `$${Math.round(anchor.price).toLocaleString("en-US")}`;
           reply =
             `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
-            `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+            `you’re around ${formatMonthlyPaymentBandLabel(lowRounded, highRounded)}/mo ` +
             `before taxes and fees, based on your APR. ` +
             "If that range works for you, want to set a time to stop in or fill out the online credit app?";
         } else {
@@ -61333,7 +61461,7 @@ if (authToken && signature) {
           const priceLabel = `$${Math.round(itemPrice).toLocaleString("en-US")}`;
           reply =
             `Ballpark, with ${downLabel} on about ${priceLabel} at ${termMonths} months, ` +
-            `you’re around $${lowRounded.toLocaleString("en-US")}–$${highRounded.toLocaleString("en-US")}/mo ` +
+            `you’re around ${formatMonthlyPaymentBandLabel(lowRounded, highRounded)}/mo ` +
             `depending on taxes, fees, and APR.`;
           if (downValue <= 0) {
             reply += " $0 down options are application-dependent and lender approval is required.";

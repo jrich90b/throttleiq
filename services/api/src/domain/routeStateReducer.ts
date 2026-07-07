@@ -1722,3 +1722,42 @@ export function decideDealerLeadSurveyTurn(
   // "buyer" or a confident-but-unspecified survey => warm buyer acknowledgement.
   return { kind: "buyer_survey_ack" };
 }
+
+// Lead-unit hold/sold disclosure (the Ryan Tower class, +15857278545, LEA-238, 2026-07-04) — the
+// customer's ADF lead names an EXACT unit (stock#/VIN), that unit goes on hold for a DIFFERENT
+// customer, and the live reply path kept quoting payments and confirming purchase logistics ("bring
+// the trade and cash Monday!") without ever disclosing the hold. Hold-awareness existed only in the
+// watch-fire engines, the cadence override (buildCadenceLeadUnitAvailabilityOverride), and the
+// console — never in the live/regen reply turn. This pure decision says whether THIS outgoing reply
+// must carry a one-time availability disclosure; the call sites (BOTH /webhooks/twilio and
+// /conversations/:id/regenerate) resolve the inputs (holds/solds lookup by the lead's stock#/VIN)
+// and weave the disclosure into the reply.
+//
+// FAIL DIRECTION: fail toward DISCLOSING. A hold with no/unknown owner conversation still
+// discloses (the unit isn't freely available either way); only the customer's OWN hold suppresses
+// it (their hold is good news, not a warning). Compliance/system replies (STOP acks, opt-out
+// confirmations) and empty replies never carry it — a disclosure there would be nonsense and
+// tampering with compliance text is the one direction we never fail toward. Disclose ONCE per
+// unit-hold (alreadyDisclosedForThisUnit dedups; re-arms if the hold key changes).
+export type LeadUnitAvailabilityDisclosureKind = "disclose_hold" | "disclose_sold" | "none";
+
+export type LeadUnitAvailabilityDisclosureInput = {
+  unavailableKind: "hold" | "sold" | null;
+  // True when the hold record's convId/leadKey matches THIS conversation (customer's own hold).
+  holdOwnedByThisConv: boolean;
+  alreadyDisclosedForThisUnit: boolean;
+  // True for compliance/system reply kinds (STOP/opt-out acks, invariant fallbacks) — never inject.
+  isProtectedReplyKind: boolean;
+};
+
+export type LeadUnitAvailabilityDisclosureDecision = { kind: LeadUnitAvailabilityDisclosureKind };
+
+export function decideLeadUnitAvailabilityDisclosure(
+  input: LeadUnitAvailabilityDisclosureInput
+): LeadUnitAvailabilityDisclosureDecision {
+  if (!input.unavailableKind) return { kind: "none" };
+  if (input.isProtectedReplyKind) return { kind: "none" };
+  if (input.alreadyDisclosedForThisUnit) return { kind: "none" };
+  if (input.unavailableKind === "hold" && input.holdOwnedByThisConv) return { kind: "none" };
+  return { kind: input.unavailableKind === "hold" ? "disclose_hold" : "disclose_sold" };
+}
