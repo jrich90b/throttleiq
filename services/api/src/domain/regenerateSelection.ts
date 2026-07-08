@@ -59,7 +59,9 @@ function normalizeReactionInboundText(text: string): string {
   // class as the English set (production miss: Armando Cortes, +17165350411, 2026-07-01 —
   // 'Le encanta "Hi Armando..."' drafted a reply on a closed/sold conversation instead of the
   // reaction-only no-reply). Quoted-body requirement keeps this tight to the wrapper format.
-function isQuotedReactionInboundText(text: string): boolean {
+  // Exported so evals can pin the wrapper detection (index.ts carries a same-pattern twin used by
+  // resolveCadencePreferredModelContext's reaction skip — cadence_reaction_model_guard:eval).
+export function isQuotedReactionInboundText(text: string): boolean {
   const normalized = normalizeReactionInboundText(text);
   if (!normalized) return false;
 
@@ -81,7 +83,10 @@ function isQuotedReactionInboundText(text: string): boolean {
   if (/^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))$/i.test(reactionToken)) {
     return true;
   }
-  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
+  // Emoji sequences carry invisible companions Extended_Pictographic alone misses: VS16 (U+FE0F,
+  // e.g. ❤️ = U+2764+FE0F — the default iOS heart reaction), ZWJ (U+200D, compound emoji), and
+  // skin-tone modifiers (\u{1F3FB}-\u{1F3FF}). Without them 'Reacted ❤️ to "…"' escaped detection.
+  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\uFE0F\u200D\u{1F3FB}-\u{1F3FF}\s]+$/u.test(reactionToken)) {
     return true;
   }
   return !/[\p{L}\p{N}]/u.test(reactionToken);
