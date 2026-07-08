@@ -265,6 +265,40 @@ export function isIndefiniteFollowUpDeferralText(text: string | null | undefined
 }
 
 /**
+ * A PURE indefinite-deferral inbound — the customer said THEY will re-initiate
+ * ("I'll let you know", "I'll reach out", "I'll get back to you") and asked us
+ * for NOTHING actionable this turn. The reply pipeline correctly stays silent
+ * (the engine holds cadence on exactly this — isCadenceHeldByIndefiniteDeferral),
+ * so the tone scorer must not grade it as a `missing_response`.
+ *
+ * Production case (2026-07-07, Gary Shapiro +17167069902): "I'll see how tomorrow
+ * goes. I'll be tied up for a while. I'll let you know. I'm in no rush. if we
+ * can't do this week I'll try for next week" — a textbook no-rush deferral graded
+ * a phantom missing_response, dirtying the release gate's tone-missing count. The
+ * scorer's `hasActionableCue` misfired on the deferral-context temporal words
+ * ("tomorrow", "next week"), so the `human_mode_non_actionable` skip didn't catch
+ * it. Mirrors the John-Miller cadence-hold fix (isCadenceHeldByIndefiniteDeferral),
+ * one turn earlier.
+ *
+ * Fail-direction is safe (toward STILL grading): it requires the deferral phrase
+ * AND no question mark AND none of the hard transactional / contact-me cues
+ * (price/pricing/payment/apr/finance/monthly/available/in stock/quote/call me/
+ * callback/text me/email me/send me/can-you/could-you/would-you) — so a deferral
+ * that ALSO carries a real ask ("I'll let you know — but send me the price") still
+ * scores. Strictly narrower than the engine's own live gate.
+ */
+const DEFERRAL_ACTIONABLE_REQUEST_RE =
+  /\b(available|in stock|price|pricing|payment|payments|apr|finance|financing|monthly|down payment|quote|call me|callback|text me|email me|send me|can you|could you|would you)\b/i;
+export function isIndefiniteDeferralNoActionableAsk(text: string | null | undefined): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  if (!isIndefiniteFollowUpDeferralText(t)) return false;
+  if (/\?/.test(t)) return false;
+  if (DEFERRAL_ACTIONABLE_REQUEST_RE.test(t)) return false;
+  return true;
+}
+
+/**
  * The engine's indefinite-deferral hold, at conversation level: the LAST
  * inbound message says the customer will re-initiate, so the cadence tick
  * skips this conversation every pass — by design — while nextDueAt stays

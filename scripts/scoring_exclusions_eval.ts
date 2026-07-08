@@ -12,6 +12,7 @@ import {
   isCadenceHeldByIndefiniteDeferral,
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
+  isIndefiniteDeferralNoActionableAsk,
   isIndefiniteFollowUpDeferralText,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
@@ -55,6 +56,25 @@ assert.equal(
   false
 );
 assert.equal(isCadenceHeldByIndefiniteDeferral({ messages: [] }), false);
+
+// Pure indefinite-deferral inbound (Gary Shapiro +17167069902 7/7: "I'll let you
+// know. I'm in no rush." graded a phantom missing_response because hasActionableCue
+// misfired on the deferral-context "tomorrow"/"next week"). The tone scorer must
+// skip these one turn earlier than the cadence hold.
+assert.equal(
+  isIndefiniteDeferralNoActionableAsk(
+    "I'll see how tomorrow goes. I'll be tied up for a while. I'll let you know. I'm in no rush. if we can't do this week I'll try for next week,"
+  ),
+  true
+); // live case
+assert.equal(isIndefiniteDeferralNoActionableAsk("I'll let you know, no rush"), true);
+assert.equal(isIndefiniteDeferralNoActionableAsk("We'll reach out when we're ready, thanks"), true);
+// Fail-direction guards: a deferral that ALSO carries a real ask must STILL score.
+assert.equal(isIndefiniteDeferralNoActionableAsk("I'll let you know — but what's the price?"), false); // question
+assert.equal(isIndefiniteDeferralNoActionableAsk("I'll let you know. Just send me the price first"), false); // transactional cue
+assert.equal(isIndefiniteDeferralNoActionableAsk("I'll get back to you, can you hold it for me"), false); // request cue
+assert.equal(isIndefiniteDeferralNoActionableAsk("What colors do you have?"), false); // not a deferral at all
+assert.equal(isIndefiniteDeferralNoActionableAsk(""), false);
 
 // Shadow replay markers (scripts/inbound_shadow_replay.ts id formats).
 assert.equal(isShadowReplayMessage({ providerMessageId: "SMshadow1781172955abc123" }), true);
@@ -240,7 +260,12 @@ assert.equal(isJustifiedLongTermCadencePark(null), false);
 const wiring: Array<[string, RegExp[]]> = [
   [
     "scripts/tone_quality_eval.ts",
-    [/isShadowReplayMessage\(inbound\)/, /isAutomatedSenderInbound\(/, /isNonSalesConversation\(conv\)/]
+    [
+      /isShadowReplayMessage\(inbound\)/,
+      /isAutomatedSenderInbound\(/,
+      /isNonSalesConversation\(conv\)/,
+      /isIndefiniteDeferralNoActionableAsk\(inboundText\)/
+    ]
   ],
   ["scripts/voice_charter_audit.ts", [/isShadowReplayMessage\(m\)/],],
   [

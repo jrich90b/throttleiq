@@ -6,6 +6,7 @@ import {
   isBareEmoticonReaction,
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
+  isIndefiniteDeferralNoActionableAsk,
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isShadowReplayMessage,
@@ -156,6 +157,7 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";
   if (isCloseoutUpdateNoReplyNeeded(inboundText)) return "closeout_update_no_reply";
+  if (isIndefiniteDeferralNoActionableAsk(inboundText)) return "indefinite_followup_deferral";
   if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(inboundText)) {
     return "manual_handoff_non_actionable";
   }
