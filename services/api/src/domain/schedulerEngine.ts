@@ -23,7 +23,22 @@ function clampStartTimes(cfg: SchedulerConfig, date: Date) {
   );
 }
 
+function localDateKey(date: Date, timeZone: string): string {
+  const p = getZonedParts(date, timeZone);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
 function getOpenClose(cfg: SchedulerConfig, date: Date) {
+  // A dealer holiday / one-off closure (cfg.closedDates, local YYYY-MM-DD) overrides the weekday
+  // hours: the date is fully closed even when its weekday is normally open — e.g. July 4 lands on
+  // an open Saturday, but the dealer is closed (R Gurajala 2026-06-28: the scheduler offered
+  // "Sat, Jul 4" as an alternative to his Fri Jul 3 request). Both generateCandidateSlots and
+  // findExactSlotForSalesperson treat {open:null,close:null} as closed, so returning it here keeps
+  // the scheduler from ever offering OR booking that date, and the requested-day-closed messaging
+  // ("We're closed that day") flows through unchanged.
+  if (Array.isArray(cfg.closedDates) && cfg.closedDates.length) {
+    if (cfg.closedDates.includes(localDateKey(date, cfg.timezone))) return { open: null, close: null };
+  }
   const dk = dayKey(date, cfg.timezone);
   const hours = cfg.businessHours?.[dk];
   return hours ?? { open: null, close: null };

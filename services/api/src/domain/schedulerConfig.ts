@@ -20,6 +20,14 @@ export type SchedulerConfig = {
   minLeadTimeHours: number;
   minGapBetweenAppointmentsMinutes: number;
   appointmentTypes: Record<string, { durationMinutes: number; colorId?: string }>;
+  /**
+   * Dealer holidays / one-off closures as local "YYYY-MM-DD" dates (dealer timezone).
+   * A date here is treated as fully closed regardless of its weekday business hours, so the
+   * scheduler never offers or books a slot on it (e.g. July 4 falls on an open Saturday but
+   * the dealer is closed). Slot generation and the exact-slot check both honor this via
+   * getOpenClose returning {open:null, close:null} for these dates.
+   */
+  closedDates?: string[];
   availabilityBlocks?: Record<
     string,
     Array<{
@@ -50,6 +58,7 @@ type SchedulerConfigRaw = {
   minLeadTimeHours?: number;
   minGapBetweenAppointmentsMinutes?: number;
   appointmentTypes?: Record<string, { durationMinutes: number; colorId?: string }>;
+  closedDates?: string[];
   availabilityBlocks?: Record<
     string,
     Array<{
@@ -94,6 +103,7 @@ export async function getSchedulerConfig(): Promise<SchedulerConfig> {
     minLeadTimeHours: parsed.minLeadTimeHours ?? 4,
     minGapBetweenAppointmentsMinutes: parsed.minGapBetweenAppointmentsMinutes ?? 60,
     appointmentTypes: parsed.appointmentTypes ?? { inventory_visit: { durationMinutes: 60 } },
+    closedDates: parsed.closedDates ?? [],
     availabilityBlocks: parsed.availabilityBlocks ?? {},
     ...parsed
   };
