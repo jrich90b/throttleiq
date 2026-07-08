@@ -44,6 +44,26 @@ assert.ok(generatorRefs >= 3, `avoidance instruction must be injected into the L
 assert.ok(!/Thanks for reaching out\./.test(llm), 'generator must not prescribe "Thanks for reaching out."');
 assert.ok(/Just text me when the time is right/.test(llm), "reminder variant must be de-corporatized to 'text me'");
 assert.ok(/Thanks for your message\./.test(llm), "intro variant must be de-corporatized to 'Thanks for your message.'");
+// Prevention (b) — positive steering (2026-07-08): shadow showed the ONLY phrases still slipping
+// were "reach out" (32x) and "feel free to" (11x). Negative-only instructions leave the model
+// nowhere to land, so the instruction now prescribes OUR reps' real alternatives.
+assert.ok(
+  /give me a shout/.test(avoidance) && /just text me/.test(avoidance),
+  'the avoidance instruction must offer the reps\' alternatives ("just text me", "give me a shout")'
+);
+// Prevention (c) — no deterministic rewrite may INJECT a banned phrase. The email→text sanitizer's
+// "text … and text" de-dupe used to write "and reach out" into drafts (manufacturing shadow hits).
+assert.ok(
+  !/text\$1and reach out/.test(llm),
+  'no replacement string in llmDraft may inject "reach out" into a draft'
+);
+assert.ok(/text\$1and give me a shout/.test(llm), 'the "text … and text" de-dupe must vary to "give me a shout"');
+// The new de-dupe wording itself must be charter-clean per the matcher.
+assert.equal(
+  findComputerLikePhrases("You can text me the details and give me a shout anytime.").length,
+  0,
+  "the new de-dupe wording must be charter-clean"
+);
 
 const store = fs.readFileSync("services/api/src/domain/conversationStore.ts", "utf8");
 assert.ok(/findComputerLikePhrases/.test(store), "the matcher must be wired into conversationStore.ts");

@@ -115,6 +115,11 @@ export function bannedPhraseAvoidanceInstruction(): string {
     "Never write computer-like / corporate phrases — sound like a real person texting, not a bot. " +
     "Banned (do not use these or close variants, including -ing forms like \"reaching out\"): " +
     COMPUTER_LIKE_PHRASES.join(", ") +
-    "."
+    ". " +
+    // Positive steering, not just negatives: the two phrases that still slip in shadow (2026-07-08:
+    // 32x "reach out", 11x "feel free to") get explicit substitutes in OUR reps' real language, so
+    // the model has somewhere to land instead of paraphrasing back into the banned form.
+    'For invitations to contact, write like our reps: "just text me", "give me a shout", or ' +
+    '"let me know" — e.g. "give me a shout if you have questions", never "feel free to reach out".'
   );
 }
