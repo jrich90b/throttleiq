@@ -550,6 +550,7 @@ import {
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
+  isStaleBookedAppointmentDay,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
@@ -9497,6 +9498,20 @@ async function buildAppointmentStatusQuestionReply(args: {
   const staffName = appointmentStatusStaffName(conv, cfg ?? undefined);
   const staffSuffix = staffName ? ` with ${staffName}` : "";
   const asksToday = /\btoday\b/i.test(inboundText);
+
+  // A booked appointment whose calendar day is already PAST is stale — never assert it as current
+  // (operator-reported on +17167506588: a Jul-3 slot parroted back on Jul 7). Route it to the same
+  // confirm/rebook handoff the unconfirmed branch uses, and offer a new time. Fail-direction: only
+  // the strictly-past-day case is suppressed (isStaleBookedAppointmentDay keeps same-day + future).
+  if (bookedEventId && whenIso && isStaleBookedAppointmentDay({ whenIso, nowMs: Date.now(), timeZone })) {
+    addAppointmentStatusReviewTodo(conv, inboundText, args.providerMessageId);
+    setFollowUpMode(conv, "manual_handoff", "appointment_status_confirm");
+    stopFollowUpCadence(conv, "manual_handoff");
+    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+    return whenText
+      ? `That appointment (${whenText}) has already passed — want me to set up a new time to come in?`
+      : "That appointment has already passed — want me to set up a new time to come in?";
+  }
 
   if (bookedEventId && whenIso) {
     const start = new Date(whenIso);

@@ -25,6 +25,7 @@ export {
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
   tentativeWindowNeedsOwnerFollowUp,
+  isStaleBookedAppointmentDay,
   decideVehicleChoiceConfidenceTurn,
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,

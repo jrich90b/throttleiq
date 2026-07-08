@@ -470,6 +470,46 @@ export function tentativeWindowNeedsOwnerFollowUp(input: {
   return input.hasRequestedDay && input.hasRequestedTime;
 }
 
+// A booked appointment whose LOCAL CALENDAR DAY is strictly before "now" is STALE — the agent must
+// never answer an appointment-status question by asserting a past slot as if it's current ("I'm
+// showing your appointment for Fri, Jul 3, 1:00 PM" said on Jul 7). Operator-reported on
+// +17167506588 (s R Gurajala): a Jul-3 appointment was parroted back days later instead of offering
+// to rebook, so the customer walked away thinking he was still set. Same-day is NOT stale — even if
+// the clock time has passed, "today at 1:00 PM"/"your appointment for today" is still a correct
+// same-day status answer (the customer may be arriving now). Compared on the dealer-local calendar
+// day (Intl, timezone-aware) so a late-evening UTC appointment isn't mis-bucketed. FAIL DIRECTION:
+// when unsure (unparseable/absent whenIso) return false — keep the existing status reply rather than
+// suppress a real upcoming appointment.
+export function isStaleBookedAppointmentDay(input: {
+  whenIso: string | null | undefined;
+  nowMs: number;
+  timeZone: string;
+}): boolean {
+  const iso = String(input.whenIso ?? "").trim();
+  if (!iso) return false;
+  const start = new Date(iso);
+  if (Number.isNaN(start.getTime())) return false;
+  const tz = String(input.timeZone ?? "").trim() || "America/New_York";
+  const dayKey = (d: Date): string => {
+    try {
+      // en-CA yields YYYY-MM-DD, which is lexicographically comparable.
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(d);
+    } catch {
+      return new Intl.DateTimeFormat("en-CA", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(d);
+    }
+  };
+  return dayKey(start) < dayKey(new Date(input.nowMs));
+}
+
 // The finance/pricing cluster — the pricing-CONTINUATION sub-decision.
 //
 // Once a turn is routed to pricing_payments (routeExecPricing, derived from the
