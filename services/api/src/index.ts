@@ -11628,7 +11628,19 @@ function resolveCadencePreferredModelContext(conv: any): {
   const contextCondition = normalizeWatchCondition(conv?.inventoryContext?.condition ?? null);
 
   const recentInbounds = (conv?.messages ?? [])
-    .filter((m: any) => m?.direction === "in" && m?.provider !== "sendgrid_adf" && String(m?.body ?? "").trim())
+    // Skip tapback/reaction inbounds ("Liked/Loved/Reacted ❤️ to “…”") — they QUOTE the agent's
+    // own outbound verbatim, so any model in them is the AGENT'S wording, not the customer's ask.
+    // Production miss (Chris Duchon, +17164184478, 2026-07-08 operator report): his 'Liked "…
+    // selling your Low Rider ST…"' reaction echoed the agent's trade remark, out-ranked his real
+    // lead model (Road Glide), and the promo cadence pitched the bike he was trading AWAY.
+    // Same class as the watch-model connective guard (#157) — never mine the agent's own words.
+    .filter(
+      (m: any) =>
+        m?.direction === "in" &&
+        m?.provider !== "sendgrid_adf" &&
+        String(m?.body ?? "").trim() &&
+        !isQuotedReactionInboundText(String(m?.body ?? ""))
+    )
     .slice(-20)
     .reverse();
   let inboundModel: string | null = null;
@@ -21754,7 +21766,10 @@ function isQuotedReactionInboundText(text: string): boolean {
   if (/^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|ó)|(?:no )?le gust(?:a|ó)|se ri[oó] de|enfatiz(?:a|ó)|destac(?:a|ó)|cuestion(?:a|ó))$/i.test(reactionToken)) {
     return true;
   }
-  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\s]+$/u.test(reactionToken)) {
+  // Emoji sequences carry invisible companions Extended_Pictographic alone misses: VS16 (U+FE0F,
+  // e.g. ❤️ = U+2764+FE0F — the default iOS heart reaction), ZWJ (U+200D, compound emoji), and
+  // skin-tone modifiers (\u{1F3FB}-\u{1F3FF}). Without them 'Reacted ❤️ to "…"' escaped detection.
+  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\uFE0F\u200D\u{1F3FB}-\u{1F3FF}\s]+$/u.test(reactionToken)) {
     return true;
   }
   return !/[\p{L}\p{N}]/u.test(reactionToken);
