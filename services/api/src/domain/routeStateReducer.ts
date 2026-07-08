@@ -1597,6 +1597,24 @@ export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurn
   return { kind: "none" };
 }
 
+// Which event_promo leads terminally close+archive on intake vs stay OPEN for staff to work. Only
+// pure SWEEPSTAKES (cta "sweepstakes" — anonymous contest entries, no dealer intent) close. Demo-ride
+// (cta "demo_ride_event", Joe 2026-07-07) and ride-challenge / national-event RSVP (cta "event_rsvp",
+// Joe 2026-07-08) leads are real people at real Harley events and stay visible — they were getting
+// closed+archived and MISSED (operator +17168184666: "these gla and event promos are getting closed
+// right away and put into the archive box so are getting missed"). Cadence is suppressed for the whole
+// event_promo bucket independently (the shouldStartCadence gate excludes bucket === "event_promo"), so
+// staying open never starts a follow-up. FAIL DIRECTION: an unrecognized event_promo cta stays OPEN — a
+// visible lead staff can ignore beats a real lead silently archived.
+export function shouldCloseEventPromoLeadOnIntake(input: {
+  classificationBucket?: string | null;
+  classificationCta?: string | null;
+}): boolean {
+  const bucket = String(input.classificationBucket ?? "").toLowerCase();
+  const cta = String(input.classificationCta ?? "").toLowerCase();
+  return bucket === "event_promo" && cta === "sweepstakes";
+}
+
 // ── Trade-qualifier turn (centralizes the trade cluster's route decision) ─────
 // After we asked "do you have a trade?", the customer's reply is classified by the typed
 // parser `parseTradeQualifierResponseWithLLM` (hasTrade = affirmed / declined / unclear).

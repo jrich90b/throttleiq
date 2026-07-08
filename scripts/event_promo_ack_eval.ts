@@ -161,21 +161,21 @@ assert.ok(
   /buildDemoRideEventSoftInvite/.test(sendgrid) && /cta === "demo_ride_event"/.test(sendgrid),
   "the initial-ADF draft must override a demo_ride_event lead with the shared soft invite"
 );
-// GLA demo-ride leads are NOT auto-closed (Joe, 2026-07-07): genuine sweepstakes/RSVP
-// (event_promo, cta !== demo_ride_event) still close with no cadence, but a demo_ride_event
-// lead stays OPEN and visible so staff can work it. The terminal close must exclude it.
+// The event_promo intake close/visibility is decided by shouldCloseEventPromoLeadOnIntake (only pure
+// sweepstakes close; demo_ride_event + event_rsvp stay OPEN and visible) — pinned in detail by
+// event_promo_visibility_eval. Here just assert the terminal close routes through that decision.
 assert.ok(
-  /bucket === "event_promo" && conv\.classification\?\.cta !== "demo_ride_event"[\s\S]*?closeConversation\(conv, "event_promo_no_cadence"\)/.test(
+  /shouldCloseEventPromoLeadOnIntake\(\{[\s\S]*?\}\)\s*\)\s*\{[\s\S]*?closeConversation\(conv, "event_promo_no_cadence"\)/.test(
     sendgrid
   ),
-  "the event_promo close must EXCLUDE demo_ride_event — GLA demo rides stay open/visible; genuine sweepstakes/RSVP still close"
+  "the event_promo intake close must route through shouldCloseEventPromoLeadOnIntake"
 );
-// "Soft invite, then NO follow-up" holds independently of the close: cadence stays
-// suppressed for the WHOLE event_promo bucket (incl. demo_ride_event) via the
-// shouldStartCadence gate, so keeping the demo-ride lead open does not start a cadence.
+// "Ack/soft invite, then NO follow-up" holds independently of the close: cadence stays suppressed for
+// the WHOLE event_promo bucket (incl. demo_ride_event + event_rsvp) via the shouldStartCadence gate,
+// so keeping a lead open does not start a cadence.
 assert.ok(
   /shouldStartCadence[\s\S]*?bucket !== "event_promo"/.test(sendgrid),
-  "cadence must stay suppressed for the whole event_promo bucket (incl. demo_ride_event) independent of the close"
+  "cadence must stay suppressed for the whole event_promo bucket (incl. demo_ride_event + event_rsvp) independent of the close"
 );
 
 const ackCount = rows.filter(r => r.ack).length;
