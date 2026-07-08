@@ -905,6 +905,48 @@ export function decideWatchOptOutTurn(input: WatchOptOutTurnInput): WatchOptOutT
   return { kind: "pause_watch" };
 }
 
+// --- Post-sale ownership loss (2026-07-08) -----------------------------------
+// The customer bought a bike from us and is on the POST-SALE cadence (courtesy/warranty/Custom
+// Coverage touches about THAT bike). When they state, as a done fact, that they no longer own it
+// (sold/traded/wrecked/gave away/stolen — parsePostSaleOwnershipWithLLM), the cadence must stop
+// durably instead of pestering them about a bike they don't have. Operator-reported (John,
+// +17164739373): a Custom Coverage reminder drew "Yeah i sold the bike remember". The side effect
+// is cadence state ONLY (stopFollowUpCadence "no_longer_owns" — a stopReason the maintenance
+// tick's sold-lead revive does NOT resurrect); the reply stays with the normal draft pipeline so
+// a mixed message ("sold it, but my buddy wants one") never loses its other half to a canned ack.
+//
+// FAIL DIRECTION: unsure => none (cadence keeps running — today's behavior). A wrongful stop
+// silently drops courtesy/warranty touches a real owner should get, so only an EXPLICIT,
+// confident, done-fact statement acts.
+// -----------------------------------------------------------------------------
+export type PostSaleOwnershipTurnKind = "stop_post_sale_cadence" | "none";
+
+export type PostSaleOwnershipTurnInput = {
+  /** conv.followUpCadence is kind "post_sale" and status "active". */
+  hasActivePostSaleCadence: boolean;
+  parserAccepted: boolean;
+  intent?: string | null; // "no_longer_owns" | "none"
+  /** Loss stated as a completed fact (not a plan/intention). */
+  explicitStatement: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type PostSaleOwnershipTurnDecision = { kind: PostSaleOwnershipTurnKind };
+
+export function decidePostSaleOwnershipTurn(
+  input: PostSaleOwnershipTurnInput
+): PostSaleOwnershipTurnDecision {
+  if (!input.hasActivePostSaleCadence) return { kind: "none" }; // nothing to stop
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "no_longer_owns") return { kind: "none" };
+  if (!input.explicitStatement) return { kind: "none" }; // a plan/intention is not a loss
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "stop_post_sale_cadence" };
+}
+
 // --- Watch sibling-scope answer (2026-07-04) --------------------------------
 // After the one-time "open to variants?" ask (buildWatchSiblingScopeAsk — a same-family sibling
 // trim landed during a strict base-model watch), the customer's answer either BROADENS the watch

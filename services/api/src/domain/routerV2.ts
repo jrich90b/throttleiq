@@ -18,6 +18,7 @@ export {
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideWatchOptOutTurn,
+  decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
   decideSchedulingTurn,

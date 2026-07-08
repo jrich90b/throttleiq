@@ -2014,6 +2014,22 @@ export type WatchOptOutParse = {
   confidence?: number;
 };
 
+export type PostSaleOwnershipParse = {
+  // The conversation has an ACTIVE POST-SALE cadence (we sold them a bike; courtesy/warranty/
+  // Custom Coverage touches are scheduled). Detects when the customer says they NO LONGER OWN
+  // that bike — sold it, traded it elsewhere, wrecked/totaled it, gave it away, it was stolen.
+  // The deterministic side effect is a durable stop of the post_sale cadence (stopReason
+  // "no_longer_owns" — the maintenance tick's sold-lead revive only resurrects
+  // "appointment_booked" stops, so this stop sticks).
+  // "none": still owns it / talking about a DIFFERENT bike (their old trade, a buddy's bike) /
+  //   only THINKING about selling / ambiguous.
+  intent: "no_longer_owns" | "none";
+  // true only when the loss of ownership is stated as a done fact ("I sold the bike"), not a
+  // plan ("thinking about selling it").
+  explicitStatement: boolean;
+  confidence?: number;
+};
+
 export type WatchScopeParse = {
   // The customer was ASKED (buildWatchSiblingScopeAsk) whether their inventory watch should also
   // cover same-family sibling trims ("Road Glide" watch — also alert on Special/ST/Limited?).
@@ -3279,6 +3295,17 @@ const WATCH_OPT_OUT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   required: ["intent", "confidence"],
   properties: {
     intent: { type: "string", enum: ["watch_opt_out", "none"] },
+    confidence: { type: "number" }
+  }
+};
+
+const POST_SALE_OWNERSHIP_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_statement", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["no_longer_owns", "none"] },
+    explicit_statement: { type: "boolean" },
     confidence: { type: "number" }
   }
 };
@@ -7417,6 +7444,103 @@ export async function parseWatchOptOutWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, confidence };
+}
+
+// Post-sale ownership-loss parser (2026-07-08). The conversation has an ACTIVE POST-SALE cadence
+// (we sold them a bike; courtesy/warranty/Custom Coverage touches are scheduled). Detects when the
+// customer says they NO LONGER OWN that bike, so the cadence stops instead of pestering them about
+// a bike they don't have (operator-reported: John, +17164739373 — got a Custom Coverage reminder,
+// replied "Yeah i sold the bike remember"). Only called when a post_sale cadence is active, so the
+// parser just decides no-longer-owns vs not. Returns null when disabled/low-signal => cadence keeps
+// running (fail toward today's behavior; the decision floor lives in decidePostSaleOwnershipTurn).
+export async function parsePostSaleOwnershipWithLLM(args: {
+  text: string;
+  soldModel?: string | null; // the bike WE sold them, e.g. "Low Rider S" (anchors "the bike")
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<PostSaleOwnershipParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_POST_SALE_OWNERSHIP_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_POST_SALE_OWNERSHIP_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_POST_SALE_OWNERSHIP_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_POST_SALE_OWNERSHIP_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const soldModel = String(args.soldModel ?? "").trim();
+  const prompt = [
+    "You read SMS in a Harley dealership thread. The customer BOUGHT a bike from us and is on a",
+    "POST-SALE follow-up cadence (courtesy check-ins, warranty / Custom Coverage reminders about",
+    "THAT bike). Decide whether THIS message says they NO LONGER OWN the bike we sold them — if so,",
+    "we stop those follow-ups instead of pestering them about a bike they don't have.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "no_longer_owns": they state, as a done fact, that the bike we sold them is gone — they sold',
+    "  it, traded it in (here or elsewhere), wrecked/totaled it, gave it away, or it was stolen.",
+    '- "none": they still own it, are only THINKING about selling ("might sell it", "thinking of',
+    "  trading up\"), are talking about a DIFFERENT bike (their old trade-in, a buddy's bike, a NEW",
+    "  bike they want next), or it's ambiguous. When unsure, choose none.",
+    "",
+    "Hard rules:",
+    '- "the bike" in a post-sale thread means the bike WE sold them unless they clearly name another.',
+    "- Selling their OLD bike (the one they traded/replaced) is NOT losing the bike we sold => none.",
+    '- A plan or intention ("probably going to sell it") is NOT a done fact => none,',
+    "  explicit_statement=false.",
+    '- Idioms are not sales: "sold my buddy on getting one" / "sold on the color" => none.',
+    "- Wanting to trade the bike IN TO US toward another bike is a live deal, not a loss => none.",
+    "- explicit_statement=true only when the loss is stated as completed fact.",
+    "- confidence 0..1; use >= 0.7 only when the loss of ownership is clear.",
+    "",
+    "Examples:",
+    '- "Yeah i sold the bike remember" -> {"intent":"no_longer_owns","explicit_statement":true,"confidence":0.96}',
+    '- "I actually traded it in at another shop last month" -> {"intent":"no_longer_owns","explicit_statement":true,"confidence":0.95}',
+    '- "Totaled it back in March, insurance already paid out" -> {"intent":"no_longer_owns","explicit_statement":true,"confidence":0.95}',
+    '- "gave it to my son, he rides it now" -> {"intent":"no_longer_owns","explicit_statement":true,"confidence":0.9}',
+    '- "somebody stole it out of my garage" -> {"intent":"no_longer_owns","explicit_statement":true,"confidence":0.9}',
+    '- "thinking about selling it, what would you give me?" -> {"intent":"none","explicit_statement":false,"confidence":0.9}',
+    '- "finally sold my old sportster, loving the new bike" -> {"intent":"none","explicit_statement":false,"confidence":0.9}',
+    '- "you sold my buddy on getting one too lol" -> {"intent":"none","explicit_statement":false,"confidence":0.9}',
+    '- "bike is awesome, thanks again" -> {"intent":"none","explicit_statement":false,"confidence":0.95}',
+    '- "when is my first service due?" -> {"intent":"none","explicit_statement":false,"confidence":0.95}',
+    "",
+    soldModel ? `Bike we sold them: ${soldModel}` : "Bike we sold them: (unknown)",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "post_sale_ownership_parser",
+      schema: POST_SALE_OWNERSHIP_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-post-sale-ownership-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: PostSaleOwnershipParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "no_longer_owns" ? "no_longer_owns" : "none";
+  const explicitStatement = !!parsed.explicit_statement;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitStatement, confidence };
 }
 
 // Watch sibling-scope answer parser. We ASKED (buildWatchSiblingScopeAsk) whether the customer's
