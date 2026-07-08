@@ -1,5 +1,41 @@
 [
   {
+    "id": "answers_dealer_time_question_books_saturday_930",
+    "text": "I will try to be in there by 9:30",
+    "history": [
+      {
+        "direction": "in",
+        "body": "OK, if I'm unable to get in there during the week, I will try to get there first thing Saturday morning"
+      },
+      {
+        "direction": "out",
+        "body": "No worries—we open up at 9am on Saturday, what time were you thinking on coming in?"
+      }
+    ],
+    "expected": {
+      "action": "confirm_proposed_appointment",
+      "should_reply": true,
+      "should_book": true,
+      "day_contains": "saturday",
+      "time_contains": "9:30"
+    }
+  },
+  {
+    "id": "unprompted_arrival_eta_stays_conservative_no_book",
+    "text": "On my way, doing my best to be there by 9:30",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Sounds good, see you soon!"
+      }
+    ],
+    "expected": {
+      "action_any_of": ["provide_arrival_window", "purchase_delivery_update", "none"],
+      "should_reply": true,
+      "should_book": false
+    }
+  },
+  {
     "id": "appointment_status_today_question_1",
     "text": "Hey is my appointment today Dalton Magill ?",
     "appointment": {
