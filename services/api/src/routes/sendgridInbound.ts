@@ -50,7 +50,7 @@ import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
@@ -9034,15 +9034,26 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     // Store the draft as an outbound message (suggest-only for now)
     queueInitialDraftForPreferredContact(draft, initialMediaUrls);
   }
-  // Event-promo/sweepstakes/RSVP ADFs are one-and-done: draft the ack, then close with
-  // no cadence. EXCEPT GLA demo-ride leads (cta "demo_ride_event"): those are corporate
-  // Harley-event demo rides, not sweepstakes — staff need to see and work them (Joe,
-  // 2026-07-07). They get the soft-invite draft (buildDemoRideEventSoftInvite, above) and
-  // then stay OPEN and visible. Cadence is already suppressed for the whole event_promo
-  // bucket independently, by the shouldStartCadence gate below (bucket !== "event_promo"),
-  // so keeping demo-ride open does NOT start a follow-up cadence — the spec is: soft
-  // invite, then no follow-up. Only the terminal close is narrowed here.
-  if (conv.classification?.bucket === "event_promo" && conv.classification?.cta !== "demo_ride_event") {
+  // Event-promo ADFs are one-and-done on cadence: draft the ack, no follow-up chase. But staff
+  // still need to WORK the real ones, so only pure SWEEPSTAKES (cta "sweepstakes" — anonymous
+  // contest entries with no dealer intent) terminally close+archive. Everything else in the
+  // event_promo bucket stays OPEN and visible:
+  //   - GLA demo-ride leads (cta "demo_ride_event") — corporate Harley-event demo rides (Joe,
+  //     2026-07-07); they get the soft-invite draft (buildDemoRideEventSoftInvite, above).
+  //   - Ride-challenge / national-event RSVP leads (cta "event_rsvp") — real people at real
+  //     Harley events, were getting closed+archived and MISSED (Joe, 2026-07-08; operator
+  //     +17168184666 "these gla and event promos are getting closed right away and put into the
+  //     archive box so are getting missed"). They get the event ack and stay visible.
+  // Cadence is suppressed for the WHOLE event_promo bucket independently, by the shouldStartCadence
+  // gate below (bucket !== "event_promo"), so staying open does NOT start a follow-up cadence — the
+  // spec is: ack/soft-invite, then no follow-up. Fail-direction: an unrecognized event_promo cta
+  // stays OPEN (a visible lead staff can ignore beats a real lead silently archived).
+  if (
+    shouldCloseEventPromoLeadOnIntake({
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta
+    })
+  ) {
     closeConversation(conv, "event_promo_no_cadence");
     stopFollowUpCadence(conv, "manual_handoff");
   }
