@@ -347,6 +347,16 @@ Env vars:
   calendar can't be reached, fall back to a lock-in ask. The calendar WRITE is live-only: regenerate
   (`book:false`) availability-checks and drafts but never writes (reflects an already-booked slot). This
   honors "do not confirm unless booked" (the confirm follows a real `bookedEventId`).
+  - **Answering the dealer's own time question counts as a concrete confirm (#170).** When OUR last
+    outbound asked what time to come in ON A SPECIFIC DAY ("we open at 9 on Saturday, what time were you
+    thinking?") and the customer answers with a concrete clock time ("I'll try to be in there by 9:30",
+    "probably around 10"), the parser sets `confirm_proposed_appointment` + `shouldBook=true` and carries
+    the day from OUR question — so it books instead of deflecting. The day is high-confidence (it's our own
+    question); the calendar check + no-false-confirm fallback still apply. This is DISTINCT from an
+    unprompted en-route ETA ("on my way, be there by 5:30"), which stays `provide_arrival_window` /
+    `shouldBook=false`. Pinned by `customer_ack_action` fixtures. Kept conservative (no auto-book) on
+    day-only confirms whose time lives only in DISTANT prior context ("see you Monday" → 11am) — that's a
+    higher wrong-book risk and a separate calibration call.
 - Test-ride scheduling weather gate:
   - Pass dealer weather status into orchestrator for ADF/email inbound paths.
   - Treat sustained rain as bad weather (in addition to snow/cold) for test-ride slot gating.
