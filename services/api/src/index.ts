@@ -5045,6 +5045,21 @@ function formatRequestedConditionLabel(condition?: "new" | "used"): string {
   return condition ? `${condition} ` : "";
 }
 
+// Human phrasing for a customer-requested model-year era/range ("early 2000s" -> "2000–2005",
+// "2015 or older" -> "2015-or-older"). Used only to word the era-miss acknowledgement, so it stays
+// factual — we never invent an interpretation the numbers don't support.
+function formatRequestedEraLabel(
+  yearMin: number | null,
+  yearMax: number | null
+): string {
+  if (yearMin != null && yearMax != null) {
+    return yearMin === yearMax ? String(yearMin) : `${yearMin}–${yearMax}`;
+  }
+  if (yearMax != null) return `${yearMax}-or-older`;
+  if (yearMin != null) return `${yearMin}-or-newer`;
+  return "";
+}
+
 type ModelCodesByFamilyCatalog = {
   families?: Record<string, string[]>;
   aliases?: Record<string, string[]>;
@@ -9040,6 +9055,8 @@ function isFaqParserAccepted(
 type AvailabilityParseHint = {
   model?: string | null;
   year?: string | null;
+  yearMin?: number | null;
+  yearMax?: number | null;
   color?: string | null;
   stockId?: string | null;
   condition?: string | null;
@@ -9070,6 +9087,8 @@ function inventoryEntityParseToAvailabilityHint(
   const hint: AvailabilityParseHint = {
     model: parsed?.model ?? null,
     year: parsed?.year != null ? String(parsed.year) : null,
+    yearMin: typeof parsed?.yearMin === "number" ? parsed.yearMin : null,
+    yearMax: typeof parsed?.yearMax === "number" ? parsed.yearMax : null,
     color: parsed?.color ?? null,
     stockId: parsed?.stockId ?? null,
     condition:
@@ -9077,7 +9096,15 @@ function inventoryEntityParseToAvailabilityHint(
         ? parsed.condition
         : null
   };
-  if (!hint.model && !hint.year && !hint.color && !hint.stockId && !hint.condition) {
+  if (
+    !hint.model &&
+    !hint.year &&
+    hint.yearMin == null &&
+    hint.yearMax == null &&
+    !hint.color &&
+    !hint.stockId &&
+    !hint.condition
+  ) {
     return null;
   }
   return hint;
@@ -24253,11 +24280,49 @@ async function resolveDeterministicAvailabilityReply(args: {
   const availableMatches = matchStatus.available;
   const leadStockId = conv.lead?.vehicle?.stockId ?? null;
   const leadVin = conv.lead?.vehicle?.vin ?? null;
-  const availableMatchesForCount = otherInventoryRequest
+  const availableMatchesForCountAll = otherInventoryRequest
     ? availableMatches.filter(
         m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))
       )
     : availableMatches;
+  // Era/decade constraint guard: the customer pinned a model-year range this turn ("early 2000s",
+  // "2015 or older"). Never present current-year units as satisfying an era-constrained ask — keep
+  // only in-era matches, and if the model exists in stock but none fall in the requested era,
+  // acknowledge the era miss and offer a watch instead of listing off-era inventory. Fail-direction:
+  // we'd rather say "we don't have that era" than fabricate a match. Both reply paths call this
+  // shared resolver, so the guard rides live + regen with no drift.
+  const eraMin =
+    typeof parsedAvailability?.yearMin === "number" && parsedAvailability.yearMin >= 1900
+      ? parsedAvailability.yearMin
+      : null;
+  const eraMax =
+    typeof parsedAvailability?.yearMax === "number" && parsedAvailability.yearMax >= 1900
+      ? parsedAvailability.yearMax
+      : null;
+  const hasEraConstraint = eraMin != null || eraMax != null;
+  const matchInRequestedEra = (item: any): boolean => {
+    const iy = Number(item?.year);
+    if (!Number.isFinite(iy)) return false;
+    if (eraMin != null && iy < eraMin) return false;
+    if (eraMax != null && iy > eraMax) return false;
+    return true;
+  };
+  const availableMatchesForCount = hasEraConstraint
+    ? availableMatchesForCountAll.filter(matchInRequestedEra)
+    : availableMatchesForCountAll;
+  if (
+    hasEraConstraint &&
+    availableMatchesForCount.length === 0 &&
+    availableMatchesForCountAll.length > 0
+  ) {
+    const eraLabel = formatRequestedEraLabel(eraMin, eraMax);
+    const modelDisplay = normalizeDisplayCase(modelForLookup ?? model);
+    const modelEraLabel = eraLabel ? `${eraLabel} ${modelDisplay}` : modelDisplay;
+    return {
+      kind: "reply",
+      reply: `I’m not seeing any ${modelEraLabel} in stock right now. ${buildOutOfStockHumanOptionsLine()} Want me to keep an eye out for one?`
+    };
+  }
   const heldMatchesForCount = otherInventoryRequest
     ? matchStatus.held.filter(
         m => !((leadStockId && m.stockId === leadStockId) || (leadVin && m.vin === leadVin))

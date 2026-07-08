@@ -11251,6 +11251,8 @@ export async function parseInventoryEntitiesWithLLM(args: {
     'input: "Customer: how about a triglycerides instead?" output: {"target_type":"alternate_request","is_availability_question":true,"is_test_ride_context":false,"model":"Tri Glide","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
     'input: "Customer: if i can stay around 500 a month with 2500 down id do it" output: {"target_type":"none","is_availability_question":false,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":500,"down_payment":2500,"confidence":0.95}',
     'input: "Customer: anything between 2021 and 2023 under 20k?" output: {"target_type":"generic_inventory","is_availability_question":true,"is_test_ride_context":false,"model":"","year":0,"year_min":2021,"year_max":2023,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":20000,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
+    'input: "Customer: Any early 2000s lowriders?" output: {"target_type":"model_only","is_availability_question":true,"is_test_ride_context":false,"model":"Low Rider","year":0,"year_min":2000,"year_max":2005,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.95}',
+    'input: "Customer: do you have any street glides 2015 or older?" output: {"target_type":"model_only","is_availability_question":true,"is_test_ride_context":false,"model":"Street Glide","year":0,"year_min":0,"year_max":2015,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.94}',
     'input: "Customer: im after a black trim cvo street glide st" output: {"target_type":"color_model","is_availability_question":true,"is_test_ride_context":false,"model":"CVO Street Glide ST","year":0,"year_min":0,"year_max":0,"color":"","trim":"black trim","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.93}',
     'input: "Customer: tuesday at 4 works for me" output: {"target_type":"none","is_availability_question":false,"is_test_ride_context":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0,"confidence":0.92}'
   ];
@@ -11261,7 +11263,7 @@ export async function parseInventoryEntitiesWithLLM(args: {
     "Entity rules:",
     "- model: explicit model mention only; else empty string.",
     "- year: single explicit model year if present; else 0.",
-    "- year_min/year_max: explicit range if present (e.g. 2021-2023); else 0/0.",
+    "- year_min/year_max: explicit year range OR era/decade/relative-year phrasing if present; else 0/0. Map natural forms: \"early 2000s\" -> 2000/2005; \"mid-2000s\" -> 2004/2007; \"late 90s\" -> 1997/1999; \"2015 or older\" -> 0/2015; \"2020 or newer\" -> 2020/0; \"2021 to 2023\" -> 2021/2023.",
     "- color: explicit color request only; else empty string.",
     "- trim: explicit trim/style/finish token only; else empty string.",
     "- stock_id: explicit stock/unit number or VIN only, preserving dealer format such as T10-26, U570-24, or the VIN text; else empty string.",
