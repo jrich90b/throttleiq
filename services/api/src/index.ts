@@ -295,6 +295,7 @@ import {
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
   parseWatchOptOutWithLLM,
+  parsePostSaleOwnershipWithLLM,
   parseWatchScopeWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseNonMotorcycleTradeWithLLM,
@@ -534,6 +535,7 @@ import {
   decideConversationCloseoutTurn,
   decideDealStatusCheckTurn,
   decideWatchOptOutTurn,
+  decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
   decideEventPromoTurn,
@@ -2577,6 +2579,67 @@ async function resolveWatchOptOutReply(
   stopFollowUpCadence(conv, "watch_opt_out");
   recordRouteOutcome(scope, "inventory_watch_opt_out", { convId: conv.id, leadKey: conv.leadKey, paused });
   return buildWatchOptOutAck();
+}
+
+// Post-sale ownership loss: confidence floor (default 0.7 — a wrongful stop drops courtesy/warranty
+// touches, so the parser must also flag the loss as an EXPLICIT done fact before this floor applies).
+function postSaleOwnershipConfidenceMin(): number {
+  const raw = Number(process.env.LLM_POST_SALE_OWNERSHIP_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the ownership parser only runs on gone-bike-ish phrasings. A gate, NOT
+// comprehension: a hint miss falls through to existing behavior; the parser owns the decision.
+const POST_SALE_OWNERSHIP_HINT_RE =
+  /\b(sold (it|the|that|my)\b|no longer (have|own|ride)|don'?t (have|own) (it|the bike)|got rid of|traded (it|the bike)|total(ed|led)|wreck(ed)?|gave (it|the bike) (away|to)|stolen|stole (it|my))\b/i;
+function postSaleOwnershipHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return POST_SALE_OWNERSHIP_HINT_RE.test(t);
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). When the
+// conv has an ACTIVE POST-SALE cadence and the customer states, as a done fact, that they no longer
+// own the bike we sold them ("Yeah i sold the bike remember" — John, +17164739373), STOP that
+// cadence durably (stopReason "no_longer_owns" — the maintenance tick's sold-lead revive only
+// resurrects "appointment_booked" stops). STATE ONLY, like applyWatchScopeAnswer: this never
+// composes the reply; the normal draft pipeline sees the message in history and responds naturally,
+// so a mixed message ("sold it, but my buddy wants one") never loses its other half to a canned ack.
+// Decision centralized in decidePostSaleOwnershipTurn (routeStateReducer). Fail-safe: no active
+// post-sale cadence / hint miss / unclear / low confidence => no state change (cadence keeps running).
+async function applyPostSaleOwnershipUpdate(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  scope: "live" | "regen"
+): Promise<boolean> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return false;
+  const cadence: any = (conv as any).followUpCadence;
+  const hasActivePostSaleCadence = cadence?.kind === "post_sale" && cadence?.status === "active";
+  if (!hasActivePostSaleCadence) return false; // nothing to stop
+  if (!postSaleOwnershipHint(text)) return false; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("post_sale_ownership_parser", () =>
+    parsePostSaleOwnershipWithLLM({
+      text,
+      soldModel: (conv as any).sale?.unitModel ?? conv.lead?.vehicle?.model ?? null,
+      history: buildHistory(conv, 8)
+    })
+  );
+  if (process.env.LLM_POST_SALE_OWNERSHIP_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-post-sale-ownership-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decidePostSaleOwnershipTurn({
+    hasActivePostSaleCadence: true,
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitStatement: !!parse?.explicitStatement,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: postSaleOwnershipConfidenceMin()
+  });
+  if (decision.kind !== "stop_post_sale_cadence") return false;
+  stopFollowUpCadence(conv, "no_longer_owns");
+  recordRouteOutcome(scope, "post_sale_no_longer_owns", { convId: conv.id, leadKey: conv.leadKey });
+  return true;
 }
 
 // A sibling-scope ask is PENDING when we asked (siblingScopeAskedAt) and nothing resolved it —
@@ -49708,6 +49771,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   if (event.provider === "twilio") {
     await applyWatchScopeAnswer(conv, event.body ?? "", "regen");
   }
+  // Post-sale ownership loss (state only) — parity with /webhooks/twilio. Idempotent: once the
+  // cadence is stopped it is no longer active and this is a no-op.
+  if (event.provider === "twilio") {
+    await applyPostSaleOwnershipUpdate(conv, event.body ?? "", "regen");
+  }
   const regenTurnId =
     String(event.providerMessageId ?? "").trim() ||
     `${event.provider}:${event.receivedAt ?? new Date().toISOString()}`;
@@ -55645,6 +55713,12 @@ if (authToken && signature) {
   // with the ask + answer in view. Same application in regenerate (route-parity law).
   if (event.provider === "twilio") {
     await applyWatchScopeAnswer(conv, event.body ?? "", "live");
+  }
+  // Post-sale ownership loss (state only, gated on an ACTIVE post_sale cadence): "I sold the
+  // bike" durably stops the cadence before drafting; the normal pipeline composes the reply.
+  // Same application in regenerate (route-parity law).
+  if (event.provider === "twilio") {
+    await applyPostSaleOwnershipUpdate(conv, event.body ?? "", "live");
   }
   const mediaOnlyAvailabilityContext = getRecentInboundAvailabilityTextForMediaOnlyTurn(conv, event);
   if (mediaOnlyAvailabilityContext) {
