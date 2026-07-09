@@ -346,7 +346,10 @@ function sanitizeSmsDraftNoEmail(draft: string, allowEmail: boolean): string {
   out = out.replace(/\bemail the details\b/gi, "text the details");
   out = out.replace(/\bemail you\b/gi, "text you");
   out = out.replace(/\be-?mail\b/gi, "text");
-  out = out.replace(/\btext\b([^.]*)\band text\b/gi, "text$1and reach out");
+  // De-dupe "text … and text" from the email→text substitutions above. The varied verb must be
+  // OUR reps' language — this line used to write "and reach out", deterministically injecting a
+  // charter-banned phrase into drafts (a chunk of the 32 shadow hits, 2026-07-08).
+  out = out.replace(/\btext\b([^.]*)\band text\b/gi, "text$1and give me a shout");
   out = out.replace(/\btext\b\s+\btext\b/gi, "text");
   return out;
 }
