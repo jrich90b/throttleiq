@@ -6079,7 +6079,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (suppressInitialAutoDraftForTimedCallback) {
       return { ok: false, reason: "timed_callback_suppressed" };
     }
-    if (prefersPhoneOnly && systemMode !== "suggest") {
+    // Call-only leads STAY SILENT in every mode (Joe ruling, 2026-07-09, +17163804680):
+    // a phone-preferred lead gets a call task, never an auto SMS/email draft — even in
+    // suggest mode the draft was noise the operator had to notice and discard. Staff can
+    // always text manually; the unsent-first-touch net is phone-aware ("call if
+    // phone-preferred"), so this fails toward a human call task, not toward silence.
+    if (prefersPhoneOnly) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       return { ok: false, reason: "phone_preferred" };
     }
@@ -6412,8 +6417,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  if (isInitialAdf && prefersPhoneOnly && systemMode !== "suggest") {
+  // Call-only stays silent in EVERY mode (Joe ruling 2026-07-09) — see the matching gate in
+  // publishAdfDraftForPreferredContact. The explicit call todo (not just maybeAddInitialCallTodo,
+  // which skips boilerplate day-one tasks) keeps the fail-direction humanward: no auto reply,
+  // but a visible "call them" task so the lead can't be silently dropped.
+  if (isInitialAdf && prefersPhoneOnly) {
     maybeAddInitialCallTodo();
+    addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
     return res.status(200).json({
       ok: true,
       parsed: true,
