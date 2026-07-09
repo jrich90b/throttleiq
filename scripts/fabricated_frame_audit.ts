@@ -97,6 +97,16 @@ function selfTest(): void {
   // The frame must be in the OPENER, not buried mid-reply.
   assert.equal(detectFabricatedFrame("Here are the specs. Happy to help anytime.", "send me the specs").fabricated, false, "gratitude phrase mid-reply (not opener) -> not flagged");
 
+  // Reassurance-answers-a-request must NOT flag (Dan Mathes, +17164711028, 7/8): the customer
+  // asked "can I drop off Tuesday afternoon?" and the reply answered "No problem at all" — a real
+  // affirmation, not a fabricated you're-welcome (reassurance-opener-voice-ok). "You're welcome"/
+  // "my pleasure" only respond to thanks, so they STAY flagged even on a request.
+  assert.equal(detectFabricatedFrame("No problem at all.", "Yes that works can I drop off Tuesday afternoon?").fabricated, false, "reassurance answering a request -> not flagged");
+  assert.equal(detectFabricatedFrame("Happy to help!", "Can you send pics of the bike?").fabricated, false, "reassurance answering a request -> not flagged");
+  assert.equal(detectFabricatedFrame("You're welcome.", "Can you send pics of the bike?").fabricated, true, "you're-welcome cannot answer a request -> still flagged");
+  // A reassurance opener with NO customer request/question is still a fabricated frame.
+  assert.equal(detectFabricatedFrame("No problem at all.", "I absolutely love my bike").fabricated, true, "reassurance with no request/question -> still flagged");
+
   // Conversation scan + pairing.
   const conv = {
     id: "+17163350819", lead: { firstName: "mike", lastName: "jaglowski" },

@@ -35,12 +35,31 @@ export function isFabricatedQuestionFrame(replyOpener: string, customerText: str
 
 export type FabricatedFrame = { fabricated: boolean; type: "gratitude" | "question" | null };
 
+// A reassurance affirmation ("no problem", "no worries", "happy/glad to help", "anytime")
+// is DUAL-USE: besides responding to thanks, it legitimately ANSWERS a customer request or
+// yes/no question — "Can I drop off Tuesday afternoon?" → "No problem at all" means "yes,
+// that's fine", not a fabricated you're-welcome (reassurance-opener-voice-ok, Joe 2026-07-08).
+// "You're welcome" / "my pleasure" can only respond to thanks, so they stay flagged.
+// NOTE: this exemption is AUDIT-ONLY (detectFabricatedFrame grades a full sent reply). The
+// live blended-lead-in guard (isFabricatedGratitudeLeadIn, wired in llmDraft.ts) is left
+// strict on purpose — a lead-in FRAGMENT never carries the business answer, so a bare "No
+// problem" lead-in with no thanks is still fabricated there (blended_lead_in_guard:eval).
+const REASSURANCE_AFFIRMATION =
+  /\b(no\s+problem|no\s+worries|happy\s+to\s+help|glad\s+to\s+help|any\s?time)\b/i;
+
 // Inspect ONLY the opening sentence of a reply — the fabricated frame is always the opener.
 // Used by the nightly fabricated_frame audit to surface replies that invent a conversational
 // frame (you thanked me / you asked a question) the customer's turn doesn't warrant.
 export function detectFabricatedFrame(reply: string, customerText: string): FabricatedFrame {
   const opener = String(reply ?? "").split(/(?<=[.!?])\s+/)[0] ?? "";
-  if (isFabricatedGratitudeLeadIn(opener, customerText)) return { fabricated: true, type: "gratitude" };
+  if (isFabricatedGratitudeLeadIn(opener, customerText)) {
+    // Audit refinement: a reassurance affirmation answering a customer request/question is
+    // a real answer, not a fabricated gratitude frame. CUSTOMER_IS_QUESTION is the generous
+    // request/question detector (also covers "can I drop off …?").
+    const reassuranceAnswer =
+      REASSURANCE_AFFIRMATION.test(opener) && CUSTOMER_IS_QUESTION.test(String(customerText ?? ""));
+    if (!reassuranceAnswer) return { fabricated: true, type: "gratitude" };
+  }
   if (isFabricatedQuestionFrame(opener, customerText)) return { fabricated: true, type: "question" };
   return { fabricated: false, type: null };
 }
