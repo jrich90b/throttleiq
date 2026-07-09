@@ -50,7 +50,7 @@ import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
@@ -9056,6 +9056,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   ) {
     closeConversation(conv, "event_promo_no_cadence");
     stopFollowUpCadence(conv, "manual_handoff");
+  } else {
+    // Ride-challenge entries get ONE follow-up anchored to the challenge wrap-up (Joe ruling
+    // 2026-07-09, +15857657010: "the ride challenge cadence should be 9/15/26") — not the
+    // standard sales drip (suppressed for event_promo by the shouldStartCadence gate below)
+    // and not total silence. Start the cadence, then pause it until the event date; the
+    // wrap-up touch goes through the normal suggest-mode + cadence-quality gates.
+    const rideChallengeTouch = resolveRideChallengeEventTouch({
+      leadSource: conv.lead?.source ?? leadSource,
+      classificationBucket: conv.classification?.bucket,
+      classificationCta: conv.classification?.cta,
+      nowMs: Date.now(),
+      followUpIso: process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null
+    });
+    if (rideChallengeTouch && !conv.followUpCadence?.status) {
+      const cfg = await getSchedulerConfig();
+      startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      pauseFollowUpCadence(conv, rideChallengeTouch.pauseUntilIso, "event_date");
+    }
   }
   const purchaseTimeframeRaw = String(conv.lead?.purchaseTimeframe ?? "").toLowerCase();
   const notReadyTimeframe =
