@@ -95,6 +95,36 @@ if (suppressed.length) {
   for (const s of suppressed.slice(0, 20)) console.log(`   - ${s.anomaly.convId} ${s.anomaly.dimension} — ${s.reason}`);
 }
 
+// Cross-routine PR-ledger suppression (batch the per-item act_runner check-open-pr): drop findings
+// whose convId::dimension already has an OPEN loop PR (fix awaiting review) or a recently-MERGED one
+// (fix landed — a stale echo until the report refreshes). Exact-key only, so we never hide a live miss.
+// gh-authed only: the box has no gh → listers return [] → suppresses nothing (fail-safe no-op there);
+// the routine re-runs loop_pr_ledger_filter.ts on the Mac where gh is authed. Any error → keep everything.
+let suppressedByOpenPr: Array<{ convId: string; dimension: string; prNumber: number; state: string; mergedAt?: string | null }> = [];
+try {
+  const { partitionWorkOrdersByLoopPr } = await import("../services/api/src/domain/loopPrDedup.ts");
+  const { listOpenLoopPrs, listRecentlyMergedLoopPrs } = await import("./loopPrLedger.ts");
+  const part = partitionWorkOrdersByLoopPr(anomalies, {
+    openPrs: listOpenLoopPrs(),
+    mergedPrs: listRecentlyMergedLoopPrs()
+  });
+  if (part.suppressed.length) {
+    anomalies.length = 0;
+    anomalies.push(...part.kept);
+    suppressedByOpenPr = part.suppressed.map(s => ({
+      convId: String(s.workOrder.convId ?? ""),
+      dimension: String(s.workOrder.dimension ?? ""),
+      prNumber: s.prNumber,
+      state: s.state,
+      mergedAt: s.mergedAt ?? null
+    }));
+    console.log(`Suppressed ${part.suppressed.length} finding(s) already covered by an open/merged loop PR:`);
+    for (const s of part.suppressed.slice(0, 20)) console.log(`   - ${s.key} → PR #${s.prNumber} (${s.state})`);
+  }
+} catch {
+  /* gh unavailable / any error → keep every finding (fail toward surfacing, never toward hiding) */
+}
+
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
@@ -146,6 +176,8 @@ const payload = {
   rawAnomalyCount,
   suppressedStaleCount: suppressed.length,
   suppressedStale: suppressed.map(s => ({ convId: s.anomaly.convId, dimension: s.anomaly.dimension, reason: s.reason })),
+  suppressedByOpenPrCount: suppressedByOpenPr.length,
+  suppressedByOpenPr,
   workOrderCount: workOrders.length,
   byTier,
   byAction,

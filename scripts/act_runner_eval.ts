@@ -106,7 +106,7 @@ assert.match(src, /process\.exit\(3\)/, "a duplicate-skip uses a distinct exit c
   assert.equal(findMergedPrForFindingKey(freshMerged, "::", { nowMs: NOW }), null, "meaningless key never dedups");
   const fs2 = await import("node:fs");
   const runner = fs2.readFileSync("scripts/act_runner.ts", "utf8");
-  assert.ok(/findMergedPrForFindingKey\(listRecentlyMergedPrs\(\)/.test(runner), "act_runner consults merged PRs in check-open-pr AND the build path");
+  assert.ok(/findMergedPrForFindingKey\(listRecentlyMergedLoopPrs\(\)/.test(runner), "act_runner consults merged PRs in check-open-pr AND the build path");
   assert.ok(/process\.exit\(4\)/.test(runner), "merged coverage exits with its own distinct code (4)");
 }
 

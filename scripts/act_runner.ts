@@ -25,9 +25,9 @@ import {
   findingKeyMarker,
   findMergedPrForFindingKey,
   findOpenPrForFindingKey,
-  isMeaningfulFindingKey,
-  type OpenPrSummary
+  isMeaningfulFindingKey
 } from "../services/api/src/domain/loopPrDedup.ts";
+import { listOpenLoopPrs, listRecentlyMergedLoopPrs } from "./loopPrLedger.ts";
 
 const argv = process.argv.slice(2);
 const sub = argv[0];
@@ -54,35 +54,9 @@ function git(args: string[]): string {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
-// Cross-routine dedup: list OPEN PRs (best-effort; an empty list on any gh error
-// fails toward building the PR, never toward silently dropping a fix).
-function listOpenPrs(): OpenPrSummary[] {
-  try {
-    const out = execFileSync(
-      "gh",
-      ["pr", "list", "--state", "open", "--limit", "200", "--json", "number,title,body"],
-      { encoding: "utf8" }
-    );
-    const parsed = JSON.parse(out);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function listRecentlyMergedPrs(): Array<OpenPrSummary & { mergedAt?: string | null }> {
-  try {
-    const out = execFileSync(
-      "gh",
-      ["pr", "list", "--state", "merged", "--limit", "100", "--json", "number,title,body,mergedAt"],
-      { encoding: "utf8" }
-    );
-    const parsed = JSON.parse(out);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+// Cross-routine dedup: the gh `pr list` readers live in scripts/loopPrLedger.ts
+// (shared with anomaly_loop_detect + loop_pr_ledger_filter). Both fail toward
+// building the PR on any gh error, never toward silently dropping a fix.
 
 // If a finding key is supplied and an OPEN PR already carries it, this is a
 // duplicate — skip (exit 3, distinct from success/usage/escalate) so the caller
@@ -90,8 +64,8 @@ function listRecentlyMergedPrs(): Array<OpenPrSummary & { mergedAt?: string | nu
 function skipIfDuplicateOpenPr(findingKey: string | undefined): void {
   if (!findingKey || !isMeaningfulFindingKey(findingKey)) return;
   const existing =
-    findOpenPrForFindingKey(listOpenPrs(), findingKey) ??
-    findMergedPrForFindingKey(listRecentlyMergedPrs(), findingKey);
+    findOpenPrForFindingKey(listOpenLoopPrs(), findingKey) ??
+    findMergedPrForFindingKey(listRecentlyMergedLoopPrs(), findingKey);
   if (existing) {
     console.log(`DUPLICATE: open PR #${existing.number} already covers "${findingKey}" — skipping (no new PR).`);
     process.exit(3);
@@ -112,7 +86,7 @@ if (sub === "check-open-pr") {
     console.error("check-open-pr requires --key <convId::dimension>");
     process.exit(2);
   }
-  const existing = findOpenPrForFindingKey(listOpenPrs(), key);
+  const existing = findOpenPrForFindingKey(listOpenLoopPrs(), key);
   if (existing) {
     console.log(`EXISTS #${existing.number} — open PR already covers "${key}"`);
     process.exit(3);
@@ -120,7 +94,7 @@ if (sub === "check-open-pr") {
   // A recently-MERGED PR covering the key means the fix already landed and the finding is a
   // stale echo awaiting its report refresh — report as covered (exit 4) so routines stop
   // re-investigating fixes that shipped (the "double work in two routines" class).
-  const merged = findMergedPrForFindingKey(listRecentlyMergedPrs(), key);
+  const merged = findMergedPrForFindingKey(listRecentlyMergedLoopPrs(), key);
   if (merged) {
     console.log(`MERGED #${merged.number} — fix already merged (${merged.mergedAt ?? "recent"}) for "${key}"; stale echo, do not rebuild`);
     process.exit(4);
