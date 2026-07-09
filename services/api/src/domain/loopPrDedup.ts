@@ -79,3 +79,63 @@ export function findMergedPrForFindingKey(
   }
   return null;
 }
+
+/** A work-order / anomaly row — anything carrying a convId + dimension we can key on. */
+export type LoopWorkOrder = { convId?: string | null; dimension?: string | null; [k: string]: unknown };
+
+export type LoopPrSuppression = {
+  workOrder: LoopWorkOrder;
+  key: string;
+  prNumber: number;
+  state: "open" | "merged";
+  mergedAt?: string | null;
+};
+
+/**
+ * Batch the per-item check-open-pr dedup so the WORK ORDER (next.json) is pre-filtered
+ * instead of every routine re-discovering the same already-filed finding per item.
+ * Drops a work order when an OPEN loop PR carries its `convId::dimension` key (a fix is
+ * awaiting review) or a RECENTLY-MERGED one does (the fix already landed — the finding is
+ * a stale echo until its report refreshes). This is the same signal `act_runner check-open-pr`
+ * emits, applied to the whole list at detect time.
+ *
+ * Fail-direction (unchanged from the single-item helpers): an empty/malformed key, or
+ * absent/empty PR lists (e.g. gh unavailable → the caller passes `[]`), suppresses NOTHING —
+ * every finding is KEPT. We only ever drop a finding we can PROVE a PR already covers, so we
+ * never silently hide a live miss (incl. state anomalies: a watch_fire_miss is dropped only if
+ * a PR was literally stamped `<phone>::watch_fire_miss`, i.e. someone already filed it).
+ */
+export function partitionWorkOrdersByLoopPr(
+  workOrders: LoopWorkOrder[] | null | undefined,
+  args: {
+    openPrs?: OpenPrSummary[] | null;
+    mergedPrs?: MergedPrSummary[] | null;
+    nowMs?: number;
+    windowDays?: number;
+  }
+): { kept: LoopWorkOrder[]; suppressed: LoopPrSuppression[] } {
+  const kept: LoopWorkOrder[] = [];
+  const suppressed: LoopPrSuppression[] = [];
+  for (const wo of workOrders ?? []) {
+    const key = findingKeyOf(wo?.convId ?? null, wo?.dimension ?? null);
+    if (!isMeaningfulFindingKey(key)) {
+      kept.push(wo);
+      continue;
+    }
+    const open = findOpenPrForFindingKey(args.openPrs, key);
+    if (open) {
+      suppressed.push({ workOrder: wo, key, prNumber: open.number, state: "open" });
+      continue;
+    }
+    const merged = findMergedPrForFindingKey(args.mergedPrs, key, {
+      nowMs: args.nowMs,
+      windowDays: args.windowDays
+    });
+    if (merged) {
+      suppressed.push({ workOrder: wo, key, prNumber: merged.number, state: "merged", mergedAt: merged.mergedAt ?? null });
+      continue;
+    }
+    kept.push(wo);
+  }
+  return { kept, suppressed };
+}
