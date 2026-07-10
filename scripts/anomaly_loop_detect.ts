@@ -59,6 +59,10 @@ for (const sib of [
   // Operator "Report issue" reports (opsAnomalyStore) → reported_issue. The explicit-human-flag net:
   // agent-behavior reports (routing/cadence/appointment/task/handoff/other) the operator filed by hand.
   { name: "operator-reported (ops anomaly)", file: path.join(reportRoot, "ops_anomaly", "latest.json") },
+  // Thumbs-down NOTES that are staff INSTRUCTIONS for a live customer ("book him in at 9:30"), not
+  // code defects (thumbs_down_action_request). The 👎 loop used to bury these; they belong in the
+  // staff-action lane so the customer stops waiting. (thumbs_down_action_sweep.ts.)
+  { name: "thumbs-down staff action", file: path.join(reportRoot, "thumbs_down_action", "latest.json") },
   // MDF assistant (Ansira co-op portal runner) failures — blocked/stuck/fell-back-because-it-didn't-load
   // runs (mdf_assistant_failure / mdf_assistant_stuck), synthetic mdf:<taskId> ids. Integration-diagnosis.
   { name: "mdf-portal-health", file: path.join(reportRoot, "mdf_health", "latest.json") },

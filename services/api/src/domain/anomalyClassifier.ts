@@ -127,6 +127,21 @@ export function classifyOutcomeAnomaly(
     };
   }
 
+  // A thumbs-down NOTE that turned out to be a STAFF INSTRUCTION for a live customer ("book him in at
+  // 9:30", "tell him we have the muffler") — not a code defect. Nothing to fix in the agent; a PERSON
+  // must act. Always Tier 2, notify, never a code change: it lands in the morning digest's staff-action
+  // lane so the customer stops waiting. (decideThumbsDownNoteRouting = staff_action.)
+  if (anomaly.dimension === "thumbs_down_action_request") {
+    return {
+      tier: 2,
+      action: "escalate",
+      workOrder: true,
+      autoMergeEligible: false,
+      notify: true,
+      rationale: "thumbs-down note is a staff instruction for a live customer → surface to a human; not a code fix"
+    };
+  }
+
   // CRM (TLP) integration anomalies. crm_update_error = a Playwright/browser-automation FAILURE
   // (selector drift, login, launch timeout) that left the dealer's CRM stale. crm_log_stale = a real
   // send that never even ATTEMPTED a CRM log (an auto-send path not wired to the logger) — the

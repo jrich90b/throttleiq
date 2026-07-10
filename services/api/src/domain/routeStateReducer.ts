@@ -832,6 +832,40 @@ export function decideFeedbackDiagnosisAction(input: FeedbackDiagnosisActionInpu
   return "record_only";
 }
 
+// --- Thumbs-down NOTE routing (2026-07-10) -----------------------------------
+// A thumbs-down note (parseThumbsDownNoteWithLLM) does one of two jobs: it asks a PERSON to do
+// something for a live customer ("book him in at 9:30") or it reports a code DEFECT ("wrong unit").
+// The old path funneled every note into the code-fix classifier, so action requests silently died in
+// a shadow report that ignores anything it hasn't seen 3+ times. This decides where a note goes.
+//
+//   staff_action   → surface the note to a HUMAN in the morning digest (a customer is waiting).
+//   reply_defect   → hand to the existing failure-mode diagnosis (decideFeedbackDiagnosisAction).
+//   record_only    → coaching/one-off; the nightly voice loop already sees it, nobody is waiting.
+//
+// FAIL DIRECTION: stranding a live customer is the expensive miss, so `unclear` AND any low-confidence
+// read route to staff_action, never record_only. We would rather put a coaching nit in front of a
+// human than let "book him in" evaporate. Only a CONFIDENT reply_defect / coaching leaves the human lane.
+export type ThumbsDownNoteRoute = "staff_action" | "reply_defect" | "record_only";
+
+export type ThumbsDownNoteRoutingInput = {
+  parserAccepted: boolean;
+  noteKind?: "action_request" | "reply_defect" | "coaching" | "unclear" | null;
+  confidence: number;
+  confidenceMin: number; // default 0.7 at the call site
+};
+
+export function decideThumbsDownNoteRouting(input: ThumbsDownNoteRoutingInput): ThumbsDownNoteRoute {
+  // Parser off/failed, or the note is ambiguous → a human reads it. Never silently dropped.
+  if (!input.parserAccepted) return "staff_action";
+  if (input.noteKind === "action_request") return "staff_action"; // a customer is waiting; confidence-independent
+  if (input.noteKind === "unclear") return "staff_action";
+  // Below here we have a non-action classification. Trust it only when the parser is confident;
+  // an unsure "it's just coaching" could be a missed action request, so fail toward the human.
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) return "staff_action";
+  if (input.noteKind === "reply_defect") return "reply_defect";
+  return "record_only"; // confident coaching
+}
+
 // --- Deal/progress status check (2026-06-18) -------------------------------
 //
 // A customer asking an OPEN status question about their deal/order/bike — "how are
