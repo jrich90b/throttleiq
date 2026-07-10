@@ -9,6 +9,7 @@ export {
   decideDraftModelArm,
   decideDealStatusCheckTurn,
   decideEventPromoTurn,
+  decideOwnerThreadStepBack,
   resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,

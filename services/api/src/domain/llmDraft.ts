@@ -11788,6 +11788,7 @@ export async function parseInventoryStatusWithLLM(args: {
     'input: "Customer: how long would it take to get a 2026 nightster in" output: {"intent":"factory_order_eta","explicit_request":true,"model":"Nightster","year":2026,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
     'input: "Customer: Do you the sportster or nightster in stock? Or something a bit lighter than the low rider" output: {"intent":"alternate_inventory_request","explicit_request":true,"model":"Sportster","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
     'input: "Customer: Is this available as well? [MMS image attachment]" output: {"intent":"image_availability_check","explicit_request":true,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.95}',
+    'input: "Customer: Hey Scott this is Mark. I thought long and hard about the test ride and did not like the new bike enough to buy it. I am now looking for an older street glide prior to the current fairing and handlebar controls. I am assuming I need to find a 2022 or older. If you have one that has the black trim instead of chrome please let me know." output: {"intent":"availability_check","explicit_request":true,"model":"Street Glide","year":0,"year_min":0,"year_max":2022,"color":"","trim":"black","stock_id":"","condition":"used","confidence":0.96}',
     'input: "Customer: On my way doing my best to be there by 530" output: {"intent":"none","explicit_request":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}',
     'input: "Customer: Perfect." output: {"intent":"none","explicit_request":false,"model":"","year":0,"year_min":0,"year_max":0,"color":"","trim":"","stock_id":"","condition":"unknown","confidence":0.96}'
   ];
@@ -11806,6 +11807,9 @@ export async function parseInventoryStatusWithLLM(args: {
     "- none: no inventory status request.",
     "- explicit_request is true only for a customer ask that should receive an inventory/status answer.",
     "- Extract target fields only when explicit in the customer message; do not infer from history except that hold_status_question may have empty target.",
+    "- color/trim carry ONLY real finish words (black, chrome, vivid black, dark billiard gray). NEVER copy a sentence fragment or clause into them ('if you have one that has the...' is not a color).",
+    "- 'X or older' / 'older than the current' => year_max=X with condition used; 'X or newer' => year_min=X.",
+    "- 'black trim instead of chrome' / 'blacked out' is trim=black, not a color.",
     "- For unlisted_inventory_followup, use recent history only to determine that 'it/that bike' refers to a back-room or unlisted bike; do not answer from public inventory.",
     "- If hasInboundMedia is true and text says this/that/it available, use image_availability_check.",
     "",
