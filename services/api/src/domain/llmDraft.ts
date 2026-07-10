@@ -6991,6 +6991,136 @@ export async function parseFeedbackFailureModeWithLLM(args: {
   };
 }
 
+// Thumbs-down NOTE intent parser (2026-07-10). Staff type a sentence into the 👎 box 119 times out of
+// 121 — but those notes do two completely different jobs, and only one of them is a bug report:
+//
+//   "Book him In at 9:30 today"                -> a live customer is waiting on a HUMAN
+//   "tell him yes we have the stock muffler"   -> a live customer is waiting on a HUMAN
+//   "Wrong unit" / "answered the wrong thing"  -> the agent's code needs a fix
+//
+// parseFeedbackFailureModeWithLLM only answers the second question (which code layer owns the
+// defect), so "book him in" gets filed as a state_or_lifecycle_miss and the customer keeps waiting.
+// This parser reads the note's INTENT first, so action requests reach a person instead of a code queue.
+//
+// FAIL DIRECTION: a missed action_request strands a real customer; a mislabeled one only adds a line
+// to the morning digest. So decideThumbsDownNoteRouting treats `unclear` and low confidence as "a
+// human reads it", never as "drop it" — which frees this parser to say unclear instead of guessing.
+export type ThumbsDownNoteParse = {
+  // action_request = the note tells a person to do something for this customer (book, call, quote, tell them X).
+  // reply_defect   = the note explains what the agent got WRONG (wrong bike, wrong context, stale state).
+  // coaching       = tone/length/phrasing preference; the voice layer owns it, nobody is waiting.
+  // unclear        = can't tell. Fails toward a human.
+  noteKind: "action_request" | "reply_defect" | "coaching" | "unclear";
+  // For action_request: what a person must do, in the staff member's own terms. Empty otherwise.
+  actionSummary: string;
+  rationale: string;
+  confidence: number;
+};
+
+const THUMBS_DOWN_NOTE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["note_kind", "action_summary", "rationale", "confidence"],
+  properties: {
+    note_kind: { type: "string", enum: ["action_request", "reply_defect", "coaching", "unclear"] },
+    action_summary: { type: "string" },
+    rationale: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseThumbsDownNoteWithLLM(args: {
+  note?: string | null;
+  inbound?: string | null;
+  ratedReply?: string | null;
+}): Promise<ThumbsDownNoteParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_THUMBS_DOWN_NOTE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_THUMBS_DOWN_NOTE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_THUMBS_DOWN_NOTE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_THUMBS_DOWN_NOTE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const note = String(args.note ?? "").trim();
+  if (!note) return null;
+
+  const prompt = [
+    "A staff member at a Harley-Davidson dealership gave an AI reply a THUMBS-DOWN and typed a note.",
+    "Decide what the NOTE is doing. Return only JSON matching the schema.",
+    "",
+    "note_kind:",
+    "- action_request: the note instructs a PERSON to do something for this customer — book/schedule them,",
+    "  call them, quote a price, or tell them a specific fact. A customer is waiting on a human. It is",
+    "  still an action_request when phrased as a correction ('should have booked him at 9:30').",
+    "- reply_defect: the note explains what the AGENT got WRONG — wrong bike/model, answered the wrong",
+    "  thing, ignored known state (already bought, handed off), mis-routed the lead. Nobody is waiting;",
+    "  the code needs a fix.",
+    "- coaching: a tone/length/phrasing preference ('too wordy', 'too pushy'). The wording IS the whole",
+    "  complaint. Nobody is waiting.",
+    "- unclear: you genuinely cannot tell.",
+    "",
+    "A note can describe a defect AND demand an action. If a person must act for this customer, it is",
+    "action_request — that classification wins, because a stranded customer costs more than a late fix.",
+    "",
+    "action_summary: for action_request ONLY, one short imperative line naming what the person must do",
+    "(e.g. 'Book him in at 9:30 today'). Empty string for every other kind. Never invent a detail that",
+    "is not in the note or the conversation.",
+    "",
+    "confidence 0..1; >= 0.8 only when clear. Prefer 'unclear' over a confident guess.",
+    "",
+    "Examples:",
+    '- note:"Book him In at 9:30 today" -> {"note_kind":"action_request","action_summary":"Book him in at 9:30 today","rationale":"tells staff to book the customer","confidence":0.95}',
+    '- note:"tell him yes we have the stock muffler out front by the bike" -> {"note_kind":"action_request","action_summary":"Tell him we have the stock muffler out front by the bike","rationale":"staff must relay a fact","confidence":0.9}',
+    '- note:"Wrong unit" -> {"note_kind":"reply_defect","action_summary":"","rationale":"agent referenced the wrong bike","confidence":0.85}',
+    '- note:"the customers bike is in service. the deal is closed, he bought the bike" -> {"note_kind":"reply_defect","action_summary":"","rationale":"agent ignored that the deal already closed","confidence":0.85}',
+    '- note:"Way too much should not be in the message" -> {"note_kind":"coaching","action_summary":"","rationale":"length/tone preference","confidence":0.85}',
+    "",
+    `Customer message: ${String(args.inbound ?? "(unknown)").slice(0, 400)}`,
+    `Down-rated agent reply: ${String(args.ratedReply ?? "(unknown)").slice(0, 400)}`,
+    `Staff note: ${note.slice(0, 400)}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "thumbs_down_note_parser",
+      schema: THUMBS_DOWN_NOTE_JSON_SCHEMA,
+      maxOutputTokens: 160,
+      debugTag: "llm-thumbs-down-note-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ?? (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const kinds = new Set(["action_request", "reply_defect", "coaching", "unclear"]);
+  const noteKind = kinds.has(String(parsed.note_kind))
+    ? (parsed.note_kind as ThumbsDownNoteParse["noteKind"])
+    : "unclear";
+  return {
+    noteKind,
+    // An actionSummary only means anything on an action_request; drop it elsewhere so nothing
+    // downstream can render a stray imperative next to a code-fix finding.
+    actionSummary:
+      noteKind === "action_request" && typeof parsed.action_summary === "string"
+        ? parsed.action_summary.slice(0, 160)
+        : "",
+    rationale: typeof parsed.rationale === "string" ? parsed.rationale.slice(0, 200) : "",
+    confidence:
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0
+  };
+}
+
 // Vehicle media request parser (2026-06-24). After we suggest units, reads whether the customer is
 // asking to SEE them — photos, colors, or listing links of bikes we already discussed ("can I see
 // the pictures and color?", "send me the links", "what colors do they come in?"). FALSE when they're

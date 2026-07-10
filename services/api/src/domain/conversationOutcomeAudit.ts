@@ -62,6 +62,9 @@ const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
   open_critic_finding: "discovery",
   intent_unaddressed: "comprehension",
   reported_issue: "feedback",
+  // A thumbs-down NOTE that instructs a person to act for a live customer ("book him in at 9:30") —
+  // routed by decideThumbsDownNoteRouting, escalated like reported_issue (a human is waiting).
+  thumbs_down_action_request: "feedback",
   task_autoclose_regression: "state",
   watch_fire_miss: "state",
   watch_fired_wrong_model: "state",
@@ -656,5 +659,42 @@ export function decideOpsAnomalyReportedIssue(a: OpsAnomalyReport, opts?: { now?
     detail: `operator-reported (${type}): ${note.slice(0, 180)}`,
     // Upper bound on the offending reply — never occurredAt (see the OutcomeAnomaly field note).
     ...(Number.isFinite(atMs) ? { reportedAt: new Date(atMs).toISOString() } : {})
+  };
+}
+
+// Thumbs-down NOTE → staff-action anomaly (2026-07-10). A rep types a note into the 👎 box that is
+// really an INSTRUCTION for a live customer ("book him in at 9:30"), not a code-defect report. The
+// sweep runs parseThumbsDownNoteWithLLM + decideThumbsDownNoteRouting and, when the route is
+// staff_action, calls this to emit the digest work order. Pure: the parse + route are computed at the
+// call site and passed in, so the mapper stays deterministic and eval'able (mirrors the ops-anomaly
+// mapper). Returns null for any non-staff route or a note we couldn't anchor to a message.
+export type ThumbsDownActionInput = {
+  convId: string;
+  leadKey?: string | null;
+  note: string;
+  route: "staff_action" | "reply_defect" | "record_only";
+  actionSummary?: string | null;
+  // ISO timestamp the 👎 was recorded (feedback.at) — the EXACT reply the note is about, so unlike an
+  // operator report this is a true occurredAt, not just an upper bound.
+  ratedAt?: string | null;
+};
+export function decideThumbsDownActionAnomaly(input: ThumbsDownActionInput): OutcomeAnomaly | null {
+  if (input.route !== "staff_action") return null; // reply_defect/record_only go to the code-fix diagnosis lane
+  const convId = String(input.convId ?? "").trim();
+  if (!convId) return null;
+  const note = String(input.note ?? "").trim();
+  if (!note) return null;
+  const summary = String(input.actionSummary ?? "").trim();
+  const atMs = Date.parse(String(input.ratedAt ?? ""));
+  return {
+    convId,
+    leadKey: String(input.leadKey ?? ""),
+    dimension: "thumbs_down_action_request",
+    category: categoryFor("thumbs_down_action_request"),
+    severity: "P2",
+    healed: false,
+    detail: `thumbs-down note = staff action${summary ? `: ${summary.slice(0, 140)}` : ""} — “${note.slice(0, 140)}”`,
+    // The 👎 is anchored to the exact rated reply, so this IS the triggering event — a real occurredAt.
+    ...(Number.isFinite(atMs) ? { occurredAt: new Date(atMs).toISOString() } : {})
   };
 }
