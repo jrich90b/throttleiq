@@ -6097,6 +6097,17 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       return { ok: false, reason: "phone_preferred" };
     }
+    // Marketplace-relay leads (AutoDealers.Digital / Facebook Marketplace with no phone) have NO direct
+    // SMS or email channel — the reply has to happen in the marketplace/Facebook inbox. The intake block
+    // above (relayOnlyMarketplaceLead → "reply in the marketplace inbox" todo + manual_handoff) already
+    // routes staff there, but it falls through to here and a dead draft still got generated — 7 live
+    // relay leads carried an undeliverable draft_ai the operator had to notice and discard (adf_ref_11592
+    // 2026-07-07 was a live pending draft; +17168638302-class noise). Mirror the call-only gate: suppress
+    // the draft, keep the handoff. Deterministic (structured source + no-phone signal); fails toward the
+    // already-created handoff task, never toward silence.
+    if (relayOnlyMarketplaceLead) {
+      return { ok: false, reason: "marketplace_relay" };
+    }
     const invariant = applyAdfReplyInvariant(text);
     if (!invariant.allow) {
       const reason = invariant.reason ?? "draft_invariant_blocked";
