@@ -147,5 +147,46 @@
       "year": null,
       "year_max": 2015
     }
+  },
+  {
+    "id": "active_unit_year_clarification_road_king_15_or_16",
+    "text": "Is it a 15 or 16?",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Also, you might get more money on the 2016 Road King depending on what your approval was on at Stan’s."
+      },
+      {
+        "direction": "out",
+        "body": "I received your approval and you were approved for $15,470 on the 2015 Road King! 20% down is required."
+      }
+    ],
+    "lead": {
+      "vehicle": {
+        "year": 2015,
+        "model": "Road King",
+        "condition": "used"
+      }
+    },
+    "expected": {
+      "is_availability_question": false,
+      "is_active_unit_clarification": true
+    }
+  },
+  {
+    "id": "genuine_availability_two_years_not_clarification",
+    "text": "do you have any 2015 or 2016 road kings in stock?",
+    "lead": {
+      "vehicle": {
+        "year": 2015,
+        "model": "Road King",
+        "condition": "used"
+      }
+    },
+    "expected": {
+      "is_availability_question": true,
+      "is_active_unit_clarification": false,
+      "model_contains": "road king"
+    }
   }
 ]

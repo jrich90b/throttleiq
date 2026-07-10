@@ -579,6 +579,7 @@ import {
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
+  decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
@@ -55423,6 +55424,27 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       !!event.mediaUrls?.length && hasAvailabilityQuestionText(event.body ?? "");
     const regenInventoryEntityAvailabilityThisTurn =
       !!regenInventoryEntityAvailabilityHint && !!regenInventoryEntityParse?.isAvailabilityQuestion;
+    // Centralized in routeStateReducer.decideInventoryUnitClarificationTurn (shared with the live
+    // /webhooks/twilio path, route-parity law): a year/unit confirmation about the vehicle already
+    // under discussion is answered from context, not routed to the stock-availability deflection
+    // below. The decision lives in the reducer; only the reply build stays here (not a mirrored
+    // decision local, so it is not new drift surface).
+    if (
+      decideInventoryUnitClarificationTurn({
+        mode: conv.mode,
+        isActiveUnitClarification: regenInventoryEntityParse?.isActiveUnitClarification
+      })
+    ) {
+      const unitClarificationReply = await buildInventoryUnitClarificationReply(conv);
+      if (unitClarificationReply) {
+        setDialogState(conv, "inventory_init");
+        return respondWithSmsRegeneratedDraft(unitClarificationReply, undefined, {
+          turnAvailabilityIntent: true,
+          turnFinanceIntent: false,
+          turnSchedulingIntent: false
+        });
+      }
+    }
     const explicitAvailabilityAskThisTurn =
       regenParserAvailabilityIntent ||
       !!regenAvailabilityPreferenceHint ||
@@ -62168,12 +62190,21 @@ if (authToken && signature) {
     });
     return publishLiveTwilioReply(inventoryBrowse.reply);
   }
+  // Centralized in routeStateReducer.decideInventoryUnitClarificationTurn (shared with the
+  // regenerate path, route-parity law). The customer is confirming/disambiguating the year (or
+  // which unit) of the vehicle already under discussion — answer from context, never a stock
+  // lookup. The `event.provider === "twilio"` gate is live-path-specific and stays here.
   const inventoryUnitClarificationReply =
     event.provider === "twilio" &&
-    String(conv.mode ?? "").toLowerCase() !== "human" &&
-    isInventoryUnitClarificationQuestion(event.body ?? "") &&
-    (conv.classification?.bucket === "inventory_interest" ||
-      String(conv.followUp?.reason ?? "").toLowerCase() === "adf_vehicle_fact_pricing")
+    decideInventoryUnitClarificationTurn({
+      mode: conv.mode,
+      isActiveUnitClarification: inventoryEntityParse?.isActiveUnitClarification,
+      // legacy narrow lexical fallback (kept fail-safe: without it a parser miss deflects)
+      legacyLexicalMatch:
+        isInventoryUnitClarificationQuestion(event.body ?? "") &&
+        (conv.classification?.bucket === "inventory_interest" ||
+          String(conv.followUp?.reason ?? "").toLowerCase() === "adf_vehicle_fact_pricing")
+    })
       ? await buildInventoryUnitClarificationReply(conv)
       : null;
   if (inventoryUnitClarificationReply) {
