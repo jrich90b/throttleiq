@@ -12045,6 +12045,11 @@ export async function parseUnifiedSemanticSlotsMergedWithLLM(args: {
   const existingPayoff = args.tradePayoff ?? null;
 
   const semanticExamples = [
+    // ANTI-FABRICATION negatives (2026-07-10 shadow soak): never manufacture a watch bike from a URL,
+    // dealer-portal/App-ID/reference noise, marketing-survey/ADF intake blob, or pure logistics chatter.
+    'input: "Customer Comments: H-D1 Dealer Portal URL: https://hdnetportal.sharepoint.com/sites/us/SitePages/Tool%20Pages/Marketplace%20Tools/Marketplace" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.9}',
+    'input: "Customer: I\'m in Rochester so stopping in will only happen if you have one." output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.9}',
+    'input: "Marketing Questions: Dealer Lead App - Type: Y SalesPerson: Brandon Hartsch - Model Year: 2025, Model: Breakout, PreQual: N" output: {"watch_action":"none","watch":{"model":"","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.9}',
     'input: "Customer: keep an eye out for a 2026 road glide 3 in black and text me when one hits" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"2026","year_min":0,"year_max":0,"color":"black","condition":"new","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.97}',
     'input: "Customer: text me if a road glide trike comes in" output: {"watch_action":"set_watch","watch":{"model":"Road Glide 3","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
     'input: "Customer: keep an eye out for a Pan Am Limited" output: {"watch_action":"set_watch","watch":{"model":"Pan America 1250 Limited","year":"","year_min":0,"year_max":0,"color":"","condition":"unknown","min_price":0,"max_price":0,"monthly_budget":0,"down_payment":0},"department_intent":"none","contact_preference_intent":"none","media_intent":"none","service_records_intent":false,"confidence":0.96}',
@@ -12129,6 +12134,13 @@ export async function parseUnifiedSemanticSlotsMergedWithLLM(args: {
     "- watch.condition should be one of new/used/any/unknown.",
     "- min_price/max_price are explicit bike-price constraints only; parse k/grand as thousands; otherwise 0.",
     "- monthly_budget/down_payment are explicit monthly/down values only; otherwise 0.",
+    // ANTI-FABRICATION (2026-07-10): the shadow soak showed the merged parser inventing watch bikes
+    // out of non-customer noise — a SharePoint/dealer-portal URL became "2013 Street Glide, Vivid Black";
+    // "I'm in Rochester so stopping in…" became "Tri Glide, used". Those slots then read as a bike the
+    // customer never named. Only ever fill watch.* from a motorcycle the customer NAMES in this message
+    // (or unambiguously points back to via existing watch/lead context) — never manufacture one from noise.
+    "- NEVER populate watch.model/year/color/condition/price from URLs, web links, dealer-portal or SharePoint addresses, App IDs, internal reference/stock numbers, or from marketing-survey / ADF / 'Dealer Lead App' intake blobs. Those are not a customer naming a bike.",
+    "- Only populate watch.* from a motorcycle the customer explicitly refers to in THIS message, or from clear existing watch/lead context the message points back to. When the message is logistics, chit-chat, or otherwise not about a specific bike (e.g. 'I'm in Rochester so stopping in will only happen if you have one'), leave watch.* empty/unknown and watch_action=none unless a genuine notify-me request is present.",
     "- confidence is 0..1.",
     "",
     "Examples:",
@@ -12260,16 +12272,30 @@ export function diffUnifiedSlotParse(
   };
 
   cmpStr("watchAction", legacy.watchAction, merged.watchAction, "none");
-  cmpStr("watch.model", legacy.watch?.model, merged.watch?.model);
-  cmpStr("watch.year", legacy.watch?.year, merged.watch?.year);
-  cmpNum("watch.yearMin", legacy.watch?.yearMin, merged.watch?.yearMin);
-  cmpNum("watch.yearMax", legacy.watch?.yearMax, merged.watch?.yearMax);
-  cmpStr("watch.color", legacy.watch?.color, merged.watch?.color);
-  cmpStr("watch.condition", legacy.watch?.condition, merged.watch?.condition, "unknown");
-  cmpNum("watch.minPrice", legacy.watch?.minPrice, merged.watch?.minPrice);
-  cmpNum("watch.maxPrice", legacy.watch?.maxPrice, merged.watch?.maxPrice);
-  cmpNum("watch.monthlyBudget", legacy.watch?.monthlyBudget, merged.watch?.monthlyBudget);
-  cmpNum("watch.downPayment", legacy.watch?.downPayment, merged.watch?.downPayment);
+  // The watch slot fields (model/year/color/condition/price…) only drive a customer-facing
+  // decision when a watch is actually being SET or STOPPED. On a non-watch turn — an ADF/survey
+  // intake blob, a dealer-portal URL, logistics chatter — both parsers still jot opportunistic
+  // guesses into `watch`, but downstream ignores them (no watch is written, and the model-relevance
+  // guard discards any bike the customer didn't reference this turn). Two LLMs guessing different
+  // inert scratch-notes is NOT a decision disagreement, so don't count it: compare the slot fields
+  // only when either side resolved to a real watch action. `watchAction` itself is always compared,
+  // so a genuine "legacy sets a watch, merged misses it" still surfaces.
+  const watchActionActive = (v: unknown) => {
+    const a = normStr(v);
+    return a === "set_watch" || a === "stop_watch";
+  };
+  if (watchActionActive(legacy.watchAction) || watchActionActive(merged.watchAction)) {
+    cmpStr("watch.model", legacy.watch?.model, merged.watch?.model);
+    cmpStr("watch.year", legacy.watch?.year, merged.watch?.year);
+    cmpNum("watch.yearMin", legacy.watch?.yearMin, merged.watch?.yearMin);
+    cmpNum("watch.yearMax", legacy.watch?.yearMax, merged.watch?.yearMax);
+    cmpStr("watch.color", legacy.watch?.color, merged.watch?.color);
+    cmpStr("watch.condition", legacy.watch?.condition, merged.watch?.condition, "unknown");
+    cmpNum("watch.minPrice", legacy.watch?.minPrice, merged.watch?.minPrice);
+    cmpNum("watch.maxPrice", legacy.watch?.maxPrice, merged.watch?.maxPrice);
+    cmpNum("watch.monthlyBudget", legacy.watch?.monthlyBudget, merged.watch?.monthlyBudget);
+    cmpNum("watch.downPayment", legacy.watch?.downPayment, merged.watch?.downPayment);
+  }
   cmpStr("departmentIntent", legacy.departmentIntent, merged.departmentIntent, "none");
   cmpStr("contactPreferenceIntent", legacy.contactPreferenceIntent, merged.contactPreferenceIntent, "none");
   cmpStr("mediaIntent", legacy.mediaIntent, merged.mediaIntent, "none");
@@ -12320,6 +12346,10 @@ async function runSemanticScopeMergedShadowCompare(
       outcome: equal ? "agree" : "disagree",
       elapsedMs,
       diffs,
+      // Log both watch actions so the report can re-derive decision-scoped agreement exactly
+      // (watch-slot diffs only matter when a watch is being set/stopped — see diffUnifiedSlotParse).
+      legacyWatchAction: legacyAsUnified.watchAction ?? "none",
+      mergedWatchAction: merged.watchAction ?? "none",
       mergedPayoffStatus: merged.payoffStatus,
       mergedTradeTargetAmount: merged.tradeTargetValue?.amount ?? null,
       textPreview: String(args.text ?? "").slice(0, 140)
@@ -12362,6 +12392,8 @@ async function runUnifiedSlotsMergedShadowCompare(
       outcome: equal ? "agree" : "disagree",
       elapsedMs,
       diffs,
+      legacyWatchAction: legacy.watchAction ?? "none",
+      mergedWatchAction: merged.watchAction ?? "none",
       textPreview: String(args.text ?? "").slice(0, 140)
     };
     console.log("[unified-slots-shadow]", JSON.stringify(record));
