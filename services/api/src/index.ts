@@ -50986,6 +50986,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   // Payments-specific parser intent (mirror of the live llmPaymentsIntent) — feeds the centralized
   // finance follow-up continuation signal further down, replacing the askedDownRecently regex.
   let regenLlmPaymentsIntent = false;
+  let regenAsksForPaymentEstimate = false;
   if (event.provider === "twilio") {
     const regenHistory = buildHistory(conv, 12);
     const pricingPaymentsParse = await safeLlmParse("regen_pricing_payments_parser", () =>
@@ -50998,6 +50999,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenLlmPaymentsIntent =
       isPricingPaymentsIntentParserAccepted(pricingPaymentsParse) &&
       pricingPaymentsParse?.intent === "payments";
+    regenAsksForPaymentEstimate =
+      isPricingPaymentsIntentParserAccepted(pricingPaymentsParse) &&
+      pricingPaymentsParse?.asksForPaymentEstimate === true;
     const externalApprovalTransferDecision = resolveExternalDealerApprovalTransferDecision(
       event.body ?? "",
       pricingPaymentsParse
@@ -54365,6 +54369,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }),
       financeFollowUpContinuation: resolveFinanceFollowUpContinuation({
         paymentsIntent: regenLlmPaymentsIntent,
+        asksForPaymentEstimate: regenAsksForPaymentEstimate,
         financeSignal: regenParserPricingIntent,
         downProvided: regenDownProvided,
         monthlyProvided: regenMonthlyBudget != null,
@@ -59744,6 +59749,13 @@ if (authToken && signature) {
     !(dialogActAccepted && dialogActParse?.topic === "pricing") &&
     !(pricingPaymentsAccepted && pricingPaymentsParse?.intent !== "none");
   const llmPaymentsIntent = pricingHistoryBleedGuard ? false : llmPaymentsIntentRaw;
+  // Explicit numbers-ask this turn (asksForPaymentEstimate) — gates the finance follow-up
+  // continuation so a volunteered trade/down gathers info instead of firing the calculator
+  // (Joe ruling 2026-07-09, +15857278545). Same bleed guard as the payments intent.
+  const llmAsksForPaymentEstimate =
+    !pricingHistoryBleedGuard &&
+    pricingPaymentsAccepted &&
+    pricingPaymentsParse?.asksForPaymentEstimate === true;
   const llmPricingIntent = pricingHistoryBleedGuard ? false : llmPricingIntentRaw;
   const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
     ? false
@@ -61490,6 +61502,7 @@ if (authToken && signature) {
   // the old recent-finance-prompt/affirmation regex backstop was already inert and is gone.
   const financeFollowUpContinuationSignal = resolveFinanceFollowUpContinuation({
     paymentsIntent: llmPaymentsIntent,
+    asksForPaymentEstimate: llmAsksForPaymentEstimate,
     financeSignal: currentTurnFinanceSignal,
     downProvided: paymentBudgetContext.downPayment != null,
     monthlyProvided: paymentBudgetContext.monthlyBudget != null,

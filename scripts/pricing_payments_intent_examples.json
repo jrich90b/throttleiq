@@ -85,7 +85,10 @@
     "text": "What APR can I get with good credit?",
     "expected": {
       "intent": "payments",
-      "intent_any": ["payments", "pricing"],
+      "intent_any": [
+        "payments",
+        "pricing"
+      ],
       "explicit_request": true,
       "asks_apr_or_term": true
     }
@@ -134,7 +137,10 @@
     "text": "Any deals or finance specials right now?",
     "expected": {
       "intent": "pricing",
-      "intent_any": ["pricing", "payments"],
+      "intent_any": [
+        "pricing",
+        "payments"
+      ],
       "explicit_request": true
     }
   },
@@ -318,6 +324,32 @@
       "explicit_request": true,
       "asks_rider_to_rider_financing": true,
       "asks_third_party_purchase_facilitation": false
+    }
+  },
+  {
+    "id": "ryan_tower_trade_down_volunteered_no_ask",
+    "text": "Awesome thank you I have a 2010 sportster and 3k cash to put down as well",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Hey ryan, it's Alexandra over at American Harley-Davidson. Thanks — I received your credit application. I’ll have our finance team reach out shortly. Reply STOP to opt out."
+      }
+    ],
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_down_payment": true,
+      "asks_for_payment_estimate": false
+    }
+  },
+  {
+    "id": "explicit_monthly_ask_with_trade_and_down",
+    "text": "With 3k down and my Sportster traded in, what would my monthly be on the Street Glide?",
+    "expected": {
+      "intent": "payments",
+      "explicit_request": true,
+      "asks_down_payment": true,
+      "asks_for_payment_estimate": true
     }
   }
 ]

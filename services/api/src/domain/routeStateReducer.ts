@@ -589,16 +589,27 @@ export function decideFinancePricingTurn(
 // the live path had already dropped that regex backstop, and regen now matches via this helper.
 export function resolveFinanceFollowUpContinuation(args: {
   paymentsIntent: boolean; // parser: turn is payments-specific (live: llmPaymentsIntent)
+  // parser: the customer explicitly ASKED for payment numbers/an estimate this turn
+  // (pricing/payments parser asksForPaymentEstimate). Joe ruling 2026-07-09 (Ryan Tower,
+  // +15857278545): volunteering "I have a 2010 sportster and 3k cash to put down" is a
+  // payments-intent turn but NOT a numbers request — the agent must gather the trade +
+  // down details, not fire the payment calculator (whose ballpark reply was also wrong).
+  asksForPaymentEstimate: boolean;
   financeSignal: boolean; // parser: pricing-or-payments route this turn (live: currentTurnFinanceSignal)
   downProvided: boolean;
   monthlyProvided: boolean;
   termProvided: boolean;
 }): boolean {
-  const { paymentsIntent, financeSignal, downProvided, monthlyProvided, termProvided } = args;
+  const { paymentsIntent, asksForPaymentEstimate, financeSignal, downProvided, monthlyProvided, termProvided } = args;
+  // The calculator/estimate continuation requires an actual numbers ASK. A declared monthly
+  // budget or term (stored payment context) still continues an in-flight structuring flow —
+  // the customer gave us numbers to work WITH — but down-payment-only context (the trade
+  // volunteer shape) does not. Fail-direction: a false negative falls through to the normal
+  // conversational path (gather/answer), never to a wrong auto-computed quote.
   return (
-    paymentsIntent ||
-    ((downProvided || monthlyProvided || termProvided) && financeSignal) ||
-    (downProvided && monthlyProvided && financeSignal)
+    (paymentsIntent && asksForPaymentEstimate) ||
+    (asksForPaymentEstimate && financeSignal) ||
+    ((monthlyProvided || termProvided) && financeSignal)
   );
 }
 
