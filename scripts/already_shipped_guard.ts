@@ -53,6 +53,16 @@ export type EchoInput = {
   draftStatus: string;
   /** origin/main commits whose message NAMES this case (phone / customer / ticket), any date */
   fixCommits: FixCommit[];
+  /**
+   * Was the graded reply anchored to the one the detector flagged (`--at`)?
+   * Unpinned, we grade the conversation's NEWEST outbound, which is often neither
+   * the flagged reply nor even agent output — staff reply by hand in the same
+   * thread, and their sends are indistinguishable from the agent's own (the
+   * "Alexandra" persona sends carry no actor field either). A newest-outbound
+   * that postdates the deploy then reads as a live miss when nothing regressed.
+   * Defaults to pinned so a caller that supplies `flaggedAtMs` deliberately is trusted.
+   */
+  replyPinned?: boolean;
 };
 
 /**
@@ -67,6 +77,7 @@ export type EchoInput = {
 export function classifyEcho(input: EchoInput): EchoResult {
   const { flaggedAtMs, deployTsMs, draftStatus, fixCommits } = input;
   const isStaleDraft = String(draftStatus ?? "") === "stale";
+  const replyPinned = input.replyPinned !== false;
 
   // (a) a fix commit that postdates the flagged reply and names the case.
   const namingCommit = [...fixCommits]
@@ -101,6 +112,16 @@ export function classifyEcho(input: EchoInput): EchoResult {
     return {
       verdict: "review",
       reason: `deploy time unknown and no naming fix commit — verify by hand`
+    };
+  }
+  // "live" is a confident claim, and an unpinned reply cannot earn it: without `--at`
+  // we graded the newest outbound, which may be a staff-typed reply or a later agent
+  // turn rather than the one the detector flagged. Downgrade to review — that still
+  // surfaces the item for a human, it just never asserts a regression we didn't see.
+  if (!replyPinned) {
+    return {
+      verdict: "review",
+      reason: `newest outbound is at/after the live deploy (${new Date(deployTsMs).toISOString()}) but no --at anchor was given, so this may not be the flagged reply (or even agent output) — re-run with --at <iso> of the flagged reply`
     };
   }
   return {
@@ -186,14 +207,38 @@ function selfTest(): void {
   });
   assert.equal(kocsis.verdict, "stale_echo", "pre-deploy superseded stale draft -> stale echo");
 
-  // A genuinely live miss: flagged AFTER the deploy, no fix.
+  // A genuinely live miss: flagged AFTER the deploy, no fix, anchored with --at.
   const live = classifyEcho({
     flaggedAtMs: Date.parse("2026-07-09T03:00:00Z"),
     deployTsMs: DEPLOY,
     draftStatus: "",
-    fixCommits: []
+    fixCommits: [],
+    replyPinned: true
   });
-  assert.equal(live.verdict, "live", "post-deploy reply with no fix -> live miss");
+  assert.equal(live.verdict, "live", "post-deploy pinned reply with no fix -> live miss");
+
+  // Mark Kocsis, 2026-07-10: his 9:30-Saturday punts were stale drafts fixed by #170, but the
+  // NEWEST outbound was Scott's hand-typed SMS 26 min after the deploy. Unpinned, that reads as
+  // a post-deploy reply -> the guard used to cry "live" on a case it had already fixed.
+  const unpinnedHumanReply = classifyEcho({
+    flaggedAtMs: Date.parse("2026-07-10T02:02:55Z"),
+    deployTsMs: Date.parse("2026-07-10T01:36:11Z"),
+    draftStatus: "",
+    fixCommits: [],
+    replyPinned: false
+  });
+  assert.equal(unpinnedHumanReply.verdict, "review", "post-deploy but UNPINNED reply -> review, never a confident 'live'");
+  assert.match(unpinnedHumanReply.reason, /--at/, "the review reason tells the operator to pin --at");
+
+  // Unpinned must never *suppress*: a stale echo stays a stale echo (evidence-backed, not a guess).
+  const unpinnedStale = classifyEcho({
+    flaggedAtMs: Date.parse("2026-07-06T20:38:33Z"),
+    deployTsMs: DEPLOY,
+    draftStatus: "stale",
+    fixCommits: [],
+    replyPinned: false
+  });
+  assert.equal(unpinnedStale.verdict, "stale_echo", "unpinned only downgrades 'live'; it never weakens a stale-echo suppression");
 
   // Ambiguous: predates deploy, NOT stale, no naming commit -> review by hand (don't auto-suppress).
   const review = classifyEcho({
@@ -217,7 +262,7 @@ function selfTest(): void {
   const noDeploy = classifyEcho({ flaggedAtMs: Date.parse("2026-07-09T03:00:00Z"), deployTsMs: NaN, draftStatus: "", fixCommits: [] });
   assert.equal(noDeploy.verdict, "review", "unknown deploy time + no fix -> review");
 
-  console.log("PASS already-shipped guard self-test (stale-echo via named commit + pre-deploy stale draft; live; review fallbacks)");
+  console.log("PASS already-shipped guard self-test (stale-echo via named commit + pre-deploy stale draft; live; unpinned + review fallbacks)");
 }
 
 function main(): void {
@@ -237,14 +282,21 @@ function main(): void {
     process.env.CONVERSATIONS_DB_PATH ||
     (process.env.DATA_DIR ? path.join(process.env.DATA_DIR, "conversations.json") : path.resolve(process.cwd(), "services", "api", "data", "conversations.json"));
 
-  const flagged = loadFlaggedReply(conversationsPath, conv, arg("--at"));
+  const atIso = arg("--at");
+  const flagged = loadFlaggedReply(conversationsPath, conv, atIso);
   if (!flagged || !flagged.at) {
     console.log(JSON.stringify({ conv, verdict: "review", reason: "could not locate a flagged outbound reply for this conversation — verify by hand" }, null, 2));
     return;
   }
   const resolvedName = name || flagged.name;
   const fixCommits = findNamingCommits(conv, resolvedName);
-  const result = classifyEcho({ flaggedAtMs: Date.parse(flagged.at), deployTsMs, draftStatus: flagged.draftStatus, fixCommits });
+  const result = classifyEcho({
+    flaggedAtMs: Date.parse(flagged.at),
+    deployTsMs,
+    draftStatus: flagged.draftStatus,
+    fixCommits,
+    replyPinned: Boolean(atIso)
+  });
 
   console.log(
     JSON.stringify(
@@ -252,6 +304,7 @@ function main(): void {
         conv,
         name: resolvedName || undefined,
         flaggedReplyAt: flagged.at,
+        replyPinned: Boolean(atIso),
         flaggedDraftStatus: flagged.draftStatus || undefined,
         deployTs: deployIso || "(unknown — pass --deploy-ts)",
         namingCommits: fixCommits.map(c => `${c.hash} ${c.subject}`),
