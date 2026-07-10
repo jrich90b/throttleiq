@@ -144,9 +144,25 @@ try {
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
-const prevKeys: Set<string> = new Set(
-  fs.existsSync(prevPath) ? (JSON.parse(fs.readFileSync(prevPath, "utf8"))?.keys ?? []) : []
-);
+const prevPayload: any = fs.existsSync(prevPath) ? JSON.parse(fs.readFileSync(prevPath, "utf8")) : {};
+const prevKeys: Set<string> = new Set(prevPayload?.keys ?? []);
+// First-seen ledger (the AGE CLOCK, Joe 2026-07-09: "they just keep building in the reports and
+// aren't touched for a while"): every finding key remembers when it FIRST appeared, so the digest
+// can lead with "oldest untouched: N days" and mark >48h items OVERDUE instead of re-listing them
+// agelessly forever. Keys that stop appearing are dropped (resolved), so the ledger self-prunes.
+const prevFirstSeen: Record<string, string> =
+  prevPayload && typeof prevPayload.firstSeen === "object" && prevPayload.firstSeen ? prevPayload.firstSeen : {};
+const nowIsoForAges = new Date().toISOString();
+const firstSeen: Record<string, string> = {};
+for (const a of anomalies) {
+  const k = keyOf(a);
+  firstSeen[k] = prevFirstSeen[k] ?? nowIsoForAges;
+}
+const ageDaysOf = (k: string): number => {
+  const t = Date.parse(firstSeen[k] ?? "");
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, Math.floor((Date.parse(nowIsoForAges) - t) / (24 * 60 * 60 * 1000)));
+};
 
 const graduatedCategories: Set<string> = new Set(
   (() => {
@@ -166,7 +182,7 @@ const graduatedCategories: Set<string> = new Set(
 const classified = anomalies.map(a => {
   const persistent = prevKeys.has(keyOf(a));
   const cls = classifyOutcomeAnomaly(a, { persistent, graduatedCategories });
-  return { ...a, persistent, ...cls };
+  return { ...a, persistent, firstSeenAt: firstSeen[keyOf(a)], ageDays: ageDaysOf(keyOf(a)), ...cls };
 });
 
 // Work order = anything the orchestrator must act on (tier 0 / reconcile-handled drops out).
@@ -202,7 +218,7 @@ const payload = {
   stop: workOrders.length === 0
 };
 fs.writeFileSync(path.join(outDir, "next.json"), JSON.stringify(payload, null, 2));
-fs.writeFileSync(prevPath, JSON.stringify({ keys: anomalies.map(keyOf) }, null, 2));
+fs.writeFileSync(prevPath, JSON.stringify({ keys: anomalies.map(keyOf), firstSeen }, null, 2));
 
 console.log(`Anomaly-loop DETECT — ${anomalies.length} anomalies → ${workOrders.length} work order(s)`);
 console.log(`By tier: 0 ${byTier["0"]} (reconcile-handled) / 1 ${byTier["1"]} / 2 ${byTier["2"]}; needs-Joe (notify): ${notify.length}`);

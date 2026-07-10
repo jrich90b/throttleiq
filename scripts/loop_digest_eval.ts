@@ -58,4 +58,33 @@ assert.match(mailer, /!digest\.hasContent && !force/, "mailer skips sending when
 assert.match(mailer, /import\("\.\.\/services\/api\/src\/domain\/emailSender\.ts"\)/, "mailer reuses the existing sendEmail (no new email infra)");
 assert.match(mailer, /LOOP_DIGEST_ENABLED/, "mailer has a kill switch");
 
-console.log("PASS loop digest eval — healthy=quiet, findings formatted (Tier 2 first, counts + conv + class), mailer send-guard + reuse.");
+// --- Decision queue + age clock (Joe, 2026-07-09: reports "keep building… aren't touched") ---
+{
+  const aged = formatLoopDigest({
+    generatedAt: "now",
+    workOrderCount: 3,
+    notifyCount: 2,
+    byTier: { "0": 0, "1": 1, "2": 2 },
+    workOrders: [
+      { convId: "+1", dimension: "reported_issue", tier: 2, notify: true, detail: "operator-reported: cadence question", ageDays: 5 },
+      { convId: "+2", dimension: "reported_issue", tier: 2, notify: true, detail: "operator-reported: routing question", ageDays: 0 },
+      { convId: "+3", dimension: "corpus_replay_judge_fail", tier: 1, notify: false, detail: "replay", ageDays: 1 }
+    ]
+  });
+  assert.ok(/⏰ Oldest untouched finding: 5 day/.test(aged.text), "digest leads with the oldest-untouched age");
+  assert.ok(/1 item\(s\) are 48h\+ OVERDUE/.test(aged.text), "48h+ items are counted as OVERDUE");
+  assert.ok(/DECISION QUEUE — reply by number/.test(aged.text), "the decision queue header invites a numbered reply");
+  assert.ok(/1\. ⏰ OVERDUE 5d \[reported_issue\] \+1/.test(aged.text), "queue is numbered, oldest first, overdue-tagged");
+  assert.ok(/2\. \(new\) \[reported_issue\] \+2/.test(aged.text), "fresh items are tagged (new)");
+  const q1 = aged.text.indexOf("DECISION QUEUE");
+  const t2 = aged.text.indexOf("NEEDS YOUR REVIEW");
+  assert.ok(q1 >= 0 && t2 > q1, "the decision queue renders ABOVE the detail sections");
+  // Tier-1-only payloads have no queue (nothing needs a human decision).
+  const t1only = formatLoopDigest({
+    generatedAt: "now", workOrderCount: 1, notifyCount: 0, byTier: { "0": 0, "1": 1, "2": 0 },
+    workOrders: [{ convId: "+9", dimension: "corpus_replay_judge_fail", tier: 1, notify: false, detail: "x", ageDays: 0 }]
+  });
+  assert.ok(!/DECISION QUEUE/.test(t1only.text), "no decision queue when nothing needs Joe");
+}
+
+console.log("PASS loop digest eval — healthy=quiet, findings formatted (Tier 2 first, counts + conv + class), decision queue + age clock, mailer send-guard + reuse.");
