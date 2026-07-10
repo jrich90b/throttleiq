@@ -74,18 +74,26 @@ for (const row of rows) {
 // outbound). Parser-led: a payments-specific intent OR payment-budget context + a pricing/payments route.
 const ffuBase = {
   paymentsIntent: false,
+  asksForPaymentEstimate: false,
   financeSignal: false,
   downProvided: false,
   monthlyProvided: false,
   termProvided: false
 };
+// Joe ruling 2026-07-09 (Ryan Tower +15857278545): the continuation (payment calculator /
+// estimate flow) now requires an explicit numbers ASK (asksForPaymentEstimate). Volunteered
+// down/trade context gathers info instead. A declared monthly budget or term still continues
+// an in-flight structuring flow.
 const ffuRows: Array<{ id: string; input: Parameters<typeof resolveFinanceFollowUpContinuation>[0]; want: boolean }> = [
-  { id: "payments_intent_alone", input: { ...ffuBase, paymentsIntent: true }, want: true },
-  { id: "down_plus_finance_signal", input: { ...ffuBase, downProvided: true, financeSignal: true }, want: true },
+  { id: "payments_intent_alone_no_ask", input: { ...ffuBase, paymentsIntent: true }, want: false },
+  { id: "payments_intent_with_ask", input: { ...ffuBase, paymentsIntent: true, asksForPaymentEstimate: true }, want: true },
+  { id: "ryan_tower_down_volunteered_no_ask", input: { ...ffuBase, paymentsIntent: true, downProvided: true, financeSignal: true }, want: false },
+  { id: "down_plus_ask", input: { ...ffuBase, downProvided: true, financeSignal: true, asksForPaymentEstimate: true }, want: true },
   { id: "monthly_plus_finance_signal", input: { ...ffuBase, monthlyProvided: true, financeSignal: true }, want: true },
   { id: "term_plus_finance_signal", input: { ...ffuBase, termProvided: true, financeSignal: true }, want: true },
   { id: "budget_without_finance_signal", input: { ...ffuBase, downProvided: true }, want: false },
-  { id: "finance_signal_without_budget", input: { ...ffuBase, financeSignal: true }, want: false },
+  { id: "finance_signal_without_budget_or_ask", input: { ...ffuBase, financeSignal: true }, want: false },
+  { id: "ask_without_any_route_signal", input: { ...ffuBase, asksForPaymentEstimate: true }, want: false },
   { id: "all_false", input: { ...ffuBase }, want: false }
 ];
 for (const row of ffuRows) {
