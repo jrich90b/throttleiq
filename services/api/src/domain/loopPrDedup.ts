@@ -139,3 +139,28 @@ export function partitionWorkOrdersByLoopPr(
   }
   return { kept, suppressed };
 }
+
+
+/**
+ * Parse a PR-ledger FILE payload (reports/anomaly_loop/pr_ledger.json) — the gh-less box's
+ * substitute for live `gh pr list` (the box digest is generated where gh doesn't exist, so a
+ * gh-authed machine exports the open/merged loop-PR lists daily and ships this file over).
+ * Returns the lists only when the payload is well-formed and FRESH (generatedAt within
+ * maxAgeDays, default 3); stale or malformed → null, and the caller suppresses NOTHING
+ * (fail toward surfacing findings, never toward hiding one on old coverage data).
+ */
+export function parseLoopPrLedgerPayload(
+  payload: unknown,
+  opts?: { nowMs?: number; maxAgeDays?: number }
+): { openPrs: OpenPrSummary[]; mergedPrs: MergedPrSummary[] } | null {
+  const p = payload as any;
+  if (!p || typeof p !== "object") return null;
+  const generatedMs = Date.parse(String(p.generatedAt ?? ""));
+  if (!Number.isFinite(generatedMs)) return null;
+  const nowMs = opts?.nowMs ?? Date.now();
+  const maxAgeMs = (opts?.maxAgeDays ?? 3) * 24 * 60 * 60 * 1000;
+  if (nowMs - generatedMs > maxAgeMs) return null; // stale export: don't trust coverage
+  const openPrs = Array.isArray(p.openPrs) ? p.openPrs.filter((x: any) => x && typeof x.number === "number") : [];
+  const mergedPrs = Array.isArray(p.mergedPrs) ? p.mergedPrs.filter((x: any) => x && typeof x.number === "number") : [];
+  return { openPrs, mergedPrs };
+}

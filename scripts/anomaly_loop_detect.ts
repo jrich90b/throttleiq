@@ -98,15 +98,31 @@ if (suppressed.length) {
 // Cross-routine PR-ledger suppression (batch the per-item act_runner check-open-pr): drop findings
 // whose convId::dimension already has an OPEN loop PR (fix awaiting review) or a recently-MERGED one
 // (fix landed — a stale echo until the report refreshes). Exact-key only, so we never hide a live miss.
-// gh-authed only: the box has no gh → listers return [] → suppresses nothing (fail-safe no-op there);
-// the routine re-runs loop_pr_ledger_filter.ts on the Mac where gh is authed. Any error → keep everything.
+// gh-authed machines use live `gh pr list`; the BOX (no gh — where the emailed digest is generated)
+// falls back to the pr_ledger.json a Mac routine exports daily (loop_pr_ledger_export.ts), freshness-
+// guarded by parseLoopPrLedgerPayload (stale/malformed → null → suppress nothing). Any error → keep everything.
 let suppressedByOpenPr: Array<{ convId: string; dimension: string; prNumber: number; state: string; mergedAt?: string | null }> = [];
 try {
-  const { partitionWorkOrdersByLoopPr } = await import("../services/api/src/domain/loopPrDedup.ts");
+  const { partitionWorkOrdersByLoopPr, parseLoopPrLedgerPayload } = await import(
+    "../services/api/src/domain/loopPrDedup.ts"
+  );
   const { listOpenLoopPrs, listRecentlyMergedLoopPrs } = await import("./loopPrLedger.ts");
+  let openPrs = listOpenLoopPrs();
+  let mergedPrs = listRecentlyMergedLoopPrs();
+  if (!openPrs.length && !mergedPrs.length) {
+    const ledgerPath = path.join(outDir, "pr_ledger.json");
+    if (fs.existsSync(ledgerPath)) {
+      const fileLedger = parseLoopPrLedgerPayload(JSON.parse(fs.readFileSync(ledgerPath, "utf8")));
+      if (fileLedger) {
+        openPrs = fileLedger.openPrs;
+        mergedPrs = fileLedger.mergedPrs;
+        console.log(`PR ledger: gh unavailable — using exported ${ledgerPath} (${openPrs.length} open / ${mergedPrs.length} merged)`);
+      }
+    }
+  }
   const part = partitionWorkOrdersByLoopPr(anomalies, {
-    openPrs: listOpenLoopPrs(),
-    mergedPrs: listRecentlyMergedLoopPrs()
+    openPrs,
+    mergedPrs
   });
   if (part.suppressed.length) {
     anomalies.length = 0;
