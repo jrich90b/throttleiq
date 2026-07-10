@@ -67,6 +67,7 @@
     "already_shipped_guard": "npx tsx scripts/already_shipped_guard.ts",
     "loop_pr_ledger_suppression:eval": "npx tsx scripts/loop_pr_ledger_suppression_eval.ts",
     "loop_pr_ledger_filter": "npx tsx scripts/loop_pr_ledger_filter.ts",
+    "loop_pr_ledger_export": "npx tsx scripts/loop_pr_ledger_export.ts",
     "campaign_asset_format:eval": "npx tsx scripts/campaign_asset_format_eval.ts",
     "task_snooze:eval": "npx tsx scripts/task_snooze_eval.ts",
     "task_autoclose_visibility:eval": "npx tsx scripts/task_autoclose_visibility_eval.ts",

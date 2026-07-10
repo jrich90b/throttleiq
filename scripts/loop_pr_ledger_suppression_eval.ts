@@ -78,4 +78,26 @@ const allCovered = applyLedgerToPayload(
 );
 assert.equal((allCovered.payload as any).stop, true, "all work orders covered → stop:true");
 
-console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + fail-safe keeps + payload recompute");
+// --- ledger FILE payload (the gh-less box's substitute for live gh) ---
+{
+  const { parseLoopPrLedgerPayload } = await import("../services/api/src/domain/loopPrDedup.ts");
+  const fresh = parseLoopPrLedgerPayload(
+    { generatedAt: new Date(NOW - DAY).toISOString(), openPrs: [{ number: 1, body: "x" }], mergedPrs: [{ number: 2, body: "y", mergedAt: new Date(NOW - DAY).toISOString() }] },
+    { nowMs: NOW }
+  );
+  assert.ok(fresh && fresh.openPrs.length === 1 && fresh.mergedPrs.length === 1, "a fresh well-formed ledger file parses");
+  assert.equal(
+    parseLoopPrLedgerPayload({ generatedAt: new Date(NOW - 5 * DAY).toISOString(), openPrs: [], mergedPrs: [] }, { nowMs: NOW }),
+    null,
+    "a stale export (>3d) is rejected — old coverage data must not hide findings"
+  );
+  assert.equal(parseLoopPrLedgerPayload({ openPrs: [] }, { nowMs: NOW }), null, "missing generatedAt is rejected");
+  assert.equal(parseLoopPrLedgerPayload("garbage", { nowMs: NOW }), null, "malformed payload is rejected");
+  const filtered = parseLoopPrLedgerPayload(
+    { generatedAt: new Date(NOW).toISOString(), openPrs: [{ number: 3 }, { nope: true }], mergedPrs: null },
+    { nowMs: NOW }
+  );
+  assert.ok(filtered && filtered.openPrs.length === 1 && filtered.mergedPrs.length === 0, "rows without a PR number are dropped; missing lists default empty");
+}
+
+console.log("PASS loop_pr_ledger_suppression eval — exact-key open/merged suppression + fail-safe keeps + payload recompute + box ledger-file freshness guard");
