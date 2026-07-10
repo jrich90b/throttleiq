@@ -29198,6 +29198,13 @@ function formatTodoCallDueAtLabel(dueAtIso: string, timeZone: string): string | 
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
+  // Sane-year guard (same rule as the web's parseSaneTaskDateMs): V8 parses year-less
+  // labels ("Thu, Jul 2, 9:00 AM") to 2001, which rendered "(requested: ...2001...)" /
+  // "9130 days ago" task lines (Henry Cole, +17168618786). A date outside the plausible
+  // window is a garbage parse — show no due label rather than a 25-year-old one.
+  const year = date.getFullYear();
+  const nowYear = new Date().getFullYear();
+  if (year < 2015 || year > nowYear + 5) return null;
   return formatSlotLocal(iso, timeZone);
 }
 

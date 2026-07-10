@@ -80,17 +80,17 @@ for (const neg of [
 
 // --- 3) Pure planner coverage. ---
 // No matches → nothing to do.
-assert.deepEqual(planPendingIncomingNotifyDedup([]), { keepId: null, retireIds: [] });
+assert.deepEqual(planPendingIncomingNotifyDedup([]), { keepId: null, retireIds: [], adoptDueAt: null });
 assert.deepEqual(
   planPendingIncomingNotifyDedup([{ id: "x", summary: "Call requested: Sat." }]),
-  { keepId: null, retireIds: [] },
+  { keepId: null, retireIds: [], adoptDueAt: null },
   "a conversation with no notify task is untouched"
 );
 
 // Exactly one → keep it, retire none (idempotent: re-running never churns).
 assert.deepEqual(
   planPendingIncomingNotifyDedup([{ id: "only", summary: bare }]),
-  { keepId: "only", retireIds: [] }
+  { keepId: "only", retireIds: [], adoptDueAt: null }
 );
 
 // Braun's real shape: 3 bare copies + 1 compound. Keep the richest (compound), retire the 3 bare.
@@ -120,4 +120,33 @@ const tie = planPendingIncomingNotifyDedup([
 assert.equal(tie.keepId, "a", "equal-length copies keep the first (stable)");
 assert.deepEqual(tie.retireIds, ["b"]);
 
-console.log("PASS pending-incoming notify-todo dedup eval (source guard + predicate + planner)");
+// --- 4) Generic arrival-notify family (Joe ruling 2026-07-09, Dante Turello +17169085899):
+// the template task AND a staff-written reminder with different words are the SAME objective. ---
+const danteTemplate = "Notify Dante Turello when the 2023 Low Rider S trade arrives or is ready to show.";
+const danteStaff = "contact customer when the low rider s gets here from the auction";
+assert.equal(isPendingIncomingInventoryNotifyTodoSummary(danteStaff), true, "staff-worded arrival reminder matches the family");
+assert.equal(
+  isPendingIncomingInventoryNotifyTodoSummary("Call customer about the trade appraisal."),
+  false,
+  "an action verb WITHOUT arrival phrasing does not match (conservative)"
+);
+assert.equal(
+  isPendingIncomingInventoryNotifyTodoSummary("The bike arrives tomorrow."),
+  false,
+  "arrival phrasing WITHOUT an action verb does not match (conservative)"
+);
+const dante = planPendingIncomingNotifyDedup([
+  { id: "tpl", summary: danteTemplate },
+  { id: "staff", summary: danteStaff, dueAt: "2026-07-10T22:01:00.000Z" }
+]);
+assert.equal(dante.keepId, "tpl", "richest copy survives");
+assert.deepEqual(dante.retireIds, ["staff"]);
+assert.equal(dante.adoptDueAt, "2026-07-10T22:01:00.000Z", "survivor adopts the retiree's due date so the schedule isn't lost");
+// A survivor that already has a due date keeps it (no adoption).
+const keepOwnDue = planPendingIncomingNotifyDedup([
+  { id: "tpl", summary: danteTemplate, dueAt: "2026-07-09T15:00:00.000Z" },
+  { id: "staff", summary: danteStaff, dueAt: "2026-07-10T22:01:00.000Z" }
+]);
+assert.equal(keepOwnDue.adoptDueAt, null, "survivor with its own dueAt adopts nothing");
+
+console.log("PASS pending-incoming notify-todo dedup eval (source guard + predicate + planner + arrival-notify family)");

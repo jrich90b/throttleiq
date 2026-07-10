@@ -243,22 +243,46 @@ export function buildPendingIncomingInventoryTaskSummary(args: {
 export function isPendingIncomingInventoryNotifyTodoSummary(summary: string | null | undefined): boolean {
   const text = lower(summary);
   if (!text) return false;
-  return text.includes("arrives or is ready to show");
+  if (text.includes("arrives or is ready to show")) return true;
+  // Generic arrival-notify family (Joe ruling 2026-07-09, Dante Turello +17169085899: the
+  // template task AND a staff-written "contact customer when the low rider s gets here from
+  // the auction" reminder sat open side by side — same objective, different words, never
+  // merged). Conservative shape: an action verb + a temporal conjunction + an arrival verb.
+  // Two tasks matching this ON THE SAME CONVERSATION are the same "tell them when it lands"
+  // objective. Deterministic matching of SYSTEM/STAFF task summaries (side-effect
+  // housekeeping, not customer comprehension — AGENTS.md-allowed).
+  const action = /\b(notify|contact|call|text|reach out|let\b.{0,30}\bknow|follow up with)\b/i.test(text);
+  const temporal = /\b(when|once|as soon as|after)\b/i.test(text);
+  const arrival =
+    /\b(arriv\w+|gets? here|get here|comes? in|came in|is here|here from|shows? up|ready to (?:show|view|see)|hits the floor|off the truck|from the auction)\b/i.test(
+      text
+    );
+  return action && temporal && arrival;
 }
 
 /**
  * Pure dedup planner for the pending-incoming notify task. Given a conversation's OPEN todos,
  * pick the single survivor (the richest copy — longest summary, so any appended ask like a
  * parts/color question isn't lost; ties keep the first) and list the redundant copies to retire.
- * No matches → nothing to do.
+ * If the survivor has no due date but a retiree does, adopt the EARLIEST retiree due date so
+ * collapsing duplicates never loses the scheduled follow-up time. No matches → nothing to do.
  */
 export function planPendingIncomingNotifyDedup(
-  openTodos: { id: string; summary?: string | null }[]
-): { keepId: string | null; retireIds: string[] } {
+  openTodos: { id: string; summary?: string | null; dueAt?: string | null }[]
+): { keepId: string | null; retireIds: string[]; adoptDueAt: string | null } {
   const matches = (openTodos ?? []).filter(t => isPendingIncomingInventoryNotifyTodoSummary(t?.summary));
-  if (matches.length === 0) return { keepId: null, retireIds: [] };
+  if (matches.length === 0) return { keepId: null, retireIds: [], adoptDueAt: null };
   const keep = matches.reduce((best, t) =>
     String(t?.summary ?? "").length > String(best?.summary ?? "").length ? t : best
   );
-  return { keepId: keep.id, retireIds: matches.filter(t => t.id !== keep.id).map(t => t.id) };
+  const retirees = matches.filter(t => t.id !== keep.id);
+  let adoptDueAt: string | null = null;
+  if (!String(keep?.dueAt ?? "").trim()) {
+    const dues = retirees
+      .map(t => String(t?.dueAt ?? "").trim())
+      .filter(d => d && Number.isFinite(Date.parse(d)))
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
+    adoptDueAt = dues[0] ?? null;
+  }
+  return { keepId: keep.id, retireIds: retirees.map(t => t.id), adoptDueAt };
 }
