@@ -539,6 +539,7 @@ import {
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
   decideEventPromoTurn,
+  resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
   decideNonBuyerSurveyTurn,
@@ -29443,6 +29444,40 @@ async function processDueFollowUpsUnlocked() {
   if (pendingNotifyDupsHealed > 0) {
     console.log(
       `[state-reconcile] collapsed ${pendingNotifyDupsHealed} duplicate pending-incoming notify todo(s)`
+    );
+  }
+  // Ride-challenge cadence realign heal (Joe ruling 2026-07-09, +15857657010): legacy ride-challenge
+  // leads classified BEFORE the 6/24 event_promo source inference (aec61b68) are still on an ACTIVE
+  // standard/long_term drip — their next proactive touch should be the challenge wrap-up (9/15/26),
+  // not a sales nudge. Realign any ACTIVE cadence whose next touch lands before the event date by
+  // pausing it until then. Idempotent (a paused cadence is no longer status "active"); only DELAYS
+  // touches, never sends or closes (fail-safe).
+  let rideChallengeRealigned = 0;
+  for (const conv of convs) {
+    const cad: any = conv.followUpCadence;
+    if (!cad || String(cad.status ?? "") !== "active") continue;
+    const touch = resolveRideChallengeEventTouch({
+      leadSource: conv.lead?.source ?? null,
+      classificationBucket: conv.classification?.bucket ?? null,
+      classificationCta: conv.classification?.cta ?? null,
+      nowMs: Date.now(),
+      followUpIso: process.env.RIDE_CHALLENGE_FOLLOWUP_ISO ?? null
+    });
+    if (!touch) continue;
+    const nextDueMs = Date.parse(String(cad.nextDueAt ?? ""));
+    if (Number.isFinite(nextDueMs) && nextDueMs >= Date.parse(touch.pauseUntilIso)) continue; // already at/after the event
+    pauseFollowUpCadence(conv, touch.pauseUntilIso, "event_date");
+    saveConversation(conv);
+    rideChallengeRealigned += 1;
+    recordRouteOutcome("manual", "ride_challenge_cadence_event_realign", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      pausedUntil: touch.pauseUntilIso
+    });
+  }
+  if (rideChallengeRealigned > 0) {
+    console.log(
+      `[state-reconcile] realigned ${rideChallengeRealigned} ride-challenge cadence(s) to the event wrap-up date`
     );
   }
   // Stale "needs reply" / held-flag heal: a conversation flagged "the AI couldn't answer this in

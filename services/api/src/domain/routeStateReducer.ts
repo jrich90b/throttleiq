@@ -1668,6 +1668,48 @@ export function shouldCloseEventPromoLeadOnIntake(input: {
   return bucket === "event_promo" && cta === "sweepstakes";
 }
 
+// ── Ride-challenge event-date cadence anchor (Joe ruling 2026-07-09) ──────────
+// "This cadence seems wrong. the ride challenge cadence should be 9/15/26"
+// (+15857657010, John Miller). A RIDE CHALLENGE entry is a season-long program, not a
+// shopping lead: the right follow-up is ONE touch anchored to the challenge wrap-up
+// (2026-09-15 — env RIDE_CHALLENGE_FOLLOWUP_ISO to move it per season), not the standard
+// day-N sales drip and not total silence. The decision is pure + structured (keyed on the
+// deterministic lead source + classification, never free text). Two consumers:
+//   - ADF intake: start the cadence, then pause it until the event date ("event_date"),
+//     so the first proactive touch lands at the wrap-up and goes through the normal
+//     suggest-mode + cadence-quality gates.
+//   - the state-reconcile heal: legacy ride-challenge leads classified BEFORE the 6/24
+//     event_promo inference (aec61b68) are still on an ACTIVE standard drip (John's next
+//     touch was due 7/4) — realign any active cadence whose next touch lands before the
+//     event date.
+// Fail-direction: a non-match returns null and nothing changes; a match only DELAYS
+// proactive touches (never sends, never closes).
+const RIDE_CHALLENGE_SOURCE = /\bride\s+challenge\b/i;
+const DEFAULT_RIDE_CHALLENGE_FOLLOWUP_ISO = "2026-09-15T13:00:00.000Z";
+
+export function resolveRideChallengeEventTouch(input: {
+  leadSource?: string | null;
+  classificationBucket?: string | null;
+  classificationCta?: string | null;
+  nowMs: number;
+  followUpIso?: string | null; // env override plumbed by the caller
+}): { pauseUntilIso: string } | null {
+  const source = String(input.leadSource ?? "");
+  if (!RIDE_CHALLENGE_SOURCE.test(source)) return null;
+  const bucket = String(input.classificationBucket ?? "").toLowerCase();
+  const cta = String(input.classificationCta ?? "").toLowerCase();
+  // event_promo/event_rsvp is the correct post-6/24 classification; general_inquiry/unknown
+  // is the legacy pre-inference shape (John Miller class). Anything else (e.g. a ride-challenge
+  // entrant who ALSO submitted a prequal → finance_prequal) is a real working lead — leave it.
+  const isEventShape = bucket === "event_promo" && cta === "event_rsvp";
+  const isLegacyShape = bucket === "general_inquiry";
+  if (!isEventShape && !isLegacyShape) return null;
+  const iso = String(input.followUpIso ?? "").trim() || DEFAULT_RIDE_CHALLENGE_FOLLOWUP_ISO;
+  const eventMs = Date.parse(iso);
+  if (!Number.isFinite(eventMs) || eventMs <= input.nowMs) return null; // past-dated event: no touch
+  return { pauseUntilIso: new Date(eventMs).toISOString() };
+}
+
 // ── Trade-qualifier turn (centralizes the trade cluster's route decision) ─────
 // After we asked "do you have a trade?", the customer's reply is classified by the typed
 // parser `parseTradeQualifierResponseWithLLM` (hasTrade = affirmed / declined / unclear).
