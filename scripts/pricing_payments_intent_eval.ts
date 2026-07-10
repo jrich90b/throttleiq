@@ -17,6 +17,7 @@ type Example = {
     asks_monthly_target?: boolean;
     asks_down_payment?: boolean;
     asks_apr_or_term?: boolean;
+    asks_for_payment_estimate?: boolean;
     asks_external_approval_transfer?: boolean;
     asks_rider_to_rider_financing?: boolean;
     asks_third_party_purchase_facilitation?: boolean;
@@ -45,6 +46,7 @@ let explicitOk = 0;
 let monthlyOk = 0;
 let downOk = 0;
 let aprTermOk = 0;
+let estimateOk = 0;
 let externalApprovalOk = 0;
 let riderToRiderOk = 0;
 let thirdPartyOk = 0;
@@ -53,6 +55,7 @@ let nullCount = 0;
 let monthlyAsserts = 0;
 let downAsserts = 0;
 let aprTermAsserts = 0;
+let estimateAsserts = 0;
 let externalApprovalAsserts = 0;
 let riderToRiderAsserts = 0;
 let thirdPartyAsserts = 0;
@@ -103,6 +106,13 @@ for (const ex of examples) {
     if (aprTermMatch) aprTermOk += 1;
   }
 
+  let estimateMatch = true;
+  if (typeof ex.expected.asks_for_payment_estimate === "boolean") {
+    estimateAsserts += 1;
+    estimateMatch = result.asksForPaymentEstimate === ex.expected.asks_for_payment_estimate;
+    if (estimateMatch) estimateOk += 1;
+  }
+
   let externalApprovalMatch = true;
   if (typeof ex.expected.asks_external_approval_transfer === "boolean") {
     externalApprovalAsserts += 1;
@@ -133,6 +143,7 @@ for (const ex of examples) {
     !monthlyMatch ||
     !downMatch ||
     !aprTermMatch ||
+    !estimateMatch ||
     !externalApprovalMatch ||
     !riderToRiderMatch ||
     !thirdPartyMatch
@@ -152,6 +163,9 @@ for (const ex of examples) {
         typeof ex.expected.asks_apr_or_term === "boolean"
           ? `expected asks_apr_or_term=${ex.expected.asks_apr_or_term}`
           : "",
+        typeof ex.expected.asks_for_payment_estimate === "boolean"
+          ? `expected asks_for_payment_estimate=${ex.expected.asks_for_payment_estimate}`
+          : "",
         typeof ex.expected.asks_external_approval_transfer === "boolean"
           ? `expected asks_external_approval_transfer=${ex.expected.asks_external_approval_transfer}`
           : "",
@@ -166,6 +180,7 @@ for (const ex of examples) {
         `got asks_monthly_target=${result.asksMonthlyTarget}`,
         `got asks_down_payment=${result.asksDownPayment}`,
         `got asks_apr_or_term=${result.asksAprOrTerm}`,
+        `got asks_for_payment_estimate=${result.asksForPaymentEstimate}`,
         `got asks_external_approval_transfer=${result.asksExternalApprovalTransfer}`,
         `got asks_rider_to_rider_financing=${result.asksRiderToRiderFinancing}`,
         `got asks_third_party_purchase_facilitation=${result.asksThirdPartyPurchaseFacilitation}`,
@@ -189,6 +204,11 @@ if (downAsserts > 0) {
 }
 if (aprTermAsserts > 0) {
   console.log(`asks_apr_or_term match: ${aprTermOk}/${aprTermAsserts} (${pct(aprTermOk, aprTermAsserts)}%)`);
+}
+if (estimateAsserts > 0) {
+  console.log(
+    `asks_for_payment_estimate match: ${estimateOk}/${estimateAsserts} (${pct(estimateOk, estimateAsserts)}%)`
+  );
 }
 if (externalApprovalAsserts > 0) {
   console.log(

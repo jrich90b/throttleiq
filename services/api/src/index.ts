@@ -29198,6 +29198,13 @@ function formatTodoCallDueAtLabel(dueAtIso: string, timeZone: string): string | 
   if (!iso) return null;
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return null;
+  // Sane-year guard (same rule as the web's parseSaneTaskDateMs): V8 parses year-less
+  // labels ("Thu, Jul 2, 9:00 AM") to 2001, which rendered "(requested: ...2001...)" /
+  // "9130 days ago" task lines (Henry Cole, +17168618786). A date outside the plausible
+  // window is a garbage parse — show no due label rather than a 25-year-old one.
+  const year = date.getFullYear();
+  const nowYear = new Date().getFullYear();
+  if (year < 2015 || year > nowYear + 5) return null;
   return formatSlotLocal(iso, timeZone);
 }
 
@@ -50986,6 +50993,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   // Payments-specific parser intent (mirror of the live llmPaymentsIntent) — feeds the centralized
   // finance follow-up continuation signal further down, replacing the askedDownRecently regex.
   let regenLlmPaymentsIntent = false;
+  let regenAsksForPaymentEstimate = false;
   if (event.provider === "twilio") {
     const regenHistory = buildHistory(conv, 12);
     const pricingPaymentsParse = await safeLlmParse("regen_pricing_payments_parser", () =>
@@ -50998,6 +51006,9 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenLlmPaymentsIntent =
       isPricingPaymentsIntentParserAccepted(pricingPaymentsParse) &&
       pricingPaymentsParse?.intent === "payments";
+    regenAsksForPaymentEstimate =
+      isPricingPaymentsIntentParserAccepted(pricingPaymentsParse) &&
+      pricingPaymentsParse?.asksForPaymentEstimate === true;
     const externalApprovalTransferDecision = resolveExternalDealerApprovalTransferDecision(
       event.body ?? "",
       pricingPaymentsParse
@@ -54365,6 +54376,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       }),
       financeFollowUpContinuation: resolveFinanceFollowUpContinuation({
         paymentsIntent: regenLlmPaymentsIntent,
+        asksForPaymentEstimate: regenAsksForPaymentEstimate,
         financeSignal: regenParserPricingIntent,
         downProvided: regenDownProvided,
         monthlyProvided: regenMonthlyBudget != null,
@@ -59744,6 +59756,13 @@ if (authToken && signature) {
     !(dialogActAccepted && dialogActParse?.topic === "pricing") &&
     !(pricingPaymentsAccepted && pricingPaymentsParse?.intent !== "none");
   const llmPaymentsIntent = pricingHistoryBleedGuard ? false : llmPaymentsIntentRaw;
+  // Explicit numbers-ask this turn (asksForPaymentEstimate) — gates the finance follow-up
+  // continuation so a volunteered trade/down gathers info instead of firing the calculator
+  // (Joe ruling 2026-07-09, +15857278545). Same bleed guard as the payments intent.
+  const llmAsksForPaymentEstimate =
+    !pricingHistoryBleedGuard &&
+    pricingPaymentsAccepted &&
+    pricingPaymentsParse?.asksForPaymentEstimate === true;
   const llmPricingIntent = pricingHistoryBleedGuard ? false : llmPricingIntentRaw;
   const llmPricingOrPaymentsIntent = pricingHistoryBleedGuard
     ? false
@@ -61490,6 +61509,7 @@ if (authToken && signature) {
   // the old recent-finance-prompt/affirmation regex backstop was already inert and is gone.
   const financeFollowUpContinuationSignal = resolveFinanceFollowUpContinuation({
     paymentsIntent: llmPaymentsIntent,
+    asksForPaymentEstimate: llmAsksForPaymentEstimate,
     financeSignal: currentTurnFinanceSignal,
     downProvided: paymentBudgetContext.downPayment != null,
     monthlyProvided: paymentBudgetContext.monthlyBudget != null,

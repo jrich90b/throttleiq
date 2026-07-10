@@ -30,12 +30,12 @@ export function salesCriticalKind(todo: any): SalesCriticalKind | null {
   // `action` is the backend-derived label (deriveTodoActionLabel), not raw customer text.
   const text = `${reason} ${String(todo?.action ?? "")}`.toLowerCase();
   if (reason === "pricing" || PRICING_RE.test(text)) return "pricing";
-  if (
-    reason === "approval" ||
-    reason === "payments" ||
-    reason === "manager" ||
-    FINANCING_RE.test(text)
-  ) {
+  // reason "manager" is a generic escalate-to-a-human, NOT a finance signal by itself —
+  // Jessica Ornce (+17167134728, operator-reported 2026-07-09 "Why does this have financing
+  // task?") had a TRADE-review manager task badged Financing purely because of its reason.
+  // A manager task still badges financing when its text actually carries finance signals
+  // (FINANCING_RE below); approval/payments stay unconditional (they ARE finance tasks).
+  if (reason === "approval" || reason === "payments" || FINANCING_RE.test(text)) {
     return "financing";
   }
   if (AVAILABILITY_RE.test(text)) return "availability";

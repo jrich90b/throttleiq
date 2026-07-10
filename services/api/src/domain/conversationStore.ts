@@ -5328,6 +5328,13 @@ export function healPendingIncomingNotifyTodoDuplicates(conv: Conversation): num
     t.doneAt = doneAt;
     retired += 1;
   }
+  // Collapsing duplicates must not lose the scheduled follow-up time: if only a retiree
+  // carried a due date, the survivor adopts the earliest one (Dante Turello class — the
+  // richest copy had no dueAt while the staff reminder was due next morning).
+  if (retired && plan.keepId && plan.adoptDueAt) {
+    const survivor = todos.find(t => t.id === plan.keepId);
+    if (survivor && !String(survivor.dueAt ?? "").trim()) survivor.dueAt = plan.adoptDueAt;
+  }
   if (retired) {
     conv.updatedAt = nowIso();
     scheduleSave();

@@ -47,4 +47,15 @@ assert.ok(
   "requestedCallPretty must gate reformatting on parseSaneTaskDateMs"
 );
 
-console.log("PASS task-date render eval — year-less/garbage labels rejected, real dates pass, both inbox render sites guarded");
+// --- 3) Source guard: the API-side due label (deriveTodoActionLabel's "(requested: ...)")
+// carries the SAME sane-year window, so a 2001 garbage parse can't render a 25-year-old due
+// label either (Joe ruling 2026-07-09; the "9130 days ago" class, +17168618786). ---
+const apiIndex = fs.readFileSync("services/api/src/index.ts", "utf8");
+const dueLabelStart = apiIndex.indexOf("function formatTodoCallDueAtLabel");
+const dueLabelBody = apiIndex.slice(dueLabelStart, dueLabelStart + 900);
+assert.ok(
+  /year < 2015 \|\| year > nowYear \+ 5/.test(dueLabelBody),
+  "formatTodoCallDueAtLabel applies the sane-year window before rendering a due label"
+);
+
+console.log("PASS task-date render eval — year-less/garbage labels rejected, real dates pass, both inbox render sites + the API due label guarded");
