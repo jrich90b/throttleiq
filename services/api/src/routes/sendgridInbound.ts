@@ -5406,16 +5406,25 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       channel,
       ruleName: isPrequalLead ? "prequal_lead" : "credit_app"
     });
-    conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
+    // A PRE-QUALIFICATION is not a credit application (Joe ruling 2026-07-09, Dylan Pennell
+    // +17163433504): it keeps the finance_prequal routing identity (bucket/cta/rule drive the
+    // ack copy) but stays in the normal conversational flow — no payments_handoff dialog
+    // state, no approval task demanding an outcome, no manual handoff, and the standard
+    // follow-up cadence RUNS. Only a real credit app / HDFS COA gets the handoff treatment.
+    if (!isPrequalLead) {
+      conv.dialogState = { name: "payments_handoff", updatedAt: new Date().toISOString() };
+    }
   };
   if (isCreditLead) {
     applyCreditLeadClassification();
-    if (!creditTodoCreated) {
-      addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+    if (!isPrequalLead) {
+      if (!creditTodoCreated) {
+        addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+      }
+      creditTodoCreated = true;
+      setFollowUpMode(conv, "manual_handoff", "credit_app");
+      stopFollowUpCadence(conv, "manual_handoff");
     }
-    creditTodoCreated = true;
-    setFollowUpMode(conv, "manual_handoff", "credit_app");
-    stopFollowUpCadence(conv, "manual_handoff");
   }
 
   // Re-submission guard (Jerill White class, Joe-approved 2026-07-02): the SAME structured form
@@ -6079,7 +6088,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (suppressInitialAutoDraftForTimedCallback) {
       return { ok: false, reason: "timed_callback_suppressed" };
     }
-    if (prefersPhoneOnly && systemMode !== "suggest") {
+    // Call-only leads STAY SILENT in every mode (Joe ruling, 2026-07-09, +17163804680):
+    // a phone-preferred lead gets a call task, never an auto SMS/email draft — even in
+    // suggest mode the draft was noise the operator had to notice and discard. Staff can
+    // always text manually; the unsent-first-touch net is phone-aware ("call if
+    // phone-preferred"), so this fails toward a human call task, not toward silence.
+    if (prefersPhoneOnly) {
       addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
       return { ok: false, reason: "phone_preferred" };
     }
@@ -6412,8 +6426,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     });
   }
 
-  if (isInitialAdf && prefersPhoneOnly && systemMode !== "suggest") {
+  // Call-only stays silent in EVERY mode (Joe ruling 2026-07-09) — see the matching gate in
+  // publishAdfDraftForPreferredContact. The explicit call todo (not just maybeAddInitialCallTodo,
+  // which skips boilerplate day-one tasks) keeps the fail-direction humanward: no auto reply,
+  // but a visible "call them" task so the lead can't be silently dropped.
+  if (isInitialAdf && prefersPhoneOnly) {
     maybeAddInitialCallTodo();
+    addCallTodoIfMissing(conv, "Preferred contact method is phone. Call customer (no auto text/email).");
     return res.status(200).json({
       ok: true,
       parsed: true,
@@ -6697,10 +6716,22 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         event.providerMessageId
       );
     }
-    addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
-    setFollowUpMode(conv, "manual_handoff", "credit_app");
-    stopFollowUpCadence(conv, "manual_handoff");
-    applyCreditLeadClassification();
+    if (isPrequalLead) {
+      // Prequal ≠ credit app (Joe ruling 2026-07-09, +17163433504): no approval task (nothing
+      // demands an outcome — a prequal isn't an application), no manual handoff, and the
+      // STANDARD follow-up cadence starts like any other lead, so a quiet prequal can't fall
+      // through the cracks (both digest voicemail complaints were prequal leads with no cadence).
+      applyCreditLeadClassification();
+      if (!conv.followUpCadence?.status && !conv.appointment?.bookedEventId) {
+        const cfg = await getSchedulerConfig();
+        startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
+      }
+    } else {
+      addTodo(conv, "approval", event.body ?? "Credit application", event.providerMessageId);
+      setFollowUpMode(conv, "manual_handoff", "credit_app");
+      stopFollowUpCadence(conv, "manual_handoff");
+      applyCreditLeadClassification();
+    }
     queueInitialDraftForPreferredContact(ack);
     maybeAddInitialCallTodo();
     saveConversation(conv);

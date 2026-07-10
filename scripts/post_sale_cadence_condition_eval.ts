@@ -28,6 +28,38 @@ assert.equal(
   "used label hint overrides a stray new condition => pre-owned (no false warranty claim)"
 );
 
+// --- model-year sanity (Joe ruling 2026-07-09, Kellen +17167995197): a lying ADF
+// condition:"new" on a bike whose model year is 3+ years older than the sale flips to
+// pre-owned; genuine non-current new stock (gap <= 2) stays new. ---
+assert.equal(
+  postSaleVehicleIsNew({
+    lead: { vehicle: { condition: "new", year: "2019", model: "Electra Glide Ultra Classic" } },
+    closedAt: "2026-05-04T13:23:15.029Z"
+  }),
+  false,
+  "Kellen class: 2019 bike sold 2026 with condition:new => pre-owned (ADF field lies)"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    lead: { vehicle: { condition: "new", year: "2024", model: "Low Rider S" } },
+    closedAt: "2026-06-30T12:00:00.000Z"
+  }),
+  true,
+  "non-current new stock: new 2024 sold 2026 (gap 2) stays NEW"
+);
+assert.equal(
+  postSaleVehicleIsNew({
+    sale: { condition: "new", year: 2026, soldAt: "2026-07-01T12:00:00.000Z" }
+  }),
+  true,
+  "current-year new sale stays NEW (sale.year + sale.soldAt path)"
+);
+assert.equal(
+  postSaleVehicleIsNew({ lead: { vehicle: { condition: "new", year: "not-a-year" } }, closedAt: "2026-05-04T00:00:00Z" }),
+  true,
+  "unparseable year => no year override (condition signal stands)"
+);
+
 // --- the condition-specific message (cadence step 2) ---
 const newMsg = postSaleAccessoryOrEnjoyMessage({
   firstName: "Marcy", repName: "Giovanni", dealerName: "American Harley-Davidson", bikeModel: "Street Glide", isNewBike: true

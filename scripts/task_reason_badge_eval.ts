@@ -18,7 +18,12 @@ const cases: Array<[any, string | null]> = [
   // financing
   [{ reason: "approval" }, "financing"],
   [{ reason: "payments" }, "financing"],
-  [{ reason: "manager" }, "financing"],
+  // reason "manager" is a generic escalate-to-a-human, not a finance signal by itself (Joe
+  // ruling 2026-07-09, Jessica Ornce +17167134728: a TRADE-review manager task badged
+  // Financing). It still badges when its text carries real finance signals.
+  [{ reason: "manager", action: "Discuss trade appraisal and next steps." }, null],
+  [{ reason: "manager" }, null],
+  [{ reason: "manager", action: "Business manager follow-up (credit app)." }, "financing"],
   [{ reason: "call", action: "Call customer to review financing and payment options." }, "financing"],
   [{ reason: "approval", action: "Business manager follow-up (credit app/prequal)." }, "financing"],
   // availability

@@ -15,6 +15,18 @@ function condText(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
 }
 
+// A "new" condition on a bike this many model years old at sale time is a lying ADF field,
+// not a new bike. Gap 2 stays NEW (genuine non-current new stock exists — a new '24 sold
+// in '26 with incentives); gap >= 3 flips to pre-owned. Joe ruling 2026-07-09 (Kellen
+// +17167995197): a 2019 Electra Glide sold in 2026 carried condition:"new" from the Dealer
+// Lead App ADF and got the Custom Coverage / factory-warranty pitch — a false warranty claim.
+const MAX_NEW_MODEL_YEAR_GAP = 2;
+
+function yearNum(value: unknown): number | null {
+  const n = Number(String(value ?? "").trim());
+  return Number.isInteger(n) && n >= 1980 && n <= 2100 ? n : null;
+}
+
 /** True only when the sold unit is confidently NEW (fail-safe: unknown => pre-owned). */
 export function postSaleVehicleIsNew(conv: any): boolean {
   const label = [
@@ -33,7 +45,18 @@ export function postSaleVehicleIsNew(conv: any): boolean {
     condText(conv?.inventoryContext?.condition)
   ];
   if (conds.some(c => c === "used" || c === "preowned" || c === "pre-owned")) return false;
-  return conds.some(c => c === "new");
+  if (!conds.some(c => c === "new")) return false;
+  // Model-year sanity: the ADF condition field routinely lies; a bike whose model year is
+  // more than MAX_NEW_MODEL_YEAR_GAP years older than the sale can't be new inventory.
+  // Fails SAFE — flipping to pre-owned only softens the touch (no factory-warranty claim).
+  const modelYear =
+    yearNum(conv?.sale?.year) ?? yearNum(conv?.lead?.vehicle?.year) ?? yearNum(conv?.inventoryContext?.year);
+  if (modelYear != null) {
+    const soldAtMs = Date.parse(String(conv?.sale?.soldAt ?? conv?.closedAt ?? ""));
+    const saleYear = Number.isFinite(soldAtMs) ? new Date(soldAtMs).getUTCFullYear() : new Date().getUTCFullYear();
+    if (saleYear - modelYear > MAX_NEW_MODEL_YEAR_GAP) return false;
+  }
+  return true;
 }
 
 /**
