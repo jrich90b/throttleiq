@@ -42,7 +42,34 @@ const map = (over: any = {}) => decideOpsAnomalyReportedIssue(report(over), { no
   assert.equal(a!.severity, "P2", "P2");
   assert.equal(a!.convId, "+1555", "convId carried (loop needs it)");
   assert.ok(/cadence/.test(a!.detail) && /follow-up cadence/.test(a!.detail), "detail carries type + note");
+  assert.equal(a!.reportedAt, ago(1), "the report's createdAt is carried as reportedAt");
 }
+
+// 1b. reportedAt is an UPPER BOUND on the offending reply, never the event time.
+//
+// An operator files days after the reply they're unhappy about (Mark Kocsis, 7/10: reported at
+// 02:38Z about a draft from 7/06). Stamping it as occurredAt would tell suppressStaleFindings the
+// bad reply happened at report time — newer than it truly was — and a dimension cutover could then
+// wrongly KEEP or DROP on a fiction. reported_issue is also a COARSE dimension (many distinct issue
+// types), so it must stay out of DIMENSION_FIX_CUTOVERS or new reports get buried under an old fix.
+{
+  const a = map()!;
+  assert.equal(a.occurredAt, undefined, "reported_issue never claims an occurredAt it cannot resolve");
+  const { DIMENSION_FIX_CUTOVERS } = await import("../services/api/src/domain/anomalyClassifier.ts");
+  assert.equal(
+    DIMENSION_FIX_CUTOVERS["reported_issue"],
+    undefined,
+    "reported_issue stays out of the cutover ledger — a coarse dimension must not be auto-suppressed"
+  );
+  // With no occurredAt, the suppressor keeps it: a human-filed report is never silently dropped.
+  const { suppressStaleFindings } = await import("../services/api/src/domain/anomalyClassifier.ts");
+  const res = suppressStaleFindings([a], { guardingEvals: new Set(["tlp_autosend_coverage:eval"]) });
+  assert.equal(res.kept.length, 1, "operator-filed report survives stale suppression");
+  assert.equal(res.suppressed.length, 0, "…and is never auto-suppressed");
+}
+
+// reportedAt is omitted when the report has no usable createdAt (rather than invented).
+assert.equal(map({ createdAt: "" })!.reportedAt, undefined, "no createdAt => no reportedAt (never invented)");
 
 // AGENT-BEHAVIOR types all cross.
 for (const type of ["routing", "cadence", "appointment", "task_inbox", "handoff", "other"]) {

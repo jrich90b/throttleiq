@@ -40,6 +40,12 @@ export type OutcomeAnomaly = {
   // drop a finding whose event predates the deployed fix for its dimension — never re-fix a ghost.
   // Optional: a detector that can't resolve an event time omits it, and the suppressor keeps the finding.
   occurredAt?: string;
+  // ISO timestamp a HUMAN filed this finding (operator "Report issue" createdAt). NOT occurredAt: the
+  // operator reports days after the reply they're complaining about, so this is only an UPPER BOUND on
+  // the triggering event. Deliberately kept separate so it can never be mistaken for the event time by
+  // the stale-finding suppressor. Its job is to bound the hand-search: the offending reply is at/before
+  // it (see scripts/already_shipped_guard.ts --at, which cannot locate the reply on its own).
+  reportedAt?: string;
 };
 
 const CATEGORY_BY_DIMENSION: Record<string, OutcomeCategory> = {
@@ -647,6 +653,8 @@ export function decideOpsAnomalyReportedIssue(a: OpsAnomalyReport, opts?: { now?
     category: categoryFor("reported_issue"),
     severity: "P2",
     healed: false,
-    detail: `operator-reported (${type}): ${note.slice(0, 180)}`
+    detail: `operator-reported (${type}): ${note.slice(0, 180)}`,
+    // Upper bound on the offending reply — never occurredAt (see the OutcomeAnomaly field note).
+    ...(Number.isFinite(atMs) ? { reportedAt: new Date(atMs).toISOString() } : {})
   };
 }
