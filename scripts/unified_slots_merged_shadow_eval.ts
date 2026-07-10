@@ -301,6 +301,56 @@ check("diff: semantic scope ignores payoff/target fields (legacy didn't run them
   assert.deepEqual(scoped2.diffs.map(d => d.field), ["watchAction"]);
 });
 
+// ── 5b. decision-scoped watch slots ─────────────────────────────────────────
+// Watch slot fields (model/year/color/condition/price) are inert scratch notes on a NON-watch
+// turn — both parsers guess them, downstream ignores them. A slot disagreement there is not a
+// decision disagreement and must NOT count (this is the fix that lifts the shadow's headline
+// agreement from ~73% to the true, decision-relevant number).
+const none = () => ({
+  watchAction: "none" as const,
+  watch: { model: "", year: "", yearMin: null, yearMax: null, color: "", condition: "unknown" as const, minPrice: null, maxPrice: null, monthlyBudget: null, downPayment: null },
+  departmentIntent: "none" as const,
+  contactPreferenceIntent: "none" as const,
+  mediaIntent: "none" as const,
+  serviceRecordsIntent: false,
+  payoffStatus: "unknown" as const,
+  needsLienHolderInfo: false,
+  providesLienHolderInfo: false,
+  tradeTargetValue: null,
+  confidence: 0.9
+});
+
+check("diff: watch-slot disagreement on a NON-watch turn is ignored (both watchAction=none)", () => {
+  const a = none();
+  const b = none();
+  // merged fabricated a bike from noise; legacy left it blank — both watchAction=none.
+  b.watch.model = "Street Glide" as any;
+  b.watch.year = "2013" as any;
+  b.watch.color = "vivid black" as any;
+  b.watch.condition = "used" as any;
+  const { equal, diffs } = diffUnifiedSlotParse(a, b, { scope: "semantic" });
+  assert.equal(equal, true, `expected agree (inert slots), got diffs: ${JSON.stringify(diffs)}`);
+});
+
+check("diff: watch-slot disagreement DOES count when a watch is actually being set", () => {
+  const a = base();          // watchAction=set_watch, model=Street Glide
+  const b = base();
+  b.watch.model = "Road Glide" as any;
+  const { equal, diffs } = diffUnifiedSlotParse(a, b, { scope: "semantic" });
+  assert.equal(equal, false);
+  assert.ok(diffs.some(d => d.field === "watch.model"), "watch.model diff must surface on a real watch turn");
+});
+
+check("diff: watch-slot disagreement counts when only ONE side sets a watch (active on either side)", () => {
+  const a = base();          // legacy: set_watch on Street Glide
+  const b = none();          // merged: missed it entirely (none, blank)
+  const { equal, diffs } = diffUnifiedSlotParse(a, b, { scope: "semantic" });
+  assert.equal(equal, false);
+  const fields = diffs.map(d => d.field);
+  assert.ok(fields.includes("watchAction"), "a missed watch must surface as a watchAction diff");
+  assert.ok(fields.includes("watch.model"), "slots compared because legacy side is an active watch");
+});
+
 // ── 6. prompt-mirror tripwire ───────────────────────────────────────────────
 // The merged parser carries a copy of the legacy rules until cutover. Sentinel
 // rule lines must appear at least twice in llmDraft.ts (legacy + merged copy) —
@@ -322,6 +372,24 @@ check("mirror: sentinel rule lines exist in BOTH the legacy and merged prompts",
       `sentinel "${sentinel.slice(0, 50)}…" appears ${count}x — legacy and merged prompts have drifted apart`
     );
   }
+});
+
+// ── 7. anti-fabrication rule present in the merged prompt ────────────────────
+// The merged prompt intentionally LEADS legacy on anti-fabrication (2026-07-10 shadow soak: it
+// invented watch bikes from URLs / App-IDs / survey blobs). This rule must not be silently dropped.
+check("merged prompt carries the anti-fabrication watch rule + a URL negative example", () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "services/api/src/domain/llmDraft.ts"),
+    "utf8"
+  );
+  assert.ok(
+    source.includes("NEVER populate watch.model/year/color/condition/price from URLs"),
+    "anti-fabrication watch rule missing from the merged prompt"
+  );
+  assert.ok(
+    source.includes("hdnetportal.sharepoint.com"),
+    "URL negative example missing from the merged semantic examples"
+  );
 });
 
 if (failures > 0) {
