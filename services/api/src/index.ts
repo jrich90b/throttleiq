@@ -539,6 +539,7 @@ import {
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
   decideEventPromoTurn,
+  decideOwnerThreadStepBack,
   resolveRideChallengeEventTouch,
   decideInProcessDealTurn,
   decideIndefiniteDeferTurn,
@@ -27933,7 +27934,21 @@ function sanitizeColorPhrase(text: string | null | undefined): string | undefine
     .replace(/^[,.:;\-]+|[,.:;\-]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return cleaned || undefined;
+  if (!cleaned) return undefined;
+  // Lifted-fragment rejection (Joe, 2026-07-09, Mark Kocsis +17168609533): the availability
+  // parser copied the customer's subordinate clause "If you have one that has the [black trim]"
+  // into the COLOR slot, and the reply rendered "...Street Glide in If You Have One That Has
+  // The in stock". A real color/finish phrase ("vivid black", "dark billiard gray", "black
+  // trim", "blacked out") is short and never carries pronouns/conditionals/request verbs.
+  // Deterministic slot-sanity (structured extraction, AGENTS.md-allowed); fail direction:
+  // dropping a color only makes the reply/watch LESS specific, never wrong.
+  const words = cleaned.split(" ").filter(Boolean);
+  const hasSentenceFragmentWord =
+    /\b(if|you|your|yours|that|this|those|these|one|ones|know|let|please|tell|text|call|me|my|i|we|whether|question|questions|feel|free|thanks|thank)\b/i.test(
+      cleaned
+    );
+  if (hasSentenceFragmentWord || words.length > 4) return undefined;
+  return cleaned;
 }
 
 function extractColorFromTrimContext(text: string): string | null {
@@ -55751,6 +55766,53 @@ if (authToken && signature) {
         undefined,
         "followup"
       );
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
+      return res.status(200).type("text/xml").send(twiml);
+    }
+  }
+  // Owner-named personal thread step-back (Joe, 2026-07-09, Mark Kocsis +17168609533): the
+  // customer opened with the assigned owner's name ("Hey Scott this is Mark"), replying to that
+  // owner's own recent HUMAN send — a two-person conversation the AI must not take over (Mark's
+  // turn drew a garbled availability draft instead of Scott's attention). Decision centralized in
+  // decideOwnerThreadStepBack (routeStateReducer): suppress the auto-draft, hand the owner a
+  // reply-needed call task. Like in_process_deal above, REGENERATE is deliberately not gated —
+  // staff explicitly asking for a draft is the override (the persona lock keeps it in the staff
+  // sender's voice). Fail-direction: firing wrongly = no auto reply + a visible owner task.
+  if (event.provider === "twilio") {
+    const sentOutbounds = (conv.messages ?? []).filter(
+      (m: any) => m?.direction === "out" && m?.provider === "twilio" && String(m?.body ?? "").trim()
+    );
+    const lastSentOutbound: any = sentOutbounds[sentOutbounds.length - 1] ?? null;
+    const lastOutboundWasHumanSend =
+      !!lastSentOutbound && !!(lastSentOutbound.actorUserId || lastSentOutbound.actorUserName);
+    const humanSenderFirstName = lastOutboundWasHumanSend
+      ? String(lastSentOutbound.actorUserName ?? "").trim().split(/\s+/)[0] || null
+      : null;
+    const ownerFirstName =
+      humanSenderFirstName || String(conv.leadOwner?.name ?? "").trim().split(/\s+/)[0] || null;
+    const stepBack = decideOwnerThreadStepBack({
+      inboundText: event.body ?? "",
+      ownerFirstName,
+      lastOutboundWasHumanSend
+    });
+    if (stepBack.kind === "owner_thread_step_back") {
+      const customerName = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "the customer";
+      const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 140);
+      addTodo(
+        conv,
+        "call",
+        `${customerName} replied to your thread (addressed you by name): "${excerpt}" — needs YOUR reply, not the assistant's.`,
+        event.providerMessageId,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      recordRouteOutcome("live", "owner_thread_step_back_no_draft", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      saveConversation(conv);
+      await flushConversationStore();
       const twiml = `<?xml version="1.0" encoding="UTF-8"?>\n<Response></Response>`;
       return res.status(200).type("text/xml").send(twiml);
     }

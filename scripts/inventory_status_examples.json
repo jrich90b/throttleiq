@@ -136,5 +136,17 @@
       "intent": "none",
       "explicit_request": false
     }
+  },
+  {
+    "id": "mark_kocsis_older_street_glide_black_trim",
+    "text": "Hey Scott this is Mark . I called this morning right after I got your message and whoever answered the phone said they would get a message to you to call me back. I'm not sure if you just got busy or if you didn't get the message. I thought long and hard about the test ride and I don't think I liked the new bike enough to buy it. I'm now looking for an older street glide prior to the current fairing and handlebar controls. I'm assuming I need to find a 2022 or older. If you have one that has the black trim instead of chrome please let me know. If you have any questions please feel free to call me.",
+    "expected": {
+      "intent": "availability_check",
+      "model": "Street Glide",
+      "year_max": 2022,
+      "condition": "used",
+      "color": "",
+      "explicit_request": true
+    }
   }
 ]

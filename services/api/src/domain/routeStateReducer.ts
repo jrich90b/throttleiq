@@ -1710,6 +1710,43 @@ export function resolveRideChallengeEventTouch(input: {
   return { pauseUntilIso: new Date(eventMs).toISOString() };
 }
 
+// ── Owner-named personal thread step-back (Joe, 2026-07-09, Mark Kocsis +17168609533) ──
+// A customer who opens with the assigned owner's NAME ("Hey Scott this is Mark"), replying to
+// that owner's own recent HUMAN outbound, is having a two-person conversation with their
+// salesperson — the AI persona must not take it over (Mark's turn drew a garbled availability
+// draft instead of Scott's attention). Decision: step back — suppress the auto-draft and hand
+// the owner a call/reply task. Deterministic structured extraction: the greeting is matched
+// against the KNOWN assigned-owner first name (never open-text comprehension), and it only
+// fires when the last outbound really was a human send from staff. Fail-direction: firing
+// wrongly = no auto reply + a visible owner task (humanward, recoverable); missing = today's
+// behavior. Applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+export type OwnerThreadStepBackInput = {
+  inboundText?: string | null;
+  ownerFirstName?: string | null; // conv.leadOwner first name (known, structured)
+  lastOutboundWasHumanSend: boolean; // last outbound before this inbound was a real staff send (not draft_ai)
+};
+
+export type OwnerThreadStepBackDecision = { kind: "owner_thread_step_back" | "none" };
+
+export function decideOwnerThreadStepBack(input: OwnerThreadStepBackInput): OwnerThreadStepBackDecision {
+  if (!input.lastOutboundWasHumanSend) return { kind: "none" };
+  const owner = String(input.ownerFirstName ?? "").trim().toLowerCase();
+  if (!owner || owner.length < 3) return { kind: "none" }; // too-short names ("al") risk false hits
+  const text = String(input.inboundText ?? "").trim().toLowerCase();
+  if (!text) return { kind: "none" };
+  // The greeting must ADDRESS the owner by name in the opening clause — "hey scott", "hi scott,",
+  // "scott this is mark", "good morning scott". A mere mention later in the message ("tell scott
+  // thanks") does not fire (the agent can still answer those normally).
+  const escaped = owner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const greeting = new RegExp(
+    `^(?:hey|hi|hello|good (?:morning|afternoon|evening)|yo|hiya)?[,!. ]*\\b${escaped}\\b(?:[,!. ]|$)`,
+    "i"
+  );
+  const opensWithName = new RegExp(`^${escaped}\\b(?:[,!. -]|$)`, "i");
+  if (greeting.test(text) || opensWithName.test(text)) return { kind: "owner_thread_step_back" };
+  return { kind: "none" };
+}
+
 // ── Trade-qualifier turn (centralizes the trade cluster's route decision) ─────
 // After we asked "do you have a trade?", the customer's reply is classified by the typed
 // parser `parseTradeQualifierResponseWithLLM` (hasTrade = affirmed / declined / unclear).
