@@ -4436,6 +4436,25 @@ export function collectInventoryWatches(conv: any): InventoryWatch[] {
   return single && !arr.includes(single) ? [...arr, single] : arr;
 }
 
+/**
+ * Prune inventory watches whose model EXACTLY matches one of `removeModels` (case-insensitive, trimmed).
+ * Pure + surgical: used to remove garbage watches (e.g. VIN-trim-code models like "Fxst Bhlf Softail
+ * Standard" that a 4/17 bulk import created on Peter Brand) while KEEPING the customer's real watches.
+ * Matching by exact model string, not a fragile "garbage signature", so the caller controls precisely
+ * what goes. Returns the kept array + how many were removed; NEVER notifies (the endpoint that calls
+ * this deliberately does not run the watchlist, so nothing fires).
+ */
+export function pruneInventoryWatchesByModel(
+  watches: InventoryWatch[],
+  removeModels: string[]
+): { kept: InventoryWatch[]; removed: number } {
+  const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
+  const remove = new Set(removeModels.map(norm).filter(Boolean));
+  if (!remove.size) return { kept: watches, removed: 0 };
+  const kept = watches.filter(w => !remove.has(norm(w?.model)));
+  return { kept, removed: watches.length - kept.length };
+}
+
 export function closeConversation(conv: Conversation, reason?: string) {
   conv.status = "closed";
   conv.closedAt = nowIso();

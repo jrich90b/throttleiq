@@ -742,6 +742,7 @@ import {
   shouldSurfaceUnsentFirstTouch,
   REAL_OUTBOUND_CONTACT_PROVIDERS,
   collectInventoryWatches,
+  pruneInventoryWatchesByModel,
   isInProcessDealLead,
   shouldNudgeInProcessDeal,
   addInternalQuestion,
@@ -37913,6 +37914,48 @@ app.post("/internal/worker/todo-cleanup", (req, res) => {
     dryRun,
     matched: matches.length,
     convIds: matches.map(t => t.convId).slice(0, 100)
+  });
+});
+
+// Surgical watch-prune repair (2026-07-11). Remove garbage inventory watches BY EXACT MODEL while
+// keeping the customer's real ones — the sanctioned way to clean VIN-trim-code junk (e.g. Peter Brand's
+// six "Fxst Bhlf Softail Standard" watches a 4/17 bulk import created) without the staff DELETE endpoint's
+// all-or-nothing clear. Worker-token authed (internal), dry-run supported. Deliberately does NOT run
+// processInventoryWatchlist, so NOTHING is triggered/notified — this only edits stored state.
+app.post("/internal/worker/watch-prune/:id", async (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const removeModels = Array.isArray(req.body?.removeModels)
+    ? req.body.removeModels.map((m: any) => String(m ?? ""))
+    : [];
+  if (!removeModels.length) {
+    return res.status(400).json({ ok: false, error: "removeModels[] required" });
+  }
+  const dryRun = req.body?.dryRun === true;
+  const before = Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : [];
+  const { kept, removed } = pruneInventoryWatchesByModel(before, removeModels);
+  if (!dryRun && removed > 0) {
+    conv.inventoryWatches = kept;
+    // Keep the singular mirror consistent: if it pointed at a pruned model, repoint to a kept one (or clear).
+    const normModel = (s: unknown) => String((s as any)?.model ?? "").trim().toLowerCase();
+    const removeSet = new Set(removeModels.map((m: string) => String(m ?? "").trim().toLowerCase()).filter(Boolean));
+    if (conv.inventoryWatch && removeSet.has(normModel(conv.inventoryWatch))) {
+      conv.inventoryWatch = kept[0] ?? undefined;
+    }
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    await flushConversationStore();
+    recordRouteOutcome("manual", "watch_prune_repair", { convId: conv.id, removed, keptModels: kept.map(w => w.model) });
+  }
+  return res.json({
+    ok: true,
+    dryRun,
+    removed,
+    keptModels: kept.map(w => w?.model),
+    removedModels: before.filter(w => !kept.includes(w)).map(w => w?.model)
   });
 });
 
