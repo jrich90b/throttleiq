@@ -482,6 +482,7 @@ import {
   unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import {
@@ -5678,7 +5679,9 @@ function modelBelongsToGenericWatchFamily(
 }
 
 function canonicalizeWatchModelLabel(model: string | null | undefined): string {
-  const raw = String(model ?? "").trim();
+  // Strip a VIN-decoded prefix first ("Xl1200x 1lc3 Forty-Eight" -> "Forty-Eight") so every
+  // watch-creation path routing through here stores the friendly model, not the raw VIN string.
+  const raw = stripLeadingVinCodes(String(model ?? "").trim());
   if (!raw) return "";
   const cleaned = raw
     .replace(/\s*\/\s*anniversary\s+edition\b/gi, " ")
@@ -37957,6 +37960,44 @@ app.post("/internal/worker/watch-prune/:id", async (req, res) => {
     keptModels: kept.map(w => w?.model),
     removedModels: before.filter(w => !kept.includes(w)).map(w => w?.model)
   });
+});
+
+// Store-wide VIN-code watch cleanup (2026-07-11). Applies stripLeadingVinCodes to every conversation's
+// stored watches ("Xl1200x 1lc3 Forty-Eight" -> "Forty-Eight") and collapses the resulting duplicates.
+// The companion to the canonicalizeWatchModelLabel fix (which stops NEW garbage): this cleans the ~7
+// leads that already carry it. Worker-token authed, dry-run supported. Deliberately does NOT run
+// processInventoryWatchlist, so it NEVER notifies — it only edits stored model strings. Fail-safe:
+// stripLeadingVinCodes leaves real model names untouched, so a healthy watch is never changed.
+app.post("/internal/worker/watch-normalize-vin", async (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
+  const dryRun = req.body?.dryRun === true;
+  const changed: Array<{ convId: string; changedModels: number; removedDuplicates: number; models: (string | null | undefined)[] }> = [];
+  let convsTouched = 0;
+  for (const listed of listConversations()) {
+    const conv = getConversation(listed.id);
+    if (!conv) continue;
+    const arr = Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : [];
+    if (!arr.length) continue;
+    const { watches: next, changedModels, removedDuplicates } = normalizeWatchModelsVin(arr as any[]);
+    if (changedModels === 0 && removedDuplicates === 0) continue;
+    changed.push({ convId: conv.id, changedModels, removedDuplicates, models: next.map((w: any) => w.model) });
+    convsTouched += 1;
+    if (!dryRun) {
+      conv.inventoryWatches = next as any;
+      // Repoint the singular mirror to a kept watch (its model may have been cleaned/deduped away).
+      const singleModel = stripLeadingVinCodes((conv.inventoryWatch as any)?.model);
+      conv.inventoryWatch = (next as any[]).find(w => String(w.model ?? "") === singleModel) ?? next[0] ?? undefined;
+      conv.updatedAt = new Date().toISOString();
+      saveConversation(conv);
+    }
+  }
+  if (!dryRun && convsTouched > 0) {
+    await flushConversationStore();
+    recordRouteOutcome("manual", "watch_vin_normalize_sweep", { convsTouched });
+  }
+  return res.json({ ok: true, dryRun, convsTouched, changed: changed.slice(0, 100) });
 });
 
 app.post("/conversations/:id/appointment", requirePermission("canEditAppointments"), async (req, res) => {
