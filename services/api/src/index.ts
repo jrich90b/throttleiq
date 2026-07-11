@@ -89,6 +89,7 @@ import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollow
 import {
   addAgentTask,
   listAgentTasks,
+  reapStuckAgentTasks,
   updateAgentTaskStatus,
   type AgentTask,
   type AgentTaskKind,
@@ -29510,6 +29511,18 @@ async function processDueFollowUpsUnlocked() {
   }
   if (staleHeldFlagsHealed > 0) {
     console.log(`[state-reconcile] cleared ${staleHeldFlagsHealed} stale "needs reply" flag(s) after a reply went out`);
+  }
+  // Stuck-agent-task reaper: a runner (esp. MDF portal) that DIED/HUNG leaves its task pinned in
+  // "running" forever — nothing transitions it, so the mdf_portal_health sweep re-flags the same orphan
+  // every night (2026-07-10: one 3.5 days old, one 3 weeks old). Fail a task stuck well past any real
+  // run window. Fail-safe: running-only + conservative 180m timeout (real MDF runs are minutes), marks
+  // "failed" only, idempotent. No customer impact — an internal co-op-portal task, not a message.
+  const reapedStuckTaskIds = await reapStuckAgentTasks({ nowMs: now.getTime() });
+  if (reapedStuckTaskIds.length > 0) {
+    console.log(`[state-reconcile] failed ${reapedStuckTaskIds.length} stuck agent task(s) (dead runner)`);
+    for (const taskId of reapedStuckTaskIds) {
+      recordRouteOutcome("manual", "stuck_agent_task_reaped", { taskId });
+    }
   }
   // Cadence re-align: a lead wrongly deferred to a long_term (months-out) first touch when its
   // structured purchase timeframe actually resolves to the STANDARD day-1 ramp (Richard Tait, 6/25:

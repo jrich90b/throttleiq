@@ -96,6 +96,58 @@ export async function updateAgentTaskStatus(
   return task;
 }
 
+// Stuck-task reaper (2026-07-10). An agent task (esp. kind "mdf_portal") whose runner process
+// DIED or HUNG leaves the task pinned in "running" forever — nothing transitions it, because a dead
+// process can't fail its own task. The mdf_portal_health sweep DETECTS this (stuck >30m) but never
+// clears it, so the same orphan re-fires every night (2026-07-10: one 3.5 days old, one 3 weeks old).
+//
+// Pure selection so it's eval'able and the timeout is legible. FAIL-SAFE by construction: it only ever
+// touches status==="running" AND age > a CONSERVATIVE timeout (default 180m — real MDF portal runs are
+// minutes, so this can never race a live run), and it only marks the task "failed" (a dead runner's
+// task genuinely cannot complete). It never touches queued/needs_approval/completed/failed/blocked.
+export const STUCK_AGENT_TASK_TIMEOUT_MIN = Number(process.env.STUCK_AGENT_TASK_TIMEOUT_MIN ?? "180");
+
+export function selectStuckAgentTasks(
+  tasks: Array<Pick<AgentTask, "id" | "status" | "updatedAt" | "kind">>,
+  opts: { nowMs: number; timeoutMinutes?: number }
+): Array<{ id: string; ageMinutes: number }> {
+  const timeoutMs = Math.max(1, opts.timeoutMinutes ?? STUCK_AGENT_TASK_TIMEOUT_MIN) * 60 * 1000;
+  const out: Array<{ id: string; ageMinutes: number }> = [];
+  for (const t of tasks) {
+    if (String(t?.status ?? "") !== "running") continue; // only a live-marked task can be a dead runner
+    const at = Date.parse(String(t?.updatedAt ?? ""));
+    if (!Number.isFinite(at)) continue; // unknown age → leave it (never reap on a guess)
+    const ageMs = opts.nowMs - at;
+    if (ageMs <= timeoutMs) continue; // still within a plausible run window → keep
+    out.push({ id: String(t.id), ageMinutes: Math.round(ageMs / 60000) });
+  }
+  return out;
+}
+
+/**
+ * Reap stuck "running" tasks → "failed". Returns the ids it failed. Fail-safe: uses the pure
+ * selection above (conservative timeout, running-only). Idempotent — a task it already failed is no
+ * longer "running", so a re-run is a no-op.
+ */
+export async function reapStuckAgentTasks(opts: { nowMs: number; timeoutMinutes?: number } = { nowMs: Date.now() }): Promise<string[]> {
+  await ensureLoaded();
+  const stuck = selectStuckAgentTasks(rows, opts);
+  for (const s of stuck) {
+    const task = rows.find(row => row.id === s.id);
+    if (!task) continue;
+    task.status = "failed";
+    task.updatedAt = new Date().toISOString();
+    task.output = {
+      ...(task.output ?? {}),
+      summary: `Auto-failed: stuck in "running" for ${s.ageMinutes}m (runner died/hung, exceeded ${
+        opts.timeoutMinutes ?? STUCK_AGENT_TASK_TIMEOUT_MIN
+      }m timeout).`
+    };
+  }
+  if (stuck.length) scheduleSave();
+  return stuck.map(s => s.id);
+}
+
 function isAgentTask(row: any): row is AgentTask {
   return (
     !!row &&
