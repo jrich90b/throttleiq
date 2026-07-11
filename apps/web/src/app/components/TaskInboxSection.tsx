@@ -511,7 +511,11 @@ export function TaskInboxSection(props: any) {
                           ) : null}
                           <span className="ml-auto" />
                           {canSnooze ? (
-                            <div className="lr-task-snooze" data-actions-menu>
+                            // No data-actions-menu here: the light-island flip gave the
+                            // Snooze button a light background under its dark-frozen text
+                            // (washed out, Joe 2026-07-10). This menu has no form
+                            // controls, so it stays a dark popup like the "+" menus.
+                            <div className="lr-task-snooze">
                               <button
                                 className="lr-task-btn"
                                 onClick={() =>

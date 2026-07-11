@@ -352,6 +352,31 @@
   --shadow-4: 0 2px 8px rgba(5, 5, 5, 0.08), 0 12px 32px rgba(5, 5, 5, 0.14);
   --shadow-focus: 0 0 0 2px var(--accent-ring);
   --foreground: var(--text-primary);
+  /* Islands flip the vars, but text INHERITS resolved values from the dark
+     shell — unstyled children (e.g. the reassign card's Cancel/Save) stayed
+     near-white on the light card. Paint the island's own foreground too. */
+  color: var(--text-primary);
+  /* The alias families (--lr-app-*, --lr-*) freeze their values where they are
+     DECLARED (the dark shell root), so without re-declaring them here, anything
+     inside a light island that consumes them paints dark-shell colors onto light
+     surfaces — the washed-out Snooze button / reassign card (Joe, 2026-07-10).
+     Re-declared against the light set above, they flip with the island. */
+  --lr-app-bg: var(--background);
+  --lr-app-bg-soft: var(--surface);
+  --lr-app-surface: var(--surface);
+  --lr-app-border: var(--border);
+  --lr-app-border-strong: var(--border-strong);
+  --lr-app-text: var(--text-primary);
+  --lr-app-muted: var(--text-secondary);
+  --lr-app-muted-soft: var(--text-muted);
+  --lr-bg: var(--background);
+  --lr-bg-soft: var(--surface);
+  --lr-surface: var(--surface);
+  --lr-surface-2: var(--surface-2);
+  --lr-border: var(--border);
+  --lr-text: var(--text-primary);
+  --lr-muted: var(--text-secondary);
+  --lr-muted-strong: var(--text-secondary);
 }
 
 body {
@@ -3625,6 +3650,26 @@ input[type="reset"],
   --status-neutral-bg: var(--neutral-100);
   --status-neutral-border: var(--neutral-200);
   --foreground: var(--text-primary);
+  /* Same alias re-flip as the .lr-light-modal/[data-actions-menu] island block:
+     the alias families (--lr-app-... and --lr-...) freeze at the dark shell
+     root, so light utility surfaces must re-declare them or campaign
+     inputs/labels paint near-white on white (Campaign setup washout, 7/10). */
+  --lr-app-bg: var(--background);
+  --lr-app-bg-soft: var(--surface);
+  --lr-app-surface: var(--surface);
+  --lr-app-border: var(--border);
+  --lr-app-border-strong: var(--border-strong);
+  --lr-app-text: var(--text-primary);
+  --lr-app-muted: var(--text-secondary);
+  --lr-app-muted-soft: var(--text-muted);
+  --lr-bg: var(--background);
+  --lr-bg-soft: var(--surface);
+  --lr-surface: var(--surface);
+  --lr-surface-2: var(--surface-2);
+  --lr-border: var(--border);
+  --lr-text: var(--text-primary);
+  --lr-muted: var(--text-secondary);
+  --lr-muted-strong: var(--text-secondary);
 }
 
 /* Global readability guard: any intentionally light utility surface should
@@ -4442,6 +4487,10 @@ input[type="reset"],
 }
 
 .lr-campaign-theme {
+  /* Aliases only — never re-point the semantic set back at these. The old
+     `--surface: var(--lr-surface)` mirror lines made each pair a var() CYCLE,
+     which computes to guaranteed-invalid and let OS-theme root values leak
+     into the campaign shell (part of the Campaign setup washout, 2026-07-10). */
   --lr-bg: var(--background);
   --lr-bg-soft: var(--surface);
   --lr-surface: var(--surface);
@@ -4452,11 +4501,6 @@ input[type="reset"],
   --lr-muted-strong: var(--text-secondary);
   --lr-accent: var(--accent);
   --lr-accent-soft: rgba(251, 127, 4, 0.18);
-  --surface: var(--lr-surface);
-  --surface-2: var(--lr-surface-2);
-  --accent: var(--lr-accent);
-  --border: var(--lr-border);
-  --foreground: var(--lr-text);
 }
 
 .lr-campaign-theme .lr-campaign-sidebar,
@@ -4717,7 +4761,10 @@ input[type="reset"],
 .lr-campaign-theme .lr-campaign-list input,
 .lr-campaign-theme .lr-campaign-list select,
 .lr-campaign-theme .lr-campaign-list textarea {
-  background: rgba(255, 255, 255, 0.03) !important;
+  /* var(--surface), not translucent white: on the light setup panel the old
+     fill was white with the frozen near-white --lr-text on top of it —
+     invisible typing (Joe, 2026-07-10). Resolves dark-correct in the list. */
+  background: var(--surface) !important;
   border-color: var(--lr-border) !important;
   color: var(--lr-text) !important;
 }
@@ -4737,16 +4784,18 @@ input[type="reset"],
 
 .lr-campaign-theme .lr-campaign-content .lr-campaign-btn {
   background: var(--surface) !important;
-  border-color: rgba(255, 255, 255, 0.32) !important;
+  border-color: var(--border-strong) !important;
   color: var(--text-primary) !important;
   font-weight: 620;
   letter-spacing: 0.012em;
 }
 
 .lr-campaign-theme .lr-campaign-content .lr-campaign-btn:hover {
-  background: var(--surface) !important;
-  border-color: rgba(255, 255, 255, 0.48) !important;
-  color: #ffffff !important;
+  /* Surface-aware hover: hardcoded #fff turned button text invisible when the
+     button sat on a light panel. */
+  background: var(--surface-hover) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text-primary) !important;
 }
 
 .lr-campaign-theme .lr-campaign-content .lr-campaign-btn:disabled {
@@ -4958,7 +5007,7 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-target-pill {
-  border-color: rgba(255, 255, 255, 0.34) !important;
+  border-color: var(--border-strong) !important;
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--surface-2);
 }
@@ -4977,7 +5026,7 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-target-pill input.lr-campaign-target-input {
-  border-color: rgba(255, 255, 255, 0.62);
+  border-color: var(--border-strong);
 }
 
 .lr-campaign-theme .lr-campaign-target-pill.bg-\[var\(--lr-accent\)\] .lr-campaign-target-pill-label {
@@ -4996,7 +5045,8 @@ input[type="reset"],
 }
 
 .lr-campaign-theme .lr-campaign-upload-card .text-gray-600 {
-  color: var(--border-strong) !important;
+  /* Body copy, not a border tone — --border-strong was ~3:1 on the light card. */
+  color: var(--text-secondary) !important;
 }
 
 .lr-campaign-theme .lr-campaign-upload-card .text-gray-700 {
@@ -5115,7 +5165,9 @@ input[type="reset"],
 .lr-campaign-dialog input,
 .lr-campaign-dialog select,
 .lr-campaign-dialog textarea {
-  background: rgba(255, 255, 255, 0.03) !important;
+  /* Surface-aware, not translucent white — dialogs carry bg-white, so the old
+     fill plus frozen light text was invisible typing on the light dialog. */
+  background: var(--surface) !important;
   color: var(--lr-text) !important;
 }
 

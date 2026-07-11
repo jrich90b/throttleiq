@@ -277,7 +277,11 @@ function BookingPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+    // This page is customer-facing and always renders as a LIGHT card, so the text
+    // color must be pinned dark explicitly: without it, a phone in dark mode flips the
+    // inherited body color near-white (globals.css prefers-color-scheme block) and the
+    // calendar days/times become white-on-white (Joe, 2026-07-10).
+    <div className="min-h-screen bg-gray-50 text-gray-900 [color-scheme:light] flex items-center justify-center p-6">
       <div className="w-full max-w-2xl bg-white border rounded-lg shadow-sm p-6">
         <div className="text-xl font-semibold mb-1">{dealerName}</div>
         <div className="text-sm text-gray-600 mb-6">
@@ -363,7 +367,7 @@ function BookingPageInner() {
                       Next
                     </button>
                   </div>
-                  <div className="grid grid-cols-7 gap-1 text-xs text-gray-500">
+                  <div className="grid grid-cols-7 gap-1 text-xs text-gray-600">
                     {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
                       <div key={d} className="text-center">
                         {d}
@@ -389,7 +393,9 @@ function BookingPageInner() {
                           <button
                             key={key}
                             className={`text-sm border rounded p-2 text-center ${
-                              hasSlots ? "hover:border-blue-500" : "opacity-40 cursor-not-allowed"
+                              hasSlots
+                                ? "hover:border-blue-500"
+                                : "text-gray-400 border-gray-200 cursor-not-allowed"
                             } ${isSelected ? "border-blue-600 bg-blue-50" : ""}`}
                             disabled={!hasSlots}
                             onClick={() => {
@@ -434,7 +440,7 @@ function BookingPageInner() {
                     </div>
                   </div>
                   {visibleSlots.length > 10 ? (
-                    <div className="text-xs text-gray-500 mt-2">
+                    <div className="text-xs text-gray-600 mt-2">
                       Scroll to see more times.
                     </div>
                   ) : null}
@@ -476,7 +482,7 @@ function BookingPageInner() {
             />
 
             <div className="flex items-center justify-between">
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-gray-600">
                 Please select a time and provide your contact details.
               </div>
               <button
@@ -498,7 +504,7 @@ export default function BookingPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="min-h-screen bg-gray-50 text-gray-900 [color-scheme:light] flex items-center justify-center p-6">
           <div className="w-full max-w-2xl bg-white border rounded-lg shadow-sm p-6">
             <div className="text-sm text-gray-600">Loading booking page…</div>
           </div>
