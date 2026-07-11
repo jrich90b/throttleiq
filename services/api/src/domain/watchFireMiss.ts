@@ -57,15 +57,22 @@ export function inventoryItemMatchesWatch(item: InventoryFeedItem, watch: Invent
     const norm = (s: string) => (/\b(pre[- ]?owned|used|cpo|certified)\b/.test(s) ? "used" : /\bnew\b/.test(s) ? "new" : s);
     if (have && norm(have) !== norm(want)) return false;
   }
-  // Price-band gate (2026-07-11). A watch that captured a budget ("used Road Glide, $14-16k") must not
-  // match a unit whose price is outside it — the recurring watch-fire-miss false-positives were a used,
-  // price-capped watch matched to a new unit far above budget (Robert Hofmeister $14-16k → new $30k
-  // Road Glide). FAIL-SAFE: only reject when the unit's price is KNOWN and provably out of band; an
-  // unknown/zero price never rejects (keep the potential miss). Depends on the snapshot now carrying price.
-  const price = typeof item.price === "number" && Number.isFinite(item.price) && item.price > 0 ? item.price : null;
-  if (price != null) {
-    if (typeof watch.maxPrice === "number" && watch.maxPrice > 0 && price > watch.maxPrice) return false;
-    if (typeof watch.minPrice === "number" && watch.minPrice > 0 && price < watch.minPrice) return false;
+  // Price-band gate — MIRRORS the live engine (index.ts notifyInventoryWatchers matcher, the
+  // `if (hasMinPrice || hasMaxPrice)` block). A watch that captured a budget ("used Road Glide,
+  // $14-16k") must not match a unit whose price is outside it (Robert Hofmeister $14-16k → new $30k
+  // Road Glide). And when the watch is banded, a unit with NO valid price does NOT match: the engine
+  // rejects an unpriced unit against a banded watch (it can't confirm the unit is in budget), so such
+  // a unit is NOT a miss the engine would ever have fired on — flagging it just cries wolf
+  // (+17162264009 7/11: a null-price 2011 Road Glide Custom against a used $14-16k Road Glide watch
+  // was a false "high miss"). Engine PARITY is the correct bar for a miss detector; the earlier
+  // "unknown price never rejects" fail-safe diverged from the engine and produced those false flags.
+  const hasMinPrice = typeof watch.minPrice === "number" && watch.minPrice > 0;
+  const hasMaxPrice = typeof watch.maxPrice === "number" && watch.maxPrice > 0;
+  if (hasMinPrice || hasMaxPrice) {
+    const price = typeof item.price === "number" && Number.isFinite(item.price) && item.price > 0 ? item.price : null;
+    if (price == null) return false;
+    if (hasMaxPrice && price > (watch.maxPrice as number)) return false;
+    if (hasMinPrice && price < (watch.minPrice as number)) return false;
   }
   return true;
 }
@@ -138,7 +145,18 @@ export function findWatchFireMisses(args: {
       if (!lastNotifiedAt) {
         confidence = "high"; // watch set up, unit available, NEVER notified
       } else if (notNotifiedMatch) {
-        confidence = "medium"; // a different matching unit arrived than the one we notified
+        // The customer was already notified about this model. If the unit we notified them about is
+        // STILL in stock, that notification still stands — the customer already knows the model is
+        // available, so a DIFFERENT same-model unit arriving is not a fresh miss (notify-once by
+        // design; +17163308822 & +17165104578 7/11: both notified units were still on the floor, so
+        // the mediums were noise). Only surface a medium when the notified unit is GONE (sold/removed)
+        // and a new matching one is available — the genuine "the bike we told them about sold, but
+        // here's another" case.
+        const notifiedStillInStock =
+          !!watch.lastNotifiedStockId &&
+          feed.some(m => String(m.stockId ?? "") === String(watch.lastNotifiedStockId));
+        if (notifiedStillInStock) continue;
+        confidence = "medium"; // notified unit gone; a different matching unit is available
         chosen = notNotifiedMatch;
       }
       if (!confidence) continue;

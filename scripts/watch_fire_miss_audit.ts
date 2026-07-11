@@ -38,16 +38,26 @@ if (process.argv.includes("--self-test")) {
     false,
     "Rahscheem case: a $18k Fat Boy is over the $10k cap => not a match"
   );
-  // FAIL-SAFE: an UNKNOWN/zero price must never reject (keep the potential miss).
+  // Engine PARITY (2026-07-11): a BANDED watch rejects a unit with no valid price — the live engine
+  // (index.ts) does the same (`if (hasMinPrice||hasMaxPrice){ if(!Number.isFinite(itemPrice)...) return false }`),
+  // so an unpriced unit against a budget watch is NOT a miss the engine would have fired on. (Was
+  // previously kept as "fail toward the miss", which diverged from the engine and cried wolf on
+  // +17162264009 — a null-price 2011 Road Glide Custom against a used $14-16k Road Glide watch.)
   assert.equal(
     inventoryItemMatchesWatch({ model: "Fat Boy", condition: "used" } as any, { model: "Fat Boy", condition: "used", maxPrice: 10000, createdAt: "" } as any),
-    true,
-    "unknown price must not reject — a real miss with a missing price stays flagged"
+    false,
+    "banded watch + unknown price => no match (engine parity)"
   );
   assert.equal(
     inventoryItemMatchesWatch({ model: "Fat Boy", condition: "used", price: 0 } as any, { model: "Fat Boy", condition: "used", maxPrice: 10000, createdAt: "" } as any),
+    false,
+    "banded watch + zero/invalid price => no match (engine parity)"
+  );
+  // A watch with NO price band still keeps an unknown-price unit — nothing to reject on.
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Fat Boy", condition: "used" } as any, { model: "Fat Boy", condition: "used", createdAt: "" } as any),
     true,
-    "zero/invalid price must not reject (fail toward keeping the miss)"
+    "no price band => unknown price still matches"
   );
 
   const feed = [
@@ -102,6 +112,44 @@ if (process.argv.includes("--self-test")) {
   assert.equal(byId.c8?.matchedStockId, "STK200");
   for (const id of ["c3", "c4", "c5", "c6"]) assert.ok(!byId[id], `${id} must NOT be flagged`);
   assert.equal(misses[0].confidence, "high", "high-confidence misses sort first");
+
+  // Notify-once parity (2026-07-11): a DIFFERENT same-model unit is not a fresh miss while the unit
+  // we already notified about is STILL in stock (the standing notification covers the model). The
+  // medium only fires when the notified unit is GONE and a new matching one is available.
+  {
+    const feed2 = [
+      { stockId: "SG-A", model: "Street Glide", year: "2024", condition: "New" },
+      { stockId: "SG-B", model: "Street Glide", year: "2024", condition: "New" }
+    ] as any[];
+    const stillInStock = findWatchFireMisses({
+      conversations: [
+        { id: "d1", leadKey: "+1", inventoryWatch: { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01", lastNotifiedAt: "2026-06-02", lastNotifiedStockId: "SG-A" } }
+      ] as any[],
+      feedItems: feed2
+    });
+    assert.equal(stillInStock.length, 0, "notified unit still in stock => no fresh miss (notify-once)");
+    const notifiedGone = findWatchFireMisses({
+      conversations: [
+        { id: "d2", leadKey: "+1", inventoryWatch: { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01", lastNotifiedAt: "2026-06-02", lastNotifiedStockId: "SG-GONE" } }
+      ] as any[],
+      feedItems: feed2
+    });
+    assert.equal(notifiedGone.length, 1, "notified unit gone + new one available => medium miss stays");
+    assert.equal(notifiedGone[0].confidence, "medium");
+  }
+
+  // Price-band parity at the conversation level: a null-price unit against a banded watch is not a
+  // miss (mirrors the +17162264009 live case).
+  {
+    const feed3 = [{ stockId: "RG-NP", model: "Road Glide", year: "2011", condition: "used", price: null }] as any[];
+    const bandedNullPrice = findWatchFireMisses({
+      conversations: [
+        { id: "e1", leadKey: "+1", inventoryWatch: { model: "Road Glide", condition: "used", minPrice: 14000, maxPrice: 16000, status: "active", createdAt: "2026-04-01" } }
+      ] as any[],
+      feedItems: feed3
+    });
+    assert.equal(bandedNullPrice.length, 0, "banded watch + null-price unit => not a miss (engine parity)");
+  }
 
   // --- Arrival gate (firstSeen): only units that arrived AFTER the watch are misses (Joe's policy:
   // a unit already in stock at watch-creation is intentionally never fired). Same fixtures, now with
