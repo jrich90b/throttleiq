@@ -145,6 +145,23 @@ escalate. The contract (full version in the loop doc):
   - any direct `conv.emailDraft` assignment path.
 
 ## UI Contrast Guardrail
+- CSS custom properties freeze their `var()` references where they are DECLARED. The
+  `--lr-app-*`/`--lr-*` alias families are declared on the dark shell roots, so every
+  light-island block (`.lr-light-modal`, `[data-actions-menu]`, and the
+  `.bg-white`/`.bg-gray-50`-style utility flip lists in `globals.css`) must RE-DECLARE the
+  alias families and paint its own `color`, or island content renders dark-shell colors on
+  light surfaces (the 2026-07-10 Campaign-setup/Snooze/reassign washouts). Never mirror a
+  semantic var back at its own alias (`--surface: var(--lr-surface)`) — that is a var()
+  cycle, computes to guaranteed-invalid, and leaks OS-theme values into the shells. Inside
+  theme-scoped rules, prefer use-site semantic vars and surface-aware fills (never
+  translucent white over an unknown surface). Pinned by `ui_contrast_guard:eval`.
+- Public customer pages with no theme wrapper (e.g. `/book`) must pin dark-on-light
+  explicitly (`text-gray-900` + `[color-scheme:light]` on the page root): the base page
+  follows the OS theme, so an always-white card otherwise gets near-white inherited text
+  on dark-mode phones. Also pinned by `ui_contrast_guard:eval`.
+- `data-actions-menu` marks a LIGHT-SURFACE island. Do not put it on wrappers whose
+  contents sit on the dark row (that is how the Snooze button washed out); menus with no
+  form controls stay dark popups.
 - Any inline light-surface action panel (for example Task Inbox reassign inline card) must include the `data-actions-menu` hook so form controls inherit enforced high-contrast white-surface styling in dark theme.
 - Sold/closed update modal (`Mark unit sold`) should keep high-contrast text + form controls on white surfaces (labels/helper text/actions) so dark-theme overlays remain readable.
 - Ensure the sold-close modal root includes `lr-light-modal` so global dark-shell contrast overrides apply to manual-entry placeholders and helper text.
