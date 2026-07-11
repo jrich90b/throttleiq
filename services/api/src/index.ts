@@ -37973,13 +37973,23 @@ app.post("/internal/worker/watch-normalize-vin", async (req, res) => {
     return res.status(401).json({ ok: false, error: "worker token required" });
   }
   const dryRun = req.body?.dryRun === true;
+  // A watch count this high is a bulk-import artifact (John Manning: 58 = the whole Softail+Dyna
+  // catalog), not real intent. Auto-normalizing it into dozens of CLEAN watches would be worse than
+  // leaving the garbage (garbage never matches inventory; clean watches would fire if the lead reopens).
+  // Skip it here and surface it for a human decision (clear vs keep the one real model).
+  const bulkDumpThreshold = Math.max(1, Number(req.body?.bulkDumpThreshold ?? 15) || 15);
   const changed: Array<{ convId: string; changedModels: number; removedDuplicates: number; models: (string | null | undefined)[] }> = [];
+  const skippedBulk: Array<{ convId: string; watchCount: number }> = [];
   let convsTouched = 0;
   for (const listed of listConversations()) {
     const conv = getConversation(listed.id);
     if (!conv) continue;
     const arr = Array.isArray(conv.inventoryWatches) ? conv.inventoryWatches : [];
     if (!arr.length) continue;
+    if (arr.length > bulkDumpThreshold) {
+      skippedBulk.push({ convId: conv.id, watchCount: arr.length });
+      continue;
+    }
     const { watches: next, changedModels, removedDuplicates } = normalizeWatchModelsVin(arr as any[]);
     if (changedModels === 0 && removedDuplicates === 0) continue;
     changed.push({ convId: conv.id, changedModels, removedDuplicates, models: next.map((w: any) => w.model) });
@@ -37997,7 +38007,7 @@ app.post("/internal/worker/watch-normalize-vin", async (req, res) => {
     await flushConversationStore();
     recordRouteOutcome("manual", "watch_vin_normalize_sweep", { convsTouched });
   }
-  return res.json({ ok: true, dryRun, convsTouched, changed: changed.slice(0, 100) });
+  return res.json({ ok: true, dryRun, convsTouched, changed: changed.slice(0, 100), skippedBulk });
 });
 
 app.post("/conversations/:id/appointment", requirePermission("canEditAppointments"), async (req, res) => {
