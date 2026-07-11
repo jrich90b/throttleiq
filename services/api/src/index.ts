@@ -332,7 +332,7 @@ import {
   CONTEXT_FIDELITY_HANDOFF_ACK
 } from "./domain/contextFidelityHold.js";
 import { customerVisitConfirmed, rideOutcomeImpliesVisit, phantomVisitGuardEnabled } from "./domain/visitFraming.js";
-import { isSpecificModel } from "./domain/modelDeflection.js";
+import { isSpecificModel, isPlaceholderModel } from "./domain/modelDeflection.js";
 import type {
   AffectParse,
   AccessoryRequestParse,
@@ -483,7 +483,7 @@ import {
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
-import { trikeClassConflict } from "./domain/modelFamily.js";
+import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
 import {
   recommendInventory,
@@ -11013,9 +11013,15 @@ async function applyPostCallSummaryActions(opts: {
       voiceWatchSourceText || customerText,
       voiceWatchAccepted ? voiceSemanticSlots : null
     );
-    if (watches.length && !(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length))) {
-      conv.inventoryWatches = watches;
-      conv.inventoryWatch = watches[0];
+    // Family-only labels ("Trike", "Touring") never become active watches — a family
+    // is not a bookable model, and a family watch fires wrong or never (Joe ruling
+    // 7/11 #4). Park them as pending so the next turn asks "which model?" instead.
+    const specificVoiceWatches = watches.filter(w => !isFamilyOnlyModelLabel(w.model));
+    const familyOnlyVoiceWatch = watches.find(w => isFamilyOnlyModelLabel(w.model));
+    const hasAnyVoiceWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
+    if (specificVoiceWatches.length && !hasAnyVoiceWatch) {
+      conv.inventoryWatches = specificVoiceWatches;
+      conv.inventoryWatch = specificVoiceWatches[0];
       conv.inventoryWatchPending = undefined;
       setDialogState(conv, "inventory_watch_active");
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
@@ -11023,9 +11029,18 @@ async function applyPostCallSummaryActions(opts: {
       recordRouteOutcome("live", "voice_watch_set", {
         convId: conv.id,
         leadKey: conv.leadKey,
-        added: watches.length,
+        added: specificVoiceWatches.length,
         confidence: voiceWatchConfidence,
         parserAccepted: voiceWatchAccepted
+      });
+    } else if (familyOnlyVoiceWatch && !hasAnyVoiceWatch && !conv.inventoryWatchPending) {
+      conv.inventoryWatchPending = { ...familyOnlyVoiceWatch, status: undefined } as any;
+      setDialogState(conv, "inventory_watch_prompted");
+      recordRouteOutcome("live", "voice_watch_family_clarify_pending", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        model: familyOnlyVoiceWatch.model ?? null,
+        confidence: voiceWatchConfidence
       });
     }
   }
@@ -11038,7 +11053,19 @@ async function applyPostCallSummaryActions(opts: {
         : undefined) ||
       undefined;
     const hasWatch = !!(conv.inventoryWatch || (conv.inventoryWatches && conv.inventoryWatches.length));
-    if (model && !hasWatch) {
+    if (model && !hasWatch && (isFamilyOnlyModelLabel(model) || isPlaceholderModel(model))) {
+      // Family/placeholder label ("Trike", "Harley-Davidson Other") — never an active
+      // watch target (Joe ruling 7/11 #4). Park as pending so the next turn clarifies.
+      if (!conv.inventoryWatchPending) {
+        conv.inventoryWatchPending = { model } as any;
+        setDialogState(conv, "inventory_watch_prompted");
+        recordRouteOutcome("live", "call_summary_watch_family_clarify_pending", {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          model
+        });
+      }
+    } else if (model && !hasWatch) {
       const parsedLeadYear = Number(conv.lead?.vehicle?.year ?? "");
       const yearFromIntent = llmAvailability?.year ? Number(llmAvailability.year) : undefined;
       const year =
@@ -28513,7 +28540,17 @@ async function resolveWatchModelFromText(
   } catch (e) {
     // ignore inventory feed lookup failures; fall back to lead model
   }
-  return fallback || null;
+  // Family-only references never resolve to a watchable model (Joe ruling 7/11 #4,
+  // +15857552622 "new or used trike" → wrong-model wrong-years watch). A standalone
+  // family word this turn ("trike", "touring") means the customer did NOT name a
+  // model — returning the lead-vehicle fallback here would watch a bike they didn't
+  // ask for. And a family/placeholder FALLBACK label ("Or New Trike", "Harley-
+  // Davidson Other") is never a watch target either. Both return null, which lands
+  // every call site in its existing "which model should I watch for?" clarify arm —
+  // the fail direction is ASK, never a guessed watch.
+  if (referencesFamilyOnlyInText(textLower)) return null;
+  if (!fallback || isFamilyOnlyModelLabel(fallback) || isPlaceholderModel(fallback)) return null;
+  return fallback;
 }
 
 function isVideoRequest(text: string): boolean {
