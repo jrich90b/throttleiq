@@ -4879,6 +4879,26 @@ export async function orchestrateInbound(
       const vinForNote = ctx?.lead?.vehicle?.vin ?? null;
       const inventoryNote = await getInventoryNote(stockForNote, vinForNote);
 
+      // Phase 2 (2026-07-11): hand the discussed unit's FEED FACTS to the composer so it can ANSWER
+      // price/mileage/photo asks instead of hedging (the biggest data-punt bucket). Only when we
+      // resolved a specific stock/VIN — a general model inquiry has no single unit, so no facts.
+      // List/asking price only; out-the-door still defers. Fail-safe: any feed hiccup => no facts.
+      let inventoryListPrice: number | null = null;
+      let inventoryMileage: number | null = null;
+      let inventoryImageUrls: string[] | null = null;
+      if (stockForNote || vinForNote) {
+        try {
+          const factItem = (await findInventoryPrice({ stockId: stockForNote, vin: vinForNote }))?.item ?? null;
+          if (factItem) {
+            inventoryListPrice = typeof factItem.price === "number" && factItem.price > 0 ? factItem.price : null;
+            inventoryMileage = typeof factItem.mileage === "number" && factItem.mileage > 0 ? factItem.mileage : null;
+            inventoryImageUrls = Array.isArray(factItem.images) && factItem.images.length ? factItem.images.slice(0, 3) : null;
+          }
+        } catch (err: any) {
+          console.warn("[inventory-facts] lookup failed", { message: err?.message ?? String(err) });
+        }
+      }
+
       const draftCtx = {
         channel: "sms" as const,
         leadSource: ctx?.leadSource ?? null,
@@ -4891,6 +4911,9 @@ export async function orchestrateInbound(
         stockId,
         inventoryUrl,
         inventoryStatus,
+        inventoryListPrice,
+        inventoryMileage,
+        inventoryImageUrls,
         inventoryNote,
         dealerProfile,
         dealerTimeZone: tz,

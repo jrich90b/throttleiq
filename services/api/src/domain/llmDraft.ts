@@ -321,6 +321,12 @@ export type DraftContext = {
   inventoryUrl?: string | null;
   inventoryStatus?: "AVAILABLE" | "PENDING" | "UNKNOWN" | null;
   inventoryNote?: string | null;
+  // Inventory FACTS for the discussed unit, straight from the feed (Phase 2). Present only when we
+  // resolved a specific stock unit; the composer may STATE these (never invent one). List/asking
+  // price only — out-the-door still defers to a person.
+  inventoryListPrice?: number | null;
+  inventoryMileage?: number | null;
+  inventoryImageUrls?: string[] | null;
 
   // STEP 3 self-correcting loop: a correction hint from the draft-quality judge for a RE-draft.
   // When set, the generator is told what was wrong with the prior attempt so the regeneration
@@ -13631,6 +13637,13 @@ AVAILABLE INVENTORY BEHAVIOR (tone + close):
 INVENTORY NOTES (optional):
 - If inventoryNote is present, weave it into the response as ONE short sentence.
 
+INVENTORY FACTS YOU MAY STATE (only when the field is provided below — NEVER invent one):
+- inventoryListPrice: the discussed unit's LIST / asking price from our inventory. If the customer asks the price and this is provided, state it as the listed/asking price (e.g., "It's listed at $X."). This is the ONLY price you may give.
+- OUT-THE-DOOR / total price (taxes, fees, doc, trade, "all in", final/best price): this is NOT the list price and you do NOT have it. If they ask for it, say you'll get them the exact out-the-door number and follow up — do NOT compute, estimate, or guess it. (This is a legitimate handoff; the ANSWER-DON'T-HEDGE rule does not override it.)
+- inventoryMileage: if provided and they ask about miles/mileage, state it (e.g., "It has about X miles on it."). If not provided, don't state a mileage.
+- inventoryImageUrls: if they ask for photos/pics/a look and these are provided, share them now (include the link) instead of saying you'll send them later. If none are provided but inventoryUrl is, share that link.
+- If the customer asks for a fact that is NOT provided above, do not make one up — say you'll confirm it and follow up (name what you're checking).
+
 GENERAL INQUIRY (strict):
 - If none of the above rules apply, ask ONE short clarifying question.
 
@@ -13727,6 +13740,9 @@ Inventory check:
 - inventoryUrl: ${ctx.inventoryUrl ?? "none"}
 - inventoryStatus: ${ctx.inventoryStatus ?? "none"}
 - inventoryNote: ${ctx.inventoryNote ?? "none"}
+- inventoryListPrice: ${typeof ctx.inventoryListPrice === "number" && ctx.inventoryListPrice > 0 ? `$${ctx.inventoryListPrice.toLocaleString("en-US")}` : "none"}
+- inventoryMileage: ${typeof ctx.inventoryMileage === "number" && ctx.inventoryMileage > 0 ? `${ctx.inventoryMileage.toLocaleString("en-US")} miles` : "none"}
+- inventoryImageUrls: ${Array.isArray(ctx.inventoryImageUrls) && ctx.inventoryImageUrls.length ? ctx.inventoryImageUrls.join(" , ") : "none"}
 
 Customer inquiry:
 ${ctx.inquiry}

@@ -13,6 +13,7 @@ export type InventoryFeedItem = {
   condition?: string;
   url?: string;
   price?: number | null;
+  mileage?: number | null;
   images?: string[];
 };
 
@@ -78,6 +79,24 @@ function priceForItem(item: Record<string, any> | null | undefined): number | nu
   return extractPrice(item);
 }
 
+// Odometer reading from the feed (the americanharley Room58 feed uses <miles>). A 0/blank
+// reading means "not reported" (or a new unit) — return null so the reply never states "0 miles".
+export function mileageForItem(item: Record<string, any> | null | undefined): number | null {
+  if (!item || typeof item !== "object") return null;
+  const candidates = [
+    text((item as any).mileage), // already-normalized snapshot items carry `mileage`
+    text((item as any).miles),
+    text((item as any).odometer),
+    text((item as any).odometer_reading)
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const n = Number(String(raw).replace(/[^\d.]/g, ""));
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
 function parseFeed(xml: string): InventoryFeedItem[] {
   const parser = new XMLParser({ ignoreAttributes: false });
   const doc = parser.parse(xml);
@@ -92,6 +111,7 @@ function parseFeed(xml: string): InventoryFeedItem[] {
     condition: text(it?.condition),
     url: text(it?.url),
     price: extractPrice(it),
+    mileage: mileageForItem(it),
     images: extractImageUrls(it)
   }));
 }
