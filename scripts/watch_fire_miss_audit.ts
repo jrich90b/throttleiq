@@ -19,6 +19,37 @@ if (process.argv.includes("--self-test")) {
   assert.equal(inventoryItemMatchesWatch({ model: "Street Glide", year: "2022" } as any, { model: "Street Glide", year: 2024, createdAt: "" } as any), false, "year mismatch must not match");
   assert.equal(inventoryItemMatchesWatch({ model: "Street Glide", year: "2024", condition: "Used" } as any, { model: "Street Glide", condition: "new", createdAt: "" } as any), false, "condition mismatch must not match");
 
+  // Condition + price-band gate (2026-07-11) — the recurring false-positives: a used, price-capped watch
+  // matched to a NEW unit far above budget. Now that the snapshot carries condition + price, these reject.
+  const usedRoadGlide = { model: "Road Glide", condition: "used", minPrice: 14000, maxPrice: 16000, createdAt: "" } as any;
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Road Glide", year: "2026", condition: "New", price: 29899 } as any, usedRoadGlide),
+    false,
+    "Robert Hofmeister case: used $14-16k watch must NOT match a new $29,899 unit (condition AND price both reject)"
+  );
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Road Glide", year: "2021", condition: "Used", price: 15500 } as any, usedRoadGlide),
+    true,
+    "a used Road Glide in the $14-16k band IS a real match (the genuine miss we must still catch)"
+  );
+  // Price gate alone (no condition on either side) — over budget rejects.
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Fat Boy", price: 18000 } as any, { model: "Fat Boy", maxPrice: 10000, createdAt: "" } as any),
+    false,
+    "Rahscheem case: a $18k Fat Boy is over the $10k cap => not a match"
+  );
+  // FAIL-SAFE: an UNKNOWN/zero price must never reject (keep the potential miss).
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Fat Boy", condition: "used" } as any, { model: "Fat Boy", condition: "used", maxPrice: 10000, createdAt: "" } as any),
+    true,
+    "unknown price must not reject — a real miss with a missing price stays flagged"
+  );
+  assert.equal(
+    inventoryItemMatchesWatch({ model: "Fat Boy", condition: "used", price: 0 } as any, { model: "Fat Boy", condition: "used", maxPrice: 10000, createdAt: "" } as any),
+    true,
+    "zero/invalid price must not reject (fail toward keeping the miss)"
+  );
+
   const feed = [
     { stockId: "STK100", model: "Street Glide", year: "2024", condition: "New" },
     { stockId: "STK200", model: "Road Glide", year: "2024", condition: "New" }

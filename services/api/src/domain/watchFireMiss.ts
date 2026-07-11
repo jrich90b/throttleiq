@@ -57,6 +57,16 @@ export function inventoryItemMatchesWatch(item: InventoryFeedItem, watch: Invent
     const norm = (s: string) => (/\b(pre[- ]?owned|used|cpo|certified)\b/.test(s) ? "used" : /\bnew\b/.test(s) ? "new" : s);
     if (have && norm(have) !== norm(want)) return false;
   }
+  // Price-band gate (2026-07-11). A watch that captured a budget ("used Road Glide, $14-16k") must not
+  // match a unit whose price is outside it — the recurring watch-fire-miss false-positives were a used,
+  // price-capped watch matched to a new unit far above budget (Robert Hofmeister $14-16k → new $30k
+  // Road Glide). FAIL-SAFE: only reject when the unit's price is KNOWN and provably out of band; an
+  // unknown/zero price never rejects (keep the potential miss). Depends on the snapshot now carrying price.
+  const price = typeof item.price === "number" && Number.isFinite(item.price) && item.price > 0 ? item.price : null;
+  if (price != null) {
+    if (typeof watch.maxPrice === "number" && watch.maxPrice > 0 && price > watch.maxPrice) return false;
+    if (typeof watch.minPrice === "number" && watch.minPrice > 0 && price < watch.minPrice) return false;
+  }
   return true;
 }
 

@@ -8,6 +8,13 @@ export type InventorySnapshotItem = {
   year?: string;
   model?: string;
   color?: string;
+  // condition + price persisted (2026-07-11) so the watch_fire_miss DETECTOR can apply the watch's
+  // condition/price-band gates. Without these the detector matched a "used $14k Road Glide" watch to a
+  // new $30k unit (Robert Hofmeister et al.) — the recurring watch-fire-miss false-positives, because
+  // inventoryItemMatchesWatch's condition gate was inert (item.condition empty) and there was no price
+  // gate at all. The LIVE engine reads the rich feed and never had this gap; this is snapshot-only.
+  condition?: string;
+  price?: number | null;
 };
 
 export type InventorySnapshot = {
@@ -45,6 +52,10 @@ function emptySnapshot(): InventorySnapshot {
 }
 
 function normalizeSnapshotItems(items: any[]): InventorySnapshotItem[] {
+  const toPrice = (v: unknown): number | null => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
   return items
     .map(item => ({
       key: inventorySnapshotKey(item) ?? "",
@@ -52,7 +63,12 @@ function normalizeSnapshotItems(items: any[]): InventorySnapshotItem[] {
       vin: item?.vin,
       year: item?.year,
       model: item?.model,
-      color: item?.color
+      color: item?.color,
+      // Carry condition + price so the detector's watch gates engage (see the type note). Applied on
+      // BOTH write (feed items) and read (persisted snapshot) so an older snapshot without them simply
+      // yields undefined until the next 5-min cron write repopulates it — never throws, never mismatches.
+      condition: item?.condition ?? undefined,
+      price: toPrice(item?.price)
     }))
     .filter(item => item.key);
 }
