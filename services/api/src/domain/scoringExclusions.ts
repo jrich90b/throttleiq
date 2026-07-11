@@ -37,6 +37,41 @@ export function isAutomatedSenderInbound(args: {
 const NON_SALES_FOLLOWUP_REASONS = new Set(["hiring_manager_inquiry", "vendor_inquiry", "spam"]);
 
 /**
+ * A structured lead-intake payload — an ADF (`PHONE LOG (ADF)`, `WEB LEAD (ADF)`)
+ * or a website widget envelope (`WEB TEXT WIDGET`) delivered by the lead provider
+ * (Traffic Log Pro, HDFS COA, the dealer site) — is a SYSTEM re-sync of lead
+ * data, not a customer-authored question. A human never types "(ADF)" or "WEB
+ * TEXT WIDGET"; these carry Source/Ref/Inquiry/Vehicle/Department fields, not a
+ * request awaiting a reply. When such a payload lands on a conversation that is
+ * ALREADY engaged (a prior outbound exists), the customer is not waiting on a
+ * reply to the payload text, so a tone scorer must not grade it `missing_response`.
+ * (Kody Erhard +17163975098, 7/10: a duplicate `PHONE LOG (ADF)` re-notification
+ * arrived mid-live-finance-deal and was wrongly counted a missed reply, dirtying
+ * the release gate's `toneMissingResponses`.)
+ *
+ * Fail-direction guard: the `hasPriorOutbound` requirement means a genuinely NEW
+ * lead's FIRST intake payload (no outbound yet) is NEVER skipped — so a real
+ * "never responded to a new lead" miss is still caught (e.g. +17168610158, "there
+ * was never an initial response generated for this lead"). Only a duplicate /
+ * follow-on intake payload on an active thread is excluded. Both a marker AND a
+ * structured field are required so a customer who merely mentions "adf" cannot
+ * match.
+ */
+const LEAD_INTAKE_MARKER_RE = /(PHONE LOG \(ADF\)|WEB LEAD \(ADF\)|WEB TEXT WIDGET|\(ADF\))/i;
+const LEAD_INTAKE_FIELD_RE = /\b(Source|Ref|Inquiry|Vehicle|Department|PreQual|Lead|Page|URL)\s*:/i;
+
+export function isLeadIntakeRenotificationOnEngagedThread(args: {
+  body?: string | null;
+  hasPriorOutbound?: boolean | null;
+}): boolean {
+  if (!args?.hasPriorOutbound) return false;
+  const body = String(args?.body ?? "").replace(/\s+/g, " ").trim();
+  if (!body) return false;
+  if (!LEAD_INTAKE_MARKER_RE.test(body)) return false;
+  return LEAD_INTAKE_FIELD_RE.test(body);
+}
+
+/**
  * A closing acknowledgment is a short, non-actionable customer turn made up
  * ENTIRELY of info-ack / gratitude / sign-off clauses — e.g. "Good to know.
  * Thank you!", "Makes sense, appreciate it", "Thanks 👍". Staying silent on

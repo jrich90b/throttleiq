@@ -14,6 +14,7 @@ import {
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
   isIndefiniteFollowUpDeferralText,
+  isLeadIntakeRenotificationOnEngagedThread,
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
   isOptOutKeywordInbound,
@@ -256,6 +257,60 @@ assert.equal(
 );
 assert.equal(isJustifiedLongTermCadencePark(null), false);
 
+// Structured lead-intake re-notification on an already-engaged thread (Kody
+// Erhard +17163975098 7/10: a duplicate `PHONE LOG (ADF)` re-sync arrived
+// mid-live-finance-deal and was wrongly graded `missing_response`, dirtying the
+// gate's toneMissingResponses). Skipped ONLY when a prior outbound exists, so a
+// genuinely-new lead's first intake payload still gets graded.
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body:
+      "PHONE LOG (ADF) Source: Traffic Log Pro Ref: 11610 Name: Kody Phone: 7163975098 Year: 2026 Vehicle: Harley-Davidson Full Line Inquiry: PreQual: N",
+    hasPriorOutbound: true
+  }),
+  true
+); // duplicate ADF on an engaged thread → not a customer question
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body: "WEB LEAD (ADF) Source: HDFS COA Online Ref: 11608 Name: Kody Erhard",
+    hasPriorOutbound: true
+  }),
+  true
+);
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body: "WEB TEXT WIDGET Department: Sales Name: natik soni Page: Street 750 URL: https://x",
+    hasPriorOutbound: true
+  }),
+  true
+);
+// Fail-direction: a NEW lead's FIRST intake payload (no prior outbound) is never
+// skipped — a real "never responded to a new lead" miss must still be caught.
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body:
+      "PHONE LOG (ADF) Source: Traffic Log Pro Ref: 11610 Name: Kody Phone: 7163975098 Inquiry: PreQual: N",
+    hasPriorOutbound: false
+  }),
+  false
+);
+// A real customer message never matches (no ADF/widget marker), even mid-thread.
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body: "Is that price including an esp?",
+    hasPriorOutbound: true
+  }),
+  false
+);
+assert.equal(
+  isLeadIntakeRenotificationOnEngagedThread({
+    body: "Can you check the adf source on that lead for me?",
+    hasPriorOutbound: true
+  }),
+  false
+); // mentions "adf" but no marker+field structure
+assert.equal(isLeadIntakeRenotificationOnEngagedThread({ body: "", hasPriorOutbound: true }), false);
+
 // Scorers must be wired to the shared module.
 const wiring: Array<[string, RegExp[]]> = [
   [
@@ -264,7 +319,8 @@ const wiring: Array<[string, RegExp[]]> = [
       /isShadowReplayMessage\(inbound\)/,
       /isAutomatedSenderInbound\(/,
       /isNonSalesConversation\(conv\)/,
-      /isIndefiniteDeferralNoActionableAsk\(inboundText\)/
+      /isIndefiniteDeferralNoActionableAsk\(inboundText\)/,
+      /isLeadIntakeRenotificationOnEngagedThread\(/
     ]
   ],
   ["scripts/voice_charter_audit.ts", [/isShadowReplayMessage\(m\)/],],

@@ -7,6 +7,7 @@ import {
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
+  isLeadIntakeRenotificationOnEngagedThread,
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isShadowReplayMessage,
@@ -140,7 +141,12 @@ function isCloseoutUpdateNoReplyNeeded(text: string): boolean {
   return false;
 }
 
-function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): string | null {
+function getSkipReason(
+  conv: AnyObj,
+  inbound: AnyObj,
+  inboundText: string,
+  ctx: { hasPriorOutbound: boolean }
+): string | null {
   const provider = String(inbound?.provider ?? "").trim().toLowerCase();
   const followUpMode = String(conv?.followUp?.mode ?? "").trim().toLowerCase();
   const convMode = String(conv?.mode ?? "").trim().toLowerCase();
@@ -148,6 +154,14 @@ function getSkipReason(conv: AnyObj, inbound: AnyObj, inboundText: string): stri
   if (isShadowReplayMessage(inbound)) return "shadow_replay_turn";
   if (isAutomatedSenderInbound({ from: inbound?.from, body: inbound?.body, convId: conv?.id })) {
     return "automated_sender";
+  }
+  if (
+    isLeadIntakeRenotificationOnEngagedThread({
+      body: inbound?.body,
+      hasPriorOutbound: ctx.hasPriorOutbound
+    })
+  ) {
+    return "lead_intake_renotification";
   }
   if (isNonSalesConversation(conv)) return "non_sales_thread";
   if (provider === "voice_transcript") return "provider_voice_transcript";
@@ -202,7 +216,8 @@ function main() {
 
       const inboundText = normalizeText(inbound?.body);
       if (!inboundText) continue;
-      const skipReason = getSkipReason(conv, inbound, inboundText);
+      const hasPriorOutbound = messages.slice(0, i).some(m => String(m?.direction) === "out");
+      const skipReason = getSkipReason(conv, inbound, inboundText, { hasPriorOutbound });
       if (skipReason) {
         skippedTurns += 1;
         skippedReasonMap.set(skipReason, (skippedReasonMap.get(skipReason) ?? 0) + 1);
