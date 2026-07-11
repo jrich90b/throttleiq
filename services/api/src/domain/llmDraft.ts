@@ -4609,6 +4609,7 @@ export async function parseAppointmentTimingWithLLM(args: {
     'input: "Customer: I couldn’t make it yesterday. How does half an hour sound? I can get there before the weather gets bad." output: {"intent":"provide_new_time","explicit_request":true,"requested":{"day":"","time_text":"in half an hour","time_window":"range"},"reference":"last_appointment","normalized_text":"in half an hour","confidence":0.93}',
     'input: "Customer: Let me know because I start driving on Friday morning" output: {"intent":"arrival_update","explicit_request":true,"requested":{"day":"friday","time_text":"morning","time_window":"range"},"reference":"none","normalized_text":"driving friday morning","confidence":0.93}',
     'input: "Customer: Ok I will be there for the taste of country pre party on Saturday 👍" output: {"intent":"none","explicit_request":false,"requested":{"day":"saturday","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"committing to a saturday event visit","confidence":0.92}',
+    'input: "Customer: we want to come in tomorrow to make the deal" output: {"intent":"none","explicit_request":false,"requested":{"day":"tomorrow","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"coming in tomorrow to make the deal","confidence":0.9}',
     'input: "Customer: Can you send pictures?" output: {"intent":"none","explicit_request":false,"requested":{"day":"","time_text":"","time_window":"unknown"},"reference":"none","normalized_text":"","confidence":0.95}'
   ];
 
@@ -4630,6 +4631,7 @@ export async function parseAppointmentTimingWithLLM(args: {
     "- Do not classify product years or model numbers as appointment times.",
     "- Arrival updates are not schedule requests and should not produce new slot offers.",
     "- arrival_update means the customer is en route or describes their inbound trip (\"on my way\", \"leaving now\", \"be there by 5:30\", \"driving in Friday\"). A future-day VISIT COMMITMENT that just confirms attending on a day or at an event (\"I'll be there Saturday for the show\", \"see you Saturday\", \"count me in for Saturday\") is NOT arrival_update — classify it none so the schedule-status handler confirms the committed day.",
+    "- A day-only VISIT COMMITMENT to come in on a day with NO clock time — even a transactional one (\"come in tomorrow to make the deal\", \"swing up Saturday to sign\", \"riding up in the morning to pick it up\", \"talk numbers when I come in Friday\") — is intent:none with requested.day set (the schedule-status handler confirms the committed day). Only classify provide_new_time when the customer gives an actual clock time or a usable time window; a bare day with no time is not provide_new_time.",
     "- If customer says 'around 11/12', keep that full range as time_text.",
     "- If customer says 'later this month same time', preserve later_this_month/same time context.",
     "- Use empty strings for unknown requested.day and requested.time_text.",

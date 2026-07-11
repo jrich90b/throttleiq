@@ -20,5 +20,10 @@ export function isParserSoftVisitCommitment(parse: AppointmentTimingParse | null
   if (parse.explicitRequest) return false;
   if (!String(parse.requested?.day ?? "").trim()) return false; // must reference a committed day
   const nt = String(parse.normalizedText ?? "").toLowerCase();
-  return /\b(commit|visit|be there|stop(?:ping)? by|coming in|come in)\b/.test(nt);
+  // Visit-commitment verbs in the parser's own normalizedText. The gate already requires
+  // intent:none + a committed day + !explicitRequest, so an en-route arrival_update ("on my
+  // way by 5:30") or an availability ask ("what's open Saturday") never reaches here — which
+  // is why we can safely broaden past "come in" to the casual ride/drive/head-in phrasings
+  // staff kept hand-fixing (Jessica Ornce "riding up there in the morning tomorrow", 2026-07-11).
+  return /\b(?:commit|visit|be there|be in|get there|make it (?:in|out)|stop(?:ping)? (?:by|in)|com(?:e|ing) (?:in|by|out)|rid(?:e|ing) (?:up|in|over)|driv(?:e|ing) (?:up|in|over)|head(?:ing|ed)? (?:up|in|over)|swing(?:ing)? (?:by|in|up)|roll(?:ing)? (?:in|up|by)|pull(?:ing)? (?:in|up)|run(?:ning)? (?:up|in|by))\b/.test(nt);
 }

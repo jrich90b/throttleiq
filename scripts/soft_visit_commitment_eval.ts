@@ -28,7 +28,30 @@ assert.equal(
   "weekday stop-by commitment => true"
 );
 
+// Casual ride/drive/deal-framed day commitments the parser now tags intent:none + day but
+// whose normalizedText the legacy verb list missed (Jessica Ornce / William Indelicato,
+// 2026-07-11 confirm-committed-day cluster). Broadened verb list must fire on these.
+const casualCommits: Array<[string, string]> = [
+  ["riding up there in the morning tomorrow", "riding up (Jessica)"],
+  ["coming in tomorrow to make the deal", "coming in to make the deal (William)"],
+  ["swing in on saturday for lien release", "swing in (Jeff)"],
+  ["heading up friday to sign the paperwork", "heading up to sign"],
+  ["driving up saturday to pick it up", "driving up to pick up"],
+  ["will make it in monday", "make it in"]
+];
+for (const [nt, label] of casualCommits) {
+  assert.equal(
+    isParserSoftVisitCommitment({ intent: "none", explicitRequest: false, requested: { day: "tomorrow" }, normalizedText: nt }),
+    true,
+    `casual day commitment => true: ${label}`
+  );
+}
+
 const fails: Array<[any, string]> = [
+  // Broadened verb list must NOT match finance/off-topic phrasings that happen to share a verb.
+  [{ intent: "none", explicitRequest: false, requested: { day: "friday" }, normalizedText: "worried about coming up short on the down payment friday" }, "come up short (finance, not a visit)"],
+  [{ intent: "none", explicitRequest: false, requested: { day: "saturday" }, normalizedText: "running low on cash before saturday" }, "running low (not a visit)"],
+  [{ intent: "none", explicitRequest: false, requested: { day: "saturday" }, normalizedText: "rode the bike hard on saturday" }, "rode on saturday (past ride, not a visit)"],
   [null, "null"],
   [undefined, "undefined"],
   [{ intent: "accept_proposed_time", explicitRequest: true, requested: { day: "saturday" }, normalizedText: "accepting saturday visit" }, "actionable booking intent"],
