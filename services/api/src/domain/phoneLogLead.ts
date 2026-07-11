@@ -40,6 +40,38 @@ export function shouldSuppressPhoneLogEmail(args: {
   return args.isPhoneLog;
 }
 
+/**
+ * A Traffic Log Pro phone-log re-notification sets a GENERIC
+ * `traffic_log_pro_phone_log` manual-handoff reason. When one lands on a
+ * conversation that is ALREADY in a manual handoff for a MORE-SPECIFIC finance /
+ * credit reason (e.g. a finance outcome recorded `credit_app_needs_info`), it
+ * must NOT downgrade that reason — a duplicate/late phone-log re-sync would
+ * otherwise erase the finance-handoff context (Kody Erhard +17163975098, 7/10: a
+ * 21:25 duplicate PHONE LOG (ADF) clobbered the 15:53 `credit_app_needs_info`
+ * handoff, tripping the outcome-QA `finance_needs_info_missing_manual_handoff`
+ * gate finding). Both are manual_handoff (staff-owned) either way, so preserving
+ * the specific reason never makes the conversation less safe — it only keeps the
+ * finance context staff routes on. The phone-log todo is still added regardless,
+ * so staff still see the callback.
+ */
+const PRESERVE_HANDOFF_REASONS = new Set([
+  "credit_app_needs_info",
+  "credit_app_needs_info_voice_hold",
+  "credit_app_cosigner",
+  "credit_app_approved",
+  "financing_declined"
+]);
+
+export function shouldPreserveHandoffReasonOverPhoneLog(args: {
+  existingMode?: string | null;
+  existingReason?: string | null;
+}): boolean {
+  const mode = String(args?.existingMode ?? "").trim().toLowerCase();
+  const reason = String(args?.existingReason ?? "").trim().toLowerCase();
+  if (mode !== "manual_handoff") return false;
+  return PRESERVE_HANDOFF_REASONS.has(reason);
+}
+
 export function buildTrafficLogProPhoneLogLeadKey(leadRef?: string | null): string {
   const ref = String(leadRef ?? "").trim();
   return ref ? `tlp_phone_log_${ref}` : `tlp_phone_log_${Date.now()}`;

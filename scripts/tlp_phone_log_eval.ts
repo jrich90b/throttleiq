@@ -3,6 +3,7 @@ import {
   buildTrafficLogProPhoneLogLeadKey,
   isPhoneLogConversation,
   isTrafficLogProPhoneLog,
+  shouldPreserveHandoffReasonOverPhoneLog,
   shouldSuppressPhoneLogEmail
 } from "../services/api/src/domain/phoneLogLead.ts";
 import { inferDisplayWalkIn, inferWalkIn, type Conversation } from "../services/api/src/domain/conversationStore.ts";
@@ -112,5 +113,33 @@ const onlineKpi = buildKpiOverview(
   }
 );
 assert.equal(onlineKpi.totals.leadVolume, 0, "phone logs should not inflate online lead close rates");
+
+// A duplicate phone-log re-sync must NOT downgrade a specific active finance/
+// credit handoff reason (Kody Erhard +17163975098 7/10: a 21:25 duplicate PHONE
+// LOG (ADF) clobbered the 15:53 credit_app_needs_info handoff → outcome-QA P1).
+for (const reason of [
+  "credit_app_needs_info",
+  "credit_app_needs_info_voice_hold",
+  "credit_app_cosigner",
+  "credit_app_approved",
+  "financing_declined"
+]) {
+  assert.equal(
+    shouldPreserveHandoffReasonOverPhoneLog({ existingMode: "manual_handoff", existingReason: reason }),
+    true,
+    `phone-log must not downgrade an active ${reason} handoff`
+  );
+}
+// A generic/absent reason IS overwritten by the phone-log reason (the default).
+assert.equal(
+  shouldPreserveHandoffReasonOverPhoneLog({ existingMode: "manual_handoff", existingReason: "traffic_log_pro_phone_log" }),
+  false
+);
+assert.equal(shouldPreserveHandoffReasonOverPhoneLog({ existingMode: "manual_handoff", existingReason: "" }), false);
+// Not currently in a manual handoff → phone-log reason applies normally.
+assert.equal(
+  shouldPreserveHandoffReasonOverPhoneLog({ existingMode: "active", existingReason: "credit_app_needs_info" }),
+  false
+);
 
 console.log("tlp_phone_log_eval passed");

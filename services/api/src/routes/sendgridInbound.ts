@@ -59,6 +59,7 @@ import {
   PHONE_LOG_SOURCE_TYPE,
   buildTrafficLogProPhoneLogLeadKey,
   isTrafficLogProPhoneLog,
+  shouldPreserveHandoffReasonOverPhoneLog,
   shouldSuppressPhoneLogEmail
 } from "../domain/phoneLogLead.js";
 import { resolveChannel, resolveLeadRule, type LeadBucket, type LeadCTA } from "../domain/leadSourceRules.js";
@@ -4594,7 +4595,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       `Phone log follow-up for ${customerName}${note ? `: ${note}` : "."}`,
       event.providerMessageId
     );
-    setFollowUpMode(conv, "manual_handoff", "traffic_log_pro_phone_log");
+    // A duplicate/late phone-log re-sync must not downgrade a more-specific
+    // active finance/credit handoff reason (e.g. credit_app_needs_info) to the
+    // generic phone-log reason — that erases the finance-handoff context the
+    // outcome-QA invariant depends on. Both stay manual_handoff either way.
+    if (
+      !shouldPreserveHandoffReasonOverPhoneLog({
+        existingMode: conv?.followUp?.mode,
+        existingReason: conv?.followUp?.reason
+      })
+    ) {
+      setFollowUpMode(conv, "manual_handoff", "traffic_log_pro_phone_log");
+    }
     stopFollowUpCadence(conv, "manual_handoff");
     saveConversation(conv);
     await flushConversationStore();
