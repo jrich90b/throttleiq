@@ -2157,6 +2157,9 @@ export async function orchestrateInbound(
     dealerProfile?: any;
     agentNameOverride?: string | null;
     needsEmpathy?: boolean | null;
+    // Recent same-conversation thumbs-down notes (collectRecentStaffCorrections) — hard
+    // constraints for the draft composer so it can't repeat a staff-rejected reply.
+    staffCorrections?: string[] | null;
   }
 ): Promise<OrchestratorResult> {
   await loadSystemPrompt("orchestrator");
@@ -4931,7 +4934,8 @@ export async function orchestrateInbound(
         callbackRequest: callbackRequested,
         voiceSummary: ctx?.voiceSummary ?? null,
         memorySummary: ambiguousFlow ? ctx?.memorySummary ?? null : null,
-        needsEmpathy: ctx?.needsEmpathy ?? null
+        needsEmpathy: ctx?.needsEmpathy ?? null,
+        staffCorrections: ctx?.staffCorrections ?? null
       };
       const baseDraft = await generateDraftWithLLM(draftCtx);
       // STEP 3 (dark unless DRAFT_QUALITY_AUTO_REGENERATE): if the judge would HOLD this draft,
