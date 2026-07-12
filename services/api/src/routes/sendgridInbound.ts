@@ -53,6 +53,7 @@ import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
+import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
 import { buildEffectiveHistory } from "../domain/effectiveContext.js";
 import { matchPartsCatalogLexicon } from "../domain/partsCatalogLexicon.js";
 import {
@@ -4122,6 +4123,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       );
     const weatherStatus = await getDealerWeatherStatusSafe();
     const result = await orchestrateInbound(event, history, {
+      staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
       appointment: conv.appointment,
       followUp: conv.followUp,
       lead: conv.lead,
@@ -8028,6 +8030,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   let result: any;
   try {
     result = await orchestrateInbound(event, history, {
+      staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
       appointment: conv.appointment,
       followUp: conv.followUp,
       lead: activeAdfLeadProfile,

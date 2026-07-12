@@ -332,6 +332,12 @@ export type DraftContext = {
   // When set, the generator is told what was wrong with the prior attempt so the regeneration
   // actually patches it (vs. a blind re-roll). Empty/absent on a first-pass draft.
   steering?: string | null;
+
+  // Same-conversation staff-correction carry-forward (Joe, 2026-07-11): recent thumbs-down
+  // NOTES on this conversation's drafts (collectRecentStaffCorrections). Unlike `steering`
+  // (a one-shot re-draft hint), these persist across turns so the next draft can't repeat
+  // a reply staff just rejected. Generation-context only — no routing/state impact.
+  staffCorrections?: string[] | null;
 };
 
 function userAskedForEmail(ctx: DraftContext): boolean {
@@ -13348,9 +13354,22 @@ IMPORTANT — THIS IS A RE-DRAFT. A prior attempt was held by quality review. Fi
 - Address what the customer actually asked this turn; don't change the subject.
 `
     : "";
+  // Staff-correction carry-forward (Joe, 2026-07-11): recent thumbs-down notes on THIS
+  // conversation are hard constraints — without them the next turn regenerated the exact
+  // reply staff had just rejected (+17163591526). Bounded upstream (count/age/length).
+  const staffCorrectionLines = (ctx.staffCorrections ?? [])
+    .map(l => String(l ?? "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  const staffCorrectionsBlock = staffCorrectionLines.length
+    ? `
+STAFF CORRECTIONS — the dealership team rejected recent drafts on THIS conversation. Treat each as a hard constraint; never repeat the rejected content or claims:
+${staffCorrectionLines.map(l => `- ${l}`).join("\n")}
+`
+    : "";
   const instructions = `
 You write dealership sales replies for a Harley-Davidson dealership.
-${steeringBlock}
+${steeringBlock}${staffCorrectionsBlock}
 VOICE / STYLE (strict):
 - Friendly, professional, concise.
 - Sound like a real dealership rep: warm, confident, low‑pressure.

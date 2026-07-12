@@ -696,6 +696,7 @@ import {
   type AuthorityModel
 } from "./domain/turnUnderstandingAuthority.js";
 import { isParserSoftVisitCommitment } from "./domain/softVisitSignal.js";
+import { collectRecentStaffCorrections } from "./domain/feedbackSteering.js";
 
 import {
   upsertConversationByLeadKey,
@@ -6787,6 +6788,7 @@ app.post("/public/widget/text-us", async (req, res) => {
         body: message
       };
       const result = await safeOrchestrateInbound("web_text_widget_sales", widgetTurn, buildHistory(conv, 20), {
+        staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
         appointment: conv.appointment,
         followUp: conv.followUp,
         leadSource: conv.lead?.source ?? null,
@@ -37308,7 +37310,12 @@ async function maybeRedraftOnNegativeFeedback(args: {
         inquiry: inbound,
         history: buildHistory(conv, 10),
         dealerProfile,
-        steering: decision.steering ?? null
+        steering: decision.steering ?? null,
+        // Prior staff corrections on this conversation still bind the re-draft (the
+        // current note rides in `steering`; exclude the rated message to avoid doubling).
+        staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString(), {
+          excludeMessageId: String(ratedMsg?.id ?? "") || null
+        })
       })) ?? ""
     ).trim();
     if (!redraft) return { redrafted: false, reason: "empty_redraft" };
@@ -55045,6 +55052,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     regenInboundDepartmentIntent
   );
   const result = await safeOrchestrateInbound("regen", event, history, {
+    staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
     appointment: conv.appointment,
     followUp: conv.followUp,
     disposition: conv.dialogState?.name ?? null,
@@ -64426,6 +64434,7 @@ if (authToken && signature) {
     inboundDepartmentIntent
   );
   const result = await safeOrchestrateInbound("twilio_inbound", event, history, {
+    staffCorrections: collectRecentStaffCorrections(conv, new Date().toISOString()),
     appointment: conv.appointment,
     followUp: conv.followUp,
     disposition: conv.dialogState?.name ?? null,
