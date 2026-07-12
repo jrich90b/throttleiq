@@ -32,6 +32,8 @@ type TrikeLookup = {
   aliasByKey: Map<string, string[]>;
   aliasKeysByLength: string[]; // longest first — most-specific alias wins
   allCodes: Set<string>;
+  familyKeys: Set<string>; // normalized family-node names ("trike", "touring", ...)
+  familyCodeCountByKey: Map<string, number>; // family key -> number of member codes
 };
 
 let trikeLookupCache: TrikeLookup | null | undefined;
@@ -100,11 +102,21 @@ function loadTrikeLookup(): TrikeLookup | null {
       if (code) allCodes.add(code);
     }
   }
+  const familyKeys = new Set<string>();
+  const familyCodeCountByKey = new Map<string, number>();
+  for (const [family, codes] of Object.entries(parsed.families ?? {})) {
+    const key = normalizeFamilyModelKey(family);
+    if (!key) continue;
+    familyKeys.add(key);
+    familyCodeCountByKey.set(key, (codes ?? []).map(normalizeFamilyCode).filter(Boolean).length);
+  }
   trikeLookupCache = {
     trikeCodes,
     aliasByKey,
     aliasKeysByLength: [...aliasByKey.keys()].sort((a, b) => b.length - a.length),
-    allCodes
+    allCodes,
+    familyKeys,
+    familyCodeCountByKey
   };
   return trikeLookupCache;
 }
@@ -151,6 +163,108 @@ export function isTrikeClassModel(modelText: string | null | undefined): boolean
   const codes = resolveCodesForModelText(key, lookup);
   if (!codes.length) return null;
   return codes.every(code => lookup.trikeCodes.has(code));
+}
+
+// ---------------------------------------------------------------------------
+// Family-only labels (Joe ruling 2026-07-11 #4): "new or used trike" names a
+// FAMILY (Tri Glide / Freewheeler / Road Glide 3), not a bookable model. A watch
+// created on a family label matches nothing or the wrong bike (+15857552622 got
+// a wrong-model wrong-years watch). When a label/turn resolves to a family node,
+// the correct move is ONE clarifying "which model?" — never a guessed watch.
+// Deterministic is correct here: classifying a label against the catalog's
+// family taxonomy is structured extraction, not comprehension.
+// FAIL DIRECTION: unknown/no-catalog resolves to false/null and infers NOTHING —
+// callers keep today's behavior. We only redirect labels the catalog KNOWS are
+// family nodes.
+// ---------------------------------------------------------------------------
+
+const FAMILY_LABEL_NOISE_WORDS = new Set([
+  "or", "new", "used", "a", "an", "the", "any", "all", "either",
+  "harley", "davidson", "hd", "motorcycle", "motorcycles", "bike", "bikes", "model"
+]);
+
+function familyKeySet(): Set<string> | null {
+  const lookup = loadTrikeLookup();
+  if (!lookup) return null;
+  return lookup.familyKeys;
+}
+
+function stripFamilyLabelNoise(key: string): string {
+  return key
+    .split(" ")
+    .filter(w => w && !FAMILY_LABEL_NOISE_WORDS.has(w))
+    .join(" ");
+}
+
+function singularizeFamilyWord(word: string): string {
+  return word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word;
+}
+
+/**
+ * Is this model LABEL (lead.vehicle.model, a parsed watch model, an ADF Vehicle
+ * field) a catalog FAMILY node rather than a specific bookable model?
+ * "Or New Trike" → "trike" → TRIKE family → true. "Tri Glide" → a real model →
+ * false. Whole-label equality after noise-stripping — never a substring test, so
+ * "Street Glide" can not false-match the STREET family.
+ */
+export function isFamilyOnlyModelLabel(label: string | null | undefined): boolean {
+  const families = familyKeySet();
+  if (!families || !families.size) return false; // no catalog → infer nothing
+  const key = normalizeFamilyModelKey(label);
+  if (!key) return false;
+  const stripped = stripFamilyLabelNoise(key);
+  if (!stripped) return false;
+  if (families.has(stripped)) return true;
+  const singular = stripped.split(" ").map(singularizeFamilyWord).join(" ");
+  return families.has(singular);
+}
+
+/**
+ * Does this customer TURN reference a family word ("trike") standalone — i.e.
+ * NOT as part of a longer specific-model alias ("Street Glide Trike", "Road
+ * Glide 3 Trike")? Returns the family word, or null. Used by the watch-model
+ * resolver: a standalone family reference must clarify ("which model?"), never
+ * fall back to the lead-vehicle model the customer didn't name this turn.
+ */
+// Family words that read as generic ATTRIBUTES in customer speech ("a street bike",
+// "something lightweight") — never treat their mere presence in a turn as a family
+// reference. Label-equality (isFamilyOnlyModelLabel) still catches them as bare labels.
+const ATTRIBUTE_LIKE_FAMILY_WORDS = new Set(["street", "lightweight"]);
+
+export function referencesFamilyOnlyInText(text: string | null | undefined): string | null {
+  const lookup = loadTrikeLookup();
+  if (!lookup || !lookup.familyKeys.size) return null;
+  const key = normalizeFamilyModelKey(text);
+  if (!key) return null;
+  const padded = ` ${key} `;
+  for (const family of lookup.familyKeys) {
+    if (family.includes(" ")) continue; // multi-word family keys: label-equality only
+    if (ATTRIBUTE_LIKE_FAMILY_WORDS.has(family)) continue;
+    const familyPlural = `${family}s`;
+    if (!padded.includes(` ${family} `) && !padded.includes(` ${familyPlural} `)) continue;
+    // Standalone check: if the text also contains a longer known alias phrase that
+    // includes this family word AND is NARROWER than the family word's own alias
+    // (fewer member codes), the customer named a specific model ("street glide
+    // trike" → 1 code vs "trike" → 6), not the family. Umbrella aliases as broad
+    // as the family word itself ("touring bike" → 15 = "touring" → 15) do NOT
+    // count as specific — they ARE the family reference. Compare alias-to-alias:
+    // the families map carries ALL historical codes (TOURING=92) while aliases
+    // carry the current set, so a families-map comparison would never fire.
+    const familyCodeCount =
+      (lookup.aliasByKey.get(family) ?? []).length || (lookup.familyCodeCountByKey.get(family) ?? 0);
+    let partOfSpecificAlias = false;
+    for (const aliasKey of lookup.aliasKeysByLength) {
+      if (!aliasKey.includes(" ")) continue;
+      if (!` ${aliasKey} `.includes(` ${family} `) && !` ${aliasKey} `.includes(` ${familyPlural} `)) continue;
+      if (!padded.includes(` ${aliasKey} `)) continue;
+      const aliasCodes = lookup.aliasByKey.get(aliasKey) ?? [];
+      if (familyCodeCount > 0 && aliasCodes.length >= familyCodeCount) continue; // umbrella = the family
+      partOfSpecificAlias = true;
+      break;
+    }
+    if (!partOfSpecificAlias) return family;
+  }
+  return null;
 }
 
 /**
