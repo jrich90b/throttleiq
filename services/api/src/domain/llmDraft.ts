@@ -10104,7 +10104,11 @@ output: {"action":"customer_reservation_request","explicit_action":true,"should_
     `EXAMPLE T
 inbound: "Can you let me know if one comes in?"
 history: "out: We don't have that one in stock right now."
-output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified if one comes in","reason":"Asking to be NOTIFIED when one arrives is an inventory watch, not a reservation/pre-order. Reserve = wants to put one aside now; watch = tell me when it shows up.","confidence":0.95}`
+output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"should_reply":true,"normalized_text":"customer asks to be notified if one comes in","reason":"Asking to be NOTIFIED when one arrives is an inventory watch, not a reservation/pre-order. Reserve = wants to put one aside now; watch = tell me when it shows up.","confidence":0.95}`,
+    `EXAMPLE U
+inbound: "I'm definitely interested. I should have the money and be in the position to pull the trigger on it by the end of next week. I appreciate your guys time and working with me. I'll be getting back ahold of you then, if you still have one available."
+history: "out: The 2026 Street Bob is a limited solo trim run — they move fast.\nout: Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?"
+output: {"action":"none","explicit_action":false,"should_reply":true,"normalized_text":"","reason":"A FUTURE/deferred purchase commitment with an 'I'll circle back next week' is NOT a reservation request. The customer is not asking us to put a specific unit aside/hold it now — they'll have the money later and will reach back out. Limited-run context alone does not turn a deferred purchase into a reservation. Leave it to the normal router (warm ack + follow-up around their stated timeframe).","confidence":0.92}`
   ];
   const prompt = [
     "You parse one inbound customer turn for high-priority dealership reply actions.",
@@ -10128,6 +10132,7 @@ output: {"action":"inventory_watch_acknowledgement","explicit_action":true,"shou
     "- Third-person CRM/ADF note phrasing like 'wants us to call him when it gets through service' still counts as explicit_callback_request.",
     "- Choose schedule_context_status_update only when recent outbound context is scheduling/visit timing and there is no location/pricing/availability/callback ask.",
     "- Choose customer_reservation_request over inventory_watch_acknowledgement/availability when the customer wants to RESERVE/pre-order/hold a unit now, even in out-of-stock or limited-run context. 'reserve one' = put one aside now; 'let me know when one comes in' = watch.",
+    "- A FUTURE/deferred purchase commitment is NOT customer_reservation_request. 'I'll pull the trigger by the end of next week', 'I'll have the money soon and get back to you', 'I'll circle back if you still have one' = the customer intends to buy LATER and will reach out — they are not asking us to put a specific unit aside/hold it now. Choose none (the normal router owns the warm ack + a follow-up around their timeframe), even in limited-run context. Reserve requires an explicit ask to hold/put-aside/deposit on a unit NOW.",
     "- Choose inventory_watch_acknowledgement only with active watch/out-of-stock/watch context; phrases like 'hit me up if one comes in' count as explicit watch acknowledgement.",
     "- Choose pending_incoming_inventory_acknowledgement before inventory_watch_acknowledgement when the context is a known trade/pending unit coming in.",
     "- The parser selects the action only. It never authors the final customer reply.",
