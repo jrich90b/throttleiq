@@ -300,6 +300,7 @@ import {
   generateDraftWithLLM,
   parseDealStatusCheckWithLLM,
   parseConversationCloseoutWithLLM,
+  parseReservationConfirmWithLLM,
   parseWatchOptOutWithLLM,
   parsePostSaleOwnershipWithLLM,
   parseWatchScopeWithLLM,
@@ -545,6 +546,7 @@ import {
   decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
+  decideReservationHandoffTurn,
   decideEventPromoTurn,
   decideOwnerThreadStepBack,
   resolveRideChallengeEventTouch,
@@ -53026,17 +53028,37 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   }
   // Reservation / pre-order intent (regen parity with the live path): staff-only
   // handoff ack + high-priority owner call task; preempts the watch routing.
-  const regenParserReservationRequest = isAcceptedInboundReplyAction(
-    regenInboundReplyActionParse,
-    "customer_reservation_request"
-  );
-  const regenReservationRequest =
+  const regenParserReservationRequest =
     event.provider === "twilio" &&
     channel === "sms" &&
     !regenParserCallbackIntent &&
-    (regenParserReservationRequest ||
-      (regenInboundReplyActionFallbackAllowed && detectReservationRequestText(event.body ?? "")));
-  if (regenReservationRequest) {
+    isAcceptedInboundReplyAction(regenInboundReplyActionParse, "customer_reservation_request");
+  // Second-look verifier — same wiring as the live path (route-parity law): awaited only when
+  // the primary parser accepted a reservation; precedence in decideReservationHandoffTurn.
+  const regenReservationConfirmParse = regenParserReservationRequest
+    ? await safeLlmParse("reservation_confirm_parser", () =>
+        parseReservationConfirmWithLLM({ text: event.body ?? "", history: buildHistory(conv, 6) })
+      )
+    : null;
+  const regenReservationTurnDecision = decideReservationHandoffTurn({
+    parserReservationAccepted: regenParserReservationRequest,
+    fallbackDetected:
+      event.provider === "twilio" &&
+      channel === "sms" &&
+      !regenParserCallbackIntent &&
+      regenInboundReplyActionFallbackAllowed &&
+      detectReservationRequestText(event.body ?? ""),
+    confirmVerdict: regenReservationConfirmParse?.verdict ?? null
+  });
+  if (regenReservationTurnDecision.reason === "second_look_veto") {
+    recordRouteOutcome("regen", "reservation_second_look_veto", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      confirmConfidence: regenReservationConfirmParse?.confidence ?? null
+    });
+  }
+  if (regenReservationTurnDecision.fire) {
     setDialogState(conv, "reservation_handoff");
     const { reply, todoSummary } = buildReservationHandoffReply({
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -53055,7 +53077,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       leadKey: conv.leadKey,
       parserAction: regenInboundReplyActionParse?.action ?? null,
       parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
-      fallback: !regenParserReservationRequest
+      fallback: !regenParserReservationRequest,
+      reservationReason: regenReservationTurnDecision.reason
     });
     return respondWithSmsRegeneratedDraft(reply, undefined, {
       turnAvailabilityIntent: false,
@@ -56580,17 +56603,40 @@ if (authToken && signature) {
   // (Joe, 2026-06-15) — confirm warmly, never quote terms, create a high-priority
   // owner call task. Runs before the watch/availability routing so a "reserve
   // one" turn can't collapse into a notify-when-it-arrives watch (Nicholas Braun).
-  const inboundParserReservationRequest = isAcceptedInboundReplyAction(
-    inboundReplyActionParse,
-    "customer_reservation_request"
-  );
-  const reservationRequestAccepted =
+  const inboundParserReservationRequest =
     event.provider === "twilio" &&
     !inboundParserExplicitCallbackRequest &&
     !inboundParserLocationQuestion &&
-    (inboundParserReservationRequest ||
-      (inboundReplyActionFallbackAllowed && detectReservationRequestText(event.body ?? "")));
-  if (reservationRequestAccepted) {
+    isAcceptedInboundReplyAction(inboundReplyActionParse, "customer_reservation_request");
+  // Second-look verifier (Kody +17163975098): awaited ONLY when the primary parser already
+  // accepted a reservation — rare turns — so the main path pays no extra LLM call. Precedence
+  // lives in decideReservationHandoffTurn (routeStateReducer); the verifier can only veto.
+  const reservationConfirmParse = inboundParserReservationRequest
+    ? await safeLlmParse("reservation_confirm_parser", () =>
+        parseReservationConfirmWithLLM({ text: event.body ?? "", history: buildHistory(conv, 6) })
+      )
+    : null;
+  const reservationTurnDecision = decideReservationHandoffTurn({
+    parserReservationAccepted: inboundParserReservationRequest,
+    fallbackDetected:
+      event.provider === "twilio" &&
+      !inboundParserExplicitCallbackRequest &&
+      !inboundParserLocationQuestion &&
+      inboundReplyActionFallbackAllowed &&
+      detectReservationRequestText(event.body ?? ""),
+    confirmVerdict: reservationConfirmParse?.verdict ?? null
+  });
+  if (reservationTurnDecision.reason === "second_look_veto") {
+    // Suppressed an over-read reservation; the turn falls through to the normal router
+    // (warm ack + follow-up), which is the correct behavior for a deferred purchase.
+    recordRouteOutcome("live", "reservation_second_look_veto", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      confirmConfidence: reservationConfirmParse?.confidence ?? null
+    });
+  }
+  if (reservationTurnDecision.fire) {
     setDialogState(conv, "reservation_handoff");
     const { reply, todoSummary } = buildReservationHandoffReply({
       firstName: normalizeDisplayCase(conv.lead?.firstName),
@@ -56609,7 +56655,8 @@ if (authToken && signature) {
       leadKey: conv.leadKey,
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
-      fallback: !inboundParserReservationRequest
+      fallback: !inboundParserReservationRequest,
+      reservationReason: reservationTurnDecision.reason
     });
     return publishLiveTwilioReply(
       reply,

@@ -1985,3 +1985,46 @@ export function decideLeadUnitAvailabilityDisclosure(
   if (input.unavailableKind === "hold" && input.holdOwnedByThisConv) return { kind: "none" };
   return { kind: input.unavailableKind === "hold" ? "disclose_hold" : "disclose_sold" };
 }
+
+// Reservation handoff second-look (2026-07-13, Kody +17163975098). The reservation handoff is an
+// EXPENSIVE side effect (committal "how to get one reserved" draft + high-priority owner call
+// task), and the primary inbound_reply_action parser occasionally over-reads a deferred "I'll buy
+// later and circle back" as a reservation. Before firing, a narrow second-look verifier
+// (parseReservationConfirmWithLLM) re-asks the one question that matters. This reducer owns the
+// precedence — applied identically in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+//
+// FAIL DIRECTION: the verifier can only VETO, never enable. A null verdict (parser disabled /
+// LLM error) falls through to the primary parser's decision — today's behavior — so an LLM outage
+// cannot kill genuine reservation handling. The deterministic regex fallback path (explicit
+// "reserve/pre-order/deposit" tokens, only consulted when the primary parser is unavailable) is
+// NOT vetoed: with the LLM down there is no verifier to ask, and those tokens are explicit.
+export type ReservationHandoffTurnInput = {
+  // Primary inbound_reply_action parser accepted customer_reservation_request (confidence-gated).
+  parserReservationAccepted: boolean;
+  // Deterministic detectReservationRequestText fired AND the fallback lane is allowed.
+  fallbackDetected: boolean;
+  // Second-look verifier verdict; null = verifier unavailable (disabled/error).
+  confirmVerdict: "reserve_now" | "not_reserve_now" | null;
+};
+
+export type ReservationHandoffTurnDecision = {
+  fire: boolean;
+  reason:
+    | "parser_confirmed" // primary parser + verifier agree: reserve now
+    | "parser_unverified" // primary parser accepted; verifier unavailable — proceed (today's behavior)
+    | "second_look_veto" // primary parser accepted; verifier says NOT a reserve-now → suppress
+    | "fallback_detector" // explicit reserve-token regex lane (primary parser unavailable)
+    | "no_signal";
+};
+
+export function decideReservationHandoffTurn(
+  input: ReservationHandoffTurnInput
+): ReservationHandoffTurnDecision {
+  if (input.parserReservationAccepted) {
+    if (input.confirmVerdict === "not_reserve_now") return { fire: false, reason: "second_look_veto" };
+    if (input.confirmVerdict === "reserve_now") return { fire: true, reason: "parser_confirmed" };
+    return { fire: true, reason: "parser_unverified" };
+  }
+  if (input.fallbackDetected) return { fire: true, reason: "fallback_detector" };
+  return { fire: false, reason: "no_signal" };
+}

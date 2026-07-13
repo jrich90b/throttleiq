@@ -2088,6 +2088,22 @@ export type DealStatusCheckParse = {
   confidence?: number;
 };
 
+export type ReservationConfirmParse = {
+  // Second-look VERIFIER for the reservation handoff (2026-07-13, Kody +17163975098). The primary
+  // inbound_reply_action parser occasionally over-reads a deferred "I'll buy later and circle back"
+  // as customer_reservation_request (~25% on that turn), which fires an expensive side effect: a
+  // committal "how to get one reserved" draft + a high-priority owner call task. Before that
+  // handoff fires, this narrow verifier re-asks ONE question: did the customer explicitly ask us
+  // to put a specific unit aside / hold it / take a deposit NOW?
+  // "reserve_now": explicit hold/put-aside/deposit/pre-order ask for a unit, right now.
+  // "not_reserve_now": anything else — deferred/future purchase ("I'll pull the trigger next
+  //   week"), general interest, a question, watch/notify asks, scheduling.
+  // Fail-direction: a null parse (LLM off/error) must fall through to TODAY'S behavior (the
+  //   handoff proceeds on the primary parser's word) — the verifier can only VETO, never enable.
+  verdict: "reserve_now" | "not_reserve_now";
+  confidence?: number;
+};
+
 export type WatchOptOutParse = {
   // "watch_opt_out": the customer (who is on an inventory watch) wants OFF the alerts — no longer
   //   interested in being notified, bought one elsewhere, "take me off the list", "stop the alerts",
@@ -3374,6 +3390,16 @@ const DEAL_STATUS_CHECK_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   properties: {
     intent: { type: "string", enum: ["deal_status_check", "none"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const RESERVATION_CONFIRM_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "confidence"],
+  properties: {
+    verdict: { type: "string", enum: ["reserve_now", "not_reserve_now"] },
     confidence: { type: "number" }
   }
 };
@@ -7589,6 +7615,92 @@ export async function parseConversationCloseoutWithLLM(args: {
 // watch, so the parser just decides opt-out vs not. Returns null when disabled/low-signal => keep the
 // watch (fail toward NOT-removing on uncertainty: a wrongly-paused watch makes them miss a unit they
 // wanted; but Joe prioritizes not-spamming, so the floor is moderate, not high).
+// Reservation second-look verifier (2026-07-13). Runs ONLY when the primary inbound_reply_action
+// parser has already accepted customer_reservation_request — i.e. on the rare turns about to fire
+// the reservation handoff (committal draft + owner call task). One narrow question, so a shaky
+// primary read can't become a real staff task. Null (disabled/error) must fall through to the
+// primary parser's decision — this verifier can only veto, never enable (fail-direction: an LLM
+// outage must not kill genuine reservation handling).
+export async function parseReservationConfirmWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ReservationConfirmParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_RESERVATION_CONFIRM_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_RESERVATION_CONFIRM_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_RESERVATION_CONFIRM_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_RESERVATION_CONFIRM_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership thread. An upstream classifier believes the customer is",
+    "asking to RESERVE a unit. Your ONLY job is to verify that one narrow claim before the",
+    "dealership acts on it (a staff call task + a 'how to get one reserved' reply).",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Verdict:",
+    '- "reserve_now": the customer EXPLICITLY asks us to put a specific unit aside / hold it /',
+    '  take a deposit / pre-order / secure a build slot, NOW: "I\'d like to reserve one", "what do',
+    '  I have to do to reserve one", "can I put a deposit down to hold it", "can you hold one for me".',
+    '- "not_reserve_now": everything else. Especially: a FUTURE/deferred purchase commitment or an',
+    '  "I\'ll circle back" ("I\'ll pull the trigger by the end of next week", "I\'ll have the money soon',
+    '  and get back to you", "I\'ll reach out then, if you still have one available"), general interest',
+    '  or excitement, a price/payment/availability question, asking to be NOTIFIED when one arrives',
+    "  (that is a watch), or reserving a TIME/appointment (that is scheduling).",
+    "",
+    "Hard rules:",
+    "- Limited-run / they-move-fast context does NOT make a deferred purchase a reservation.",
+    "- Intent to buy later + 'I'll contact you' = not_reserve_now, even with strong interest.",
+    "- When unsure, choose not_reserve_now (the normal router still replies warmly; staff can",
+    "  always escalate — a false reservation task is worse than a soft ack).",
+    "- confidence 0..1.",
+    "",
+    "Examples:",
+    '- "What do I have to do to reserve one" -> {"verdict":"reserve_now","confidence":0.97}',
+    '- "Can I put a deposit down to hold it?" -> {"verdict":"reserve_now","confidence":0.96}',
+    '- "I\'m definitely interested. I should have the money and be in the position to pull the trigger on it by the end of next week. I\'ll be getting back ahold of you then, if you still have one available." -> {"verdict":"not_reserve_now","confidence":0.95}',
+    '- "Love that bike. Hopefully it\'s still there when my tax return hits" -> {"verdict":"not_reserve_now","confidence":0.9}',
+    '- "Can you let me know if one comes in?" -> {"verdict":"not_reserve_now","confidence":0.95}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "reservation_confirm_parser",
+      schema: RESERVATION_CONFIRM_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-reservation-confirm-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const verdict: ReservationConfirmParse["verdict"] =
+    String(parsed.verdict ?? "").toLowerCase() === "reserve_now" ? "reserve_now" : "not_reserve_now";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { verdict, confidence };
+}
+
 export async function parseWatchOptOutWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
