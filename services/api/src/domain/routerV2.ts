@@ -23,6 +23,7 @@ export {
   decidePostSaleOwnershipTurn,
   decideWatchScopeTurn,
   decideLeadUnitAvailabilityDisclosure,
+  decideReservationHandoffTurn,
   decideSchedulingTurn,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,

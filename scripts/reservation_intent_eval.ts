@@ -22,6 +22,7 @@ import {
   buildReservationHandoffReply,
   detectReservationRequestText
 } from "../services/api/src/domain/reservationIntent.ts";
+import { decideReservationHandoffTurn } from "../services/api/src/domain/routeStateReducer.ts";
 import { checkMessage } from "./voice_charter_audit.ts";
 
 // 1) Detector: reservation/pre-order of a UNIT fires; scheduling-reserve and
@@ -101,6 +102,74 @@ assert.match(
   apiSrc,
   /import \{ buildReservationHandoffReply, detectReservationRequestText \} from "\.\/domain\/reservationIntent\.js"/,
   "index.ts imports the reservation handoff helpers"
+);
+
+// 5) Second-look decision table (2026-07-13, Kody +17163975098). The reservation handoff fires an
+// expensive side effect (committal draft + owner call task), so an accepted primary parse gets one
+// narrow verification pass; precedence is pinned here. FAIL DIRECTION: the verifier can only VETO,
+// never enable — a null verdict (LLM off/error) proceeds on the primary parser's word (today's
+// behavior), and the explicit-token regex fallback lane is never vetoed.
+const DECISION_ROWS: {
+  id: string;
+  input: Parameters<typeof decideReservationHandoffTurn>[0];
+  fire: boolean;
+  reason: string;
+}[] = [
+  {
+    id: "parser_plus_verifier_agree_fires",
+    input: { parserReservationAccepted: true, fallbackDetected: false, confirmVerdict: "reserve_now" },
+    fire: true,
+    reason: "parser_confirmed"
+  },
+  {
+    id: "verifier_veto_suppresses_deferred_purchase",
+    input: { parserReservationAccepted: true, fallbackDetected: false, confirmVerdict: "not_reserve_now" },
+    fire: false,
+    reason: "second_look_veto"
+  },
+  {
+    id: "verifier_veto_wins_even_if_fallback_also_matched",
+    input: { parserReservationAccepted: true, fallbackDetected: true, confirmVerdict: "not_reserve_now" },
+    fire: false,
+    reason: "second_look_veto"
+  },
+  {
+    id: "null_verifier_proceeds_on_primary_parser",
+    input: { parserReservationAccepted: true, fallbackDetected: false, confirmVerdict: null },
+    fire: true,
+    reason: "parser_unverified"
+  },
+  {
+    id: "fallback_token_lane_never_vetoed",
+    input: { parserReservationAccepted: false, fallbackDetected: true, confirmVerdict: null },
+    fire: true,
+    reason: "fallback_detector"
+  },
+  {
+    id: "no_signal_no_fire",
+    input: { parserReservationAccepted: false, fallbackDetected: false, confirmVerdict: null },
+    fire: false,
+    reason: "no_signal"
+  }
+];
+for (const row of DECISION_ROWS) {
+  const decision = decideReservationHandoffTurn(row.input);
+  assert.equal(decision.fire, row.fire, `[${row.id}] fire`);
+  assert.equal(decision.reason, row.reason, `[${row.id}] reason`);
+}
+
+// 6) Second-look wiring: BOTH paths call the verifier + reducer, and both record the veto outcome.
+assert.ok(
+  (apiSrc.match(/parseReservationConfirmWithLLM\(\{ text: event\.body \?\? ""/g) ?? []).length >= 2,
+  "both paths call the reservation second-look verifier"
+);
+assert.ok(
+  (apiSrc.match(/decideReservationHandoffTurn\(\{/g) ?? []).length >= 2,
+  "both paths route the reservation turn through decideReservationHandoffTurn"
+);
+assert.ok(
+  (apiSrc.match(/recordRouteOutcome\(\s*"(?:live|regen)",\s*"reservation_second_look_veto"/g) ?? []).length >= 2,
+  "both paths record the second-look veto outcome"
 );
 
 console.log("PASS reservation intent eval");
