@@ -426,6 +426,74 @@ export async function classifySchedulingIntent(input: string): Promise<boolean> 
   }
 }
 
+const DEPARTMENT_HANDOFF_ACK_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["ack"],
+  properties: {
+    ack: { type: "string" }
+  }
+};
+
+/**
+ * Generate a department web-widget handoff acknowledgment that ENGAGES the customer's specific
+ * request (e.g. "a quote for a lower cylinder head replacement on a 2018 Street Glide Special")
+ * rather than a static "I've passed your message along" template that ignores what they asked —
+ * the template dropped the request and the quality gate correctly held it (James Browne
+ * +12543831187, 2026-07-13, held on a Service quote). Comprehend, don't template (AGENTS.md).
+ *
+ * HARD no-fabrication rule: we have NO DMS, so the reply must NEVER state or imply a price, cost,
+ * estimate figure, part availability, timeframe/ETA, or appointment; it acknowledges WHAT they
+ * asked and commits the department to follow up. Returns null on ANY failure (disabled, no key,
+ * empty message, model error) so the caller falls back to the safe static template — never go
+ * silent, never fabricate. Behind LLM_DEPARTMENT_ACK_ENABLED (default on; "0" = kill switch to the
+ * static template). The published draft still passes through the quality gate + suggest-mode review.
+ */
+export async function buildDepartmentHandoffAckWithLLM(args: {
+  message: string;
+  deptLabel: string;
+  firstName?: string | null;
+}): Promise<string | null> {
+  const enabled = String(process.env.LLM_DEPARTMENT_ACK_ENABLED ?? "1").trim().toLowerCase();
+  if (enabled === "0" || enabled === "false" || enabled === "no") return null;
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const message = String(args.message ?? "").trim();
+  if (!message) return null;
+  const deptLabel = String(args.deptLabel ?? "team").trim() || "team";
+  const firstName = String(args.firstName ?? "").trim();
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const prompt = [
+    "You write ONE short, warm SMS reply for a Harley-Davidson dealership, texting like a helpful human employee — never a bot.",
+    `The customer submitted a ${deptLabel} web form. Acknowledge their SPECIFIC request and let them know you're getting it to the ${deptLabel} team, who will follow up with them.`,
+    "",
+    "HARD RULES (breaking any is unsafe — never break them):",
+    "- You do NOT have pricing, parts availability, service timeframes, or appointment slots. NEVER state or imply any price, dollar amount, cost/estimate figure, part availability, ETA/timeframe, or appointment time.",
+    "- Reference what they actually asked about (the specific job / part / bike) so it clearly isn't a canned reply — but do NOT invent any detail they didn't give.",
+    "- Do NOT ask for information the customer already provided.",
+    "- 1-2 sentences, SMS-length, warm and natural. No signature, no 'Reply STOP', no email formatting.",
+    firstName ? `- Greet them by first name: ${firstName}.` : "- A friendly greeting is fine.",
+    "",
+    `Customer's ${deptLabel} request: ${message}`,
+    "",
+    'Return only JSON: { "ack": "<the SMS text>" }'
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "department_handoff_ack",
+      schema: DEPARTMENT_HANDOFF_ACK_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-department-ack"
+    });
+    const ack = parsed && typeof parsed === "object" ? String((parsed as any).ack ?? "").trim() : "";
+    return ack || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function classifySmallTalkWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

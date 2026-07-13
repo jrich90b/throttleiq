@@ -18,6 +18,10 @@ import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyer
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
+import {
+  shouldEscalateStaleHeldDraft,
+  HELD_DRAFT_BACKSTOP_TODO_MARKER
+} from "./domain/heldDraftBackstop.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
@@ -239,6 +243,7 @@ import {
 import {
   classifySchedulingIntent,
   classifySmallTalkWithLLM,
+  buildDepartmentHandoffAckWithLLM,
   classifyBlendedChatterWithLLM,
   generateSmallTalkReplyWithLLM,
   generateBlendedLeadInWithLLM,
@@ -6917,7 +6922,15 @@ app.post("/public/widget/text-us", async (req, res) => {
       // fabricate parts/service/apparel availability. Suggest mode keeps it a staff-approved
       // draft; the customer gave phone + text consent so it delivers by SMS.
       const deptLabel = webTextWidgetDepartmentLabel(department);
-      const deptAck = `Hi ${firstName || "there"} — thanks for reaching out to our ${deptLabel} team. I've passed your message along and they'll text you right back.`;
+      // Engage the customer's SPECIFIC request (comprehend, don't template): the static line below
+      // ignored what they actually asked and the quality gate correctly held it (James Browne
+      // +12543831187, a "quote for a lower cylinder head replacement on a 2018 Street Glide Special"
+      // held 7/13). The LLM ack references the real request + commits the dept to follow up, and NEVER
+      // fabricates a price/availability (no DMS). Fail-safe: any failure falls back to the static
+      // template so we never go silent. The draft still passes through the quality gate + suggest review.
+      const deptAckFallback = `Hi ${firstName || "there"} — thanks for reaching out to our ${deptLabel} team. I've passed your message along and they'll text you right back.`;
+      const deptAckEngaged = await buildDepartmentHandoffAckWithLLM({ message, deptLabel, firstName });
+      const deptAck = deptAckEngaged || deptAckFallback;
       const evaluateDeptAckInvariant = (
         text: string,
         invariantHints?: CustomerReplyDraftInvariantHints
@@ -29682,6 +29695,52 @@ async function processDueFollowUpsUnlocked() {
         idleDays
       });
     }
+  }
+
+  // Stale held-draft backstop: a draft-quality HOLD that self-heal couldn't fix, that no customer
+  // reply or code-fix redeploy ever cleared, sits on "being fixed" forever with the customer getting
+  // nothing (James Browne +12543831187, a Service quote held 7/12, silent ~14h — a gap widened by
+  // DRAFT_QUALITY_HOLD_CLASS_ONLY=0, which HOLDS unhealable drafts instead of publishing them). After a
+  // stale window, pull a human in: clear the held limbo so the console is replyable again + raise ONE
+  // "needs a human reply" todo carrying the customer's ask. Deduped via an own-marker todo +
+  // heldDraftEscalatedAt (re-nudge), capped per tick; context-fidelity holds are skipped (own todo).
+  const HELD_DRAFT_BACKSTOP_TODOS_PER_TICK = 15;
+  const convIdsWithHeldBackstopTodo = new Set(
+    openTodos.filter(t => String(t.summary ?? "").includes(HELD_DRAFT_BACKSTOP_TODO_MARKER)).map(t => t.convId)
+  );
+  let heldDraftsEscalated = 0;
+  for (const conv of convs) {
+    if (heldDraftsEscalated >= HELD_DRAFT_BACKSTOP_TODOS_PER_TICK) break;
+    if (!shouldEscalateStaleHeldDraft(conv as any, convIdsWithHeldBackstopTodo.has(conv.id), now.getTime())) continue;
+    const heldReason = String((conv.draftHeld as any)?.reason ?? "");
+    const who = normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "this lead";
+    const ask = String((conv.draftHeld as any)?.inboundPreview ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+    const askLine = ask ? ` They asked: "${ask}".` : "";
+    const todo = addTodo(
+      conv,
+      "note",
+      `${HELD_DRAFT_BACKSTOP_TODO_MARKER} Reply to ${who} needs a human — the AI's draft was held for review and couldn't auto-fix, so it never sent.${askLine} Please review and reply.`,
+      undefined,
+      conv.leadOwner,
+      undefined,
+      "followup"
+    );
+    if (todo) {
+      conv.heldDraftEscalatedAt = now.toISOString();
+      // Clear the held limbo so the console shows a normal, replyable conversation (the task carries the
+      // context). The customer's ask stands; the withheld weak draft is NOT restored — staff replies fresh.
+      (conv as any).draftHeld = null;
+      saveConversation(conv);
+      heldDraftsEscalated += 1;
+      recordRouteOutcome("manual", "held_draft_escalated_to_human", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        reason: heldReason
+      });
+    }
+  }
+  if (heldDraftsEscalated > 0) {
+    console.log(`[state-reconcile] escalated ${heldDraftsEscalated} stale held draft(s) to a human`);
   }
 
   // Unsent first-touch safety net: a NEVER-contacted lead whose initial reply was DRAFTED but never sent
