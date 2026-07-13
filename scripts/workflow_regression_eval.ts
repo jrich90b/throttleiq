@@ -630,8 +630,45 @@ const cases: Case[] = [
     expected: false
   },
   {
+    id: "compliment_reply_suppressed_for_finance_signal",
+    actual: allowComplimentOnlyReply({ complimentOnly: true, financeSignal: true }),
+    expected: false
+  },
+  {
+    id: "compliment_reply_suppressed_for_availability_signal",
+    actual: allowComplimentOnlyReply({ complimentOnly: true, availabilitySignal: true }),
+    expected: false
+  },
+  {
+    id: "compliment_reply_suppressed_for_callback_signal",
+    actual: allowComplimentOnlyReply({ complimentOnly: true, callbackSignal: true }),
+    expected: false
+  },
+  {
     id: "compliment_reply_allowed_without_action_signal",
     actual: allowComplimentOnlyReply({ complimentOnly: true }),
+    expected: true
+  },
+  {
+    // Parity pin: the LIVE compliment gate (/webhooks/twilio) must feed the routing precheck's
+    // finance/availability/callback intent into allowComplimentOnlyReply — mirroring the regen
+    // gate — so a compliment that also carries a real ask ("nice bike — what's my down payment?")
+    // does NOT short-circuit into a pleasantry echo. Regression here reopens the +17163975098 miss.
+    id: "live_compliment_gate_feeds_finance_availability_callback_signals",
+    actual: (() => {
+      const source = readFileSync(new URL("../services/api/src/index.ts", import.meta.url), "utf8");
+      const liveGate = source.indexOf('schedulingSignal: complimentHasSchedulingSignal');
+      if (liveGate < 0) return false;
+      const declStart = source.indexOf('const routingParserIntentOverridePrecheck =');
+      const window = source.slice(Math.max(0, liveGate - 600), liveGate);
+      return (
+        declStart > 0 &&
+        declStart < liveGate && // precheck is hoisted ABOVE the gate
+        window.includes('financeSignal: routingParserIntentOverridePrecheck === "pricing_payments"') &&
+        window.includes('availabilitySignal: routingParserIntentOverridePrecheck === "availability"') &&
+        window.includes('callbackSignal: routingParserIntentOverridePrecheck === "callback"')
+      );
+    })(),
     expected: true
   },
   {
