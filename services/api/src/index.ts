@@ -17,7 +17,7 @@ import { orchestrateInbound } from "./domain/orchestrator.js";
 import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
-import { findTlpLogCatchupCandidates } from "./domain/tlpLogCatchup.js";
+import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
 import { leadVehicleRelevantToFollowUp } from "./domain/followUpVehicleRelevance.js";
 import { parsePreferredAdfDate } from "./domain/preferredAdfDate.js";
 import { decideConversationAccess } from "./domain/conversationAccess.js";
@@ -779,6 +779,7 @@ import {
   registerScheduleInviteSent,
   updateConversationContact,
   setCrmLastLoggedAt,
+  setCrmLeadRefNotFound,
   setVoiceContext,
   getActiveVoiceContext,
   setMemorySummary,
@@ -48465,6 +48466,23 @@ function buildTlpLogFailureQuestion(leadRef: string, err: any): string {
   return `TLP log failed for leadRef ${leadRef}.${detail} Retry in TLP or update manually.`;
 }
 
+// A CONFIRMED "this customer isn't in TLP" note — filed instead of buildTlpLogFailureQuestion when
+// the lookup definitively found no lead (isTlpLeadNotFoundError). Actionable + plain: create the
+// lead and the next message logs on its own. The `lead ref <ref> not found` phrase is the stable
+// marker hasOpenTlpLeadNotFoundQuestion dedupes on.
+function buildTlpLeadNotFoundQuestion(leadRef: string): string {
+  return `This customer isn't in TLP yet (lead ref ${leadRef} not found), so this conversation can't be logged to the CRM. Create the lead in TLP — the next message will then log automatically.`;
+}
+
+// Dedupe: only one open "not in TLP" note per conversation+ref at a time, so a fresh send that
+// re-hits the same missing lead doesn't stack a second identical note.
+function hasOpenTlpLeadNotFoundQuestion(convId: string, leadRef: string): boolean {
+  const marker = `lead ref ${leadRef} not found`;
+  return listOpenQuestions().some(
+    q => q.convId === convId && String(q.text ?? "").includes(marker)
+  );
+}
+
 // Reusable TLP (CRM) contact logger — extracted from the manual POST /conversations/:id/send handler so
 // the AUTO-SEND paths (cadence, appointment confirmations, webhook autopilot) log the same way instead of
 // sending blind (the crm_log_stale coverage gap). Idempotent: buildTranscript returns count===0 once the
@@ -48499,7 +48517,16 @@ async function logTlpForConversation(
       console.log("✅ TLP log success", { leadRef, convId: conv.id });
     } catch (err: any) {
       console.warn("⚠️ TLP log failed:", err?.message ?? err);
-      addInternalQuestion(conv.id, conv.leadKey, buildTlpLogFailureQuestion(leadRef, err));
+      if (isTlpLeadNotFoundError(err?.message ?? err)) {
+        // TLP itself said "no such lead" — stop the catch-up sweep from re-hammering it and file
+        // ONE clear "create the lead" note instead of the repeated cryptic failure.
+        setCrmLeadRefNotFound(conv, new Date().toISOString(), leadRef);
+        if (!hasOpenTlpLeadNotFoundQuestion(conv.id, leadRef)) {
+          addInternalQuestion(conv.id, conv.leadKey, buildTlpLeadNotFoundQuestion(leadRef));
+        }
+      } else {
+        addInternalQuestion(conv.id, conv.leadKey, buildTlpLogFailureQuestion(leadRef, err));
+      }
     }
   }
 }
@@ -66067,9 +66094,15 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             const lastAt = conv.messages[conv.messages.length - 1]?.at;
             if (lastAt) setCrmLastLoggedAt(conv, lastAt, leadRef);
           } catch (err: any) {
-            const msg = buildTlpLogFailureQuestion(leadRef, err);
-            addInternalQuestion(conv.id, conv.leadKey, msg);
             console.warn("[voice] TLP log failed:", err?.message ?? err);
+            if (isTlpLeadNotFoundError(err?.message ?? err)) {
+              setCrmLeadRefNotFound(conv, new Date().toISOString(), leadRef);
+              if (!hasOpenTlpLeadNotFoundQuestion(conv.id, leadRef)) {
+                addInternalQuestion(conv.id, conv.leadKey, buildTlpLeadNotFoundQuestion(leadRef));
+              }
+            } else {
+              addInternalQuestion(conv.id, conv.leadKey, buildTlpLogFailureQuestion(leadRef, err));
+            }
           }
         }
       } else {

@@ -25,7 +25,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { findTlpLogCatchupCandidates } from "../services/api/src/domain/tlpLogCatchup.ts";
+import {
+  findTlpLogCatchupCandidates,
+  isTlpLeadNotFoundError
+} from "../services/api/src/domain/tlpLogCatchup.ts";
 
 const NOW = Date.parse("2026-07-06T12:00:00.000Z");
 const min = (n: number) => n * 60 * 1000;
@@ -227,6 +230,90 @@ assert.ok(
   "permanently-blocked convs no longer pin the oldest-first batch"
 );
 
+// --- 1c) Lead-not-in-CRM suppression (2026-07-12): a customer never logged into TLP first ---
+
+// The classifier only fires on TLP's OWN definitive "no such lead" signals — a transient portal
+// failure (login/MFA/timeout/selector) must stay retryable, never permanently drop a live lead.
+assert.equal(
+  isTlpLeadNotFoundError("lead: no quick-lookup result for ref 10966"),
+  true,
+  "the 'no results' banner is a confirmed not-found"
+);
+assert.equal(
+  isTlpLeadNotFoundError("lead: no visible quick-lookup row matching ref 11607 and phone 7160000000"),
+  true,
+  "the 'no matching row' fallback is a confirmed not-found"
+);
+assert.equal(
+  isTlpLeadNotFoundError(
+    "lead: quick lookup failed; ref 10966: lead: no quick-lookup result for ref 10966 | phone 716... with ref 10966: lead: no visible quick-lookup row matching ref 10966 and phone 716..."
+  ),
+  true,
+  "the wrapped 'quick lookup failed' error still classifies not-found via its leaf phrase"
+);
+assert.equal(
+  isTlpLeadNotFoundError("lead launch timed out waiting for TLP login"),
+  false,
+  "a login/launch failure is transient, NOT a confirmed not-found (must keep retrying)"
+);
+assert.equal(
+  isTlpLeadNotFoundError("selector #QL_Ref not found on page"),
+  false,
+  "selector drift is transient, NOT a lead-not-found (a missing selector is a portal-shape failure)"
+);
+assert.equal(isTlpLeadNotFoundError(""), false, "empty error never classifies as not-found");
+
+// Sweep skip: a leadRef stamped not-found for THIS outbound is a dead end — don't re-hammer it.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({
+      crm: { leadRefNotFoundAtByLeadRef: { "12345": iso(NOW - min(30)) } },
+      messages: [out(NOW - day(3))]
+    })],
+    NOW
+  ),
+  [],
+  "a lead confirmed missing in the CRM is not re-queued every sweep (the noise this fixes)"
+);
+
+// The stamp is per-leadRef: a not-found marker for a DIFFERENT ref doesn't suppress this conv.
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({
+      crm: { leadRefNotFoundAtByLeadRef: { "99999": iso(NOW - min(30)) } },
+      messages: [out(NOW - day(3))]
+    })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a not-found stamp for a different ref does not suppress this conversation's ref"
+);
+
+// RECOVERY: a NEWER outbound than the not-found stamp re-opens the attempt — staff may have
+// created the lead in TLP and texted again, so we try once more (fail toward re-logging).
+assert.deepEqual(
+  findTlpLogCatchupCandidates(
+    [conv({
+      crm: { leadRefNotFoundAtByLeadRef: { "12345": iso(NOW - day(2)) } },
+      messages: [out(NOW - day(3)), out(NOW - min(30))]
+    })],
+    NOW
+  ),
+  ["+15550000001"],
+  "a new send after the not-found stamp re-opens the log attempt (natural recovery)"
+);
+
+// --- 1d) Source guards for the not-found suppression path ---
+const catchupSrc = fs.readFileSync(
+  path.resolve("services/api/src/domain/tlpLogCatchup.ts"),
+  "utf8"
+);
+assert.match(
+  catchupSrc,
+  /leadRefNotFoundAtByLeadRef\?\.\[leadRef\][\s\S]{0,120}notFoundAt >= outboundAt\)\s*continue/,
+  "the sweep skips a leadRef confirmed not-found for this-or-older outbound"
+);
+
 // --- 2) Source guards ---
 const indexSrc = fs.readFileSync(path.resolve("services/api/src/index.ts"), "utf8");
 assert.match(
@@ -251,9 +338,32 @@ assert.equal(
   1,
   "crm.lastCatchupAttemptAt is written by the sweep path only"
 );
+// The logger catch classifies a confirmed not-found and stamps the marker instead of re-filing
+// the generic failure question (which never deduped => the staff spam this replaces).
+assert.match(
+  indexSrc,
+  /isTlpLeadNotFoundError\(err\?\.message \?\? err\)[\s\S]{0,220}setCrmLeadRefNotFound\(conv[\s\S]{0,300}buildTlpLeadNotFoundQuestion\(leadRef\)/,
+  "on a confirmed not-found the logger stamps the marker + files the clear one-time note"
+);
+assert.match(
+  indexSrc,
+  /function hasOpenTlpLeadNotFoundQuestion[\s\S]{0,220}listOpenQuestions\(\)/,
+  "the not-found note is deduped against open questions (one per conv+ref)"
+);
 const storeSrc = fs.readFileSync(
   path.resolve("services/api/src/domain/conversationStore.ts"),
   "utf8"
+);
+// A successful log clears the not-found marker so a resolved lead doesn't keep a stale dead-end flag.
+assert.match(
+  storeSrc,
+  /export function setCrmLeadRefNotFound[\s\S]{0,400}leadRefNotFoundAtByLeadRef\[normalizedLeadRef\] = iso/,
+  "setCrmLeadRefNotFound stamps the per-ref not-found marker"
+);
+assert.match(
+  storeSrc,
+  /delete conv\.crm\.leadRefNotFoundAtByLeadRef\[normalizedLeadRef\]/,
+  "a successful log clears the not-found marker for that ref"
 );
 assert.equal(
   (storeSrc.match(/lastCatchupAttemptAt\s*=/g) ?? []).length,
@@ -269,5 +379,5 @@ assert.ok(
 );
 
 console.log(
-  "PASS tlp log catch-up eval (decision table 18 rows incl. retry back-off + serialized-queue/kill-switch/sweep-only-stamp source guards)"
+  "PASS tlp log catch-up eval (decision table incl. retry back-off + lead-not-in-CRM suppression/recovery + classifier + serialized-queue/kill-switch/sweep-only-stamp/not-found source guards)"
 );
