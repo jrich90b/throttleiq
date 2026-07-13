@@ -113,15 +113,21 @@ export function isDesignAcceptedHandoff(row: ReplayRow): boolean {
   return isDeptLead && isHandoffAck;
 }
 
+// A Dealer Lead App post-ride survey log (internal, staff-filed after a demo/test ride): the
+// "Marketing Questions: Dealer Lead App ..." block plus a "Demo Bikes Ridden:" line. Never a
+// customer question — the outcome + follow-up stay with the salesperson.
+export function isDealerRideLogBody(body: string): boolean {
+  const b = body.toLowerCase();
+  return /dealer lead app/.test(b) && /demo bikes? ridden|demo ride|test ride/.test(b);
+}
+
 // Dealer-ride post-ride thank-you BY DESIGN (Joe-approved 2026-07-02): a confirmed demo-ride
 // lead gets ONE warm thank-you draft while the outcome + follow-up stay with the salesperson —
 // the judge reads it as "didn't answer the asks", but that IS the accepted policy.
 export function isDealerRideThankYou(row: ReplayRow): boolean {
   const draft = String(row.draft ?? "").toLowerCase();
-  const body = String(row.body ?? "").toLowerCase();
-  const isDlaRide = /dealer lead app/.test(body) && /demo bikes? ridden|demo ride|test ride/.test(body);
   const isThankYou = /thanks (?:again )?for coming in for the (?:test )?ride|thanks for your interest in the/.test(draft);
-  return isDlaRide && isThankYou;
+  return isDealerRideLogBody(String(row.body ?? "")) && isThankYou;
 }
 
 // Event-promo / sweepstakes ack BY DESIGN (PR #34/#91): a sweeps/RSVP marketing lead gets the
@@ -218,7 +224,12 @@ export function isExpectedSilence(row: ReplayRow): boolean {
   const mode = String(row.router?.followUpMode ?? "").toLowerCase();
   const reason = String(row.router?.followUpReason ?? "").toLowerCase();
   if (mode === "manual_handoff" || mode === "paused_indefinite") return true;
-  return /in_process_deal|walk_?in|phone_log|marketplace_relay|credit_app|dealer_ride|handoff/.test(reason);
+  if (/in_process_deal|walk_?in|phone_log|marketplace_relay|credit_app|dealer_ride|handoff/.test(reason)) return true;
+  // A Dealer Lead App post-ride survey log is staff-filed and never a customer question. The
+  // FIRST one earns its one by-design thank-you (isDealerRideThankYou); a REPEAT log correctly
+  // stays silent (the thank-you already went out). Body-keyed so it holds even when the replayed
+  // router state doesn't carry a dealer_ride reason (the case the reason-list above misses).
+  return isDealerRideLogBody(String(row.body ?? ""));
 }
 
 /** A row worth spending a judge call on: it produced a draft on an actionable inbound. */
@@ -868,6 +879,27 @@ function selfTest() {
     realMiss
   );
   assert(!realScore.pass && realScore.critical && realScore.adjustment === "none", "a genuine wrong-intent reply stays critical");
+
+  // Dealer Lead App post-ride survey log (internal, staff-filed). Body shape pinned from prod
+  // regressions +17169123294 (Angelo) / +17164442837 (Megan): a "Marketing Questions: Dealer
+  // Lead App ..." block with a "Demo Bikes Ridden:" line. The FIRST log earns its one thank-you;
+  // a REPEAT log correctly stays silent — both are by-design, not a miss.
+  const rideLogBody =
+    "WEB LEAD (ADF)\nSource: Dealer Lead App\nRef: 11315\nName: Megan Sweeney\n\nInquiry:\nCustomer Comments: Stone Giuga Marketing Questions: Dealer Lead App - Type: Y SalesPerson: Stone Giuga - Which model of motorcycle are you interested in? 2022,SPORTSTER,FORTY-EIGHT Demo Bikes Ridden: 2015,SPORTSTER,1200 CUSTOM";
+  const rideThankYou = mk({ body: rideLogBody, draft: "Hi Megan — Thanks again for coming in for the test ride on the 2015 Sportster 1200 Custom. If you need anything, just let me know." });
+  const rideThankYouScore = adjustScore(
+    scoreTurn(rideThankYou, { addressed: false, customerAsk: "next steps", why: "did not answer", severity: "major" }),
+    rideThankYou
+  );
+  assert(rideThankYouScore.pass && rideThankYouScore.adjustment === "design_accepted_handoff", "first dealer-ride log's one thank-you passes as accepted design");
+  const rideSilence = mk({ body: rideLogBody, draft: null, verdict: "no_response" });
+  const rideSilenceScore = adjustScore(scoreTurn(rideSilence, null), rideSilence);
+  assert(rideSilenceScore.pass && rideSilenceScore.adjustment === "design_accepted_handoff", "a repeat dealer-ride log producing silence is expected, not a miss");
+  assert(isExpectedSilence(rideSilence), "dealer-ride log silence is body-keyed (holds without a dealer_ride router reason)");
+  // Guard against over-broadening: a plain customer message that gets NO reply is still a miss.
+  const plainSilence = mk({ body: "is the low rider st still available?", draft: null, verdict: "no_response" });
+  const plainSilenceScore = adjustScore(scoreTurn(plainSilence, null), plainSilence);
+  assert(!plainSilenceScore.pass && plainSilenceScore.adjustment === "none", "a plain customer message with no reply still fails as unexpected silence");
 
   // prompt builder reachable (shared with the nightly audit — same judging semantics)
   assert(buildIntentJudgePrompt({ convId: "x", at: "t", inboundText: "hi", replyText: "hey", replyKind: "draft", context: [] }).length > 50, "judge prompt builder shared");

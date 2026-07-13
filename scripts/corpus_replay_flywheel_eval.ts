@@ -21,6 +21,10 @@ assert.ok(
 );
 assert.ok(/maxJudge/.test(flywheel) && /LLM_ENABLED/.test(flywheel), "LLM cost is capped and key-gated");
 assert.ok(/occurredAt: atIso/.test(flywheel), "findings are timestamped for downstream stale-suppression");
+// Dealer Lead App post-ride survey logs are staff-filed, never a customer question: the first
+// earns one by-design thank-you, a repeat correctly stays silent. Body-keyed so it holds even
+// when the replayed router state lacks a dealer_ride reason (reviewed 2026-07-12 with Joe).
+assert.ok(/isDealerRideLogBody/.test(flywheel) && /return isDealerRideLogBody\(String\(row\.body/.test(flywheel), "a dealer-ride survey log producing silence is scored as expected silence, body-keyed");
 
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
