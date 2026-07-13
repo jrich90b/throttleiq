@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
+import { matchInboundReply } from "./lib/toneResponseMatch.ts";
 import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
@@ -41,10 +42,13 @@ type EvalRow = {
   intent: string;
   issueCodes: string[];
   issueDetails: Array<{ code: string; detail: string }>;
-  status: "responded" | "missing_response";
+  status: "responded" | "responded_late" | "missing_response";
   // True when staff rewrote the agent's draft before sending and we graded the
   // agent's `originalDraftBody` (its actual output) rather than the human's text.
   gradedAgentDraft?: boolean;
+  // True when the reply landed AFTER the response window — a real (graded) reply,
+  // not a miss (Joe ruling 2026-07-13). Latency is what response_latency_audit tracks.
+  respondedLate?: boolean;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -224,21 +228,13 @@ function main() {
         continue;
       }
 
-      const maxOutMs = inboundAtMs + parsed.responseWindowMin * 60 * 1000;
-      let matchedOut: any | null = null;
-      for (let j = i + 1; j < messages.length; j += 1) {
-        const out = messages[j];
-        const outAtMs = toMs(String(out?.at ?? ""));
-        if (!Number.isFinite(outAtMs)) continue;
-        if (outAtMs > maxOutMs) break;
-        if (out?.direction !== "out") continue;
-        const outText = normalizeText(out?.body);
-        if (!outText) continue;
-        matchedOut = out;
-        break;
-      }
+      // A reply that lands AFTER the 30-min window is still a real, graded reply —
+      // NOT a `missing_response` miss (Joe ruling 2026-07-13). matchInboundReply
+      // returns the prompt reply, the late reply, or null when the turn was truly
+      // dropped (customer re-nudged first, or no reply at all).
+      const match = matchInboundReply(messages, i, parsed.responseWindowMin);
 
-      if (!matchedOut) {
+      if (!match) {
         rows.push({
           convId,
           leadRef,
@@ -256,11 +252,13 @@ function main() {
           band: "poor",
           intent: "general",
           issueCodes: ["missing_response"],
-          issueDetails: [{ code: "missing_response", detail: "no outbound reply in configured response window" }],
+          issueDetails: [{ code: "missing_response", detail: "no reply before the customer's next message" }],
           status: "missing_response"
         });
         continue;
       }
+
+      const matchedOut = match.matchedOut;
 
       // When a staff member rewrote the agent's draft before sending, the SENT
       // body is the human's words, not the agent's — grading the agent on it is a
@@ -274,8 +272,6 @@ function main() {
       const outboundText = normalizeText(gradedBody);
       const tone = evaluateTurnToneQuality({ inboundText, outboundText });
       const outAtIso = String(matchedOut?.at ?? "");
-      const outAtMs = toMs(outAtIso);
-      const latency = Number.isFinite(outAtMs) ? Math.max(0, Math.round((outAtMs - inboundAtMs) / 1000)) : null;
 
       rows.push({
         convId,
@@ -288,20 +284,26 @@ function main() {
         outboundAt: outAtIso,
         outboundProvider: String(matchedOut?.provider ?? ""),
         outboundText,
-        responseLatencySec: latency,
+        responseLatencySec: match.latencySec,
         score: tone.score,
         pass: tone.pass,
         band: tone.band,
         intent: tone.intent,
         issueCodes: tone.issues.map(x => x.code),
         issueDetails: tone.issues.map(x => ({ code: x.code, detail: x.detail })),
-        status: "responded",
-        gradedAgentDraft: outboundWasHumanRewritten || undefined
+        status: match.withinWindow ? "responded" : "responded_late",
+        gradedAgentDraft: outboundWasHumanRewritten || undefined,
+        respondedLate: match.withinWindow ? undefined : true
       });
     }
   }
 
-  const responded = rows.filter(r => r.status === "responded");
+  // Late replies are real, graded replies — pooled with prompt replies for
+  // pass-rate math. Only a genuinely dropped turn (no reply before the customer's
+  // next message) counts as missing (Joe ruling 2026-07-13).
+  const responded = rows.filter(r => r.status === "responded" || r.status === "responded_late");
+  const respondedWithinWindow = rows.filter(r => r.status === "responded");
+  const respondedLate = rows.filter(r => r.status === "responded_late");
   const missing = rows.filter(r => r.status === "missing_response");
   const passCountResponded = responded.filter(r => r.pass).length;
   const failCountResponded = responded.length - passCountResponded;
@@ -380,6 +382,8 @@ function main() {
       .sort((a, b) => b.count - a.count),
     totalInboundTurns: rows.length,
     respondedTurns: responded.length,
+    respondedWithinWindowCount: respondedWithinWindow.length,
+    respondedLateCount: respondedLate.length,
     missingResponseCount: missing.length,
     passCount: passCountAll,
     failCount: failCountAll,

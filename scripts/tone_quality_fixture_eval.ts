@@ -1,4 +1,5 @@
 import { evaluateTurnToneQuality } from "./lib/toneQuality.ts";
+import { matchInboundReply } from "./lib/toneResponseMatch.ts";
 
 type Fixture = {
   id: string;
@@ -251,6 +252,93 @@ function hasIssue(issues: string[], issue: string): boolean {
   return issues.includes(issue);
 }
 
+// --- Reply-matching fixtures (Joe ruling 2026-07-13: a reply after the 30-min
+// window is a LATE reply, not a missing_response miss). Exercises the extracted
+// matchInboundReply so the "did this turn get answered" rule stays pinned.
+const WINDOW_MIN = 30;
+const T0 = Date.parse("2026-07-12T15:00:00.000Z");
+const at = (minAfter: number) => new Date(T0 + minAfter * 60 * 1000).toISOString();
+
+type MatchFixture = {
+  id: string;
+  messages: Array<{ direction: "in" | "out"; at: string; body: string }>;
+  inboundIndex: number;
+  expect: { matched: boolean; withinWindow?: boolean };
+};
+
+const MATCH_FIXTURES: MatchFixture[] = [
+  {
+    id: "prompt_reply_within_window",
+    messages: [
+      { direction: "in", at: at(0), body: "Can I look at it Saturday?" },
+      { direction: "out", at: at(10), body: "Saturday works — what time?" }
+    ],
+    inboundIndex: 0,
+    expect: { matched: true, withinWindow: true }
+  },
+  {
+    id: "late_reply_hours_later_is_not_a_miss",
+    // Davey Cash shape: real, good reply ~4h later, no re-nudge in between.
+    messages: [
+      { direction: "in", at: at(0), body: "Hi Alexandra can I look at it on Saturday?" },
+      { direction: "out", at: at(262), body: "Happy to help. Saturday can work. Just let me know what time." }
+    ],
+    inboundIndex: 0,
+    expect: { matched: true, withinWindow: false }
+  },
+  {
+    id: "reply_just_past_window_is_late_not_miss",
+    messages: [
+      { direction: "in", at: at(0), body: "Do you have black street glides?" },
+      { direction: "out", at: at(31), body: "Yes — a couple in stock. Want details?" }
+    ],
+    inboundIndex: 0,
+    expect: { matched: true, withinWindow: false }
+  },
+  {
+    id: "no_reply_at_all_is_a_miss",
+    messages: [{ direction: "in", at: at(0), body: "Still interested, any update?" }],
+    inboundIndex: 0,
+    expect: { matched: false }
+  },
+  {
+    id: "customer_renudged_before_reply_is_a_miss",
+    // First text sat unanswered until the customer re-pinged → the first turn is a
+    // genuine drop; the reply attaches to the second inbound instead.
+    messages: [
+      { direction: "in", at: at(0), body: "Can you send pricing?" },
+      { direction: "in", at: at(90), body: "Hello? Anyone there?" },
+      { direction: "out", at: at(300), body: "So sorry for the delay — pricing coming right up." }
+    ],
+    inboundIndex: 0,
+    expect: { matched: false }
+  },
+  {
+    id: "reply_attaches_to_second_inbound_after_renudge",
+    messages: [
+      { direction: "in", at: at(0), body: "Can you send pricing?" },
+      { direction: "in", at: at(90), body: "Hello? Anyone there?" },
+      { direction: "out", at: at(300), body: "So sorry for the delay — pricing coming right up." }
+    ],
+    inboundIndex: 1,
+    expect: { matched: true, withinWindow: false }
+  }
+];
+
+function runMatchFixtures(): number {
+  let failing = 0;
+  for (const f of MATCH_FIXTURES) {
+    const match = matchInboundReply(f.messages, f.inboundIndex, WINDOW_MIN);
+    let pass = true;
+    if (f.expect.matched !== Boolean(match)) pass = false;
+    if (match && f.expect.withinWindow !== undefined && match.withinWindow !== f.expect.withinWindow) pass = false;
+    if (!pass) failing += 1;
+    const got = match ? `matched(withinWindow=${match.withinWindow})` : "no-match";
+    console.log(`${pass ? "PASS" : "FAIL"} match:${f.id} -> ${got}`);
+  }
+  return failing;
+}
+
 function main() {
   let passCount = 0;
   const rows = FIXTURES.map(f => {
@@ -284,12 +372,16 @@ function main() {
     console.log(`${row.pass ? "PASS" : "FAIL"} ${row.id} score=${row.score} issues=${row.issues.join("|") || "-"}`);
   }
 
-  const failing = rows.length - passCount;
+  const matchFailing = runMatchFixtures();
+
+  const failing = rows.length - passCount + matchFailing;
   if (failing > 0) {
     console.error(`\n${failing} tone-quality fixture checks failed.`);
     process.exit(1);
   }
-  console.log(`\nAll ${rows.length} tone-quality fixture checks passed.`);
+  console.log(
+    `\nAll ${rows.length} tone-grader + ${MATCH_FIXTURES.length} reply-matching fixture checks passed.`
+  );
 }
 
 main();
