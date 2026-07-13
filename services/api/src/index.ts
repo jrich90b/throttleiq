@@ -58100,6 +58100,46 @@ if (authToken && signature) {
     }
   }
 
+  // Parser-first routing precheck, HOISTED above the compliment gate (its computation used to
+  // live below, at the manual-quote precheck ~line 59162). The LIVE compliment gate must be able
+  // to suppress a compliment-only reply when the turn ALSO carries a finance / availability /
+  // callback intent — exactly as the REGEN gate already does (`allowComplimentOnlyReply` with
+  // financeSignal/availabilitySignal/callbackSignal, ~index.ts:54448). Keeping BOTH paths in sync
+  // is the parser-first parity law (AGENTS.md). Without this, a turn like "That's a nice bike.
+  // Where would you think my down payment range would be?" collapsed to a pleasantry echo on live
+  // and dropped the down-payment question. The precheck is a side-effect-free classification and
+  // its single result is REUSED by the deterministic shortcuts further down (no extra round-trip
+  // on the main path — the same parse that already ran here, just earlier).
+  const recentHistory = buildHistory(conv, 6);
+  const routingDecisionParserEligible =
+    event.provider === "twilio" &&
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  const routingDecisionParsePrecheck = routingDecisionParserEligible
+    ? await safeLlmParse("routing_decision_parser_precheck", () =>
+        parseRoutingDecisionWithLLM({
+          text: event.body,
+          history: recentHistory,
+          lead: conv.lead,
+          followUp: conv.followUp ?? null,
+          dialogState: getDialogState(conv),
+          classification: conv.classification ?? null
+        })
+      )
+    : null;
+  const routingParserDecisionPrecheck = resolveRoutingParserDecision({
+    parserIntent: routingDecisionParsePrecheck?.primaryIntent ?? null,
+    parserFallbackAction: routingDecisionParsePrecheck?.fallbackAction ?? null,
+    parserClarifyPrompt: routingDecisionParsePrecheck?.clarifyPrompt ?? null,
+    parserConfidence: routingDecisionParsePrecheck?.confidence ?? null,
+    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
+  });
+  const routingParserIntentOverridePrecheck =
+    routingParserDecisionPrecheck.intentOverride && routingParserDecisionPrecheck.intentOverride !== "general"
+      ? routingParserDecisionPrecheck.intentOverride
+      : null;
+
   const complimentSchedulingSignals = detectSchedulingSignals(String(event.body ?? ""));
   const complimentHasSchedulingSignal =
     llmExplicitScheduleIntent ||
@@ -58118,6 +58158,10 @@ if (authToken && signature) {
         !isLogisticsProgressUpdateText(event.body ?? "") &&
         !isHealthUpdateWithoutScheduleAsk(event.body ?? "") &&
         !(Array.isArray(event.mediaUrls) && event.mediaUrls.length > 0),
+      // Mirror the regen gate: a compliment that ALSO carries a real ask must not short-circuit.
+      financeSignal: routingParserIntentOverridePrecheck === "pricing_payments",
+      availabilitySignal: routingParserIntentOverridePrecheck === "availability",
+      callbackSignal: routingParserIntentOverridePrecheck === "callback",
       schedulingSignal: complimentHasSchedulingSignal
     })
   ) {
@@ -59158,35 +59202,9 @@ if (authToken && signature) {
     );
   const inboundText = String(event.body ?? "").trim();
   const inboundLower = inboundText.toLowerCase();
-  const recentHistory = buildHistory(conv, 6);
-  const routingDecisionParserEligible =
-    event.provider === "twilio" &&
-    process.env.LLM_ENABLED === "1" &&
-    process.env.LLM_ROUTING_PARSER_ENABLED !== "0" &&
-    !!process.env.OPENAI_API_KEY;
-  const routingDecisionParsePrecheck = routingDecisionParserEligible
-    ? await safeLlmParse("routing_decision_parser_precheck", () =>
-        parseRoutingDecisionWithLLM({
-          text: event.body,
-          history: recentHistory,
-          lead: conv.lead,
-          followUp: conv.followUp ?? null,
-          dialogState: getDialogState(conv),
-          classification: conv.classification ?? null
-        })
-      )
-    : null;
-  const routingParserDecisionPrecheck = resolveRoutingParserDecision({
-    parserIntent: routingDecisionParsePrecheck?.primaryIntent ?? null,
-    parserFallbackAction: routingDecisionParsePrecheck?.fallbackAction ?? null,
-    parserClarifyPrompt: routingDecisionParsePrecheck?.clarifyPrompt ?? null,
-    parserConfidence: routingDecisionParsePrecheck?.confidence ?? null,
-    parserConfidenceMin: Number(process.env.LLM_ROUTING_PARSER_CONFIDENCE_MIN ?? 0.72)
-  });
-  const routingParserIntentOverridePrecheck =
-    routingParserDecisionPrecheck.intentOverride && routingParserDecisionPrecheck.intentOverride !== "general"
-      ? routingParserDecisionPrecheck.intentOverride
-      : null;
+  // NOTE: `recentHistory` and the routing-decision precheck (`routingParserIntentOverridePrecheck`)
+  // are now computed once, HOISTED above the compliment gate (see the parser-first parity comment
+  // there). They are reused verbatim here — this is the single precheck parse, not a second one.
   const parserPrecheckBlocksDeterministicShortcut = !!routingParserIntentOverridePrecheck;
   if (
     event.provider === "twilio" &&
