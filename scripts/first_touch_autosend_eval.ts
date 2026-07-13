@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 import {
   decideFirstTouchAutoSend,
   isFirstTouchAckAutoSendEnabled,
+  buildFirstTouchShadowRecord,
   type FirstTouchAutoSendInput
 } from "../services/api/src/domain/firstTouchAutoSend.ts";
 
@@ -73,7 +74,46 @@ function run(): void {
   if (saved === undefined) delete process.env.FIRST_TOUCH_ACK_AUTOSEND;
   else process.env.FIRST_TOUCH_ACK_AUTOSEND = saved;
 
-  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity)");
+  // Shadow record builder (STEP 1 evidence log): carries the decision verdict +
+  // the actual ack text and risk context, and clips long fields for readability.
+  const rec = buildFirstTouchShadowRecord({
+    at: "2026-07-13T12:00:00.000Z",
+    convId: "+15551234567",
+    leadKey: "+15551234567",
+    leadName: "Test Rider",
+    model: "Street Glide",
+    leadSource: "Room58 - Book test ride",
+    inboundText: "Interested in the Street Glide, any availability?",
+    ackText: "Hi Test — this is Alexandra at American Harley-Davidson. Thanks for reaching out about the Street Glide; let me pull the details and follow up shortly.",
+    decision: decideFirstTouchAutoSend(base)
+  });
+  assert.equal(rec.wouldSend, true, "record mirrors the send decision");
+  assert.equal(rec.reason, "first_touch_deterministic_ack", "record carries the decision reason");
+  assert.equal(rec.leadName, "Test Rider");
+  assert.ok(rec.ack.includes("Alexandra"), "record carries the actual ack text");
+  const held = buildFirstTouchShadowRecord({
+    at: "2026-07-13T12:00:00.000Z",
+    convId: null,
+    leadKey: null,
+    ackText: "",
+    decision: decideFirstTouchAutoSend({ ...base, isDeterministicReply: false })
+  });
+  assert.equal(held.wouldSend, false, "held decision ⇒ wouldSend false");
+  assert.equal(held.reason, "llm_substantive_reply");
+  assert.equal(held.leadName, null, "missing optional fields clip to null");
+  assert.equal(held.inbound, null);
+  const clipped = buildFirstTouchShadowRecord({
+    at: "t",
+    convId: "c",
+    leadKey: "k",
+    inboundText: "x".repeat(500),
+    ackText: "y".repeat(800),
+    decision: decideFirstTouchAutoSend(base)
+  });
+  assert.ok(clipped.inbound!.length <= 241, "inbound clipped");
+  assert.ok(clipped.ack.length <= 601, "ack clipped");
+
+  console.log("PASS first-touch-autosend eval (dark no-op + 1 send case + 7 fail-safes + parity + shadow record)");
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

@@ -256,6 +256,7 @@
     "gold_corpus_harvest:eval": "npx tsx scripts/gold_corpus_harvest_eval.ts",
     "nightly:monitor": "npm run context_fidelity:audit && npm run drift_monitor:run; npm run gold_corpus:harvest; npm run self_heal:harvest",
     "first_touch_autosend:eval": "npx tsx scripts/first_touch_autosend_eval.ts",
+    "first_touch_autosend_shadow:report": "npx tsx scripts/first_touch_autosend_shadow_report.ts",
     "model_ab:report": "npx tsx scripts/model_ab_report.ts",
     "persona_continuity:eval": "npx tsx scripts/persona_continuity_eval.ts",
     "release_gate:report": "npx tsx scripts/release_gate_report.ts",

@@ -18,6 +18,9 @@
  * exact current behavior. The live customer-send wiring is STEP 2 (approve-first).
  */
 
+import fs from "node:fs";
+import path from "node:path";
+
 export type FirstTouchAutoSendInput = {
   /** Feature flag (FIRST_TOUCH_ACK_AUTOSEND). Off ⇒ never auto-send. */
   enabled: boolean;
@@ -67,4 +70,78 @@ export function isFirstTouchAckAutoSendEnabled(): boolean {
 export function firstTouchAutoSendDebugEnabled(): boolean {
   const raw = String(process.env.FIRST_TOUCH_ACK_AUTOSEND_DEBUG ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+// ---------------------------------------------------------------------------
+// Shadow log (STEP 1 evidence): capture the ACTUAL first-touch ack the agent
+// would auto-send, plus the risk context (model / sold-or-held disclosure lives
+// in the ack text itself, lead source, the customer's inbound) so Joe can READ
+// what would have gone out — with nothing ever sent. Reviewed via
+// `npm run first_touch_autosend_shadow:report`. Enabled by
+// FIRST_TOUCH_ACK_AUTOSEND_DEBUG (default OFF); logging must NEVER disrupt the
+// live inbound path.
+
+export type FirstTouchShadowRecordInput = {
+  at: string;
+  convId: string | null;
+  leadKey: string | null;
+  leadName?: string | null;
+  model?: string | null;
+  leadSource?: string | null;
+  inboundText?: string | null;
+  ackText: string;
+  decision: FirstTouchAutoSendDecision;
+};
+
+export type FirstTouchShadowRecord = {
+  at: string;
+  convId: string | null;
+  leadKey: string | null;
+  leadName: string | null;
+  model: string | null;
+  leadSource: string | null;
+  inbound: string | null;
+  wouldSend: boolean;
+  reason: string;
+  ack: string;
+};
+
+function clip(value: unknown, max: number): string | null {
+  const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** Pure: assemble the reviewable shadow record (ack text + risk context + decision). */
+export function buildFirstTouchShadowRecord(input: FirstTouchShadowRecordInput): FirstTouchShadowRecord {
+  return {
+    at: input.at,
+    convId: input.convId ?? null,
+    leadKey: input.leadKey ?? null,
+    leadName: clip(input.leadName, 80),
+    model: clip(input.model, 80),
+    leadSource: clip(input.leadSource, 80),
+    inbound: clip(input.inboundText, 240),
+    wouldSend: Boolean(input.decision?.send),
+    reason: String(input.decision?.reason ?? ""),
+    ack: clip(input.ackText, 600) ?? ""
+  };
+}
+
+export function firstTouchAutoSendShadowDir(): string {
+  return (
+    process.env.FIRST_TOUCH_AUTOSEND_SHADOW_DIR ||
+    path.resolve(process.cwd(), "reports", "first_touch_autosend")
+  );
+}
+
+/** Append one shadow record as JSONL. Wrapped so it can NEVER throw into the live path. */
+export function appendFirstTouchShadowLog(record: FirstTouchShadowRecord): void {
+  try {
+    const dir = firstTouchAutoSendShadowDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "first_touch_autosend_shadow.jsonl"), `${JSON.stringify(record)}\n`);
+  } catch {
+    // shadow logging is best-effort; never disrupt the customer inbound path.
+  }
 }

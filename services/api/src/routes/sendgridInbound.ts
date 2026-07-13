@@ -1952,7 +1952,12 @@ function emailReplyInvariantHintsFromOrchestratorResult(result: Awaited<ReturnTy
   };
 }
 import { getSystemMode } from "../domain/settingsStore.js";
-import { decideFirstTouchAutoSend, firstTouchAutoSendDebugEnabled } from "../domain/firstTouchAutoSend.js";
+import {
+  decideFirstTouchAutoSend,
+  firstTouchAutoSendDebugEnabled,
+  buildFirstTouchShadowRecord,
+  appendFirstTouchShadowLog
+} from "../domain/firstTouchAutoSend.js";
 import { sendEmail } from "../domain/emailSender.js";
 import { upsertContact } from "../domain/contactsStore.js";
 
@@ -5669,10 +5674,24 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         invariantAllow: true, // past the invariant.allow gate above
         hasDeliverablePhone: typeof leadKey === "string" && leadKey.startsWith("+")
       });
-      console.log("[first_touch_autosend shadow]", {
+      // Log the ACTUAL ack text + risk context (sold/held disclosure lives in the
+      // ack itself) so it can be reviewed message-by-message — never sent.
+      const shadowRecord = buildFirstTouchShadowRecord({
+        at: new Date().toISOString(),
         convId: conv?.id ?? null,
-        wouldSend: shadow.send,
-        reason: shadow.reason
+        leadKey: typeof leadKey === "string" ? leadKey : null,
+        leadName: [conv?.lead?.firstName, conv?.lead?.lastName].filter(Boolean).join(" ") || null,
+        model: conv?.lead?.vehicle?.model ?? null,
+        leadSource: typeof leadSource === "string" ? leadSource : null,
+        inboundText: effectiveInquiry || event?.body || null,
+        ackText: invariant.draftText,
+        decision: shadow
+      });
+      appendFirstTouchShadowLog(shadowRecord);
+      console.log("[first_touch_autosend shadow]", {
+        convId: shadowRecord.convId,
+        wouldSend: shadowRecord.wouldSend,
+        reason: shadowRecord.reason
       });
     }
     return { ok: true, draft: invariant.draftText };
