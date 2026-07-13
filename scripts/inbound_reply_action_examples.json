@@ -212,5 +212,21 @@
       "explicit_action": true,
       "should_reply": true
     }
+  },
+  {
+    "id": "deferred_future_purchase_is_not_reservation",
+    "text": "I'm definitely interested. I should have the money and be in the position to pull the trigger on it by the end of next week. I appreciate your guys time and working with me. I'll be getting back ahold of you then, if you still have one available.",
+    "history": [
+      { "direction": "out", "body": "The 2026 Street Bob is a limited solo trim run — they move fast." },
+      { "direction": "out", "body": "Hey Kody - just following up with you about the 2026 Street Bob. What are your thoughts?" }
+    ],
+    "hasActiveInventoryWatch": false,
+    "hasPendingIncomingInventory": false,
+    "dialogState": null,
+    "expected": {
+      "action": "none",
+      "explicit_action": false,
+      "should_reply": true
+    }
   }
 ]
