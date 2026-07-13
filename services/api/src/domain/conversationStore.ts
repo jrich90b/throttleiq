@@ -790,6 +790,9 @@ export type Conversation = {
   followUpCadence?: FollowUpCadence;
   /** Set once when a stale manual-handoff lead is surfaced as a staff follow-up todo, so it is never re-nudged. */
   staleHandoffNudgedAt?: string;
+  /** Set when a stale draft-quality HOLD is escalated to a staff "needs a human reply" todo, so the
+   *  backstop (domain/heldDraftBackstop.ts) doesn't re-fire every tick (re-surfaces after a window). */
+  heldDraftEscalatedAt?: string;
   /** Set once when an in-process deal is surfaced as an owner "nudge?" todo, so it is never re-nudged. */
   inProcessNudgedAt?: string;
   manualContext?: ManualContextState;
