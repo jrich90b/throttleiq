@@ -43,9 +43,34 @@ export type TlpCatchupConversation = {
   id?: string;
   lead?: { leadRef?: string | null } | null;
   latestLead?: { leadRef?: string | null } | null;
-  crm?: { lastLoggedAt?: string | null; lastCatchupAttemptAt?: string | null } | null;
+  crm?: {
+    lastLoggedAt?: string | null;
+    lastCatchupAttemptAt?: string | null;
+    leadRefNotFoundAtByLeadRef?: Record<string, string> | null;
+  } | null;
   messages?: TlpCatchupMessage[] | null;
 };
+
+/**
+ * A CONFIRMED "the lead is not in TLP" lookup outcome — distinct from a transient portal failure
+ * (login/MFA wall, launch timeout, selector drift, page never loaded). Matches the connector's own
+ * definitive lookup-miss signals thrown by findLeadRowByLookup (tlpPlaywright.ts): the "no results"
+ * banner and the "no matching row" fallback. Both leaf phrases also appear as substrings of the
+ * wrapped "quick lookup failed; ..." error and of the browser-use-rescue-appended message.
+ *
+ * FAIL DIRECTION: match ONLY the definite not-found phrases. ANY other error (timeout, login,
+ * selector, unknown) stays transient => the caller keeps retrying, so a flaky portal never gets a
+ * live lead permanently dropped from CRM logging. We stop retrying ONLY when TLP itself said "no
+ * such lead".
+ */
+export function isTlpLeadNotFoundError(message: unknown): boolean {
+  const raw = String(message ?? "").toLowerCase();
+  if (!raw) return false;
+  return (
+    raw.includes("no quick-lookup result for") ||
+    raw.includes("no visible quick-lookup row matching ref")
+  );
+}
 
 export type TlpCatchupOptions = {
   /** Wait this long after the outbound before catching up — the normal send-path log
@@ -105,6 +130,13 @@ export function findTlpLogCatchupCandidates(
     if (nowMs - outboundAt > lookbackMs) continue; // stale history — not worth a browser job
     const lastLoggedAt = Date.parse(String(conv?.crm?.lastLoggedAt ?? ""));
     if (Number.isFinite(lastLoggedAt) && lastLoggedAt >= outboundAt) continue; // already logged
+    // Confirmed "lead not in the CRM" — TLP's own lookup found no matching lead for this ref.
+    // Don't re-hammer it every sweep (the repeated-failure noise this fixes): a lead that isn't
+    // in the CRM will never resolve on retry. A NEWER outbound than the not-found stamp re-opens
+    // the attempt (staff may have created the lead and texted again). Parallel to the lastLoggedAt
+    // check above: a not-found recorded for this-or-older outbound is already handled => skip.
+    const notFoundAt = Date.parse(String(conv?.crm?.leadRefNotFoundAtByLeadRef?.[leadRef] ?? ""));
+    if (Number.isFinite(notFoundAt) && notFoundAt >= outboundAt) continue;
     // Retry back-off (see header). Applies ONLY when the stamped attempt is for THIS same
     // stuck gap: a newer outbound or a lastLoggedAt advance past the attempt means the
     // world moved on — the stamp is stale and must never delay the catch-up. Unparseable

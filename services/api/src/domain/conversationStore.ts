@@ -801,6 +801,13 @@ export type Conversation = {
      *  ONLY — drives the retry back-off in domain/tlpLogCatchup.ts so a permanently-failing
      *  log can't pin the batch; never written by the normal send-path logger. */
     lastCatchupAttemptAt?: string;
+    /** Per-leadRef timestamp of a CONFIRMED "lead not found in TLP" lookup — set ONLY when the
+     *  Playwright lookup definitively resolves no matching lead (isTlpLeadNotFoundError), never
+     *  on a transient portal/login/timeout failure. Suppresses the catch-up sweep from
+     *  re-hammering a lead that isn't in the CRM (domain/tlpLogCatchup.ts) until a NEWER outbound
+     *  lands — natural recovery if staff later creates the lead and texts again. Cleared on a
+     *  successful log for the same ref (setCrmLastLoggedAt). */
+    leadRefNotFoundAtByLeadRef?: Record<string, string>;
   };
   inventoryWatch?: InventoryWatch;
   inventoryWatches?: InventoryWatch[];
@@ -5949,7 +5956,26 @@ export function setCrmLastLoggedAt(conv: Conversation, iso: string, leadRef?: st
   if (normalizedLeadRef) {
     conv.crm.lastLoggedAtByLeadRef = conv.crm.lastLoggedAtByLeadRef ?? {};
     conv.crm.lastLoggedAtByLeadRef[normalizedLeadRef] = iso;
+    // A successful log means the lead resolved after all — clear any stale "not found in TLP"
+    // marker so the bookkeeping doesn't keep a dead-end flag around.
+    if (conv.crm.leadRefNotFoundAtByLeadRef?.[normalizedLeadRef]) {
+      delete conv.crm.leadRefNotFoundAtByLeadRef[normalizedLeadRef];
+    }
   }
+  conv.updatedAt = nowIso();
+  scheduleSave();
+}
+
+/** Stamp a CONFIRMED "this lead is not in TLP" outcome for a leadRef. Set only from the logger's
+ *  catch path when isTlpLeadNotFoundError(err) is true (a definitive lookup miss, not a transient
+ *  portal failure). Read by the catch-up sweep (domain/tlpLogCatchup.ts) to STOP re-hammering a
+ *  lead the CRM doesn't have — a newer outbound than this stamp re-opens the attempt. */
+export function setCrmLeadRefNotFound(conv: Conversation, iso: string, leadRef: string) {
+  const normalizedLeadRef = String(leadRef ?? "").trim();
+  if (!normalizedLeadRef) return;
+  conv.crm = conv.crm ?? {};
+  conv.crm.leadRefNotFoundAtByLeadRef = conv.crm.leadRefNotFoundAtByLeadRef ?? {};
+  conv.crm.leadRefNotFoundAtByLeadRef[normalizedLeadRef] = iso;
   conv.updatedAt = nowIso();
   scheduleSave();
 }
