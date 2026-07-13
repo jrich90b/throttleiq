@@ -3404,6 +3404,7 @@ export default function Home() {
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeSending, setComposeSending] = useState(false);
   const [composeConfirmOpen, setComposeConfirmOpen] = useState(false);
+  const [composeConfirmDontRemind, setComposeConfirmDontRemind] = useState(false);
   const [composeConversation, setComposeConversation] = useState<ConversationDetail | null>(null);
   const [composePaymentRequestOpen, setComposePaymentRequestOpen] = useState(false);
   const [composePaymentRequestAmount, setComposePaymentRequestAmount] = useState("");
@@ -6221,8 +6222,33 @@ export default function Home() {
     return null;
   }
 
-  // "Send SMS" click → validate, then always ask the operator to confirm the customer is in the
-  // CRM first (a brand-new console text isn't logged to TLP unless the lead exists there).
+  // "Don't remind me again today" — the CRM-first confirm is suppressed for the rest of the
+  // operator's local calendar day, stored per-browser (a nicety for staff doing a batch).
+  const COMPOSE_CRM_REMINDER_KEY = "lr_compose_crm_reminder_suppressed_date";
+  function composeCrmReminderTodayKey(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  }
+  function isComposeCrmReminderSuppressedToday(): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(COMPOSE_CRM_REMINDER_KEY) === composeCrmReminderTodayKey();
+    } catch {
+      return false;
+    }
+  }
+  function suppressComposeCrmReminderToday(): void {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(COMPOSE_CRM_REMINDER_KEY, composeCrmReminderTodayKey());
+    } catch {
+      /* storage blocked — worst case the reminder simply shows again */
+    }
+  }
+
+  // "Send SMS" click → validate, then ask the operator to confirm the customer is in the CRM
+  // first (a brand-new console text isn't logged to TLP unless the lead exists there) — unless
+  // they've snoozed the reminder for today.
   function requestComposeSend() {
     const validationError = composeValidationError();
     if (validationError) {
@@ -6230,10 +6256,16 @@ export default function Home() {
       return;
     }
     setComposeError(null);
+    if (isComposeCrmReminderSuppressedToday()) {
+      void sendCompose();
+      return;
+    }
+    setComposeConfirmDontRemind(false);
     setComposeConfirmOpen(true);
   }
 
   function confirmComposeSend() {
+    if (composeConfirmDontRemind) suppressComposeCrmReminderToday();
     setComposeConfirmOpen(false);
     void sendCompose();
   }
@@ -23795,6 +23827,14 @@ export default function Home() {
                   conversation records against their lead. If they aren&rsquo;t in TLP yet, this
                   message won&rsquo;t be logged to the CRM.
                 </div>
+                <label className="mt-3 flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={composeConfirmDontRemind}
+                    onChange={e => setComposeConfirmDontRemind(e.target.checked)}
+                  />
+                  Don&rsquo;t remind me again today
+                </label>
                 <div className="mt-4 flex items-center justify-end gap-2">
                   <button
                     className="px-3 py-2 border rounded text-sm"
