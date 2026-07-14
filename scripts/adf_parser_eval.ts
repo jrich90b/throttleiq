@@ -196,11 +196,43 @@ const hdfsCreditAppAdf = `<?xml version="1.0" encoding="UTF-8"?>
  </prospect>
 </adf>`;
 
+// HD.com "Request a Quote" carries the contact preference as a concatenated camelCase field
+// inside Customer Comments ("PreferredMethodOfContact - text(sms)"), NOT the spaced
+// "Preferred method of contact - " variant. The `\s+`-only label regex missed it, so
+// preferredContactMethod came back undefined (Taliea Lloyd 2026-07-13).
+const talieaQuoteRequestAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-07-13T18:15:51+00:00</requestdate>
+   <id sequence="1" source="HD.com Request a Quote">11622</id>
+   <vehicle interest="buy" status="NEW">
+     <year>2025</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Low Rider ST</model>
+     <vin></vin>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Taliea</name>
+       <name part="last">Lloyd</name>
+       <email>taliealloyd0721@gmail.com</email>
+       <phone type="cellphone">7165366889</phone>
+       <comment><![CDATA[Customer Comments: PreferredMethodOfContact - text(sms), InterestedInCustomizingMotorcycle - yes, CustomizeOptions - customizeAudio, customize-Fit-]]></comment>
+     </contact>
+   </customer>
+   <provider>
+     <name part="full" type="individual">HD.com Request a Quote</name>
+   </provider>
+ </prospect>
+</adf>`;
+
 const markLead = parseAdfXml(markNicholsTradeAcceleratorAdf);
 const matthewLead = parseAdfXml(matthewWallValueMyTradeAdf);
 const laricussLead = parseAdfXml(laricussTruncatedTradeAdf);
 const completeParenLead = parseAdfXml(completeParenTradeAdf);
 const hdfsCreditAppLead = parseAdfXml(hdfsCreditAppAdf);
+const talieaLead = parseAdfXml(talieaQuoteRequestAdf);
 
 const checks: Check[] = [
   { id: "mark_lead_ref", actual: markLead.leadRef, expected: "11310" },
@@ -219,6 +251,7 @@ const checks: Check[] = [
   { id: "matthew_trade_condition", actual: matthewLead.tradeVehicle?.condition, expected: "used" },
   { id: "matthew_sell_option", actual: matthewLead.sellOption, expected: "either" },
   { id: "matthew_preferred_contact", actual: matthewLead.preferredContactMethod, expected: "phone" },
+  { id: "taliea_camelcase_preferred_contact", actual: talieaLead.preferredContactMethod, expected: "sms" },
   {
     id: "matthew_primary_not_metadata_year",
     actual: matthewLead.year === "2026" ? "2026" : "not_2026",

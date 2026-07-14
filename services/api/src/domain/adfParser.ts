@@ -272,8 +272,12 @@ function parseFromComment(comment?: string) {
   const parsePreferredContactMethod = (text: string): "email" | "sms" | "phone" | undefined => {
     const normalized = String(text ?? "").toLowerCase();
     if (!normalized) return undefined;
+    // `\s*` (not `\s+`) between the label words so the concatenated HD.com camelCase form
+    // "PreferredMethodOfContact - text(sms)" (Taliea Lloyd 2026-07-13) is captured alongside the
+    // spaced "Preferred method of contact - " / "Preferred contact method:" variants. Value
+    // "text(sms)" captures "text" -> sms (the trailing "(sms)" is ignored via the \b after the token).
     const explicitMatch = normalized.match(
-      /preferred\s+(?:contact\s+method|method\s+of\s+contact|contact\s+preference)\s*[:\-]?\s*(email|e-mail|text|sms|phone|call|voice)\b/i
+      /preferred\s*(?:contact\s*method|method\s*of\s*contact|contact\s*preference)\s*[:\-]?\s*(email|e-mail|text|sms|phone|call|voice)\b/i
     );
     const token = explicitMatch?.[1]?.toLowerCase();
     if (token) {
