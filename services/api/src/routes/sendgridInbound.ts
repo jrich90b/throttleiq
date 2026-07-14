@@ -118,6 +118,7 @@ import { listInventorySolds, normalizeInventorySoldKey } from "../domain/invento
 import { getAllModels, isModelInRecentYearsForMake } from "../domain/modelsByYear.js";
 import {
   isPriceOnlyInquiryText,
+  isQuoteRequestSourceLead,
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../domain/adfPolicy.js";
@@ -8773,10 +8774,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const hasIdentifiers = !!conv.lead?.vehicle?.stockId || !!conv.lead?.vehicle?.vin;
     const isRequestDetails = /request details/i.test(leadSourceLower);
     const questionTail = isRequestDetails ? " Any specific questions about the bike?" : "";
+    // A "Request a Quote" source is a structured pricing ask (an ADF source/CTA signal, not
+    // free-text comprehension). The email path always names pricing (its helpLine); the SMS
+    // must not drop it to a bare availability invite, or the quote ask goes unanswered
+    // (adf_direct_ask_unanswered: pricing — Taliea Lloyd 2026-07-13). Mirror the email's soft
+    // pricing line WITHOUT launching the payment-estimator gather (Joe: payment-estimator
+    // proactivity = WAIT), so the first touch acknowledges pricing and still invites a visit.
+    const isQuoteRequestLead = isQuoteRequestSourceLead({ inferredCta, leadSourceLower });
     if (initialAvailability === "in_stock") {
-      draft =
-        `Thanks for your inquiry about the ${bikeLabel}. ` +
-        `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
+      draft = isQuoteRequestLead
+        ? `Thanks for your inquiry about the ${bikeLabel}. Happy to help with pricing, options, and availability — if you’d like to stop in and check it out, just say the word.`
+        : `Thanks for your inquiry about the ${bikeLabel}. ` +
+          `If you’d like to stop in and check it out, just say the word.${questionTail ? " Any specific questions I can answer?" : ""}`;
     } else if (initialAvailability === "on_hold") {
       draft =
         `Thanks for your inquiry about the ${bikeLabel}. ` +

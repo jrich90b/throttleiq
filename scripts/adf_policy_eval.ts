@@ -1,6 +1,7 @@
 import {
   extractAdfInquiryCandidates,
   isPriceOnlyInquiryText,
+  isQuoteRequestSourceLead,
   shouldForceInitialTestRideSourceScheduleCopy,
   shouldRouteRoom58PriceHandoff
 } from "../services/api/src/domain/adfPolicy.ts";
@@ -58,6 +59,28 @@ const cases: Case[] = [
         hasInventoryIdentifiers: true,
         pricingInquiryIntent: true
       })
+  },
+  {
+    // "HD.com Request a Quote" source is a structured pricing ask even when the free-text
+    // inquiry carries no price words (Taliea Lloyd 2026-07-13, customization-fields body).
+    // The in-stock SMS must name pricing, so this predicate must fire from the source label.
+    id: "request_a_quote_source_is_quote_lead",
+    expected: true,
+    run: () =>
+      isQuoteRequestSourceLead({ inferredCta: "check_availability", leadSourceLower: "hd.com request a quote" })
+  },
+  {
+    id: "request_a_quote_cta_is_quote_lead",
+    expected: true,
+    run: () => isQuoteRequestSourceLead({ inferredCta: "request_a_quote", leadSourceLower: "website contact form" })
+  },
+  {
+    // A plain availability source with no quote CTA must NOT be treated as a quote lead —
+    // otherwise every in-stock ADF gets the pricing line and we lose the distinction.
+    id: "availability_source_is_not_quote_lead",
+    expected: false,
+    run: () =>
+      isQuoteRequestSourceLead({ inferredCta: "check_availability", leadSourceLower: "room58 - request details" })
   },
   {
     id: "price_plus_trade_not_price_only_handoff",

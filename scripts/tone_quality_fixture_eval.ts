@@ -186,6 +186,30 @@ const FIXTURES: Fixture[] = [
     expect: { minScore: 85, mustNotIncludeIssues: ["adf_direct_ask_unanswered", "intent_mismatch"] }
   },
   {
+    // Model-RESOLVED, in-stock "Request a Quote" ADF (Taliea Lloyd 2026-07-13). The old
+    // in-stock purchase-intent SMS dropped the quote ask to a bare availability invite
+    // ("stop in and check it out"), so it scored adf_direct_ask_unanswered: pricing +
+    // intent_mismatch even though the model/photo were right. Single-line ADF so the
+    // Request-a-Quote pricing-ask detection survives (see AGENTS.md).
+    id: "adf_quote_in_stock_bare_availability_fails",
+    inboundText:
+      "WEB LEAD (ADF) Source: HD.com Request a Quote Ref: 11622 Name: Taliea Lloyd Email: taliealloyd0721@gmail.com Phone: 7165366889 Year: 2025 Vehicle: Harley-Davidson Low Rider ST Inquiry: Customer Comments: PreferredMethodOfContact - text(sms), InterestedInCustomizingMotorcycle - yes, CustomizeOptions - customizeAudio, customize-Fit-",
+    outboundText:
+      "Thanks for your inquiry about the 2025 Low Rider ST. If you’d like to stop in and check it out, just say the word.",
+    expect: { mustIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
+    // The repaired in-stock quote SMS mirrors the email's pricing helpLine (names pricing)
+    // and keeps the visit invite — WITHOUT launching the payment-estimator gather
+    // (Joe: payment-estimator proactivity = WAIT). The quote ask is now answered.
+    id: "adf_quote_in_stock_names_pricing_passes",
+    inboundText:
+      "WEB LEAD (ADF) Source: HD.com Request a Quote Ref: 11622 Name: Taliea Lloyd Email: taliealloyd0721@gmail.com Phone: 7165366889 Year: 2025 Vehicle: Harley-Davidson Low Rider ST Inquiry: Customer Comments: PreferredMethodOfContact - text(sms), InterestedInCustomizingMotorcycle - yes, CustomizeOptions - customizeAudio, customize-Fit-",
+    outboundText:
+      "Thanks for your inquiry about the 2025 Low Rider ST. Happy to help with pricing, options, and availability — if you’d like to stop in and check it out, just say the word.",
+    expect: { mustNotIncludeIssues: ["adf_direct_ask_unanswered"] }
+  },
+  {
     id: "adf_service_question_hijacked_by_inventory",
     inboundText:
       "WEB LEAD (ADF)\nSource: ROOM 58 LTD\nRef: 20001\nName: Sam Service\nYear: 2018\nVehicle: Harley-Davidson Street Glide\n\nInquiry:\nDo you do NYS inspections on Harleys?",

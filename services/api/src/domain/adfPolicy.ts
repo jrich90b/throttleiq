@@ -31,6 +31,19 @@ export function shouldRouteRoom58PriceHandoff(args: {
   return candidates.some(isPriceOnlyInquiryText);
 }
 
+// A "Request a Quote" lead is a structured pricing ask — signalled by the ADF source label
+// ("HD.com Request a Quote") or the mapped `request_a_quote` CTA, NOT by free-text keywords.
+// The initial-ADF EMAIL always names pricing (its helpLine); the SMS must not drop the quote
+// ask to a bare availability invite (adf_direct_ask_unanswered: pricing — Taliea Lloyd
+// 2026-07-13). This is a source/CTA structured signal, so a deterministic check is correct.
+export function isQuoteRequestSourceLead(args: {
+  inferredCta?: string | null;
+  leadSourceLower?: string | null;
+}): boolean {
+  if (args.inferredCta === "request_a_quote") return true;
+  return /request a quote/i.test(String(args.leadSourceLower ?? ""));
+}
+
 export function shouldForceInitialTestRideSourceScheduleCopy(args: {
   isInitialAdf: boolean;
   inferredBucket?: string | null;
