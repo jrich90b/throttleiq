@@ -2028,3 +2028,26 @@ export function decideReservationHandoffTurn(
   if (input.fallbackDetected) return { fire: true, reason: "fallback_detector" };
   return { fire: false, reason: "no_signal" };
 }
+
+// --- Day-only visit-commitment: propose real slots vs ask "what time?" (Joe-approved 2026-07-14) ---
+// When a customer commits to a DAY with no time ("can I look at it Saturday?"), the agent used to
+// ask "what time works?" ONLY offering real open slots when the customer explicitly asked us to
+// suggest a time. Joe's north star is answer→book, so a named-day commitment should proactively
+// OFFER that day's real open slots (via findScheduleSlotsForRequestedDay + buildRequestedDaySlotReply,
+// never fabricated). This pure predicate decides whether to ATTEMPT the day-slot proposal; the
+// caller still falls back to the "what time?" ask when the lookup returns no slots (fail-safe:
+// no scheduler config / no open slots that day → current behavior). Applied identically in the
+// live (/webhooks/twilio) and regenerate paths so the two never drift.
+export type DaySlotProposalInput = {
+  hasNamedDay: boolean; // the turn carries a resolved day-of-week commitment
+  customerAskedToSuggest: boolean; // customer explicitly asked the dealer to pick a time
+  proposalEnabled: boolean; // kill switch (SCHEDULING_DAY_SLOT_PROPOSAL_ENABLED !== "0")
+};
+
+export function shouldProposeDaySlotsForNamedDay(input: DaySlotProposalInput): boolean {
+  if (!input.hasNamedDay) return false; // no day => nothing to propose slots for
+  // Flag on: any named-day commitment gets a proactive slot offer. Flag off: legacy behavior
+  // (only when the customer asked us to suggest). Either way the caller's null-slot fallback
+  // preserves the "what time?" ask when there is nothing real to offer.
+  return input.proposalEnabled || input.customerAskedToSuggest;
+}

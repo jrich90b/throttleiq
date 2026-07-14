@@ -559,6 +559,7 @@ import {
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
+  shouldProposeDaySlotsForNamedDay,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
@@ -1937,6 +1938,16 @@ function buildDayOnlySchedulingTimeReply(
     ? `I don’t have any other questions right now — just let me know what time you are thinking${timeTarget} so I can schedule you in.`
     : `Just let me know what time you are thinking${timeTarget} so I can schedule you in.`;
   return `${replyDayPhrase} can work. ${timePrompt}`;
+}
+
+// Item 2 (Joe-approved 2026-07-14): a named-day visit commitment ("can I look at it Saturday?")
+// proactively offers that day's real open slots instead of asking "what time?". Kill switch —
+// set SCHEDULING_DAY_SLOT_PROPOSAL_ENABLED=0 in api.env to restore ask-first behavior. The
+// decision is the pure shouldProposeDaySlotsForNamedDay (routeStateReducer); this only reads
+// the flag. Fail-safe regardless: no scheduler config / no open slots that day => the slot
+// reply is null and the caller falls back to the "what time?" ask.
+function isDaySlotProposalEnabled(): boolean {
+  return process.env.SCHEDULING_DAY_SLOT_PROPOSAL_ENABLED !== "0";
 }
 
 function customerAskedDealerToSuggestAppointmentTime(text: string | null | undefined): boolean {
@@ -55014,7 +55025,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           return respondWithSmsRegeneratedDraft(rememberedReply);
         }
         const requestedPhrase = `${requestedDayLabel}${requestedDayPart ? ` ${requestedDayPart}` : ""}`;
-        if (requestedDay && customerAskedDealerToSuggestAppointmentTime(event.body)) {
+        if (
+          requestedDay &&
+          shouldProposeDaySlotsForNamedDay({
+            hasNamedDay: !!requestedDay,
+            customerAskedToSuggest: customerAskedDealerToSuggestAppointmentTime(event.body),
+            proposalEnabled: isDaySlotProposalEnabled()
+          })
+        ) {
           const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
           const daySlots = await findScheduleSlotsForRequestedDay({
             conv,
@@ -64850,7 +64868,13 @@ if (authToken && signature) {
     }
     if (dayInfo?.day && !result.requestedTime) {
       let offeredDealerSuggestedSlots = false;
-      if (customerAskedDealerToSuggestAppointmentTime(event.body)) {
+      if (
+        shouldProposeDaySlotsForNamedDay({
+          hasNamedDay: true,
+          customerAskedToSuggest: customerAskedDealerToSuggestAppointmentTime(event.body),
+          proposalEnabled: isDaySlotProposalEnabled()
+        })
+      ) {
         const appointmentType = isTestRideDialogState(getDialogState(conv)) ? "test_ride" : "inventory_visit";
         const daySlots = await findScheduleSlotsForRequestedDay({
           conv,
