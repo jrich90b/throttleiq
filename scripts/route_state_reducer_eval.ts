@@ -8,6 +8,7 @@ import {
   resolveNoResponsePolicyDecision,
   resolveRoutingParserDecision,
   resolveTurnPrimaryIntent,
+  shouldProposeDaySlotsForNamedDay,
   shouldTreatInboundAsTestRideBikeSelection
 } from "../services/api/src/domain/routeStateReducer.ts";
 
@@ -1020,3 +1021,62 @@ if (routingParserPassed !== routingParserCases.length) {
 }
 
 console.log(`\nAll ${routingParserCases.length} routing-parser checks passed.`);
+
+// --- Day-only visit-commitment slot-proposal trigger (item 2, Joe-approved 2026-07-14) ---
+// Pins the decision to ATTEMPT a real-slot offer for a named-day commitment. The caller's
+// null-slot fallback (findScheduleSlotsForRequestedDay => buildRequestedDaySlotReply) still
+// preserves the "what time?" ask when the lookup returns nothing, so this is fail-safe.
+type DaySlotProposalCase = {
+  id: string;
+  input: { hasNamedDay: boolean; customerAskedToSuggest: boolean; proposalEnabled: boolean };
+  expected: boolean;
+};
+
+const daySlotProposalCases: DaySlotProposalCase[] = [
+  {
+    // Davey Cash: "can I look at it Saturday?" — named day, did NOT ask us to suggest, flag on
+    // => proactively propose that day's real slots (the new answer->book behavior).
+    id: "named_day_flag_on_not_asked_proposes",
+    input: { hasNamedDay: true, customerAskedToSuggest: false, proposalEnabled: true },
+    expected: true
+  },
+  {
+    // Legacy behavior preserved when the flag is off: only propose when the customer asked us.
+    id: "named_day_flag_off_not_asked_falls_back_to_what_time",
+    input: { hasNamedDay: true, customerAskedToSuggest: false, proposalEnabled: false },
+    expected: false
+  },
+  {
+    id: "named_day_flag_off_but_asked_still_proposes",
+    input: { hasNamedDay: true, customerAskedToSuggest: true, proposalEnabled: false },
+    expected: true
+  },
+  {
+    id: "named_day_flag_on_and_asked_proposes",
+    input: { hasNamedDay: true, customerAskedToSuggest: true, proposalEnabled: true },
+    expected: true
+  },
+  {
+    // No resolved day => nothing to propose slots for, regardless of flag/ask.
+    id: "no_named_day_never_proposes",
+    input: { hasNamedDay: false, customerAskedToSuggest: true, proposalEnabled: true },
+    expected: false
+  }
+];
+
+let daySlotProposalPassed = 0;
+for (const c of daySlotProposalCases) {
+  const actual = shouldProposeDaySlotsForNamedDay(c.input);
+  const ok = actual === c.expected;
+  if (ok) daySlotProposalPassed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"} ${c.id} expected=${c.expected} actual=${actual}`);
+}
+
+if (daySlotProposalPassed !== daySlotProposalCases.length) {
+  console.error(
+    `\n${daySlotProposalCases.length - daySlotProposalPassed} failures out of ${daySlotProposalCases.length} day-slot-proposal cases`
+  );
+  process.exit(1);
+}
+
+console.log(`\nAll ${daySlotProposalCases.length} day-slot-proposal checks passed.`);
