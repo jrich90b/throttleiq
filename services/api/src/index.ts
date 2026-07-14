@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
@@ -9079,19 +9079,20 @@ async function buildVehicleFactQuestionReply(args: {
 // sales / availability / vehicle-fact answer, else null. Shared by every reply
 // chokepoint so live + regenerate stay in sync.
 async function maybeEventPromoAckReply(conv: Conversation): Promise<string | null> {
-  if (
-    decideEventPromoTurn({
-      classificationBucket: conv.classification?.bucket,
-      classificationCta: conv.classification?.cta
-    }).kind !== "event_promo_ack"
-  ) {
+  const epDecision = decideEventPromoTurn({
+    classificationBucket: conv.classification?.bucket,
+    classificationCta: conv.classification?.cta
+  });
+  if (epDecision.kind !== "event_promo_ack") {
     return null;
   }
   const profile = await getDealerProfileHot();
   const agentName = String((profile as any)?.agentName ?? "").trim() || "Sales Team";
   const dealerName = String((profile as any)?.dealerName ?? "").trim() || "American Harley-Davidson";
   const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
-  return buildEventPromoAck(firstName, agentName, dealerName);
+  return epDecision.ackVariant === "list_opt_in"
+    ? buildMarketingOptInAck(firstName, agentName, dealerName)
+    : buildEventPromoAck(firstName, agentName, dealerName);
 }
 
 async function applyVehicleFactQuestionDecision(args: {

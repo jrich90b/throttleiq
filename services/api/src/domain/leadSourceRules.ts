@@ -32,6 +32,7 @@ export type LeadCTA =
   | "demo_ride_event"
   | "event_rsvp"
   | "sweepstakes"
+  | "list_opt_in"
   | "contact_us"
   | "callback"
   | "unknown";

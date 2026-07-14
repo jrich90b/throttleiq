@@ -47,7 +47,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
@@ -5121,7 +5121,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       inferredCta = parserBucketCta.cta;
     } else if (marketingEventIntentFromParser) {
       inferredBucket = "event_promo";
-      inferredCta = "event_rsvp";
+      // A plain mailing-list OPT-IN ("sign up for emails/texts about events/promos") is NOT a
+      // sweepstakes/RSVP — tag it list_opt_in so the ack says "you're on the list" instead of the
+      // fabricated "Thanks for entering — good luck!" contest frame (2026-07-14 corpus-replay
+      // judge_fail, +17166985963). Stays in the event_promo bucket so cadence is still suppressed
+      // and the lead stays OPEN (only cta=sweepstakes closes on intake).
+      inferredCta =
+        llmJourneyIntent?.marketingKind === "list_opt_in" ? "list_opt_in" : "event_rsvp";
     } else if (hasStockIntent) {
       inferredBucket = "inventory_interest";
       inferredCta = "check_availability";
@@ -9007,16 +9013,18 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   // otherwise be (2026-06-20 context-fidelity audit). Overrides the finalized sales draft so
   // the customer-facing reply matches the lead type. Demo-ride events keep their own handling
   // (decideEventPromoTurn excludes cta=demo_ride_event).
-  if (
-    decideEventPromoTurn({
-      classificationBucket: conv.classification?.bucket,
-      classificationCta: conv.classification?.cta
-    }).kind === "event_promo_ack"
-  ) {
+  const epAckDecision = decideEventPromoTurn({
+    classificationBucket: conv.classification?.bucket,
+    classificationCta: conv.classification?.cta
+  });
+  if (epAckDecision.kind === "event_promo_ack") {
     const epAgentName = String(dealerProfile?.agentName ?? "").trim() || "Sales Team";
     const epDealerName = String(dealerProfile?.dealerName ?? "").trim() || "American Harley-Davidson";
     const epFirstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
-    draft = buildEventPromoAck(epFirstName, epAgentName, epDealerName);
+    draft =
+      epAckDecision.ackVariant === "list_opt_in"
+        ? buildMarketingOptInAck(epFirstName, epAgentName, epDealerName)
+        : buildEventPromoAck(epFirstName, epAgentName, epDealerName);
   }
 
   // Corporate/GLA demo-ride program lead (bucket=event_promo, cta=demo_ride_event): the ride
