@@ -5,10 +5,12 @@ import { createPortal } from "react-dom";
 import { InboxSection } from "./components/InboxSection";
 import PipelineBoard from "./pipeline/PipelineBoard";
 import { TaskInboxSection } from "./components/TaskInboxSection";
+import { MorningDigestModal } from "./components/MorningDigestModal";
 import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
 import { dueBucketFor, summarizeTriage } from "./lib/taskTriage";
+import { morningDigestDayKey, shouldShowMorningDigest } from "./lib/morningDigest";
 import { resizeImageForUpload, humanizeUploadError } from "./lib/imageResize";
 
 type SpeechRecognitionLike = {
@@ -2945,6 +2947,8 @@ export default function Home() {
   const [mode, setMode] = useState<SystemMode>("suggest");
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  // Morning digest — shown at most once per local day per user (lib/morningDigest.ts).
+  const [morningDigestOpen, setMorningDigestOpen] = useState(false);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [questionOutcomeById, setQuestionOutcomeById] = useState<Record<string, string>>({});
   const [questionFollowUpById, setQuestionFollowUpById] = useState<Record<string, string>>({});
@@ -11192,6 +11196,53 @@ export default function Home() {
     await openCallPickerOrStart(conv ?? selectedConv);
   }
 
+  // ── Morning digest (once per day per user) ────────────────────────────────
+  // The /todos payload is already owner-scoped server-side (canUserAccessTodoTask),
+  // so a salesperson's digest is automatically just THEIR tasks; a manager sees
+  // the store. The shown-today marker is only written on dismiss/action, so a
+  // crash or accidental reload before the rep reads it re-shows the digest.
+  const morningDigestUserId = String(authUser?.id ?? "");
+
+  function markMorningDigestShown() {
+    if (morningDigestUserId) {
+      try {
+        window.localStorage.setItem(
+          `lr_morning_digest:${morningDigestUserId}`,
+          morningDigestDayKey(Date.now())
+        );
+      } catch {
+        // localStorage unavailable → the digest may show again; harmless.
+      }
+    }
+    setMorningDigestOpen(false);
+  }
+
+  useEffect(() => {
+    if (loading || authLoading || morningDigestOpen) return;
+    const canSeeTasks =
+      authUser?.role === "manager" ||
+      authUser?.role === "salesperson" ||
+      isDepartmentUser ||
+      authUser?.permissions?.canAccessTodos;
+    if (!canSeeTasks || !morningDigestUserId) return;
+    let lastShown: string | null = null;
+    try {
+      lastShown = window.localStorage.getItem(`lr_morning_digest:${morningDigestUserId}`);
+    } catch {
+      return; // can't dedupe without storage — don't risk a popup on every poll
+    }
+    if (
+      shouldShowMorningDigest({
+        nowMs: Date.now(),
+        lastShownDayKey: lastShown,
+        openTaskCount: todos.length
+      })
+    ) {
+      setMorningDigestOpen(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, authLoading, morningDigestOpen, morningDigestUserId, authUser, isDepartmentUser, todos.length]);
+
   function openApprovalTodoOutcome(todo: TodoItem) {
     setApprovalOutcomeTarget(todo);
     setApprovalOutcome("contacted_follow_up");
@@ -15142,6 +15193,27 @@ export default function Home() {
             </div>
           </div>
         ) : null}
+
+        <MorningDigestModal
+          open={morningDigestOpen}
+          onClose={markMorningDigestShown}
+          todos={todos}
+          conversationsById={conversationsById}
+          authUser={authUser}
+          todoActionLabel={todoActionLabel}
+          onCall={todo => {
+            markMorningDigestShown();
+            void openCallFromTodo(todo as TodoItem);
+          }}
+          onMessage={todo => {
+            markMorningDigestShown();
+            openConversation(String(todo.convId));
+          }}
+          onOpenTaskInbox={() => {
+            markMorningDigestShown();
+            goToSection("todos");
+          }}
+        />
 
         {approvalOutcomeOpen && approvalOutcomeTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
