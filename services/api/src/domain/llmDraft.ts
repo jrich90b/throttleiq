@@ -10,6 +10,7 @@ import { buildPartsCatalogParserHint, matchPartsCatalogLexicon } from "./partsCa
 import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
+import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -12219,6 +12220,51 @@ export async function parseInventoryStatusWithLLM(args: {
   };
 }
 
+/**
+ * Model-relevance guard for the MERGED-parser cutover (approve-first, Tier 2).
+ *
+ * The merged one-call parser's known failure mode (shadow soak, 2026-07) is
+ * OVER-ATTACHMENT: it will happily set a durable inventory watch on a bike lifted
+ * from a URL / dealer-portal blob / thread context on a turn where the customer
+ * named no model at all. CLAUDE.md is explicit — "never act on a model the
+ * customer didn't reference this turn." So before a merged parse can create a
+ * watch, its watch MODEL passes through the same `passesModelRelevanceGuard`
+ * the model-authority resolver already uses: a model the customer neither named
+ * this turn NOR could be the active subject of an actionable turn (i.e. a bare
+ * ack / thanks / sign-off / ≤2-word turn) is dropped.
+ *
+ * Scoped deliberately:
+ *  - Only fires on `watchAction === "set_watch"` (the durable side-effect). On a
+ *    non-watch turn the watch slots are inert scratch notes downstream ignores.
+ *  - Only blanks the MODEL-identifying slots (model/year/color/condition); the
+ *    action and any price band the customer stated are preserved (a bare
+ *    "text me if one lands" set_watch with no model is legitimate downstream).
+ *
+ * Pure + deterministic so it is unit-pinned by unified_slots_merged_shadow:eval.
+ */
+export function applyMergedWatchRelevanceGuard(
+  parse: UnifiedSemanticSlotParse | null,
+  inboundText: string
+): UnifiedSemanticSlotParse | null {
+  if (!parse) return parse;
+  if (parse.watchAction !== "set_watch") return parse;
+  const model = String(parse.watch?.model ?? "").trim();
+  if (!model) return parse;
+  if (passesModelRelevanceGuard(model, String(inboundText ?? ""))) return parse;
+  return {
+    ...parse,
+    watch: {
+      ...parse.watch,
+      model: "",
+      year: "",
+      yearMin: null,
+      yearMax: null,
+      color: "",
+      condition: "unknown"
+    }
+  };
+}
+
 export async function parseUnifiedSemanticSlotsWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
@@ -12233,6 +12279,22 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
     process.env.LLM_UNIFIED_SLOT_PARSER_ENABLED === "1" &&
     !!process.env.OPENAI_API_KEY;
   if (!useLLM) return null;
+
+  // Merged-parser cutover (DARK, off by default — docs/comprehension_consolidation_plan.md).
+  // When LLM_UNIFIED_SLOT_MERGED_LIVE=1 the live + regenerate paths are served by
+  // the merged ONE-call parser instead of the three legacy sub-parsers, collapsing
+  // ~3 round-trips into 1. Both request paths funnel their unified parse through
+  // THIS wrapper, so gating here keeps them in lock-step (parser-first in both
+  // paths). The shadow soak cleared the cutover bar (≥2400 turns, 99.4%
+  // decision-scoped agreement); the residual disagreement is watch-slot
+  // over-attachment on non-watch turns, which `applyMergedWatchRelevanceGuard`
+  // neutralizes before a durable watch can be written. Enabling live is a
+  // deliberate multi-flag canary (also needs LLM_UNIFIED_SLOT_PARSER_ENABLED=1 +
+  // LLM_UNIFIED_SLOT_ROUTER_ENABLED=1 at the consume-sites); kill switch = unset.
+  if (process.env.LLM_UNIFIED_SLOT_MERGED_LIVE === "1") {
+    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
+    return applyMergedWatchRelevanceGuard(merged, args.text);
+  }
 
   const [semantic, trade, tradeTarget] = await Promise.all([
     parseSemanticSlotsWithLLM({
