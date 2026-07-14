@@ -18,7 +18,8 @@ const {
   morningDigestDayKey,
   shouldShowMorningDigest,
   groupTasksForDigest,
-  digestAttentionCount
+  digestAttentionCount,
+  nextMorningDigestUiState
 } = await import("../apps/web/src/app/lib/morningDigest.ts");
 
 let failures = 0;
@@ -136,6 +137,31 @@ check("attention count = overdue + today only", () => {
 check("empty/absent input is safe", () => {
   assert.deepEqual(groupTasksForDigest([], now), []);
   assert.equal(digestAttentionCount([], now), 0);
+});
+
+// ── 3. acting on a task must NOT end the digest for the day ──────────────────
+// Joe, 2026-07-14: "when you hit message or call does it disappear and you
+// won't see it again?" — Call/Message minimizes to a reopen pill; only an
+// explicit dismissal writes the shown-today key.
+check("Call/Message (act) closes but does NOT burn the day — pill stays", () => {
+  const s = nextMorningDigestUiState("act");
+  assert.equal(s.open, false);
+  assert.equal(s.minimized, true);
+  assert.equal(s.writeDayKey, false, "acting on a task must not write the shown-today key");
+});
+
+check("explicit dismiss ends it for the day — key written, no pill", () => {
+  const s = nextMorningDigestUiState("dismiss");
+  assert.equal(s.open, false);
+  assert.equal(s.minimized, false);
+  assert.equal(s.writeDayKey, true);
+});
+
+check("reopen from the pill restores the popup without burning the day", () => {
+  const s = nextMorningDigestUiState("reopen");
+  assert.equal(s.open, true);
+  assert.equal(s.minimized, false);
+  assert.equal(s.writeDayKey, false);
 });
 
 if (failures > 0) {

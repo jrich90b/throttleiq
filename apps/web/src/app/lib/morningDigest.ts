@@ -87,3 +87,28 @@ export function digestAttentionCount(todos: any[], nowMs: number): number {
   }
   return n;
 }
+
+export type MorningDigestUiEvent = "dismiss" | "act" | "reopen";
+export type MorningDigestUiState = { open: boolean; minimized: boolean; writeDayKey: boolean };
+
+/**
+ * What closing/reopening the digest does (Joe, 2026-07-14: "when you hit message
+ * or call does it disappear and you won't see it again?" — it must NOT).
+ *
+ *  - "act" (Call/Message on a task): close the popup so the rep can work the
+ *    conversation, but do NOT write the shown-today key — a floating reopen pill
+ *    stays up so the remaining tasks are one click away all day.
+ *  - "dismiss" (X / "Got it" / jumping to the full Task Inbox): done for the day —
+ *    write the day key, no pill, the digest returns tomorrow morning.
+ *  - "reopen" (the pill): bring the popup back, still without burning the day.
+ */
+export function nextMorningDigestUiState(event: MorningDigestUiEvent): MorningDigestUiState {
+  switch (event) {
+    case "act":
+      return { open: false, minimized: true, writeDayKey: false };
+    case "reopen":
+      return { open: true, minimized: false, writeDayKey: false };
+    default:
+      return { open: false, minimized: false, writeDayKey: true };
+  }
+}
