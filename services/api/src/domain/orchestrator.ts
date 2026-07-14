@@ -40,7 +40,7 @@ import {
 import { findMsrpPricing, getMsrpColorNames } from "./msrpPriceList.js";
 import { getInventoryNote } from "./inventoryNotes.js";
 import { getDealerProfile } from "./dealerProfile.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck } from "./agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck } from "./agentVoice.js";
 import { decideEventPromoTurn } from "./routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "./longTermMessage.js";
 import { matchPartsCatalogLexicon } from "./partsCatalogLexicon.js";
@@ -2511,9 +2511,12 @@ export async function orchestrateInbound(
   // out-of-context "That stock number is still available, what day works to stop in?" drafts on
   // sweepstakes entries — 2026-06-20 context-fidelity audit). Scoped to the ADF turn so a genuine
   // SMS question from such a lead still gets a real answer. Demo-ride events are handled separately.
+  const eventPromoDecision = decideEventPromoTurn({
+    classificationBucket: ctx?.bucket,
+    classificationCta: ctx?.cta
+  });
   const isNonSalesEventPromoAdf =
-    decideEventPromoTurn({ classificationBucket: ctx?.bucket, classificationCta: ctx?.cta }).kind ===
-      "event_promo_ack" && event.provider === "sendgrid_adf";
+    eventPromoDecision.kind === "event_promo_ack" && event.provider === "sendgrid_adf";
   if (isNonSalesEventPromoAdf) {
     const dealerProfile = await getDealerProfileWithAgentName();
     const agentName = getAgentNameFromProfile(dealerProfile, "Brooke");
@@ -2523,7 +2526,10 @@ export async function orchestrateInbound(
       intent: "GENERAL",
       stage: "ENGAGED",
       shouldRespond: true,
-      draft: buildEventPromoAck(leadFirst, agentName, dealerName)
+      draft:
+        eventPromoDecision.ackVariant === "list_opt_in"
+          ? buildMarketingOptInAck(leadFirst, agentName, dealerName)
+          : buildEventPromoAck(leadFirst, agentName, dealerName)
     });
   }
 

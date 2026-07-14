@@ -1668,20 +1668,29 @@ export function reduceStaleStateForInbound(input: StaleStateCleanupInput): Stale
 // EXCLUDED — they keep their dedicated dealer-ride handling.
 export type EventPromoTurnKind = "event_promo_ack" | "none";
 
+// Which flavour of the non-sales ack to render. The routing decision (kind) is IDENTICAL
+// for both — the whole non-demo event_promo bucket gets an ack and every precedence guard
+// keys on `kind === "event_promo_ack"`. `ackVariant` only selects the WORDING at the three
+// ack-build sites: a marketing/mailing-list OPT-IN (cta="list_opt_in") gets "you're on the
+// list" (buildMarketingOptInAck); a sweepstakes/RSVP/bare event_promo gets the contest
+// thank-you (buildEventPromoAck). Keeping `kind` unchanged means adding the opt-in variant
+// touches no precedence/close/cadence logic — only the customer-facing sentence.
+export type EventPromoAckVariant = "contest" | "list_opt_in";
+
 export type EventPromoTurnInput = {
   classificationBucket?: string | null;
   classificationCta?: string | null;
 };
 
-export type EventPromoTurnDecision = { kind: EventPromoTurnKind };
+export type EventPromoTurnDecision = { kind: EventPromoTurnKind; ackVariant: EventPromoAckVariant };
 
 export function decideEventPromoTurn(input: EventPromoTurnInput): EventPromoTurnDecision {
   const bucket = String(input.classificationBucket ?? "").toLowerCase();
   const cta = String(input.classificationCta ?? "").toLowerCase();
   if (bucket === "event_promo" && cta !== "demo_ride_event") {
-    return { kind: "event_promo_ack" };
+    return { kind: "event_promo_ack", ackVariant: cta === "list_opt_in" ? "list_opt_in" : "contest" };
   }
-  return { kind: "none" };
+  return { kind: "none", ackVariant: "contest" };
 }
 
 // Which event_promo leads terminally close+archive on intake vs stay OPEN for staff to work. Only

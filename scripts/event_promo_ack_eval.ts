@@ -22,16 +22,23 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import { decideEventPromoTurn } from "../services/api/src/domain/routeStateReducer.ts";
-import { buildDemoRideEventSoftInvite, buildEventPromoAck } from "../services/api/src/domain/agentVoice.ts";
+import { buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck } from "../services/api/src/domain/agentVoice.ts";
 import { resolveLeadRule } from "../services/api/src/domain/leadSourceRules.ts";
 
 // --- 1) Decision table (pure). ---
-type Row = { id: string; bucket: string | null; cta: string | null; ack: boolean };
+// `variant` is the ack WORDING selector (only meaningful when ack=true): a mailing-list opt-in
+// (cta=list_opt_in) renders buildMarketingOptInAck ("you're on the list"); everything else in the
+// non-demo event_promo bucket renders the contest thank-you (buildEventPromoAck). The routing `kind`
+// is identical for both, so precedence/close/cadence are unaffected.
+type Row = { id: string; bucket: string | null; cta: string | null; ack: boolean; variant?: "contest" | "list_opt_in" };
 const rows: Row[] = [
-  { id: "sweepstakes", bucket: "event_promo", cta: "sweepstakes", ack: true },
-  { id: "event_rsvp", bucket: "event_promo", cta: "event_rsvp", ack: true },
-  { id: "bare_event_promo", bucket: "event_promo", cta: null, ack: true },
-  { id: "event_promo_unknown_cta", bucket: "event_promo", cta: "unknown", ack: true },
+  { id: "sweepstakes", bucket: "event_promo", cta: "sweepstakes", ack: true, variant: "contest" },
+  { id: "event_rsvp", bucket: "event_promo", cta: "event_rsvp", ack: true, variant: "contest" },
+  { id: "bare_event_promo", bucket: "event_promo", cta: null, ack: true, variant: "contest" },
+  { id: "event_promo_unknown_cta", bucket: "event_promo", cta: "unknown", ack: true, variant: "contest" },
+  // Mailing-list OPT-IN ("sign up for emails/texts about events/promos") — same routing, opt-in wording
+  // (2026-07-14 corpus-replay judge_fail, +17166985963: was drafted "Thanks for entering — good luck!").
+  { id: "list_opt_in", bucket: "event_promo", cta: "list_opt_in", ack: true, variant: "list_opt_in" },
   // Demo-ride events keep their dedicated dealer-ride handling — NOT diverted.
   { id: "demo_ride_event_excluded", bucket: "event_promo", cta: "demo_ride_event", ack: false },
   // Real sales leads must never be diverted to the ack.
@@ -43,12 +50,19 @@ const rows: Row[] = [
   { id: "empty", bucket: null, cta: null, ack: false }
 ];
 for (const r of rows) {
-  const kind = decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind;
+  const decision = decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta });
   assert.equal(
-    kind === "event_promo_ack",
+    decision.kind === "event_promo_ack",
     r.ack,
-    `decideEventPromoTurn[${r.id}] expected ack=${r.ack}, got kind=${kind}`
+    `decideEventPromoTurn[${r.id}] expected ack=${r.ack}, got kind=${decision.kind}`
   );
+  if (r.ack && r.variant) {
+    assert.equal(
+      decision.ackVariant,
+      r.variant,
+      `decideEventPromoTurn[${r.id}] expected ackVariant=${r.variant}, got ${decision.ackVariant}`
+    );
+  }
 }
 
 // --- 1b) Classification: the event-marketing SOURCES must resolve to event_promo so the ack even gets
@@ -134,6 +148,27 @@ for (const b of BANNED) {
 const ackNoName = buildEventPromoAck(null, "Alexandra", "American Harley-Davidson");
 assert.ok(!/undefined|null/.test(ackNoName), "ack must handle a missing first name cleanly");
 
+// --- 2b) Marketing-opt-in ack safety (pure). A mailing-list opt-in is NOT a contest, so the ack must
+//         confirm the customer is on the list and carry NONE of the sales/availability frames AND NONE
+//         of the fabricated sweepstakes/contest frame ("Thanks for entering — good luck!") that the
+//         corpus-replay judge flagged on the +17166985963 Room58 "Contact Us" opt-in. ---
+const optInAck = buildMarketingOptInAck("Katie", "Alexandra", "American Harley-Davidson");
+assert.ok(
+  /Katie/.test(optInAck) && /Alexandra/.test(optInAck) && /American Harley-Davidson/.test(optInAck),
+  "opt-in ack must identify lead + agent + dealer"
+);
+assert.ok(/on the list|events and promos/i.test(optInAck), "opt-in ack must confirm the customer is on the list");
+const OPT_IN_BANNED: { label: string; re: RegExp }[] = [
+  ...BANNED,
+  // The fabricated contest frame is the whole point of the fix — it must never appear on an opt-in.
+  { label: "sweepstakes/contest frame", re: /\b(entering|good luck|winner|sweepstake|congrats)\b/i }
+];
+for (const b of OPT_IN_BANNED) {
+  assert.ok(!b.re.test(optInAck), `marketing opt-in ack must not contain a ${b.label}: "${optInAck}"`);
+}
+const optInAckNoName = buildMarketingOptInAck(null, "Alexandra", "American Harley-Davidson");
+assert.ok(!/undefined|null/.test(optInAckNoName), "opt-in ack must handle a missing first name cleanly");
+
 // --- 3) Source guard — the gate is wired at all three chokepoints, BOTH paths. ---
 const orchestrator = fs.readFileSync("services/api/src/domain/orchestrator.ts", "utf8");
 const index = fs.readFileSync("services/api/src/index.ts", "utf8");
@@ -150,6 +185,26 @@ assert.ok(
 assert.ok(
   /decideEventPromoTurn/.test(sendgrid) && /buildEventPromoAck/.test(sendgrid),
   "the initial-ADF draft must divert a non-sales event_promo lead to the ack"
+);
+
+// --- 3b) The opt-in variant must be wired at all three chokepoints (both paths) so a mailing-list
+//         opt-in renders "you're on the list" instead of the contest frame, AND the intake must tag a
+//         list_opt_in journey-intent parse as cta=list_opt_in for the decision to fire. ---
+assert.ok(
+  /buildMarketingOptInAck/.test(orchestrator) && /ackVariant === "list_opt_in"/.test(orchestrator),
+  "orchestrateInbound must render a list_opt_in event_promo ADF with the marketing-opt-in ack"
+);
+assert.ok(
+  /buildMarketingOptInAck/.test(index) && /ackVariant === "list_opt_in"/.test(index),
+  "the vehicle-fact reply (live + regen) must render a list_opt_in turn with the marketing-opt-in ack"
+);
+assert.ok(
+  /buildMarketingOptInAck/.test(sendgrid) && /ackVariant === "list_opt_in"/.test(sendgrid),
+  "the initial-ADF draft must render a list_opt_in lead with the marketing-opt-in ack"
+);
+assert.ok(
+  /marketingKind === "list_opt_in"[\s\S]*?"list_opt_in"\s*:\s*"event_rsvp"/.test(sendgrid),
+  "the ADF intake must map a list_opt_in marketing journey-intent to cta=list_opt_in (else event_rsvp)"
 );
 
 // Demo-ride soft invite wired at BOTH draft chokepoints (orchestrator + initial-ADF).

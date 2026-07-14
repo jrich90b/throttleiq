@@ -2634,6 +2634,12 @@ export type WalkInOutcomeParse = {
 
 export type JourneyIntentParse = {
   journeyIntent: "sale_trade" | "service_support" | "marketing_event" | "none";
+  // Sub-kind of a marketing_event: distinguishes a mailing-list OPT-IN ("sign up for
+  // emails/texts about events and promotions") from an actual sweepstakes/contest ENTRY or
+  // an event RSVP. Only meaningful when journeyIntent === "marketing_event" (else "none").
+  // Drives the ack wording so a plain opt-in never gets a fabricated "Thanks for entering —
+  // good luck!" contest frame (2026-07-14 corpus-replay judge_fail, +17166985963).
+  marketingKind: "sweepstakes_entry" | "event_rsvp" | "list_opt_in" | "none";
   explicitRequest: boolean;
   confidence?: number;
 };
@@ -3958,11 +3964,15 @@ const INVENTORY_STATUS_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
 const JOURNEY_INTENT_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["journey_intent", "explicit_request", "confidence"],
+  required: ["journey_intent", "marketing_kind", "explicit_request", "confidence"],
   properties: {
     journey_intent: {
       type: "string",
       enum: ["sale_trade", "service_support", "marketing_event", "none"]
+    },
+    marketing_kind: {
+      type: "string",
+      enum: ["sweepstakes_entry", "event_rsvp", "list_opt_in", "none"]
     },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
@@ -10819,12 +10829,16 @@ export async function parseJourneyIntentWithLLM(args: {
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const lead = args.lead ?? {};
   const examples = [
-    'input: "Customer: I want to trade my Heritage and look at a Street Glide." output: {"journey_intent":"sale_trade","explicit_request":true,"confidence":0.96}',
-    'input: "Customer: How much are payments on the 2025 Heritage?" output: {"journey_intent":"sale_trade","explicit_request":true,"confidence":0.97}',
-    'input: "Customer: My brake lever is sticking and I need service." output: {"journey_intent":"service_support","explicit_request":true,"confidence":0.96}',
-    'input: "Customer: I signed up for the giveaway at the event." output: {"journey_intent":"marketing_event","explicit_request":false,"confidence":0.9}',
-    'input: "Customer: Thanks, I will think about it." output: {"journey_intent":"none","explicit_request":false,"confidence":0.95}',
-    'input: "Customer: I already bought elsewhere." output: {"journey_intent":"none","explicit_request":false,"confidence":0.93}'
+    'input: "Customer: I want to trade my Heritage and look at a Street Glide." output: {"journey_intent":"sale_trade","marketing_kind":"none","explicit_request":true,"confidence":0.96}',
+    'input: "Customer: How much are payments on the 2025 Heritage?" output: {"journey_intent":"sale_trade","marketing_kind":"none","explicit_request":true,"confidence":0.97}',
+    'input: "Customer: My brake lever is sticking and I need service." output: {"journey_intent":"service_support","marketing_kind":"none","explicit_request":true,"confidence":0.96}',
+    'input: "Customer: I signed up for the giveaway at the event." output: {"journey_intent":"marketing_event","marketing_kind":"sweepstakes_entry","explicit_request":false,"confidence":0.9}',
+    'input: "Customer: I entered to win the bike at the H-D open house." output: {"journey_intent":"marketing_event","marketing_kind":"sweepstakes_entry","explicit_request":false,"confidence":0.92}',
+    'input: "Customer: Count me in for the ride challenge / RSVP me for the open house." output: {"journey_intent":"marketing_event","marketing_kind":"event_rsvp","explicit_request":true,"confidence":0.9}',
+    'input: "Customer: Just wanting to sign up for emails and text messages of any events or promotions you may run thru out the year. Thanks" output: {"journey_intent":"marketing_event","marketing_kind":"list_opt_in","explicit_request":true,"confidence":0.93}',
+    'input: "Customer: Add me to your mailing list please." output: {"journey_intent":"marketing_event","marketing_kind":"list_opt_in","explicit_request":true,"confidence":0.92}',
+    'input: "Customer: Thanks, I will think about it." output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.95}',
+    'input: "Customer: I already bought elsewhere." output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.93}'
   ];
   const prompt = [
     "You are a parser for inbound dealership customer messages.",
@@ -10833,12 +10847,18 @@ export async function parseJourneyIntentWithLLM(args: {
     "Classify the message intent at the journey level:",
     "- sale_trade: customer is explicitly shopping again, wants to buy, asks for trade/appraisal value, asks about availability/pricing/test ride for purchase.",
     "- service_support: customer asks for service/repair/parts/help with current unit ownership.",
-    "- marketing_event: customer references event RSVP/sweepstakes/challenge/promo participation.",
+    "- marketing_event: customer references event RSVP/sweepstakes/challenge/promo participation, or asks to join the dealer's email/text marketing list.",
     "- none: everything else, including courtesy acknowledgements.",
+    "",
+    "marketing_kind (only when journey_intent is marketing_event; otherwise \"none\"):",
+    "- sweepstakes_entry: entered/signed up for a giveaway, contest, or sweepstakes to WIN something.",
+    "- event_rsvp: RSVP'd for or is attending a specific event (open house, ride challenge, demo day).",
+    "- list_opt_in: just wants to be added to the email/text mailing list for events/promotions — NOT entering a contest and NOT attending a specific event.",
     "",
     "Rules:",
     "- Use sale_trade only for clear sales or trade-in intent.",
     "- If uncertain between sale_trade and anything else, choose none.",
+    "- A plain request to 'sign up for emails/texts' about events/promos is list_opt_in, NOT sweepstakes_entry — there is no contest to win.",
     "- explicit_request=true only when the customer clearly asks for action.",
     "- confidence is 0..1.",
     "",
@@ -10879,6 +10899,14 @@ export async function parseJourneyIntentWithLLM(args: {
     intentRaw === "marketing_event"
       ? intentRaw
       : "none";
+  const marketingKindRaw = String(parsed.marketing_kind ?? "").toLowerCase();
+  const marketingKind: JourneyIntentParse["marketingKind"] =
+    journeyIntent === "marketing_event" &&
+    (marketingKindRaw === "sweepstakes_entry" ||
+      marketingKindRaw === "event_rsvp" ||
+      marketingKindRaw === "list_opt_in")
+      ? marketingKindRaw
+      : "none";
   const explicitRequest = !!parsed.explicit_request;
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
@@ -10887,6 +10915,7 @@ export async function parseJourneyIntentWithLLM(args: {
 
   return {
     journeyIntent,
+    marketingKind,
     explicitRequest,
     confidence
   };

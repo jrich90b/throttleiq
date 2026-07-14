@@ -56,6 +56,28 @@ export function buildEventPromoAck(
 }
 
 /**
+ * Approved acknowledgement for a MARKETING/MAILING-LIST OPT-IN lead — a customer who asked
+ * to be added to the dealer's email/text list for events and promotions ("Just wanting to
+ * sign up for emails and text messages of any events or promotions..."). This is NOT a
+ * sweepstakes/contest entry, so the `buildEventPromoAck` "Thanks for entering — good luck!"
+ * frame is a FABRICATED contest context (2026-07-14 corpus-replay judge_fail, +17166985963:
+ * a "Room58 - Contact Us" mailing-list opt-in was drafted "Thanks for entering — good luck!").
+ * The correct reply confirms they are on the list, with NO contest frame, NO availability
+ * claim, NO stop-in push, and NO appointment offer. Selected via
+ * `decideEventPromoTurn(...).ackVariant === "list_opt_in"`. Pinned by `event_promo_ack:eval`.
+ */
+export function buildMarketingOptInAck(
+  firstName: string | null | undefined,
+  agentName: string,
+  dealerName: string
+): string {
+  return (
+    `${buildAgentIntro(firstName, agentName, dealerName)}` +
+    "You're on the list — I'll make sure you get our events and promos. If you ever want to talk bikes, I'm here."
+  );
+}
+
+/**
  * Approved SOFT INVITE for a corporate/GLA demo-ride lead (bucket=event_promo,
  * cta=demo_ride_event). These are H-D corporate demo-ride program leads — the ride does NOT
  * happen at the dealership, so a dealership scheduling push ("I can get you scheduled to come
