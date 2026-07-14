@@ -10,7 +10,12 @@ import { SideNavIcon } from "./components/UiIcon";
 import { useInboxSectionData } from "./hooks/useInboxSectionData";
 import { useTaskInboxData } from "./hooks/useTaskInboxData";
 import { dueBucketFor, summarizeTriage } from "./lib/taskTriage";
-import { morningDigestDayKey, shouldShowMorningDigest } from "./lib/morningDigest";
+import {
+  morningDigestDayKey,
+  nextMorningDigestUiState,
+  shouldShowMorningDigest,
+  type MorningDigestUiEvent
+} from "./lib/morningDigest";
 import { resizeImageForUpload, humanizeUploadError } from "./lib/imageResize";
 
 type SpeechRecognitionLike = {
@@ -2949,6 +2954,9 @@ export default function Home() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   // Morning digest — shown at most once per local day per user (lib/morningDigest.ts).
   const [morningDigestOpen, setMorningDigestOpen] = useState(false);
+  // Acting on a task minimizes the digest to a reopen pill instead of ending it
+  // for the day (Joe, 7/14) — see nextMorningDigestUiState.
+  const [morningDigestMinimized, setMorningDigestMinimized] = useState(false);
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
   const [questionOutcomeById, setQuestionOutcomeById] = useState<Record<string, string>>({});
   const [questionFollowUpById, setQuestionFollowUpById] = useState<Record<string, string>>({});
@@ -11203,8 +11211,9 @@ export default function Home() {
   // crash or accidental reload before the rep reads it re-shows the digest.
   const morningDigestUserId = String(authUser?.id ?? "");
 
-  function markMorningDigestShown() {
-    if (morningDigestUserId) {
+  function applyMorningDigestEvent(event: MorningDigestUiEvent) {
+    const next = nextMorningDigestUiState(event);
+    if (next.writeDayKey && morningDigestUserId) {
       try {
         window.localStorage.setItem(
           `lr_morning_digest:${morningDigestUserId}`,
@@ -11214,11 +11223,12 @@ export default function Home() {
         // localStorage unavailable → the digest may show again; harmless.
       }
     }
-    setMorningDigestOpen(false);
+    setMorningDigestOpen(next.open);
+    setMorningDigestMinimized(next.minimized);
   }
 
   useEffect(() => {
-    if (loading || authLoading || morningDigestOpen) return;
+    if (loading || authLoading || morningDigestOpen || morningDigestMinimized) return;
     const canSeeTasks =
       authUser?.role === "manager" ||
       authUser?.role === "salesperson" ||
@@ -11241,7 +11251,7 @@ export default function Home() {
       setMorningDigestOpen(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, authLoading, morningDigestOpen, morningDigestUserId, authUser, isDepartmentUser, todos.length]);
+  }, [loading, authLoading, morningDigestOpen, morningDigestMinimized, morningDigestUserId, authUser, isDepartmentUser, todos.length]);
 
   function openApprovalTodoOutcome(todo: TodoItem) {
     setApprovalOutcomeTarget(todo);
@@ -15196,24 +15206,35 @@ export default function Home() {
 
         <MorningDigestModal
           open={morningDigestOpen}
-          onClose={markMorningDigestShown}
+          onClose={() => applyMorningDigestEvent("dismiss")}
           todos={todos}
           conversationsById={conversationsById}
           authUser={authUser}
           todoActionLabel={todoActionLabel}
           onCall={todo => {
-            markMorningDigestShown();
+            applyMorningDigestEvent("act");
             void openCallFromTodo(todo as TodoItem);
           }}
           onMessage={todo => {
-            markMorningDigestShown();
+            applyMorningDigestEvent("act");
             openConversation(String(todo.convId));
           }}
           onOpenTaskInbox={() => {
-            markMorningDigestShown();
+            applyMorningDigestEvent("dismiss");
             goToSection("todos");
           }}
         />
+        {morningDigestMinimized && !morningDigestOpen ? (
+          <button
+            type="button"
+            className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-2 rounded-full bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--accent-contrast)] shadow-lg hover:opacity-90"
+            onClick={() => applyMorningDigestEvent("reopen")}
+            title="Reopen your morning digest"
+          >
+            <SideNavIcon name="todos" className="h-4 w-4" />
+            Morning digest · {todos.length}
+          </button>
+        ) : null}
 
         {approvalOutcomeOpen && approvalOutcomeTarget ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
