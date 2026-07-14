@@ -392,6 +392,36 @@ check("merged prompt carries the anti-fabrication watch rule + a URL negative ex
   );
 });
 
+// ── 8. narrative-extraction + normalization rules present in the merged prompt ──────────────
+// 2026-07-13 shadow review (the 0.5% decision disagreements): the anti-fabrication rules
+// over-corrected — a long STORY turn naming a real bike ("gator harley... 2005 cvo... sold the
+// bike out from under me") extracted NOTHING while legacy correctly got CVO/2005/used. The merged
+// prompt intentionally LEADS legacy here (like section 7): noise rules must not blank a bike the
+// customer actually described. Also pins the catalog display-form normalization ("Forty-Eight")
+// and the year-range-goes-in-year_min/max example. These must not be silently dropped.
+check("merged prompt carries the narrative-extraction rule + CVO story and Forty-Eight range examples", () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "services/api/src/domain/llmDraft.ts"),
+    "utf8"
+  );
+  assert.ok(
+    source.includes("Anti-fabrication is about NOISE, not length"),
+    "narrative-extraction rule missing from the merged prompt"
+  );
+  assert.ok(
+    source.includes("gator harley of leesburg"),
+    "CVO narrative few-shot missing from the merged semantic examples"
+  );
+  assert.ok(
+    source.includes("Normalize watch.model to its catalog display form"),
+    "catalog display-form normalization rule missing from the merged prompt"
+  );
+  assert.ok(
+    source.includes('"model":"Forty-Eight","year":"","year_min":2016,"year_max":2018'),
+    "Forty-Eight year-range few-shot missing from the merged semantic examples"
+  );
+});
+
 if (failures > 0) {
   console.error(`unified_slots_merged_shadow:eval FAILED (${failures} case(s))`);
   process.exit(1);
