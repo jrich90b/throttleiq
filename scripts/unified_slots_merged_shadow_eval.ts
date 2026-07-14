@@ -24,7 +24,8 @@ const {
   normalizeTradePayoffLLMOutput,
   normalizeTradeTargetLLMOutput,
   combineUnifiedSlotParse,
-  diffUnifiedSlotParse
+  diffUnifiedSlotParse,
+  applyMergedWatchRelevanceGuard
 } = await import("../services/api/src/domain/llmDraft.ts");
 
 let failures = 0;
@@ -420,6 +421,66 @@ check("merged prompt carries the narrative-extraction rule + CVO story and Forty
     source.includes('"model":"Forty-Eight","year":"","year_min":2016,"year_max":2018'),
     "Forty-Eight year-range few-shot missing from the merged semantic examples"
   );
+});
+
+// ── 9. merged-parser cutover: watch model-relevance guard ────────────────────
+// The DARK merged-live cutover (LLM_UNIFIED_SLOT_MERGED_LIVE) routes both paths
+// through the one-call parser, whose failure mode is watch OVER-ATTACHMENT on
+// non-watch turns. applyMergedWatchRelevanceGuard drops a set_watch model the
+// customer neither named this turn nor could mean on an actionable turn — BEFORE
+// it becomes a durable inventoryWatch. Pinned pure (no LLM) so the cutover's
+// safety belt can't silently regress. (Guard core is also pinned by model_authority:eval.)
+const setWatch = (model: string, extra?: Record<string, unknown>) => ({
+  watchAction: "set_watch" as const,
+  watch: { model, year: "2023", yearMin: null, yearMax: null, color: "black", condition: "used" as const, minPrice: null, maxPrice: 18000, monthlyBudget: null, downPayment: null, ...(extra ?? {}) },
+  departmentIntent: "none" as const,
+  contactPreferenceIntent: "none" as const,
+  mediaIntent: "none" as const,
+  serviceRecordsIntent: false,
+  payoffStatus: "unknown" as const,
+  needsLienHolderInfo: false,
+  providesLienHolderInfo: false,
+  tradeTargetValue: null,
+  confidence: 0.9
+});
+
+check("guard: model NAMED this turn is kept on a set_watch", () => {
+  const out = applyMergedWatchRelevanceGuard(setWatch("Street Glide") as any, "text me if a street glide comes in");
+  assert.equal(out!.watchAction, "set_watch");
+  assert.equal(out!.watch?.model, "Street Glide");
+});
+
+check("guard: model NOT named on a bare-ack turn is dropped (over-attachment), action + price kept", () => {
+  const out = applyMergedWatchRelevanceGuard(setWatch("Street Glide") as any, "👍 thanks!");
+  assert.equal(out!.watchAction, "set_watch", "action preserved — only the model is spurious");
+  assert.equal(out!.watch?.model, "", "over-attached model blanked");
+  assert.equal(out!.watch?.year, "");
+  assert.equal(out!.watch?.color, "");
+  assert.equal(out!.watch?.condition, "unknown");
+  assert.equal(out!.watch?.maxPrice, 18000, "a price band the customer stated is not collateral damage");
+});
+
+check("guard: model NOT named this turn but ACTIONABLE turn is kept (active subject)", () => {
+  // A real question is actionable — the model may be the thread's active subject,
+  // so the guard must NOT strip it (this is the over-strip failure mode).
+  const out = applyMergedWatchRelevanceGuard(setWatch("Street Glide") as any, "got any used ones under 18k?");
+  assert.equal(out!.watch?.model, "Street Glide");
+});
+
+check("guard: inert watch on a NON-watch turn (watchAction=none) is untouched", () => {
+  const parse = { ...setWatch("Street Glide"), watchAction: "none" as const };
+  const out = applyMergedWatchRelevanceGuard(parse as any, "👍");
+  assert.equal(out!.watch?.model, "Street Glide", "guard only acts on set_watch — none-turn slots are inert");
+});
+
+check("guard: set_watch with an empty model is a no-op", () => {
+  const out = applyMergedWatchRelevanceGuard(setWatch("") as any, "👍");
+  assert.equal(out!.watchAction, "set_watch");
+  assert.equal(out!.watch?.model, "");
+});
+
+check("guard: null parse passes through", () => {
+  assert.equal(applyMergedWatchRelevanceGuard(null, "anything"), null);
 });
 
 if (failures > 0) {
