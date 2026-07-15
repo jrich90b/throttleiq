@@ -304,6 +304,7 @@ import {
   parseWatchOptOutWithLLM,
   parsePostSaleOwnershipWithLLM,
   parseWatchScopeWithLLM,
+  parseFinanceDistressWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseNonMotorcycleTradeWithLLM,
   parseServiceAppointmentRequestWithLLM,
@@ -555,6 +556,7 @@ import {
   decideNonBuyerSurveyTurn,
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
+  decideFinanceDistressTurn,
   decideFinanceProcessQuestionTurn,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
@@ -2893,6 +2895,74 @@ async function resolveFinanceProcessHandoffReply(
   stopRelatedCadences(conv, "finance_process_question", { setMode: "manual_handoff" });
   recordRouteOutcome(scope, "finance_process_handoff", { convId: conv.id, leadKey: conv.leadKey });
   return buildFinanceProcessHandoffReply();
+}
+
+// Finance-distress hard gate (Joe ruling 2026-07-15): confidence floor (default 0.7).
+function financeDistressConfidenceMin(): number {
+  const raw = Number(process.env.LLM_FINANCE_DISTRESS_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the finance-distress parser only runs on distress-ish phrasings.
+// A gate, NOT comprehension: a hint miss falls through to existing behavior (fail-safe),
+// and the parser — not this regex — owns the distress-vs-normal-question decision.
+const FINANCE_DISTRESS_HINT_RE =
+  /\b(credit (score|history|report|union)|(bad|no|poor|damaged|shot|ruined|bruised|rebuild(ing)?|rough|terrible) credit|credit('s| is| was)? (bad|shot|ruined|gone|terrible|not great|poor)|bankrupt\w*|repossess\w*|repo\b|identity theft|high(er)? interest|(interest|rate|apr|payment)s? .{0,30}(high|crazy|ridiculous|insane|outrageous)|(ridiculous|crazy|insane|outrageous) .{0,30}(interest|rate|apr|payment)|can'?t (afford|swing|make the payment)|cannot afford|couldn'?t afford|out of my (budget|price range|league)|fixed income|disability|lost my job|laid off|unemploy\w*|hours (got |getting )?cut|financial (hardship|trouble|situation|problems)|money('s| is)? (tight|a problem)|struggling (financially|to)|paycheck to paycheck)\b/i;
+
+function financeDistressHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return FINANCE_DISTRESS_HINT_RE.test(t);
+}
+
+// Honest, warm handoff — NO solutioning (no co-signer suggestions, rate framing, or
+// approval odds; the open critic flags those as unauthorized financial advice). The
+// distressed customer gets empathy + a person, nothing else.
+function buildFinanceDistressHandoffReply(): string {
+  return "That's a completely fair concern, and it deserves a real conversation — not a text thread. I'm looping in our finance manager personally; they work through situations like this one-on-one and they'll be in touch with you shortly.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law).
+// Returns the handoff reply (and sets the payments handoff state + a manager todo + stops
+// cadence) ONLY when a confident, SELF-disclosed finance distress is detected; otherwise
+// null so the existing finance handling runs. Runs BEFORE the finance-process handoff in
+// both paths — a distressed turn can also contain process phrasing, and distress outranks.
+// Mirrors resolveFinanceProcessHandoffReply.
+async function resolveFinanceDistressHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!financeDistressHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("finance_distress_parser", () =>
+    parseFinanceDistressWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_FINANCE_DISTRESS_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-finance-distress-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideFinanceDistressTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    selfDisclosed: !!parse?.selfDisclosed,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: financeDistressConfidenceMin()
+  });
+  if (decision.kind !== "finance_distress_handoff") return null;
+  addTodo(
+    conv,
+    "payments",
+    `Finance-distress lead — needs a person from the finance team (keep it human; no automated suggestions). Customer said: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "finance_distress");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "finance_distress", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "finance_distress_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildFinanceDistressHandoffReply();
 }
 
 function nonMotorcycleTradeConfidenceMin(): number {
@@ -51521,6 +51591,25 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  // Finance-DISTRESS hard gate (parity with live /webhooks/twilio; distress outranks the
+  // finance-process handoff below). The decision lives entirely in the shared resolver +
+  // routeStateReducer — nothing here is hand-mirrored, so the local deliberately does NOT
+  // take the `regen*` mirrored-local naming (route-parity ratchet counts those as drift surface).
+  {
+    const distressHandoffReply = await resolveFinanceDistressHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (distressHandoffReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(distressHandoffReply);
+      }
+      return respondWithSmsRegeneratedDraft(distressHandoffReply);
+    }
+  }
+
   // Finance-process / logistics handoff (parity with live /webhooks/twilio).
   {
     const regenFinanceProcessReply = await resolveFinanceProcessHandoffReply(
@@ -57943,6 +58032,25 @@ if (authToken && signature) {
       turnFinanceIntent: true,
       financeContextIntent: true
     });
+  }
+
+  // Finance-DISTRESS hard gate (Joe ruling 2026-07-15): a self-disclosed credit problem /
+  // affordability hardship gets empathy + a human, never automated solutioning. Runs BEFORE
+  // the finance-process handoff (distress outranks). Parser-first + fail-safe (null =>
+  // existing finance handling). Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const financeDistressReply = await resolveFinanceDistressHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (financeDistressReply) {
+      return publishLiveTwilioReply(financeDistressReply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
   }
 
   // Finance-process / logistics handoff: a conditional/timing/sequencing question about the

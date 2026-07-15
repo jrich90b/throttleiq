@@ -1118,6 +1118,47 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
+// --- Finance-distress hard gate (Joe ruling 2026-07-15) --------------------
+//
+// A customer disclosing THEIR OWN credit problem / affordability struggle / financial
+// hardship gets a clean human handoff — never automated solutioning. Production miss
+// (John Geschwender, +17166060001): "due to a past identity theft I no longer have a
+// credit score and paying a ridiculous high interest just doesn't seem plausible" was
+// answered with "would a co-signer be a possibility?" — flagged by the open critic as
+// unauthorized financial advice. Every parser was confidently CORRECT about the words;
+// the failure was judgment, so the route itself is gated.
+//
+// Centralized + pure; the parser signal is fed in. FAIL DIRECTION: unsure => none, and
+// the existing finance handling runs (worst case = today's behavior). We only gate on a
+// confident, SELF-disclosed distress — a general "what score do you need?" question or
+// bike-price haggling must never be pulled away from its normal handler.
+// ---------------------------------------------------------------------------
+export type FinanceDistressTurnKind = "finance_distress_handoff" | "none";
+
+export type FinanceDistressTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "finance_distress" | "none"
+  selfDisclosed: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type FinanceDistressTurnDecision = {
+  kind: FinanceDistressTurnKind;
+};
+
+export function decideFinanceDistressTurn(
+  input: FinanceDistressTurnInput
+): FinanceDistressTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "finance_distress") return { kind: "none" };
+  if (!input.selfDisclosed) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "finance_distress_handoff" };
+}
+
 // --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
 //
 // A Harley dealer's standard trade flow is for MOTORCYCLES. Every so often a customer wants

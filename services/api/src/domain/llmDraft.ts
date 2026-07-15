@@ -3455,6 +3455,21 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   }
 };
 
+const FINANCE_DISTRESS_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "distress_kind", "self_disclosed", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["finance_distress", "none"] },
+    distress_kind: {
+      type: "string",
+      enum: ["credit_problem", "affordability", "hardship", "other", "none"]
+    },
+    self_disclosed: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
 const NON_MOTORCYCLE_TRADE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
@@ -8223,6 +8238,113 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { intent, explicitRequest, confidence };
+}
+
+// Finance DISTRESS (Joe ruling 2026-07-15, John Geschwender +17166060001): a customer
+// disclosing a credit problem, affordability hardship, or rate shock about THEIR OWN
+// situation must get a clean human handoff — never automated solutioning (co-signer
+// suggestions, rate framing, approval odds). The agent read every word of "due to a past
+// identity theft I no longer have a credit score" correctly and still replied "would a
+// co-signer be a possibility?" — a tone/judgment failure no confidence floor can catch,
+// so it's hard-gated here. Mirrors parseFinanceProcessQuestionWithLLM.
+export type FinanceDistressParse = {
+  intent: "finance_distress" | "none";
+  distressKind: "credit_problem" | "affordability" | "hardship" | "other" | "none";
+  selfDisclosed: boolean;
+  confidence?: number;
+};
+
+export async function parseFinanceDistressWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<FinanceDistressParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FINANCE_DISTRESS_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FINANCE_DISTRESS_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FINANCE_DISTRESS_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FINANCE_DISTRESS_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer is",
+    "disclosing FINANCIAL DISTRESS about their own situation — a credit problem (no/bad/damaged",
+    "credit, bankruptcy, repossession, identity theft), an affordability struggle (can't afford",
+    "the payment, rate/interest feels impossibly high FOR THEM), or a personal financial hardship",
+    "(job loss, fixed income, medical bills). These conversations need a human from the finance",
+    "team — the agent must NOT suggest solutions (co-signers, rates, approval framing).",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "finance_distress": the customer states THEIR OWN credit problem, affordability struggle,',
+    "  or financial hardship — even mid-conversation, even phrased as resignation ('oh well',",
+    "  'doesn't seem plausible for me', 'guess I can't').",
+    '- "none": a normal finance question (what rate, what payment, how much down, do I qualify),',
+    "  price NEGOTIATION on the bike ('too expensive', 'can you do better on price'), a general",
+    "  question about credit requirements not tied to their own stated problem, or a non-finance turn.",
+    "",
+    "Hard rules (this gate pulls a lead away from automation — precision matters):",
+    "- self_disclosed=true ONLY when the customer describes their own situation ('my credit', 'I",
+    "  can't afford', 'I lost my job') — not hypotheticals or questions about requirements.",
+    '- Asking "what credit score do you need?" with no stated problem = none (normal question).',
+    '- Haggling on the BIKE price ("that\'s too much", "I\'ve seen it cheaper") = none.',
+    "- distress_kind: credit_problem | affordability | hardship | other; use none with intent none.",
+    "- confidence is 0..1; use >= 0.7 only when the self-disclosed distress is clear.",
+    "",
+    "Examples:",
+    '- "Oh well, due to a past identity theft I no longer have a credit score and paying a ridiculous high interest for that just doesn\'t seem plausible for me" -> {"intent":"finance_distress","distress_kind":"credit_problem","self_disclosed":true,"confidence":0.95}',
+    '- "my credit is shot after my divorce, not sure I could even get approved" -> {"intent":"finance_distress","distress_kind":"credit_problem","self_disclosed":true,"confidence":0.93}',
+    '- "I went through a bankruptcy last year so financing is probably a no go" -> {"intent":"finance_distress","distress_kind":"credit_problem","self_disclosed":true,"confidence":0.93}',
+    '- "honestly with my hours getting cut I can\'t swing that payment right now" -> {"intent":"finance_distress","distress_kind":"affordability","self_disclosed":true,"confidence":0.9}',
+    '- "I\'m on a fixed income so those numbers scare me" -> {"intent":"finance_distress","distress_kind":"affordability","self_disclosed":true,"confidence":0.88}',
+    '- "what rate can I get?" -> {"intent":"none","distress_kind":"none","self_disclosed":false,"confidence":0.92}',
+    '- "what credit score do you guys usually need?" -> {"intent":"none","distress_kind":"none","self_disclosed":false,"confidence":0.85}',
+    '- "that\'s too much, I\'ve seen the same bike for 2 grand less" -> {"intent":"none","distress_kind":"none","self_disclosed":false,"confidence":0.9}',
+    '- "how much do I need for a down payment?" -> {"intent":"none","distress_kind":"none","self_disclosed":false,"confidence":0.9}',
+    '- "can I come by Saturday?" -> {"intent":"none","distress_kind":"none","self_disclosed":false,"confidence":0.95}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "finance_distress_parser",
+      schema: FINANCE_DISTRESS_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 90,
+      debugTag: "llm-finance-distress-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: FinanceDistressParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "finance_distress" ? "finance_distress" : "none";
+  const kindRaw = String(parsed.distress_kind ?? "").toLowerCase();
+  const distressKind: FinanceDistressParse["distressKind"] =
+    kindRaw === "credit_problem" || kindRaw === "affordability" || kindRaw === "hardship" || kindRaw === "other"
+      ? (kindRaw as FinanceDistressParse["distressKind"])
+      : "none";
+  const selfDisclosed = parsed.self_disclosed === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, distressKind, selfDisclosed, confidence };
 }
 
 // Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
