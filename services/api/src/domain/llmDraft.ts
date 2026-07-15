@@ -10991,7 +10991,14 @@ export async function parseJourneyIntentWithLLM(args: {
     'input: "Customer: Just wanting to sign up for emails and text messages of any events or promotions you may run thru out the year. Thanks" output: {"journey_intent":"marketing_event","marketing_kind":"list_opt_in","explicit_request":true,"confidence":0.93}',
     'input: "Customer: Add me to your mailing list please." output: {"journey_intent":"marketing_event","marketing_kind":"list_opt_in","explicit_request":true,"confidence":0.92}',
     'input: "Customer: Thanks, I will think about it." output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.95}',
-    'input: "Customer: I already bought elsewhere." output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.93}'
+    'input: "Customer: I already bought elsewhere." output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.93}',
+    // Post-sale visit/pickup COORDINATION is a continuation of the existing thread, NOT a new
+    // sale (Nicholas Braun, +17166286477, 2026-07-15: after a SOLD unit, the dealer texted "come
+    // down for the backrest whenever" and "Perfect man, are you there today?" was misread as a new
+    // sale_trade journey → forked a duplicate ::2 thread that then auto-sent). Fail toward none.
+    'input: "Customer: Perfect man, are you there today?" output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.9}',
+    'input: "Customer: When can I come grab the backrest?" output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.9}',
+    'input: "Customer: On my way to pick up my bike, what time do you close?" output: {"journey_intent":"none","marketing_kind":"none","explicit_request":false,"confidence":0.9}'
   ];
   const prompt = [
     "You are a parser for inbound dealership customer messages.",
@@ -11010,6 +11017,11 @@ export async function parseJourneyIntentWithLLM(args: {
     "",
     "Rules:",
     "- Use sale_trade only for clear sales or trade-in intent.",
+    "- A message COORDINATING a visit, pickup, or delivery — 'are you there today?', 'what time",
+    "  do you close', 'on my way', 'when can I come grab it / the backrest / my bike' — is a",
+    "  CONTINUATION of the existing thread, NOT sale_trade. Choose none unless the customer names a",
+    "  NEW bike to buy or a trade to appraise. Weigh Recent messages: a reply to the dealer's own",
+    "  message about a pickup/delivery/post-sale item is none.",
     "- If uncertain between sale_trade and anything else, choose none.",
     "- A plain request to 'sign up for emails/texts' about events/promos is list_opt_in, NOT sweepstakes_entry — there is no contest to win.",
     "- explicit_request=true only when the customer clearly asks for action.",
