@@ -11,6 +11,7 @@ import { isDemoDayEventQuestionText } from "./workflowRegressionGuards.js";
 import { findComputerLikePhrases, bannedPhraseAvoidanceInstruction } from "./voiceBannedPhrases.js";
 import { decideDraftModelArm, type DraftModelArm } from "./routeStateReducer.js";
 import { passesModelRelevanceGuard } from "./turnUnderstandingAuthority.js";
+import { appendParserCaptureRecord, buildParserCaptureRecord } from "./parserCapture.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -4260,6 +4261,28 @@ async function requestStructuredJson(args: {
     return parsed && typeof parsed === "object" ? parsed : null;
   };
 
+  // Distillation data flywheel: durably capture every successful parser
+  // input→output pair (parserCapture.ts). Best-effort logging only — a capture
+  // failure can never disturb the parse result or the live customer path.
+  const captureStartedAt = Date.now();
+  const capture = (output: any, source: "structured" | "fallback"): void => {
+    try {
+      appendParserCaptureRecord(
+        buildParserCaptureRecord({
+          at: new Date().toISOString(),
+          schemaName: args.schemaName,
+          model: args.model,
+          source,
+          elapsedMs: Date.now() - captureStartedAt,
+          prompt: args.prompt,
+          output
+        })
+      );
+    } catch {
+      // never let logging touch the parse path
+    }
+  };
+
   try {
     const resp = await client.responses.parse({
       model: args.model,
@@ -4284,11 +4307,15 @@ async function requestStructuredJson(args: {
     });
     const parsedFromApi = (resp as any)?.output_parsed;
     if (parsedFromApi && typeof parsedFromApi === "object") {
+      capture(parsedFromApi, "structured");
       return parsedFromApi;
     }
     const raw = resp.output_text?.trim() ?? "";
     const parsed = parseObject(raw);
-    if (parsed) return parsed;
+    if (parsed) {
+      capture(parsed, "structured");
+      return parsed;
+    }
     if (args.debug) {
       console.warn(`[${args.debugTag ?? "llm-json-parser"}] structured parse failed`, {
         model: args.model,
@@ -4323,7 +4350,10 @@ async function requestStructuredJson(args: {
     });
     const raw = resp.output_text?.trim() ?? "";
     const parsed = parseObject(raw);
-    if (parsed) return parsed;
+    if (parsed) {
+      capture(parsed, "fallback");
+      return parsed;
+    }
     if (args.debug) {
       console.warn(`[${args.debugTag ?? "llm-json-parser"}] fallback parse failed`, {
         model: args.model,
