@@ -305,6 +305,7 @@ import {
   parsePostSaleOwnershipWithLLM,
   parseWatchScopeWithLLM,
   parseFinanceProcessQuestionWithLLM,
+  parseFinanceHardshipDisclosureWithLLM,
   parseNonMotorcycleTradeWithLLM,
   parseServiceAppointmentRequestWithLLM,
   summarizeVoiceTranscriptWithLLM,
@@ -556,6 +557,7 @@ import {
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
+  decideFinanceHardshipTurn,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
@@ -2893,6 +2895,72 @@ async function resolveFinanceProcessHandoffReply(
   stopRelatedCadences(conv, "finance_process_question", { setMode: "manual_handoff" });
   recordRouteOutcome(scope, "finance_process_handoff", { convId: conv.id, leadKey: conv.leadKey });
   return buildFinanceProcessHandoffReply();
+}
+
+// Finance-hardship staff handoff: confidence floor (default 0.7).
+function financeHardshipConfidenceMin(): number {
+  const raw = Number(process.env.LLM_FINANCE_HARDSHIP_CONFIDENCE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.7;
+}
+
+// Cheap pre-filter so the finance-hardship parser only runs on plausible credit-hardship
+// phrasings. A gate, NOT comprehension: a hint miss falls through to existing behavior
+// (fail-safe), and the parser — not this regex — owns the hardship-vs-normal-finance decision.
+const FINANCE_HARDSHIP_HINT_RE =
+  /\b(credit score|no credit|bad credit|low credit|poor credit|credit is (?:\w+\s+){0,2}(bad|shot|rough|terrible|poor|low)|bankrupt|bankruptcy|repo(ssession|ed)?|charge[-\s]?off|identity theft|denied|declined|turned down|didn'?t qualify|won'?t qualify|can'?t qualify|do(n'?t| not) qualify|get approved|even.*approv|high interest|ridiculous.*(rate|interest)|fixed income|collections?)\b/i;
+
+function financeHardshipHint(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (!t) return false;
+  return FINANCE_HARDSHIP_HINT_RE.test(t);
+}
+
+// Warm, HONEST hand-off — NO solutioning. The assistant can't (and by policy shouldn't)
+// suggest a co-signer, a rate, or approval odds to a customer disclosing a credit hardship;
+// it acknowledges with empathy and routes to the finance manager, who handles it privately.
+function buildFinanceHardshipHandoffReply(): string {
+  return "I really appreciate you sharing that, and I understand completely. This is exactly the kind of thing our finance manager handles personally and confidentially — let me loop them in and they'll reach out to you directly.";
+}
+
+// Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
+// the warm hand-off reply (and sets the payments handoff state + a finance-specialist todo +
+// stops cadence) ONLY when a confident, explicit finance-HARDSHIP disclosure is detected;
+// otherwise null so the existing finance handling runs. Mirrors resolveFinanceProcessHandoffReply.
+async function resolveFinanceHardshipHandoffReply(
+  conv: Conversation | null | undefined,
+  inboundText: string,
+  providerMessageId: string | null | undefined,
+  scope: "live" | "regen"
+): Promise<string | null> {
+  const text = String(inboundText ?? "").trim();
+  if (!text || !conv) return null;
+  if (!financeHardshipHint(text)) return null; // pre-filter; miss => existing behavior
+  const parse = await safeLlmParse("finance_hardship_disclosure_parser", () =>
+    parseFinanceHardshipDisclosureWithLLM({ text, history: buildHistory(conv, 8) })
+  );
+  if (process.env.LLM_FINANCE_HARDSHIP_PARSER_DEBUG === "1" && parse) {
+    console.log("[llm-finance-hardship-parse]", { convId: conv.id, ...parse });
+  }
+  const decision = decideFinanceHardshipTurn({
+    parserAccepted: !!parse,
+    intent: parse?.intent ?? null,
+    explicitRequest: !!parse?.explicitRequest,
+    confidence: parse?.confidence ?? 0,
+    confidenceMin: financeHardshipConfidenceMin()
+  });
+  if (decision.kind !== "finance_hardship_handoff") return null;
+  addTodo(
+    conv,
+    "payments",
+    `Finance credit-hardship — needs the finance manager (no bot solutioning). Customer said: ${text}`,
+    providerMessageId ?? undefined
+  );
+  setDialogState(conv, "payments_handoff");
+  setFollowUpMode(conv, "manual_handoff", "finance_hardship");
+  stopFollowUpCadence(conv, "manual_handoff");
+  stopRelatedCadences(conv, "finance_hardship", { setMode: "manual_handoff" });
+  recordRouteOutcome(scope, "finance_hardship_handoff", { convId: conv.id, leadKey: conv.leadKey });
+  return buildFinanceHardshipHandoffReply();
 }
 
 function nonMotorcycleTradeConfidenceMin(): number {
@@ -51511,6 +51579,23 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     return respondWithSmsRegeneratedDraft(reply);
   }
 
+  // Finance-hardship staff handoff (parity with live /webhooks/twilio). Placed BEFORE the
+  // affordability objection so a credit-hardship disclosure takes precedence.
+  {
+    const regenFinanceHardshipReply = await resolveFinanceHardshipHandoffReply(
+      conv,
+      event.body ?? "",
+      (inbound as any)?.providerMessageId,
+      "regen"
+    );
+    if (regenFinanceHardshipReply) {
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(regenFinanceHardshipReply);
+      }
+      return respondWithSmsRegeneratedDraft(regenFinanceHardshipReply);
+    }
+  }
+
   if (isAffordabilityRideConfidenceObjectionText(event.body ?? "")) {
     const reply = buildAffordabilityRideConfidenceObjectionReply();
     setDialogState(conv, "pricing_init");
@@ -57916,6 +58001,26 @@ if (authToken && signature) {
       turnFinanceIntent: false,
       turnSchedulingIntent: false
     });
+  }
+
+  // Finance-hardship staff handoff: a customer disclosing a credit/financing hardship (no/bad
+  // credit, prior denial, bankruptcy, identity theft, fear of a high rate) gets a warm hand-off
+  // to the finance manager — NEVER a bot-proposed solution (co-signer/rate/approval odds).
+  // Placed BEFORE the affordability objection so credit-hardship takes precedence. Parser-first +
+  // fail-safe (null => existing finance handling). Same resolver runs in /conversations/:id/regenerate.
+  if (event.provider === "twilio") {
+    const financeHardshipReply = await resolveFinanceHardshipHandoffReply(
+      conv,
+      semanticInboundText,
+      event.providerMessageId,
+      "live"
+    );
+    if (financeHardshipReply) {
+      return publishLiveTwilioReply(financeHardshipReply, {
+        turnFinanceIntent: true,
+        financeContextIntent: true
+      });
+    }
   }
 
   // Deterministic detector — KEEP (re-classified 2026-06-22 by the de-tangle fail-direction

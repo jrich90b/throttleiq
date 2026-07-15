@@ -35,7 +35,14 @@ import path from "node:path";
 // 251 (2026-07-13): initial snapshot at guard introduction — 245 distinct, 151 with a
 // live-path twin. Migrating a mirrored pair into a shared decide*/resolve* helper is the
 // de-tangle program's unit of progress; lower this number with every such PR.
-const MIRRORED_LOCALS_BASELINE = 251;
+// 252 (2026-07-15): +1 for a NEW both-path customer route — the finance-hardship staff handoff
+// (Joe ruling 2026-07-15). The DECISION is centralized (decideFinanceHardshipTurn) and the
+// reply is a single shared resolver (resolveFinanceHardshipHandoffReply) both paths call, so
+// this is the sanctioned shared-resolver pattern, NOT new hand-mirrored decision logic — but
+// CLAUDE.md's both-paths parity law still requires one regen call-site local (regenFinanceHardshipReply)
+// to branch on email/sms. A brand-new shared handoff is the ONLY sanctioned reason to raise this;
+// it does NOT license hand-mirroring inline decision logic. Resume ratcheting DOWN from 252.
+const MIRRORED_LOCALS_BASELINE = 252;
 
 // ── Single-path decisions, each with a reason. New single-path symbols FAIL. ──
 // Entries baselined 2026-07-13 at guard introduction. "verify on touch": the reason is a

@@ -1118,6 +1118,45 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
+// --- Finance-hardship staff handoff (2026-07-15) ---------------------------
+//
+// When a customer discloses a personal CREDIT / FINANCING HARDSHIP (no/bad credit, prior
+// denial, bankruptcy, identity theft affecting credit, fear of a high rate, "I won't
+// qualify"), the assistant must NOT propose a financing solution (co-signer, a rate,
+// approval odds) — that is finance advice outside its lane. It hands the lead to the finance
+// manager warmly and without solutioning (Joe ruling 2026-07-15; extends the 2026-07-11
+// "finance needs-info always staff handoff" ruling). Centralized + pure; the parser signal
+// is fed in and applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+//
+// FAIL DIRECTION: unsure => none, and the existing finance handling runs. We only hand off on
+// a confident, explicit hardship disclosure.
+// ---------------------------------------------------------------------------
+export type FinanceHardshipTurnKind = "finance_hardship_handoff" | "none";
+
+export type FinanceHardshipTurnInput = {
+  parserAccepted: boolean;
+  intent?: string | null; // "finance_hardship" | "none"
+  explicitRequest: boolean;
+  confidence: number;
+  confidenceMin: number;
+};
+
+export type FinanceHardshipTurnDecision = {
+  kind: FinanceHardshipTurnKind;
+};
+
+export function decideFinanceHardshipTurn(
+  input: FinanceHardshipTurnInput
+): FinanceHardshipTurnDecision {
+  if (!input.parserAccepted) return { kind: "none" };
+  if (input.intent !== "finance_hardship") return { kind: "none" };
+  if (!input.explicitRequest) return { kind: "none" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { kind: "none" };
+  }
+  return { kind: "finance_hardship_handoff" };
+}
+
 // --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
 //
 // A Harley dealer's standard trade flow is for MOTORCYCLES. Every so often a customer wants

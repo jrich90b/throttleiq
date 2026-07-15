@@ -2156,6 +2156,25 @@ export type FinanceProcessQuestionParse = {
   confidence?: number;
 };
 
+export type FinanceHardshipDisclosureParse = {
+  // "finance_hardship": the customer DISCLOSED a personal CREDIT / FINANCING HARDSHIP that a
+  //   human finance specialist must handle privately, and where the agent must NOT propose a
+  //   financing SOLUTION (co-signer, a specific rate/APR, approval odds, "we can work through
+  //   it with X"): no/thin/damaged credit score, bad/"shot"/low credit, prior bankruptcy or
+  //   repossession, a past finance DENIAL, identity theft affecting their credit, fear of a
+  //   high interest rate tied to their credit, fixed income / "I won't qualify". The honest
+  //   move is a warm, non-solutioning hand-off to the finance manager (Joe ruling 2026-07-15:
+  //   finance-distress replies are a plain staff hand-off — no bot solutioning; extends the
+  //   2026-07-11 "finance needs-info always staff handoff" ruling).
+  // "none": a normal finance NUMBER question (payment/rate/amount down), a finance PROCESS
+  //   question (another handler owns that), general affordability/budget talk with no credit
+  //   hardship, or any non-finance turn. Fail here when unsure — a false "none" just runs the
+  //   existing finance handling.
+  intent: "finance_hardship" | "none";
+  explicitRequest: boolean;
+  confidence?: number;
+};
+
 export type NonMotorcycleTradeParse = {
   // The customer wants to trade in / put toward the deal an item that is NOT a motorcycle
   // (a motorcycle camper/trailer, RV, car/truck, boat/jet ski, ATV/UTV, snowmobile, etc.).
@@ -3450,6 +3469,17 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
   required: ["intent", "explicit_request", "confidence"],
   properties: {
     intent: { type: "string", enum: ["finance_process_handoff", "none"] },
+    explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["intent", "explicit_request", "confidence"],
+  properties: {
+    intent: { type: "string", enum: ["finance_hardship", "none"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
@@ -8217,6 +8247,99 @@ export async function parseFinanceProcessQuestionWithLLM(args: {
 
   const intent: FinanceProcessQuestionParse["intent"] =
     String(parsed.intent ?? "").toLowerCase() === "finance_process_handoff" ? "finance_process_handoff" : "none";
+  const explicitRequest = parsed.explicit_request === true;
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { intent, explicitRequest, confidence };
+}
+
+// Detects a customer DISCLOSING a personal credit/financing hardship (no/bad credit, prior
+// denial or bankruptcy, identity theft affecting credit, fear of a high rate, "I won't
+// qualify") so the agent hands off to the finance manager WITHOUT proposing a co-signer, a
+// rate, or approval framing (Joe ruling 2026-07-15). Mirrors parseFinanceProcessQuestionWithLLM.
+// Fail direction: unsure => "none" and the existing finance handling runs.
+export async function parseFinanceHardshipDisclosureWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<FinanceHardshipDisclosureParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_FINANCE_HARDSHIP_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_FINANCE_HARDSHIP_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_FINANCE_HARDSHIP_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_FINANCE_HARDSHIP_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
+  const prompt = [
+    "You read SMS in a Harley dealership sales thread and decide whether the customer just",
+    "DISCLOSED a personal CREDIT / FINANCING HARDSHIP — a sensitive situation that our finance",
+    "manager must handle privately and where our texting assistant must NOT propose a financing",
+    "solution (no co-signer suggestion, no specific rate/APR, no approval odds, no 'we can work",
+    "through it with X'). Return only JSON that matches the provided schema.",
+    "",
+    "Classify intent:",
+    '- "finance_hardship": the customer reveals a credit/qualifying hardship or fear tied to it —',
+    "  no credit score / thin file, bad/low/'shot' credit, a prior finance DENIAL, bankruptcy or",
+    "  repossession, identity theft affecting their credit, worry about a high interest rate",
+    "  because of their credit, fixed income or 'I won't/can't qualify'. explicit_request need not",
+    "  be a literal question — a disclosure ('my credit is rough') still counts.",
+    '- "none": a normal finance NUMBER question (payment, rate, how much down), a finance PROCESS',
+    "  question (insurance/paperwork timing), plain affordability/budget talk with NO credit",
+    "  hardship ('trying to stay under $500/mo'), or any non-finance turn (scheduling, availability,",
+    "  trade, photos, social).",
+    "",
+    "Hard rules (precision matters — don't pull normal finance questions into the hardship handoff):",
+    "- A pure budget/payment target with no credit concern ('I want to keep it around $400/month') = none.",
+    "- 'What rate can I get?' with no hardship disclosure = none (that's a number question).",
+    "- Hand off (finance_hardship) the moment the customer ties the ask to bad/no credit, a denial,",
+    "  bankruptcy, identity theft, or fear of a high rate because of their credit.",
+    "- explicit_request=true when the customer clearly surfaced the hardship this turn.",
+    "- confidence is 0..1; use >= 0.7 only when the hardship read is clear.",
+    "",
+    "Examples:",
+    '- "due to a past identity theft I no longer have a credit score and paying a ridiculous high interest just doesn\'t seem plausible for me" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.95}',
+    '- "my credit is pretty bad, not sure I\'d even get approved" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.93}',
+    '- "I had a bankruptcy a couple years ago, does that matter?" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.9}',
+    '- "got denied at another dealer, can you guys do anything?" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.9}',
+    '- "I\'m on a fixed income and worried the rate would be too high" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.85}',
+    '- "what would my monthly payment be?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    '- "trying to stay under $500 a month" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
+    '- "what rate can I get?" -> {"intent":"none","explicit_request":false,"confidence":0.88}',
+    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    "",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "finance_hardship_disclosure_parser",
+      schema: FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-finance-hardship-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const intent: FinanceHardshipDisclosureParse["intent"] =
+    String(parsed.intent ?? "").toLowerCase() === "finance_hardship" ? "finance_hardship" : "none";
   const explicitRequest = parsed.explicit_request === true;
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
