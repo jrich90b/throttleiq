@@ -1038,6 +1038,13 @@ function optionalTextVerbosity(model: string): Record<string, { verbosity: "low"
   return isGpt5Model(model) ? { text: { verbosity: "low" } } : {};
 }
 
+// Output-token budget for the campaign copy calls. gpt-5-mini is a reasoning model and the
+// copy prompt asks for a full responsive HTML email (even alongside the SMS body), so 1800
+// truncated the response before the JSON closed — the parse then failed and generation fell
+// back to a template that ignored the attached brief. Give the JSON room to finish. Kept in
+// line with the email-HTML rescue budget (5200) with headroom. See campaign_copy_budget:eval.
+export const CAMPAIGN_COPY_MAX_OUTPUT_TOKENS = 6000;
+
 function toSourceHits(result: Awaited<ReturnType<typeof searchGoogleCse>>): CampaignSourceHit[] {
   if (!result?.hits?.length) return [];
   return result.hits.slice(0, 8).map(hit => ({
@@ -2179,7 +2186,7 @@ async function tryGenerateWithLlm(args: {
       input: prompt,
       ...optionalReasoning(model),
       ...optionalTemperature(model, 0.2),
-      max_output_tokens: 1800,
+      max_output_tokens: CAMPAIGN_COPY_MAX_OUTPUT_TOKENS,
       text: {
         format: {
           type: "json_schema",
@@ -2258,7 +2265,7 @@ async function tryGenerateWithLlm(args: {
       ...optionalReasoning(model),
       ...optionalTextVerbosity(model),
       ...optionalTemperature(model, 0.2),
-      max_output_tokens: 1800
+      max_output_tokens: CAMPAIGN_COPY_MAX_OUTPUT_TOKENS
     });
     recordOpenAIUsage(resp, {
       feature: "campaign_studio",
