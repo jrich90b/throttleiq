@@ -3533,8 +3533,10 @@ export default function Home() {
   const loadConversationRef = useRef<(id: string) => Promise<void>>(async () => {});
   const selectedIdRef = useRef<string | null>(null);
   const refreshConversationsRef = useRef<() => Promise<void>>(async () => {});
+  const refreshTodosRef = useRef<() => Promise<void>>(async () => {});
   const refreshSelectedRef = useRef<(id: string) => Promise<void>>(async () => {});
   const lastConversationsSigRef = useRef<string>("");
+  const lastTodosSigRef = useRef<string>("");
   const lastSelectedSigRef = useRef<string>("");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -5483,7 +5485,16 @@ export default function Home() {
   async function refreshTodos() {
     const r = await fetch("/api/todos", { cache: "no-store" });
     const data = await r.json().catch(() => null);
-    setTodos((data?.todos as TodoItem[]) ?? []);
+    const next = (data?.todos as TodoItem[]) ?? [];
+    // Skip the state update (and re-render) when nothing changed, so the 4s poll doesn't churn
+    // the inbox. The /todos payload is open-only, so an auto-closed task simply drops out — the
+    // id set changing is the main signal; dueAt/reminderAt/outcome catch in-place snooze/outcome edits.
+    const sig = next
+      .map(t => `${t.id}:${t.dueAt ?? ""}:${t.reminderAt ?? ""}:${t.outcome ?? ""}:${t.appointmentOutcomeStatus ?? ""}`)
+      .join("|");
+    if (sig === lastTodosSigRef.current) return;
+    lastTodosSigRef.current = sig;
+    setTodos(next);
   }
 
   async function refreshSelectedConversation(id: string) {
@@ -7353,6 +7364,10 @@ export default function Home() {
   });
 
   useEffect(() => {
+    refreshTodosRef.current = refreshTodos;
+  });
+
+  useEffect(() => {
     refreshSelectedRef.current = refreshSelectedConversation;
   });
 
@@ -7483,6 +7498,9 @@ export default function Home() {
     if (!authUser) return;
     const t = window.setInterval(() => {
       void refreshConversationsRef.current();
+      // Keep the task inbox live too, so a task that auto-closes on the backend (e.g. a logged
+      // call/inbound fulfills it) drops off without a manual page refresh. Skip on hidden tabs.
+      if (document.visibilityState !== "hidden") void refreshTodosRef.current();
       const id = selectedIdRef.current;
       if (id) void refreshSelectedRef.current(id);
     }, 4000);
