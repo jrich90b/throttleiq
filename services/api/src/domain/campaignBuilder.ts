@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import OpenAI from "openai";
 import type {
@@ -535,6 +536,92 @@ type BriefDocContext = {
   excerpt: string;
 };
 
+// How many characters of extracted brief text to feed the copy LLM per document.
+// A one-page promo flyer / brief runs a few thousand characters; 900 (the old cap)
+// truncated most briefs down to a headline. Six docs max keeps the prompt bounded.
+const BRIEF_EXCERPT_MAX = 4000;
+
+const BRIEF_TEXT_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".json",
+  ".yaml",
+  ".yml",
+  ".html",
+  ".htm"
+]);
+
+type PdfParseFn = (buffer: Buffer) => Promise<{ text?: string }>;
+const requireForPdf = createRequire(import.meta.url);
+let cachedPdfParse: PdfParseFn | null | undefined;
+
+function getPdfParse(): PdfParseFn | null {
+  if (cachedPdfParse !== undefined) return cachedPdfParse;
+  try {
+    cachedPdfParse = requireForPdf("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
+  } catch {
+    cachedPdfParse = null;
+  }
+  return cachedPdfParse;
+}
+
+/**
+ * Turn an uploaded reference-file buffer into brief context the copy LLM can actually
+ * read. This is where an attached PDF flyer or text brief becomes real prompt content
+ * instead of a placeholder — the reference-file picker accepts .pdf/.txt/.md/.csv/etc,
+ * so every accepted type has to yield usable text here or the campaign draft ignores it.
+ * PDF parsing is injectable so the eval can pin the dispatch contract deterministically.
+ */
+export async function extractBriefExcerpt(
+  buffer: Buffer,
+  ext: string,
+  deps: { parsePdf?: PdfParseFn | null } = {}
+): Promise<{ type: BriefDocContext["type"]; excerpt: string }> {
+  if (!buffer.length) {
+    return { type: "missing", excerpt: "File was empty." };
+  }
+  const lower = String(ext ?? "").toLowerCase();
+
+  if (lower === ".pdf") {
+    const parsePdf = deps.parsePdf !== undefined ? deps.parsePdf : getPdfParse();
+    if (parsePdf) {
+      try {
+        const parsed = await parsePdf(buffer);
+        const excerpt = normalizeWhitespace(String(parsed?.text ?? "")).slice(0, BRIEF_EXCERPT_MAX);
+        if (excerpt) {
+          return { type: "text", excerpt };
+        }
+        return {
+          type: "pdf",
+          excerpt:
+            "PDF uploaded but no selectable text was found (likely scanned/image-only). Use the file as the promotion/event source of truth."
+        };
+      } catch {
+        // fall through to placeholder below
+      }
+    }
+    return {
+      type: "pdf",
+      excerpt: "PDF uploaded. Text could not be extracted; use the file as the promotion/event source of truth."
+    };
+  }
+
+  if (BRIEF_TEXT_EXTENSIONS.has(lower)) {
+    const excerpt = normalizeWhitespace(buffer.toString("utf8")).slice(0, BRIEF_EXCERPT_MAX);
+    return {
+      type: "text",
+      excerpt: excerpt || "Text file uploaded (empty after normalization)."
+    };
+  }
+
+  return {
+    type: "binary",
+    excerpt: "File uploaded. Treat as supporting campaign brief context."
+  };
+}
+
 async function readBriefContextFromUrl(url: string): Promise<BriefDocContext> {
   const filePath = localCampaignUploadPathForUrl(url);
   if (!filePath) {
@@ -547,41 +634,8 @@ async function readBriefContextFromUrl(url: string): Promise<BriefDocContext> {
   const ext = path.extname(filePath).toLowerCase();
   try {
     const buffer = await fs.readFile(filePath);
-    if (!buffer.length) {
-      return { url, type: "missing", excerpt: "File was empty." };
-    }
-    if (ext === ".pdf") {
-      return {
-        url,
-        type: "pdf",
-        excerpt: "PDF uploaded. Use file as promotion/event source of truth."
-      };
-    }
-    const textExt = new Set([
-      ".txt",
-      ".md",
-      ".markdown",
-      ".csv",
-      ".json",
-      ".yaml",
-      ".yml",
-      ".html",
-      ".htm"
-    ]);
-    if (textExt.has(ext)) {
-      const raw = buffer.toString("utf8");
-      const excerpt = normalizeWhitespace(raw).slice(0, 900);
-      return {
-        url,
-        type: "text",
-        excerpt: excerpt || "Text file uploaded (empty after normalization)."
-      };
-    }
-    return {
-      url,
-      type: "binary",
-      excerpt: "File uploaded. Treat as supporting campaign brief context."
-    };
+    const { type, excerpt } = await extractBriefExcerpt(buffer, ext);
+    return { url, type, excerpt };
   } catch {
     return {
       url,
