@@ -63,15 +63,49 @@ async function main() {
   assert.ok(capped.excerpt.length > 900, "excerpt cap must be larger than the old 900-char truncation");
   assert.ok(capped.excerpt.length <= 4000, "excerpt stays bounded for the prompt");
 
-  // 7) Unknown binary (e.g. .docx today) -> supporting-context placeholder, not text.
-  const bin = await extractBriefExcerpt(Buffer.from([0x50, 0x4b, 0x03, 0x04]), ".docx");
+  // 7) Unknown binary (e.g. .xlsx) -> supporting-context placeholder, not text.
+  const bin = await extractBriefExcerpt(Buffer.from([0x50, 0x4b, 0x03, 0x04]), ".xlsx");
   assert.equal(bin.type, "binary", "unknown binary stays type binary");
 
   // 8) Empty file -> missing.
   const empty = await extractBriefExcerpt(Buffer.alloc(0), ".pdf");
   assert.equal(empty.type, "missing", "empty file is missing");
 
-  console.log("campaign_brief_extraction_eval: OK (8 checks)");
+  // 9) Word .docx with real body text -> extracted text reaches the prompt.
+  //    Built with the same jszip the extractor uses so it exercises the real docx path.
+  const JsZip = (await import("jszip")).default;
+  const zip = new JsZip();
+  const docXml =
+    '<?xml version="1.0"?><w:document xmlns:w="x"><w:body>' +
+    "<w:p><w:r><w:t>Fall Service Special: $89.95 oil change</w:t></w:r></w:p>" +
+    "<w:p><w:r><w:t>Book by October 31 &amp; save.</w:t></w:r></w:p>" +
+    "</w:body></w:document>";
+  zip.file("word/document.xml", docXml);
+  const docxBuf = await zip.generateAsync({ type: "nodebuffer" });
+  const docx = await extractBriefExcerpt(docxBuf, ".docx");
+  assert.equal(docx.type, "text", "valid .docx should extract as text");
+  assert.ok(docx.excerpt.includes("Fall Service Special"), "docx excerpt carries body text");
+  assert.ok(docx.excerpt.includes("$89.95"), "docx excerpt carries promo specifics");
+  assert.ok(docx.excerpt.includes("October 31 & save"), "docx entities decoded (&amp; -> &)");
+
+  // 10) Corrupt .docx (zip magic but not a real docx) -> binary placeholder, no crash.
+  const badDocx = await extractBriefExcerpt(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]), ".docx");
+  assert.equal(badDocx.type, "binary", "corrupt .docx falls back to binary");
+
+  // 11) Injected docx parser: text -> type text; throw -> binary.
+  const injText = await extractBriefExcerpt(Buffer.from("x"), ".docx", {
+    parseDocx: async () => "Spring Open House Saturday 9-3, free swag"
+  });
+  assert.equal(injText.type, "text", "docx with extractable text is type text");
+  assert.ok(injText.excerpt.includes("Spring Open House"), "docx injected text reaches prompt");
+  const injThrow = await extractBriefExcerpt(Buffer.from("x"), ".docx", {
+    parseDocx: async () => {
+      throw new Error("bad docx");
+    }
+  });
+  assert.equal(injThrow.type, "binary", "docx parser throw falls back to binary");
+
+  console.log("campaign_brief_extraction_eval: OK (11 checks)");
 }
 
 main().catch(err => {

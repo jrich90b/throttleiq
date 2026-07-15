@@ -554,17 +554,58 @@ const BRIEF_TEXT_EXTENSIONS = new Set([
 ]);
 
 type PdfParseFn = (buffer: Buffer) => Promise<{ text?: string }>;
-const requireForPdf = createRequire(import.meta.url);
+type DocxParseFn = (buffer: Buffer) => Promise<string>;
+const requireForBrief = createRequire(import.meta.url);
 let cachedPdfParse: PdfParseFn | null | undefined;
+let cachedJsZip: any | null | undefined;
 
 function getPdfParse(): PdfParseFn | null {
   if (cachedPdfParse !== undefined) return cachedPdfParse;
   try {
-    cachedPdfParse = requireForPdf("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
+    cachedPdfParse = requireForBrief("pdf-parse/lib/pdf-parse.js") as PdfParseFn;
   } catch {
     cachedPdfParse = null;
   }
   return cachedPdfParse;
+}
+
+function getJsZip(): any | null {
+  if (cachedJsZip !== undefined) return cachedJsZip;
+  try {
+    cachedJsZip = requireForBrief("jszip");
+  } catch {
+    cachedJsZip = null;
+  }
+  return cachedJsZip;
+}
+
+// Extract the visible paragraph text from a .docx (a zip whose word/document.xml holds the
+// body). Returns "" on any failure so callers fall back to the binary placeholder — a missing
+// jszip or a malformed file degrades to today's behavior, never a crash. Old binary .doc is
+// NOT handled here (different format); it stays a binary placeholder.
+async function extractDocxTextDefault(buffer: Buffer): Promise<string> {
+  const JsZip = getJsZip();
+  if (!JsZip) return "";
+  try {
+    const zip = await JsZip.loadAsync(buffer);
+    const doc = zip.file("word/document.xml");
+    if (!doc) return "";
+    const xml = await doc.async("string");
+    // Paragraph breaks -> spaces, drop all other tags, keep run text (<w:t>...).
+    const withBreaks = xml
+      .replace(/<\/w:p>/g, " \n")
+      .replace(/<w:tab\b[^>]*\/>/g, " ")
+      .replace(/<[^>]+>/g, "");
+    // Decode the handful of XML entities Word emits.
+    return withBreaks
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'");
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -577,12 +618,31 @@ function getPdfParse(): PdfParseFn | null {
 export async function extractBriefExcerpt(
   buffer: Buffer,
   ext: string,
-  deps: { parsePdf?: PdfParseFn | null } = {}
+  deps: { parsePdf?: PdfParseFn | null; parseDocx?: DocxParseFn | null } = {}
 ): Promise<{ type: BriefDocContext["type"]; excerpt: string }> {
   if (!buffer.length) {
     return { type: "missing", excerpt: "File was empty." };
   }
   const lower = String(ext ?? "").toLowerCase();
+
+  if (lower === ".docx") {
+    const parseDocx = deps.parseDocx !== undefined ? deps.parseDocx : extractDocxTextDefault;
+    if (parseDocx) {
+      try {
+        const excerpt = normalizeWhitespace(await parseDocx(buffer)).slice(0, BRIEF_EXCERPT_MAX);
+        if (excerpt) {
+          return { type: "text", excerpt };
+        }
+      } catch {
+        // fall through to placeholder below
+      }
+    }
+    return {
+      type: "binary",
+      excerpt:
+        "Word document uploaded but no text could be extracted. Treat as supporting campaign brief context."
+    };
+  }
 
   if (lower === ".pdf") {
     const parsePdf = deps.parsePdf !== undefined ? deps.parsePdf : getPdfParse();
@@ -1044,6 +1104,54 @@ function optionalTextVerbosity(model: string): Record<string, { verbosity: "low"
 // back to a template that ignored the attached brief. Give the JSON room to finish. Kept in
 // line with the email-HTML rescue budget (5200) with headroom. See campaign_copy_budget:eval.
 export const CAMPAIGN_COPY_MAX_OUTPUT_TOKENS = 6000;
+
+/**
+ * The "Output requirements:" lines for the campaign copy prompt, gated by channel. An SMS-only
+ * campaign never uses an email downstream, so asking the model for a full responsive HTML email
+ * (the bulk of these lines) just burns the output-token budget and was the reason SMS drafts
+ * truncated and fell back to a brief-ignoring template. For SMS-only we drop all the HTML/image
+ * instructions and keep the required email fields trivial; email/"both" channels keep the full set.
+ * Exported so campaign_sms_prompt:eval can pin the channel split.
+ */
+export function campaignCopyOutputRequirements(
+  requiresEmailHtml: boolean,
+  channelSupportsEmailDigest: boolean
+): string[] {
+  const lines = ["Output requirements:", "- sms_body: 1-2 short sentences grounded in the brief/context."];
+  if (!requiresEmailHtml) {
+    lines.push(
+      "- This is an SMS-only campaign: put all the real promotion content in sms_body.",
+      "- email_subject: a short line under 75 chars (not used downstream; keep it minimal).",
+      "- email_body_text: one short sentence (not used downstream).",
+      "- Do NOT produce email_body_html or email_sections; leave them empty."
+    );
+    return lines;
+  }
+  lines.push(
+    "- email_subject: under 75 chars.",
+    "- email_body_text: plain text email body with clear CTA.",
+    "- email_body_html: optional in this JSON pass.",
+    "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
+    "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
+    "- Header-logo rule: only use dealer logo (never place campaign creative image in the header logo slot).",
+    "- Use the first image URL in the image library as the primary hero/lead visual.",
+    "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
+    "- Typography mapping rule: heading style should match the paired image style for that section (for example western/vintage sections use serif/slab fallback stacks, modern/performance sections use bold sans fallback stacks).",
+    "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
+    "- Use each image URL at most once unless only one image URL is available.",
+    "- Do NOT add an 'additional visuals' gallery/strip section.",
+    "- Keep section image mapping aligned to image library order (hero first, then one image per section).",
+    "- Layout may vary per campaign; do not force one rigid repeated template pattern every run.",
+    "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
+    "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
+    "- email_sections: optional array of section blocks for digest-style email layout.",
+    "- If email_sections are returned, include image_url per section selected from the image library.",
+    channelSupportsEmailDigest
+      ? "- Prefer 2-4 sections when context provides multiple updates."
+      : "- If sections are used, keep to one short section."
+  );
+  return lines;
+}
 
 function toSourceHits(result: Awaited<ReturnType<typeof searchGoogleCse>>): CampaignSourceHit[] {
   if (!result?.hits?.length) return [];
@@ -2085,29 +2193,7 @@ async function tryGenerateWithLlm(args: {
     "Image library (use these exact URLs only):",
     imageLibrary,
     "",
-    "Output requirements:",
-    "- sms_body: 1-2 short sentences.",
-    "- email_subject: under 75 chars.",
-    "- email_body_text: plain text email body with clear CTA.",
-    "- email_body_html: optional in this JSON pass.",
-    "- email_body_html must be responsive table-based email markup with inline CSS only (no scripts, no external CSS).",
-    "- email_body_html must include a branded top header row with the dealer logo and a right-side dealer link.",
-    "- Header-logo rule: only use dealer logo (never place campaign creative image in the header logo slot).",
-    "- Use the first image URL in the image library as the primary hero/lead visual.",
-    "- For each major content block, pair the most relevant image from the image library. Keep text/image pairing logically matched.",
-    "- Typography mapping rule: heading style should match the paired image style for that section (for example western/vintage sections use serif/slab fallback stacks, modern/performance sections use bold sans fallback stacks).",
-    "- Use distinct image URLs across sections; do not repeat the same campaign image for every block when multiple images are provided.",
-    "- Use each image URL at most once unless only one image URL is available.",
-    "- Do NOT add an 'additional visuals' gallery/strip section.",
-    "- Keep section image mapping aligned to image library order (hero first, then one image per section).",
-    "- Layout may vary per campaign; do not force one rigid repeated template pattern every run.",
-    "- All images must render fully visible (no crop). Use object-fit:contain with height:auto and sensible max-height.",
-    "- Keep URLs exactly as provided. Do not invent or rewrite image URLs.",
-    "- email_sections: optional array of section blocks for digest-style email layout.",
-    "- If email_sections are returned, include image_url per section selected from the image library.",
-    channelSupportsEmailDigest
-      ? "- Prefer 2-4 sections when context provides multiple updates."
-      : "- If sections are used, keep to one short section."
+    ...campaignCopyOutputRequirements(requiresEmailHtml, channelSupportsEmailDigest)
   ].join("\n");
 
   const parseObject = (raw: string): any | null => {
