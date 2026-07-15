@@ -48323,6 +48323,11 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
       const existingIsCampaignThread =
         String((existingConv as any)?.campaignThread?.status ?? "").toLowerCase() === "campaign";
       const conv = upsertConversationByLeadKey(leadKey, "suggest");
+      // Remember the thread's last real Inbox activity BEFORE this broadcast. appendOutbound below
+      // advances inboxActivityAt for a normal send; we restore it after so a mass campaign send
+      // tags the thread (campaignThread + updatedAt) WITHOUT bumping it to the top of the working
+      // Inbox. Only a genuine reply (appendInbound) re-bumps it. Falls back to updatedAt when unset.
+      const prevInboxActivityAt = String((conv as any).inboxActivityAt ?? conv.updatedAt ?? "").trim() || undefined;
       updateConversationContact(conv, {
         firstName: contact.firstName,
         lastName: contact.lastName,
@@ -48371,6 +48376,8 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
         };
       }
       conv.updatedAt = new Date().toISOString();
+      // Freeze the working-Inbox sort position: the blast does not count as Inbox activity.
+      (conv as any).inboxActivityAt = prevInboxActivityAt;
       saveConversation(conv);
       sent.push({ id: String(contact.id), phone: phone || undefined, email: email || undefined, sid });
     } catch (err: any) {

@@ -726,6 +726,11 @@ export type Conversation = {
   };
   createdAt: string;
   updatedAt: string;
+  // Timestamp of the last activity that should sort the working Inbox (a customer reply or a
+  // staff/AI 1:1 message). A campaign broadcast updates updatedAt but deliberately leaves this
+  // untouched, so a mass send tags the thread without shoving it to the top of the Inbox — only
+  // real back-and-forth re-bumps it. Falls back to updatedAt when unset (older conversations).
+  inboxActivityAt?: string;
   messages: Message[];
   leadOwner?: LeadOwner;
   manualSender?: {
@@ -2030,6 +2035,9 @@ export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   maybeMarkEngagedFromInbound(conv, evt);
   consumeAgentContextOnInboundIfNeeded(conv, "inbound_customer_reply");
   conv.updatedAt = nowIso();
+  // A real customer reply is genuine Inbox activity — bump the working-Inbox sort. (A campaign
+  // reply flips campaign -> linked_open above, so it (correctly) rises to the top of the Inbox.)
+  conv.inboxActivityAt = conv.updatedAt;
   scheduleSave();
 }
 
@@ -2268,6 +2276,10 @@ export function appendOutbound(
   }
   consumeAgentContextIfNeeded(conv, "outbound_sent");
   conv.updatedAt = nowIso();
+  // A 1:1 staff/AI reply is genuine Inbox activity and should keep the thread near the top. A
+  // campaign BROADCAST also routes through here, but the broadcast caller freezes inboxActivityAt
+  // back to its pre-send value afterward so a mass send tags the thread without reordering the Inbox.
+  conv.inboxActivityAt = conv.updatedAt;
   scheduleSave();
   return message;
 }
@@ -3588,6 +3600,7 @@ export function listConversations() {
         hotDealSticky,
         dealTemperature,
         campaignThread: c.campaignThread ?? null,
+        inboxActivityAt: c.inboxActivityAt ?? null,
         walkIn: inferredWalkIn ? true : null,
         engagement: c.engagement ?? null,
         sale: c.sale ?? null,

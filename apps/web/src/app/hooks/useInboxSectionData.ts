@@ -175,8 +175,12 @@ export function useInboxSectionData({
     });
 
     return [...rows].sort((a, b) => {
-      const aMs = Date.parse(String(a.updatedAt ?? "")) || 0;
-      const bMs = Date.parse(String(b.updatedAt ?? "")) || 0;
+      // Sort the working Inbox by last REAL activity (customer reply / staff reply), not by the
+      // generic record-updated time. A campaign broadcast bumps updatedAt but leaves inboxActivityAt
+      // frozen, so a mass send no longer shoves threads to the top of the Inbox. Falls back to
+      // updatedAt for older conversations that predate the field.
+      const aMs = Date.parse(String(a.inboxActivityAt ?? a.updatedAt ?? "")) || 0;
+      const bMs = Date.parse(String(b.inboxActivityAt ?? b.updatedAt ?? "")) || 0;
       return bMs - aMs;
     });
   }, [
@@ -276,7 +280,9 @@ export function useInboxSectionData({
     const groups: GroupedConversation[] = [];
     let lastLabel = "";
     for (const c of filteredConversations) {
-      const label = new Date(c.updatedAt).toLocaleDateString("en-US", {
+      // Group the Inbox by the same effective time it is sorted by (last real activity), so a
+      // campaign-tagged thread stays under its real-activity date, not the day the blast went out.
+      const label = new Date(c.inboxActivityAt ?? c.updatedAt).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
         month: "long",

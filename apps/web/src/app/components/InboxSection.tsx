@@ -430,6 +430,15 @@ export function InboxSection(props: any) {
                       .toLowerCase();
                     const linkedOpenCampaign = view === "campaigns" && campaignThreadStatus === "linked_open";
                     const campaignReply = isCampaignReplyConversation(c);
+                    // In the main Inbox, a thread that was texted by a campaign but hasn't replied yet
+                    // gets a quiet "Campaign sent" tag (it no longer jumps to the top — see
+                    // inboxActivityAt). Once they reply it becomes the green "Campaign reply" instead.
+                    const campaignSent =
+                      view === "inbox" &&
+                      (campaignThreadStatus === "campaign" ||
+                        campaignThreadStatus === "linked_open" ||
+                        campaignThreadStatus === "passed") &&
+                      !campaignReply;
                     const needsResponse = needsCustomerResponse(c);
                     const openTasks = openTasksByConv?.get(c.id) ?? [];
                     const primaryOpenTask = openTasks[0] ?? null;
@@ -589,6 +598,14 @@ export function InboxSection(props: any) {
                                     title="Customer replied to a campaign message"
                                   >
                                     Campaign reply
+                                  </span>
+                                ) : null}
+                                {campaignSent ? (
+                                  <span
+                                    className="lr-inbox-pill lr-inbox-pill-muted"
+                                    title="You sent this contact a campaign message — the thread stays put until they reply"
+                                  >
+                                    Campaign sent
                                   </span>
                                 ) : null}
                                 {outcomeNeeded ? (
