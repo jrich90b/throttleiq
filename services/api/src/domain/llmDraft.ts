@@ -12362,8 +12362,7 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead,
       inventoryWatch: args.inventoryWatch,
       inventoryWatchPending: args.inventoryWatchPending,
-      dialogState: args.dialogState,
-      _shadowSuppressed: true // the wrapper fires its own full-scope shadow below
+      dialogState: args.dialogState
     }),
     parseTradePayoffWithLLM({
       text: args.text,
@@ -12377,14 +12376,7 @@ export async function parseUnifiedSemanticSlotsWithLLM(args: {
       lead: args.lead
     })
   ]);
-  const legacy = combineUnifiedSlotParse(semantic, trade, tradeTarget);
-  if (legacy && process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1") {
-    // Shadow compare (consolidation-plan Phase-1 pattern): the merged one-call
-    // parser runs alongside, fire-and-forget — it logs disagreements and NEVER
-    // affects the live result or adds latency to the customer path.
-    void runUnifiedSlotsMergedShadowCompare(args, legacy);
-  }
-  return legacy;
+  return combineUnifiedSlotParse(semantic, trade, tradeTarget);
 }
 
 // Pure combiner shared by the legacy 3-call path and the merged 1-call parser —
@@ -12443,16 +12435,19 @@ export function combineUnifiedSlotParse(
 }
 
 // ---------------------------------------------------------------------------
-// Merged unified slot parser — the parser-consolidation shadow slice
-// (docs/comprehension_consolidation_plan.md, 2026-07-02). ONE structured call
-// carries all three jobs the legacy path runs as parallel sub-calls
-// (semantic slots + trade payoff + trade target value). Runs ONLY in shadow
-// (UNIFIED_SLOTS_MERGED_SHADOW=1) behind parseUnifiedSemanticSlotsWithLLM;
-// output is normalized by the SAME shared guard rails and compared field-by-
-// field against the legacy result. Cutover is a separate approve-first step.
-// NOTE: the rules/examples below are a MERGED-SHADOW COPY of the three legacy
-// prompts — if you edit a legacy parser's rules/examples, mirror it here (and
-// vice versa) until cutover deletes one of the copies.
+// Merged unified slot parser — the parser-consolidation slice
+// (docs/comprehension_consolidation_plan.md, 2026-07-02; CUT OVER LIVE
+// 2026-07-14, PR #204). ONE structured call carries all three jobs the legacy
+// path runs as parallel sub-calls (semantic slots + trade payoff + trade
+// target value). Serves the SMS live + regenerate paths when
+// LLM_UNIFIED_SLOT_MERGED_LIVE=1 (via parseUnifiedSemanticSlotsWithLLM, with
+// applyMergedWatchRelevanceGuard on the result); output is normalized by the
+// SAME shared guard rails as the legacy sub-parsers.
+// NOTE: the rules/examples below are still a COPY of the three legacy prompts
+// (the email path runs those directly) — if you edit a legacy parser's
+// rules/examples, mirror it here (and vice versa) until the email-lane cutover
+// lets the legacy copies be deleted. Pinned by the mirror tripwire in
+// unified_slots_merged_shadow:eval.
 // ---------------------------------------------------------------------------
 
 const UNIFIED_SLOT_MERGED_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
@@ -12776,110 +12771,13 @@ export function diffUnifiedSlotParse(
   return { equal: diffs.length === 0, diffs };
 }
 
-// Semantic-scope shadow: fires from parseSemanticSlotsWithLLM on the live
-// traffic path. The legacy side of the comparison is the semantic result only;
-// merged payoff/target outputs are logged unvalidated for cutover review.
-async function runSemanticScopeMergedShadowCompare(
-  args: {
-    text: string;
-    history?: { direction: "in" | "out"; body: string }[];
-    lead?: Conversation["lead"];
-    inventoryWatch?: Conversation["inventoryWatch"];
-    inventoryWatchPending?: Conversation["inventoryWatchPending"];
-    dialogState?: string;
-  },
-  legacySemantic: SemanticSlotParse
-): Promise<void> {
-  try {
-    const startedAt = Date.now();
-    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
-    const elapsedMs = Date.now() - startedAt;
-    if (!merged) {
-      console.log(
-        "[unified-slots-shadow]",
-        JSON.stringify({ at: new Date().toISOString(), scope: "semantic", outcome: "merged_null", elapsedMs })
-      );
-      return;
-    }
-    const legacyAsUnified = combineUnifiedSlotParse(legacySemantic, null, null);
-    if (!legacyAsUnified) return;
-    const { equal, diffs } = diffUnifiedSlotParse(legacyAsUnified, merged, { scope: "semantic" });
-    const record = {
-      at: new Date().toISOString(),
-      scope: "semantic",
-      outcome: equal ? "agree" : "disagree",
-      elapsedMs,
-      diffs,
-      // Log both watch actions so the report can re-derive decision-scoped agreement exactly
-      // (watch-slot diffs only matter when a watch is being set/stopped — see diffUnifiedSlotParse).
-      legacyWatchAction: legacyAsUnified.watchAction ?? "none",
-      mergedWatchAction: merged.watchAction ?? "none",
-      mergedPayoffStatus: merged.payoffStatus,
-      mergedTradeTargetAmount: merged.tradeTargetValue?.amount ?? null,
-      textPreview: String(args.text ?? "").slice(0, 140)
-    };
-    console.log("[unified-slots-shadow]", JSON.stringify(record));
-    appendUnifiedSlotsShadowRecord(record);
-  } catch (err: any) {
-    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
-  }
-}
-
-// Fire-and-forget shadow runner: never throws into the live path, never blocks it.
-async function runUnifiedSlotsMergedShadowCompare(
-  args: {
-    text: string;
-    history?: { direction: "in" | "out"; body: string }[];
-    lead?: Conversation["lead"];
-    inventoryWatch?: Conversation["inventoryWatch"];
-    inventoryWatchPending?: Conversation["inventoryWatchPending"];
-    tradePayoff?: Conversation["tradePayoff"];
-    dialogState?: string;
-  },
-  legacy: UnifiedSemanticSlotParse
-): Promise<void> {
-  try {
-    const startedAt = Date.now();
-    const merged = await parseUnifiedSemanticSlotsMergedWithLLM(args);
-    const elapsedMs = Date.now() - startedAt;
-    if (!merged) {
-      console.log(
-        "[unified-slots-shadow]",
-        JSON.stringify({ at: new Date().toISOString(), scope: "all", outcome: "merged_null", elapsedMs })
-      );
-      return;
-    }
-    const { equal, diffs } = diffUnifiedSlotParse(legacy, merged);
-    const record = {
-      at: new Date().toISOString(),
-      scope: "all",
-      outcome: equal ? "agree" : "disagree",
-      elapsedMs,
-      diffs,
-      legacyWatchAction: legacy.watchAction ?? "none",
-      mergedWatchAction: merged.watchAction ?? "none",
-      textPreview: String(args.text ?? "").slice(0, 140)
-    };
-    console.log("[unified-slots-shadow]", JSON.stringify(record));
-    appendUnifiedSlotsShadowRecord(record);
-  } catch (err: any) {
-    console.warn("[unified-slots-shadow] error:", err?.message ?? err);
-  }
-}
-
-function appendUnifiedSlotsShadowRecord(record: Record<string, unknown>): void {
-  try {
-    const dir =
-      process.env.UNIFIED_SLOTS_SHADOW_DIR ||
-      (process.env.REPORT_ROOT ? `${process.env.REPORT_ROOT}/unified_slots_shadow` : "");
-    if (!dir) return;
-    fs.mkdirSync(dir, { recursive: true });
-    const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    fs.appendFileSync(`${dir}/unified_slots_shadow_${day}.jsonl`, `${JSON.stringify(record)}\n`);
-  } catch {
-    // best-effort persistence; the console line is the primary record
-  }
-}
+// NOTE (2026-07-15): the live shadow-compare runners that produced the
+// unified_slots_shadow JSONL corpus were retired after the merged-parser
+// cutover shipped (PR #204) — the 12-day / 2,413-turn soak reached its verdict
+// (99.4% decision-scoped agreement) and each further comparison cost an extra
+// LLM call per turn for evidence already banked. The pure comparator
+// (diffUnifiedSlotParse, above) and the historical JSONL + report script are
+// KEPT — they're the acceptance harness for the email-lane cutover next.
 
 export async function parseSemanticSlotsWithLLM(args: {
   text: string;
@@ -12888,9 +12786,6 @@ export async function parseSemanticSlotsWithLLM(args: {
   inventoryWatch?: Conversation["inventoryWatch"];
   inventoryWatchPending?: Conversation["inventoryWatchPending"];
   dialogState?: string;
-  /** internal: set by parseUnifiedSemanticSlotsWithLLM so its own full-scope
-   *  shadow doesn't double-fire the semantic-scope shadow below. */
-  _shadowSuppressed?: boolean;
 }): Promise<SemanticSlotParse | null> {
   const useLLM =
     process.env.LLM_ENABLED === "1" &&
@@ -13022,21 +12917,13 @@ export async function parseSemanticSlotsWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const out = normalizeSemanticSlotLLMOutput(parsed, {
+  return normalizeSemanticSlotLLMOutput(parsed, {
     text,
     history,
     lead,
     inventoryWatch: watch ?? undefined,
     inventoryWatchPending: pending ?? undefined
   });
-  if (process.env.UNIFIED_SLOTS_MERGED_SHADOW === "1" && !args._shadowSuppressed) {
-    // Semantic-scope shadow on the REAL production traffic path: wherever the
-    // semantic parser runs live, the merged 3-in-1 parser runs alongside,
-    // fire-and-forget — semantic fields are diffed; the merged payoff/target
-    // outputs are logged (unvalidated) for cutover review.
-    void runSemanticScopeMergedShadowCompare(args, out);
-  }
-  return out;
 }
 
 // Deterministic post-parse normalization for the semantic-slot LLM output — the
@@ -13533,7 +13420,7 @@ export function getCachedSelfHealVerdict(inbound: string, draft: string): DraftQ
 // offline miner (scripts/self_heal_harvest.ts) turns into APPROVE-FIRST few-shot/fixture
 // candidates, so a heal the system already solved once becomes durable learning instead of
 // being re-solved from scratch on the next occurrence. Best-effort, never throws into the
-// draft path (same contract as appendUnifiedSlotsShadowRecord above).
+// draft path (same best-effort append contract as appendParserCaptureRecord).
 function appendSelfHealWinRecord(record: Record<string, unknown>): void {
   try {
     const dir =
