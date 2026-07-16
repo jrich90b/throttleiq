@@ -395,6 +395,25 @@ const RULES: LeadRule[] = [
     bucket: "event_promo",
     cta: "demo_ride_event",
     tone: "short_conversational"
+  },
+  {
+    name: "dealer_lead_app_passenger",
+    // A demo-ride PASSENGER (rode ALONG at a demo event, NOT the buyer) — operator-reported
+    // (Elizabeth Klapa +17169492988, 2026-06-25: "This was a passenger. Thank them for coming for
+    // the demo ride and ask them to reach out if they ever want a bike of their own; do NOT set a
+    // cadence"). Same treatment as a GLA demo-ride lead: one warm soft invite
+    // (buildDemoRideEventSoftInvite) and no follow-up cadence (the event_promo bucket closes
+    // `event_promo_no_cadence`) — never the sales-framed general-inquiry default with nudges that a
+    // passenger was falling through to. Scoped to the "- Passenger" variant ONLY: plain
+    // "Dealer Lead App" (the buyer) and "Dealer Lead App - Prequalify" keep their sales/finance
+    // handling. Pinned by event_promo_ack:eval.
+    match: {
+      equals: ["Dealer Lead App - Passenger"],
+      prefix: ["Dealer Lead App - Passenger"]
+    },
+    bucket: "event_promo",
+    cta: "demo_ride_event",
+    tone: "short_conversational"
   }
 ];
 
