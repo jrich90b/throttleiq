@@ -48,6 +48,7 @@ import {
   resolveNamedSchedulingDay
 } from "./domain/testRideDayAwareReply.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh, fillLeadVehicleFromVoiceFacts } from "./domain/voiceCadenceFacts.js";
+import { applyTradeVehicleRepair, type TradeVehicleRepairRequest } from "./domain/tradeVehicleRepair.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
   buildRecentVehicleDiscussionReply,
@@ -38019,6 +38020,42 @@ app.post("/conversations/:id/reopen", (req, res) => {
 // year-rollover class). Sets dates directly and never messages the customer,
 // unlike /followup-action which sends a cadence ack text. Worker-token gated
 // so repairs can run from the box without a dashboard session.
+// One-time cleanup of leads whose trade/sell bike was mis-filed as the motorcycle of
+// interest before the 2026-07-15 adfParser fix (Joe's cleanup pass). Worker-token gated,
+// expect-guarded (refuses when the live lead no longer matches the audited state), and
+// dry-run capable. See domain/tradeVehicleRepair.ts for the pure decision.
+app.post("/internal/worker/trade-vehicle-repair/:id", (req, res) => {
+  if (!canUseWorkerInternal(req)) {
+    return res.status(401).json({ ok: false, error: "worker token required" });
+  }
+  const conv = getConversation(req.params.id);
+  if (!conv) return res.status(404).json({ ok: false, error: "Not found" });
+  const request: TradeVehicleRepairRequest = {
+    action: req.body?.action,
+    expectModel: String(req.body?.expectModel ?? ""),
+    expectYear: req.body?.expectYear !== undefined ? String(req.body.expectYear) : undefined,
+    trade: req.body?.trade
+  };
+  const dryRun = req.body?.dryRun === true;
+  const target = dryRun ? JSON.parse(JSON.stringify(conv.lead ?? null)) : conv.lead;
+  const decision = applyTradeVehicleRepair(target, request);
+  if (!decision.ok) {
+    return res.status(400).json({ ok: false, dryRun, error: decision.error });
+  }
+  if (!dryRun) {
+    conv.updatedAt = new Date().toISOString();
+    saveConversation(conv);
+    recordRouteOutcome("live", "trade_vehicle_repair", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      action: decision.action,
+      before: decision.before,
+      after: decision.after
+    });
+  }
+  return res.json({ ok: true, dryRun, action: decision.action, before: decision.before, after: decision.after });
+});
+
 app.post("/internal/worker/cadence-repair/:id", (req, res) => {
   if (!canUseWorkerInternal(req)) {
     return res.status(401).json({ ok: false, error: "worker token required" });
