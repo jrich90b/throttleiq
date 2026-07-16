@@ -106,6 +106,27 @@ for (const src of [
 // A DEALERSHIP demo/test-ride request keeps its real scheduling handling.
 assert.equal(resolveLeadRule("DEALER DEMO RIDE").bucket, "test_ride", "a dealership demo-ride request stays test_ride");
 
+// --- 1c-passenger) A demo-ride PASSENGER lead (rode along, not the buyer) gets the SAME event_promo/
+//     demo_ride_event treatment as a GLA demo ride: one soft invite + no follow-up cadence — NEVER the
+//     sales-framed general-inquiry default with nudges. Operator-reported (Elizabeth Klapa
+//     +17169492988, 2026-06-25): "This was a passenger. Thank them for coming for the demo ride and ask
+//     them to reach out if they ever want a bike of their own; do NOT set a cadence." ---
+for (const src of ["Dealer Lead App - Passenger", "dealer lead app - passenger" /* case-insensitive */]) {
+  const r = resolveLeadRule(src);
+  assert.equal(r.bucket, "event_promo", `passenger demo-ride "${src}" must classify as event_promo, got ${r.bucket}/${r.cta}`);
+  assert.equal(r.cta, "demo_ride_event", `passenger demo-ride "${src}" must carry cta=demo_ride_event, got ${r.cta}`);
+  assert.notEqual(
+    decideEventPromoTurn({ classificationBucket: r.bucket, classificationCta: r.cta }).kind,
+    "event_promo_ack",
+    `"${src}" must NOT be diverted to the sweepstakes ack (demo_ride_event has its own soft invite)`
+  );
+}
+// SAFETY BOUNDARY: only the "- Passenger" variant flips to no-cadence. The plain "Dealer Lead App"
+// BUYER and the "- Prequalify" finance variant must keep their sales/finance handling (NOT event_promo),
+// or a real buyer would silently lose their follow-up cadence.
+assert.notEqual(resolveLeadRule("Dealer Lead App").bucket, "event_promo", "the plain Dealer Lead App buyer must NOT be diverted to event_promo");
+assert.equal(resolveLeadRule("Dealer Lead App - Prequalify").bucket, "finance_prequal", "the Dealer Lead App prequal variant stays finance_prequal");
+
 // --- 1d) Soft-invite safety (pure): the demo_ride_event reply is a SOFT INVITE — it must identify the
 //         agent + dealer and carry NO scheduling push/appointment times, NO availability claim, and NO
 //         fabricated completed-ride frame ("thanks for your recent demo ride" — the source alone doesn't
