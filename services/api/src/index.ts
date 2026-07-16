@@ -9564,6 +9564,18 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll check that and follow up with confirmation.";
 }
 
+// Fallback confirmation for a customer-PROPOSED concrete day+time (appointment-timing
+// provide_new_time → propose_booking) when the calendar couldn't be reached / the write failed —
+// mirrors buildCustomerAckConfirmationReply but sourced from the appointment-timing phrase. Never a
+// fabricated "you're all set"; the owner also gets a scheduling-deferral follow-up task.
+function buildProposedAppointmentConfirmationReply(parsed: AppointmentTimingParse | null): string {
+  const phrase = appointmentTimingRequestedPhrase(parsed);
+  if (phrase) {
+    return `Perfect — I’ll check ${normalizeDisplayCase(phrase)} and follow up with confirmation.`;
+  }
+  return "Perfect — I’ll check that and follow up with confirmation.";
+}
+
 function formatLocalTimeOnly(iso: string, timeZone: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -9747,10 +9759,13 @@ function resolveCustomerAckRequestedDayTime(args: {
   parsed: CustomerAckActionParse | null;
   rawText: string | null | undefined;
   timeZone: string;
+  // An explicit day/time source for turns where the customer-ack parse is absent — e.g. an
+  // appointment-timing `provide_new_time` proposal ("Tomorrow at 9:30am?") routed to propose_booking.
+  requestedOverride?: { day?: string | null; timeText?: string | null; normalizedText?: string | null } | null;
 }): ReturnType<typeof parseRequestedDayTime> {
-  const parsedDay = String(args.parsed?.requested?.day ?? "").trim();
-  const parsedTime = String(args.parsed?.requested?.timeText ?? "").trim();
-  const normalized = String(args.parsed?.normalizedText ?? "").trim();
+  const parsedDay = String(args.requestedOverride?.day ?? args.parsed?.requested?.day ?? "").trim();
+  const parsedTime = String(args.requestedOverride?.timeText ?? args.parsed?.requested?.timeText ?? "").trim();
+  const normalized = String(args.requestedOverride?.normalizedText ?? args.parsed?.normalizedText ?? "").trim();
   const raw = String(args.rawText ?? "").trim();
   const direct =
     parseRequestedDayTimeWithRawFallback(`${parsedDay} ${parsedTime}`.trim(), raw, args.timeZone) ??
@@ -10098,6 +10113,10 @@ async function resolveCustomerAckConfirmBooking(args: {
   rawText: string | null | undefined;
   book: boolean;
   sourceMessageId?: string | null;
+  // Explicit day/time source when there is no customer-ack parse (appointment-timing
+  // provide_new_time proposal → propose_booking). rawText stays the real inbound so the
+  // service-department check is evaluated against the actual message.
+  requestedOverride?: { day?: string | null; timeText?: string | null; normalizedText?: string | null } | null;
 }): Promise<{ reply: string; booked: boolean; alternatives: any[]; checkedCalendar: boolean } | null> {
   const conv = args.conv;
   // --- IO (the parts that read config / calendar / write the event). The DECISION over these results
@@ -10118,7 +10137,8 @@ async function resolveCustomerAckConfirmBooking(args: {
       conv,
       parsed: args.parsed,
       rawText: args.rawText,
-      timeZone: cfg.timezone || "America/New_York"
+      timeZone: cfg.timezone || "America/New_York",
+      requestedOverride: args.requestedOverride ?? null
     });
     if (requested) {
       appointmentType = inferAppointmentTypeFromConv(conv);
@@ -52720,6 +52740,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     customerAckAction: null,
     appointmentTimingAccepted: regenAppointmentTimingAccepted,
     appointmentTimingIntent: regenAppointmentTimingIntent,
+    appointmentTimingHasConcreteDayTime:
+      !!regenAppointmentTimingParse?.requested?.day && !!regenAppointmentTimingParse?.requested?.timeText,
     parserScheduleStatusUpdate: regenParserScheduleStatusUpdate,
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
@@ -52800,6 +52822,67 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       return respondWithEmailRegeneratedDraft(reply);
     }
     return respondWithSmsRegeneratedDraft(reply);
+  }
+  if (event.provider === "twilio" && regenSched.kind === "propose_booking") {
+    // Regen mirror of the live propose_booking arm — DRAFT preview only (book:false, no calendar
+    // write). Same resolver + appointment-timing day/time source; keeps live/regen in sync so the
+    // route-parity guard doesn't diverge (a customer-proposed concrete time books in both paths).
+    const result = await resolveCustomerAckConfirmBooking({
+      conv,
+      parsed: null,
+      rawText: event.body,
+      book: false,
+      sourceMessageId: (inbound as any)?.providerMessageId,
+      requestedOverride: {
+        day: regenAppointmentTimingParse?.requested?.day ?? null,
+        timeText: regenAppointmentTimingParse?.requested?.timeText ?? null,
+        normalizedText: regenAppointmentTimingParse?.normalizedText ?? null
+      }
+    });
+    if (result) {
+      recordRouteOutcome(
+        "regen",
+        `appointment_timing_propose_${result.booked ? "booked" : result.alternatives.length ? "offered_alts" : "lockin"}`,
+        {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          confidence: regenAppointmentTimingParse?.confidence ?? null,
+          booked: result.booked,
+          alternativeCount: result.alternatives.length
+        }
+      );
+      return respondWithSmsRegeneratedDraft(result.reply, undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "appointment_timing_propose_lockin_fallback", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: regenAppointmentTimingParse?.confidence ?? null
+    });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: true,
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase: appointmentTimingRequestedPhrase(regenAppointmentTimingParse)
+      },
+      event.body,
+      (inbound as any)?.providerMessageId
+    );
+    return respondWithSmsRegeneratedDraft(
+      buildProposedAppointmentConfirmationReply(regenAppointmentTimingParse),
+      undefined,
+      {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      }
+    );
   }
   if (regenTradeFollowupMessage) {
     if (conv.lead) {
@@ -60997,6 +61080,8 @@ if (authToken && signature) {
     customerAckShouldBook: customerAckActionParse?.shouldBook ?? false,
     appointmentTimingAccepted,
     appointmentTimingIntent,
+    appointmentTimingHasConcreteDayTime:
+      !!appointmentTimingParse?.requested?.day && !!appointmentTimingParse?.requested?.timeText,
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
@@ -61331,6 +61416,60 @@ if (authToken && signature) {
     }
     if (!checked?.alternatives.length) setDialogState(conv, "schedule_request");
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
+  }
+  if (event.provider === "twilio" && sched.kind === "propose_booking") {
+    // Customer PROPOSED a concrete day+time to come in ("Tomorrow at 930am?") with no prior dealer
+    // offer, so the customer-ack confirm arm never fired. Check the calendar and ACTUALLY book it
+    // (or offer alternatives) via the SAME resolver as a confirm — never the "I'll check that time
+    // and follow up" deflection that let the orchestrator improvise (Mark Ezell +17169904133).
+    const result = await resolveCustomerAckConfirmBooking({
+      conv,
+      parsed: null,
+      rawText: event.body,
+      book: true,
+      sourceMessageId: event.providerMessageId,
+      requestedOverride: {
+        day: appointmentTimingParse?.requested?.day ?? null,
+        timeText: appointmentTimingParse?.requested?.timeText ?? null,
+        normalizedText: appointmentTimingParse?.normalizedText ?? null
+      }
+    });
+    if (result) {
+      recordRouteOutcome(
+        "live",
+        `appointment_timing_propose_${result.booked ? "auto_booked" : result.alternatives.length ? "offered_alts" : "unavailable"}`,
+        {
+          convId: conv.id,
+          leadKey: conv.leadKey,
+          confidence: appointmentTimingParse?.confidence ?? null,
+          booked: result.booked,
+          alternativeCount: result.alternatives.length
+        }
+      );
+      return publishLiveTwilioReply(result.reply, { turnSchedulingIntent: true });
+    }
+    // Couldn't book (no config / calendar unreachable / service ctx / write failed) → lock-in ask +
+    // owner follow-up task so the requested slot isn't silently dropped. Never a fabricated confirm.
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("live", "appointment_timing_propose_lockin_fallback", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: appointmentTimingParse?.confidence ?? null
+    });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: true,
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase: appointmentTimingRequestedPhrase(appointmentTimingParse)
+      },
+      event.body,
+      event.providerMessageId
+    );
+    return publishLiveTwilioReply(buildProposedAppointmentConfirmationReply(appointmentTimingParse), {
+      turnSchedulingIntent: true
+    });
   }
   let bookingParseText = bookingIntentAccepted ? bookingParse?.normalizedText ?? "" : "";
   if (

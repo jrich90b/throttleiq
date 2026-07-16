@@ -80,4 +80,28 @@ assert.match(
 // The centralized decision is fed shouldBook in the live path.
 assert.match(api, /customerAckShouldBook: customerAckActionParse\?\.shouldBook \?\? false,/, "live feeds shouldBook into the route decision");
 
+// --- 4) propose_booking: a customer-PROPOSED concrete day+time (no prior offer) books too. ---
+// Mark Ezell +17169904133 ("Tomorrow at 930am?"): the appointment-timing provide_new_time proposal
+// had no booking arm, so it fell through to the orchestrator and improvised (9:30/9:40/today).
+// It now routes to the SAME resolver as a confirm — book:true live, book:false regen — sourcing the
+// day/time from the appointment-timing parse. Both paths + the concrete-day+time gate are pinned.
+assert.equal(
+  decideSchedulingTurn({ ...base, customerAckActionAccepted: false, customerAckAction: null, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }).kind,
+  "propose_booking",
+  "a concrete provide_new_time proposal routes to the book-or-offer arm"
+);
+assert.equal(
+  decideSchedulingTurn({ ...base, customerAckActionAccepted: false, customerAckAction: null, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: false }).kind,
+  "none",
+  "a day-ONLY provide_new_time keeps its slot-offer path (#203), not propose_booking"
+);
+// Live: gate includes propose_booking and calls the resolver with book:true + the timing day/time override.
+assert.match(api, /sched\.kind === "propose_booking"\) \{[\s\S]*?resolveCustomerAckConfirmBooking\(\{[\s\S]*?book: true,[\s\S]*?requestedOverride: \{/, "live propose_booking books for real (book:true) from the appointment-timing day/time");
+assert.match(api, /appointment_timing_propose_\$\{result\.booked \? "auto_booked"/, "live records the propose booked/alts/unavailable outcome");
+// Regen: propose_booking is availability-check only (book:false) — live/regen parity.
+assert.match(api, /regenSched\.kind === "propose_booking"\) \{[\s\S]*?resolveCustomerAckConfirmBooking\(\{[\s\S]*?book: false,[\s\S]*?requestedOverride: \{/, "regen propose_booking is availability-check only (book:false)");
+// The concrete-day+time signal is fed into the route decision in BOTH paths.
+assert.match(api, /appointmentTimingHasConcreteDayTime:\n\s*!!appointmentTimingParse\?\.requested\?\.day && !!appointmentTimingParse\?\.requested\?\.timeText,/, "live feeds the concrete day+time gate");
+assert.match(api, /appointmentTimingHasConcreteDayTime:\n\s*!!regenAppointmentTimingParse\?\.requested\?\.day && !!regenAppointmentTimingParse\?\.requested\?\.timeText,/, "regen feeds the concrete day+time gate");
+
 console.log("PASS auto-book-on-confirm eval (route decision + booking semantics + live/regen wiring)");
