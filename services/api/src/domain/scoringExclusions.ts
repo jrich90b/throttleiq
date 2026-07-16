@@ -355,3 +355,49 @@ export function isCadenceHeldByIndefiniteDeferral(conv: {
   }
   return false;
 }
+
+/**
+ * A campaign-broadcast send is a staff-composed mass-marketing SMS/email blast
+ * fired from Campaign Studio (`POST /contacts/broadcast`), NOT the agent's 1:1
+ * conversational voice. The broadcast handler tags the conversation with a
+ * `campaignThread` (campaignId + first/lastSentAt) and appends the outbound at
+ * ~the same instant; a genuine 1:1 agent reply lives on a thread with no
+ * campaignThread (or lands minutes/hours from any send). We identify a broadcast
+ * send by that correlation — a message on a campaign-tagged thread whose `at`
+ * sits within a few seconds of a campaignThread send timestamp.
+ *
+ * Why exclude it from the Agent Voice Charter: the charter grades the AGENT's
+ * conversational tone (banned filler, brand-repeat, persona re-intro). A
+ * marketing blast legitimately LEADS with the full dealer brand ("American
+ * Harley-Davidson: $1,000 Customer Cash…") for recipient identification, so the
+ * `long_brand_repeat` check fires 10× on one blast and dirties the release gate
+ * with a false-positive class. (2026-07-15: a single "Customer Cash Low Rider S
+ * & ST" blast to 10 numbers drove the charter rate to 17.2%.)
+ *
+ * Fail-direction: this is a REPORT-ONLY scorer exclusion — it can never change a
+ * customer-facing send, close, route, or task; the worst case is under-counting
+ * a charter nit on a staff-composed blast. The correlation is tight (campaignId
+ * required + a ±10s window around a recorded send), so a real 1:1 agent reply is
+ * never excused: the opt-out footer alone is NOT used (agent first-touch intros
+ * carry it too and must still be graded).
+ */
+const CAMPAIGN_BROADCAST_MATCH_TOLERANCE_MS = 10_000;
+export function isCampaignBroadcastSend(
+  msg: { at?: string | null; direction?: string | null } | null | undefined,
+  campaignThread:
+    | { campaignId?: string | null; firstSentAt?: string | null; lastSentAt?: string | null }
+    | null
+    | undefined
+): boolean {
+  if (!campaignThread) return false;
+  if (!String(campaignThread.campaignId ?? "").trim()) return false;
+  const atMs = Date.parse(String(msg?.at ?? "").trim());
+  if (!Number.isFinite(atMs)) return false;
+  for (const iso of [campaignThread.firstSentAt, campaignThread.lastSentAt]) {
+    const sentMs = Date.parse(String(iso ?? "").trim());
+    if (Number.isFinite(sentMs) && Math.abs(atMs - sentMs) <= CAMPAIGN_BROADCAST_MATCH_TOLERANCE_MS) {
+      return true;
+    }
+  }
+  return false;
+}

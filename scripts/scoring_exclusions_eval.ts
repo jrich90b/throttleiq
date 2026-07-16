@@ -10,6 +10,7 @@ import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
   isCadenceHeldByIndefiniteDeferral,
+  isCampaignBroadcastSend,
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
@@ -323,7 +324,7 @@ const wiring: Array<[string, RegExp[]]> = [
       /isLeadIntakeRenotificationOnEngagedThread\(/
     ]
   ],
-  ["scripts/voice_charter_audit.ts", [/isShadowReplayMessage\(m\)/],],
+  ["scripts/voice_charter_audit.ts", [/isShadowReplayMessage\(m\)/, /isCampaignBroadcastSend\(m, campaignThread\)/],],
   [
     "scripts/route_audit_watchdog.ts",
     [/isShadowReplayMessage\(m\)/, /isAutomatedSenderInbound\(/, /isNonSalesConversation\(conv\)/]
@@ -349,5 +350,49 @@ assert.match(
   /CONVERSATIONS_DB_PATH: path\.join\(args\.dataDir, "conversations\.json"\)/,
   "shadow replay must pin CONVERSATIONS_DB_PATH to the shadow data copy"
 );
+
+// Campaign-broadcast send exclusion — a Campaign Studio blast (POST
+// /contacts/broadcast) tags the thread with a campaignThread and appends the
+// outbound at ~the same instant; the Agent Voice Charter must not grade it as
+// the agent's conversational voice. (2026-07-15: a "Customer Cash Low Rider S
+// & ST" blast to 10 numbers tripped long_brand_repeat 10× and drove the charter
+// rate to 17.2%, dirtying the release gate.)
+const broadcastThread = {
+  campaignId: "camp_c6dfce430aca7_1784141936839",
+  campaignName: "Customer Cash Low Rider S & ST",
+  firstSentAt: "2026-07-15T21:18:20.698Z",
+  lastSentAt: "2026-07-15T21:18:22.062Z"
+};
+// The live blast: the appended message `at` drifts a couple ms from the recorded
+// send timestamp (separate Date.now() calls in one request) — the ±10s tolerance
+// must still match it.
+assert.equal(
+  isCampaignBroadcastSend({ at: "2026-07-15T21:18:20.696Z", direction: "out" }, broadcastThread),
+  true
+); // 2ms before firstSentAt
+assert.equal(
+  isCampaignBroadcastSend({ at: "2026-07-15T21:18:22.062Z", direction: "out" }, broadcastThread),
+  true
+); // exact lastSentAt
+// A genuine 1:1 agent reply on a thread with NO campaignThread is always graded.
+assert.equal(
+  isCampaignBroadcastSend({ at: "2026-07-15T21:18:22.062Z", direction: "out" }, null),
+  false
+);
+// A later 1:1 reply on a campaign-tagged thread (minutes/hours after the send)
+// is NOT excused — only the send instant is a broadcast.
+assert.equal(
+  isCampaignBroadcastSend({ at: "2026-07-15T21:30:00.000Z", direction: "out" }, broadcastThread),
+  false
+);
+// A campaignThread missing a campaignId cannot vouch for a broadcast.
+assert.equal(
+  isCampaignBroadcastSend(
+    { at: "2026-07-15T21:18:22.062Z", direction: "out" },
+    { firstSentAt: "2026-07-15T21:18:22.062Z", lastSentAt: "2026-07-15T21:18:22.062Z" }
+  ),
+  false
+);
+assert.equal(isCampaignBroadcastSend({ at: "", direction: "out" }, broadcastThread), false);
 
 console.log("PASS scoring exclusions eval");

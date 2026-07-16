@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
+import { isCampaignBroadcastSend, isShadowReplayMessage } from "../services/api/src/domain/scoringExclusions.ts";
 
 type Violation = {
   check: string;
@@ -231,9 +231,15 @@ function main() {
     let staffHasSent = false;
     let sawOutbound = false;
     const sentNorms = new Map<string, string>();
+    const campaignThread = (conv as any)?.campaignThread;
     for (const m of msgs) {
       if (m?.direction !== "out") continue;
       if (isShadowReplayMessage(m)) continue;
+      // A staff-composed Campaign Studio blast is not the agent's conversational
+      // voice — leading with the full dealer brand is correct for a marketing
+      // send, so it must not count against the Agent Voice Charter (report-only
+      // exclusion; see scoringExclusions.isCampaignBroadcastSend).
+      if (isCampaignBroadcastSend(m, campaignThread)) continue;
       const provider = String(m?.provider ?? "");
       const body = String(m?.body ?? "");
       const isDraft = provider === "draft_ai";
