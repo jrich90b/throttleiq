@@ -282,6 +282,7 @@ export type SchedulingTurnKind =
   | "arrival_update"
   | "tentative_window"
   | "decline_time"
+  | "propose_booking"
   | "visit_commitment"
   | "none";
 
@@ -295,6 +296,9 @@ export type SchedulingTurnInput = {
   // Block B — appointment-timing parser (intent string + whether accepted).
   appointmentTimingAccepted: boolean;
   appointmentTimingIntent?: string | null;
+  // The appointment-timing parse carried a CONCRETE day AND time (not day-only). Gates the
+  // provide_new_time → propose_booking arm so a day-only proposal keeps its slot-offer path (#203).
+  appointmentTimingHasConcreteDayTime?: boolean;
   // Block C — inbound_reply_action schedule_context_status_update (accepted).
   parserScheduleStatusUpdate: boolean;
   // Context gates available where the decision is computed.
@@ -349,6 +353,18 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
 
   // Block B — appointment-timing intents (reached only when A didn't claim the turn).
   if (input.appointmentTimingAccepted && !input.pricingOrPaymentsIntent) {
+    // A customer PROPOSING a concrete day+time to come in ("Tomorrow at 9:30am?") — unprompted, so
+    // the customer-ack confirm arm (Block A) never fired. Route it to the SAME calendar-check-and-book
+    // resolver as a confirm, or it falls through to the orchestrator and improvises (Mark Ezell
+    // +17169904133: "Tomorrow at 930am?" → "I'll check that time and follow up" then a contradictory
+    // 9:30/9:40/today mess, never booked). Gated on day AND time so a day-ONLY proposal keeps its
+    // slot-offer path (#203). Applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+    if (
+      input.appointmentTimingIntent === "provide_new_time" &&
+      input.appointmentTimingHasConcreteDayTime
+    ) {
+      return { kind: "propose_booking", visitCommitment };
+    }
     if (input.appointmentTimingIntent === "arrival_update" && !visitCommitment) {
       return { kind: "arrival_update", visitCommitment };
     }

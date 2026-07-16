@@ -74,6 +74,17 @@ const rows: Row[] = [
   { id: "timing_tentative", input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "tentative_time_window" }, kind: "tentative_window" },
   { id: "timing_decline", input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "decline_time" }, kind: "decline_time" },
 
+  // --- provide_new_time: a customer-PROPOSED time (no prior dealer offer, so Block A never fired) ---
+  // Concrete day+time => route to the book-or-offer resolver (propose_booking), not a bare deflection.
+  // Mark Ezell +17169904133 ("Tomorrow at 930am?") — the routing hole that let the orchestrator improvise.
+  { id: "timing_provide_new_time_concrete_daytime", input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "propose_booking" },
+  // Day-ONLY proposal ("I'll come Saturday") is NOT booked here — it keeps its slot-offer path (#203).
+  { id: "timing_provide_new_time_day_only", input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: false }, kind: "none" },
+  // A customer-ack confirm still OUTRANKS a competing provide_new_time (A over B).
+  { id: "confirm_beats_provide_new_time", input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "confirm_appointment" },
+  // Pricing/payments suppresses Block B, so a concrete proposal does not book mid-pricing thread.
+  { id: "provide_new_time_suppressed_by_pricing", input: { ...base, pricingOrPaymentsIntent: true, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "none" },
+
   // --- Block C: visit commitment, and the Todd preemption rules ---
   { id: "visit_commitment_plain", input: { ...base, ...VISIT }, kind: "visit_commitment", visitCommitment: true },
   {
