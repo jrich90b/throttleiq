@@ -563,6 +563,7 @@ import {
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
   shouldProposeDaySlotsForNamedDay,
+  shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
@@ -22240,6 +22241,19 @@ function isPurchaseDeliveryScheduleStatusQuestionText(text: string | null | unde
   return asksStatus && scheduleContext;
 }
 
+// Shared "the customer is mid-deal / committed to a specific unit" predicate: the conversation is
+// in an active purchase_delivery state (dialog or followUp reason) or is sold/post-sale. Extracted
+// so the purchase-delivery logistics hint and the committed-buyer availability-suppression guard
+// read the same state (they must not drift). Behavior-preserving refactor of the prior inline check.
+function isActivePurchaseDeliveryState(conv: any): boolean {
+  return (
+    String(getDialogState(conv) ?? "").toLowerCase() === "purchase_delivery" ||
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery" ||
+    String(conv?.followUp?.reason ?? "").toLowerCase() === "post_sale" ||
+    isSoldOrPostSaleConversation(conv)
+  );
+}
+
 function hasPurchaseDeliveryLogisticsParserHint(
   conv: any,
   textRaw: string | null | undefined,
@@ -22248,11 +22262,7 @@ function hasPurchaseDeliveryLogisticsParserHint(
 ): boolean {
   const text = String(textRaw ?? "").toLowerCase();
   if (!text.trim()) return false;
-  const activePurchaseDeliveryState =
-    String(getDialogState(conv) ?? "").toLowerCase() === "purchase_delivery" ||
-    String(conv?.followUp?.reason ?? "").toLowerCase() === "purchase_delivery" ||
-    String(conv?.followUp?.reason ?? "").toLowerCase() === "post_sale" ||
-    isSoldOrPostSaleConversation(conv);
+  const activePurchaseDeliveryState = isActivePurchaseDeliveryState(conv);
   if (hasMedia && recentOutboundRequestedMediaProofContext(conv)) return true;
   const postSaleItemPickup = isPostSaleItemPickupLogisticsText(text);
   if (postSaleItemPickup) {
@@ -55021,8 +55031,17 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       });
       return respondWithSmsRegeneratedDraft(reply);
     }
+    // Committed-buyer guard (regen twin of the live arm): don't re-pitch a bike a mid-deal customer
+    // already chose. Centralized in shouldSuppressCommittedBuyerAvailabilityRepitch (both paths);
+    // inlined here — the decision lives only in the shared reducer, no regen-mirrored local, so the
+    // two paths cannot drift (route-parity mirrored-locals ratchet).
     if (
       explicitAvailabilityAskThisTurn &&
+      !shouldSuppressCommittedBuyerAvailabilityRepitch({
+        activePurchaseDeliveryState: isActivePurchaseDeliveryState(conv),
+        availabilityArmWouldFire: explicitAvailabilityAskThisTurn,
+        directAvailabilityQuestionThisTurn: regenDirectAvailabilityQuestion
+      }) &&
       (!visitTimingIntent || regenDirectAvailabilityQuestion) &&
       !financeOrRateAskThisTurn
     ) {
@@ -63046,9 +63065,25 @@ if (authToken && signature) {
     !routeExecPricing &&
     !routeExecCallback &&
     !specsSignal;
+  // Committed-buyer guard: a customer mid-deal (purchase_delivery/sold) arranging pickup must not be
+  // re-pitched the bike they already chose. Centralized in shouldSuppressCommittedBuyerAvailabilityRepitch
+  // (routeStateReducer, both paths); an explicit availability question this turn is carved out.
+  const liveCommittedBuyerAvailabilitySuppressed = shouldSuppressCommittedBuyerAvailabilityRepitch({
+    activePurchaseDeliveryState: isActivePurchaseDeliveryState(conv),
+    availabilityArmWouldFire: availabilityExplicit,
+    directAvailabilityQuestionThisTurn
+  });
+  if (liveCommittedBuyerAvailabilitySuppressed) {
+    logDecisionTrace("live.route_availability_suppressed_committed_buyer", {
+      dialogState: String(getDialogState(conv) ?? ""),
+      followUpReason: String(conv?.followUp?.reason ?? ""),
+      text: String(event.body ?? "").slice(0, 180)
+    });
+  }
   if (
     event.provider === "twilio" &&
     availabilityExplicit &&
+    !liveCommittedBuyerAvailabilitySuppressed &&
     !financePriorityOverride &&
     (!schedulePriorityOverride || directAvailabilityQuestionThisTurn) &&
     !pricingSignal &&
