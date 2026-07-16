@@ -8,7 +8,11 @@
  *   - a real message/question reopens an archived conv
  *   - a media-bearing inbound reopens even with an ack caption
  *   - non-archive closes keep their existing semantics (a generic close still reopens on
- *     any inbound; sticky closes — sold/hold/post_sale — never reopen, unchanged)
+ *     any inbound; SOLD/post_sale closes never reopen)
+ *   - HOLD closes (unit/order/manual hold — a purchase in progress, NOT sold) reopen on a
+ *     REAL customer message and stay closed only on a bare ack (Joe ruling 2026-07-16;
+ *     David Miller +17163440581: closed-with-hold, texted "I am on my way" to pick up his
+ *     held Street Glide, and the live deal stayed buried in the archived box)
  *
  * Run: npx tsx scripts/archived_ack_no_reopen_eval.ts
  */
@@ -93,6 +97,48 @@ const evt = (body: string, mediaUrls?: string[]) =>
   conv.closedReason = "sold";
   appendInbound(conv, evt("What oil should I use?"));
   eq(conv.status, "closed", "sticky closes still never auto-reopen (unchanged)");
+}
+// SOLD via sale.soldAt + real message => stays closed (sold bucket owns post-sale traffic).
+{
+  const conv = mkArchived("a6");
+  conv.closedReason = "other";
+  conv.sale = { soldAt: "2026-06-25T19:36:33.253Z" };
+  appendInbound(conv, evt("Are you there today? Coming for the backrest."));
+  eq(conv.status, "closed", "a sold deal (sale.soldAt) never auto-reopens");
+}
+// HOLD close + REAL message => REOPENS (Joe ruling 2026-07-16; the David Miller case).
+{
+  const conv = mkArchived("a7");
+  conv.closedReason = "other";
+  conv.hold = { key: "t36-25", stockId: "T36-25", reason: "unit_hold" };
+  appendInbound(conv, evt("I am on my way to pick up the bike"));
+  eq(conv.status, "open", "a real message reopens a hold deal (purchase in progress, not sold)");
+  eq(conv.closedReason, undefined, "closedReason cleared on hold reopen");
+}
+// HOLD close + bare ack => stays closed (no content to act on).
+{
+  const conv = mkArchived("a8");
+  conv.closedReason = "other";
+  conv.hold = { key: "t36-25", stockId: "T36-25", reason: "unit_hold" };
+  appendInbound(conv, evt("👍"));
+  eq(conv.status, "closed", "a bare ack leaves a hold deal closed");
+}
+// HOLD via followUp.reason (unit_hold) + real message => reopens too.
+{
+  const conv = mkArchived("a9");
+  conv.closedReason = "other";
+  conv.followUp = { mode: "manual_handoff", reason: "unit_hold" };
+  appendInbound(conv, evt("When can I come grab it?"));
+  eq(conv.status, "open", "a followUp.reason hold reopens on a real message");
+}
+// HOLD + SOLD together => sold wins, stays closed.
+{
+  const conv = mkArchived("a10");
+  conv.closedReason = "other";
+  conv.hold = { key: "x", reason: "unit_hold" };
+  conv.sale = { soldAt: "2026-06-25T19:36:33.253Z" };
+  appendInbound(conv, evt("Quick question about the paperwork"));
+  eq(conv.status, "closed", "sold outranks hold — a completed deal stays closed");
 }
 
 console.log(`PASS archived-ack no-reopen eval (${n} assertions)`);

@@ -1987,20 +1987,31 @@ export function isBareAckInboundText(text: string | null | undefined): boolean {
 export function appendInbound(conv: Conversation, evt: InboundMessageEvent) {
   if (conv.status === "closed") {
     const closedReason = String(conv.closedReason ?? "").toLowerCase();
-    const stickyClosed =
+    // SOLD stays closed no matter what: post-sale texts are worked in the sold bucket, and a
+    // genuinely NEW purchase forks a fresh journey (journey-intent parser in
+    // resolveInboundConversationForSms) — reopening the sold lead would pull completed deals
+    // back into the inbox on every "thanks!".
+    const soldSticky =
       closedReason === "sold" ||
-      /\bhold\b/.test(closedReason) ||
       !!conv.sale?.soldAt ||
-      !!conv.hold ||
-      /\b(unit_hold|order_hold|manual_hold|post_sale)\b/.test(
-        String(conv.followUp?.reason ?? "").toLowerCase()
-      );
+      /\bpost_sale\b/.test(String(conv.followUp?.reason ?? "").toLowerCase());
+    // A HOLD deal (bike held for the customer, purchase in progress) is NOT sold: a real
+    // customer message there is live deal traffic and must reopen the thread so it surfaces
+    // (Joe ruling 2026-07-16; David Miller +17163440581 — closed-with-hold since 4/20, texted
+    // "I am on my way" on 7/3 to pick the bike up and the thread stayed buried in the
+    // archived box). Only a bare content-free ack leaves a hold thread closed.
+    const holdSticky =
+      !soldSticky &&
+      (/\bhold\b/.test(closedReason) ||
+        !!conv.hold ||
+        /\b(unit_hold|order_hold|manual_hold)\b/.test(
+          String(conv.followUp?.reason ?? "").toLowerCase()
+        ));
+    const bareAck = !(evt.mediaUrls && evt.mediaUrls.length) && isBareAckInboundText(evt.body);
+    const stickyClosed = soldSticky || (holdSticky && bareAck);
     // Staff-archived + a bare content-free ack (no media) => stay archived. Any real message,
     // question, or attachment still reopens (fail-safe toward reopening).
-    const archivedAckHold =
-      /archive/.test(closedReason) &&
-      !(evt.mediaUrls && evt.mediaUrls.length) &&
-      isBareAckInboundText(evt.body);
+    const archivedAckHold = /archive/.test(closedReason) && bareAck;
     if (!stickyClosed && !archivedAckHold) {
       conv.status = "open";
       conv.closedAt = undefined;
