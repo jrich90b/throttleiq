@@ -29573,6 +29573,47 @@ async function processDueFollowUpsUnlocked() {
   if (cadenceHandoffHealed > 0) {
     console.log(`[state-reconcile] paused ${cadenceHandoffHealed} cadence(s) active during manual handoff`);
   }
+  // State-invariant: a conversation carrying a SPECIFIC inventory watch while the lead's
+  // motorcycle-of-interest is empty/placeholder should show the watched bike as the interest —
+  // the watch IS the customer's stated want, already normalized + garbage-guarded (Nicholas
+  // Braun, 2026-07-16: "the new 2026 superglide please" created a Super Glide watch the same
+  // minute, but the field stayed "Harley-Davidson Other"; none of the 12 watch-attach sites
+  // write the field, and only the in-stock availability arm does). FILL-ONLY: a specific
+  // model already on the lead is never overwritten (over-attachment is the worse failure
+  // mode). Watch status (active/paused) doesn't matter — paused just means it stopped firing,
+  // the stated want stands. Idempotent; heals the backlog and future misses alike.
+  let watchInterestFilled = 0;
+  for (const conv of convs) {
+    const watch = collectInventoryWatches(conv).find(
+      (w: any) => isSpecificModel(String(w?.model ?? "")) && String(w?.model ?? "").trim()
+    );
+    if (!watch) continue;
+    const currentModel = String(
+      conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? ""
+    ).trim();
+    if (currentModel && isSpecificModel(currentModel)) continue;
+    conv.lead = conv.lead ?? {};
+    conv.lead.vehicle = conv.lead.vehicle ?? {};
+    conv.lead.vehicle.model = String(watch.model);
+    conv.lead.vehicle.description = String(watch.model);
+    if (watch.year && !String(conv.lead.vehicle.year ?? "").trim()) {
+      conv.lead.vehicle.year = String(watch.year);
+    }
+    if ((watch as any).make && !String(conv.lead.vehicle.make ?? "").trim()) {
+      conv.lead.vehicle.make = String((watch as any).make);
+    }
+    saveConversation(conv);
+    watchInterestFilled += 1;
+    recordRouteOutcome("manual", "watch_interest_fill_heal", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      model: String(watch.model),
+      replacedPlaceholder: currentModel || null
+    });
+  }
+  if (watchInterestFilled > 0) {
+    console.log(`[state-reconcile] filled ${watchInterestFilled} placeholder motorcycle-of-interest field(s) from the customer's watch`);
+  }
   // Pending-incoming notify-todo dedup heal: the singleton "Notify when the trade arrives" task
   // historically duplicated because addTodo dedups by taskClass and the same objective split
   // across class buckets (Nicholas Braun: 4 open copies, 2026-06-23). The upsert at write-time

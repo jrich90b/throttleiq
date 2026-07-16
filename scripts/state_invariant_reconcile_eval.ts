@@ -78,5 +78,23 @@ assert.ok(
   "maintenance pass must heal pre-existing cadence-active-while-handoff contradictions"
 );
 
+// 3. Watch→interest fill heal (Nicholas Braun, 2026-07-16: "the new 2026 superglide please"
+//    created a Super Glide watch the same minute, but the motorcycle-of-interest field stayed
+//    "Harley-Davidson Other"). A SPECIFIC inventory watch with an empty/placeholder
+//    motorcycle-of-interest fills the field from the watch.
+assert.ok(
+  /watch_interest_fill_heal/.test(idx),
+  "maintenance pass must fill a placeholder motorcycle-of-interest from the customer's watch"
+);
+const healRegion = idx.match(/let watchInterestFilled = 0;[\s\S]{0,1800}?watch_interest_fill_heal/)?.[0] ?? "";
+assert.ok(
+  /if \(currentModel && isSpecificModel\(currentModel\)\) continue;/.test(healRegion),
+  "the watch→interest heal must be FILL-ONLY (a specific existing model is never overwritten)"
+);
+assert.ok(
+  /isSpecificModel\(String\(w\?\.model \?\? ""\)\)/.test(healRegion),
+  "the watch→interest heal must only fill from a SPECIFIC watch model (never a placeholder)"
+);
+
 await fsp.rm(tmpDir, { recursive: true, force: true });
 console.log("state_invariant_reconcile:eval ok");
