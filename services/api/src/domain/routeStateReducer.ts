@@ -2099,3 +2099,36 @@ export function shouldProposeDaySlotsForNamedDay(input: DaySlotProposalInput): b
   // preserves the "what time?" ask when there is nothing real to offer.
   return input.proposalEnabled || input.customerAskedToSuggest;
 }
+
+// --- Committed-buyer availability re-pitch suppression (Joe, 2026-07-16) ---
+// When a customer has ALREADY committed to a specific unit and is arranging paperwork/pickup/
+// delivery — the conversation is in an active purchase_delivery (or sold/post-sale) state — a
+// bare pickup/timing/logistics turn ("And to hopefully pick it up tomorrow as well") must NOT be
+// routed into the availability re-pitch arm ("Yes — we have one in stock right now … Want to come
+// check it out? Here is photo."). Re-selling a bike the customer already chose (and came in to see)
+// is the tone-deaf failure this guards against: it ignores the ask, restarts the funnel, and reads
+// like the agent forgot the customer is buying.
+//
+// Carve-out: an EXPLICIT availability question this turn ("is the red one still there?") is a
+// legitimate ask even mid-deal, so it is NOT suppressed — the customer gets a real answer.
+//
+// Fail-direction: removing this guard makes us re-pitch to a committed buyer (a wrong, tone-deaf
+// answer) => this is a KEEP-class deterministic precedence gate. It composes existing structured
+// signals (dialog/followUp state + the availability router's own eligibility + the direct-question
+// parser); it introduces NO new keyword/regex read of customer text. Applied identically in the
+// live (/webhooks/twilio) and regenerate paths so the two never drift; pinned by
+// committed_buyer_availability_suppression:eval.
+export type CommittedBuyerAvailabilitySuppressionInput = {
+  activePurchaseDeliveryState: boolean; // dialogState/followUp === purchase_delivery, or sold/post-sale
+  availabilityArmWouldFire: boolean; // the availability re-pitch arm is otherwise eligible this turn
+  directAvailabilityQuestionThisTurn: boolean; // an explicit "is it still available?" ask (carve-out)
+};
+
+export function shouldSuppressCommittedBuyerAvailabilityRepitch(
+  input: CommittedBuyerAvailabilitySuppressionInput
+): boolean {
+  if (!input.activePurchaseDeliveryState) return false; // not a committed-buyer deal => normal availability answering
+  if (!input.availabilityArmWouldFire) return false; // nothing to suppress
+  if (input.directAvailabilityQuestionThisTurn) return false; // explicit availability ask is legit mid-deal
+  return true;
+}

@@ -27,6 +27,7 @@ export {
   decideReservationHandoffTurn,
   decideSchedulingTurn,
   shouldProposeDaySlotsForNamedDay,
+  shouldSuppressCommittedBuyerAvailabilityRepitch,
   decideTradeQualifierTurn,
   decideCustomerAckConfirmBooking,
   decideSchedulingDeferralFollowUpTask,
