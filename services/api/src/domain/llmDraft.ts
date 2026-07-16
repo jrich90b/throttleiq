@@ -12043,6 +12043,7 @@ const VOICE_DURABLE_FACTS_JSON_SCHEMA: { [key: string]: unknown } = {
   additionalProperties: false,
   required: [
     "quoted_unit",
+    "discussed_unit",
     "quoted_price",
     "otd_price",
     "budget_max",
@@ -12053,6 +12054,7 @@ const VOICE_DURABLE_FACTS_JSON_SCHEMA: { [key: string]: unknown } = {
   ],
   properties: {
     quoted_unit: { type: "string" },
+    discussed_unit: { type: "string" },
     quoted_price: { type: "number" },
     otd_price: { type: "number" },
     budget_max: { type: "number" },
@@ -12065,6 +12067,12 @@ const VOICE_DURABLE_FACTS_JSON_SCHEMA: { [key: string]: unknown } = {
 
 export type VoiceDurableFactsParse = {
   quotedUnit: string;
+  // The specific unit the customer is SHOPPING FOR on this call (e.g. "2021 Street Glide
+  // Special"), whether or not a price was quoted. Empty when no specific unit was discussed
+  // (a trade-in/sell-only call, service call, or generic browsing). Feeds the fill-only-when-
+  // empty motorcycle-of-interest write-back (Joe, 2026-07-15) — never the bike they're
+  // trading/selling.
+  discussedUnit: string;
   quotedPrice: number;
   otdPrice: number;
   budgetMax: number;
@@ -12096,15 +12104,21 @@ export async function parseVoiceDurableFactsWithLLM(args: {
   if (!summary) return null;
   const examples = [
     'EXAMPLE A summary: "Customer declines the billiard gray HDFXBR Breakout priced at twenty eight grand due to cost; he is interested in a pre-owned Breakout around fifteen grand (less than twenty)."',
-    'EXAMPLE A output: {"quoted_unit":"","quoted_price":0,"otd_price":0,"budget_max":15000,"wants_preowned":true,"preferences":[],"blockers":["declined new at $28k as too expensive"],"confidence":0.92}',
+    'EXAMPLE A output: {"quoted_unit":"","discussed_unit":"pre-owned Breakout","quoted_price":0,"otd_price":0,"budget_max":15000,"wants_preowned":true,"preferences":[],"blockers":["declined new at $28k as too expensive"],"confidence":0.92}',
     'EXAMPLE B summary: "Customer asked prices for a Harley Breakout (pre-owned) and was quoted $14,995 asking price; with new plates, taxes, and fees the total was quoted as $16,534. Customer needs new plates."',
-    'EXAMPLE B output: {"quoted_unit":"pre-owned Breakout","quoted_price":14995,"otd_price":16534,"budget_max":0,"wants_preowned":true,"preferences":[],"blockers":["needs new plates"],"confidence":0.95}'
+    'EXAMPLE B output: {"quoted_unit":"pre-owned Breakout","discussed_unit":"pre-owned Breakout","quoted_price":14995,"otd_price":16534,"budget_max":0,"wants_preowned":true,"preferences":[],"blockers":["needs new plates"],"confidence":0.95}',
+    'EXAMPLE C summary: "Customer wants to sell his 2015 Ultra Limited; Stone offered to have it appraised. No purchase discussed."',
+    'EXAMPLE C output: {"quoted_unit":"","discussed_unit":"","quoted_price":0,"otd_price":0,"budget_max":0,"wants_preowned":false,"preferences":[],"blockers":[],"confidence":0.93}'
   ];
   const prompt = [
     "Extract durable sales facts from a dealership phone call summary. Return only JSON matching the schema.",
     "",
     "Guidelines:",
     "- quoted_unit: the specific unit a price was quoted for (e.g. \"2017 Breakout\"), empty string if no quote happened.",
+    "- discussed_unit: the specific unit the CUSTOMER IS SHOPPING FOR on this call, quoted or not.",
+    "  NEVER the bike they own, are trading in, or want to sell — that is not what they're shopping",
+    "  for. Empty string when no specific purchase unit came up (sell/trade-only, service, or",
+    "  generic browsing).",
     "- quoted_price / otd_price: dollar amounts actually quoted on the call; 0 when not stated. otd_price is the out-the-door total.",
     "- budget_max: the customer's stated ceiling in dollars; 0 when not stated.",
     "- wants_preowned: true only if the customer said they want used/pre-owned.",
@@ -12128,6 +12142,7 @@ export async function parseVoiceDurableFactsWithLLM(args: {
     if (!parsed || typeof parsed !== "object") return null;
     return {
       quotedUnit: String(parsed.quoted_unit ?? "").trim(),
+      discussedUnit: String(parsed.discussed_unit ?? "").trim(),
       quotedPrice: Number(parsed.quoted_price ?? 0),
       otdPrice: Number(parsed.otd_price ?? 0),
       budgetMax: Number(parsed.budget_max ?? 0),

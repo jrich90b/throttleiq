@@ -47,7 +47,7 @@ import {
   makeSchedulingReaskDayAware,
   resolveNamedSchedulingDay
 } from "./domain/testRideDayAwareReply.js";
-import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh } from "./domain/voiceCadenceFacts.js";
+import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh, fillLeadVehicleFromVoiceFacts } from "./domain/voiceCadenceFacts.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
   buildRecentVehicleDiscussionReply,
@@ -41828,6 +41828,15 @@ function buildContactsView() {
       condition,
       vehicleDescription:
         c.vehicleDescription ?? conv?.lead?.vehicle?.description ?? conv?.lead?.vehicle?.model,
+      // The bike the customer is trading in / selling to us — kept SEPARATE from the
+      // motorcycle of interest so a sell/trade lead's own bike never masquerades as the
+      // bike they want (Joe, 2026-07-15).
+      tradeVehicleDescription: (() => {
+        const t = conv?.lead?.tradeVehicle;
+        if (!t) return undefined;
+        const label = [t.year, t.make, t.model].filter(Boolean).join(" ").trim() || t.description;
+        return label || undefined;
+      })(),
       inquiry: c.inquiry ?? inquiry,
       status
     };
@@ -66187,7 +66196,13 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             const voiceFactsParse = await safeLlmParse("voice_durable_facts_parser", () =>
               parseVoiceDurableFactsWithLLM({ summary: summaryText, lead: conv.lead ?? undefined })
             );
-            if (applyVoiceDurableFacts(conv, voiceFactsParse, { sourceMessageId: callScopedMessageId ?? null })) {
+            const appliedFacts = applyVoiceDurableFacts(conv, voiceFactsParse, {
+              sourceMessageId: callScopedMessageId ?? null
+            });
+            // A unit the customer is shopping for, surfaced on the call, fills an EMPTY/
+            // placeholder motorcycle-of-interest field (never overwrites a real model).
+            const filledVehicle = fillLeadVehicleFromVoiceFacts(conv, voiceFactsParse);
+            if (appliedFacts || filledVehicle) {
               saveConversation(conv);
             }
           } catch (err: any) {

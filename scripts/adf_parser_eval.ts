@@ -227,7 +227,43 @@ const talieaQuoteRequestAdf = `<?xml version="1.0" encoding="UTF-8"?>
  </prospect>
 </adf>`;
 
+// Joe, 2026-07-15: a sell/trade lead whose ONLY <vehicle> is the customer's OWN bike
+// (interest="trade-in" / "sell") was landing as the motorcycle of interest. The single
+// trade/sell-tagged vehicle must go to tradeVehicle and leave the interest fields EMPTY.
+const tradeOnlySingleVehicleAdf = `<?xml version="1.0" encoding="UTF-8"?>
+<?adf version="1.0"?>
+<adf>
+ <prospect>
+   <requestdate>2026-07-15T14:00:00+00:00</requestdate>
+   <id sequence="1" source="Traffic Log Pro">11702</id>
+   <vehicle interest="trade-in" status="USED">
+     <year>2019</year>
+     <make>HARLEY-DAVIDSON</make>
+     <model>Road King Special</model>
+     <vin></vin>
+     <odometer unit="MILES">12000</odometer>
+   </vehicle>
+   <customer>
+     <contact>
+       <name part="first">Casey</name>
+       <name part="last">Traderman</name>
+       <phone type="cellphone">7165551234</phone>
+     </contact>
+   </customer>
+   <provider>
+     <name part="full" type="individual">Trade Accelerator - Trade In</name>
+   </provider>
+ </prospect>
+</adf>`;
+
+const sellOnlySingleVehicleAdf = tradeOnlySingleVehicleAdf
+  .replace('interest="trade-in"', 'interest="sell"')
+  .replace("Road King Special", "Fat Bob 114")
+  .replace("<year>2019</year>", "<year>2020</year>");
+
 const markLead = parseAdfXml(markNicholsTradeAcceleratorAdf);
+const tradeOnlyLead = parseAdfXml(tradeOnlySingleVehicleAdf);
+const sellOnlyLead = parseAdfXml(sellOnlySingleVehicleAdf);
 const matthewLead = parseAdfXml(matthewWallValueMyTradeAdf);
 const laricussLead = parseAdfXml(laricussTruncatedTradeAdf);
 const completeParenLead = parseAdfXml(completeParenTradeAdf);
@@ -271,7 +307,16 @@ const checks: Check[] = [
   // HDFS credit-app comment ("Model Year: 2020, Model: Low Rider S") describes the FINANCED vehicle, not
   // a trade-in — no sellVehicleFieldContext markers present, so no tradeVehicle should be fabricated.
   { id: "hdfs_credit_app_no_fabricated_trade", actual: hdfsCreditAppLead.tradeVehicle, expected: undefined },
-  { id: "hdfs_credit_app_buy_model_intact", actual: hdfsCreditAppLead.vehicleModel, expected: "Low Rider S" }
+  { id: "hdfs_credit_app_buy_model_intact", actual: hdfsCreditAppLead.vehicleModel, expected: "Low Rider S" },
+  // Single trade-in-tagged vehicle: NOT the motorcycle of interest; lands in tradeVehicle.
+  { id: "trade_only_no_interest_model", actual: tradeOnlyLead.vehicleModel, expected: undefined },
+  { id: "trade_only_no_interest_year", actual: tradeOnlyLead.year, expected: undefined },
+  { id: "trade_only_trade_model", actual: tradeOnlyLead.tradeVehicle?.model, expected: "Road King Special" },
+  { id: "trade_only_trade_year", actual: tradeOnlyLead.tradeVehicle?.year, expected: "2019" },
+  // interest="sell" behaves the same as trade-in.
+  { id: "sell_only_no_interest_model", actual: sellOnlyLead.vehicleModel, expected: undefined },
+  { id: "sell_only_trade_model", actual: sellOnlyLead.tradeVehicle?.model, expected: "Fat Bob 114" },
+  { id: "sell_only_trade_year", actual: sellOnlyLead.tradeVehicle?.year, expected: "2020" }
 ];
 
 let passed = 0;

@@ -10,7 +10,7 @@ import path from "node:path";
 import { checkMessage } from "./voice_charter_audit.ts";
 
 process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "eval-no-live-key";
-const { applyVoiceDurableFacts, buildVoiceFactsCadenceLine } = await import(
+const { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, fillLeadVehicleFromVoiceFacts } = await import(
   "../services/api/src/domain/voiceCadenceFacts.ts"
 );
 
@@ -172,5 +172,95 @@ assert.equal(
 );
 const llmSource = await fs.readFile(path.resolve("services/api/src/domain/llmDraft.ts"), "utf8");
 assert.match(llmSource, /was quoted \$14,995 asking price/, "parser few-shots pin the production fixture");
+
+// ── Fill-only-when-empty motorcycle-of-interest write-back (Joe, 2026-07-15) ──
+const baseFacts = {
+  quotedUnit: "",
+  discussedUnit: "",
+  quotedPrice: 0,
+  otdPrice: 0,
+  budgetMax: 0,
+  wantsPreowned: false,
+  preferences: [],
+  blockers: [],
+  confidence: 0.9
+};
+
+// 1) Empty field + discussed unit => filled (year split out).
+{
+  const c: any = { lead: {} };
+  assert.equal(
+    fillLeadVehicleFromVoiceFacts(c, { ...baseFacts, discussedUnit: "2021 Street Glide Special" }),
+    true,
+    "empty motorcycle-of-interest must fill from the discussed unit"
+  );
+  assert.equal(c.lead.vehicle.model, "Street Glide Special");
+  assert.equal(c.lead.vehicle.year, "2021");
+}
+
+// 2) Placeholder ("Harley-Davidson Other" / "Full Line") counts as empty => filled.
+{
+  const c: any = { lead: { vehicle: { model: "Harley-Davidson Other" } } };
+  assert.equal(
+    fillLeadVehicleFromVoiceFacts(c, { ...baseFacts, discussedUnit: "Fat Bob 114" }),
+    true,
+    "a placeholder model must be treated as unknown and filled"
+  );
+  assert.equal(c.lead.vehicle.model, "Fat Bob 114");
+}
+
+// 3) A REAL model is never overwritten (fill-only; over-attachment is the worse failure mode).
+{
+  const c: any = { lead: { vehicle: { model: "Road Glide Limited" } } };
+  assert.equal(
+    fillLeadVehicleFromVoiceFacts(c, { ...baseFacts, discussedUnit: "Street Glide" }),
+    false,
+    "a real motorcycle-of-interest must never be overwritten by a call"
+  );
+  assert.equal(c.lead.vehicle.model, "Road Glide Limited");
+}
+
+// 4) No unit discussed (sell/trade-only or service call) => no-op.
+{
+  const c: any = { lead: {} };
+  assert.equal(fillLeadVehicleFromVoiceFacts(c, { ...baseFacts }), false, "no discussed unit => no write");
+  assert.equal(c.lead.vehicle, undefined);
+}
+
+// 5) Low confidence => no-op.
+{
+  const c: any = { lead: {} };
+  assert.equal(
+    fillLeadVehicleFromVoiceFacts(c, { ...baseFacts, discussedUnit: "Street Glide", confidence: 0.4 }),
+    false,
+    "below the confidence floor => no write"
+  );
+}
+
+// 6) quotedUnit works as the fallback source when discussedUnit is empty.
+{
+  const c: any = { lead: {} };
+  assert.equal(
+    fillLeadVehicleFromVoiceFacts(c, { ...baseFacts, quotedUnit: "2017 Breakout" }),
+    true,
+    "a quoted unit fills when no discussed unit is present"
+  );
+  assert.equal(c.lead.vehicle.model, "Breakout");
+  assert.equal(c.lead.vehicle.year, "2017");
+}
+
+// Wiring pin: the live voice ingestion site must call the fill helper.
+assert.match(
+  apiSource,
+  /fillLeadVehicleFromVoiceFacts\(conv, voiceFactsParse\)/,
+  "the live voice-summary ingestion site must attempt the motorcycle-of-interest fill"
+);
+// Parser pin: the discussed_unit slot must exist with the trade/sell exclusion rule.
+assert.match(llmSource, /discussed_unit/, "voice facts schema must carry discussed_unit");
+assert.match(
+  llmSource,
+  /NEVER the bike they own, are trading in, or want to sell/,
+  "discussed_unit prompt must exclude the trade/sell bike"
+);
 
 console.log("PASS voice cadence facts eval");

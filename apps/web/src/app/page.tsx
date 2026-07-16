@@ -20791,6 +20791,14 @@ export default function Home() {
                           </span>
                         </div>
                       </div>
+                      {(selectedContact as any).tradeVehicleDescription ? (
+                        <div className="px-4 py-3 flex items-center justify-between gap-3">
+                          <div className="text-gray-500">Trade-In / Sell</div>
+                          <div className="font-medium text-right">
+                            {(selectedContact as any).tradeVehicleDescription}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="px-4 py-3 flex items-center justify-between gap-3">
                         <div className="text-gray-500">Text Marketing Opt-in</div>
                         <div className="flex items-center gap-3">

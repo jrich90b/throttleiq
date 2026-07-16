@@ -79,17 +79,32 @@ function pickByType(list: any[], type: string): any | undefined {
   });
 }
 
+// A vehicle tagged interest="trade-in"/"sell" is the customer's OWN bike (they want the
+// dealer to take it) — it must NEVER be read as the motorcycle of interest (Joe, 2026-07-15:
+// sell/trade leads were landing with their own bike listed as the bike they want). Structured
+// extraction, deterministic per AGENTS.md. Fail direction: an untagged vehicle keeps today's
+// behavior (motorcycle of interest), so ordinary leads are unchanged.
+function isTradeOrSellInterest(x: any): boolean {
+  const interest = (attr(x, "interest") ?? "").toLowerCase();
+  return interest.includes("trade") || interest.includes("sell");
+}
+
 function pickVehicle(v: any): any {
-  if (!Array.isArray(v)) return v ?? {};
-  const byInterest = v.find(x => (attr(x, "interest") ?? "").toLowerCase() === "buy");
+  if (!Array.isArray(v)) {
+    // Single-vehicle ADF: a trade/sell-tagged bike yields NO motorcycle of interest (the
+    // comment/body may still name the bike they want via the parseFromComment fallbacks).
+    return v && isTradeOrSellInterest(v) ? {} : (v ?? {});
+  }
+  const candidates = v.filter(x => !isTradeOrSellInterest(x));
+  const byInterest = candidates.find(x => (attr(x, "interest") ?? "").toLowerCase() === "buy");
   if (byInterest) return byInterest;
-  const byStock = v.find(x => text(x?.stock) || text(x?.vin) || text(x?.year));
-  return byStock ?? v[0] ?? {};
+  const byStock = candidates.find(x => text(x?.stock) || text(x?.vin) || text(x?.year));
+  return byStock ?? candidates[0] ?? {};
 }
 
 function pickTradeVehicle(v: any): any | null {
-  if (!Array.isArray(v)) return null;
-  const byInterest = v.find(x => (attr(x, "interest") ?? "").toLowerCase().includes("trade"));
+  if (!Array.isArray(v)) return v && isTradeOrSellInterest(v) ? v : null;
+  const byInterest = v.find(isTradeOrSellInterest);
   return byInterest ?? null;
 }
 

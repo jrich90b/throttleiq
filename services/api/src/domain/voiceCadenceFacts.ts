@@ -9,6 +9,7 @@
  */
 import { saveConversation, type Conversation } from "./conversationStore.js";
 import { parseVoiceDurableFactsWithLLM, type VoiceDurableFactsParse } from "./llmDraft.js";
+import { isSpecificModel } from "./modelDeflection.js";
 
 const FACT_CONFIDENCE_MIN = Number(process.env.VOICE_DURABLE_FACTS_CONFIDENCE_MIN ?? 0.7);
 const FACT_FRESHNESS_DAYS = Number(process.env.VOICE_FACTS_CADENCE_MAX_AGE_DAYS ?? 45);
@@ -42,6 +43,39 @@ export function applyVoiceDurableFacts(
     updatedAt: opts.nowIso || new Date().toISOString(),
     sourceMessageId: opts.sourceMessageId ?? null
   };
+  return true;
+}
+
+/**
+ * Fill-only-when-empty motorcycle-of-interest write-back (Joe, 2026-07-15): when a call
+ * surfaces the specific unit the customer is SHOPPING FOR (discussed/quoted unit) and the
+ * lead has NO specific motorcycle of interest yet (empty, or a placeholder like
+ * "Harley-Davidson Other" / "Full Line"), fill the field so staff see it. CONSERVATIVE by
+ * design: never overwrites a real model (the over-attachment failure mode is worse than a
+ * det-miss — see the model-relevance-guard doctrine), and the parser's discussed_unit rule
+ * explicitly excludes the bike they own/trade/sell. Returns true when it wrote.
+ */
+export function fillLeadVehicleFromVoiceFacts(
+  conv: Conversation,
+  parsed: VoiceDurableFactsParse | null
+): boolean {
+  if (!parsed) return false;
+  if (!(parsed.confidence >= FACT_CONFIDENCE_MIN)) return false;
+  const unit = String(parsed.discussedUnit || parsed.quotedUnit || "").trim();
+  if (!unit) return false;
+  const existing = String(
+    conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? ""
+  ).trim();
+  if (existing && isSpecificModel(existing)) return false; // fill-only: a real model stays
+  const yearMatch = unit.match(/\b(19|20)\d{2}\b/);
+  const model = unit.replace(/\b(19|20)\d{2}\b/, "").replace(/\s{2,}/g, " ").trim() || unit;
+  conv.lead = conv.lead ?? {};
+  conv.lead.vehicle = conv.lead.vehicle ?? {};
+  if (yearMatch && !String(conv.lead.vehicle.year ?? "").trim()) {
+    conv.lead.vehicle.year = yearMatch[0];
+  }
+  conv.lead.vehicle.model = model;
+  conv.lead.vehicle.description = model;
   return true;
 }
 
