@@ -532,7 +532,7 @@ function applyNoTradeLanguageGuard(
 
 type BriefDocContext = {
   url: string;
-  type: "text" | "pdf" | "binary" | "missing";
+  type: "text" | "pdf" | "image" | "binary" | "missing";
   excerpt: string;
 };
 
@@ -555,6 +555,28 @@ const BRIEF_TEXT_EXTENSIONS = new Set([
 
 type PdfParseFn = (buffer: Buffer) => Promise<{ text?: string }>;
 type DocxParseFn = (buffer: Buffer) => Promise<string>;
+// Reads the promotional copy OUT of an image brief (a flyer graphic, a screenshot of an
+// offer, a photo of a printed sheet) via the vision model, so a PNG/JPG brief becomes real
+// prompt content instead of a placeholder. Injectable so the eval pins the dispatch contract
+// without a real vision call or a checked-in image fixture.
+type ImageBriefExtractFn = (buffer: Buffer, mime: string) => Promise<string>;
+
+const BRIEF_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+
+function briefImageMimeForExt(ext: string): string {
+  switch (String(ext ?? "").toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".bmp":
+      return "image/bmp";
+    default:
+      return "image/jpeg";
+  }
+}
 const requireForBrief = createRequire(import.meta.url);
 let cachedPdfParse: PdfParseFn | null | undefined;
 let cachedJsZip: any | null | undefined;
@@ -608,6 +630,59 @@ async function extractDocxTextDefault(buffer: Buffer): Promise<string> {
   }
 }
 
+// Read the promotional copy out of an IMAGE brief via the vision model. A campaign brief that
+// is a picture (a flyer graphic, a screenshot of an offer, a photo of a printed sheet) carries
+// its headline / dates / offer / prices as pixels, so plain file reads see nothing. This asks the
+// vision model to transcribe that content into text the copy LLM can use. Returns "" on any
+// failure (LLM off, no key, model error) so callers fall back to the image placeholder — never a
+// crash, never a fabrication. This is transcription, not invention: the prompt forbids adding
+// anything not visible in the image.
+async function extractCampaignBriefImageTextDefault(buffer: Buffer, mime: string): Promise<string> {
+  if (process.env.LLM_ENABLED !== "1" || !process.env.OPENAI_API_KEY) return "";
+  if (process.env.LLM_CAMPAIGN_BRIEF_IMAGE_VISION_ENABLED === "0") return "";
+  if (!buffer.length) return "";
+  const model =
+    process.env.OPENAI_CAMPAIGN_BRIEF_IMAGE_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const imageBase64 = buffer.toString("base64");
+  const prompt = [
+    "You are reading a marketing brief that a dealership uploaded as an IMAGE (a flyer, a screenshot,",
+    "or a photo of a printed sheet) so its content can be used to write a promotional SMS/email.",
+    "Transcribe ALL of the promotional information visible in the image as plain text: the headline/",
+    "offer, any dates or deadlines, prices/discounts/APR, models or products named, promo codes, and",
+    "any call to action or fine print. Preserve exact numbers, dates, and codes verbatim.",
+    "Output ONLY the transcribed content as plain text. Do NOT add, infer, or invent anything that is",
+    "not visible in the image. If the image contains no readable promotional text, output nothing."
+  ].join("\n");
+  try {
+    const resp = await client.responses.create({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            { type: "input_image", image_url: `data:${mime};base64,${imageBase64}`, detail: "high" }
+          ]
+        }
+      ] as any,
+      max_output_tokens: 1200
+    });
+    recordOpenAIUsage(resp, {
+      feature: "llm_parser",
+      operation: "campaign_brief_image_extract",
+      requestKind: "responses.create",
+      model,
+      metadata: { debugTag: "campaign-brief-image-vision" }
+    });
+    return String((resp as any)?.output_text ?? "").trim();
+  } catch (error) {
+    console.warn("[campaign-brief-image-vision] extract failed", {
+      message: error instanceof Error ? error.message : String(error)
+    });
+    return "";
+  }
+}
+
 /**
  * Turn an uploaded reference-file buffer into brief context the copy LLM can actually
  * read. This is where an attached PDF flyer or text brief becomes real prompt content
@@ -618,7 +693,11 @@ async function extractDocxTextDefault(buffer: Buffer): Promise<string> {
 export async function extractBriefExcerpt(
   buffer: Buffer,
   ext: string,
-  deps: { parsePdf?: PdfParseFn | null; parseDocx?: DocxParseFn | null } = {}
+  deps: {
+    parsePdf?: PdfParseFn | null;
+    parseDocx?: DocxParseFn | null;
+    extractImageText?: ImageBriefExtractFn | null;
+  } = {}
 ): Promise<{ type: BriefDocContext["type"]; excerpt: string }> {
   if (!buffer.length) {
     return { type: "missing", excerpt: "File was empty." };
@@ -665,6 +744,29 @@ export async function extractBriefExcerpt(
     return {
       type: "pdf",
       excerpt: "PDF uploaded. Text could not be extracted; use the file as the promotion/event source of truth."
+    };
+  }
+
+  if (BRIEF_IMAGE_EXTENSIONS.has(lower)) {
+    const extractImageText =
+      deps.extractImageText !== undefined ? deps.extractImageText : extractCampaignBriefImageTextDefault;
+    if (extractImageText) {
+      try {
+        const excerpt = normalizeWhitespace(await extractImageText(buffer, briefImageMimeForExt(lower))).slice(
+          0,
+          BRIEF_EXCERPT_MAX
+        );
+        if (excerpt) {
+          return { type: "text", excerpt };
+        }
+      } catch {
+        // fall through to placeholder below
+      }
+    }
+    return {
+      type: "image",
+      excerpt:
+        "Image brief uploaded but no readable promotional text was found. Treat as supporting campaign brief context."
     };
   }
 

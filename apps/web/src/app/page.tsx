@@ -15717,7 +15717,7 @@ export default function Home() {
                         ref={campaignBriefUploadInputRef}
                         className="hidden"
                         type="file"
-                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        accept=".pdf,.txt,.md,.csv,.json,.html,.doc,.docx,.png,.jpg,.jpeg,.webp,.gif,.bmp,application/pdf,text/plain,text/markdown,text/csv,application/json,text/html,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/webp,image/gif,image/bmp"
                         multiple
                         disabled={campaignBriefUploadBusy}
                         onChange={async e => {

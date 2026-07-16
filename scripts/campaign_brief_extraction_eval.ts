@@ -105,7 +105,37 @@ async function main() {
   });
   assert.equal(injThrow.type, "binary", "docx parser throw falls back to binary");
 
-  console.log("campaign_brief_extraction_eval: OK (11 checks)");
+  // 12) IMAGE brief (.png) with a vision reader that transcribes the promo copy -> real text
+  //     reaches the prompt as type "text", so a flyer/screenshot brief is no longer ignored.
+  //     Vision is injected so the assertion is deterministic (no real model call / image fixture).
+  const flyerText =
+    "SUMMER DEMO DAYS. Ride the all-new 2026 Street Glide, July 18-19. " +
+    "$0 down, 3.99% APR for 60 months. Free lunch. Code SUMMER26.";
+  const img = await extractBriefExcerpt(Buffer.from("\x89PNG fake bytes"), ".png", {
+    extractImageText: async () => flyerText
+  });
+  assert.equal(img.type, "text", "image brief with transcribed text should be type text");
+  assert.ok(img.excerpt.includes("SUMMER DEMO DAYS"), "image excerpt carries the transcribed headline");
+  assert.ok(img.excerpt.includes("SUMMER26"), "image excerpt carries promo specifics (code/dates)");
+
+  // 13) Image with no readable text -> honest image placeholder, not fabricated content.
+  const blankImg = await extractBriefExcerpt(Buffer.from("\x89PNG blank"), ".jpg", {
+    extractImageText: async () => "   "
+  });
+  assert.equal(blankImg.type, "image", "unreadable image brief is type image");
+  assert.ok(blankImg.excerpt.length > 0, "unreadable image still returns a placeholder excerpt");
+
+  // 14) Vision reader throws / unavailable -> graceful image placeholder, never crashes generation.
+  const imgThrow = await extractBriefExcerpt(Buffer.from("\x89PNG boom"), ".webp", {
+    extractImageText: async () => {
+      throw new Error("vision failed");
+    }
+  });
+  assert.equal(imgThrow.type, "image", "image vision throw falls back to type image");
+  const imgNoDep = await extractBriefExcerpt(Buffer.from("\x89PNG nodep"), ".png", { extractImageText: null });
+  assert.equal(imgNoDep.type, "image", "missing vision reader falls back to type image");
+
+  console.log("campaign_brief_extraction_eval: OK (14 checks)");
 }
 
 main().catch(err => {

@@ -46930,10 +46930,17 @@ app.post("/campaigns/briefs", requireManager, upload.single("file"), async (req,
     "application/json",
     "text/html",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/msword"
+    "application/msword",
+    // Image briefs (a flyer graphic, a screenshot of an offer, a photo of a printed sheet) —
+    // the vision reader (extractBriefExcerpt) transcribes the promo copy for the SMS/email draft.
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/bmp"
   ]);
   if (!allowed.has(mime)) {
-    return res.status(400).json({ ok: false, error: "unsupported file type (pdf/text/doc)" });
+    return res.status(400).json({ ok: false, error: "unsupported file type (pdf/text/doc/image)" });
   }
   const maxBytes = 50 * 1024 * 1024;
   if (Number(req.file.size ?? 0) > maxBytes) {
@@ -46958,7 +46965,17 @@ app.post("/campaigns/briefs", requireManager, upload.single("file"), async (req,
                   ? ".doc"
                   : mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     ? ".docx"
-                    : "";
+                    : mime === "image/png"
+                      ? ".png"
+                      : mime === "image/jpeg"
+                        ? ".jpg"
+                        : mime === "image/webp"
+                          ? ".webp"
+                          : mime === "image/gif"
+                            ? ".gif"
+                            : mime === "image/bmp"
+                              ? ".bmp"
+                              : "";
   const ext = extFromOriginal || extFromMime || ".pdf";
   const fileName = `campaign_brief_${Date.now()}_${Math.random().toString(36).slice(2, 8)}${ext}`;
   const dir = path.resolve(getDataDir(), "uploads", "campaigns");
