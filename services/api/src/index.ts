@@ -57398,6 +57398,11 @@ if (authToken && signature) {
       });
     }
     const humanModeShortAck = isShortAckText(humanModeText) || isEmojiOnlyText(humanModeText);
+    // Human-mode re-engagement backstop (Logan Hazel +12109976639, 2026-07-17): when a watch arm
+    // below handles this turn (state-only, no return), it sets this flag so the fall-through
+    // reply-needed task at the block terminus does not ALSO fire for a turn that was already
+    // surfaced as a watch.
+    let humanModeInventoryWatchHandled = false;
     const humanModeHasScheduleKeyword =
       /\b(schedule|book|appointment|appt|reschedule|move|availability|available|openings?|stop by|stop in|come in|works?|what time|what times|cancel|can't make|cant make|cannot make)\b/i.test(
         humanModeText
@@ -57611,6 +57616,7 @@ if (authToken && signature) {
       (!humanModeDemoDayQuestion && !!conv.inventoryWatchPending) ||
       (!humanModeDemoDayQuestion && !!conv.inventoryWatch);
     if (humanModeWatchParserEligible && humanModeWatchHint) {
+      humanModeInventoryWatchHandled = true;
       const humanModeSemanticSlotParse = await safeLlmParse("semantic_slot_parser_human_mode", () =>
         parseSemanticSlotsWithLLM({
           text: humanModeText,
@@ -57798,6 +57804,38 @@ if (authToken && signature) {
           }
         }
       }
+    }
+    // Human-mode re-engagement backstop: staff has the wheel (mode=human), so we correctly do NOT
+    // auto-draft a reply here — but a substantive customer message that no arm above handled must
+    // still SURFACE to the owner, or a live lead silently vanishes (Logan Hazel +12109976639,
+    // 2026-07-17: a trade + model-interest reply arrived in human mode and produced NO draft AND
+    // NO task — nothing in the inbox except the activity bump). Mirror owner_thread_step_back: add
+    // a "needs YOUR reply" follow-up task for the owner. Deterministic side-effect (AGENTS.md
+    // allows deterministic side-effects/state); fail-safe by direction — a redundant task is cheap,
+    // the current false-negative drops the lead. addTodo merges by (conv, open, "followup") so
+    // repeat inbounds refresh one task instead of stacking. Skip short-acks/reactions (opt-out and
+    // disposition closeouts already returned above) and turns already surfaced as a watch.
+    if (
+      event.provider === "twilio" &&
+      !humanModeShortAck &&
+      !humanModeInventoryWatchHandled
+    ) {
+      const customerName =
+        normalizeDisplayCase(conv.lead?.firstName) || conv.lead?.name || "the customer";
+      const excerpt = String(event.body ?? "").replace(/\s+/g, " ").slice(0, 140);
+      addTodo(
+        conv,
+        "call",
+        `${customerName} replied while you have this thread: "${excerpt}" — needs YOUR reply.`,
+        event.providerMessageId,
+        conv.leadOwner,
+        undefined,
+        "followup"
+      );
+      recordRouteOutcome("live", "human_mode_reengagement_reply_needed", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
     }
     saveConversation(conv);
     await flushConversationStore();
