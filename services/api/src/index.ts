@@ -523,6 +523,7 @@ import {
   normalizeInventorySoldKey
 } from "./domain/inventorySolds.js";
 import { appendLeadUnitAvailabilityDisclosure } from "./domain/leadUnitAvailabilityDisclosure.js";
+import { buildLongTermTimelineMessage } from "./domain/longTermMessage.js";
 import { sendEmail } from "./domain/emailSender.js";
 import {
   canApplyDispositionCloseout,
@@ -32022,10 +32023,18 @@ async function maybeStartCadence(
     const due = new Date(sentAtIso || new Date().toISOString());
     due.setMonth(due.getMonth() + Math.max(1, Math.round(monthsStart)));
     due.setHours(10, 30, 0, 0);
-    const timeframeLabel = String(conv.lead?.purchaseTimeframe ?? "").trim() || "a future";
-    const msg =
-      `Hi, this is Brooke at American Harley-Davidson. You mentioned a ${timeframeLabel} timeline. ` +
-      "I’m here when you’re ready. Just reach out when the time is right.";
+    // Shared canonical (buildLongTermTimelineMessage): this inline twin had BOTH drifts the
+    // consolidation exists to kill — the hardcoded "Brooke at American Harley-Davidson"
+    // identity (wrong agent on a live thread; dealer-portability blocker) and the corporate
+    // "reach out" closer. Identity comes from the dealer profile, copy from the pinned canon.
+    const longTermProfile = await getDealerProfileHot();
+    const msg = buildLongTermTimelineMessage({
+      agentName: longTermProfile?.agentName,
+      dealerName: longTermProfile?.dealerName,
+      firstName: conv.lead?.firstName,
+      timeframe: conv.lead?.purchaseTimeframe,
+      hasLicense: conv.lead?.hasMotoLicense
+    });
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
     return;
   }

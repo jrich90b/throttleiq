@@ -255,3 +255,22 @@ export function stripLeadingAgentGreeting(body: string): string {
     .replace(/^hey\s+[^,]+,\s*/i, "")
     .trim();
 }
+
+/**
+ * Strip an "it's {someone} over at {dealerName}." clause (the softened
+ * `buildAgentIntroPhrase` shape) wherever it names THIS dealer. Twin of
+ * `applyInitialAdfPrefix`'s "this is X at Y" strips (sendgridInbound): deterministic
+ * templates (e.g. buildLongTermTimelineMessage) now carry their own profile-built softened
+ * intro, and when the template's first name or a per-send agent override differs from the
+ * prefix being prepended, the cheap startsWith dedupe misses. Anchoring on the dealer name
+ * keeps it surgical — ordinary sentences don't take the "it's … over at {dealer}." shape.
+ * Fail direction: one consistent profile-based intro, never a double introduction.
+ * Pinned by long_term_message:eval.
+ */
+export function stripAgentIntroPhraseForDealer(body: string, dealerName: string): string {
+  const dealer = String(dealerName ?? "").trim();
+  const text = String(body ?? "");
+  if (!dealer) return text;
+  const dealerEsc = dealer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`\\bit[’']s\\s+[^.]{1,80}?\\s+over\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
+}
