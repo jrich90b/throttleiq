@@ -2,6 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { dataPath } from "./dataDir.js";
+import { getDealerId } from "./storePersistence.js";
 
 export type InventoryFeedItem = {
   stockId?: string;
@@ -22,10 +23,36 @@ const INVENTORY_FETCH_TIMEOUT_MS = Number(process.env.INVENTORY_FETCH_TIMEOUT_MS
 let cache: { items: InventoryFeedItem[]; loadedAt: number } | null = null;
 let snapshotCache: { items: InventoryFeedItem[]; loadedAt: number } | null = null;
 
-function getFeedUrl(): string | null {
+/**
+ * Feed-URL scoping (de-hardcode A3, 2026-07-17): INVENTORY_XML_URL always wins.
+ * The legacy americanharley default survives ONLY for the americanharley dealer
+ * id — the live AH box runs with no INVENTORY_XML_URL set, so deleting the
+ * default would kill its feed. Any other dealer id gets NO feed URL and the
+ * feed loads empty. Fail direction: a misconfigured second dealer gets no
+ * inventory data — never this dealer's bikes.
+ */
+export const LEGACY_AMERICANHARLEY_FEED_URL =
+  "https://americanharley-davidson.com/inventory/xml?location=127";
+const LEGACY_FEED_DEALER_ID = "americanharley";
+let warnedLegacyFeedDefault = false;
+
+export function resolveInventoryFeedUrl(): string | null {
   const url = process.env.INVENTORY_XML_URL?.trim();
   if (url) return url;
-  return "https://americanharley-davidson.com/inventory/xml?location=127";
+  const dealerId = getDealerId();
+  if (dealerId === LEGACY_FEED_DEALER_ID) {
+    if (!warnedLegacyFeedDefault) {
+      warnedLegacyFeedDefault = true;
+      console.warn(
+        `[inventory-feed] INVENTORY_XML_URL unset — using the deprecated implicit ${LEGACY_FEED_DEALER_ID} default feed URL; set INVENTORY_XML_URL explicitly`
+      );
+    }
+    return LEGACY_AMERICANHARLEY_FEED_URL;
+  }
+  console.error(
+    `[inventory-feed] INVENTORY_XML_URL is not set for dealer "${dealerId}" — inventory feed disabled (no implicit default exists for non-${LEGACY_FEED_DEALER_ID} dealers)`
+  );
+  return null;
 }
 
 function text(v: any): string | undefined {
@@ -277,7 +304,7 @@ export async function hasInventoryForModelYear(opts: {
 export async function getInventoryFeed(opts?: { bypassCache?: boolean }): Promise<InventoryFeedItem[]> {
   const now = Date.now();
   if (!opts?.bypassCache && cache && now - cache.loadedAt < CACHE_TTL_MS) return cache.items;
-  const url = getFeedUrl();
+  const url = resolveInventoryFeedUrl();
   if (!url) return [];
   const staleItems = cache?.items ?? [];
   const controller = new AbortController();
