@@ -2157,20 +2157,22 @@ export type FinanceProcessQuestionParse = {
 };
 
 export type FinanceHardshipDisclosureParse = {
-  // "finance_hardship": the customer DISCLOSED a personal CREDIT / FINANCING HARDSHIP that a
-  //   human finance specialist must handle privately, and where the agent must NOT propose a
-  //   financing SOLUTION (co-signer, a specific rate/APR, approval odds, "we can work through
-  //   it with X"): no/thin/damaged credit score, bad/"shot"/low credit, prior bankruptcy or
-  //   repossession, a past finance DENIAL, identity theft affecting their credit, fear of a
-  //   high interest rate tied to their credit, fixed income / "I won't qualify". The honest
-  //   move is a warm, non-solutioning hand-off to the finance manager (Joe ruling 2026-07-15:
-  //   finance-distress replies are a plain staff hand-off — no bot solutioning; extends the
-  //   2026-07-11 "finance needs-info always staff handoff" ruling).
+  // "distress": the customer signals REAL, CURRENT financial pain where any bot "solution" (a
+  //   co-signer nudge, a rate, approval odds) would read as tone-deaf — a fresh/active bankruptcy,
+  //   "I can't afford anything right now", a job loss, "I'm drowning", a foreclosure/repossession
+  //   in progress, income that leaves no room at all. The honest move is a warm, non-solutioning
+  //   hand-off to the finance manager (Joe ruling 2026-07-15: no bot solutioning on distress).
+  // "decline": the customer surfaced a credit QUALIFYING OBSTACLE that a co-signer can realistically
+  //   address while they STILL want the bike — no/thin/damaged credit score, bad/low credit, a
+  //   PAST finance denial, a PAST bankruptcy ("does that matter?"), identity theft that wiped their
+  //   score, worry about a high rate because of their credit, "not sure I'd qualify". Here an
+  //   empathetic CO-SIGNER NUDGE is welcome and helpful (Joe, 2026-07-16 — refines the 7/15 ruling:
+  //   the John Geschwender / no-credit-score case should get the co-signer nudge, not a silent handoff).
   // "none": a normal finance NUMBER question (payment/rate/amount down), a finance PROCESS
   //   question (another handler owns that), general affordability/budget talk with no credit
   //   hardship, or any non-finance turn. Fail here when unsure — a false "none" just runs the
   //   existing finance handling.
-  intent: "finance_hardship" | "none";
+  hardshipKind: "distress" | "decline" | "none";
   explicitRequest: boolean;
   confidence?: number;
 };
@@ -3477,9 +3479,13 @@ const FINANCE_PROCESS_QUESTION_PARSER_JSON_SCHEMA: { [key: string]: unknown } = 
 const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "explicit_request", "confidence"],
+  required: ["hardship_kind", "explicit_request", "confidence"],
   properties: {
-    intent: { type: "string", enum: ["finance_hardship", "none"] },
+    // distress = real current financial pain where any bot "solution" reads as tone-deaf → quiet
+    // warm staff handoff, no solutioning. decline = a credit QUALIFYING obstacle a co-signer can
+    // realistically address (thin/no/bad credit, prior denial, past bankruptcy, high-rate worry) →
+    // an empathetic co-signer nudge is welcome. none = a normal number/process/budget or off-topic turn.
+    hardship_kind: { type: "string", enum: ["distress", "decline", "none"] },
     explicit_request: { type: "boolean" },
     confidence: { type: "number" }
   }
@@ -8281,41 +8287,49 @@ export async function parseFinanceHardshipDisclosureWithLLM(args: {
 
   const history = (args.history ?? []).slice(-6).map(h => `${h.direction}: ${h.body}`);
   const prompt = [
-    "You read SMS in a Harley dealership sales thread and decide whether the customer just",
-    "DISCLOSED a personal CREDIT / FINANCING HARDSHIP — a sensitive situation that our finance",
-    "manager must handle privately and where our texting assistant must NOT propose a financing",
-    "solution (no co-signer suggestion, no specific rate/APR, no approval odds, no 'we can work",
-    "through it with X'). Return only JSON that matches the provided schema.",
+    "You read SMS in a Harley dealership sales thread. The customer may have surfaced a personal",
+    "CREDIT / FINANCING situation. Sort it into one of three buckets so we respond the right way. Our",
+    "texting assistant must NEVER quote a specific rate/APR or promise approval odds.",
+    "Return only JSON that matches the provided schema.",
     "",
-    "Classify intent:",
-    '- "finance_hardship": the customer reveals a credit/qualifying hardship or fear tied to it —',
-    "  no credit score / thin file, bad/low/'shot' credit, a prior finance DENIAL, bankruptcy or",
-    "  repossession, identity theft affecting their credit, worry about a high interest rate",
-    "  because of their credit, fixed income or 'I won't/can't qualify'. explicit_request need not",
-    "  be a literal question — a disclosure ('my credit is rough') still counts.",
+    "Classify hardship_kind:",
+    '- "distress": REAL, CURRENT financial pain, where suggesting a co-signer or any "solution" would',
+    "  read as tone-deaf — a fresh/active bankruptcy or one they're filing now, 'I can't afford",
+    "  anything right now', a recent job loss, 'I'm drowning' / 'buried in debt', a foreclosure or",
+    "  repossession in progress, income that leaves no room at all. These get a warm HUMAN hand-off,",
+    "  no bot solutioning.",
+    '- "decline": a credit QUALIFYING OBSTACLE that a co-signer could realistically fix while the',
+    "  customer STILL wants the bike — no credit score / thin file, bad/low/'shot' credit, a PAST",
+    "  finance denial, a PAST bankruptcy ('a couple years ago, does that matter?'), identity theft",
+    "  that wiped their score, worry about a high rate BECAUSE of their credit, 'not sure I'd",
+    "  qualify'. These are the spots where an empathetic co-signer nudge is genuinely helpful.",
     '- "none": a normal finance NUMBER question (payment, rate, how much down), a finance PROCESS',
     "  question (insurance/paperwork timing), plain affordability/budget talk with NO credit",
     "  hardship ('trying to stay under $500/mo'), or any non-finance turn (scheduling, availability,",
     "  trade, photos, social).",
     "",
-    "Hard rules (precision matters — don't pull normal finance questions into the hardship handoff):",
-    "- A pure budget/payment target with no credit concern ('I want to keep it around $400/month') = none.",
+    "Hard rules:",
+    "- A pure budget/payment target with no credit concern ('keep it around $400/month') = none.",
     "- 'What rate can I get?' with no hardship disclosure = none (that's a number question).",
-    "- Hand off (finance_hardship) the moment the customer ties the ask to bad/no credit, a denial,",
-    "  bankruptcy, identity theft, or fear of a high rate because of their credit.",
-    "- explicit_request=true when the customer clearly surfaced the hardship this turn.",
-    "- confidence is 0..1; use >= 0.7 only when the hardship read is clear.",
+    "- The line between distress and decline is AFFORDABILITY-PAIN vs a QUALIFYING obstacle: if they",
+    "  signal they genuinely can't afford it / real current hardship => distress; if they still want",
+    "  the bike and the blocker is their credit/qualifying => decline. When a hardship read is clear",
+    "  but you can't tell which, prefer 'decline' (a warm co-signer nudge is the softer, safer reply).",
+    "- explicit_request=true when the customer clearly surfaced the situation this turn.",
+    "- confidence is 0..1; use >= 0.7 only when the read is clear.",
     "",
     "Examples:",
-    '- "due to a past identity theft I no longer have a credit score and paying a ridiculous high interest just doesn\'t seem plausible for me" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.95}',
-    '- "my credit is pretty bad, not sure I\'d even get approved" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.93}',
-    '- "I had a bankruptcy a couple years ago, does that matter?" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.9}',
-    '- "got denied at another dealer, can you guys do anything?" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.9}',
-    '- "I\'m on a fixed income and worried the rate would be too high" -> {"intent":"finance_hardship","explicit_request":true,"confidence":0.85}',
-    '- "what would my monthly payment be?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
-    '- "trying to stay under $500 a month" -> {"intent":"none","explicit_request":false,"confidence":0.9}',
-    '- "what rate can I get?" -> {"intent":"none","explicit_request":false,"confidence":0.88}',
-    '- "can I come by Saturday?" -> {"intent":"none","explicit_request":false,"confidence":0.92}',
+    '- "due to a past identity theft I no longer have a credit score and paying a ridiculous high interest just doesn\'t seem plausible for me" -> {"hardship_kind":"decline","explicit_request":true,"confidence":0.92}',
+    '- "my credit is pretty bad, not sure I\'d even get approved" -> {"hardship_kind":"decline","explicit_request":true,"confidence":0.9}',
+    '- "I had a bankruptcy a couple years ago, does that matter?" -> {"hardship_kind":"decline","explicit_request":true,"confidence":0.88}',
+    '- "got denied at another dealer, can you guys do anything?" -> {"hardship_kind":"decline","explicit_request":true,"confidence":0.9}',
+    '- "I\'m on a fixed income and worried the rate would be too high" -> {"hardship_kind":"decline","explicit_request":true,"confidence":0.82}',
+    '- "honestly I just filed for bankruptcy and can\'t afford anything right now" -> {"hardship_kind":"distress","explicit_request":true,"confidence":0.93}',
+    '- "I lost my job last month, this probably isn\'t happening for me" -> {"hardship_kind":"distress","explicit_request":true,"confidence":0.9}',
+    '- "what would my monthly payment be?" -> {"hardship_kind":"none","explicit_request":false,"confidence":0.92}',
+    '- "trying to stay under $500 a month" -> {"hardship_kind":"none","explicit_request":false,"confidence":0.9}',
+    '- "what rate can I get?" -> {"hardship_kind":"none","explicit_request":false,"confidence":0.88}',
+    '- "can I come by Saturday?" -> {"hardship_kind":"none","explicit_request":false,"confidence":0.92}',
     "",
     history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
     `Message: ${text}`
@@ -8338,14 +8352,15 @@ export async function parseFinanceHardshipDisclosureWithLLM(args: {
     (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
   if (!parsed) return null;
 
-  const intent: FinanceHardshipDisclosureParse["intent"] =
-    String(parsed.intent ?? "").toLowerCase() === "finance_hardship" ? "finance_hardship" : "none";
+  const rawKind = String(parsed.hardship_kind ?? "").toLowerCase();
+  const hardshipKind: FinanceHardshipDisclosureParse["hardshipKind"] =
+    rawKind === "distress" ? "distress" : rawKind === "decline" ? "decline" : "none";
   const explicitRequest = parsed.explicit_request === true;
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
-  return { intent, explicitRequest, confidence };
+  return { hardshipKind, explicitRequest, confidence };
 }
 
 // Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
