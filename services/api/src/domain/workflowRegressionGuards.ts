@@ -1,3 +1,5 @@
+import { GENERIC_AGENT_DISPLAY_NAME } from "./agentVoice.js";
+
 export type RequestedScheduleWindowMode = "after" | "before" | "any_time" | "window" | "none";
 
 function normalizeScheduleLabel(raw?: string | null): string {
@@ -794,7 +796,7 @@ export function buildRideChallengeSignupReply(args: {
   established?: boolean;
 }): string {
   const firstName = String(args.firstName ?? "").trim() || "there";
-  const agentName = String(args.agentName ?? "").trim() || "Alexandra";
+  const agentName = String(args.agentName ?? "").trim() || GENERIC_AGENT_DISPLAY_NAME;
   const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
   const intro = args.established ? "" : `Hi ${firstName} — this is ${agentName} at ${dealerName}. `;
   return (
@@ -1965,7 +1967,7 @@ export function buildMarketplaceSellMyBikeReviewReply(args: {
   const bikeLabel = String(args.bikeLabel ?? "").trim() || "your bike";
   const firstName = String(args.firstName ?? "").trim();
   if (args.isInitialAdf) {
-    const agentName = String(args.agentName ?? "").trim() || "Brooke";
+    const agentName = String(args.agentName ?? "").trim() || GENERIC_AGENT_DISPLAY_NAME;
     const dealerName = String(args.dealerName ?? "").trim() || "American Harley-Davidson";
     return (
       `Thanks — I received the sell-my-bike details for ${bikeLabel}. ` +

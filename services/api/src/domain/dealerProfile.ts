@@ -111,6 +111,16 @@ export async function getDealerProfile(): Promise<DealerProfile | null> {
   }
 }
 
+/**
+ * Synchronous read of the last profile loaded by getDealerProfile/saveDealerProfile.
+ * For sync call paths that cannot await (e.g. the persona self-intro guard inside the
+ * outbound append path). Null until the first async load — callers must fail safe on
+ * null (in practice the cache is warm within seconds of boot on any inbound/outbound).
+ */
+export function getCachedDealerProfile(): DealerProfile | null {
+  return cached;
+}
+
 export async function saveDealerProfile(profile: DealerProfile): Promise<DealerProfile> {
   const filePath = process.env.DEALER_PROFILE_PATH
     ? path.resolve(process.env.DEALER_PROFILE_PATH)

@@ -9,6 +9,60 @@
  * opener). Keep all intro wording here so future tweaks are one edit, never scattered.
  */
 
+/**
+ * Neutral agent stand-in for fail paths where the dealer profile has no agentName.
+ * Deliberately lowercase and phrase-shaped so it reads naturally mid-intro
+ * ("it's the team over at {dealer}", "This is the team at {dealer}") — never a
+ * baked-in persona. AH-era persona names were scattered through the code as
+ * fallbacks; a second dealer must never inherit another store's persona
+ * (identity-fallback sweep, 2026-07-17). Pinned by dealer_identity_fallback:eval.
+ */
+export const GENERIC_AGENT_DISPLAY_NAME = "the team";
+
+/** Neutral dealership stand-in for public pages when the profile has no dealerName. */
+export const GENERIC_DEALER_DISPLAY_NAME = "our dealership";
+
+/**
+ * THE agent-name accessor: the configured profile agentName when set, else the
+ * neutral generic. Every fallback for "who signs/introduces the agent" should
+ * route through here instead of hardcoding a persona.
+ */
+export function resolveDealerAgentName(
+  profile: { agentName?: string | null } | null | undefined,
+  fallback: string = GENERIC_AGENT_DISPLAY_NAME
+): string {
+  const clean = String(profile?.agentName ?? "").trim();
+  return clean || fallback;
+}
+
+/**
+ * Persona self-intro matcher ("this is {agent}") built from the CONFIGURED agent
+ * name — used by the manual-sender persona lock (conversationStore.lockPersonaToStaffSender)
+ * to recognize an unedited persona-signed draft. Returns null when there is no usable
+ * name (no persona to protect → callers skip the check). Escapes regex metacharacters
+ * and tolerates flexible whitespace inside multi-word names.
+ */
+export function buildPersonaSelfIntroPattern(agentName: string | null | undefined): RegExp | null {
+  const clean = String(agentName ?? "").trim();
+  if (!clean) return null;
+  const escaped = clean
+    .split(/\s+/)
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  // A \b after a non-word final char (e.g. "…(Danny)") can never match — only close the
+  // name with a word boundary when the name actually ends in a word character.
+  const tail = /\w$/.test(clean) ? "\\b" : "";
+  return new RegExp(`\\bthis is\\s+${escaped}${tail}`, "i");
+}
+
+/**
+ * Footer identity line for the public marketing-unsubscribe page: the configured
+ * dealerName, else the neutral generic — never a hardcoded dealership literal.
+ */
+export function buildMarketingUnsubscribeFooter(dealerName?: string | null): string {
+  return String(dealerName ?? "").trim() || GENERIC_DEALER_DISPLAY_NAME;
+}
+
 /** Casual greeting, no em-dash. "Hey {name}, " or "Hey there, " when the name is unknown. */
 export function buildAgentGreeting(firstName?: string | null): string {
   const name = String(firstName ?? "").trim();

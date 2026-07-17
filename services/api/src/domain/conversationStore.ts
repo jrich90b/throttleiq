@@ -26,6 +26,8 @@ import {
   type DraftStateInvariantInput
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
+import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
+import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
   isPendingIncomingInventoryNotifyTodoSummary,
@@ -2320,7 +2322,12 @@ export function lockPersonaToStaffSender(
   const userName = String(actor?.userName ?? "").trim();
   if (!userName) return;
   if (conv.manualSender?.userName || conv.manualSender?.userId) return;
-  if (/\bthis is alexandra\b/i.test(String(sentBody ?? ""))) return;
+  // Persona check runs against the CONFIGURED agent name (was a hardcoded AH-era
+  // "this is alexandra" literal — identity-fallback sweep, 2026-07-17). This guard
+  // only inspects the NEW outbound body at send time (never stored history), so the
+  // legacy literal needs no compatibility alternative. Sync path → cached profile.
+  const personaSelfIntro = buildPersonaSelfIntroPattern(getCachedDealerProfile()?.agentName);
+  if (personaSelfIntro && personaSelfIntro.test(String(sentBody ?? ""))) return;
   conv.manualSender = {
     userId: String(actor?.userId ?? "").trim() || undefined,
     userName,
