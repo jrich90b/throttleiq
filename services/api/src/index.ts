@@ -309,6 +309,7 @@ import {
   parseWatchScopeWithLLM,
   parseFinanceProcessQuestionWithLLM,
   parseFinanceHardshipDisclosureWithLLM,
+  parseIncomingInventoryPurposeWithLLM,
   parseNonMotorcycleTradeWithLLM,
   parseServiceAppointmentRequestWithLLM,
   summarizeVoiceTranscriptWithLLM,
@@ -563,6 +564,7 @@ import {
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideFinanceHardshipTurn,
+  decideIncomingInventoryPurpose,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideSchedulingTurn,
@@ -28674,7 +28676,12 @@ function customerNameForPendingIncomingInventory(conv: Conversation): string {
   );
 }
 
-function applyPendingIncomingInventoryState(
+function incomingInventoryPurposeConfidenceMin(): number {
+  const v = Number(process.env.INCOMING_INVENTORY_PURPOSE_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
+async function applyPendingIncomingInventoryState(
   conv: Conversation,
   opts?: {
     sourceText?: string | null;
@@ -28682,7 +28689,7 @@ function applyPendingIncomingInventoryState(
     source?: "adf" | "manual" | "customer" | "system";
     acknowledged?: boolean;
   }
-): boolean {
+): Promise<boolean> {
   const nowIsoValue = new Date().toISOString();
   const pending = buildPendingIncomingInventoryFromConversation({
     conv,
@@ -28692,6 +28699,29 @@ function applyPendingIncomingInventoryState(
     nowIso: nowIsoValue
   });
   if (!pending) return false;
+  // WHY is it coming in? Comprehended once, then carried forward — so we never call a bike the
+  // customer is BUYING "your trade" (Joe 2026-07-16). A prior confident read wins (no re-parse on
+  // every ack turn); otherwise classify from the establishing context. Fail-safe: parser off/null or
+  // low confidence => "unclear" => neutral "coming in" copy.
+  const priorPurpose = conv.pendingIncomingInventory?.purpose;
+  if (priorPurpose && priorPurpose !== "unclear") {
+    pending.purpose = priorPurpose;
+  } else {
+    const purposeParse = await safeLlmParse("incoming_inventory_purpose_parser", () =>
+      parseIncomingInventoryPurposeWithLLM({
+        seedText: String(opts?.sourceText ?? "").trim(),
+        condition: pending.condition ?? null,
+        vehicle: pending.label ?? pending.model ?? null
+      })
+    );
+    pending.purpose = decideIncomingInventoryPurpose({
+      parserAccepted: !!purposeParse,
+      purpose: purposeParse?.purpose ?? null,
+      confidence: purposeParse?.confidence ?? 0,
+      confidenceMin: incomingInventoryPurposeConfidenceMin(),
+      condition: pending.condition ?? null
+    }).purpose;
+  }
   if (opts?.acknowledged) pending.acknowledgedAt = nowIsoValue;
   conv.pendingIncomingInventory = pending;
   conv.inventoryWatchPending = undefined;
@@ -32078,7 +32108,7 @@ async function maybeStartCadence(
     .filter(Boolean)
     .join("\n");
   if (hasPendingIncomingInventorySignal(pendingIncomingSeedText)) {
-    applyPendingIncomingInventoryState(conv, {
+    await applyPendingIncomingInventoryState(conv, {
       sourceText: pendingIncomingSeedText,
       source: "adf"
     });
@@ -53556,7 +53586,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
           partsInquiry: regenPartsTurnDefer
         })));
   if (regenPendingIncomingAcknowledgement) {
-    applyPendingIncomingInventoryState(conv, {
+    await applyPendingIncomingInventoryState(conv, {
       sourceText: `${regenLastOutboundForActionText}\n${String(event.body ?? "")}`,
       sourceMessageId: event.providerMessageId,
       source: "customer",
@@ -57145,7 +57175,7 @@ if (authToken && signature) {
           partsInquiry: partsTurnDefer
         })));
   if (pendingIncomingAcknowledgement) {
-    applyPendingIncomingInventoryState(conv, {
+    await applyPendingIncomingInventoryState(conv, {
       sourceText: `${pendingIncomingLastOutboundText}\n${String(event.body ?? "")}`,
       sourceMessageId: event.providerMessageId,
       source: "customer",

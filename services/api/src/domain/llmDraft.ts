@@ -2177,6 +2177,20 @@ export type FinanceHardshipDisclosureParse = {
   confidence?: number;
 };
 
+// WHY a bike is coming in to the dealership — read from the context that established the incoming
+// unit (the ADF/lead summary + opening messages), NOT from regex on the `condition` field. Drives the
+// customer copy so we never call a bike the customer is BUYING "your trade" (Joe, 2026-07-16; Bill
+// Indelicato +17163591526: "I'll keep this tied to the 2015 Road King trade" for a used bike the
+// dealer was sourcing FOR him).
+//   "trade_in"            — the CUSTOMER'S OWN bike is being taken in on trade.
+//   "sourced_for_purchase"— the dealer is bringing a used/other unit IN for the customer to BUY.
+//   "factory_order"       — a NEW bike ordered from the factory for the customer.
+//   "unclear"             — can't tell. Fails to neutral "coming in" copy (true either way).
+export type IncomingInventoryPurposeParse = {
+  purpose: "trade_in" | "sourced_for_purchase" | "factory_order" | "unclear";
+  confidence?: number;
+};
+
 export type NonMotorcycleTradeParse = {
   // The customer wants to trade in / put toward the deal an item that is NOT a motorcycle
   // (a motorcycle camper/trailer, RV, car/truck, boat/jet ski, ATV/UTV, snowmobile, etc.).
@@ -3487,6 +3501,19 @@ const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown }
     // an empathetic co-signer nudge is welcome. none = a normal number/process/budget or off-topic turn.
     hardship_kind: { type: "string", enum: ["distress", "decline", "none"] },
     explicit_request: { type: "boolean" },
+    confidence: { type: "number" }
+  }
+};
+
+const INCOMING_INVENTORY_PURPOSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["purpose", "confidence"],
+  properties: {
+    purpose: {
+      type: "string",
+      enum: ["trade_in", "sourced_for_purchase", "factory_order", "unclear"]
+    },
     confidence: { type: "number" }
   }
 };
@@ -8371,6 +8398,102 @@ export async function parseFinanceHardshipDisclosureWithLLM(args: {
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
   return { hardshipKind, explicitRequest, confidence };
+}
+
+/**
+ * Reads WHY a bike is coming in to the dealership from the context that established it, so the
+ * customer copy is right. Replaces the old `condition === "new" ? order : trade` guess, which called
+ * every used incoming unit "your trade" — including a bike the dealer was SOURCING for the customer
+ * to buy (Bill Indelicato +17163591526). FAIL DIRECTION: null/unclear => neutral "coming in" copy,
+ * which is true whether it's a trade-in or a purchase — never a wrong "trade" claim.
+ */
+export async function parseIncomingInventoryPurposeWithLLM(args: {
+  seedText: string;
+  condition?: string | null;
+  vehicle?: string | null;
+}): Promise<IncomingInventoryPurposeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_INCOMING_INVENTORY_PURPOSE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_INCOMING_INVENTORY_PURPOSE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_INCOMING_INVENTORY_PURPOSE_PARSER_MODEL || process.env.OPENAI_MODEL || "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_INCOMING_INVENTORY_PURPOSE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const seedText = String(args.seedText ?? "").trim();
+  if (!seedText) return null;
+  const condition = String(args.condition ?? "").trim();
+  const vehicle = String(args.vehicle ?? "").trim();
+
+  const prompt = [
+    "A Harley-Davidson dealership has a bike COMING IN that is tied to one customer's thread. Read the",
+    "context below and decide WHY that bike is coming in, so we describe it to the customer correctly.",
+    "Return only JSON that matches the provided schema.",
+    "",
+    "purpose:",
+    '- "trade_in": the bike coming in is the CUSTOMER\'S OWN bike, which the dealer is taking IN on',
+    "  trade (the customer is handing it over). Cues: 'taking your bike in on trade', 'your trade is",
+    "  coming in', the customer is trading/selling THEIR bike to us.",
+    '- "sourced_for_purchase": the dealer is bringing a used / pre-owned / auction / other-store unit',
+    "  IN so THIS CUSTOMER CAN BUY IT. The customer is the BUYER, not the trade-in owner. Cues: 'we",
+    "  have one coming in', 'getting one in for you', 'it's coming from the auction / another dealer',",
+    "  a used bike the customer is waiting on to look at and buy.",
+    '- "factory_order": a NEW bike ordered from Harley for this customer (a pre-order / build).',
+    '- "unclear": you genuinely cannot tell which side the customer is on.',
+    "",
+    "Hard rules:",
+    "- The KEY question is which SIDE the customer is on: are they HANDING US their bike (trade_in), or",
+    "  WAITING TO BUY a bike we're bringing in (sourced_for_purchase)?",
+    "- 'used' or 'pre-owned' ALONE does NOT mean trade_in — a used bike we're sourcing for a buyer is",
+    "  sourced_for_purchase. Only call it trade_in when the bike is clearly the customer's OWN.",
+    "- A customer asking to be told 'when it arrives / when it's ready to look at' is usually the BUYER",
+    "  (sourced_for_purchase) unless the text says the bike is theirs.",
+    "- When torn between trade_in and sourced_for_purchase, answer 'unclear' — we'd rather say a neutral",
+    "  'coming in' than wrongly call a customer's purchase a trade.",
+    "- confidence 0..1; use >= 0.7 only when the side is clear.",
+    "",
+    "Examples:",
+    '- "Customer is trading in his 2015 Road King, we are taking it in next week" -> {"purpose":"trade_in","confidence":0.95}',
+    '- "We have a 2015 Road King coming in from the auction for him to look at" -> {"purpose":"sourced_for_purchase","confidence":0.93}',
+    '- "Getting a used Street Glide in for this customer to buy, will let him know when it lands" -> {"purpose":"sourced_for_purchase","confidence":0.94}',
+    '- "He wants to be notified when the 2015 Road King gets here so he can see it" -> {"purpose":"sourced_for_purchase","confidence":0.8}',
+    '- "New 2026 Street Glide on order from the factory for this customer" -> {"purpose":"factory_order","confidence":0.95}',
+    '- "2015 Road King" -> {"purpose":"unclear","confidence":0.5}',
+    "",
+    condition ? `Unit condition field: ${condition}` : "Unit condition field: (unknown)",
+    vehicle ? `Unit: ${vehicle}` : "Unit: (unknown)",
+    `Context:\n${seedText.slice(0, 1200)}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "incoming_inventory_purpose_parser",
+      schema: INCOMING_INVENTORY_PURPOSE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 80,
+      debugTag: "llm-incoming-inventory-purpose-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const raw = String(parsed.purpose ?? "").toLowerCase();
+  const purpose: IncomingInventoryPurposeParse["purpose"] =
+    raw === "trade_in" || raw === "sourced_for_purchase" || raw === "factory_order" ? raw : "unclear";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+  return { purpose, confidence };
 }
 
 // Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
