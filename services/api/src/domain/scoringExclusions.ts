@@ -137,6 +137,40 @@ export function isClosingAckNoAction(text: string | null | undefined): boolean {
   return CLOSING_ACK_SUBSTANTIVE_RE.test(normalized);
 }
 
+// Forward-looking excitement with no ask — "can't wait", "so excited",
+// "looking forward to it", "stoked". These are the future-tense twin of a
+// closing ack: the customer is expressing anticipation about a plan already in
+// motion (an appointment, an event they RSVP'd to), not opening a new thread.
+const ENTHUSIASM_ACK_RE =
+  /(?:can'?t wait|cant wait|so excited|super excited|really excited|looking forward|look forward|counting down|pumped|stoked|thrilled|see you (?:then|there|soon|saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow)|let'?s (?:go|do it)|woo+ho+|yes+)/i;
+
+/**
+ * A short, forward-looking enthusiasm reply carries no question and asks nothing
+ * of us — replying "great, see you then!" to "Can't wait" is filler that makes
+ * the agent read as a bot. So the agent is correctly silent, and grading that
+ * silence is a phantom miss (the +15857657010 "Can't wait" reaction to the 7/16
+ * event blast was one of the turns that dirtied the release gate; a bare
+ * short-ack matcher never covered it because "can't wait" is not an ack phrase).
+ *
+ * Fail-direction: this HIDES turns from scoring, so over-firing masks a real
+ * miss. Kept fail-safe by a length ceiling, a question-mark guard, and the SAME
+ * actionable-cue guard the closing-ack matcher uses — "can't wait, what's the
+ * price?" or "so excited — when can I come in?" still get graded.
+ */
+export function isEnthusiasmAckNoAction(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (raw.length > 60) return false;
+  if (/\?/.test(raw)) return false;
+  const normalized = stripEmojiDecoration(raw)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  if (CLOSING_ACK_ACTIONABLE_CUE_RE.test(normalized)) return false;
+  return ENTHUSIASM_ACK_RE.test(normalized);
+}
+
 /**
  * A bare ASCII-emoticon reaction — ":)", ";-)", ":D", "=)", "<3", "^_^" — is a
  * pure no-reply-needed reaction, the ASCII twin of the Unicode-emoji-only turn

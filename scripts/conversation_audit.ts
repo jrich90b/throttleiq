@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
+import { isEnthusiasmAckNoAction, isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -182,7 +182,12 @@ function run() {
 
     if (lastInbound && !hasOutboundAfter(messages, lastInbound?.at)) {
       const inboundAge = ageMinutes(lastInbound?.at);
-      if (inboundAge != null && inboundAge > 2 && !isShortAckNoAction(lastInbound?.body)) {
+      if (
+        inboundAge != null &&
+        inboundAge > 2 &&
+        !isShortAckNoAction(lastInbound?.body) &&
+        !isEnthusiasmAckNoAction(lastInbound?.body)
+      ) {
         issuePush(issues, "inbound_unanswered");
       }
     }

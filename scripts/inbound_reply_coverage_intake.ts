@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
+import { isEnthusiasmAckNoAction, isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
 import {
   evaluateTurnToneQuality,
   isAdfInboundText,
@@ -255,6 +255,7 @@ function expectedNoResponseReason(conv: Conversation, inboundText: string): stri
   const t = normalizeText(inboundText).toLowerCase();
   if (!t) return null;
   if (isShortAckNoAction(t)) return "short_ack_no_action";
+  if (isEnthusiasmAckNoAction(t)) return "enthusiasm_ack_no_reply";
   if (isCloseoutUpdateNoReplyNeeded(t)) return "closeout_update_no_reply";
   const followUpMode = normalizeText(conv.followUp?.mode).toLowerCase();
   const convMode = normalizeText(conv.mode).toLowerCase();

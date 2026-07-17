@@ -5,6 +5,7 @@ import { matchInboundReply } from "./lib/toneResponseMatch.ts";
 import {
   isAutomatedSenderInbound,
   isClosingAckNoAction,
+  isEnthusiasmAckNoAction,
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
   isLeadIntakeRenotificationOnEngagedThread,
@@ -162,6 +163,7 @@ function getSkipReason(
   if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";
+  if (isEnthusiasmAckNoAction(inboundText)) return "enthusiasm_ack_no_reply";
   if (isCloseoutUpdateNoReplyNeeded(inboundText)) return "closeout_update_no_reply";
   if (isIndefiniteDeferralNoActionableAsk(inboundText)) return "indefinite_followup_deferral";
   if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(inboundText)) {

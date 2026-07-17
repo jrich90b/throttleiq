@@ -19,6 +19,7 @@ import {
   isJustifiedLongTermCadencePark,
   isNonSalesConversation,
   isOptOutKeywordInbound,
+  isEnthusiasmAckNoAction,
   isShadowReplayMessage,
   isShortAckNoAction,
   isTestLeadEmail,
@@ -228,6 +229,23 @@ assert.equal(
   isShortAckNoAction("thanks for all the info, I really appreciate you taking the time to walk me through the options"),
   false
 ); // over length ceiling
+
+// Forward-looking enthusiasm — no ask, so the agent is correctly silent
+// (Joe ruling 7/17: "stay silent is right"). "Can't wait" to the 7/16 event
+// blast (+15857657010) was one of the turns that dirtied the release gate; it
+// is not an ack phrase, so the short-ack matcher never covered it.
+assert.equal(isEnthusiasmAckNoAction("Can't wait"), true); // live 7/17 phantom
+assert.equal(isEnthusiasmAckNoAction("Can't wait "), true);
+assert.equal(isEnthusiasmAckNoAction("So excited!"), true);
+assert.equal(isEnthusiasmAckNoAction("Looking forward to it 🙌"), true);
+assert.equal(isEnthusiasmAckNoAction("stoked, see you saturday"), true);
+assert.equal(isEnthusiasmAckNoAction("Awesome, can't wait"), true);
+// Fail-direction guards: anything carrying an actual ask must STILL be graded.
+assert.equal(isEnthusiasmAckNoAction("Can't wait! What's the out-the-door price?"), false); // question
+assert.equal(isEnthusiasmAckNoAction("so excited — when can I come in"), false); // actionable cue
+assert.equal(isEnthusiasmAckNoAction("can't wait to see the pricing you promised"), false); // actionable cue
+assert.equal(isEnthusiasmAckNoAction("Ok"), false); // plain ack, not enthusiasm (short-ack's job)
+assert.equal(isEnthusiasmAckNoAction(""), false);
 assert.equal(isClosingAckNoAction("thanks man, when can I come in?"), false); // question survives the vocative
 
 // Bare ASCII-emoticon reactions — the typed twin of an emoji-only turn — are
