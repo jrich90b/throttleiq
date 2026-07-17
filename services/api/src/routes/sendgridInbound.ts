@@ -47,7 +47,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripLeadingAgentGreeting, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
@@ -1609,9 +1609,13 @@ function buildDealerLeadAppPostRideReply(args: {
     String(args.conv?.leadOwner?.firstName ?? "").trim() ||
     String(args.conv?.lead?.salesperson ?? args.conv?.latestLead?.salesperson ?? "").trim() ||
     String(args.agentName ?? "").trim() ||
-    "Alexandra";
+    GENERIC_AGENT_DISPLAY_NAME;
+  // The generic stand-in is a phrase ("the team") — pass it through whole so it never
+  // degrades to a bare "The" via the first-name split.
   const senderFirst =
-    normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
+    senderFull === GENERIC_AGENT_DISPLAY_NAME
+      ? GENERIC_AGENT_DISPLAY_NAME
+      : normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || GENERIC_AGENT_DISPLAY_NAME;
   const dealerLeadAppText = [
     args.conv?.lead?.comment,
     args.conv?.latestLead?.comment,
@@ -5485,7 +5489,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     let resubmissionAck: string | null = null;
     if (adfResubmission.hoursSinceLastOutbound == null || adfResubmission.hoursSinceLastOutbound >= 24) {
       const profile = await getDealerProfile();
-      const agentName = String(profile?.agentName ?? "").trim() || "Alexandra";
+      const agentName = resolveDealerAgentName(profile);
       const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
       const firstName = String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null;
       // Same controlled publication boundary as every other ADF draft — the draft-state
@@ -5615,7 +5619,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     if (!shouldIntroduceOnAdf) return text;
     const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const prefixLeadProfile = activeAdfLeadProfile ?? conv.lead;
     const firstName = normalizeDisplayCase(prefixLeadProfile?.firstName);
     const prefix = buildAgentIntro(firstName, agentName, dealerName);
@@ -5757,7 +5761,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isRideChallengeSignup) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Alexandra";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const ack = buildRideChallengeSignupReply({
       firstName,
@@ -6513,7 +6517,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isEagleRiderRentalLead && isInitialAdf) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Alexandra";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const modelLabel =
       formatModelLabel(null, conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? null) ||
@@ -6822,7 +6826,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (earlyMarketplaceSellMyBikeLead) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(activeAdfLeadProfile?.firstName);
     const modelLabel = normalizeVehicleModel(
       activeAdfLeadProfile?.tradeVehicle?.model ??
@@ -6881,7 +6885,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     initialMediaUrls = undefined;
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     if (conv.lead) conv.lead.walkIn = true;
     if (!conv.dialogState?.name || conv.dialogState.name === "none" || conv.dialogState.name === "inventory_init") {
@@ -7630,7 +7634,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if ((isRoom58Sell || isMarketplaceSell) && isSellLead) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const buyingUsedEnabled = profile?.buying?.usedBikesEnabled !== false;
     const sellOption = conv.lead?.sellOption;
     const tradeIntent = sellOption === "trade" || sellOption === "either";
@@ -7754,7 +7758,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isRoom58Standard) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack = `${greeting}Thanks — I got your inquiry. This is ${agentName} at ${dealerName}. I’ll make sure the team follows up soon.`;
@@ -7794,7 +7798,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (routeRoom58PriceHandoff) {
     const profile = await getDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const modelLabel = normalizeVehicleModel(
       conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "",
@@ -7955,7 +7959,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isMetaPromoOffer && isGenericMetaOfferModel(metaOfferRawModel)) {
     const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
-    const agentName = profile?.agentName ?? "Brooke";
+    const agentName = resolveDealerAgentName(profile);
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const greeting = firstName ? `Hi ${firstName} — ` : "Hi — ";
     let ack =
@@ -8433,7 +8437,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
 
           const profile = await getDealerProfile();
           const dealerName = String(profile?.dealerName ?? "").trim() || "American Harley-Davidson";
-          const agentName = String(profile?.agentName ?? "").trim() || "Brooke";
+          const agentName = resolveDealerAgentName(profile);
           const addrLine1 = String(profile?.address?.line1 ?? "").trim();
           const addrCity = String(profile?.address?.city ?? "").trim();
           const addrState = String(profile?.address?.state ?? "").trim();

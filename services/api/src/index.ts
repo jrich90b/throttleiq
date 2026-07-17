@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk, buildMarketingUnsubscribeFooter, buildPersonaSelfIntroPattern, GENERIC_AGENT_DISPLAY_NAME, resolveDealerAgentName } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
@@ -6916,7 +6916,7 @@ app.post("/public/widget/text-us", async (req, res) => {
         sale: conv.sale ?? null,
         pickup: conv.pickup ?? null,
         dealerProfile,
-        agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra")
+        agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile))
       });
       const salesTaskReason = result.handoff?.required ? result.handoff.reason : "other";
       const salesTaskSummary = `Sales website text lead: ${message}`;
@@ -7092,10 +7092,14 @@ app.get("/public/marketing/unsubscribe", async (req, res) => {
   const message = applied
     ? `You have been unsubscribed from marketing emails for ${escapeHtml(emailRaw)}.`
     : "Enter your email to unsubscribe from marketing emails.";
+  // Footer identity comes from the dealer profile (was a hardcoded AH literal —
+  // identity-fallback sweep, 2026-07-17); generic fallback when unset.
+  const unsubscribeProfile = await getDealerProfile();
+  const unsubscribeFooter = escapeHtml(buildMarketingUnsubscribeFooter(unsubscribeProfile?.dealerName));
   return res
     .status(200)
     .type("html")
-    .send(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${pageTitle}</title></head><body style="margin:0;background:#05070b;color:#f8fafc;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:680px;margin:48px auto;padding:24px;border:1px solid #263143;border-radius:12px;background:#0b1220;"><h1 style="margin:0 0 12px;font-size:24px;line-height:30px;">${pageTitle}</h1><p style="margin:0 0 18px;color:#d1d5db;font-size:15px;line-height:22px;">${message}</p>${applied ? "" : `<form method="post" action="/public/marketing/unsubscribe" style="display:flex;gap:10px;flex-wrap:wrap;"><input name="email" type="email" required placeholder="you@example.com" value="${escapeHtml(emailRaw)}" style="flex:1;min-width:240px;padding:12px 10px;border:1px solid #374151;border-radius:8px;background:#111827;color:#f8fafc;" /><button type="submit" style="padding:12px 14px;border:0;border-radius:8px;background:#f97316;color:#111827;font-weight:700;cursor:pointer;">Unsubscribe</button></form>`}<p style="margin:18px 0 0;color:#94a3b8;font-size:13px;line-height:19px;">American Harley-Davidson</p></main></body></html>`);
+    .send(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${pageTitle}</title></head><body style="margin:0;background:#05070b;color:#f8fafc;font-family:Arial,Helvetica,sans-serif;"><main style="max-width:680px;margin:48px auto;padding:24px;border:1px solid #263143;border-radius:12px;background:#0b1220;"><h1 style="margin:0 0 12px;font-size:24px;line-height:30px;">${pageTitle}</h1><p style="margin:0 0 18px;color:#d1d5db;font-size:15px;line-height:22px;">${message}</p>${applied ? "" : `<form method="post" action="/public/marketing/unsubscribe" style="display:flex;gap:10px;flex-wrap:wrap;"><input name="email" type="email" required placeholder="you@example.com" value="${escapeHtml(emailRaw)}" style="flex:1;min-width:240px;padding:12px 10px;border:1px solid #374151;border-radius:8px;background:#111827;color:#f8fafc;" /><button type="submit" style="padding:12px 14px;border:0;border-radius:8px;background:#f97316;color:#111827;font-weight:700;cursor:pointer;">Unsubscribe</button></form>`}<p style="margin:18px 0 0;color:#94a3b8;font-size:13px;line-height:19px;">${unsubscribeFooter}</p></main></body></html>`);
 });
 
 app.post("/public/marketing/unsubscribe", async (req, res) => {
@@ -7377,7 +7381,7 @@ app.post("/debug/inbound/process", express.json(), async (req, res) => {
       pickup: conv.pickup ?? null,
       weather: weatherStatus ?? null,
       dealerProfile,
-      agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke")
+      agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile))
     });
 
   if (result?.draft && result.shouldRespond) {
@@ -14649,9 +14653,13 @@ function buildDealerLeadAppPostRideReply(args: {
     String(args.conv?.leadOwner?.firstName ?? "").trim() ||
     String(args.conv?.lead?.salesperson ?? args.conv?.latestLead?.salesperson ?? "").trim() ||
     String(args.agentName ?? "").trim() ||
-    "Alexandra";
+    GENERIC_AGENT_DISPLAY_NAME;
+  // The generic stand-in is a phrase ("the team") — pass it through whole so it never
+  // degrades to a bare "The" via the first-name split.
   const senderFirst =
-    normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
+    senderFull === GENERIC_AGENT_DISPLAY_NAME
+      ? GENERIC_AGENT_DISPLAY_NAME
+      : normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || GENERIC_AGENT_DISPLAY_NAME;
   const dealerLeadAppText = [
     args.conv?.lead?.comment,
     args.conv?.latestLead?.comment,
@@ -14804,8 +14812,13 @@ function buildDealerRideOutcomeCustomerDraft(args: {
   const senderFull =
     String(args.conv?.leadOwner?.name ?? "").trim() ||
     String(args.agentName ?? "").trim() ||
-    "Alexandra";
-  const senderFirst = normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || "Alexandra";
+    GENERIC_AGENT_DISPLAY_NAME;
+  // The generic stand-in is a phrase ("the team") — pass it through whole so it never
+  // degrades to a bare "The" via the first-name split.
+  const senderFirst =
+    senderFull === GENERIC_AGENT_DISPLAY_NAME
+      ? GENERIC_AGENT_DISPLAY_NAME
+      : normalizeDisplayCase(senderFull.split(/\s+/).filter(Boolean)[0] ?? senderFull) || GENERIC_AGENT_DISPLAY_NAME;
   const modelLabel = getDealerRideOutcomeModelLabel(args.conv, args.unit);
   // Phantom-visit guard (dark): a recorded ride outcome (sold/hold/showed) implies they came in, so the
   // recap intro is correct then; for did_not_show/cancelled it would fabricate a visit.
@@ -19916,12 +19929,17 @@ function getPreferredSalespeopleForConv(
 }
 
 function resolveConversationAgentName(conv: any, fallbackName?: string): string {
-  const normalizeAgentName = (raw: string | null | undefined, fallback = "Alexandra"): string => {
+  // Ultimate fallback is the neutral generic, never a hardcoded AH-era persona
+  // literal (identity-fallback sweep, 2026-07-17).
+  const normalizeAgentName = (raw: string | null | undefined, fallback = GENERIC_AGENT_DISPLAY_NAME): string => {
     const clean = String(raw ?? "").trim();
     if (!clean || /^(our team|sales team|team)$/i.test(clean)) return fallback;
     return clean;
   };
-  const fallback = normalizeAgentName(fallbackName, "Alexandra");
+  const fallback = normalizeAgentName(fallbackName, GENERIC_AGENT_DISPLAY_NAME);
+  // Persona self-intro matcher for the historic-backfill scan below — built from the
+  // resolved agent name (call sites pass the profile agentName as fallbackName), not a literal.
+  const personaSelfIntro = buildPersonaSelfIntroPattern(fallback === GENERIC_AGENT_DISPLAY_NAME ? null : fallback);
   const leadFirst = String(conv?.lead?.firstName ?? "")
     .trim()
     .toLowerCase();
@@ -19956,7 +19974,7 @@ function resolveConversationAgentName(conv: any, fallbackName?: string): string 
     if (prov !== "twilio" && prov !== "sendgrid" && prov !== "human") continue;
     const actor = String(m?.actorUserName ?? "").trim();
     if (!actor || /^(our team|sales team|team)$/i.test(actor)) continue;
-    if (/\bthis is alexandra\b/i.test(String(m?.body ?? ""))) continue;
+    if (personaSelfIntro && personaSelfIntro.test(String(m?.body ?? ""))) continue;
     if (matchesLeadIdentity(actor)) continue;
     const first = actor.split(/\s+/).filter(Boolean)[0] ?? "";
     return normalizeAgentName(first || actor, fallback);
@@ -21831,7 +21849,7 @@ function buildScheduleContextStatusUpdateReply(
 
 function buildDealerLocationReply(conv: any, dealerProfile: any): string {
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+  const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
   const address = dealerProfile?.address;
   const line1 = address?.line1 ?? "1149 Erie Ave.";
   const city = address?.city ?? "North Tonawanda";
@@ -21845,7 +21863,7 @@ function buildDealerLocationReply(conv: any, dealerProfile: any): string {
 
 function buildAdfDealerLocationCostReply(conv: any, dealerProfile: any, inboundText: string): string {
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+  const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
   const firstName = normalizeDisplayCase(conv?.lead?.firstName);
   const address = dealerProfile?.address;
   const line1 = String(address?.line1 ?? "1149 Erie Ave.").trim();
@@ -51732,7 +51750,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       if (event.provider === "sendgrid_adf") {
         const regenDealerProfile = await getDealerProfileHot();
         const dealerName = regenDealerProfile?.dealerName ?? "American Harley-Davidson";
-        const agentName = resolveConversationAgentName(conv, regenDealerProfile?.agentName ?? "Alexandra");
+        const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(regenDealerProfile));
         const firstName = normalizeDisplayCase(conv.lead?.firstName);
         reply = `${buildAgentIntro(firstName, agentName, dealerName)}${reply}`.trim();
       }
@@ -51970,7 +51988,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       "non_buyer_survey_ack";
   if (regenIsAdfFirstTouchNonBuyer) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
     const reply = buildNonBuyerSurveyAck(firstName, agentName, dealerName);
     recordRouteOutcome("regen", "non_buyer_survey_ack", {
@@ -52018,7 +52036,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     : { kind: "none" as const };
   if (regenDealerSurveyDecision.kind !== "none") {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const firstName =
       normalizeDisplayCase(conv.lead?.firstName) ||
       (String(conv.lead?.name ?? "").trim().split(/\s+/)[0] || null);
@@ -52061,7 +52079,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       : null;
   if (regenAdfFirstTimeRiderDecision) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const replyBody = buildInitialAdfFirstTimeRiderGuidanceReply({
       parsed: regenAdfFirstTimeRiderDecision,
@@ -52126,7 +52144,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         : null);
     if (adfVehicleFactDecision) {
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = resolveConversationAgentName(scopedAdfConv, dealerProfile?.agentName ?? "Alexandra");
+      const agentName = resolveConversationAgentName(scopedAdfConv, resolveDealerAgentName(dealerProfile));
       const firstName = normalizeDisplayCase(scopedAdfConv.lead?.firstName);
       const year = extractVehicleYearFromContext(scopedAdfConv);
       const model = extractVehicleModelFromContext(scopedAdfConv);
@@ -52235,7 +52253,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenModelRaw = conv.lead?.vehicle?.model ?? conv.lead?.vehicle?.description ?? "";
   if (event.provider === "sendgrid_adf" && regenMetaPromoSource && isGenericMetaOfferModel(regenModelRaw)) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const offersResolution = resolveOffersUrl({
       dealerProfile,
@@ -52290,7 +52308,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     });
   if (regenRideChallengeLead && !hasRideChallengeSignupAcknowledgement(conv.messages)) {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
     const reply = buildRideChallengeSignupReply({
       firstName,
@@ -52444,7 +52462,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const thankYou = buildDealerLeadAppPostRideReply({
         conv,
         dealerName: dealerProfile?.dealerName,
-        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        agentName: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
         inventoryStatus: "unknown"
       });
       recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
@@ -52462,7 +52480,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       const thankYou = buildDealerLeadAppPostRideReply({
         conv,
         dealerName: dealerProfile?.dealerName,
-        agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra"),
+        agentName: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
         inventoryStatus: "unknown"
       });
       recordRouteOutcome("regen", "dealer_ride_thank_you_draft", { convId: conv.id, leadKey: conv.leadKey });
@@ -52478,7 +52496,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       secondaryStatus: dealerRideOutcome.secondaryStatus,
       note: dealerRideOutcome.note,
       dealerName: dealerProfile?.dealerName ?? "American Harley-Davidson",
-      agentName: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra")
+      agentName: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile))
     });
     recordRouteOutcome("regen", "dealer_ride_outcome_customer_draft", {
       convId: conv.id,
@@ -54282,7 +54300,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
     const agentName =
       resolveRegenSenderName() ||
-      resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
+      resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const latestInboundAtMs = Date.parse(String(latestInboundBeforeDraft?.at ?? ""));
     const hasPriorOutbound =
       Array.isArray(conv.messages) &&
@@ -55589,7 +55607,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null,
     dealerProfile,
-    agentNameOverride: resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke"),
+    agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile)),
     needsEmpathy: regenAcceptedAffect?.needsEmpathy ?? null
   });
 
@@ -55604,7 +55622,7 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
   const agentName =
     resolveRegenSenderName() ||
-    resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
+    resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
   const firstName = normalizeDisplayCase(conv.lead?.firstName);
   const hasSentOutbound = (conv.messages ?? []).some(
     m =>
@@ -62164,7 +62182,7 @@ if (authToken && signature) {
       routePolicyMode === "legacy" ? legacyNoResponseAction : policyNoResponseDecision.action;
     if (effectiveNoResponseAction === "ack_manual_handoff_question") {
       const dealerProfile = await getDealerProfileHot();
-      const speaker = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+      const speaker = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
       let reply = `Got it — this is ${speaker}. I’m checking that now and will follow up shortly.`;
       let replySource: "llm_structured" | "llm_freeform" | "fallback" | "manual_handoff" =
         "manual_handoff";
@@ -62721,7 +62739,7 @@ if (authToken && signature) {
       saveConversation(conv);
       const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+      const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
       const firstName = normalizeDisplayCase(conv.lead?.firstName);
       const replyRaw =
         `${buildAgentIntro(firstName, agentName, dealerName)}Thanks for your H‑D Meta promo offer request. ` +
@@ -62795,7 +62813,7 @@ if (authToken && signature) {
       }
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const label = futureFromReply?.label;
     const labelText = formatFutureTimeframeLabelForReply(label);
     const replyRaw = label
@@ -62817,7 +62835,7 @@ if (authToken && signature) {
       setDialogState(conv, "followup_paused");
       const dealerProfile = await getDealerProfileHot();
       const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-      const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+      const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
       const replyRaw = buildFriendlyReachOutClose(false);
       const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
       return publishLiveTwilioReply(reply);
@@ -62895,7 +62913,7 @@ if (authToken && signature) {
     }
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const label = future.label;
     const labelText = formatFutureTimeframeLabelForReply(label);
     const replyRaw = `Got it — I’ll pause follow-up until ${labelText}. Just reach out if anything changes before then.`;
@@ -62908,7 +62926,7 @@ if (authToken && signature) {
     pauseFollowUpCadence(conv, pauseUntil, "customer_reminder");
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const replyRaw =
       "Sounds good — I’m here when you’re ready. Just reach out when the time is right.";
     const reply = ensureUniqueDraft(replyRaw, conv, dealerName, agentName);
@@ -64128,7 +64146,7 @@ if (authToken && signature) {
   ) {
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Alexandra");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const bikeLabel = formatModelLabelForFollowUp(
       conv.lead?.vehicle?.year ?? null,
       conv.lead?.vehicle?.model ?? null
@@ -65142,7 +65160,7 @@ if (authToken && signature) {
     pickup: conv.pickup ?? null,
     weather: weatherStatus ?? null,
     dealerProfile: weatherProfile,
-    agentNameOverride: resolveConversationAgentName(conv, weatherProfile?.agentName ?? "Brooke"),
+    agentNameOverride: resolveConversationAgentName(conv, resolveDealerAgentName(weatherProfile)),
     needsEmpathy: acceptedAffect?.needsEmpathy ?? null
   });
   logRouteTiming("orchestrator", orchestratorStartedAt, {
@@ -65559,7 +65577,7 @@ if (authToken && signature) {
     const reason = result.handoff.reason;
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const ack = ensureUniqueDraft(result.handoff.ack, conv, dealerName, agentName);
     if (getDialogState(conv) === "callback_requested") {
       setDialogState(conv, "callback_handoff");
@@ -65580,7 +65598,7 @@ if (authToken && signature) {
   if (result.autoClose?.reason) {
     const dealerProfile = await getDealerProfileHot();
     const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-    const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+    const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
     const ack = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
     closeConversation(conv, result.autoClose.reason);
     stopRelatedCadences(conv, result.autoClose.reason, { close: true });
@@ -66174,7 +66192,7 @@ if (authToken && signature) {
 
   const dealerProfile = await getDealerProfileHot();
   const dealerName = dealerProfile?.dealerName ?? "American Harley-Davidson";
-  const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "Brooke");
+  const agentName = resolveConversationAgentName(conv, resolveDealerAgentName(dealerProfile));
   const lastOutboundTextFinal = getLastNonVoiceOutbound(conv)?.body ?? "";
   let reply = ensureUniqueDraft(result.draft, conv, dealerName, agentName);
   reply = applySlotOfferPolicy(conv, reply, lastOutboundTextFinal);

@@ -1,6 +1,9 @@
 /**
  * Persona continuity eval — voice charter: once staff sends as themselves,
- * the thread's voice is theirs; AI must not silently reintroduce Alexandra.
+ * the thread's voice is theirs; AI must not silently reintroduce the store persona.
+ * The persona self-intro guard is CONFIG-driven (identity-fallback sweep, 2026-07-17):
+ * it recognizes the dealer profile's agentName, so this eval runs against a fixture
+ * profile — no hardcoded persona.
  */
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
@@ -9,6 +12,16 @@ import path from "node:path";
 
 const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "persona-continuity-eval-"));
 process.env.CONVERSATIONS_DB_PATH = path.join(tempDir, "conversations.json");
+process.env.DEALER_PROFILE_PATH = path.join(tempDir, "dealer_profile.json");
+const fixtureAgentName = "Danielle";
+const fixtureDealerName = "Lakeside Cycle Works";
+await fs.writeFile(
+  process.env.DEALER_PROFILE_PATH,
+  JSON.stringify({ agentName: fixtureAgentName, dealerName: fixtureDealerName })
+);
+// Warm the sync profile cache the persona guard reads (getCachedDealerProfile).
+const { getDealerProfile } = await import("../services/api/src/domain/dealerProfile.ts");
+await getDealerProfile();
 
 const { appendOutbound, finalizeDraftAsSent, limitEmDashStyle, upsertConversationByLeadKey } =
   await import("../services/api/src/domain/conversationStore.ts");
@@ -28,19 +41,37 @@ appendOutbound(
 assert.equal(freehand.manualSender?.userName, "Scott Hartrich");
 assert.equal(freehand.manualSender?.source, "manual_send");
 
-// Sending an unedited Alexandra-signed draft does NOT lock the persona.
-const alexandraSend = upsertConversationByLeadKey("+17165553002", "suggest");
+// Sending an unedited persona-signed draft (the CONFIGURED agent name) does NOT lock the persona.
+const personaSend = upsertConversationByLeadKey("+17165553002", "suggest");
 appendOutbound(
-  alexandraSend,
+  personaSend,
   "salesperson",
-  alexandraSend.leadKey,
-  "Hi Sam — this is Alexandra at American Harley-Davidson. Thanks for reaching out.",
+  personaSend.leadKey,
+  `Hi Sam — this is ${fixtureAgentName} at ${fixtureDealerName}. Thanks for reaching out.`,
   "twilio",
   "SM_eval_persona_2",
   undefined,
   { userId: "u-scott", userName: "Scott Hartrich" }
 );
-assert.equal(alexandraSend.manualSender, undefined, "Alexandra-signed sends must not lock persona");
+assert.equal(personaSend.manualSender, undefined, "persona-signed sends must not lock persona");
+
+// A self-intro under a DIFFERENT name is not this store's persona — it locks like any staff send.
+const otherNameSend = upsertConversationByLeadKey("+17165553007", "suggest");
+appendOutbound(
+  otherNameSend,
+  "salesperson",
+  otherNameSend.leadKey,
+  `Hi Sam — this is Rachel at ${fixtureDealerName}. Thanks for reaching out.`,
+  "twilio",
+  "SM_eval_persona_2b",
+  undefined,
+  { userId: "u-rachel", userName: "Rachel Stone" }
+);
+assert.equal(
+  otherNameSend.manualSender?.userName,
+  "Rachel Stone",
+  "a non-persona self-intro is a staff takeover and must lock"
+);
 
 // AI drafts never lock the persona.
 const draftOnly = upsertConversationByLeadKey("+17165553003", "suggest");
