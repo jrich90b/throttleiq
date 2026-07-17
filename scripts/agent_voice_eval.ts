@@ -8,6 +8,8 @@ import {
   buildAgentGreeting,
   buildAgentIntro,
   buildAgentIntroPhrase,
+  hasCustomerReceivedOutbound,
+  shouldIntroduceOnAdfTouch,
   stripLeadingAgentGreeting
 } from "../services/api/src/domain/agentVoice.ts";
 
@@ -36,4 +38,62 @@ assert.equal(stripLeadingAgentGreeting("Hi Nicholas — thanks for reaching out.
 assert.equal(stripLeadingAgentGreeting("Hey Nicholas, thanks for reaching out."), "thanks for reaching out.");
 assert.equal(stripLeadingAgentGreeting("Thanks for reaching out."), "Thanks for reaching out.");
 
-console.log("PASS agent voice intro eval");
+// ── WHEN to introduce on an inbound ADF. The gate is "has the customer actually RECEIVED anything
+//    from us", NOT "is this the first ADF" — an unsent draft must never buy our silence about who we
+//    are. Six americanharley leads got a no-intro first message behind an unsent draft (Zackary Hauff
+//    +17165985414 2026-07-16; Aaron, Francis, Curtis, Elijah, John). Joe 2026-07-16: "the first
+//    outgoing message, the agent should always introduce itself."
+const ADF = { isAdfEvent: true };
+const draft = (draftStatus = "stale") => ({ direction: "out", provider: "draft_ai", draftStatus });
+const sent = (provider = "twilio") => ({ direction: "out", provider });
+const inbound = () => ({ direction: "in", provider: "sendgrid_adf" });
+
+// hasCustomerReceivedOutbound — only real, customer-facing sends count.
+assert.equal(hasCustomerReceivedOutbound([]), false, "no messages → nothing received");
+assert.equal(hasCustomerReceivedOutbound(null), false, "null messages → nothing received");
+assert.equal(hasCustomerReceivedOutbound([inbound(), draft()]), false, "an unsent draft is NOT received");
+assert.equal(hasCustomerReceivedOutbound([draft(), draft("pending")]), false, "pending/stale drafts are NOT received");
+for (const p of ["voice_call", "voice_summary", "voice_transcript", "payment_event"]) {
+  assert.equal(
+    hasCustomerReceivedOutbound([{ direction: "out", provider: p }]),
+    false,
+    `${p} is an internal log row, not a message the customer received`
+  );
+}
+for (const p of ["twilio", "sendgrid", "human", "web_widget"]) {
+  assert.equal(hasCustomerReceivedOutbound([sent(p)]), true, `${p} IS a real customer-facing send`);
+}
+assert.equal(hasCustomerReceivedOutbound([{ direction: "in", provider: "twilio" }]), false, "an INBOUND twilio msg is not something we sent");
+// An unknown/new provider fails toward "not received" → we introduce again (harmless) rather than
+// silently skipping the intro (the bug).
+assert.equal(hasCustomerReceivedOutbound([{ direction: "out", provider: "some_new_channel" }]), false, "unknown provider fails toward introducing");
+
+// shouldIntroduceOnAdfTouch — the decision itself.
+assert.equal(shouldIntroduceOnAdfTouch({ ...ADF, messages: [] }), true, "a genuine first ADF introduces (unchanged)");
+assert.equal(shouldIntroduceOnAdfTouch({ ...ADF, messages: [inbound()] }), true, "inbound-only history still introduces");
+// THE REGRESSION: first ADF drafted but never sent, second ADF arrives → must STILL introduce.
+assert.equal(
+  shouldIntroduceOnAdfTouch({ ...ADF, messages: [inbound(), draft(), inbound()] }),
+  true,
+  "Zackary: an unsent first-ADF draft must NOT suppress the intro on the next ADF"
+);
+// Already talked to them for real → do not re-introduce.
+assert.equal(
+  shouldIntroduceOnAdfTouch({ ...ADF, messages: [inbound(), sent(), inbound()] }),
+  false,
+  "a real prior send means they know us — no re-intro"
+);
+assert.equal(
+  shouldIntroduceOnAdfTouch({ ...ADF, messages: [inbound(), draft(), sent(), inbound()] }),
+  false,
+  "a draft plus a real send still counts as contacted"
+);
+assert.equal(
+  shouldIntroduceOnAdfTouch({ ...ADF, messages: [sent("human"), inbound()] }),
+  false,
+  "a staff text counts — don't re-introduce over a human"
+);
+// Non-ADF turns are out of scope (this gate only governs the ADF ack path).
+assert.equal(shouldIntroduceOnAdfTouch({ isAdfEvent: false, messages: [] }), false, "non-ADF event never routes through the ADF intro");
+
+console.log("PASS agent voice intro eval (+ ADF first-received intro gate)");
