@@ -4,7 +4,6 @@ import { evaluateTurnToneQuality, normalizeText } from "./lib/toneQuality.ts";
 import { matchInboundReply } from "./lib/toneResponseMatch.ts";
 import {
   isAutomatedSenderInbound,
-  isBareEmoticonReaction,
   isClosingAckNoAction,
   isHumanRewrittenOutbound,
   isIndefiniteDeferralNoActionableAsk,
@@ -12,6 +11,7 @@ import {
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isShadowReplayMessage,
+  isShortAckNoAction,
   isTestLeadEmail
 } from "../services/api/src/domain/scoringExclusions.ts";
 
@@ -102,18 +102,6 @@ function computeMedian(values: number[]): number {
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 1) return sorted[mid] ?? 0;
   return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
-}
-
-function isShortAckNoAction(text: string): boolean {
-  const t = String(text ?? "")
-    .trim()
-    .toLowerCase();
-  if (!t) return false;
-  if (/^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
-  if (isBareEmoticonReaction(t)) return true;
-  return /^(ok|okay|k|kk|got it|sounds good|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do)[.!?\s]*$/i.test(
-    t
-  );
 }
 
 function isReactionToOutboundText(text: string): boolean {

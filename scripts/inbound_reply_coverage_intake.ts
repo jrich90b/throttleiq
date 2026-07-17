@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
 import {
   evaluateTurnToneQuality,
   isAdfInboundText,
@@ -212,26 +213,10 @@ function normalizeProvider(raw: unknown): Provider | null {
   return null;
 }
 
-function isEmojiOnlyText(text: string): boolean {
-  const t = String(text ?? "").trim();
-  return t.length > 0 && /^[\p{Extended_Pictographic}\s]+$/u.test(t);
-}
-
 function isReactionToOutboundText(text: string): boolean {
   const t = String(text ?? "").trim();
   if (!t) return false;
   return /to\s+["“][\s\S]+["”]/i.test(t) && /^[\p{Emoji}\p{Extended_Pictographic}\s\W]*to\s+["“]/u.test(t);
-}
-
-function isShortAckNoAction(text: string): boolean {
-  const t = normalizeText(text).toLowerCase();
-  if (!t) return false;
-  if (isEmojiOnlyText(t)) return true;
-  if (t.length > 80) return false;
-  if (/[?]/.test(t)) return false;
-  return /^(ok|okay|k|kk|got it|sounds good|sounds great|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do|yep|yup|sure|no problem)[.!?\s]*$/i.test(
-    t
-  );
 }
 
 function hasActionableCue(text: string): boolean {

@@ -109,13 +109,25 @@ const CLOSING_ACK_FULL_RE = new RegExp(
 const CLOSING_ACK_SUBSTANTIVE_RE =
   /(thank|thx|\bty\b|appreciate|cheers|good to (?:know|hear)|good deal|no problem|all (?:good|set)|will do|sounds good|makes sense|noted|understood|fair enough|you (?:too|as well)|same to you|have a (?:good|great))/i;
 
+/**
+ * Strip emoji decoration so a matcher grades what the customer SAID, not how
+ * they dressed it up ("Thanks 👍" is the turn "Thanks").
+ *
+ * Covers pictographs plus the skin-tone modifiers, variation selectors and ZWJ
+ * that ride along with them. Deliberately NOT `\p{Emoji}` / `\p{Emoji_Component}`:
+ * those also match plain digits and `#`/`*`, so stripping them would silently
+ * rewrite "ok 2" into "ok" and mask real content.
+ */
+function stripEmojiDecoration(text: string): string {
+  return text.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}]/gu, " ");
+}
+
 export function isClosingAckNoAction(text: string | null | undefined): boolean {
   const raw = String(text ?? "").trim();
   if (!raw) return false;
   if (raw.length > 60) return false;
   if (/\?/.test(raw)) return false;
-  const normalized = raw
-    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, " ")
+  const normalized = stripEmojiDecoration(raw)
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
@@ -143,6 +155,44 @@ export function isBareEmoticonReaction(text: string | null | undefined): boolean
   const tokens = t.split(/\s+/);
   if (tokens.length === 0 || tokens.length > 4) return false;
   return tokens.every(tok => ASCII_EMOTICON_TOKEN_RE.test(tok));
+}
+
+/**
+ * A bare short ack — "ok", "thanks", "awesome", "👍", "Awesome 👍" — carries no
+ * ask, so the agent is correctly silent on it. Grading that silence as a
+ * `missing_response` manufactures a phantom miss.
+ *
+ * Every scorer used to keep its own inline copy of this matcher (tone quality,
+ * reply-coverage intake, conversation audit) and all three drifted apart while
+ * sharing one gap: the ack list was matched against RAW text, so a trailing
+ * emoji defeated it. Bare "Awesome" was skipped but "Awesome 👍" was graded a
+ * miss — on 2026-07-17 exactly two such turns ("Awesome 👍", one emoji-tailed
+ * ack) dirtied the release gate's tone-missing count. `isClosingAckNoAction`
+ * above already strips pictographs before matching; this now does the same, so
+ * decoration no longer changes the verdict.
+ *
+ * Fail-direction: this HIDES turns from scoring, so over-firing would mask a
+ * real miss. It stays fail-safe via a length ceiling and a question-mark guard
+ * ("ok?" is a question, not an ack) — both strictly NARROWER than the inline
+ * copies this replaces, two of which had neither.
+ */
+const SHORT_ACK_PHRASE_RE =
+  /^(?:ok(?:ay)?|kk?|got it|sounds (?:good|great)|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do|yep|yup|sure|no problem)[.!\s]*$/i;
+
+export function isShortAckNoAction(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (raw.length > 80) return false;
+  // A question is never a bare ack, however short ("ok?", "cool?").
+  if (/\?/.test(raw)) return false;
+  if (isBareEmoticonReaction(raw)) return true;
+  const normalized = stripEmojiDecoration(raw)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  // Nothing but emoji survived the strip — a pure reaction turn.
+  if (!normalized) return true;
+  return SHORT_ACK_PHRASE_RE.test(normalized);
 }
 
 export function isNonSalesConversation(conv: {

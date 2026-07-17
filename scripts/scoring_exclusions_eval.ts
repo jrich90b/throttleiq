@@ -20,6 +20,7 @@ import {
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isShadowReplayMessage,
+  isShortAckNoAction,
   isTestLeadEmail,
   isYearRolloverParkFingerprint
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -183,6 +184,7 @@ assert.equal(isYearRolloverParkFingerprint(null), false);
 assert.equal(isClosingAckNoAction("Good to know. Thank you!"), true);
 assert.equal(isClosingAckNoAction("Makes sense, appreciate it"), true);
 assert.equal(isClosingAckNoAction("Thanks 👍"), true);
+assert.equal(isClosingAckNoAction("Thanks 🤙🏽"), true); // skin-tone modifier must strip too
 assert.equal(isClosingAckNoAction("Good to hear that, thanks so much!"), true);
 assert.equal(isClosingAckNoAction("ok thank you"), true);
 assert.equal(isClosingAckNoAction("You too, have a great weekend"), true);
@@ -202,6 +204,30 @@ assert.equal(isClosingAckNoAction("appreciate it brother"), true);
 assert.equal(isClosingAckNoAction("thank you boss"), true);
 assert.equal(isClosingAckNoAction("thanks guys"), true);
 assert.equal(isClosingAckNoAction("thanks man, call me when you can"), false); // actionable cue survives the vocative
+
+// Bare short acks — the agent is correctly silent, so grading them is a phantom
+// miss. An emoji decoration must not change the verdict: "Awesome 👍" is the
+// same turn as "Awesome" (both dirtied the 7/17 gate's tone-missing count
+// because every inline copy of this matcher tested the RAW text).
+assert.equal(isShortAckNoAction("Awesome 👍"), true); // live 7/17 phantom (+17164722478)
+assert.equal(isShortAckNoAction("Awesome"), true);
+assert.equal(isShortAckNoAction("👍"), true); // pure reaction
+assert.equal(isShortAckNoAction("ok 🤙🏽"), true); // modifier + emoji tail
+assert.equal(isShortAckNoAction("Thanks!"), true);
+assert.equal(isShortAckNoAction("sounds great"), true);
+assert.equal(isShortAckNoAction(":)"), true); // ASCII emoticon twin
+assert.equal(isShortAckNoAction(""), false);
+// Fail-direction guards: this HIDES turns from scoring, so anything carrying a
+// real ask must still be graded. The question-mark and length rails are
+// narrower than the inline copies they replace.
+assert.equal(isShortAckNoAction("ok?"), false); // a question, not an ack
+assert.equal(isShortAckNoAction("cool 👍 is it still available?"), false);
+assert.equal(isShortAckNoAction("Awesome, when can I come in"), false); // carries an ask
+assert.equal(isShortAckNoAction("Can't wait"), false); // not an ack phrase — stays graded
+assert.equal(
+  isShortAckNoAction("thanks for all the info, I really appreciate you taking the time to walk me through the options"),
+  false
+); // over length ceiling
 assert.equal(isClosingAckNoAction("thanks man, when can I come in?"), false); // question survives the vocative
 
 // Bare ASCII-emoticon reactions — the typed twin of an emoji-only turn — are

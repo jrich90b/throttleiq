@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
 
 type AnyObj = Record<string, any>;
 
@@ -20,17 +21,6 @@ function ageMinutes(input: unknown): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
   return Math.max(0, (Date.now() - ms) / 60000);
-}
-
-function isShortAckNoAction(text: unknown): boolean {
-  const t = String(text ?? "")
-    .trim()
-    .toLowerCase();
-  if (!t) return false;
-  if (/^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(t)) return true;
-  return /^(ok|okay|k|kk|got it|sounds good|thanks|thank you|thx|ty|perfect|awesome|cool|great)[.!?\s]*$/i.test(
-    t
-  );
 }
 
 function normalizeText(input: unknown): string {
