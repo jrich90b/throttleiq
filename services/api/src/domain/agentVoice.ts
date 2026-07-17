@@ -25,6 +25,51 @@ export function buildAgentIntro(
 }
 
 /**
+ * Providers that mean the customer ACTUALLY RECEIVED the message. An ALLOWLIST on purpose: a
+ * `draft_ai` row is a draft the staff may never approve (1,051 of 1,134 in the americanharley store
+ * are `draftStatus: "stale"` — never sent), and `voice_call` / `voice_summary` / `voice_transcript` /
+ * `payment_event` are internal log rows, not texts we sent. An unknown/new provider therefore fails
+ * toward "not received" → we introduce again, which is harmless; the reverse (staying silent about who
+ * we are on the customer's FIRST message) is the bug this exists to prevent.
+ */
+export const CUSTOMER_FACING_OUTBOUND_PROVIDERS = new Set(["twilio", "sendgrid", "human", "web_widget"]);
+
+export function hasCustomerReceivedOutbound(
+  messages: ReadonlyArray<{ direction?: string | null; provider?: string | null } | null | undefined> | null | undefined
+): boolean {
+  if (!Array.isArray(messages)) return false;
+  return messages.some(
+    m => m?.direction === "out" && CUSTOMER_FACING_OUTBOUND_PROVIDERS.has(String(m?.provider ?? ""))
+  );
+}
+
+/**
+ * Should an inbound ADF's reply introduce the agent ("Hey Zackary, it's Alexandra over at American
+ * Harley-Davidson.")?
+ *
+ * The old gate was `isInitialAdf` = "is this the FIRST ADF on the thread". That conflates *we drafted
+ * something* with *the customer heard from us*: when the first ADF's draft is never sent, a second ADF
+ * minutes later is "not initial", so the customer's FIRST EVER received message skips the intro and
+ * opens "Thanks Zackary — we just received your online credit application" as if they already knew us.
+ * Six americanharley leads landed that way (Zackary Hauff +17165985414 2026-07-16, Aaron +13463990700,
+ * Francis +17173823519, Curtis +17164005844, Elijah +17165729565, John +17169974120) — every one with
+ * an unsent draft ahead of the send. Operator-reported (Joe, 2026-07-16): "even though there were two
+ * ADFs that came through, the first outgoing message, the agent should always introduce itself."
+ *
+ * So key the intro off what the customer RECEIVED, not off draft history. This is strictly a superset
+ * of the old gate (no real send ⊇ no outbound at all), so a genuine first ADF still introduces exactly
+ * as before. Deliberately scoped to the intro decision — `isInitialAdf` still owns cadence/availability
+ * /side-effect routing, which is a different question.
+ */
+export function shouldIntroduceOnAdfTouch(args: {
+  isAdfEvent: boolean;
+  messages: ReadonlyArray<{ direction?: string | null; provider?: string | null } | null | undefined> | null | undefined;
+}): boolean {
+  if (!args.isAdfEvent) return false;
+  return !hasCustomerReceivedOutbound(args.messages);
+}
+
+/**
  * Greeting-less intro clause: "it's {agent} over at {dealer}. " (trailing space).
  * Use when a greeting is emitted separately (e.g. a template already opens with
  * `buildAgentGreeting(...)`) or for a bare mid-reply identity line that should not

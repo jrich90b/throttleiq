@@ -47,7 +47,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
@@ -4560,6 +4560,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   }
   const hasOutboundBeforeInbound = Array.isArray(conv.messages) && conv.messages.some((m: any) => m.direction === "out");
   const isInitialAdf = event.provider === "sendgrid_adf" && !hasOutboundBeforeInbound;
+  // Whether this ADF's reply should INTRODUCE the agent. Keyed off what the customer actually
+  // RECEIVED, not off `isInitialAdf` ("is this the first ADF"): when a first ADF's draft is never
+  // sent, a second ADF minutes later is "not initial", so the customer's first ever message opened
+  // "Thanks Zackary — we just received your online credit application" with no idea who we are.
+  // Strictly a superset of isInitialAdf, and scoped to the INTRO only — isInitialAdf still owns
+  // cadence/availability/side-effect routing. See shouldIntroduceOnAdfTouch for the evidence.
+  const shouldIntroduceOnAdf = shouldIntroduceOnAdfTouch({
+    isAdfEvent: event.provider === "sendgrid_adf",
+    messages: conv.messages
+  });
   const isExplicitWalkInLeadSource = isExplicitWalkInLeadSourceHint;
   const isTrafficLogWalkInLead = shouldTreatAdfAsWalkInContext({
     leadSource,
@@ -5602,7 +5612,7 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   };
 
   const applyInitialAdfPrefix = async (text: string) => {
-    if (!isInitialAdf) return text;
+    if (!shouldIntroduceOnAdf) return text;
     const profile = await getInitialDealerProfile();
     const dealerName = profile?.dealerName ?? "American Harley-Davidson";
     const agentName = profile?.agentName ?? "Brooke";
@@ -6744,18 +6754,21 @@ export async function handleSendgridInbound(req: Request, res: Response) {
   if (isCreditLead) {
     const firstName = normalizeDisplayCase(conv.lead?.firstName);
     const asksIfInventoryIsAllOnline = isInventoryOnlineCompletenessQuestionText(inquiryText);
+    // Wording AND intro both key off "has the customer received anything yet", not "is this the first
+    // ADF" — otherwise a customer whose first ADF draft went unsent opens on the mid-conversation
+    // "we just received..." copy, which presumes a relationship they've had no message about.
     let ack = isPrequalLead
-      ? isInitialAdf
+      ? shouldIntroduceOnAdf
         ? "Thanks — I received your pre-qualification submission. I’ll have our finance team reach out shortly to review options."
         : firstName
           ? `Thanks ${firstName} — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps.`
           : "Thanks — we just received your pre-qualification submission. Our finance team will reach out shortly to review options and next steps."
-      : isInitialAdf
+      : shouldIntroduceOnAdf
         ? "Thanks — I received your credit application. I’ll have our finance team reach out shortly."
         : firstName
           ? `Thanks ${firstName} — we just received your online credit application. Our finance team will reach out shortly to go over options.`
           : "Thanks — we just received your online credit application. Our finance team will reach out shortly to go over options.";
-    if (isInitialAdf) {
+    if (shouldIntroduceOnAdf) {
       ack = await applyInitialAdfPrefix(ack);
     }
     if (asksIfInventoryIsAllOnline) {
