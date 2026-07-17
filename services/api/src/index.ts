@@ -2924,6 +2924,16 @@ function buildFinanceHardshipHandoffReply(): string {
   return "I really appreciate you sharing that, and I understand completely. This is exactly the kind of thing our finance manager handles personally and confidentially — let me loop them in and they'll reach out to you directly.";
 }
 
+// DECLINE case: an empathetic co-signer NUDGE (Joe, 2026-07-16). A soft, non-committal ask — NEVER a
+// specific rate/APR or an approval promise — so it stays inside the assistant's lane while still moving
+// a thin-file / no-score / prior-denial lead forward. Keeps the thread with the bot to gauge co-signer
+// interest; a "yes" next turn flows into the normal finance path.
+function buildFinanceCosignerNudgeReply(name?: string | null): string {
+  const first = normalizeDisplayCase(String(name ?? "").trim());
+  const hi = first ? `I hear you, ${first} — ` : "I hear you — ";
+  return `${hi}that's a more common spot than you'd think, and it doesn't have to be a dealbreaker. A lot of folks in that situation go with a qualified co-signer, which can really open up the options. Would a co-signer be a possibility for you? If so, I can have our finance team walk you both through it.`;
+}
+
 // Shared by BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law). Returns
 // the warm hand-off reply (and sets the payments handoff state + a finance-specialist todo +
 // stops cadence) ONLY when a confident, explicit finance-HARDSHIP disclosure is detected;
@@ -2945,12 +2955,19 @@ async function resolveFinanceHardshipHandoffReply(
   }
   const decision = decideFinanceHardshipTurn({
     parserAccepted: !!parse,
-    intent: parse?.intent ?? null,
+    hardshipKind: parse?.hardshipKind ?? null,
     explicitRequest: !!parse?.explicitRequest,
     confidence: parse?.confidence ?? 0,
     confidenceMin: financeHardshipConfidenceMin()
   });
+  // DECLINE: a routine credit qualifying obstacle → an empathetic co-signer nudge, and keep the thread
+  // with the bot (no hard handoff / cadence stop) so the customer can respond about a co-signer.
+  if (decision.kind === "finance_cosigner_nudge") {
+    recordRouteOutcome(scope, "finance_cosigner_nudge", { convId: conv.id, leadKey: conv.leadKey });
+    return buildFinanceCosignerNudgeReply(conv.lead?.firstName);
+  }
   if (decision.kind !== "finance_hardship_handoff") return null;
+  // DISTRESS: real current financial pain → warm human hand-off, no bot solutioning.
   addTodo(
     conv,
     "payments",

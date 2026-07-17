@@ -1134,24 +1134,28 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
-// --- Finance-hardship staff handoff (2026-07-15) ---------------------------
+// --- Finance-hardship turn (2026-07-15, refined 2026-07-16) -----------------
 //
-// When a customer discloses a personal CREDIT / FINANCING HARDSHIP (no/bad credit, prior
-// denial, bankruptcy, identity theft affecting credit, fear of a high rate, "I won't
-// qualify"), the assistant must NOT propose a financing solution (co-signer, a rate,
-// approval odds) — that is finance advice outside its lane. It hands the lead to the finance
-// manager warmly and without solutioning (Joe ruling 2026-07-15; extends the 2026-07-11
-// "finance needs-info always staff handoff" ruling). Centralized + pure; the parser signal
-// is fed in and applied in BOTH /webhooks/twilio and /conversations/:id/regenerate.
+// A customer who surfaces a personal CREDIT / FINANCING situation gets ONE of two safe replies —
+// never a bot-quoted rate/APR or approval promise:
+//  - DISTRESS (real current financial pain — fresh bankruptcy, "can't afford anything", job loss):
+//    a warm, non-solutioning hand-off to the finance manager. No co-signer pitch — that reads as
+//    tone-deaf (Joe ruling 2026-07-15).
+//  - DECLINE (a credit QUALIFYING obstacle a co-signer can realistically fix while they still want
+//    the bike — no/thin/bad credit, prior denial, past bankruptcy, identity theft, high-rate worry):
+//    an empathetic CO-SIGNER NUDGE (Joe, 2026-07-16 — refines 7/15: the John Geschwender no-credit-
+//    score case should get the nudge, not a silent handoff).
+// Centralized + pure; the parser signal is fed in and applied in BOTH /webhooks/twilio and
+// /conversations/:id/regenerate.
 //
-// FAIL DIRECTION: unsure => none, and the existing finance handling runs. We only hand off on
-// a confident, explicit hardship disclosure.
+// FAIL DIRECTION: unsure => none, and the existing finance handling runs. We only act on a confident,
+// explicit disclosure; an ambiguous hardship read is parsed as decline (the softer co-signer nudge).
 // ---------------------------------------------------------------------------
-export type FinanceHardshipTurnKind = "finance_hardship_handoff" | "none";
+export type FinanceHardshipTurnKind = "finance_hardship_handoff" | "finance_cosigner_nudge" | "none";
 
 export type FinanceHardshipTurnInput = {
   parserAccepted: boolean;
-  intent?: string | null; // "finance_hardship" | "none"
+  hardshipKind?: string | null; // "distress" | "decline" | "none"
   explicitRequest: boolean;
   confidence: number;
   confidenceMin: number;
@@ -1165,12 +1169,13 @@ export function decideFinanceHardshipTurn(
   input: FinanceHardshipTurnInput
 ): FinanceHardshipTurnDecision {
   if (!input.parserAccepted) return { kind: "none" };
-  if (input.intent !== "finance_hardship") return { kind: "none" };
   if (!input.explicitRequest) return { kind: "none" };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
     return { kind: "none" };
   }
-  return { kind: "finance_hardship_handoff" };
+  if (input.hardshipKind === "distress") return { kind: "finance_hardship_handoff" };
+  if (input.hardshipKind === "decline") return { kind: "finance_cosigner_nudge" };
+  return { kind: "none" };
 }
 
 // --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
