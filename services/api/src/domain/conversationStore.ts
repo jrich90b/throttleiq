@@ -1853,6 +1853,13 @@ async function persistStore(): Promise<void> {
 }
 
 if (getDataBackend() !== "file") {
+  // Eager tenant-config validation (fail loudly at startup, not mid-request):
+  // in postgres/dual_write mode getDealerId() throws when DEALER_ID/DEALER_SLUG
+  // is unset, so a mis-provisioned dealer process crashes at module import
+  // instead of silently defaulting into another dealer's database rows. The
+  // lazy per-flush call sites catch-and-fallback, so they must never be the
+  // first place this surfaces.
+  getDealerId();
   const sweepMinutes = Math.max(1, Number(process.env.STORE_FULL_SWEEP_MINUTES ?? 30));
   const sweepTimer = setInterval(() => {
     fullPgUpsertNeeded = true;
