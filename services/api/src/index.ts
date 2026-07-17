@@ -48224,18 +48224,39 @@ function resolveConversationForContact(contact: any): any | null {
 
 // The one decision both the audience PREVIEW and the actual SEND share, so what
 // the manager sees in "Sending to X of Y" is exactly what the send will do.
+// One parse of the request's campaign kind, shared by the audience preview and the send so the two
+// can never disagree about whether a blast is an event or a promotion.
+function normalizeBroadcastCampaignKind(raw: unknown): "event" | "promotion" | null {
+  const v = String(raw ?? "").trim().toLowerCase();
+  return v === "event" || v === "promotion" ? v : null;
+}
+
 function assessBroadcastRecipient(
   contact: any,
   channel: "sms" | "email",
-  opts: { nowMs: number; includeDealSuppressed: boolean }
+  opts: { nowMs: number; includeDealSuppressed: boolean; campaignKind?: "event" | "promotion" | null }
 ): { skip: false } | { skip: true; reason: string; detail?: string } {
   const contactStatus = String(contact?.status ?? "active").trim().toLowerCase();
   if (contactStatus === "suppressed") return { skip: true, reason: "suppressed" };
   if (contactStatus === "archived") return { skip: true, reason: "archived" };
   if (!opts.includeDealSuppressed) {
-    const deal = evaluatePromotionSuppression(resolveConversationForContact(contact), {
-      nowMs: opts.nowMs
-    });
+    const suppressionConv = resolveConversationForContact(contact);
+    // EVENT blast (dealer_event) = an invitation, so it reaches recent buyers, deals on hold, and
+    // in-play leads; only do-not-contact states (opted out / wrong number) still bite. PROMOTION
+    // suppresses both deal states and engaged leads. No campaignKind (ad-hoc/legacy broadcast) keeps
+    // the original behavior: deal states suppress, engagement does not. (Joe ruling 2026-07-16.)
+    const isEvent = opts.campaignKind === "event";
+    const isPromotion = opts.campaignKind === "promotion";
+    const deal = evaluatePromotionSuppression(
+      suppressionConv
+        ? { ...suppressionConv, lastInboundAt: getLastInboundMessage(suppressionConv)?.at ?? null }
+        : suppressionConv,
+      {
+        nowMs: opts.nowMs,
+        suppressDealStates: !isEvent,
+        suppressEngagedLeads: isPromotion
+      }
+    );
     if (deal.suppressed && deal.reason) {
       return { skip: true, reason: deal.reason, detail: deal.detail };
     }
@@ -48259,6 +48280,10 @@ app.post("/contacts/broadcast/preview", requireManager, (req, res) => {
   const sendToAll = req.body?.sendToAll === true;
   const listId = String(req.body?.listId ?? "").trim();
   const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  // PROMOTION → skip in-play leads (booked appt / active back-and-forth / deal-or-trade) AND recent
+  // buyers / deals on hold. EVENT → reach all of those; only opted-out / wrong-number still skip.
+  // Absent → legacy broadcast behavior. Must mirror the send endpoint (preview/send lockstep).
+  const campaignKind = normalizeBroadcastCampaignKind(req.body?.campaignKind);
   if (!sendToAll && !listId) return res.status(400).json({ ok: false, error: "Missing listId" });
 
   let list: any = null;
@@ -48275,7 +48300,7 @@ app.post("/contacts/broadcast/preview", requireManager, (req, res) => {
   const excluded: Array<{ id: string; name: string; reason: string; reasonLabel: string; detail?: string }> = [];
   let sendable = 0;
   for (const contact of recipients) {
-    const verdict = assessBroadcastRecipient(contact, channel, { nowMs, includeDealSuppressed });
+    const verdict = assessBroadcastRecipient(contact, channel, { nowMs, includeDealSuppressed, campaignKind });
     if (!verdict.skip) {
       sendable += 1;
       continue;
@@ -48388,13 +48413,17 @@ app.post("/contacts/broadcast", requireManager, async (req, res) => {
       .trim();
 
   const includeDealSuppressed = req.body?.includeDealSuppressed === true;
+  // PROMOTION → skip in-play leads + recent buyers / deals on hold. EVENT → reach them. Must match
+  // the preview's gate so "Sending to X of Y" stays truthful (send + preview lockstep).
+  const campaignKind = normalizeBroadcastCampaignKind(req.body?.campaignKind);
   const broadcastNowMs = Date.now();
   for (const contact of recipients) {
     try {
       // Same decision the audience preview showed — keep send + preview in lockstep.
       const verdict = assessBroadcastRecipient(contact, channel, {
         nowMs: broadcastNowMs,
-        includeDealSuppressed
+        includeDealSuppressed,
+        campaignKind
       });
       if (verdict.skip) {
         skipped.push({ id: String(contact.id), reason: verdict.reason });

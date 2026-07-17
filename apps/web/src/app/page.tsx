@@ -4310,12 +4310,17 @@ export default function Home() {
     setCampaignQueueSendPreview({ target, includeExcluded: false, loading: true, data: null });
     setCampaignError(null);
     try {
+      // A dealer_event campaign is an EVENT (reaches everyone); anything else is a PROMOTION
+      // (skips in-play leads — booked appt / active back-and-forth / deal-or-trade). This keeps the
+      // preview's "excluded" count truthful vs the actual send.
+      const previewIsEvent = (campaignQueueSendDialogEntry?.tags ?? []).includes("dealer_event");
       const resp = await fetch("/api/contacts/broadcast/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channel: target === "email" ? "email" : "sms",
-          ...(sendToAll ? { sendToAll: true } : { listId: listIdRaw })
+          ...(sendToAll ? { sendToAll: true } : { listId: listIdRaw }),
+          campaignKind: previewIsEvent ? "event" : "promotion"
         })
       });
       const data = await resp.json().catch(() => null);
@@ -4396,6 +4401,8 @@ export default function Home() {
             : { message }),
           campaignId,
           campaignName: String(entry.name ?? "").trim() || undefined,
+          // Event (dealer_event) → everyone; promotion → skip in-play leads. Must match the preview.
+          campaignKind: (entry.tags ?? []).includes("dealer_event") ? "event" : "promotion",
           ...(opts?.includeDealSuppressed ? { includeDealSuppressed: true } : {})
         })
       });
