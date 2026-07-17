@@ -748,6 +748,8 @@ import {
   healStaleHeldFlag,
   isSchedulingLeakConversation,
   realignMisdeferredLongTermCadence,
+  realignOverEagerEngagedCadence,
+  cadenceTempoCappedToLongTerm,
   inferTodoTaskClass,
   isCadenceGeneratedFollowUpTodoSummary,
   listOpenTodos,
@@ -13683,7 +13685,11 @@ async function buildCadenceRegeneratedDraft(
     return { body: manualTestRideAvailabilityOverride };
   }
 
-  const engagedKind = cadence.kind === "engaged" || (!!(conv.engagement?.at || hasAgentContextForCadence));
+  // Route parity with the live tick: a 4+ month stated timeframe keeps the gentle long_term tempo even
+  // after engagement, so the regen draft doesn't switch to the engaged (contextual/scheduling) framing.
+  const engagedKind =
+    !cadenceTempoCappedToLongTerm(conv.lead) &&
+    (cadence.kind === "engaged" || !!(conv.engagement?.at || hasAgentContextForCadence));
   const contextTag = engagedKind ? await resolveCadenceContextTag(conv, cadence) : null;
   const shouldPreferContextualStep0NoSlots =
     !isTradeNoInterest &&
@@ -29755,6 +29761,26 @@ async function processDueFollowUpsUnlocked() {
   if (cadenceRealigned > 0) {
     console.log(`[state-reconcile] re-aligned ${cadenceRealigned} mis-deferred long_term cadence(s) to standard`);
   }
+  // Cadence tempo cap (the mirror): a lead bumped to the aggressive "engaged" tempo whose STRUCTURED
+  // purchase timeframe is actually 4+ months out (Joe, 2026-07-16: Zachary +17169013675 — "4-6 Months",
+  // test-rode, then got the full engaged press). Downshift the already-upgraded ones to a fresh gentle
+  // long_term nurture. Capped per tick; fail-direction safe (only pushes the next touch LATER).
+  let engagedTempoCapped = 0;
+  for (const conv of convs) {
+    if (engagedTempoCapped >= 25) break;
+    if (realignOverEagerEngagedCadence(conv, cfg.timezone, now)) {
+      saveConversation(conv);
+      engagedTempoCapped += 1;
+      recordRouteOutcome("manual", "engaged_cadence_capped_to_long_term", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        purchaseTimeframe: conv.lead?.purchaseTimeframe ?? null
+      });
+    }
+  }
+  if (engagedTempoCapped > 0) {
+    console.log(`[state-reconcile] capped ${engagedTempoCapped} over-eager engaged cadence(s) to long_term`);
+  }
   // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
   // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
@@ -30642,11 +30668,15 @@ async function processDueFollowUpsUnlocked() {
       !isTradeInAppraisalLead &&
       !isSellMyBikeLead;
     const hasAgentContextForCadence = !!getActiveAgentContextText(conv).trim();
+    // A 4+ month stated timeframe caps the tempo at long_term — don't let the generic engagement bump
+    // override the customer's own timeline (Joe, 2026-07-16). Fail-direction safe (fewer touches).
+    const cadenceTempoCapped = cadenceTempoCappedToLongTerm(conv.lead);
     if (
       !isPostSale &&
       !isTradeNoInterest &&
       !isTradeInAppraisalLead &&
       !isSellMyBikeLead &&
+      !cadenceTempoCapped &&
       (conv.engagement?.at || hasAgentContextForCadence || hasFinanceDocsCadenceSignal) &&
       cadence.kind !== "engaged"
     ) {

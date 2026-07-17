@@ -4179,6 +4179,26 @@ export function resolveInitialAdfCadencePlan(input: {
   return "standard";
 }
 
+// A lead whose STRUCTURED purchase timeframe is 4+ months (or years) out is not a near-term buyer —
+// even once they ENGAGE (test ride / visit / reply), their own stated timeline should keep the
+// proactive cadence at the gentle long_term tempo ([30,90,180]) rather than being bumped to the
+// aggressive "engaged" ramp (the 13-step [1,2,3,5,7,...] schedule). Joe, 2026-07-16: Zachary
+// (+17169013675) said 4-6 months, test-rode a Low Rider S, then got the full engaged-buyer press.
+// Structured-field check (lead timeframe), NOT comprehension. Fail direction is SAFE: it only ever
+// REDUCES / defers proactive touches. Reuses resolveInitialAdfCadencePlan's long_term branch so the
+// timeframe→tempo boundary has ONE source of truth. ("not interested" resolves to suppress, not
+// long_term, so it returns false here and stays on its own paused_indefinite path.)
+export function cadenceTempoCappedToLongTerm(
+  lead?: { purchaseTimeframe?: string | null; purchaseTimeframeMonthsStart?: number | null } | null
+): boolean {
+  return (
+    resolveInitialAdfCadencePlan({
+      purchaseTimeframe: lead?.purchaseTimeframe,
+      purchaseTimeframeMonthsStart: lead?.purchaseTimeframeMonthsStart
+    }) === "long_term"
+  );
+}
+
 // Near-term (0-3 month) purchase window — the hot Meta buyers. Lines up with
 // resolveInitialAdfCadencePlan's "standard" (now 0-3mo + unsure/unparseable; 4+mo routes to
 // long_term). Structured-field check (lead timeframe), NOT comprehension — used to create an
@@ -4259,6 +4279,44 @@ export function realignMisdeferredLongTermCadence(
     nextDueAt: computeFollowUpDueAt(anchorAtIso, FOLLOW_UP_DAY_OFFSETS[0], timeZone),
     stepIndex: 0,
     kind: "standard",
+    scheduleInviteCount: 0,
+    scheduleMuted: false
+  };
+  conv.updatedAt = nowIso();
+  scheduleSave();
+  return true;
+}
+
+// Mirror of realignMisdeferredLongTermCadence in the OTHER direction: heal a lead that got bumped to
+// the aggressive "engaged" tempo even though its STRUCTURED purchase timeframe is 4+ months (or years)
+// out — the generic engagement bump (index.ts cadence tick) upgrades kind -> "engaged" on any inbound /
+// agent context, ignoring the customer's own stated timeline (Joe, 2026-07-16: Zachary +17169013675,
+// "4-6 Months", got test-ride + promo + event press). A straight kind="long_term" swap is unsafe mid-
+// flight because ENGAGED walks the 13-step array and LONG_TERM only has 3 offsets, so we RE-ANCHOR to a
+// fresh long_term nurture at stepIndex 0 (next touch ~30 days out). Tight gate + fail-direction safe: it
+// only ever pushes the next proactive touch LATER / reduces touches. Returns true if it re-anchored.
+export function realignOverEagerEngagedCadence(
+  conv: Conversation,
+  timeZone: string,
+  now: Date = new Date()
+): boolean {
+  const cad = conv?.followUpCadence;
+  if (!cad || cad.status !== "active" || cad.kind !== "engaged") return false;
+  // Only when the lead's OWN stated timeframe caps them to long_term — respect a real near-term
+  // engaged buyer (0-3mo / unknown), only downshift the explicitly-far-out ones.
+  if (!cadenceTempoCappedToLongTerm(conv.lead)) return false;
+  if (conv.closedAt || conv.closedReason || (conv as any).sale?.soldAt) return false;
+  if (conv.appointment?.bookedEventId) return false;
+  const mode = String(conv.followUp?.mode ?? "");
+  if (mode === "manual_handoff" || mode === "paused_indefinite" || mode === "holding_inventory") return false;
+  if (conv.followUp?.reason === "inventory_watch" || conv.inventoryWatch) return false;
+  const anchorAtIso = now.toISOString();
+  conv.followUpCadence = {
+    status: "active",
+    anchorAt: anchorAtIso,
+    nextDueAt: computeFollowUpDueAt(anchorAtIso, LONG_TERM_DAY_OFFSETS[0], timeZone),
+    stepIndex: 0,
+    kind: "long_term",
     scheduleInviteCount: 0,
     scheduleMuted: false
   };
