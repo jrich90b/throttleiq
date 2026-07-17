@@ -4874,7 +4874,15 @@ export async function orchestrateInbound(
 
       const longTermMonths = lead.purchaseTimeframeMonthsStart;
       if (event.provider === "sendgrid_adf" && longTermMonths && longTermMonths >= 1) {
-        const msg = buildLongTermTimelineMessage(lead.purchaseTimeframe, lead.hasMotoLicense);
+        // Identity from the dealer profile (with any per-send agent override) — never hardcoded.
+        const longTermProfile = await getDealerProfileWithAgentName();
+        const msg = buildLongTermTimelineMessage({
+          agentName: longTermProfile?.agentName,
+          dealerName: longTermProfile?.dealerName,
+          firstName: lead.firstName,
+          timeframe: lead.purchaseTimeframe,
+          hasLicense: lead.hasMotoLicense
+        });
         return finalize({
           intent,
           stage: "ENGAGED",

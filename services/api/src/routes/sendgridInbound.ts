@@ -47,7 +47,7 @@ import {
   markOpenTodosResolvedByCommunication
 } from "../domain/conversationStore.js";
 import type { InventoryWatch } from "../domain/conversationStore.js";
-import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
+import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripAgentIntroPhraseForDealer, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
@@ -5647,6 +5647,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const agentEsc = esc(agentName);
     const dealerEsc = esc(dealerName);
     body = body.replace(new RegExp(`\\bthis is\\s+${agentEsc}\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
+    // Softened-intro twin of the strips above: deterministic templates (e.g.
+    // buildLongTermTimelineMessage) now open with "it's {agent} over at {dealer}." via
+    // buildAgentIntro, and when the template's first name or a per-send agent override
+    // differs from this profile-built prefix, the startsWith dedupe misses. See the
+    // helper's doc (agentVoice.ts) — fail direction: one intro, never two.
+    body = stripAgentIntroPhraseForDealer(body, dealerName);
     if (firstName) {
       const firstEsc = esc(firstName);
       body = body.replace(new RegExp(`\\b(thanks\\s+for\\s+(?:the\\s+)?note),\\s*${firstEsc}\\s*[—-]\\s*`, "ig"), "$1 — ");
@@ -9233,7 +9239,16 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const due = new Date();
     due.setMonth(due.getMonth() + longTermDeferMonths);
     due.setHours(10, 30, 0, 0);
-    const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+    // Identity from the dealer profile — this deferred message goes out months later as-is
+    // (no ADF prefix pass at send time), so it must introduce the REAL profile agent itself.
+    const longTermProfile = await getInitialDealerProfile();
+    const msg = buildLongTermTimelineMessage({
+      agentName: longTermProfile?.agentName,
+      dealerName: longTermProfile?.dealerName,
+      firstName: conv.lead?.firstName,
+      timeframe: conv.lead?.purchaseTimeframe,
+      hasLicense: conv.lead?.hasMotoLicense
+    });
     scheduleLongTermFollowUp(conv, due.toISOString(), msg);
   }
   const shouldStartCadence =
@@ -9257,7 +9272,15 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       const due = new Date();
       due.setMonth(due.getMonth() + longTermDeferMonths);
       due.setHours(10, 30, 0, 0);
-      const msg = buildLongTermTimelineMessage(conv.lead?.purchaseTimeframe, conv.lead?.hasMotoLicense);
+      // Same deferred-send rule as the realign branch above: profile identity, never hardcoded.
+      const longTermProfile = await getInitialDealerProfile();
+      const msg = buildLongTermTimelineMessage({
+        agentName: longTermProfile?.agentName,
+        dealerName: longTermProfile?.dealerName,
+        firstName: conv.lead?.firstName,
+        timeframe: conv.lead?.purchaseTimeframe,
+        hasLicense: conv.lead?.hasMotoLicense
+      });
       scheduleLongTermFollowUp(conv, due.toISOString(), msg);
     } else {
       startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
