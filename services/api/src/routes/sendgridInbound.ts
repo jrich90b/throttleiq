@@ -289,12 +289,15 @@ function dealerOffersRiderToRiderFinancing(profile: any): boolean {
 
 function buildRiderToRiderFinanceLeadReply(args: {
   firstName?: string | null;
-  isInitialAdf: boolean;
+  // "should we introduce ourselves this turn" — keyed off what the customer RECEIVED
+  // (shouldIntroduceOnAdfTouch), NOT "is this the first ADF"; an unsent draft must not pick the
+  // mid-conversation "Thanks {name}" wording on the customer's first received message. See #218.
+  shouldIntroduce: boolean;
   dealerOffersProgram: boolean;
 }): string {
   const firstName = normalizeDisplayCase(args.firstName);
   if (args.dealerOffersProgram) {
-    if (args.isInitialAdf) {
+    if (args.shouldIntroduce) {
       return (
         "Thanks - we received your Rider to Rider financing inquiry. " +
         "I'll have our business manager reach out shortly. " +
@@ -305,7 +308,7 @@ function buildRiderToRiderFinanceLeadReply(args: {
       ? `Thanks ${firstName} - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you're also looking at one of our in-stock bikes, I can help with that too.`
       : "Thanks - we received your Rider to Rider financing inquiry. Our business manager will reach out shortly. If you're also looking at one of our in-stock bikes, I can help with that too.";
   }
-  if (args.isInitialAdf) {
+  if (args.shouldIntroduce) {
     return (
       "Thanks for reaching out about Rider to Rider financing. " +
       "We don't participate in Rider to Rider financing, but we can review similar financing options we do offer. " +
@@ -6569,12 +6572,13 @@ export async function handleSendgridInbound(req: Request, res: Response) {
     const dealerOffersProgram = dealerOffersRiderToRiderFinancing(profile);
     let ack = buildRiderToRiderFinanceLeadReply({
       firstName,
-      isInitialAdf,
+      shouldIntroduce: shouldIntroduceOnAdf,
       dealerOffersProgram
     });
-    if (isInitialAdf) {
-      ack = await applyInitialAdfPrefix(ack);
-    }
+    // Call unconditionally — applyInitialAdfPrefix internally no-ops unless shouldIntroduceOnAdf.
+    // The old `if (isInitialAdf)` wrapper was the last site still keyed off "first ADF" rather than
+    // "customer received", so an unsent draft made the customer's first received message skip the intro.
+    ack = await applyInitialAdfPrefix(ack);
     ack = withInitialAvailabilityLine(ack);
     if (dealerOffersProgram) {
       addTodo(conv, "approval", event.body ?? "Rider to Rider financing inquiry", event.providerMessageId);

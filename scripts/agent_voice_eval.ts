@@ -4,6 +4,7 @@
  * corporate "Hi {name} — This is {agent} at {dealer}." (em-dash + stiff). Dealer-agnostic.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   buildAgentGreeting,
   buildAgentIntro,
@@ -96,4 +97,38 @@ assert.equal(
 // Non-ADF turns are out of scope (this gate only governs the ADF ack path).
 assert.equal(shouldIntroduceOnAdfTouch({ isAdfEvent: false, messages: [] }), false, "non-ADF event never routes through the ADF intro");
 
-console.log("PASS agent voice intro eval (+ ADF first-received intro gate)");
+// ── Both-path source guard: the finance + Rider-to-Rider ADF acks must gate their first-touch intro
+//    on "customer RECEIVED" (shouldIntroduceOnAdf / hasCustomerReceivedOutbound), NOT on "is this the
+//    first ADF" (isInitialAdf / a raw any-outbound scan). This is the #218 migration; it must cover the
+//    rider-to-rider ack (both paths) and the index.ts regenerate finance twin, or an unsent draft makes
+//    the customer's first received message skip the intro / pick mid-conversation wording.
+const sendgrid = fs.readFileSync("services/api/src/routes/sendgridInbound.ts", "utf8");
+const indexTs = fs.readFileSync("services/api/src/index.ts", "utf8");
+
+// Rider-to-Rider (live ADF intake): builder keyed off shouldIntroduce, fed shouldIntroduceOnAdf; and
+// the intro prefix is applied UNCONDITIONALLY (the old `if (isInitialAdf) { ack = applyInitialAdfPrefix }`
+// wrapper — the last isInitialAdf-gated intro — is gone).
+assert.ok(
+  /buildRiderToRiderFinanceLeadReply\(\{[\s\S]*?shouldIntroduce:\s*shouldIntroduceOnAdf/.test(sendgrid),
+  "rider-to-rider ADF ack must fork wording on shouldIntroduceOnAdf, not isInitialAdf"
+);
+assert.ok(
+  !/if \(isInitialAdf\) \{\s*ack = await applyInitialAdfPrefix/.test(sendgrid),
+  "the rider-to-rider intro prefix must be applied unconditionally (no isInitialAdf wrapper) — applyInitialAdfPrefix self-gates on shouldIntroduceOnAdf"
+);
+
+// index.ts regenerate twin: the `hasPriorOutbound` wording gate (finance + rider-to-rider regen) must
+// use the shared allowlist helper, so it can't drift from the intake path and never counts an unsent
+// draft or a voice/payment log row as contact.
+assert.ok(
+  /const hasPriorOutbound = hasCustomerReceivedOutbound\(conv\.messages\)/.test(indexTs),
+  "index.ts regenerate finance/rider-to-rider wording gate must be hasCustomerReceivedOutbound(conv.messages)"
+);
+// And the old hand-rolled draft_ai-exclusion scan for this gate must be gone (would reintroduce the
+// voice/payment residual + the drift).
+assert.ok(
+  !/const hasPriorOutbound =\s*\n\s*Array\.isArray\(conv\.messages\) &&/.test(indexTs),
+  "the old hand-rolled hasPriorOutbound scan must be replaced by the shared helper"
+);
+
+console.log("PASS agent voice intro eval (+ ADF first-received intro gate + r2r/finance both-path guard)");
