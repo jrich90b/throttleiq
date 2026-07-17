@@ -3,7 +3,9 @@ import { promises as fs } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { isDealerLeadAppConfirmedDemoRideAdfText } from "../services/api/src/domain/workflowRegressionGuards.ts";
+import { isOptOutKeywordInbound } from "../services/api/src/domain/scoringExclusions.ts";
 
 type Provider = "twilio" | "sendgrid_adf" | "web_widget";
 type Verdict = "candidate_safe" | "review" | "expected_no_response" | "no_response" | "error";
@@ -881,7 +883,7 @@ function isImmediateArrivalInbound(inbound: string): boolean {
   );
 }
 
-function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
+export function classifyDraft(provider: Provider, inbound: string, draft: string | null, conv?: Conversation | null): {
   verdict: Verdict;
   reasons: string[];
 } {
@@ -892,6 +894,20 @@ function classifyDraft(provider: Provider, inbound: string, draft: string | null
   const immediateArrivalInbound = isImmediateArrivalInbound(inbound);
   const pendingIncomingInventoryContext = hasPendingIncomingInventoryContext(conv);
   if (!draftText) {
+    if (isOptOutKeywordInbound(inbound)) {
+      // A bare carrier opt-out keyword ("STOP", "UNSUBSCRIBE", "CANCEL", …). Twilio itself
+      // opts the number out, sends the compliance confirmation, and BLOCKS further outbound —
+      // so LeadRider staying silent is the ONLY legal behavior, never a miss (opt-out-is-Twilio
+      // ruling). Without this, the replay scored a bare "Stop" as verdict `no_response`
+      // (unexpected silence → a corpus_replay_judge_fail), which dirtied the anomaly feed with
+      // 12 phantom opt-out failures on the 2026-07-17 sweep. Reuses the SAME canonical
+      // whole-message matcher the tone/QA scorers use (isOptOutKeywordInbound), so a real,
+      // answerable "stop texting me about the road glide" is NOT suppressed and still scores.
+      return {
+        verdict: "expected_no_response",
+        reasons: ["carrier opt-out keyword — Twilio handles the confirmation; agent silence is required, not a miss"]
+      };
+    }
     if (isDealerLeadAppOutcomeAdf(provider, inbound)) {
       return {
         verdict: "missing_response",
@@ -1293,9 +1309,16 @@ async function main() {
   );
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error(err?.stack ?? err?.message ?? err);
-    process.exit(1);
-  });
+// Only run the replay when invoked directly (npm run inbound_shadow:replay); importing this
+// module for its pure classifiers (e.g. classifyDraft in an eval) must NOT trigger a replay.
+// Canonical direct-run guard (matches answer_correctness_audit / agent_actions_audit).
+const invokedDirectly =
+  !!process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (invokedDirectly) {
+  main()
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error(err?.stack ?? err?.message ?? err);
+      process.exit(1);
+    });
+}
