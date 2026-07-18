@@ -19,6 +19,7 @@
  */
 import { REAL_OUTBOUND_CONTACT_PROVIDERS, collectInventoryWatches } from "./conversationStore.js";
 import { modelMatches } from "./inventoryFeed.js";
+import { isCampaignBroadcastSend } from "./scoringExclusions.js";
 
 export type OutcomeSeverity = "P1" | "P2" | "P3";
 
@@ -514,6 +515,7 @@ export type OutboundAuthorshipMsg = {
   actorUserName?: string | null;
   actorUserId?: string | null;
   from?: string | null;
+  at?: string | null;
 };
 
 /**
@@ -538,10 +540,21 @@ export function isHumanAuthoredOutbound(m: OutboundAuthorshipMsg | null | undefi
  * is agent-authored; if the latest real outbound is human-authored, a human is driving the thread, so we
  * return null and the sweep skips the conversation. fail-direction: under-report (never flag a human's
  * message as an agent bug); the deterministic detectors still cover side-effects on human-driven threads.
+ *
+ * A Campaign Studio BROADCAST send is excluded the same way (2026-07-17: the 7/16 "250 Years of
+ * Freedom" EVENT blast drew 7 "promotional_blast_sent_to_active_finance_lead"-style findings — and
+ * would re-fire after EVERY event blast). Joe's ruling (7/16): EVENT blasts reach active/engaged/sold
+ * leads BY DESIGN, and a staff-composed mass send carries no actor stamp yet is not the agent's 1:1
+ * decision — so it must never be critiqued as one. Same correlation the voice charter uses
+ * (scoringExclusions.isCampaignBroadcastSend: campaignId + ±10s send-window), so a genuine 1:1 agent
+ * reply on a campaign-tagged thread (minutes/hours from any send) is still graded.
  */
 export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
   messages: T[],
-  realOutProviders: ReadonlySet<string>
+  realOutProviders: ReadonlySet<string>,
+  campaignThread?:
+    | { campaignId?: string | null; firstSentAt?: string | null; lastSentAt?: string | null }
+    | null
 ): T | null {
   const list = Array.isArray(messages) ? messages : [];
   let lastRealOut: T | null = null;
@@ -556,6 +569,7 @@ export function selectOpenCriticAgentReply<T extends OutboundAuthorshipMsg>(
   }
   if (!lastRealOut) return null;
   if (isHumanAuthoredOutbound(lastRealOut)) return null;
+  if (isCampaignBroadcastSend(lastRealOut, campaignThread ?? null)) return null;
   return lastRealOut;
 }
 

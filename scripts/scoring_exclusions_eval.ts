@@ -369,6 +369,13 @@ const wiring: Array<[string, RegExp[]]> = [
     ]
   ],
   ["scripts/voice_charter_audit.ts", [/isShadowReplayMessage\(m\)/, /isCampaignBroadcastSend\(m, campaignThread\)/],],
+  // The open-critic's agent-reply selector shares the SAME broadcast discriminator (Joe 7/16:
+  // event blasts reach active/engaged/sold leads by design — a mass send is never a 1:1 agent
+  // decision to critique). If it re-inlines its own copy the two notions drift.
+  [
+    "services/api/src/domain/conversationOutcomeAudit.ts",
+    [/isCampaignBroadcastSend\(lastRealOut, campaignThread \?\? null\)/]
+  ],
   [
     "scripts/route_audit_watchdog.ts",
     [/isShadowReplayMessage\(m\)/, /isAutomatedSenderInbound\(/, /isNonSalesConversation\(conv\)/]
