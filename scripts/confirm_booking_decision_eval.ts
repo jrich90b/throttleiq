@@ -59,6 +59,14 @@ k({ availabilityChecked: false }, "fall_back", "availability lookup failed => fa
 // --- Already booked reflects the existing appointment. ---
 k({ hasExistingBooking: true }, "already_booked", "existing confirmed appt => reflect it");
 
+// --- RANGE-CONSTRAINT VETO (Kody +17163975098, 2026-07-16): an open-ended bound ("after 3")
+// is never a bookable clock time — even a fully-"go" input must fall back, and no other flag
+// may rescue it into a booked/lock-in confirm. (The caller's IO also skips the write.) ---
+k({ rangeConstrained: true }, "fall_back", "bounded window => fall_back, never booked AT the bound");
+k({ rangeConstrained: true, book: false }, "fall_back", "bounded window on regen => no lock-in draft either");
+k({ rangeConstrained: true, hasAlternatives: true }, "fall_back", "alternatives don't rescue a bounded window into a confirm");
+k({ rangeConstrained: true, hasExistingBooking: true }, "already_booked", "an existing booking still just gets reflected (no new write)");
+
 // --- Precedence: service beats everything; existing-booking beats requested/availability. ---
 k({ serviceContext: true, hasExistingBooking: true, slotFree: true }, "fall_back", "service context outranks an existing booking");
 k({ hasExistingBooking: true, requestedResolved: false, availabilityChecked: false }, "already_booked", "existing booking outranks missing time/availability");

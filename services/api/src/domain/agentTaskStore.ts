@@ -148,6 +148,66 @@ export async function reapStuckAgentTasks(opts: { nowMs: number; timeoutMinutes?
   return stuck.map(s => s.id);
 }
 
+// ---------------------------------------------------------------------------
+// MDF portal-draft claim-task dedup (2026-07-17). Three identical "Fill MDF portal
+// draft" tasks were created for ONE claim within 10 minutes (claim
+// mdf_498ac7ea88726 — two of them 10 seconds apart, a double-click on "Start
+// portal draft"), inflating the anomaly feed 3x and, had the session been live,
+// risking two runners racing the same Ansira form.
+//
+// Pure + deterministic (a side-effect invariant guard): creation is IDEMPOTENT
+// while a portal-draft task for the same claim is still ACTIVE. "Active" mirrors
+// the runner's own run-once pick rule (scripts/mdf_portal_runner.ts chooseTask):
+// the runner only ever picks a queued/needs_approval task WITHOUT run output, and
+// "running" is an in-flight run. A task that already ran (needs_approval WITH a
+// run summary = post-run review) or ended (completed/failed/blocked) never blocks
+// a fresh Start — retrying after a failure stays one click.
+// ---------------------------------------------------------------------------
+
+export type PortalDraftTaskSnapshot = {
+  id?: string | null;
+  kind?: string | null;
+  status?: string | null;
+  instructions?: string | null;
+  output?: { summary?: string | null } | null;
+};
+
+/** The claim marker the portal-task endpoint writes into task instructions. */
+export function mdfPortalClaimMarker(claimId: string): string {
+  return `[mdf-portal:${String(claimId ?? "").trim()}]`;
+}
+
+/**
+ * The most recent ACTIVE portal-draft task for this claim, or null. Callers pass a
+ * newest-first list (listAgentTasks), so the first hit is the one to attach to.
+ */
+export function findActivePortalDraftTask<T extends PortalDraftTaskSnapshot>(
+  existingTasks: T[],
+  claimId: string
+): T | null {
+  const id = String(claimId ?? "").trim();
+  if (!id) return null;
+  const marker = mdfPortalClaimMarker(id);
+  for (const task of existingTasks ?? []) {
+    if (String(task?.kind ?? "") !== "mdf_portal") continue;
+    if (!String(task?.instructions ?? "").includes(marker)) continue;
+    const status = String(task?.status ?? "");
+    const hasRunOutput = !!String(task?.output?.summary ?? "").trim();
+    const active =
+      status === "running" || ((status === "queued" || status === "needs_approval") && !hasRunOutput);
+    if (active) return task;
+  }
+  return null;
+}
+
+/** Idempotent-create decision: create only when no active task exists for the claim. */
+export function shouldCreatePortalDraftTask(
+  existingTasks: PortalDraftTaskSnapshot[],
+  claimId: string
+): boolean {
+  return findActivePortalDraftTask(existingTasks, claimId) === null;
+}
+
 function isAgentTask(row: any): row is AgentTask {
   return (
     !!row &&

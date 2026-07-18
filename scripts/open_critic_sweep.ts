@@ -66,13 +66,16 @@ const { decideOpenCriticAnomaly, summarizeTurnActions, selectOpenCriticAgentRepl
 // reply to judge. A conversation whose latest real outbound was typed/edited by a human (manual
 // takeover) is skipped — selectOpenCriticAgentReply returns null so the critic never grades a human's
 // message as an agent error (Kurtis Stone's manual self-intro "hello stone from American Harley…" was
-// misread as the agent addressing the customer as "Stone", 2026-06-30).
+// misread as the agent addressing the customer as "Stone", 2026-06-30). A Campaign Studio broadcast
+// send (campaignThread + ±10s send-window) is skipped the same way — an EVENT blast reaching an
+// active/engaged lead is BY DESIGN (Joe 7/16), not a 1:1 agent decision to critique (the 7/16
+// "250 Years of Freedom" blast drew 7 false promotional-blast findings on 7/17).
 const candidates = convs
   .filter(c => {
     if (isClosed(c)) return false;
     const msgs = Array.isArray(c?.messages) ? c.messages : [];
     const hasInbound = msgs.some((m: any) => m?.direction === "in" && String(m?.body ?? "").trim());
-    const agentReply = selectOpenCriticAgentReply(msgs, REAL_OUT);
+    const agentReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread);
     return hasInbound && !!agentReply && now - lastAt(c) <= windowMs;
   })
   .sort((a, b) => lastAt(b) - lastAt(a))
@@ -89,7 +92,7 @@ for (const c of candidates) {
     .filter((m: any) => (m?.direction === "in" || m?.direction === "out") && String(m?.body ?? "").trim())
     .slice(-12)
     .map((m: any) => ({ direction: m.direction as "in" | "out", body: String(m.body) }));
-  const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT);
+  const lastReply = selectOpenCriticAgentReply(msgs, REAL_OUT, c?.campaignThread);
   if (!lastReply) continue;
   const channel = String(lastReply?.from ?? "").includes("@") ? "email" : "sms";
   const convTodos = openTodos.filter((t: any) => String(t?.convId ?? "") === String(c?.id ?? ""));

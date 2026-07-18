@@ -14,6 +14,7 @@ type PipelineCard = {
   lastCustomerAt: string | null;
   daysSinceTouch: number | null;
   nextDueAt: string | null;
+  followUpHold?: boolean;
   appointmentAt: string | null;
   creditActive: boolean;
   atRisk: boolean;
@@ -249,6 +250,9 @@ export default function PipelineBoard({
                           <SideNavIcon name="calendar" className="w-3.5 h-3.5 inline-block align-[-2px] mr-1" />
                           {fmtWhen(c.appointmentAt)}
                         </span>
+                      ) : c.followUpHold ? (
+                        // A held follow-up freezes nextDueAt — show the hold, not a stale date.
+                        <span className="lr-pipeline-card-due">on hold</span>
                       ) : c.nextDueAt ? (
                         <span className="lr-pipeline-card-due">↻ {fmtWhen(c.nextDueAt)}</span>
                       ) : null}

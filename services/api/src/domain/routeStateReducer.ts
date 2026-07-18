@@ -283,8 +283,47 @@ export type SchedulingTurnKind =
   | "tentative_window"
   | "decline_time"
   | "propose_booking"
+  | "offer_slots_in_bound"
   | "visit_commitment"
   | "none";
+
+// ---------------------------------------------------------------------------
+// RANGE-CONSTRAINT VETO (production incident: Kody +17163975098, 2026-07-16).
+//
+// "are you guys available anytime later on the day? … I don't think I'll be out
+// until after 3 tomorrow" was auto-booked AT 3:00 PM — the excluded bound — 28
+// seconds later, because a deterministic concrete-time signal counted "after 3"
+// as a clock time and overrode the parser's correct range/question read
+// (appointment_timing: intent=ask_for_times, window=range). Staff had to move
+// it to 4:00 PM.
+//
+// This helper is the veto's ONE definition. It reads the PARSER's structured
+// output (requested.timeWindow + the parser's own normalized time_text) — this
+// is structured extraction over parser output, NOT raw-customer-text
+// comprehension: the parser already comprehended the turn and carries the
+// window signal (AGENTS.md "comprehend, never regex").
+//
+// TRUE  = the window is an OPEN-ENDED BOUND: "after 3", "before noon", "later
+//         in the day", "past 5", "until 4" — there is no bookable clock time;
+//         booking AT the stated hour is exactly the incident.
+// FALSE = an approximate POINT ("around 10", "10-ish") or a dealer-proposed
+//         window confirm ("11-12"): the parser also labels these range, but
+//         they stay bookable at the anchor hour (Chuck Bailey +17163197142 /
+//         Rafael "11-12" behaviors, pinned by scheduling_auto_book_on_confirm).
+//
+// FAIL DIRECTION: a veto fires toward NOT booking (slots get offered honoring
+// the bound, or an honest deferral + owner task). A missed veto is the bug.
+// ---------------------------------------------------------------------------
+export function isOpenEndedTimeBoundParse(requested?: {
+  timeWindow?: string | null;
+  timeText?: string | null;
+} | null): boolean {
+  if (!requested) return false;
+  if (requested.timeWindow !== "range") return false;
+  const t = String(requested.timeText ?? "").toLowerCase();
+  if (!t.trim()) return false;
+  return /\b(after|before|later|past|until|till|til)\b/.test(t);
+}
 
 export type SchedulingTurnInput = {
   // Block A — customer-ack parser (action string + whether the parse was accepted).
@@ -293,12 +332,19 @@ export type SchedulingTurnInput = {
   // The customer confirmed a CONCRETE proposed time and the parser cleared it to book
   // (CustomerAckActionParse.shouldBook). Only then does a confirm route to the auto-book arm.
   customerAckShouldBook?: boolean;
+  // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16): the customer-ack parse's requested
+  // window is an OPEN-ENDED BOUND (isOpenEndedTimeBoundParse — "after 3", "later in the
+  // day"). A bounded "confirm" must never reach the auto-book arm.
+  customerAckOpenEndedBound?: boolean;
   // Block B — appointment-timing parser (intent string + whether accepted).
   appointmentTimingAccepted: boolean;
   appointmentTimingIntent?: string | null;
   // The appointment-timing parse carried a CONCRETE day AND time (not day-only). Gates the
   // provide_new_time → propose_booking arm so a day-only proposal keeps its slot-offer path (#203).
   appointmentTimingHasConcreteDayTime?: boolean;
+  // RANGE-CONSTRAINT VETO: the appointment-timing parse's requested window is an
+  // OPEN-ENDED BOUND (isOpenEndedTimeBoundParse over the timing parse).
+  appointmentTimingOpenEndedBound?: boolean;
   // Block C — inbound_reply_action schedule_context_status_update (accepted).
   parserScheduleStatusUpdate: boolean;
   // Context gates available where the decision is computed.
@@ -330,7 +376,12 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
         // "Around 1pm"). Only route to the auto-book arm when the parser cleared it to book;
         // otherwise fall through (the appointment-timing / lock-in arms handle the soft cases),
         // so we never auto-book on a vague signal.
-        if (input.customerAckShouldBook) return { kind: "confirm_appointment", visitCommitment };
+        if (input.customerAckShouldBook) {
+          // RANGE-CONSTRAINT VETO (Kody 7/16): an open-ended bound ("after 3") is NOT a
+          // bookable clock time — offer slots honoring the bound instead of booking AT it.
+          if (input.customerAckOpenEndedBound) return { kind: "offer_slots_in_bound", visitCommitment };
+          return { kind: "confirm_appointment", visitCommitment };
+        }
         break;
       case "accept_tentative_appointment":
         return { kind: "accept_tentative", visitCommitment };
@@ -363,7 +414,22 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
       input.appointmentTimingIntent === "provide_new_time" &&
       input.appointmentTimingHasConcreteDayTime
     ) {
+      // RANGE-CONSTRAINT VETO (Kody 7/16): "tomorrow after 3" carries a day AND a timeText,
+      // but the time is an open-ended bound — never route it to the book-or-offer resolver
+      // (which would book AT the bound); offer slots honoring the bound instead.
+      if (input.appointmentTimingOpenEndedBound) {
+        return { kind: "offer_slots_in_bound", visitCommitment };
+      }
       return { kind: "propose_booking", visitCommitment };
+    }
+    // The Kody turn shape itself: an availability QUESTION carrying an open-ended bound
+    // ("are you guys available anytime later on the day? I don't think I'll be out until
+    // after 3 tomorrow" — intent ask_for_times, window range). Claim it for the
+    // bound-honoring slot-offer arm so no downstream deterministic day+time signal (the
+    // bare-hour "3") can read the bound as a concrete time and auto-book. A plain
+    // ask_for_times without a bound keeps its existing fall-through path.
+    if (input.appointmentTimingIntent === "ask_for_times" && input.appointmentTimingOpenEndedBound) {
+      return { kind: "offer_slots_in_bound", visitCommitment };
     }
     if (input.appointmentTimingIntent === "arrival_update" && !visitCommitment) {
       return { kind: "arrival_update", visitCommitment };
@@ -413,6 +479,11 @@ export type ConfirmBookingDecisionInput = {
   serviceContext: boolean; // a service-dept scheduling ask must not book a sales visit
   hasConfig: boolean; // scheduler config resolved
   hasExistingBooking: boolean; // appointment already has bookedEventId + whenText (reflect it)
+  // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16): the parse's requested window is an
+  // OPEN-ENDED BOUND ("after 3" — isOpenEndedTimeBoundParse). Belt-and-suspenders net under
+  // decideSchedulingTurn's routing veto: even if a bounded parse reaches this resolver, it
+  // must NEVER book or confirm a slot AT the bound → fall_back (lock-in ask + owner task).
+  rangeConstrained?: boolean;
   requestedResolved: boolean; // a concrete day+time resolved from the turn
   availabilityChecked: boolean; // the calendar availability lookup returned a result (not null)
   slotFree: boolean; // availability.available AND an exact slot is open
@@ -432,6 +503,9 @@ export function decideCustomerAckConfirmBooking(input: ConfirmBookingDecisionInp
   if (input.serviceContext) return { kind: "fall_back" };
   if (!input.hasConfig) return { kind: "fall_back" };
   if (input.hasExistingBooking) return { kind: "already_booked" };
+  // RANGE-CONSTRAINT VETO: a bound ("after 3") is not a bookable clock time — never a
+  // booked/lock-in confirm at the bound. The caller's IO must also skip the calendar write.
+  if (input.rangeConstrained) return { kind: "fall_back" };
   if (!input.requestedResolved) return { kind: "fall_back" };
   if (!input.availabilityChecked) return { kind: "fall_back" };
   if (input.slotFree) {

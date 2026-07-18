@@ -7,16 +7,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
   cdpConnectFailureSummary,
   findMissingFormControls,
+  isExpiredSessionLanding,
+  isSignInPageText,
   marketingActivityOptionIssue,
   missingActivityDatesSummary,
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
   portalRunDeadlineSummary,
+  sessionExpiredSummary,
   type CdpTargetStats
 } from "./mdf_portal_preflight.ts";
 
@@ -1166,8 +1170,10 @@ async function pageBodyText(page: any): Promise<string> {
   return page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
 }
 
+// Shared with the session preflight (scripts/mdf_portal_preflight.ts) so the early
+// probe and the in-run login checks can never drift apart.
 function isLoginPage(text: string): boolean {
-  return /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text);
+  return isSignInPageText(text);
 }
 
 async function hasChromeAutofilledInput(page: any, selectors: string[]): Promise<boolean> {
@@ -1326,9 +1332,7 @@ async function openMdfSsoEntry(page: any, portalUrl: string, options: RunnerOpti
 async function openAnsiraClaimFormThroughHNet(page: any, options: RunnerOptions): Promise<{ page: any; blocker: string | null }> {
   const sessionExpired = (where: string): { page: any; blocker: string } => ({
     page,
-    blocker:
-      `The MDF runner hit the Ansira/H-DNet sign-in screen (${where}) — the session has expired. ` +
-      "Log into h-dnet.com in the runner's dedicated Chrome window, confirm app.ansira.com/member/reimbursements/claims shows the claims list (not a login), then run the portal draft again."
+    blocker: sessionExpiredSummary(where)
   });
   const onLogin = async (): Promise<boolean> => {
     const url = String(page.url());
@@ -1406,6 +1410,40 @@ async function connectRunnerBrowser(cdpUrl: string): Promise<import("playwright"
     return await chromium.connectOverCDP(cdpUrl);
   } catch (err: any) {
     throw new Error(cdpConnectFailureSummary(stats, String(err?.message ?? err).split("\n")[0]));
+  }
+}
+
+/**
+ * SESSION PREFLIGHT (2026-07-17). Read-only probe of the Ansira claims list through
+ * the runner Chrome — right after the CDP attach, BEFORE any files download, any tab
+ * navigates, or a browser-use pass burns. `context.request` rides the CDP browser's
+ * own cookie jar, so an expired H-DNet/Ansira session resolves to the sign-in/SSO
+ * page exactly as a real navigation would (4 of the 8 recent run failures were this
+ * class, each discovered only after a full run burned). GET only — no credentials
+ * read, typed, or transmitted; no tab touched.
+ *
+ * Fail-open by design: any probe error (connect refused mid-probe, network hiccup,
+ * unreadable body) reports NOT expired and the run proceeds — the in-run login
+ * detection in openAnsiraClaimFormThroughHNet still catches a real expiry, so a
+ * flaky probe can never turn away a live session (the fail-safe direction).
+ */
+async function checkAnsiraSessionViaCdp(cdpUrl: string): Promise<{ expired: boolean; finalUrl?: string }> {
+  let browser: import("playwright").Browser | null = null;
+  try {
+    browser = await connectRunnerBrowser(cdpUrl);
+    const context = browser.contexts()[0];
+    if (!context) return { expired: false };
+    const response = await context.request.get(ANSIRA_CLAIMS_LIST_URL, {
+      timeout: 20_000,
+      maxRedirects: 10
+    });
+    const finalUrl = String(response.url() ?? "");
+    const bodyText = await response.text().catch(() => "");
+    return { expired: isExpiredSessionLanding({ finalUrl, bodyText }), finalUrl };
+  } catch {
+    return { expired: false };
+  } finally {
+    await browser?.close().catch(() => {});
   }
 }
 
@@ -1879,6 +1917,30 @@ async function runMain(options: RunnerOptions) {
     }
     console.log("Guided MDF portal packet opened.");
     return;
+  }
+
+  // SESSION PREFLIGHT (2026-07-17): the dominant failure class was an expired
+  // H-DNet/Ansira session discovered only after a full run burned (30d attempt-level
+  // success just 24%). Probe the claims list read-only through the runner Chrome
+  // FIRST — an expired session becomes an instant, actionable blocked task instead
+  // of a burned run. Applies to BOTH automation paths (Playwright and browser-use);
+  // fail-open, so only a POSITIVE sign-in landing ever aborts. Kill switch
+  // MDF_PORTAL_SESSION_PREFLIGHT=0: the probe rides the CDP context's cookie jar,
+  // which only production can prove — if it ever misreads a LIVE session as
+  // expired, disable it here and the runner behaves exactly as before.
+  if (osFlag("MDF_PORTAL_SESSION_PREFLIGHT", true) && options.cdpUrl && cdpOk && (playwrightAvailable || browserUseAvailable)) {
+    const sessionCheck = await checkAnsiraSessionViaCdp(options.cdpUrl);
+    if (sessionCheck.expired) {
+      const summary = sessionExpiredSummary("session preflight, before any fill");
+      updateTask(tasks, task.id, "blocked", summary, [promptPath, htmlPath, options.portalUrl]);
+      if (remoteBundles) {
+        await updateRemoteTask(options, task.id, "blocked", summary, [promptPath, htmlPath, options.portalUrl]);
+      } else {
+        await saveTasks(tasks);
+      }
+      console.log("MDF session preflight: H-DNet/Ansira session expired — run aborted before any fill.");
+      return;
+    }
   }
 
   // Download the packet's files locally so browser-use can attach them to the form's

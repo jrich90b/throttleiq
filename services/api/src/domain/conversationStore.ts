@@ -33,6 +33,7 @@ import {
   isPendingIncomingInventoryNotifyTodoSummary,
   planPendingIncomingNotifyDedup
 } from "./pendingIncomingInventory.js";
+import { isFollowUpCadenceHeld } from "./cadenceHoldTtl.js";
 
 export type ConversationMode = "autopilot" | "suggest" | "human";
 export type MessageProvider =
@@ -3653,6 +3654,10 @@ export function listConversations() {
           : null,
         followUpCadence: c.followUpCadence ?? null,
         followUp: c.followUp ?? null,
+        // Display honesty: while the follow-up mode holds the cadence (holding_inventory /
+        // manual_handoff / paused_indefinite, post_sale excepted), the tick will not send —
+        // so the console must show "on hold", not an overdue nextDueAt (frozen-hold census 7/17).
+        followUpHold: isFollowUpCadenceHeld(c.followUp?.mode, c.followUpCadence?.kind) ? true : null,
         manualContext: c.manualContext ?? null,
         hold: c.hold ?? null,
         inventoryWatch: c.inventoryWatch ?? null,

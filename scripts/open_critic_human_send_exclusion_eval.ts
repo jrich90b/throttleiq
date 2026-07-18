@@ -1,6 +1,6 @@
 /**
  * open_critic_human_send_exclusion:eval — pins the open-critic's reply-selection so it grades the
- * AGENT's reply, never a human-typed/edited send.
+ * AGENT's reply, never a human-typed/edited send NOR a Campaign Studio broadcast send.
  *
  * Production bug (2026-06-30): salesman Kurtis Stone typed manual self-intros with a missing comma
  * after his own name — "hello stone from American Harley…" / "hello Donald Stone from American Harley
@@ -90,13 +90,56 @@ assert.equal(
 // No outbound at all => null.
 assert.equal(selectOpenCriticAgentReply([{ direction: "in", provider: "twilio", body: "hi" }], REAL_OUT), null, "no outbound => null");
 
+// --- campaign-broadcast exclusion --------------------------------------------
+// Joe's ruling (7/16): EVENT blasts reach active/engaged/sold leads BY DESIGN. The 7/16 "250 Years
+// of Freedom" event broadcast landed on active threads as an ordinary twilio outbound with NO actor
+// stamp, so the critic graded each one as the agent's 1:1 reply and filed 7 age-0
+// "promotional_blast_sent_to_active_finance_lead"-style findings on 7/17 — a class that would
+// re-fire after EVERY event blast. The discriminator is the SAME one the voice charter shipped on
+// 7/16 (scoringExclusions.isCampaignBroadcastSend): the broadcast handler stamps the conversation's
+// campaignThread and appends the outbound at ~the same instant, so a campaignId + ±10s send-window
+// match = a staff-composed mass send, never a 1:1 agent decision.
+const eventBroadcastThread = {
+  campaignId: "camp_250years_1784200000000",
+  campaignName: "250 Years of Freedom",
+  firstSentAt: "2026-07-16T18:00:00.000Z",
+  lastSentAt: "2026-07-16T18:00:04.250Z"
+};
+// An active finance lead mid-thread; the LATEST real outbound is the event blast (no actor stamp,
+// at ~the recorded send instant) => null: nothing 1:1 to critique this window.
+const blastLatest = [
+  { direction: "in", provider: "twilio", body: "what would payments look like on the Road Glide?", at: "2026-07-15T16:00:00.000Z" },
+  { direction: "out", provider: "twilio", body: "Great question — our finance team can pull real numbers. What monthly payment are you trying to stay around?", at: "2026-07-15T16:05:00.000Z" },
+  { direction: "out", provider: "twilio", body: "250 Years of Freedom — join us Saturday at American Harley-Davidson! Live music, food trucks, demo rides. Reply STOP to opt out.", at: "2026-07-16T18:00:04.251Z" }
+];
+assert.equal(
+  selectOpenCriticAgentReply(blastLatest, REAL_OUT, eventBroadcastThread),
+  null,
+  "latest real outbound is a campaign-broadcast send => skip (an event blast reaching an active lead is by design, not a 1:1 agent decision)"
+);
+// The SAME campaign-tagged thread, but the customer replied and the agent answered minutes later:
+// the genuine 1:1 reply IS still graded — the exclusion excuses only the send instant.
+const replyAfterBlast = [
+  ...blastLatest,
+  { direction: "in", provider: "twilio", body: "sounds fun — will the Road Glide be there to demo?", at: "2026-07-16T19:10:00.000Z" },
+  { direction: "out", provider: "twilio", body: "It sure will — want me to reserve you a demo slot Saturday?", at: "2026-07-16T19:12:00.000Z" }
+];
+const pickedAfterBlast = selectOpenCriticAgentReply(replyAfterBlast, REAL_OUT, eventBroadcastThread);
+assert.ok(
+  pickedAfterBlast && pickedAfterBlast.body.startsWith("It sure will"),
+  "a genuine 1:1 agent reply on a campaign-tagged thread (outside the send window) is still graded"
+);
+// No campaignThread => the same message is graded normally (the exclusion never fires on 1:1 threads).
+const pickedNoThread = selectOpenCriticAgentReply(blastLatest, REAL_OUT, null);
+assert.ok(pickedNoThread && pickedNoThread.body.startsWith("250 Years"), "without a campaignThread the correlation cannot vouch => still selected");
+
 // --- wiring: the sweep uses the shared selector in BOTH the prefilter and the loop ------------------
 const sweep = fs.readFileSync(path.resolve("scripts/open_critic_sweep.ts"), "utf8");
 assert.ok(/selectOpenCriticAgentReply/.test(sweep), "open_critic_sweep imports the shared agent-reply selector");
 assert.ok(
-  (sweep.match(/selectOpenCriticAgentReply\(msgs, REAL_OUT\)/g) || []).length >= 2,
-  "the sweep uses the selector in BOTH the prefilter and the per-conv loop (no human-authored reply graded)"
+  (sweep.match(/selectOpenCriticAgentReply\(msgs, REAL_OUT, c\?\.campaignThread\)/g) || []).length >= 2,
+  "the sweep uses the selector in BOTH the prefilter and the per-conv loop, passing the thread's campaignThread (no human-authored or broadcast send graded)"
 );
 assert.ok(!/\.reverse\(\)\s*\.find\(\(m: any\) => m\?\.direction === "out"/.test(sweep), "the old un-authored lastReply find is gone");
 
-console.log("PASS open-critic human-send exclusion eval (authorship predicate + agent-reply selection + sweep wiring)");
+console.log("PASS open-critic human-send exclusion eval (authorship predicate + agent-reply selection + campaign-broadcast exclusion + sweep wiring)");
