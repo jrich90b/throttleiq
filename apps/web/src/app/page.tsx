@@ -872,6 +872,8 @@ type ConversationListItem = {
     kind?: string | null;
   } | null;
   followUp?: { mode?: string; reason?: string; updatedAt?: string } | null;
+  // API-computed: the follow-up mode holds the cadence (frozen nextDueAt must not read as overdue).
+  followUpHold?: boolean | null;
   manualContext?: ManualContextState | null;
   inventoryWatches?: Array<{
     model: string;
@@ -1040,6 +1042,8 @@ type ConversationDetail = {
     kind?: string | null;
   };
   followUp?: { mode?: string; reason?: string; updatedAt?: string };
+  // API-computed: the follow-up mode holds the cadence (frozen nextDueAt must not read as overdue).
+  followUpHold?: boolean | null;
   contact?: {
     attempts?: number;
     reachedAt?: string | null;
@@ -21423,6 +21427,18 @@ export default function Home() {
             !cadenceAlert &&
             selectedCadence?.status === "active" &&
             selectedCadence?.nextDueAt ? (
+              selectedConv.followUpHold ? (
+                // Display honesty: a held follow-up mode freezes nextDueAt (the scheduler skips
+                // this lead), so a stale past date must not render as an overdue "Next due".
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  Auto follow-up is on hold
+                  {selectedConv.followUp?.mode === "holding_inventory"
+                    ? " — waiting on inventory (we'll text them when their bike is available)."
+                    : selectedConv.followUp?.mode === "manual_handoff"
+                      ? " — staff are handling this lead."
+                      : " — the customer asked to hold off."}
+                </div>
+              ) : (
               <div className="mt-3 border rounded-lg border-[var(--status-warning-border)] bg-[var(--status-warning-bg)] px-3 py-2 text-sm flex items-center justify-between gap-3">
                 <div>
                   <div className="font-medium text-[var(--status-warning-text)]">Follow-up cadence active</div>
@@ -21437,6 +21453,7 @@ export default function Home() {
                   Review
                 </button>
               </div>
+              )
             ) : null}
             {agentContextOpen ? (
             <div className="mt-3 border rounded-lg bg-slate-50 px-3 py-3" data-actions-menu>

@@ -56,8 +56,9 @@ assert.match(api, /async function resolveCustomerAckConfirmBooking\(/, "the conf
 assert.match(api, /const serviceContext = isServiceDepartmentSchedulingRequest\(conv, args\.rawText\);/, "a service-dept ask is detected (the decision defers it)");
 assert.match(api, /findRequestedAppointmentSlotAvailability\(\{ conv, requested, appointmentType \}\)/, "it checks calendar availability");
 assert.match(api, /const outcome = decideCustomerAckConfirmBooking\(\{/, "branching is delegated to the pure decision");
-// Only writes the calendar on a live, free-slot turn (never on regen / taken / no-time).
-assert.match(api, /availability\?\.available && availability\.exactSlot && args\.book\) \{[\s\S]*?bookConfirmedAppointmentSlot\(\{/, "books ONLY when slot is free AND book:true (live)");
+// Only writes the calendar on a live, free-slot, NON-bounded turn (never on regen / taken /
+// no-time / a range-bound parse — the Kody veto).
+assert.match(api, /availability\?\.available && availability\.exactSlot && args\.book && !rangeConstrained\) \{[\s\S]*?bookConfirmedAppointmentSlot\(\{/, "books ONLY when slot is free AND book:true AND not range-bound (live)");
 assert.match(api, /you’re all set for \$\{bookResult!\.whenText\}/, "a booked slot => 'you're all set for <time>' confirm");
 assert.match(api, /buildRequestedSlotUnavailableReply\(availability!\.requestedLabel, availability!\.alternatives\)/, "a taken slot => offer alternatives");
 assert.match(api, /I’ll get you locked in and confirm\./, "regen (book:false) free slot => honest lock-in draft, no calendar write");
@@ -71,11 +72,13 @@ assert.match(
   "live handler books for real (book:true)"
 );
 assert.match(api, /customer_ack_confirm_\$\{result\.booked \? "auto_booked"/, "live records the booked/alts/unavailable outcome");
-// Regen: the confirm handler calls the resolver with book:false (no calendar write on a draft).
+// Regen: the confirm handler calls the resolver with book:false (no calendar write on a draft),
+// and its gate carries the RANGE-CONSTRAINT VETO (a bounded "after 3" confirm falls through to
+// the shared decideSchedulingTurn bound arms instead — same as live).
 assert.match(
   api,
-  /confirm_proposed_appointment" && regenCustomerAckActionParse\?\.shouldBook\) \{[\s\S]*?resolveCustomerAckConfirmBooking\(\{[\s\S]*?book: false,/,
-  "regen handler is availability-check only (book:false)"
+  /confirm_proposed_appointment" &&\s*\n\s*regenCustomerAckActionParse\?\.shouldBook &&[\s\S]*?!isOpenEndedTimeBoundParse\(regenCustomerAckActionParse\?\.requested\)\s*\n\s*\) \{[\s\S]*?resolveCustomerAckConfirmBooking\(\{[\s\S]*?book: false,/,
+  "regen handler is availability-check only (book:false) and range-bound vetoed"
 );
 // The centralized decision is fed shouldBook in the live path.
 assert.match(api, /customerAckShouldBook: customerAckActionParse\?\.shouldBook \?\? false,/, "live feeds shouldBook into the route decision");
@@ -104,4 +107,36 @@ assert.match(api, /regenSched\.kind === "propose_booking"\) \{[\s\S]*?resolveCus
 assert.match(api, /appointmentTimingHasConcreteDayTime:\n\s*!!appointmentTimingParse\?\.requested\?\.day && !!appointmentTimingParse\?\.requested\?\.timeText,/, "live feeds the concrete day+time gate");
 assert.match(api, /appointmentTimingHasConcreteDayTime:\n\s*!!regenAppointmentTimingParse\?\.requested\?\.day && !!regenAppointmentTimingParse\?\.requested\?\.timeText,/, "regen feeds the concrete day+time gate");
 
-console.log("PASS auto-book-on-confirm eval (route decision + booking semantics + live/regen wiring)");
+// --- 5) RANGE-CONSTRAINT VETO (Kody +17163975098, 2026-07-16): a parser-read open-ended
+// bound ("after 3", "later in the day") must NEVER auto-book — while the genuine confirms
+// above (sections 1-4) keep booking. Both the route decision and every booking write are pinned.
+// Route decision: bounded turns divert to the offer-slots arm.
+assert.equal(
+  decideSchedulingTurn({ ...base, customerAckShouldBook: true, customerAckOpenEndedBound: true }).kind,
+  "offer_slots_in_bound",
+  "a bounded confirm never reaches the auto-book arm"
+);
+assert.equal(
+  decideSchedulingTurn({ ...base, customerAckActionAccepted: false, customerAckAction: null, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true, appointmentTimingOpenEndedBound: true }).kind,
+  "offer_slots_in_bound",
+  "a bounded provide_new_time never reaches propose_booking"
+);
+// The veto signal is fed from the parses in BOTH paths.
+assert.match(api, /customerAckOpenEndedBound: isOpenEndedTimeBoundParse\(customerAckActionParse\?\.requested\),/, "live feeds the ack bound signal");
+assert.match(api, /appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse\(appointmentTimingParse\?\.requested\),/, "live feeds the timing bound signal");
+assert.match(api, /appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse\(regenAppointmentTimingParse\?\.requested\),/, "regen feeds the timing bound signal");
+// The resolver never writes the calendar on a bounded parse (IO runs before the pure decision).
+assert.match(api, /availability\?\.available && availability\.exactSlot && args\.book && !rangeConstrained\) \{/, "resolver skips the calendar write on a bounded parse");
+assert.match(api, /rangeConstrained,\n\s*requestedResolved/, "resolver feeds rangeConstrained into the pure decision");
+// The deep deterministic suggest-mode booking writes are all veto-gated (the incident's path:
+// the bare-hour "3" in "after 3" satisfied the deterministic day+time signal and booked).
+const vetoGateCount = (api.match(/!schedulingRangeBoundVeto/g) ?? []).length;
+assert.ok(vetoGateCount >= 3, `all three deep auto-book sites are veto-gated (found ${vetoGateCount})`);
+assert.match(api, /const schedulingRangeBoundVeto =\n\s*isOpenEndedTimeBoundParse\(appointmentTimingParse\?\.requested\) \|\|\n\s*isOpenEndedTimeBoundParse\(customerAckActionParse\?\.requested\) \|\|\n\s*isOpenEndedTimeBoundParse\(bookingParse\?\.requested\);/, "the deep veto reads all three parser window signals");
+// The offer arm exists in BOTH paths and never books (no insertEvent inside it).
+const liveBoundArm = api.match(/sched\.kind === "offer_slots_in_bound"\) \{[\s\S]*?\n  \}/)?.[0] ?? "";
+assert.ok(liveBoundArm.includes("findScheduleSlotsForRequestedWindowClauses"), "live bound arm offers window slots");
+assert.ok(!liveBoundArm.includes("insertEvent"), "live bound arm never writes the calendar");
+assert.match(api, /regenSched\.kind === "offer_slots_in_bound"\) \{[\s\S]*?findScheduleSlotsForRequestedWindowClauses/, "regen mirrors the bound offer arm");
+
+console.log("PASS auto-book-on-confirm eval (route decision + booking semantics + live/regen wiring + range-bound veto)");

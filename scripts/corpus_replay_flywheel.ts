@@ -37,6 +37,7 @@ import {
   type IntentVerdict
 } from "./intent_handled_audit.ts";
 import { isTestLeadEmail } from "../services/api/src/domain/scoringExclusions.ts";
+import { isPlaceholderModel } from "../services/api/src/domain/modelDeflection.ts";
 
 export type ReplayRow = {
   id?: string;
@@ -191,6 +192,43 @@ export function isAcceptedClarify(row: ReplayRow, judge: IntentVerdict | null | 
   return asksOneQuestion && clarifyShape;
 }
 
+// The ADF intake body carries the lead's vehicle as a "Vehicle: <description>" line
+// (sendgridInbound's WEB LEAD/PHONE LOG formatter). Structured extraction of our own
+// intake format — not customer-intent comprehension.
+export function extractAdfVehicleLabel(body: string): string | null {
+  const m = String(body ?? "").match(/^\s*Vehicle:\s*(.+?)\s*$/im);
+  return m ? m[1] : null;
+}
+
+// A lead-vehicle label that names NO real bike: the LIVE deflection's placeholder notion
+// (modelDeflection.isPlaceholderModel — "Other"/"Full Line"/bare make) PLUS the campaign-tag
+// "vehicles" Meta/prequal ADFs carry ("H-D Meta Promo", "Meta Promo Offer"). The campaign tags
+// stay scorer-local so the live deflection decision is untouched (detector-only change).
+export function isPlaceholderVehicleLabel(label: string | null | undefined): boolean {
+  if (isPlaceholderModel(label ?? null)) return true;
+  return /\b(meta\s+promo|promo\s+offer|pre-?qual)\b/i.test(String(label ?? ""));
+}
+
+// Placeholder-vehicle clarify BY DESIGN: when the ADF's Vehicle line is a placeholder
+// ("Harley-Davidson Other", "H-D Meta Promo", bare make), the customer specified NO model —
+// a draft asking which model they're eyeing ADDRESSES the ask (the modelDeflection rule:
+// genuinely unknown → ask). The judge reads the placeholder as a SPECIFIED model and fails
+// the clarify as a miss (8 of 73 fails on the 7/17 sweep). A SPECIFIC Vehicle line never
+// matches, so re-asking for a model already on record still fails (the real miss class).
+export function isPlaceholderVehicleClarify(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
+  if (!judge || judge.addressed) return false;
+  const vehicle = extractAdfVehicleLabel(String(row.body ?? ""));
+  if (vehicle == null) return false; // no Vehicle line at all -> not this class
+  if (!isPlaceholderVehicleLabel(vehicle)) return false;
+  const draft = String(row.draft ?? "");
+  if (!/\?/.test(draft)) return false; // a which-model ask is a question
+  return (
+    /\b(?:which|what)\s+(?:[a-z'’-]+\s+){0,2}(?:bike|model|ride|harley)\b/i.test(draft) ||
+    /\b(?:specific|particular)\s+(?:[a-z'’-]+\s+){0,1}(?:bike|model|ride|unit)\b/i.test(draft) ||
+    /\b(?:bike|model)\b[^.!?]{0,50}\bin mind\b/i.test(draft)
+  );
+}
+
 // Finance-policy BY DESIGN: no fabricated rates/payments — the credit-app path or a
 // budget-anchoring counter-question IS the designed answer to "what are the numbers?"
 export function isFinancePolicyAnswer(row: ReplayRow, judge: IntentVerdict | null | undefined): boolean {
@@ -300,6 +338,9 @@ export function adjustScore(score: TurnScore, row: ReplayRow): TurnScore & { adj
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isAcceptedClarify(row, score.judge)) {
+    return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
+  }
+  if (!score.pass && isPlaceholderVehicleClarify(row, score.judge)) {
     return { ...score, pass: true, critical: false, adjustment: "design_accepted_handoff" };
   }
   if (!score.pass && isFinancePolicyAnswer(row, score.judge)) {
@@ -879,6 +920,67 @@ function selfTest() {
     realMiss
   );
   assert(!realScore.pass && realScore.critical && realScore.adjustment === "none", "a genuine wrong-intent reply stays critical");
+
+  // Placeholder-vehicle clarify (7/17 sweep: 8 of 73 fails). An ADF Vehicle of
+  // "Harley-Davidson Other" / "H-D Meta Promo" specifies NO model — the judge misreads it as a
+  // specified model and fails the agent for asking which model, but asking IS the correct move.
+  // Fixture drafts are the REAL failing shape: full ADF openers (>260 chars, so the short-clarify
+  // isAcceptedClarify path does NOT cover them — only the new placeholder classifier can).
+  const placeholderMajor: IntentVerdict = {
+    addressed: false,
+    customerAsk: "info on the Harley-Davidson Other they inquired about",
+    why: "asked which model instead of answering about the specified vehicle",
+    severity: "major"
+  };
+  const placeholderAdfBody =
+    "WEB LEAD (ADF)\nSource: H-D Meta Promo Offer\nName: Randy Cole\nVehicle: Harley-Davidson Other\n\nInquiry:\nPreferred method of contact - text";
+  const placeholderClarify = mk({
+    body: placeholderAdfBody,
+    draft:
+      "Hi Randy — it's Alexandra at American Harley-Davidson. Thanks for claiming the H-D promo offer, that discount is a great excuse to finally pick out the right ride. Quick question so I can get real numbers and photos in front of you instead of guesses: which model are you eyeing, or are you still browsing the full lineup for now?"
+  });
+  assert(isPlaceholderVehicleClarify(placeholderClarify, placeholderMajor), "a which-model ask on a placeholder Vehicle line matches the classifier");
+  const placeholderClarifyScore = adjustScore(scoreTurn(placeholderClarify, placeholderMajor), placeholderClarify);
+  assert(
+    placeholderClarifyScore.pass && placeholderClarifyScore.adjustment === "design_accepted_handoff",
+    "a which-model clarify on a placeholder ADF vehicle passes as accepted design"
+  );
+  // The "H-D Meta Promo" campaign-tag vehicle is a placeholder too (scorer-local extension).
+  const metaPromoClarify = mk({
+    body: "WEB LEAD (ADF)\nSource: Facebook\nName: Dee\nVehicle: H-D Meta Promo\n\nInquiry:\nClaim offer",
+    draft:
+      "Hi Dee — thanks for reaching out about the Meta promo! I want to make sure I send you photos, pricing, and current inventory for the right ride instead of burying you in the whole lineup at once. Is there a specific bike you have in mind already, or would you like me to put together a few options based on how you plan to ride?"
+  });
+  const metaPromoScore = adjustScore(
+    scoreTurn(metaPromoClarify, { addressed: false, customerAsk: "the promo vehicle", why: "did not address the vehicle", severity: "major" }),
+    metaPromoClarify
+  );
+  assert(metaPromoScore.pass && metaPromoScore.adjustment === "design_accepted_handoff", "an H-D Meta Promo campaign-tag vehicle counts as a placeholder");
+  // Guard against over-broadening: a SPECIFIC Vehicle line means asking which model is still a miss.
+  const specificVehicleReAsk = mk({
+    body: "WEB LEAD (ADF)\nSource: Website\nName: Ted\nVehicle: 2021 Street Glide Special\n\nInquiry:\nIs it still available?",
+    draft:
+      "Hi Ted — it's Alexandra at American Harley-Davidson. Thanks for reaching out about our inventory, we've got a great selection on the floor right now and I'd love to help you narrow it down to the right ride for where and how you plan to cruise. Which model are you interested in, and are you leaning new or pre-owned this time around?"
+  });
+  assert(!isPlaceholderVehicleClarify(specificVehicleReAsk, placeholderMajor), "a SPECIFIC Vehicle line never matches the placeholder classifier");
+  const specificVehicleScore = adjustScore(
+    scoreTurn(specificVehicleReAsk, { addressed: false, customerAsk: "availability of the 2021 Street Glide Special", why: "asked for the model already on record", severity: "major" }),
+    specificVehicleReAsk
+  );
+  assert(!specificVehicleScore.pass && specificVehicleScore.critical, "re-asking for a SPECIFIED model stays a critical miss");
+  // A placeholder vehicle with a draft that never asks which model earns no free pass either.
+  const placeholderNoAsk = mk({
+    body: placeholderAdfBody,
+    draft: "Hi Randy — thanks for reaching out! Stop by any time this week and the team will take good care of you, we're open until six most nights and Saturdays too. We appreciate you thinking of American Harley-Davidson and look forward to meeting you at the dealership whenever works."
+  });
+  const placeholderNoAskScore = adjustScore(
+    scoreTurn(placeholderNoAsk, { addressed: false, customerAsk: "help choosing a bike", why: "generic brush-off", severity: "major" }),
+    placeholderNoAsk
+  );
+  assert(!placeholderNoAskScore.pass, "a placeholder vehicle with no which-model ask is not excused");
+  assert(extractAdfVehicleLabel(placeholderAdfBody) === "Harley-Davidson Other", "Vehicle line extraction is exact");
+  assert(extractAdfVehicleLabel("WEB LEAD (ADF)\nName: Sam\n\nInquiry:\nhello") === null, "no Vehicle line -> null (not this class)");
+  assert(isPlaceholderVehicleLabel("Full Line") && isPlaceholderVehicleLabel("Harley-Davidson") && !isPlaceholderVehicleLabel("2021 Street Glide Special"), "the live placeholder notion (Other/Full Line/bare make) is reused");
 
   // Dealer Lead App post-ride survey log (internal, staff-filed). Body shape pinned from prod
   // regressions +17169123294 (Angelo) / +17164442837 (Megan): a "Marketing Questions: Dealer

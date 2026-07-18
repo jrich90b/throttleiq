@@ -237,6 +237,73 @@ export function portalFormDidNotExpandSummary(): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Session-expiry preflight (2026-07-17). The dominant portal-run failure class
+// (4 of the 8 most recent failures — agent_mr3s6tv6 7/2 + agent_mrp010rb /
+// agent_mrp0cs8u / agent_mrp0czzy all 7/17) was an EXPIRED H-DNet/Ansira session,
+// discovered only after staff pressed "Start portal draft" and a full run burned
+// (file downloads, navigation, or an entire browser-use pass) before landing on
+// the sign-in screen. The runner already knows how to RECOGNIZE that screen when
+// it fails (openAnsiraClaimFormThroughHNet's login checks); these helpers factor
+// that same detection into a pure, browser-free form so the runner can probe the
+// Ansira claims list read-only RIGHT AFTER the CDP attach — through the runner
+// Chrome's own cookies, no credentials touched — and abort instantly with an
+// actionable message instead of burning the run.
+//
+// Fail direction: a false "expired" verdict would turn away a live session, so the
+// classifier only fires on POSITIVE sign-in markers (the SSO host / login routes in
+// the final URL, or sign-in form text). An unreachable probe, an empty body, or an
+// unrecognized landing NEVER blocks — the runner proceeds and the existing in-run
+// login detection still applies downstream.
+// ---------------------------------------------------------------------------
+
+/** The logged-in Ansira MDF claims list — the session probe target. */
+export const ANSIRA_CLAIMS_LIST_URL = "https://app.ansira.com/member/reimbursements/claims";
+
+/**
+ * Sign-in page TEXT markers — the runner's long-standing login-screen detection
+ * (previously the runner-private isLoginPage), now shared so the early probe and
+ * the in-run checks can never drift apart. "Create Claim" excludes the logged-in
+ * Ansira create form, which legitimately mentions e.g. Microsoft-hosted assets.
+ */
+export function isSignInPageText(text: string): boolean {
+  return /sign in|password|microsoft|enter your email|authenticate/i.test(text) && !/Create Claim/i.test(text);
+}
+
+export type SessionProbeLanding = {
+  /** URL the probe RESOLVED to after redirects (an expired session 302s to sign-in). */
+  finalUrl: string;
+  /** Body of the landing page (HTML or text); empty/unreadable never classifies as expired. */
+  bodyText?: string;
+};
+
+/**
+ * True when the claims-list probe landed on a sign-in/SSO surface — the session is
+ * expired. URL markers mirror the runner's in-run login check (onLogin): Microsoft's
+ * SSO host (where H-DNet auth lives) or a /auth/login route; body markers reuse
+ * isSignInPageText for an inline auth wall served without a redirect.
+ */
+export function isExpiredSessionLanding(landing: SessionProbeLanding): boolean {
+  const url = String(landing?.finalUrl ?? "");
+  if (/login\.microsoftonline\.com/i.test(url)) return true; // H-DNet SSO host
+  if (/\/auth\/login/i.test(url)) return true; // Ansira's own login route
+  return isSignInPageText(String(landing?.bodyText ?? ""));
+}
+
+/**
+ * Operator-facing summary for the expired-session class — shared by the early
+ * probe AND the in-run detection so the failure reads the same everywhere.
+ * Wording is load-bearing: "sign-in screen" / "session has expired" keep it inside
+ * the mdf-portal-health detector's LOAD_FAILURE_RE classes (pinned by the eval).
+ */
+export function sessionExpiredSummary(where: string): string {
+  return (
+    `The MDF runner hit the Ansira/H-DNet sign-in screen (${where}) — the session has expired. ` +
+    "No draft was created (nothing was saved). " +
+    "Log into h-dnet.com in the runner's dedicated Chrome window, confirm app.ansira.com/member/reimbursements/claims shows the claims list (not a login), then press Start portal draft again."
+  );
+}
+
 /**
  * Microsoft "Pick an account" tile selection (saved-login click-through). Clicking
  * an account TILE is credential-free — it only chooses which account the ordinary

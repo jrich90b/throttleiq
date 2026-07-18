@@ -26,6 +26,22 @@ assert.ok(/occurredAt: atIso/.test(flywheel), "findings are timestamped for down
 // when the replayed router state lacks a dealer_ride reason (reviewed 2026-07-12 with Joe).
 assert.ok(/isDealerRideLogBody/.test(flywheel) && /return isDealerRideLogBody\(String\(row\.body/.test(flywheel), "a dealer-ride survey log producing silence is scored as expected silence, body-keyed");
 
+// Placeholder-vehicle clarify (2026-07-17): an ADF Vehicle of "Harley-Davidson Other" /
+// "H-D Meta Promo" / bare make names NO real bike, so a which-model clarify ADDRESSES the ask
+// (the live deflection's own rule — modelDeflection: genuinely unknown → ask). The judge was
+// reading the placeholder as a specified model and failing the clarify (8 of 73 fails, 7/17
+// sweep). Pinned: the flywheel REUSES the live placeholder notion (no scorer-local drift on
+// Other/Full Line/bare make) and adjustScore hooks the deterministic classifier — behavior
+// cases live in the self-test above.
+assert.ok(
+  /from "\.\.\/services\/api\/src\/domain\/modelDeflection\.ts"/.test(flywheel) && /isPlaceholderModel/.test(flywheel),
+  "the flywheel reuses the LIVE placeholder-model notion (modelDeflection.isPlaceholderModel)"
+);
+assert.ok(
+  /isPlaceholderVehicleClarify\(row, score\.judge\)/.test(flywheel),
+  "adjustScore excuses a which-model clarify on a placeholder ADF vehicle (deterministic pre-classification, not prompt-tweaking)"
+);
+
 const audit = fs.readFileSync("scripts/intent_handled_audit.ts", "utf8");
 assert.ok(/export async function realJudge/.test(audit), "realJudge stays exported for the flywheel");
 
