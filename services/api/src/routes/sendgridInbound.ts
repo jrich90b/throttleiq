@@ -49,6 +49,7 @@ import {
 import type { InventoryWatch } from "../domain/conversationStore.js";
 import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, shouldIntroduceOnAdfTouch, stripLeadingAgentGreeting } from "../domain/agentVoice.js";
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
+import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
 import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
@@ -3810,6 +3811,20 @@ export async function handleSendgridInbound(req: Request, res: Response) {
         from: req.body?.from
       });
       return res.status(200).json({ ok: true, parsed: false, reason: "no_adf_found" });
+    }
+
+    // A machine "view this in an HTML-capable email client" notice is vendor noise, not a
+    // customer message — drop it before creating a conversation or drafting a junk reply.
+    // (autosender@trafficlogpro.com, 2026-07-18 — see inboundMailActionability.ts.) Fail-safe:
+    // the match requires the notice to be the ENTIRE body, so a real customer is never dropped.
+    if (isHtmlClientNoticeOnly(body)) {
+      console.log("[sendgrid inbound] non-actionable HTML-client notice, no draft", {
+        from: fromEmail,
+        subject: req.body?.subject
+      });
+      return res
+        .status(200)
+        .json({ ok: true, parsed: true, drafted: false, reason: "non_actionable_html_client_notice" });
     }
 
     const existingByTag = taggedLeadKey ? getConversation(taggedLeadKey) : null;
