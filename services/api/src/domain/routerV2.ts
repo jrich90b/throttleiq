@@ -40,6 +40,7 @@ export {
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
+  isOpenEndedTimeBoundParse,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,

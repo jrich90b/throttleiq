@@ -326,5 +326,22 @@
       "should_book": false,
       "day_contains": "monday"
     }
+  },
+  {
+    "id": "kody_after_3_bound_is_availability_ask_never_a_booking_confirm",
+    "text": "are you guys available anytime later on the day? I don't think I'll be out until after 3 tomorrow",
+    "history": [
+      {
+        "direction": "out",
+        "body": "Want to set up a time to swing by and take a look?"
+      }
+    ],
+    "expected": {
+      "action_any_of": ["ask_for_available_times", "none"],
+      "should_reply": true,
+      "should_book": false,
+      "day_contains": "tomorrow",
+      "time_contains": "after 3"
+    }
   }
 ]
