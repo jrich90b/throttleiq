@@ -5,6 +5,7 @@
  */
 import type { Conversation } from "./conversationStore.js";
 import { hasActiveDealCloseoutBlockers } from "./transitionSafety.js";
+import { isFollowUpCadenceHeld } from "./cadenceHoldTtl.js";
 
 export type PipelineStage =
   | "new"
@@ -49,6 +50,8 @@ export type PipelineCard = {
   lastCustomerAt: string | null;
   daysSinceTouch: number | null;
   nextDueAt: string | null;
+  /** True while a hold mode freezes the cadence — nextDueAt must render "on hold", not overdue. */
+  followUpHold: boolean;
   appointmentAt: string | null;
   creditActive: boolean;
   atRisk: boolean;
@@ -148,6 +151,7 @@ export function buildPipelineCard(
     lastCustomerAt: lastIn,
     daysSinceTouch,
     nextDueAt: String(conv?.followUpCadence?.nextDueAt ?? "").trim() || null,
+    followUpHold: isFollowUpCadenceHeld(conv?.followUp?.mode, conv?.followUpCadence?.kind),
     appointmentAt: String(conv?.appointment?.matchedSlot?.start ?? conv?.appointment?.start ?? "").trim() || null,
     creditActive: hasActiveDealCloseoutBlockers(conv, { openTodos: opts.openTodos, nowMs }),
     atRisk:
