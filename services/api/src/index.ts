@@ -14,7 +14,7 @@ import OpenAI, { toFile } from "openai";
 import { google } from "googleapis";
 import sharp from "sharp";
 import { orchestrateInbound } from "./domain/orchestrator.js";
-import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk } from "./domain/agentVoice.js";
+import { buildAgentIntro, buildEventPromoAck, buildMarketingOptInAck, buildNonBuyerSurveyAck, buildBuyerSurveyAck, buildWatchAvailableReply, buildWatchSiblingScopeAsk, hasCustomerReceivedOutbound } from "./domain/agentVoice.js";
 import { postSaleVehicleIsNew, postSaleAccessoryOrEnjoyMessage } from "./domain/postSaleCadence.js";
 import { isIndefiniteFollowUpDeferralText } from "./domain/scoringExclusions.js";
 import { findTlpLogCatchupCandidates, isTlpLeadNotFoundError } from "./domain/tlpLogCatchup.js";
@@ -54476,15 +54476,11 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const agentName =
       resolveRegenSenderName() ||
       resolveConversationAgentName(conv, dealerProfile?.agentName || "Brooke");
-    const latestInboundAtMs = Date.parse(String(latestInboundBeforeDraft?.at ?? ""));
-    const hasPriorOutbound =
-      Array.isArray(conv.messages) &&
-      conv.messages.some(m => {
-        if (m.direction !== "out") return false;
-        if (m.provider === "draft_ai") return false;
-        const atMs = Date.parse(String(m.at ?? ""));
-        return Number.isFinite(latestInboundAtMs) && Number.isFinite(atMs) ? atMs < latestInboundAtMs : true;
-      });
+    // "Has the customer RECEIVED a real message from us yet" — the SAME shared helper the ADF intake
+    // uses (agentVoice.hasCustomerReceivedOutbound, allowlist twilio/sendgrid/human/web_widget), so
+    // the regenerate wording can't drift from the live intake and never counts an unsent draft or a
+    // voice/payment log row as contact. `hasPriorOutbound` is a wording gate ONLY (r2r + finance ack).
+    const hasPriorOutbound = hasCustomerReceivedOutbound(conv.messages);
     if (latestInboundIsRiderFinanceAdf) {
       const dealerOffersProgram = dealerOffersRiderToRiderFinancing(dealerProfile);
       const reply = buildRiderToRiderFinanceRegenReply({
