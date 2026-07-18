@@ -694,6 +694,11 @@ import {
 } from "./domain/heldUnitWatchHeal.js";
 import { hasDisclosedUnitUnavailabilityWithoutReply } from "./domain/cadenceAvailabilityDisclosure.js";
 import {
+  decideCadenceHoldTtlResume,
+  isFollowUpCadenceHeld,
+  resolveCadenceHoldInventoryTtlDays
+} from "./domain/cadenceHoldTtl.js";
+import {
   isAutoCloseEligibleTask,
   decideTaskAutoClose,
   isTaskFulfillmentAutoCloseEnabled,
@@ -29836,6 +29841,67 @@ async function processDueFollowUpsUnlocked() {
   if (engagedTempoCapped > 0) {
     console.log(`[state-reconcile] capped ${engagedTempoCapped} over-eager engaged cadence(s) to long_term`);
   }
+  // Inventory-hold TTL heal: a holding_inventory watch-fire hold with no re-fire freezes the
+  // cadence forever — the tick below skips every holding_inventory conv, so an engaged lead's
+  // ACTIVE cadence sits with a past-due nextDueAt and the customer never hears from us again
+  // (2026-07-17 census: 11 convs, worst 104d overdue; Cory Fiegel +17169490089 — held since a
+  // 6/5 watch fire, 41d overdue, zero touches in 42 days). Once the hold outlives the TTL
+  // (default 14d, env CADENCE_HOLD_INVENTORY_TTL_DAYS) with no watch re-fire, resume ONE gentle
+  // future-dated step: mode back to active (reason inventory_hold_expired) + nextDueAt pushed
+  // ~24h forward — never a burst of missed touches, never earlier than an already-future date.
+  // The pure decision (domain/cadenceHoldTtl.ts) enumerates every tick stop-state (closed/
+  // opt-out/call_only/human/handoff/post-sale/booked), so none of those can be resumed.
+  // Fail-direction safe: one future-dated follow-up instead of eternal silence. Capped per tick.
+  const holdTtlDays = resolveCadenceHoldInventoryTtlDays(process.env.CADENCE_HOLD_INVENTORY_TTL_DAYS);
+  let inventoryHoldsExpired = 0;
+  for (const conv of convs) {
+    if (inventoryHoldsExpired >= 25) break;
+    const holdDecision = decideCadenceHoldTtlResume({
+      followUpMode: conv.followUp?.mode ?? null,
+      followUpUpdatedAt: conv.followUp?.updatedAt ?? null,
+      watchLastNotifiedAts: collectInventoryWatches(conv).map((w: any) => w?.lastNotifiedAt ?? null),
+      conversationStatus: conv.status ?? null,
+      closedAt: conv.closedAt ?? null,
+      closedReason: conv.closedReason ?? null,
+      soldAt: (conv as any).sale?.soldAt ?? null,
+      suppressed: isSuppressed(conv.leadKey),
+      contactPreference: (conv as any).contactPreference ?? null,
+      conversationMode: (conv as any).mode ?? null,
+      appointmentBookedEventId: conv.appointment?.bookedEventId ?? null,
+      cadenceStatus: conv.followUpCadence?.status ?? null,
+      cadenceKind: conv.followUpCadence?.kind ?? null,
+      cadenceNextDueAt: conv.followUpCadence?.nextDueAt ?? null,
+      nowMs: now.getTime(),
+      ttlDays: holdTtlDays
+    });
+    if (!holdDecision.resume) continue;
+    setFollowUpMode(conv, "active", "inventory_hold_expired");
+    const cad = conv.followUpCadence;
+    if (cad) {
+      cad.nextDueAt = holdDecision.nextDueAtIso;
+      // Clear only a STALE pause — a deliberately future-dated pause still stands (the tick
+      // honors the later of pausedUntil/nextDueAt, so this can never pull a touch earlier).
+      const pausedUntilMs = Date.parse(String(cad.pausedUntil ?? ""));
+      if (!Number.isFinite(pausedUntilMs) || pausedUntilMs <= now.getTime()) {
+        cad.pausedUntil = undefined;
+        cad.pauseReason = undefined;
+      }
+    }
+    conv.updatedAt = nowIso();
+    saveConversation(conv);
+    inventoryHoldsExpired += 1;
+    recordRouteOutcome("manual", "inventory_hold_ttl_resumed", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      heldDays: holdDecision.heldDays,
+      nextDueAt: holdDecision.nextDueAtIso
+    });
+  }
+  if (inventoryHoldsExpired > 0) {
+    console.log(
+      `[state-reconcile] resumed ${inventoryHoldsExpired} expired inventory-hold cadence(s) (TTL ${holdTtlDays}d)`
+    );
+  }
   // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
   // come ~10, nothing scheduled). Surface ONE staff "book this visit" todo so it doesn't fall through.
@@ -37559,10 +37625,16 @@ app.get("/conversations/:id", async (req, res) => {
     phoneLog && conv.lead?.email
       ? { ...conv, lead: { ...conv.lead, email: undefined } }
       : conv;
+  // Display honesty: a held follow-up mode freezes the cadence's nextDueAt (the tick skips the
+  // conv), so the console must render "on hold" instead of an overdue date. Post-sale cadences
+  // keep running through a hold, so they stay honest without the flag.
+  const followUpHold = isFollowUpCadenceHeld(conv.followUp?.mode, conv.followUpCadence?.kind)
+    ? true
+    : null;
   res.json({
     ok: true,
     systemMode: getSystemMode(),
-    conversation: { ...conversationForResponse, emailDraft, leadSource, walkIn, phoneLog }
+    conversation: { ...conversationForResponse, emailDraft, leadSource, walkIn, phoneLog, followUpHold }
   });
 });
 
