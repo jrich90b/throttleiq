@@ -26,6 +26,8 @@ import {
   type DraftStateInvariantInput
 } from "./draftStateInvariants.js";
 import { isPhoneLogConversation } from "./phoneLogLead.js";
+import { buildPersonaSelfIntroPattern } from "./agentVoice.js";
+import { getCachedDealerProfile } from "./dealerProfile.js";
 import { findComputerLikePhrases } from "./voiceBannedPhrases.js";
 import {
   isPendingIncomingInventoryNotifyTodoSummary,
@@ -1852,6 +1854,13 @@ async function persistStore(): Promise<void> {
 }
 
 if (getDataBackend() !== "file") {
+  // Eager tenant-config validation (fail loudly at startup, not mid-request):
+  // in postgres/dual_write mode getDealerId() throws when DEALER_ID/DEALER_SLUG
+  // is unset, so a mis-provisioned dealer process crashes at module import
+  // instead of silently defaulting into another dealer's database rows. The
+  // lazy per-flush call sites catch-and-fallback, so they must never be the
+  // first place this surfaces.
+  getDealerId();
   const sweepMinutes = Math.max(1, Number(process.env.STORE_FULL_SWEEP_MINUTES ?? 30));
   const sweepTimer = setInterval(() => {
     fullPgUpsertNeeded = true;
@@ -2321,7 +2330,12 @@ export function lockPersonaToStaffSender(
   const userName = String(actor?.userName ?? "").trim();
   if (!userName) return;
   if (conv.manualSender?.userName || conv.manualSender?.userId) return;
-  if (/\bthis is alexandra\b/i.test(String(sentBody ?? ""))) return;
+  // Persona check runs against the CONFIGURED agent name (was a hardcoded AH-era
+  // "this is alexandra" literal — identity-fallback sweep, 2026-07-17). This guard
+  // only inspects the NEW outbound body at send time (never stored history), so the
+  // legacy literal needs no compatibility alternative. Sync path → cached profile.
+  const personaSelfIntro = buildPersonaSelfIntroPattern(getCachedDealerProfile()?.agentName);
+  if (personaSelfIntro && personaSelfIntro.test(String(sentBody ?? ""))) return;
   conv.manualSender = {
     userId: String(actor?.userId ?? "").trim() || undefined,
     userName,

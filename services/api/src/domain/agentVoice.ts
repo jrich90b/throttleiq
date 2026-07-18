@@ -9,6 +9,60 @@
  * opener). Keep all intro wording here so future tweaks are one edit, never scattered.
  */
 
+/**
+ * Neutral agent stand-in for fail paths where the dealer profile has no agentName.
+ * Deliberately lowercase and phrase-shaped so it reads naturally mid-intro
+ * ("it's the team over at {dealer}", "This is the team at {dealer}") — never a
+ * baked-in persona. AH-era persona names were scattered through the code as
+ * fallbacks; a second dealer must never inherit another store's persona
+ * (identity-fallback sweep, 2026-07-17). Pinned by dealer_identity_fallback:eval.
+ */
+export const GENERIC_AGENT_DISPLAY_NAME = "the team";
+
+/** Neutral dealership stand-in for public pages when the profile has no dealerName. */
+export const GENERIC_DEALER_DISPLAY_NAME = "our dealership";
+
+/**
+ * THE agent-name accessor: the configured profile agentName when set, else the
+ * neutral generic. Every fallback for "who signs/introduces the agent" should
+ * route through here instead of hardcoding a persona.
+ */
+export function resolveDealerAgentName(
+  profile: { agentName?: string | null } | null | undefined,
+  fallback: string = GENERIC_AGENT_DISPLAY_NAME
+): string {
+  const clean = String(profile?.agentName ?? "").trim();
+  return clean || fallback;
+}
+
+/**
+ * Persona self-intro matcher ("this is {agent}") built from the CONFIGURED agent
+ * name — used by the manual-sender persona lock (conversationStore.lockPersonaToStaffSender)
+ * to recognize an unedited persona-signed draft. Returns null when there is no usable
+ * name (no persona to protect → callers skip the check). Escapes regex metacharacters
+ * and tolerates flexible whitespace inside multi-word names.
+ */
+export function buildPersonaSelfIntroPattern(agentName: string | null | undefined): RegExp | null {
+  const clean = String(agentName ?? "").trim();
+  if (!clean) return null;
+  const escaped = clean
+    .split(/\s+/)
+    .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\s+");
+  // A \b after a non-word final char (e.g. "…(Danny)") can never match — only close the
+  // name with a word boundary when the name actually ends in a word character.
+  const tail = /\w$/.test(clean) ? "\\b" : "";
+  return new RegExp(`\\bthis is\\s+${escaped}${tail}`, "i");
+}
+
+/**
+ * Footer identity line for the public marketing-unsubscribe page: the configured
+ * dealerName, else the neutral generic — never a hardcoded dealership literal.
+ */
+export function buildMarketingUnsubscribeFooter(dealerName?: string | null): string {
+  return String(dealerName ?? "").trim() || GENERIC_DEALER_DISPLAY_NAME;
+}
+
 /** Casual greeting, no em-dash. "Hey {name}, " or "Hey there, " when the name is unknown. */
 export function buildAgentGreeting(firstName?: string | null): string {
   const name = String(firstName ?? "").trim();
@@ -254,4 +308,23 @@ export function stripLeadingAgentGreeting(body: string): string {
     .replace(/^hi\s+[^—]+—\s*/i, "")
     .replace(/^hey\s+[^,]+,\s*/i, "")
     .trim();
+}
+
+/**
+ * Strip an "it's {someone} over at {dealerName}." clause (the softened
+ * `buildAgentIntroPhrase` shape) wherever it names THIS dealer. Twin of
+ * `applyInitialAdfPrefix`'s "this is X at Y" strips (sendgridInbound): deterministic
+ * templates (e.g. buildLongTermTimelineMessage) now carry their own profile-built softened
+ * intro, and when the template's first name or a per-send agent override differs from the
+ * prefix being prepended, the cheap startsWith dedupe misses. Anchoring on the dealer name
+ * keeps it surgical — ordinary sentences don't take the "it's … over at {dealer}." shape.
+ * Fail direction: one consistent profile-based intro, never a double introduction.
+ * Pinned by long_term_message:eval.
+ */
+export function stripAgentIntroPhraseForDealer(body: string, dealerName: string): string {
+  const dealer = String(dealerName ?? "").trim();
+  const text = String(body ?? "");
+  if (!dealer) return text;
+  const dealerEsc = dealer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`\\bit[’']s\\s+[^.]{1,80}?\\s+over\\s+at\\s+${dealerEsc}\\.?\\s*`, "ig"), "");
 }

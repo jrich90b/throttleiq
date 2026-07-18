@@ -80,23 +80,65 @@ async function main(): Promise<void> {
     "../services/api/src/domain/storePersistence.ts"
   );
 
-  // Backend selection defaults
+  // Backend selection defaults + the dealer-id invariant guard (soft blocker
+  // B5): the dealer-id default is file-mode only; a database-backed mode with
+  // no explicit dealer must fail loudly, never silently share another
+  // dealer's rows.
   const envBackup = { DATA_BACKEND: process.env.DATA_BACKEND, DEALER_ID: process.env.DEALER_ID, DEALER_SLUG: process.env.DEALER_SLUG };
-  delete process.env.DATA_BACKEND;
-  assert.equal(getDataBackend(), "file", "DATA_BACKEND unset must default to file");
-  process.env.DATA_BACKEND = "dual";
-  assert.equal(getDataBackend(), "dual_write");
-  process.env.DATA_BACKEND = "postgres";
-  assert.equal(getDataBackend(), "postgres");
-  process.env.DATA_BACKEND = "nonsense";
-  assert.equal(getDataBackend(), "file", "unknown DATA_BACKEND must fall back to file");
-  delete process.env.DEALER_ID;
-  delete process.env.DEALER_SLUG;
-  assert.equal(getDealerId(), "americanharley", "DEALER_ID must default to americanharley");
-  process.env.DATA_BACKEND = envBackup.DATA_BACKEND ?? "";
-  if (!envBackup.DATA_BACKEND) delete process.env.DATA_BACKEND;
-  if (envBackup.DEALER_ID) process.env.DEALER_ID = envBackup.DEALER_ID;
-  if (envBackup.DEALER_SLUG) process.env.DEALER_SLUG = envBackup.DEALER_SLUG;
+  try {
+    delete process.env.DATA_BACKEND;
+    delete process.env.DEALER_ID;
+    delete process.env.DEALER_SLUG;
+    assert.equal(getDataBackend(), "file", "DATA_BACKEND unset must default to file");
+    process.env.DATA_BACKEND = "dual";
+    assert.equal(getDataBackend(), "dual_write");
+    process.env.DATA_BACKEND = "postgres";
+    assert.equal(getDataBackend(), "postgres");
+    process.env.DATA_BACKEND = "nonsense";
+    assert.equal(getDataBackend(), "file", "unknown DATA_BACKEND must fall back to file");
+
+    // (a) file mode + no dealer env -> default ok (evals/local dev, zero env).
+    delete process.env.DATA_BACKEND;
+    assert.equal(getDealerId(), "americanharley", "file mode must default the dealer id");
+
+    for (const backend of ["dual_write", "postgres"] as const) {
+      process.env.DATA_BACKEND = backend;
+
+      // (b) database-backed mode + explicit dealer env -> used verbatim.
+      process.env.DEALER_ID = "dealer_two";
+      assert.equal(getDealerId(), "dealer_two", `${backend} must use the explicit DEALER_ID`);
+      delete process.env.DEALER_ID;
+      process.env.DEALER_SLUG = "dealer_two_slug";
+      assert.equal(getDealerId(), "dealer_two_slug", `${backend} must accept DEALER_SLUG`);
+      delete process.env.DEALER_SLUG;
+
+      // (c) database-backed mode + no dealer env -> throws naming the required
+      // env var; whitespace-only counts as unset.
+      process.env.DEALER_ID = "   ";
+      assert.throws(
+        () => getDealerId(),
+        (err: unknown) =>
+          err instanceof Error &&
+          err.message.includes("DEALER_ID") &&
+          err.message.includes(backend),
+        `${backend} with no DEALER_ID must fail loudly, not default`
+      );
+      delete process.env.DEALER_ID;
+      assert.throws(
+        () => getDealerId(),
+        (err: unknown) =>
+          err instanceof Error &&
+          err.message.includes("DEALER_ID") &&
+          err.message.includes(backend),
+        `${backend} with no dealer env at all must fail loudly, not default`
+      );
+    }
+  } finally {
+    for (const [k, v] of Object.entries(envBackup)) {
+      if (v == null) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 
   // File-mode round trip in a fresh DATA_DIR
   const fileDir = await fs.mkdtemp(path.join(os.tmpdir(), "store-persistence-file-"));

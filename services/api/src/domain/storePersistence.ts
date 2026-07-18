@@ -31,11 +31,28 @@ export function getDataBackend(): DataBackend {
   return "file";
 }
 
+/**
+ * Resolve the tenant (dealer) every database row is keyed under.
+ *
+ * INVARIANT GUARD (fail-direction: crash the boot, never mix tenants):
+ * the "americanharley" default exists ONLY for file mode, where DATA_DIR
+ * already scopes the store and evals/local dev must run with zero env.
+ * In postgres/dual_write mode a defaulted dealer id would silently read and
+ * write another dealer's conversations (cross-tenant data collision), so an
+ * unset DEALER_ID/DEALER_SLUG throws instead. conversationStore.ts calls
+ * this eagerly at module init so a mis-provisioned process dies at startup,
+ * not mid-request.
+ */
 export function getDealerId(): string {
-  return (
-    process.env.DEALER_ID?.trim() ||
-    process.env.DEALER_SLUG?.trim() ||
-    "americanharley"
+  const explicit = process.env.DEALER_ID?.trim() || process.env.DEALER_SLUG?.trim();
+  if (explicit) return explicit;
+  const backend = getDataBackend();
+  if (backend === "file") return "americanharley";
+  throw new Error(
+    `DEALER_ID (or DEALER_SLUG) must be set when DATA_BACKEND='${backend}'. ` +
+      "Refusing to default the dealer id: a second dealer's process defaulting " +
+      "here would read/write another dealer's database rows. Set DEALER_ID in " +
+      "the runtime env file."
   );
 }
 
