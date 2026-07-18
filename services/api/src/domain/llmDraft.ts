@@ -6259,7 +6259,13 @@ inbound: "Got into a horse driving accident and broke 5 ribs and punctured a lun
 output: {"disposition":"stepping_back","explicit_disposition":true,"timeframe_text":"","confidence":0.96}`,
     `EXAMPLE R
 inbound: "I am going to take care of the pipes myself"
-output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.95}`
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.95}`,
+    `EXAMPLE S
+inbound: "Sounds like it could be a nice bike but a little out of my current price range. Thank you though."
+output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","confidence":0.9}`,
+    `EXAMPLE T
+inbound: "Money's just too tight right now, I've got to stop looking for a while."
+output: {"disposition":"defer_no_window","explicit_disposition":true,"timeframe_text":"","confidence":0.92}`
   ];
 
   const prompt = [
@@ -6277,7 +6283,8 @@ output: {"disposition":"none","explicit_disposition":false,"timeframe_text":"","
     "Important:",
     "- If message contains compliments plus a disposition, disposition still applies.",
     "- If customer says they have to pass at this point because of health, injury, recovery, or life circumstances, treat as stepping_back.",
-    "- If customer says price/payment is too high or they can't afford it right now, treat as defer_no_window unless they provide a clear timeframe.",
+    "- Price objection, ONE bike: if the customer says a SPECIFIC bike is too expensive / out of their range but is still shopping (e.g. 'a little out of my range, keep me posted', 'I'll wait for something else', 'anything else come in?'), that is a live objection on that unit, NOT a closeout — return none (the lead is still active).",
+    "- Budget stop, no continued shopping: if the customer says they generally can't afford anything right now / are stopping the search over money with no continued-shopping signal, treat as defer_no_window unless they give a clear timeframe (then defer_with_window).",
     "- explicit_disposition=true only when disposition is clearly expressed.",
     "- timeframe_text should contain the raw timeframe phrase when disposition is defer_with_window; otherwise empty string.",
     "- If a clear disposition is mixed with another active request, still parse the disposition but preserve any raw timeframe phrase.",
