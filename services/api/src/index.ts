@@ -576,6 +576,7 @@ import {
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,
+  isOpenEndedTimeBoundParse,
   evaluateNoResponseFallback,
   nextActionFromState,
   reduceStaleStateForInbound,
@@ -9583,6 +9584,18 @@ function buildCustomerAckConfirmationReply(parsed: CustomerAckActionParse | null
   return "Perfect — I’ll check that and follow up with confirmation.";
 }
 
+// Deferral for a bound-constrained scheduling turn (offer_slots_in_bound) when no slots inside
+// the bound could be resolved — names the customer's own bound ("tomorrow after 3") and promises
+// times, never a booking/confirm (the RANGE-CONSTRAINT VETO's fail direction; Kody 7/16). The
+// owner also gets a scheduling-deferral follow-up task so the request isn't silently dropped.
+function buildBoundedWindowAvailabilityReply(boundPhrase: string): string {
+  const phrase = String(boundPhrase ?? "").trim();
+  if (phrase) {
+    return `Sounds good — I’ll check what we have open ${normalizeDisplayCase(phrase)} and follow up with times.`;
+  }
+  return "Sounds good — I’ll check available times and follow up.";
+}
+
 // Fallback confirmation for a customer-PROPOSED concrete day+time (appointment-timing
 // provide_new_time → propose_booking) when the calendar couldn't be reached / the write failed —
 // mirrors buildCustomerAckConfirmationReply but sourced from the appointment-timing phrase. Never a
@@ -10135,12 +10148,27 @@ async function resolveCustomerAckConfirmBooking(args: {
   // Explicit day/time source when there is no customer-ack parse (appointment-timing
   // provide_new_time proposal → propose_booking). rawText stays the real inbound so the
   // service-department check is evaluated against the actual message.
-  requestedOverride?: { day?: string | null; timeText?: string | null; normalizedText?: string | null } | null;
+  requestedOverride?: {
+    day?: string | null;
+    timeText?: string | null;
+    normalizedText?: string | null;
+    timeWindow?: "exact" | "range" | "unknown" | null;
+  } | null;
 }): Promise<{ reply: string; booked: boolean; alternatives: any[]; checkedCalendar: boolean } | null> {
   const conv = args.conv;
   // --- IO (the parts that read config / calendar / write the event). The DECISION over these results
   // is the pure decideCustomerAckConfirmBooking (routeStateReducer), pinned by an eval. ---
   const serviceContext = isServiceDepartmentSchedulingRequest(conv, args.rawText);
+  // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16): the parse the day/time is sourced from
+  // carries an OPEN-ENDED BOUND ("after 3") — never book/confirm a slot AT the bound.
+  // decideSchedulingTurn already routes bounded turns away from this resolver; this is the
+  // belt-and-suspenders net (it also skips the calendar WRITE below, since the IO runs
+  // before the pure decision).
+  const rangeConstrained = isOpenEndedTimeBoundParse(
+    args.requestedOverride
+      ? { timeWindow: args.requestedOverride.timeWindow ?? null, timeText: args.requestedOverride.timeText ?? null }
+      : args.parsed?.requested
+  );
   const cfg = serviceContext ? null : await getSchedulerConfigHot().catch(() => null);
 
   const existingEventId = String(conv.appointment?.bookedEventId ?? "").trim();
@@ -10165,7 +10193,7 @@ async function resolveCustomerAckConfirmBooking(args: {
         console.log("[confirm-book] availability check failed:", e?.message ?? e);
         return null;
       });
-      if (availability?.available && availability.exactSlot && args.book) {
+      if (availability?.available && availability.exactSlot && args.book && !rangeConstrained) {
         bookResult = await bookConfirmedAppointmentSlot({
           conv,
           slot: availability.exactSlot,
@@ -10180,6 +10208,7 @@ async function resolveCustomerAckConfirmBooking(args: {
     serviceContext,
     hasConfig: !!cfg,
     hasExistingBooking,
+    rangeConstrained,
     requestedResolved: !!requested,
     availabilityChecked: !!availability,
     slotFree: !!(availability?.available && availability?.exactSlot),
@@ -20623,8 +20652,12 @@ function extractRequestedScheduleWindowClauses(textRaw: string | null | undefine
     .map(s => s.trim())
     .filter(Boolean);
   const sourceSentences = sentences.length ? sentences : [text];
+  // today/tomorrow are real day anchors too — "tomorrow after 3" must resolve a window
+  // clause (the Kody bound-offer path retries with the parser's normalized "tomorrow after 3"
+  // phrase; without these tokens the clause extraction returned nothing and the turn
+  // degraded to a vague deferral). parseRequestedDayTime already handles both tokens.
   const dayRe =
-    /\b(monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/gi;
+    /\b(today|tomorrow|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat|sunday|sun)\b/gi;
   const clauses: string[] = [];
   for (const sentence of sourceSentences) {
     const matches = Array.from(sentence.matchAll(dayRe));
@@ -20846,6 +20879,7 @@ async function findScheduleSlotsForRequestedWindow(args: {
     : null;
   const windowMode = resolveRequestedScheduleWindowMode(args.text);
   const isBefore = windowMode === "before";
+  const isAfter = windowMode === "after";
   const isAnyTime = windowMode === "any_time";
   const cal = await getAuthedCalendarClient();
   const timeMin = new Date().toISOString();
@@ -20864,6 +20898,10 @@ async function findScheduleSlotsForRequestedWindow(args: {
         if (windowEndUtc && c.start.getTime() > windowEndUtc.getTime()) return false;
         if (isAnyTime) return true;
         if (isBefore) return c.start.getTime() <= requestedStartUtc.getTime();
+        // "after X" is an EXCLUDED bound: "after 3" means 3:00 itself does NOT work
+        // (Kody +17163975098, 7/16 — booked AT 3:00, staff corrected to 4:00). Offer
+        // only slots STRICTLY past the bound.
+        if (isAfter) return c.start.getTime() > requestedStartUtc.getTime();
         return c.start.getTime() >= requestedStartUtc.getTime();
       })
       .sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -51273,7 +51311,14 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnFinanceIntent: false
       });
     }
-    if (action === "confirm_proposed_appointment" && regenCustomerAckActionParse?.shouldBook) {
+    if (
+      action === "confirm_proposed_appointment" &&
+      regenCustomerAckActionParse?.shouldBook &&
+      // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16): a bounded window ("after 3") is
+      // never treated as a concrete confirm — fall through so the shared decideSchedulingTurn
+      // bound arms (offer_slots_in_bound) claim the turn, same as the live path.
+      !isOpenEndedTimeBoundParse(regenCustomerAckActionParse?.requested)
+    ) {
       // Regenerate is a DRAFT preview — availability-check only, never a calendar write (book:false).
       // If the live turn already booked, this reflects "you're all set"; otherwise it drafts an honest
       // lock-in confirmation or offers alternatives. Same route helper as the live path (in sync).
@@ -52831,10 +52876,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
   const regenSched = decideSchedulingTurn({
     customerAckActionAccepted: false,
     customerAckAction: null,
+    // Block A is resolved by the regen customer-ack block above (which applies its own
+    // range-constraint veto on the confirm gate), so no ack bound signal is needed here.
+    customerAckOpenEndedBound: false,
     appointmentTimingAccepted: regenAppointmentTimingAccepted,
     appointmentTimingIntent: regenAppointmentTimingIntent,
     appointmentTimingHasConcreteDayTime:
       !!regenAppointmentTimingParse?.requested?.day && !!regenAppointmentTimingParse?.requested?.timeText,
+    // RANGE-CONSTRAINT VETO (Kody 7/16) — same parser-carried bound signal as the live path.
+    appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(regenAppointmentTimingParse?.requested),
     parserScheduleStatusUpdate: regenParserScheduleStatusUpdate,
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
@@ -52929,7 +52979,8 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
       requestedOverride: {
         day: regenAppointmentTimingParse?.requested?.day ?? null,
         timeText: regenAppointmentTimingParse?.requested?.timeText ?? null,
-        normalizedText: regenAppointmentTimingParse?.normalizedText ?? null
+        normalizedText: regenAppointmentTimingParse?.normalizedText ?? null,
+        timeWindow: regenAppointmentTimingParse?.requested?.timeWindow ?? null
       }
     });
     if (result) {
@@ -52976,6 +53027,64 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         turnFinanceIntent: false
       }
     );
+  }
+  if (event.provider === "twilio" && regenSched.kind === "offer_slots_in_bound") {
+    // Regen mirror of the live offer_slots_in_bound arm (RANGE-CONSTRAINT VETO, Kody 7/16):
+    // a parser-read open-ended bound ("after 3 tomorrow") never drafts a booking/confirm —
+    // offer the first open slots honoring the bound, or an honest availability deferral.
+    // Draft-only (no calendar write happens in this arm in either path).
+    const appointmentType = inferAppointmentTypeFromConv(conv);
+    const boundPhrase = appointmentTimingRequestedPhrase(regenAppointmentTimingParse);
+    let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      conv,
+      text: event.body,
+      appointmentType
+    });
+    if (!windowSlots.length && boundPhrase && boundPhrase !== String(event.body ?? "").trim()) {
+      windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+        conv,
+        text: boundPhrase,
+        appointmentType
+      });
+    }
+    const windowReply = buildRequestedDaySlotReply(windowSlots);
+    if (windowReply) {
+      setLastSuggestedSlots(conv, windowSlots);
+      setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      recordRouteOutcome("regen", "scheduling_bound_window_slots_offered", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: regenAppointmentTimingParse?.confidence ?? null,
+        slotCount: windowSlots.length
+      });
+      return respondWithSmsRegeneratedDraft(`Sounds good. ${windowReply}`, undefined, {
+        turnSchedulingIntent: true,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
+    }
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("regen", "scheduling_bound_window_deferral", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: regenAppointmentTimingParse?.confidence ?? null
+    });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: true,
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase: boundPhrase
+      },
+      event.body,
+      (inbound as any)?.providerMessageId
+    );
+    return respondWithSmsRegeneratedDraft(buildBoundedWindowAvailabilityReply(boundPhrase), undefined, {
+      turnSchedulingIntent: true,
+      turnAvailabilityIntent: false,
+      turnFinanceIntent: false
+    });
   }
   if (regenTradeFollowupMessage) {
     if (conv.lead) {
@@ -61209,10 +61318,14 @@ if (authToken && signature) {
     customerAckActionAccepted,
     customerAckAction: customerAckActionParse?.action,
     customerAckShouldBook: customerAckActionParse?.shouldBook ?? false,
+    // RANGE-CONSTRAINT VETO (Kody +17163975098, 7/16): parser-carried open-ended bounds
+    // ("after 3", "later in the day") route to the offer-slots arm, never an auto-book.
+    customerAckOpenEndedBound: isOpenEndedTimeBoundParse(customerAckActionParse?.requested),
     appointmentTimingAccepted,
     appointmentTimingIntent,
     appointmentTimingHasConcreteDayTime:
       !!appointmentTimingParse?.requested?.day && !!appointmentTimingParse?.requested?.timeText,
+    appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(appointmentTimingParse?.requested),
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
@@ -61562,7 +61675,8 @@ if (authToken && signature) {
       requestedOverride: {
         day: appointmentTimingParse?.requested?.day ?? null,
         timeText: appointmentTimingParse?.requested?.timeText ?? null,
-        normalizedText: appointmentTimingParse?.normalizedText ?? null
+        normalizedText: appointmentTimingParse?.normalizedText ?? null,
+        timeWindow: appointmentTimingParse?.requested?.timeWindow ?? null
       }
     });
     if (result) {
@@ -61602,6 +61716,68 @@ if (authToken && signature) {
       turnSchedulingIntent: true
     });
   }
+  if (event.provider === "twilio" && sched.kind === "offer_slots_in_bound") {
+    // RANGE-CONSTRAINT VETO arm (Kody +17163975098, 2026-07-16): the parser read this turn's
+    // time as an OPEN-ENDED BOUND ("after 3 tomorrow", "later in the day") — booking or
+    // proposing a slot AT the bound is the incident (auto-booked 3:00 PM against "after 3").
+    // Offer the first open slots honoring the bound instead (findScheduleSlotsForRequestedWindow
+    // resolves "after X" strictly past the bound); NEVER a calendar write from this arm.
+    const appointmentType = inferAppointmentTypeFromConv(conv);
+    const boundPhrase =
+      (isOpenEndedTimeBoundParse(customerAckActionParse?.requested)
+        ? customerAckActionRequestedPhrase(customerAckActionParse)
+        : appointmentTimingRequestedPhrase(appointmentTimingParse)) ||
+      appointmentTimingRequestedPhrase(appointmentTimingParse) ||
+      customerAckActionRequestedPhrase(customerAckActionParse);
+    let windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+      conv,
+      text: event.body,
+      appointmentType
+    });
+    if (!windowSlots.length && boundPhrase && boundPhrase !== String(event.body ?? "").trim()) {
+      // The raw inbound often carries the bound BEFORE the day ("after 3 tomorrow"), which
+      // yields no day clause — retry from the parser's normalized day+time ("tomorrow after 3").
+      windowSlots = await findScheduleSlotsForRequestedWindowClauses({
+        conv,
+        text: boundPhrase,
+        appointmentType
+      });
+    }
+    const windowReply = buildRequestedDaySlotReply(windowSlots);
+    if (windowReply) {
+      setLastSuggestedSlots(conv, windowSlots);
+      setDialogState(conv, appointmentType === "test_ride" ? "test_ride_offer_sent" : "schedule_offer_sent");
+      recordRouteOutcome("live", "scheduling_bound_window_slots_offered", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        confidence: appointmentTimingParse?.confidence ?? customerAckActionParse?.confidence ?? null,
+        slotCount: windowSlots.length
+      });
+      return publishLiveTwilioReply(`Sounds good. ${windowReply}`, { turnSchedulingIntent: true });
+    }
+    // No slots resolvable inside the bound (calendar unreachable / phrase didn't resolve) →
+    // honest availability deferral + owner follow-up task. Fails toward NOT booking.
+    setDialogState(conv, "schedule_request");
+    recordRouteOutcome("live", "scheduling_bound_window_deferral", {
+      convId: conv.id,
+      leadKey: conv.leadKey,
+      confidence: appointmentTimingParse?.confidence ?? customerAckActionParse?.confidence ?? null
+    });
+    addSchedulingDeferralFollowUpTodo(
+      conv,
+      {
+        deferred: true,
+        booked: false,
+        offeredAlternatives: false,
+        requestedPhrase: boundPhrase
+      },
+      event.body,
+      event.providerMessageId
+    );
+    return publishLiveTwilioReply(buildBoundedWindowAvailabilityReply(boundPhrase), {
+      turnSchedulingIntent: true
+    });
+  }
   let bookingParseText = bookingIntentAccepted ? bookingParse?.normalizedText ?? "" : "";
   if (
     !bookingParseText &&
@@ -61635,8 +61811,12 @@ if (authToken && signature) {
   const llmHasTimeWord = bookingParseText
     ? /\b(\d{1,2}):(\d{2})\s*(am|pm)?\b/i.test(bookingParseText)
     : false;
+  // "after N"/"before N" are OPEN-ENDED BOUNDS, not clock times — counting them here is what
+  // auto-booked Kody (+17163975098, 7/16) AT the excluded 3:00 bound. The parser carries the
+  // window signal (requested.timeWindow=range + the bound in timeText → isOpenEndedTimeBoundParse);
+  // this deterministic signal must not re-read that meaning from text.
   const llmHasAtHour = bookingParseText
-    ? /\b(?:at|for|around|by|after|before)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(bookingParseText)
+    ? /\b(?:at|for|around|by)\s*(\d{1,2})(?::\d{2})?\b(?!\s*\/)/i.test(bookingParseText)
     : false;
   const llmHasDayTime = !!llmHasDayToken && (llmHasTimeWord || llmHasAtHour);
   const llmHasDayOnlyAvailability =
@@ -61660,6 +61840,18 @@ if (authToken && signature) {
       schedulingSignalsBase.hasDayOnlyAvailability || llmHasDayOnlyAvailability,
     hasDayOnlyRequest: schedulingSignalsBase.hasDayOnlyRequest || llmHasDayOnlyRequest
   };
+  // RANGE-CONSTRAINT VETO (Kody +17163975098, 2026-07-16): ANY parser on this turn read the
+  // requested time as an OPEN-ENDED BOUND ("after 3", "later in the day" — window=range).
+  // The deterministic day+time machinery can still see a "concrete" time in the same text
+  // (the bare-hour token "3" in "after 3" satisfies extractTimeToken/hasDayTime), so every
+  // suggest-mode auto-book write below is additionally gated on !schedulingRangeBoundVeto.
+  // The veto only blocks BOOKING — offering slots (which honor the bound) and asking stay
+  // allowed. Raw parses on purpose (not confidence-gated): even a low-confidence bound read
+  // should fail toward NOT booking.
+  const schedulingRangeBoundVeto =
+    isOpenEndedTimeBoundParse(appointmentTimingParse?.requested) ||
+    isOpenEndedTimeBoundParse(customerAckActionParse?.requested) ||
+    isOpenEndedTimeBoundParse(bookingParse?.requested);
   if (effectiveTestRideIntent && schedulingAllowed && !isTestRideDialogState(getDialogState(conv))) {
     setDialogState(conv, "test_ride_init");
   }
@@ -65590,7 +65782,14 @@ if (authToken && signature) {
     incrementPricingAttempt(conv);
   }
   if (!pricingOrPaymentsIntent && result.suggestedSlots && result.suggestedSlots.length > 0) {
-    if (schedulingAllowed && schedulingSignals.hasDayTime && !conv.appointment?.bookedEventId) {
+    // Suggested-slot exact-match BOOKING write — vetoed on a parser-read bound (Kody 7/16):
+    // never book a slot AT "after 3"; the window-filter offer path below still runs.
+    if (
+      schedulingAllowed &&
+      schedulingSignals.hasDayTime &&
+      !schedulingRangeBoundVeto &&
+      !conv.appointment?.bookedEventId
+    ) {
       let requested = result.requestedTime ?? null;
       if (!requested) {
         try {
@@ -65777,7 +65976,11 @@ if (authToken && signature) {
       const timeMin = new Date(now).toISOString();
       const timeMax = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000).toISOString();
 
-      if (!skipExactBooking) {
+      // Exact-slot search feeds a suggest-mode BOOKING write (autoBookInSuggest) or a pinned
+      // "lock that in?" pendingSlot ask — both anchored AT the requested hour. A parser-read
+      // bound ("after 3") vetoes the whole exact path (Kody 7/16): fall through to the
+      // closest-slots OFFER flow below, which proposes times without booking.
+      if (!skipExactBooking && !schedulingRangeBoundVeto) {
         for (const salespersonId of preferredSalespeople) {
           const sp = salespeople.find((p: any) => p.id === salespersonId);
           if (!sp) continue;
@@ -65976,7 +66179,9 @@ if (authToken && signature) {
       }
 
       if (bestSlots.length >= 2) {
-        if (schedulingSignals.hasDayTime && result.requestedTime) {
+        // bestSlots exact-match BOOKING write — same range-bound veto (Kody 7/16): a bound
+        // turn falls through to the slot OFFER reply below instead of booking AT the bound.
+        if (schedulingSignals.hasDayTime && !schedulingRangeBoundVeto && result.requestedTime) {
           const requestedStartUtc = localPartsToUtcDate(cfg.timezone, result.requestedTime);
           const match = bestSlots.find(s => {
             const startMs = new Date(s.start).getTime();

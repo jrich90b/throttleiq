@@ -17,7 +17,8 @@
 import assert from "node:assert/strict";
 import {
   decideSchedulingTurn,
-  isExplicitSchedulingAskIntent
+  isExplicitSchedulingAskIntent,
+  isOpenEndedTimeBoundParse
 } from "../services/api/src/domain/routeStateReducer.ts";
 
 type Row = {
@@ -85,6 +86,46 @@ const rows: Row[] = [
   // Pricing/payments suppresses Block B, so a concrete proposal does not book mid-pricing thread.
   { id: "provide_new_time_suppressed_by_pricing", input: { ...base, pricingOrPaymentsIntent: true, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true }, kind: "none" },
 
+  // --- RANGE-CONSTRAINT VETO (production incident: Kody +17163975098, 2026-07-16) ---
+  // "are you guys available anytime later on the day? I don't think I'll be out until after 3
+  // tomorrow" — appointment_timing read it correctly (ask_for_times, window=range, "after 3"),
+  // yet a deterministic concrete-time signal auto-booked AT the excluded 3:00 bound. The bound
+  // must route to the offer-slots arm (slots strictly after the bound), NEVER a booking arm.
+  {
+    id: "kody_bounded_ask_offers_slots_not_book",
+    input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "ask_for_times", appointmentTimingHasConcreteDayTime: true, appointmentTimingOpenEndedBound: true },
+    kind: "offer_slots_in_bound"
+  },
+  // A plain ask_for_times WITHOUT a bound keeps its existing fall-through path (unchanged).
+  { id: "plain_ask_for_times_unclaimed", input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "ask_for_times" }, kind: "none" },
+  // A bounded provide_new_time ("I can come tomorrow after 3" — day+timeText present) must NOT
+  // reach the book-or-offer resolver; it routes to the bound-honoring offer arm.
+  {
+    id: "bounded_provide_new_time_offers_not_books",
+    input: { ...base, appointmentTimingAccepted: true, appointmentTimingIntent: "provide_new_time", appointmentTimingHasConcreteDayTime: true, appointmentTimingOpenEndedBound: true },
+    kind: "offer_slots_in_bound"
+  },
+  // A bounded customer-ack "confirm" (misparse of "I'll be out after 3" as a booking confirm)
+  // must NOT reach the auto-book arm even with shouldBook set.
+  {
+    id: "bounded_ack_confirm_offers_not_books",
+    input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true, customerAckOpenEndedBound: true },
+    kind: "offer_slots_in_bound"
+  },
+  // Fail-direction proof (genuine concrete confirms STILL book): a range window WITHOUT an
+  // open-ended bound — a dealer-proposed "11-12" window confirm or "around 4" — keeps booking.
+  {
+    id: "range_window_without_bound_still_books",
+    input: { ...base, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true, customerAckOpenEndedBound: false },
+    kind: "confirm_appointment"
+  },
+  // Pricing/payments still suppresses the bounded arms (Block A/B pricing gate).
+  {
+    id: "pricing_suppresses_bounded_ask",
+    input: { ...base, pricingOrPaymentsIntent: true, appointmentTimingAccepted: true, appointmentTimingIntent: "ask_for_times", appointmentTimingOpenEndedBound: true },
+    kind: "none"
+  },
+
   // --- Block C: visit commitment, and the Todd preemption rules ---
   { id: "visit_commitment_plain", input: { ...base, ...VISIT }, kind: "visit_commitment", visitCommitment: true },
   {
@@ -139,5 +180,19 @@ assert.equal(isExplicitSchedulingAskIntent("none"), false, "no scheduling ask");
 assert.equal(isExplicitSchedulingAskIntent(null), false, "null intent");
 assert.equal(isExplicitSchedulingAskIntent(undefined), false, "undefined intent");
 passed += 8;
+
+// isOpenEndedTimeBoundParse — the veto's ONE definition (routeStateReducer). It reads the
+// PARSER's structured output: window=range + a bound token in the parser's own time_text.
+// TRUE only for open-ended bounds; approximate points and two-ended windows stay bookable.
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "after 3" }), true, "'after 3' (range) is an open-ended bound");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "before noon" }), true, "'before noon' (range) is a bound");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "later in the day" }), true, "'later in the day' is a bound");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "not until 4" }), true, "'not until 4' is a bound");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "around 10" }), false, "'around 10' is an approximate POINT — stays bookable (Chuck Bailey)");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "11-12" }), false, "a dealer-window '11-12' confirm stays bookable (Rafael)");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "exact", timeText: "after 3" }), false, "parser said exact => trust the parser (no bound)");
+assert.equal(isOpenEndedTimeBoundParse({ timeWindow: "range", timeText: "" }), false, "no time text => no bound");
+assert.equal(isOpenEndedTimeBoundParse(null), false, "no parse => no bound");
+passed += 9;
 
 console.log(`PASS scheduling-turn decision eval (${passed} rows)`);
