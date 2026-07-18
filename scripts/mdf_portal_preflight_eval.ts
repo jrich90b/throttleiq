@@ -12,6 +12,7 @@
  */
 import assert from "node:assert/strict";
 import {
+  ANSIRA_CLAIMS_LIST_URL,
   ANSIRA_FORM_CONTROLS,
   ansiraFormChangedSummary,
   ansiraMarketingOptionSummary,
@@ -19,11 +20,14 @@ import {
   cdpLooksBloated,
   findMissingFormControls,
   formatMissingControls,
+  isExpiredSessionLanding,
+  isSignInPageText,
   marketingActivityOptionIssue,
   missingActivityDatesSummary,
   pickAccountTileLabel,
   portalFormDidNotExpandSummary,
-  portalRunDeadlineSummary
+  portalRunDeadlineSummary,
+  sessionExpiredSummary
 } from "./mdf_portal_preflight.ts";
 
 const { findMdfPortalFailures } = await import("../services/api/src/domain/mdfPortalHealth.ts");
@@ -280,5 +284,128 @@ assert.equal(
 // Only chrome buttons (no @) → null.
 assert.equal(pickAccountTileLabel(["Use another account", "Open menu", "Back"]), null, "non-account buttons never match");
 assert.equal(pickAccountTileLabel([]), null, "empty picker → null");
+
+// ---------------------------------------------------------------------------
+// 11) Session-expiry preflight — pins the dominant 30d failure class (4 of the 8
+//     most recent failures: agent_mr3s6tv6 7/2 + agent_mrp010rb / agent_mrp0cs8u /
+//     agent_mrp0czzy 7/17): an expired H-DNet/Ansira session discovered only after
+//     a full run burned. The pure classifier must (a) fire on every observed
+//     sign-in landing shape (SSO-host redirect, Ansira /auth/login route, inline
+//     sign-in form text), (b) NEVER fire on a logged-in Ansira landing or an
+//     unreadable probe (fail-open — a false "expired" would turn away a live
+//     session), and (c) emit a summary the anomaly feed still classifies.
+// ---------------------------------------------------------------------------
+
+// The probe target is the claims list the operator is told to verify — same URL,
+// one source of truth.
+assert.equal(
+  ANSIRA_CLAIMS_LIST_URL,
+  "https://app.ansira.com/member/reimbursements/claims",
+  "the session probe targets the Ansira claims list"
+);
+
+// (a1) Expired session redirects to the H-DNet SSO host (Microsoft) — decisive on
+//      URL alone, even when the body is unreadable.
+assert.equal(
+  isExpiredSessionLanding({
+    finalUrl: "https://login.microsoftonline.com/625f2ee0-190f-4e6f-9cbb-be276a887c4d/oauth2/authorize?client_id=abc",
+    bodyText: ""
+  }),
+  true,
+  "a redirect to the Microsoft SSO host is an expired session"
+);
+
+// (a2) Ansira's own login route.
+assert.equal(
+  isExpiredSessionLanding({ finalUrl: "https://app.ansira.com/auth/login?returnTo=%2Fmember%2Freimbursements%2Fclaims" }),
+  true,
+  "a redirect to Ansira's /auth/login route is an expired session"
+);
+
+// (a3) Inline auth wall: URL unchanged but the body is a sign-in form — the same
+//      text markers the runner's in-run login check uses.
+assert.equal(
+  isExpiredSessionLanding({
+    finalUrl: ANSIRA_CLAIMS_LIST_URL,
+    bodyText: "Sign in\nEnter your email or phone\nNext\nCan't access your account?"
+  }),
+  true,
+  "an inline sign-in form at the claims URL is an expired session"
+);
+
+// (b1) The logged-in claims list ("Create MDF Recap" button, claim rows) is NOT
+//      a sign-in landing.
+assert.equal(
+  isExpiredSessionLanding({
+    finalUrl: ANSIRA_CLAIMS_LIST_URL,
+    bodyText: "MDF Recaps\nCreate MDF Recap\nClaim Name\nStatus\nClaimed Amount\nDraft"
+  }),
+  false,
+  "the logged-in claims list is not classified expired"
+);
+
+// (b2) Fail-open: an unreadable/empty body with an unremarkable URL never blocks —
+//      downstream in-run detection still applies.
+assert.equal(
+  isExpiredSessionLanding({ finalUrl: ANSIRA_CLAIMS_LIST_URL, bodyText: "" }),
+  false,
+  "an unreadable probe body fails open (never blocks the run)"
+);
+
+// (b3) The "Create Claim" exclusion: the logged-in create form legitimately
+//      mentions e.g. Microsoft-hosted assets — must not read as a login screen.
+assert.equal(
+  isSignInPageText("Create Claim\nMarketing Activity\nfonts served by Microsoft\nSave for Later"),
+  false,
+  "the create form mentioning 'microsoft' is excluded by the Create Claim marker"
+);
+assert.equal(
+  isSignInPageText("Sign in to continue\nPassword\nForgot my password"),
+  true,
+  "a real sign-in form still matches the shared text markers"
+);
+
+// (c) The operator summary: names the sign-in screen + expired session, says
+//     nothing was saved, and carries the whole fix (log in via the runner Chrome,
+//     verify the claims list, press Start again).
+const expiredSummary = sessionExpiredSummary("session preflight, before any fill");
+assert.ok(/sign-in screen/i.test(expiredSummary), "expired-session summary names the sign-in screen");
+assert.ok(/session has expired/i.test(expiredSummary), "expired-session summary names the expiry");
+assert.ok(/no draft was created/i.test(expiredSummary), "expired-session summary states nothing was saved");
+assert.ok(expiredSummary.includes("h-dnet.com"), "expired-session summary tells the operator where to log in");
+assert.ok(expiredSummary.includes("app.ansira.com/member/reimbursements/claims"), "expired-session summary tells the operator what to verify");
+assert.ok(/start portal draft again/i.test(expiredSummary), "expired-session summary tells the operator to press Start again");
+assert.ok(expiredSummary.includes("session preflight, before any fill"), "expired-session summary carries WHERE it was caught");
+
+// Anomaly-feed parity, both ways the runner records it: the preflight abort writes
+// a BLOCKED task; the in-run detection surfaces via the blocked/needs_approval
+// shells. All must keep tripping the mdf-portal-health detector.
+const blockedFlagged = findMdfPortalFailures({
+  tasks: [
+    {
+      id: "eval_session_blocked",
+      kind: "mdf_portal",
+      status: "blocked",
+      updatedAt: new Date().toISOString(),
+      output: { summary: expiredSummary }
+    }
+  ] as any
+});
+assert.equal(blockedFlagged.length, 1, "a session-preflight blocked task is detected by mdf-portal-health");
+assert.equal(blockedFlagged[0].dimension, "mdf_assistant_failure", "session-preflight block maps to mdf_assistant_failure");
+
+const fallbackFlagged = findMdfPortalFailures({
+  tasks: [
+    {
+      id: "eval_session_fallback",
+      kind: "mdf_portal",
+      status: "needs_approval",
+      updatedAt: new Date().toISOString(),
+      output: { summary: `Automatic MDF portal runner failed before completion: ${sessionExpiredSummary("recap list")}` }
+    }
+  ] as any
+});
+assert.equal(fallbackFlagged.length, 1, "the in-run expired-session summary still trips LOAD_FAILURE_RE under needs_approval");
+assert.equal(fallbackFlagged[0].dimension, "mdf_assistant_failure", "in-run expired-session summary maps to mdf_assistant_failure");
 
 console.log("PASS mdf portal preflight eval");

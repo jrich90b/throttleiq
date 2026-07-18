@@ -93,7 +93,9 @@ import {
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import {
   addAgentTask,
+  findActivePortalDraftTask,
   listAgentTasks,
+  mdfPortalClaimMarker,
   reapStuckAgentTasks,
   updateAgentTaskStatus,
   type AgentTask,
@@ -46520,6 +46522,16 @@ app.post("/mdf/portal-login-task", requireManager, async (req, res) => {
 app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
   const claim = getMdfClaim(req.params.id);
   if (!claim) return res.status(404).json({ ok: false, error: "MDF claim not found." });
+  // CLAIM-TASK DEDUP (2026-07-17): a double-click on "Start portal draft" (and a
+  // re-press minutes later) stacked three identical portal tasks on one claim
+  // (mdf_498ac7ea88726 — two of them 10s apart). Idempotent create: while an ACTIVE
+  // task for this claim exists (queued/running, or needs_approval that hasn't run
+  // yet), attach to it instead of creating another — one claim, one runner. Pinned
+  // by mdf_claim_task_dedup:eval.
+  const activePortalTask = findActivePortalDraftTask(await listAgentTasks(1000), claim.id);
+  if (activePortalTask) {
+    return res.json({ ok: true, task: activePortalTask, claim, deduped: true });
+  }
   const user = (req as any).user ?? null;
   const fileLines = (claim.packet.uploadedFiles ?? [])
     .map(file => {
@@ -46556,7 +46568,7 @@ app.post("/mdf/claims/:id/portal-task", requireManager, async (req, res) => {
       role: String(user?.role ?? "").trim() || undefined
     },
     instructions: [
-      `[mdf-portal:${claim.id}]`,
+      mdfPortalClaimMarker(claim.id),
       "Use browser-use or logged-in Chrome browser control to prepare an H-D MDF portal draft from this saved LeadRider MDF packet.",
       "Do not submit the claim. Stop at the final review/save-draft step and report exactly what was filled, uploaded, and what still needs human review.",
       "",
