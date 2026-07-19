@@ -78,3 +78,28 @@ export function hasDisclosedUnitUnavailabilityWithoutReply(
   }
   return false;
 }
+
+/**
+ * The COLOR (or color+trim token) we may attribute to the customer's stated interest in the
+ * "I know you were interested in the {unit} …" cadence disclosure — and ONLY that.
+ *
+ * Joe ruling 2026-07-19 (+17169867992 William Wittmeyer): the agent told William "I know you
+ * were interested in the 2025 Tri Glide Ultra in black, but that bike has sold." William never
+ * said "black" — his lead had no color, and the word came from the agent's own earlier photo
+ * offer ("a 2025 Tri Glide Ultra in Vivid Black"). Attributing a color the customer never
+ * chose is the fabricated-attribution class. The held/sold cadence override builds its unit
+ * label from a search-surfaced sibling unit's color (or a color lifted from our own outbound),
+ * neither of which is customer-sourced. This helper returns a color ONLY when it came from the
+ * customer — their own inbound words or the lead/ADF vehicle field — else null (omit the
+ * color, keep just year+model). Fail-direction is safe: dropping an unverified color never
+ * fabricates; the sold/hold disclosure + alternatives offer is untouched.
+ */
+export function customerSourcedInterestColor(args: {
+  leadColor?: string | null;
+  inboundColor?: string | null;
+}): string | null {
+  const lead = String(args.leadColor ?? "").trim();
+  if (lead) return lead;
+  const inbound = String(args.inboundColor ?? "").trim();
+  return inbound || null;
+}
