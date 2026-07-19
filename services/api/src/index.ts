@@ -48,6 +48,11 @@ import {
   resolveNamedSchedulingDay
 } from "./domain/testRideDayAwareReply.js";
 import { applyVoiceDurableFacts, buildVoiceFactsCadenceLine, ensureVoiceFactsFresh, fillLeadVehicleFromVoiceFacts } from "./domain/voiceCadenceFacts.js";
+import {
+  decideVoiceNextStep,
+  resolveVoiceLiveCallBreatherHours,
+  resolveVoiceNextStepConfidenceMin
+} from "./domain/voiceNextStep.js";
 import { applyTradeVehicleRepair, type TradeVehicleRepairRequest } from "./domain/tradeVehicleRepair.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
@@ -66966,6 +66971,70 @@ app.post("/webhooks/twilio/voice/recording", async (req, res) => {
             // placeholder motorcycle-of-interest field (never overwrites a real model).
             const filledVehicle = fillLeadVehicleFromVoiceFacts(conv, voiceFactsParse);
             if (appliedFacts || filledVehicle) {
+              saveConversation(conv);
+            }
+            // Voice next-step plan (Joe, 2026-07-19): act on the plan agreed on this LIVE
+            // call — hold cadence for a customer-owed step, create a dated task for a
+            // staff promise, and give any live conversation a breather before the next
+            // generic touch. Voicemails never reach here (isVoicemail gate above). Every
+            // branch only delays a proactive touch or adds a task (pauseFollowUpCadence
+            // only ever pushes nextDueAt later) — fail direction: cadence continues.
+            if (process.env.VOICE_NEXT_STEP_ENABLED !== "0") {
+              const nsCfg = await getSchedulerConfigHot();
+              const nsTimezone = nsCfg.timezone || "America/New_York";
+              const dueText = String(voiceFactsParse?.nextStepDueText ?? "").trim();
+              const nsDecision = decideVoiceNextStep({
+                isVoicemail,
+                nowMs: Date.now(),
+                timeZone: nsTimezone,
+                cadenceKind: conv.followUpCadence?.kind ?? null,
+                followUpMode: conv.followUp?.mode ?? null,
+                conversationStatus: conv.status ?? null,
+                nextStepOwner: voiceFactsParse?.nextStepOwner ?? "none",
+                nextStepAction: voiceFactsParse?.nextStepAction ?? "",
+                nextStepConfidence: voiceFactsParse?.nextStepConfidence ?? 0,
+                dueDate: dueText ? parseRequestedDateOnly(dueText, nsTimezone) : null,
+                confidenceMin: resolveVoiceNextStepConfidenceMin(
+                  process.env.VOICE_NEXT_STEP_CONFIDENCE_MIN
+                ),
+                breatherHours: resolveVoiceLiveCallBreatherHours(
+                  process.env.VOICE_LIVE_CALL_BREATHER_HOURS
+                )
+              });
+              if (nsDecision.kind === "breather_only") {
+                pauseFollowUpCadence(conv, nsDecision.holdUntilIso, "voice_live_call_breather");
+                recordRouteOutcome("manual", "voice_live_call_breather", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey,
+                  holdUntil: nsDecision.holdUntilIso
+                });
+              } else if (nsDecision.kind === "hold_for_customer") {
+                pauseFollowUpCadence(conv, nsDecision.holdUntilIso, "voice_customer_next_step");
+                recordRouteOutcome("manual", "voice_next_step_customer_hold", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey,
+                  holdUntil: nsDecision.holdUntilIso,
+                  dueLabel: nsDecision.dueLabel
+                });
+              } else if (nsDecision.kind === "staff_task") {
+                const nsTask = addTodo(
+                  conv,
+                  "other",
+                  nsDecision.taskSummary,
+                  callScopedMessageId ?? undefined,
+                  undefined,
+                  { dueAt: nsDecision.taskDueIso },
+                  "reminder"
+                );
+                pauseFollowUpCadence(conv, nsDecision.holdUntilIso, "voice_staff_next_step");
+                recordRouteOutcome("manual", "voice_next_step_staff_task", {
+                  convId: conv.id,
+                  leadKey: conv.leadKey,
+                  taskCreated: !!nsTask,
+                  taskDueAt: nsDecision.taskDueIso,
+                  holdUntil: nsDecision.holdUntilIso
+                });
+              }
               saveConversation(conv);
             }
           } catch (err: any) {
