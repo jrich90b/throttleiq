@@ -28737,6 +28737,14 @@ async function applyPendingIncomingInventoryState(
   // every ack turn); otherwise classify from the establishing context. Fail-safe: parser off/null or
   // low confidence => "unclear" => neutral "coming in" copy.
   const priorPurpose = conv.pendingIncomingInventory?.purpose;
+  // Allocation (spoken_for_other = the in-transit unit is claimed by someone else; Joe ruling
+  // 2026-07-19, Peter Arnoldo) carries forward the same way purpose does: a prior confident read
+  // wins so every later ack turn keeps the handoff framing without re-parsing — BOTH paths call
+  // this applier, which is what keeps live and regenerate in sync.
+  const priorAllocation = conv.pendingIncomingInventory?.allocation;
+  if (priorAllocation && priorAllocation !== "unclear") {
+    pending.allocation = priorAllocation;
+  }
   if (priorPurpose && priorPurpose !== "unclear") {
     pending.purpose = priorPurpose;
   } else {
@@ -28747,13 +28755,18 @@ async function applyPendingIncomingInventoryState(
         vehicle: pending.label ?? pending.model ?? null
       })
     );
-    pending.purpose = decideIncomingInventoryPurpose({
+    const purposeDecision = decideIncomingInventoryPurpose({
       parserAccepted: !!purposeParse,
       purpose: purposeParse?.purpose ?? null,
+      allocation: purposeParse?.allocation ?? null,
       confidence: purposeParse?.confidence ?? 0,
       confidenceMin: incomingInventoryPurposeConfidenceMin(),
       condition: pending.condition ?? null
-    }).purpose;
+    });
+    pending.purpose = purposeDecision.purpose;
+    if (!pending.allocation && purposeDecision.allocation !== "unclear") {
+      pending.allocation = purposeDecision.allocation;
+    }
   }
   if (opts?.acknowledged) pending.acknowledgedAt = nowIsoValue;
   conv.pendingIncomingInventory = pending;

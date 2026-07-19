@@ -51,7 +51,7 @@ import { buildAgentIntro, buildDemoRideEventSoftInvite, buildEventPromoAck, buil
 import { buildAdfResubmissionAck, detectAdfFormResubmission } from "../domain/adfResubmission.js";
 import { isHtmlClientNoticeOnly } from "../domain/inboundMailActionability.js";
 import { buildTradeAdfAck } from "../domain/tradeAdfReply.js";
-import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch } from "../domain/routeStateReducer.js";
+import { decideEventPromoTurn, decideNonBuyerSurveyTurn, decideDealerLeadSurveyTurn, shouldCloseEventPromoLeadOnIntake, resolveRideChallengeEventTouch, decideIncomingInventoryPurpose } from "../domain/routeStateReducer.js";
 import { buildLongTermTimelineMessage } from "../domain/longTermMessage.js";
 import { orchestrateInbound } from "../domain/orchestrator.js";
 import { collectRecentStaffCorrections } from "../domain/feedbackSteering.js";
@@ -85,7 +85,8 @@ import {
   parseWalkInOutcomeWithLLM,
   parseAdfDepartmentInterestWithLLM,
   parseDealerLeadSurveyWithLLM,
-  hasDealerLeadSurveyHint
+  hasDealerLeadSurveyHint,
+  parseIncomingInventoryPurposeWithLLM
 } from "../domain/llmDraft.js";
 import type {
   CompositeSalesInquiryParse,
@@ -140,7 +141,10 @@ import {
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryInitialAdfReply,
   buildPendingIncomingInventoryTaskSummary,
-  hasPendingIncomingInventorySignal
+  buildSpokenForIncomingHandoffAck,
+  hasPendingIncomingInventorySignal,
+  hasSpokenForIncomingCue,
+  incomingInventoryPurposeConfidenceFloor
 } from "../domain/pendingIncomingInventory.js";
 import { buildOffersLine, resolveOffersUrl } from "../domain/offers.js";
 import {
@@ -7434,8 +7438,94 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       !!conv.hold ||
       conv.followUp?.mode === "paused_indefinite";
 
+    // Joe ruling 2026-07-19 (+17166887637 Peter Arnoldo): when the intake note says the desired
+    // unit is INCOMING and SPOKEN FOR by someone else ("once the next one we have coming in
+    // arrives which is spoken for"), do NOT set an availability watch — the agent only knows the
+    // pipeline through staff notes and must never answer allocation/ETA questions itself. Instead:
+    // pending-incoming state + manual handoff + a staff task to confirm the customer's allocation,
+    // and a warm "you're on the list" ack. Deterministic prefilter gates a typed-parser read
+    // (allocation), decided centrally (decideIncomingInventoryPurpose); anything below the
+    // confidence floor or unclear falls through to today's watch behavior (safe fail-direction —
+    // a false positive would wrongly suppress a legit watch, so the parser must be confident).
+    let walkInSpokenForHandoff = false;
+    if (
+      hasWatchIntent &&
+      !(hasDealProgressSignal || hasCreditCosignerSignal) &&
+      hasSpokenForIncomingCue(walkInCleanedComment)
+    ) {
+      const spokenForParse = await parseIncomingInventoryPurposeWithLLM({
+        seedText: walkInCleanedComment,
+        condition: requestedConditionHint ?? null,
+        vehicle:
+          [singleYear, modelLabel].filter(Boolean).join(" ").trim() ||
+          String(conv.lead?.vehicle?.model ?? "").trim() ||
+          null
+      }).catch(() => null);
+      const spokenForDecision = decideIncomingInventoryPurpose({
+        parserAccepted: !!spokenForParse,
+        purpose: spokenForParse?.purpose ?? null,
+        allocation: spokenForParse?.allocation ?? null,
+        confidence: spokenForParse?.confidence ?? 0,
+        confidenceMin: incomingInventoryPurposeConfidenceFloor(),
+        condition: requestedConditionHint ?? null
+      });
+      if (spokenForDecision.allocation === "spoken_for_other") {
+        const nowIsoValue = new Date().toISOString();
+        const pending = buildPendingIncomingInventoryFromConversation({
+          conv,
+          sourceText: walkInCleanedComment,
+          sourceMessageId: event.providerMessageId,
+          source: "adf",
+          allocation: "spoken_for_other",
+          nowIso: nowIsoValue
+        });
+        if (pending) {
+          // The customer's STATED model (the walk-in hint, e.g. "Super Glide") outranks the
+          // structured Vehicle field ("Street Glide") — model-authority, same rule the watch uses.
+          if (modelLabel) {
+            pending.model = modelLabel;
+            const yearNum = Number(String(singleYear ?? "").trim());
+            if (Number.isFinite(yearNum) && yearNum >= 1900 && yearNum <= 2100) {
+              pending.year = yearNum;
+            }
+            pending.label = [singleYear, modelLabel].filter(Boolean).join(" ").trim() || modelLabel;
+          }
+          pending.purpose = spokenForDecision.purpose;
+          conv.pendingIncomingInventory = pending;
+          conv.inventoryWatchPending = undefined;
+          conv.dialogState = { name: "pending_incoming_inventory", updatedAt: nowIsoValue } as any;
+          setFollowUpMode(conv, "manual_handoff", "pending_incoming_inventory");
+          stopFollowUpCadence(conv, "pending_incoming_inventory");
+          const spokenForCustomerName =
+            [String(conv.lead?.firstName ?? "").trim(), String(conv.lead?.lastName ?? "").trim()]
+              .filter(Boolean)
+              .join(" ")
+              .trim() ||
+            String((conv.lead as any)?.name ?? "").trim() ||
+            String(conv.leadKey ?? "").trim() ||
+            "customer";
+          addTodo(
+            conv,
+            "call",
+            buildPendingIncomingInventoryTaskSummary({ pending, customerName: spokenForCustomerName }),
+            event.providerMessageId,
+            conv.leadOwner,
+            undefined,
+            "followup"
+          );
+          tail = buildSpokenForIncomingHandoffAck(pending);
+          walkInSpokenForHandoff = true;
+        }
+      }
+    }
+
     let walkInWatchSet = false;
-    if (modelLabel && hasWatchIntent && !(hasDealProgressSignal || hasCreditCosignerSignal)) {
+    if (
+      !walkInSpokenForHandoff &&
+      modelLabel &&
+      hasWatchIntent &&
+      !(hasDealProgressSignal || hasCreditCosignerSignal)
+    ) {
       const requestedCondition: "new" | "used" | undefined =
         requestedConditionHint === "used"
           ? "used"
@@ -7469,7 +7559,12 @@ export async function handleSendgridInbound(req: Request, res: Response) {
       setFollowUpMode(conv, "holding_inventory", "inventory_watch");
       stopFollowUpCadence(conv, "inventory_watch");
       walkInWatchSet = true;
-    } else if (hasWatchIntent && !modelLabel && !(hasDealProgressSignal || hasCreditCosignerSignal)) {
+    } else if (
+      !walkInSpokenForHandoff &&
+      hasWatchIntent &&
+      !modelLabel &&
+      !(hasDealProgressSignal || hasCreditCosignerSignal)
+    ) {
       conv.inventoryWatchPending = {
         year: singleYear,
         color: desiredColor,

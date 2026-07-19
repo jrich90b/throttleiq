@@ -1291,29 +1291,49 @@ export type IncomingInventoryPurpose = "trade_in" | "sourced_for_purchase" | "fa
 export type IncomingInventoryPurposeInput = {
   parserAccepted: boolean;
   purpose?: string | null;
+  // WHO the incoming unit is allocated to (Joe ruling 2026-07-19, Peter Arnoldo +17166887637).
+  // "spoken_for_other" (at/above the confidence floor) is what diverts a walk-in watch into a
+  // staff handoff — anything else keeps today's behavior.
+  allocation?: string | null;
   confidence: number;
   confidenceMin: number;
   condition?: string | null;
 };
 
+export type IncomingInventoryAllocation = "spoken_for_other" | "for_this_customer" | "unclear";
+
 export function decideIncomingInventoryPurpose(
   input: IncomingInventoryPurposeInput
-): { purpose: IncomingInventoryPurpose } {
+): { purpose: IncomingInventoryPurpose; allocation: IncomingInventoryAllocation } {
+  // Allocation is accepted only from a confident parse — a wrong "spoken_for_other" would
+  // suppress a legitimate availability watch, so anything uncertain fails to "unclear"
+  // (= today's behavior: watch + generic ack).
+  const allocationAccepted =
+    input.parserAccepted &&
+    Number.isFinite(input.confidence) &&
+    input.confidence >= input.confidenceMin;
+  const allocation: IncomingInventoryAllocation =
+    allocationAccepted &&
+    (input.allocation === "spoken_for_other" || input.allocation === "for_this_customer")
+      ? input.allocation
+      : "unclear";
   // A structured `new` condition is a factory order regardless of the parser — a dealer never takes a
   // brand-new bike in on trade. (Keeps the 2026-06 Nicholas Braun pre-order fix intact.)
-  if (String(input.condition ?? "").trim().toLowerCase() === "new") return { purpose: "factory_order" };
-  if (!input.parserAccepted) return { purpose: "unclear" };
+  if (String(input.condition ?? "").trim().toLowerCase() === "new") {
+    return { purpose: "factory_order", allocation };
+  }
+  if (!input.parserAccepted) return { purpose: "unclear", allocation };
   if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
-    return { purpose: "unclear" };
+    return { purpose: "unclear", allocation };
   }
   if (
     input.purpose === "trade_in" ||
     input.purpose === "sourced_for_purchase" ||
     input.purpose === "factory_order"
   ) {
-    return { purpose: input.purpose };
+    return { purpose: input.purpose, allocation };
   }
-  return { purpose: "unclear" };
+  return { purpose: "unclear", allocation };
 }
 
 // --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
