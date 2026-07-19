@@ -265,7 +265,13 @@ export function auditConversationOutcome(conv: AuditableConv, opts: { now?: Date
         dimension: "human_correction_material",
         severity: "P2",
         healed: false,
-        detail: `staff materially corrected the AI draft (${hc.category ?? "?"})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`
+        detail: `staff materially corrected the AI draft (${hc.category ?? "?"})${hc.reason ? ` — ${String(hc.reason).slice(0, 120)}` : ""}`,
+        // The correction time is stamped as occurredAt (mirrors negative_feedback below): the corrected
+        // draft is at/before it, so a fix commit that postdates it provably postdates the draft. Without
+        // this these rows carried NO event time, so the already-shipped echo suppressor could never prove
+        // them stale and a per-case fix (e.g. #148, +12282200201 poker-chip) re-fired forever once its
+        // 14-day PR-ledger window lapsed. (suppressAlreadyShippedEchoes in anomalyClassifier.)
+        occurredAt: new Date(hcAtMs).toISOString()
       });
     }
   }

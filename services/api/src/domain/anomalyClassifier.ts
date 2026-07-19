@@ -105,6 +105,65 @@ export function suppressStaleFindings(
   return { kept, suppressed };
 }
 
+// A fix commit on origin/main whose message NAMES a case (phone/customer/ticket). dateMs = commit date.
+export type NamingCommit = { hash: string; subject: string; dateMs: number };
+
+// Dimensions whose detector grades a FROZEN stored transcript (a past draft/reply/replay) — the record
+// never changes, so a finding re-fires on every run even after its per-case fix ships, once that fix ages
+// out of the 14-day merged-PR-ledger window (loopPrDedup). Only these are echo-suppressible. Operator/
+// human signals (reported_issue, thumbs_down_action_request) are deliberately EXCLUDED: a commit naming
+// the customer doesn't prove the operator's latest note is stale — a person may be reporting something new.
+export const ECHO_SUPPRESSIBLE_DIMENSIONS: ReadonlySet<string> = new Set([
+  "human_correction_material",
+  "corpus_replay_judge_fail"
+]);
+
+/**
+ * Already-shipped echo suppressor — the PERMANENT complement to the 14-day merged-PR-ledger window.
+ *
+ * WHY (2026-07-18): the PR-ledger dedup (loopPrDedup) stops suppressing a finding 14 days after its fix
+ * PR merges (fail toward surfacing — a bug that reappears weeks later may be a regression). But the
+ * frozen-transcript detectors above grade a record that never changes, so once that window lapses the
+ * SAME already-shipped ghost re-fires forever (+12282200201 poker-chip → apparel, fixed by #148 on 7/2,
+ * re-surfaced 7/18 with a pinned passing eval). This closes that gap without weakening regression
+ * detection: it suppresses ONLY when a commit that NAMES the case landed STRICTLY AFTER the flagged event
+ * — a genuine post-fix regression has a NEW event dated after the commit, so it is never hidden.
+ *
+ * Pure: the git-grep IO (commits naming a case) is injected via namingCommitsFor so this stays eval-pinned.
+ * Fail-safe: no occurredAt, no naming commit, or the only naming commits predate the event → KEEP.
+ */
+export function suppressAlreadyShippedEchoes(
+  anomalies: OutcomeAnomaly[],
+  opts: { namingCommitsFor: (a: OutcomeAnomaly) => NamingCommit[]; dimensions?: ReadonlySet<string> }
+): StaleSuppressionResult {
+  const dims = opts.dimensions ?? ECHO_SUPPRESSIBLE_DIMENSIONS;
+  const kept: OutcomeAnomaly[] = [];
+  const suppressed: StaleSuppression[] = [];
+  for (const a of anomalies) {
+    if (!dims.has(String(a?.dimension ?? ""))) {
+      kept.push(a);
+      continue; // out of scope → keep
+    }
+    const eventMs = Date.parse(String(a?.occurredAt ?? ""));
+    if (!Number.isFinite(eventMs)) {
+      kept.push(a);
+      continue; // no event time → can't prove the graded reply predates a fix → keep
+    }
+    const naming = (opts.namingCommitsFor(a) ?? [])
+      .filter(c => Number.isFinite(c.dateMs) && c.dateMs > eventMs)
+      .sort((x, y) => x.dateMs - y.dateMs)[0];
+    if (naming) {
+      suppressed.push({
+        anomaly: a,
+        reason: `already shipped: ${a.dimension} event ${a.occurredAt} predates naming fix ${naming.hash} "${naming.subject}" (${new Date(naming.dateMs).toISOString()})`
+      });
+    } else {
+      kept.push(a); // no commit names this case after the event → keep (may be live / a new regression)
+    }
+  }
+  return { kept, suppressed };
+}
+
 export function classifyOutcomeAnomaly(
   anomaly: Pick<OutcomeAnomaly, "category" | "dimension" | "healed" | "severity">,
   opts: { persistent?: boolean; graduatedCategories?: Set<string> } = {}
