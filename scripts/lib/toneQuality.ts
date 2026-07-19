@@ -433,13 +433,45 @@ export function detectAdfDirectAskMisses(inboundText: string, outboundText: stri
     }));
 }
 
+// A soft-visit COMMITMENT — the customer telling us they hope/plan/will try to
+// come by ("I'll stop by", "hope to stop by weather permitting", "will call
+// down to your event today") — is a statement, not a scheduling REQUEST. The
+// right reply is a warm acknowledgment, so grading it as a scheduling turn
+// wrongly flags every warm ack as intent_mismatch (release-gate tone phantom,
+// 2026-07-19: Kevin Short, Luke Paolini, Aidan McCarthy — all warm gratitude/
+// visit FYIs scored `intent_mismatch` for not answering with scheduling).
+// Suppress the scheduling classification ONLY when the message carries no
+// actual scheduling ask and no model interest:
+//   - no question ("?") and no "what time/day", when-are-you-open, can-I-come,
+//     set-a-time, book/schedule/appointment/available/test-ride request → a
+//     genuine "can I come in Saturday at 2?" keeps scheduling;
+//   - no model hint → a model-interest turn ("looking at a Street Glide, can
+//     come in tomorrow") stays on its normal intent so the generic-model-reask
+//     catch is untouched.
+function isVisitCommitmentWithoutSchedulingAsk(text: string): boolean {
+  const t = normalizeText(text).toLowerCase();
+  if (!t) return false;
+  if (t.includes("?")) return false;
+  if (hasModelHint(t)) return false;
+  if (
+    /\b(what time|what day|when (?:are|is|do|does|can|could|would|will|should|you)|can i (?:come|stop|swing|book)|could i (?:come|stop|swing|book)|set (?:a|up) (?:time|appointment)|book(?:ing)?|schedule|appointment|availab(?:le|ility)|what works|works best|works for you|reschedul|make an appointment|test[\s-]?ride|demo[\s-]?ride)\b/.test(
+      t
+    )
+  ) {
+    return false;
+  }
+  return /\b(stop by|stop in|stopping by|come by|coming by|come in|coming in|come down|coming down|call down|calling down|swing by|swinging by|be there|be down|be over|head down|make it (?:in|down|out|over)|see (?:you|ya))\b/.test(
+    t
+  );
+}
+
 export function detectPrimaryIntent(inboundText: string): ToneIntent {
   const text = normalizeText(inboundText);
   if (!text) return "general";
   if (hasServiceSignal(text)) return "service";
   if (hasPartsSignal(text)) return "parts";
   if (hasApparelSignal(text)) return "apparel";
-  if (hasSchedulingSignal(text)) return "scheduling";
+  if (hasSchedulingSignal(text) && !isVisitCommitmentWithoutSchedulingAsk(text)) return "scheduling";
   if (hasAvailabilitySignal(text)) return "availability";
   if (hasWarrantySignal(text)) return "warranty";
   if (hasPricingSignal(text)) return "pricing_finance";

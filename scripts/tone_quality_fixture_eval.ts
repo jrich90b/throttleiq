@@ -40,6 +40,39 @@ const FIXTURES: Fixture[] = [
     expect: { maxScore: 75, mustIncludeIssues: ["pushy_cta_on_ack"] }
   },
   {
+    // Soft-visit commitment / gratitude FYI — a statement the customer is
+    // coming, NOT a scheduling request. A warm ack is the right reply and must
+    // NOT be scored as a scheduling intent_mismatch (2026-07-19 release-gate
+    // phantoms: Kevin Short, Luke Paolini, Aidan McCarthy).
+    id: "soft_visit_gratitude_warm_ack_not_scheduling",
+    inboundText:
+      "Good morning Scott, the delivery went well. I hop to stop by weather permitting. Thank you Scott & Stone for your help for making Sue & I very happy.",
+    outboundText: "That's great! I am happy for you guys.",
+    expect: { minScore: 85, mustNotIncludeIssues: ["intent_mismatch"] }
+  },
+  {
+    id: "soft_visit_will_try_to_stop_by_warm_ack",
+    inboundText:
+      "Beautiful Day Yesterday! Very Much Appreciated ! Thank you! Will try to stop by not with bike due to weather. Thank you ! Be safe have a Great Day !",
+    outboundText: "Glad you had a great day — appreciate you. If you need anything, just let me know.",
+    expect: { minScore: 85, mustNotIncludeIssues: ["intent_mismatch"] }
+  },
+  {
+    id: "soft_visit_will_call_down_today_warm_ack",
+    inboundText: "Thanks will call down to your event today weather permitting to check it out",
+    outboundText: "Sounds good — hope to see you there. Let me know if you need anything.",
+    expect: { minScore: 85, mustNotIncludeIssues: ["intent_mismatch"] }
+  },
+  {
+    // Guardrail: a soft-visit phrase does NOT suppress scheduling when a real
+    // scheduling ASK is present — "can I come in Saturday at 9:30?" stays a
+    // scheduling turn (answered correctly here).
+    id: "visit_phrase_with_real_scheduling_ask_stays_scheduling",
+    inboundText: "I'd love to stop by — can I come in Saturday at 9:30?",
+    outboundText: "Saturday at 9:30 works. Want me to lock that in for you?",
+    expect: { minScore: 85, mustNotIncludeIssues: ["intent_mismatch"] }
+  },
+  {
     id: "duplicate_self_identification",
     inboundText: "Do you have any deals right now?",
     outboundText:
