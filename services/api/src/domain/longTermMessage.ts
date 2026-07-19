@@ -31,24 +31,33 @@ export function buildLongTermTimelineMessage(args: {
   dealerName?: string | null;
   /** Customer first name for the greeting; blank => "Hey there, ". */
   firstName?: string | null;
-  /** The lead's stated purchase timeframe label (e.g. "4-6 Months"); blank => "a future timeline". */
+  /**
+   * Accepted for call-site parity. NO LONGER rendered into the copy — see the ruling note
+   * below. The long-term cadence honors the timeframe via its send TIMING, not by claiming
+   * the customer "mentioned" it.
+   */
   timeframe?: string | null;
   /** Accepted for call-site parity; the copy is identical with or without a license. */
   hasLicense?: boolean;
 }): string {
-  const tf = String(args.timeframe ?? "").trim();
-  const timelineClause = tf ? `a ${tf} timeline` : "a future timeline";
+  // Joe ruling 2026-07-19 (+13476815373 Muhammd Ali): do NOT tell the customer "You
+  // mentioned a {timeframe} timeline." `timeframe` is usually an ADF/Meta FORM field
+  // (purchaseTimeframe) the customer SELECTED on a lead form, not something they STATED in
+  // conversation — and it is often blank, in which case the old copy fabricated an even
+  // vaguer claim ("a future timeline"). Attributing a conversational statement the customer
+  // never made is exactly the fabricated-frame class Joe asked us to guard. The neutral
+  // closer carries the same warmth without the false attribution.
   const closer = "I’m here when you’re ready. Just text me when the time is right.";
   const agentName = String(args.agentName ?? "").trim();
   const dealerName = String(args.dealerName ?? "").trim();
   if (agentName && dealerName) {
-    return `${buildAgentIntro(args.firstName, agentName, dealerName)}You mentioned ${timelineClause}. ${closer}`;
+    return `${buildAgentIntro(args.firstName, agentName, dealerName)}${closer}`;
   }
   if (dealerName) {
-    return `${buildAgentGreeting(args.firstName)}it's the team over at ${dealerName}. You mentioned ${timelineClause}. ${closer}`;
+    return `${buildAgentGreeting(args.firstName)}it's the team over at ${dealerName}. ${closer}`;
   }
   if (agentName) {
-    return `${buildAgentGreeting(args.firstName)}it's ${agentName}. You mentioned ${timelineClause}. ${closer}`;
+    return `${buildAgentGreeting(args.firstName)}it's ${agentName}. ${closer}`;
   }
-  return `${buildAgentGreeting(args.firstName)}you mentioned ${timelineClause}. ${closer}`;
+  return `${buildAgentGreeting(args.firstName)}${closer}`;
 }

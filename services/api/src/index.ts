@@ -16417,7 +16417,12 @@ async function buildLongTermFollowUp(
   const name = lead?.firstName ?? null;
   const greeting = name ? `Hi ${name} — ` : "";
   const label = formatModelLabel(year, model);
-  const timeframe = lead?.purchaseTimeframe ? lead.purchaseTimeframe.trim() : "a future";
+  // Joe ruling 2026-07-19 (+13476815373 Muhammd Ali): the proactive long-term check-in must
+  // NOT claim the customer brought up a timeframe. `purchaseTimeframe` is usually an ADF/Meta
+  // FORM field the customer SELECTED, not something they STATED in conversation (and it can be
+  // blank — the old "a future" fallback fabricated a claim on an unknown timeframe). The
+  // cadence already honors the timeframe via its send TIMING; the copy stays neutral and never
+  // attributes a statement the customer didn't make.
 
   let matches: any[] = [];
   if (model) {
@@ -16478,19 +16483,19 @@ async function buildLongTermFollowUp(
     const colorLabel = colorLabelRaw ? colorLabelRaw.charAt(0).toUpperCase() + colorLabelRaw.slice(1) : null;
     const itemLabel = colorLabel ? `${colorLabel} ${label}` : label;
     return {
-      body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, we do have a ${itemLabel} in stock now. Want to take a look?`,
+      body: `${greeting}just checking in — we do have a ${itemLabel} in stock now. Want to take a look?`,
       mediaUrls: [imagePick.url]
     };
   }
 
   if (canTestRide) {
     return {
-      body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, I’m here when you’re ready. Just reach out when the time is right.`
+      body: `${greeting}just checking in — I’m here when you’re ready. Just reach out when the time is right.`
     };
   }
 
   return {
-    body: `${greeting}just checking in — since you mentioned a ${timeframe} timeline, I’m here when you’re ready. Just reach out when the time is right.`
+    body: `${greeting}just checking in — I’m here when you’re ready. Just reach out when the time is right.`
   };
 }
 

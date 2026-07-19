@@ -13,6 +13,7 @@
  * code serves dealer #2 unchanged (eval_suite.manifest.ts guard).
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { buildLongTermTimelineMessage } from "../services/api/src/domain/longTermMessage.ts";
 import {
@@ -41,7 +42,14 @@ assert.ok(
 );
 assert.ok(msg.includes(fixtureLive.agentName), `expected the profile agent name in: ${msg}`);
 assert.ok(msg.includes(fixtureLive.dealerName), `expected the profile dealer name in: ${msg}`);
-assert.ok(msg.includes("a 4-6 Months timeline"), `expected the timeframe to be interpolated: ${msg}`);
+// Joe ruling 2026-07-19: even when a timeframe IS present, the copy must NOT claim the
+// customer "mentioned/said" it — it's usually a FORM field, not a conversational statement.
+assert.doesNotMatch(
+  msg,
+  /you (mentioned|said|told)/i,
+  `must not attribute a timeframe the customer never stated in conversation: ${msg}`
+);
+assert.doesNotMatch(msg, /timeline/i, `must not reference a timeline the customer didn't state: ${msg}`);
 assert.doesNotMatch(msg, /\bthis is\b/i, `must not use the corporate "this is" intro: ${msg}`);
 
 // (b) A different dealer profile produces THAT dealer's message (portability for dealer #2).
@@ -68,7 +76,10 @@ const msgAgentOnly = buildLongTermTimelineMessage({
 });
 assert.ok(msgAgentOnly.includes(fixturePortable.agentName), `agent-only fallback should name the agent: ${msgAgentOnly}`);
 const msgBare = buildLongTermTimelineMessage({ firstName: "Jordan" });
-assert.ok(msgBare.includes("a future timeline"), "missing timeframe should read 'a future timeline'");
+// Missing timeframe must NOT fabricate one (the old copy said "you mentioned a future
+// timeline" — a claim on a timeframe the customer never gave). No timeline reference at all.
+assert.doesNotMatch(msgBare, /timeline/i, `missing timeframe must not fabricate a timeline claim: ${msgBare}`);
+assert.doesNotMatch(msgBare, /you (mentioned|said|told)/i, `missing timeframe must not attribute a statement: ${msgBare}`);
 assert.doesNotMatch(msgBare, /\ba a\b/i, `missing timeframe must not double the article: ${msgBare}`);
 
 // (c) The old hardcoded identity never appears — in ANY shape, including empty-profile fallbacks.
@@ -90,6 +101,9 @@ for (const out of allOutputs) {
   // De-corporatized: the charter-approved "text me", never "reach out".
   assert.match(out, /Just text me when the time is right\./, `expected the de-corped "text me" closer: ${out}`);
   assert.doesNotMatch(out, /reach out/i, `must not re-introduce the "reach out" tell: ${out}`);
+  // Joe ruling 2026-07-19: NO output may attribute an unstated timeframe/statement.
+  assert.doesNotMatch(out, /you (mentioned|said|told)/i, `no output may attribute an unstated statement: ${out}`);
+  assert.doesNotMatch(out, /timeline/i, `no output may reference an unstated timeline: ${out}`);
   // Clean against the computer-like denylist.
   const hits = findComputerLikePhrases(out);
   assert.equal(hits.length, 0, `long-term message tripped the banned-phrase denylist: ${hits.join(", ")}`);
@@ -112,8 +126,8 @@ for (const out of allOutputs) {
   assert.equal(introCount, 1, `re-prefixing a templated intro must yield exactly one intro: ${reprefixed}`);
   assert.ok(!reprefixed.includes("Casey"), `the overridden template agent must be replaced, not doubled: ${reprefixed}`);
   assert.ok(
-    reprefixed.includes("You mentioned a 4-6 Months timeline."),
-    `the message body must survive the dedupe: ${reprefixed}`
+    reprefixed.includes("Just text me when the time is right."),
+    `the message body (neutral closer) must survive the dedupe: ${reprefixed}`
   );
   // No dealer name => strip is a no-op (fails safe toward keeping text).
   assert.equal(stripAgentIntroPhraseForDealer(templated, ""), templated, "empty dealer name must be a no-op");
@@ -125,5 +139,27 @@ assert.equal(
   buildLongTermTimelineMessage({ ...fixtureLive, timeframe: "4-6 Months", hasLicense: false }),
   "long-term message copy must be identical regardless of hasLicense"
 );
+
+// (d) Source-level parity: the live-tick twin `buildLongTermFollowUp` (index.ts, used by
+// processDueFollowUpsUnlocked) must ALSO be free of the "since you mentioned a {timeframe}
+// timeline" attribution — otherwise the ruled +13476815373 production copy regenerates on the
+// live path while the canonical builder is clean. Pin it at the source, like the other
+// two-path cadence evals do.
+{
+  const indexSrc = readFileSync("services/api/src/index.ts", "utf8");
+  const start = indexSrc.indexOf("async function buildLongTermFollowUp(");
+  assert.ok(start >= 0, "buildLongTermFollowUp must exist in index.ts");
+  const body = indexSrc.slice(start, start + 4000);
+  assert.doesNotMatch(
+    body,
+    /you mentioned a \$\{timeframe\} timeline/i,
+    "buildLongTermFollowUp must not attribute the ADF-form timeframe as a customer statement"
+  );
+  assert.doesNotMatch(
+    body,
+    /since you mentioned/i,
+    "buildLongTermFollowUp must not use the 'since you mentioned' attribution the ruling retired"
+  );
+}
 
 console.log("long_term_message_eval passed");
