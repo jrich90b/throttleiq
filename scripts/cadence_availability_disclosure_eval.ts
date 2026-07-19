@@ -12,10 +12,12 @@
  * Pure-function eval over the domain helpers — no live store, no LLM.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const {
   isUnitUnavailabilityDisclosureText,
-  hasDisclosedUnitUnavailabilityWithoutReply
+  hasDisclosedUnitUnavailabilityWithoutReply,
+  customerSourcedInterestColor
 } = await import("../services/api/src/domain/cadenceAvailabilityDisclosure.ts");
 
 let passed = 0;
@@ -127,6 +129,42 @@ check("a draft disclosure ABOVE a real one still suppresses on the real send", (
   assert.equal(
     hasDisclosedUnitUnavailabilityWithoutReply([inbound(), sent(SOLD_IRON883), draft(UPDATE_SOLD)]),
     true
+  );
+});
+
+// Joe ruling 2026-07-19 (+17169867992 William): the "you were interested in the {unit}"
+// disclosure must only attribute a COLOR the customer actually sourced.
+check("customer-sourced color: lead vehicle color is attributable", () => {
+  assert.equal(customerSourcedInterestColor({ leadColor: "Vivid Black", inboundColor: null }), "Vivid Black");
+});
+check("customer-sourced color: a color from the customer's own words is attributable", () => {
+  assert.equal(customerSourcedInterestColor({ leadColor: null, inboundColor: "red" }), "red");
+});
+check("customer-sourced color: lead color wins over an inbound color", () => {
+  assert.equal(customerSourcedInterestColor({ leadColor: "blue", inboundColor: "red" }), "blue");
+});
+check("customer-sourced color: NO customer color => null (William: omit the fabricated 'black')", () => {
+  assert.equal(customerSourcedInterestColor({ leadColor: null, inboundColor: null }), null);
+  assert.equal(customerSourcedInterestColor({ leadColor: "", inboundColor: "   " }), null);
+  assert.equal(customerSourcedInterestColor({}), null);
+});
+check("held/sold override builds its unit label from a customer-sourced color only", () => {
+  // Source-level pin: buildCadenceHeldInventoryOverride's model-search label must derive its
+  // color via customerSourcedInterestColor, not item.color/context.color (the search-surfaced
+  // sibling / self-echoed color that fabricated William's "in black").
+  const src = readFileSync("services/api/src/index.ts", "utf8");
+  const start = src.indexOf("async function buildCadenceHeldInventoryOverride(");
+  assert.ok(start >= 0, "buildCadenceHeldInventoryOverride must exist in index.ts");
+  const body = src.slice(start, start + 40000);
+  assert.match(
+    body,
+    /customerSourcedInterestColor\(/,
+    "the held/sold cadence override must gate its interest-label color via customerSourcedInterestColor"
+  );
+  assert.doesNotMatch(
+    body,
+    /color: item\?\.color \?\? context\.color/,
+    "the model-search interest label must not attribute item.color/context.color (non-customer-sourced)"
   );
 });
 

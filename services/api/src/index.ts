@@ -705,7 +705,10 @@ import {
   planStaleHeldUnitWatchHeal,
   resolveHeldGuardWatchTarget
 } from "./domain/heldUnitWatchHeal.js";
-import { hasDisclosedUnitUnavailabilityWithoutReply } from "./domain/cadenceAvailabilityDisclosure.js";
+import {
+  hasDisclosedUnitUnavailabilityWithoutReply,
+  customerSourcedInterestColor
+} from "./domain/cadenceAvailabilityDisclosure.js";
 import {
   decideCadenceHoldTtlResume,
   isFollowUpCadenceHeld,
@@ -13120,12 +13123,22 @@ async function buildCadenceHeldInventoryOverride(args: {
 
   const firstName = normalizeDisplayCase(args.name || "there");
   const item = shouldOverrideSold ? soldItem : heldItem;
+  // Joe ruling 2026-07-19 (+17169867992 William): the "I know you were interested in the {unit}"
+  // clause must only carry a COLOR the customer actually sourced (their inbound words or the
+  // lead vehicle field) — never a search-surfaced sibling unit's color or one lifted from our
+  // own outbound copy (this override was matched by MODEL SEARCH, not an exact stock#/VIN the
+  // customer referenced, so item.color/context.color are not customer-expressed). Otherwise omit
+  // the color and attribute only year + model.
+  const interestColor = customerSourcedInterestColor({
+    leadColor: conv?.lead?.vehicle?.color,
+    inboundColor: extractColorMention(getLastInboundBody(conv))
+  });
   const unitLabel = buildInventoryUnitLabel(
     {
       ...item,
       year: item?.year ?? context.year ?? undefined,
       model: item?.model ?? context.model,
-      color: item?.color ?? context.color ?? undefined
+      color: interestColor ?? undefined
     },
     context.model
   );
