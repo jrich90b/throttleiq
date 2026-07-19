@@ -38,6 +38,7 @@ export {
   decideVehicleRecommendationTurn,
   shouldBowOutRecommenderForNamedModel,
   decideVehicleMediaRequestTurn,
+  decideInventoryUnitClarificationTurn,
   decideFeedbackRedraftTurn,
   resolveFinanceFollowUpContinuation,
   isExplicitSchedulingAskIntent,

@@ -852,6 +852,29 @@ export function decideVehicleMediaRequestTurn(input: VehicleMediaRequestTurnInpu
   return { kind: "send_media" };
 }
 
+// --- Inventory unit clarification (2026-07-10; centralized 2026-07-19) --------
+// A customer confirming/disambiguating the YEAR (or which of two quoted units) of the vehicle
+// ALREADY under discussion — e.g. "Is it a 15 or 16?" — is answered from context, never routed to
+// the stock-availability deflection. Centralized so BOTH /webhooks/twilio and
+// /conversations/:id/regenerate make the IDENTICAL gate decision (route-parity law) instead of
+// hand-mirroring it as regen-locals in the regenerate handler.
+//
+// FAIL DIRECTION: default is `false` — fall through to normal availability/inventory routing. We
+// only capture the turn as a context-answer when the parser flags it (`isActiveUnitClarification`)
+// or the caller's legacy lexical fallback fires, AND the thread is not human-owned.
+export type InventoryUnitClarificationTurnInput = {
+  mode?: string | null;
+  isActiveUnitClarification?: boolean | null;
+  legacyLexicalMatch?: boolean | null; // path-specific fail-safe fallback (see callers)
+};
+
+export function decideInventoryUnitClarificationTurn(
+  input: InventoryUnitClarificationTurnInput
+): boolean {
+  if (String(input.mode ?? "").toLowerCase() === "human") return false;
+  return !!input.isActiveUnitClarification || !!input.legacyLexicalMatch;
+}
+
 // --- Feedback-driven redraft (2026-06-24) -----------------------------------
 // Phase 1 of the closed-loop feedback system: a staff thumbs-DOWN on a still-PENDING AI draft
 // triggers an immediate steered re-draft into the same console box (suggest mode — a human still

@@ -2,6 +2,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseInventoryEntitiesWithLLM } from "../services/api/src/domain/llmDraft.ts";
+import { decideInventoryUnitClarificationTurn } from "../services/api/src/domain/routeStateReducer.ts";
+
+// --- Decision-table: the centralized route gate BOTH paths call (route-parity law) ---
+// Pins decideInventoryUnitClarificationTurn so the year/unit-clarification route decision is one
+// shared function, not hand-mirrored regen-locals (which the route-parity drift ratchet forbids).
+const clarificationGateCases: { id: string; input: Parameters<typeof decideInventoryUnitClarificationTurn>[0]; expected: boolean }[] = [
+  { id: "parser_signal_routes", input: { mode: "suggest", isActiveUnitClarification: true }, expected: true },
+  { id: "legacy_lexical_fallback_routes", input: { mode: "suggest", legacyLexicalMatch: true }, expected: true },
+  { id: "human_mode_never_routes", input: { mode: "human", isActiveUnitClarification: true, legacyLexicalMatch: true }, expected: false },
+  { id: "no_signal_falls_through", input: { mode: "suggest", isActiveUnitClarification: false, legacyLexicalMatch: false }, expected: false }
+];
+for (const c of clarificationGateCases) {
+  const actual = decideInventoryUnitClarificationTurn(c.input);
+  if (actual !== c.expected) {
+    console.error(`FAIL decideInventoryUnitClarificationTurn ${c.id}: expected ${c.expected}, got ${actual}`);
+    process.exit(1);
+  }
+}
+console.log(`decideInventoryUnitClarificationTurn decision-table: ${clarificationGateCases.length}/${clarificationGateCases.length} passed`);
 
 type Example = {
   id: string;
@@ -11,6 +30,7 @@ type Example = {
   expected: {
     target_type?: string | null;
     is_availability_question?: boolean | null;
+    is_active_unit_clarification?: boolean | null;
     is_test_ride_context?: boolean | null;
     model_contains?: string | null;
     model_not_contains?: string | null;
@@ -84,6 +104,9 @@ for (const ex of examples) {
   }
   if (Object.hasOwn(expected, "is_availability_question")) {
     checks.push((result.isAvailabilityQuestion ?? null) === expected.is_availability_question);
+  }
+  if (Object.hasOwn(expected, "is_active_unit_clarification")) {
+    checks.push((result.isActiveUnitClarification ?? null) === expected.is_active_unit_clarification);
   }
   if (Object.hasOwn(expected, "is_test_ride_context")) {
     checks.push((result.isTestRideContext ?? null) === expected.is_test_ride_context);
