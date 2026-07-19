@@ -48,6 +48,40 @@ export function isTradeSellCadenceContext(conv: any): boolean {
   return sourceMentionsTradeSell(source);
 }
 
+/**
+ * A proactive cadence line that OFFERS to keep an availability watch on the customer's model
+ * — "…want me to keep an eye on the {model} for you?" (the inventory-cluster step-2 variant).
+ *
+ * Joe ruling 2026-07-19 (+17164184478 Chris Duchon): the agent offered to "keep an eye on"
+ * a Fltrx Road Glide that is amply IN STOCK. You don't offer an availability watch on a bike
+ * that's already on the lot — you invite the customer in to see it. This detector lets both
+ * cadence builders drop the watch-offer variant when the model is confirmed in stock, falling
+ * to the sibling "still interested / other options?" line. Deterministic side-effect/copy
+ * selection (AGENTS.md permits deterministic for side-effect + copy routing), not comprehension.
+ */
+export function isWatchOfferCadenceVariant(text: string | null | undefined): boolean {
+  const t = normalizeGuardText(text);
+  if (!t) return false;
+  return (
+    /\bkeep an eye (?:out )?on\b/.test(t) ||
+    /\bwatch (?:the|this|that|it)\b.*\bfor you\b/.test(t) ||
+    /\b(?:let|text|ping|message) you (?:know )?when (?:one|it|a|the)\b/.test(t)
+  );
+}
+
+/**
+ * Drop watch-offer variants from a cadence variant pool WHEN the customer's model is confirmed
+ * in stock. Never returns an empty pool — if excluding the watch offer would leave nothing (a
+ * pool that was ONLY watch offers), the original pool is kept so a cadence touch still sends.
+ * (When `inStock` is false — e.g. a feed outage returning false — the pool is returned
+ * unchanged, so a legitimately out-of-stock watch offer is never wrongly suppressed.)
+ */
+export function excludeWatchOfferWhenInStock(variants: string[], inStock: boolean): string[] {
+  if (!inStock || !Array.isArray(variants) || variants.length === 0) return variants;
+  const filtered = variants.filter(v => !isWatchOfferCadenceVariant(v));
+  return filtered.length ? filtered : variants;
+}
+
 export function inventoryItemMatchesRequestedYear(
   item: { year?: string | number | null; label?: string | null } | null | undefined,
   requestedYear: string | number | null | undefined

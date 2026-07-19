@@ -93,7 +93,8 @@ import {
 } from "./domain/manualCadenceContext.js";
 import {
   filterCadenceUnavailableItemsByRequestedYear,
-  isTradeSellCadenceContext
+  isTradeSellCadenceContext,
+  excludeWatchOfferWhenInStock
 } from "./domain/cadenceInventoryGuard.js";
 import { activateManualQuoteDeliveredFollowUp } from "./domain/manualQuoteFollowUp.js";
 import {
@@ -13680,6 +13681,12 @@ async function buildCadenceRegeneratedDraft(
   const firstName = normalizeDisplayCase(conv.lead?.firstName) || "there";
   const agentName = resolveConversationAgentName(conv, dealerProfile?.agentName ?? "our team");
   const hasSpecificFollowUpModel = !!(followUpModel && !isUnknownCadenceModel(followUpModel));
+  // Regen parity with the live send path (Joe ruling 2026-07-19, +17164184478): never offer an
+  // availability watch on an in-stock model. Both paths compute the same in-stock signal and
+  // drop the watch-offer variant so live and regenerate can't drift (route-parity law).
+  const followUpModelInStock = hasSpecificFollowUpModel
+    ? await hasInventoryForModelYear({ model: followUpModel, year: followUpYear, yearDelta: 1 })
+    : false;
   const followUpLabel = hasSpecificFollowUpModel
     ? formatModelLabelForFollowUp(followUpYear, followUpModel)
     : "";
@@ -13860,7 +13867,7 @@ async function buildCadenceRegeneratedDraft(
     const engagedNoSlotMap =
       (contextTag && ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS[contextTag]) ||
       ENGAGED_FOLLOW_UP_VARIANTS_NO_SLOTS.general;
-    const variants =
+    const rawVariants =
       !hasSpecificFollowUpModel && noModelStepVariants.length
         ? noModelStepVariants
         : engagedKind
@@ -13868,6 +13875,8 @@ async function buildCadenceRegeneratedDraft(
           : lastSentStep === 4 && inviteArm === "challenger"
             ? FOLLOW_UP_VARIANTS_NO_SLOTS_CHALLENGER[4]
             : FOLLOW_UP_VARIANTS_NO_SLOTS[lastSentStep] ?? FOLLOW_UP_VARIANTS_NO_SLOTS[0] ?? [];
+    // Drop "want me to keep an eye on the {model}?" when the model is in stock (ruling above).
+    const variants = excludeWatchOfferWhenInStock(rawVariants, followUpModelInStock);
     const fallback = renderFollowUpTemplate(
       FOLLOW_UP_MESSAGES[Math.min(lastSentStep, FOLLOW_UP_MESSAGES.length - 1)] ??
         FOLLOW_UP_MESSAGES[FOLLOW_UP_MESSAGES.length - 1],
@@ -30793,6 +30802,13 @@ async function processDueFollowUpsUnlocked() {
     const followUpModel = cadenceModelPref.model;
     const followUpYear = cadenceModelPref.year;
     const hasSpecificFollowUpModel = !!(followUpModel && !isUnknownCadenceModel(followUpModel));
+    // Joe ruling 2026-07-19 (+17164184478): never OFFER an availability watch on a model that's
+    // in stock — invite the customer in instead. Compute once; both this send path and the regen
+    // twin drop the watch-offer variant when the model is confirmed on the lot (fails safe: a
+    // feed outage returns false → the watch offer is preserved, never wrongly suppressed).
+    const followUpModelInStock = hasSpecificFollowUpModel
+      ? await hasInventoryForModelYear({ model: followUpModel, year: followUpYear, yearDelta: 1 })
+      : false;
     const followUpLabel = hasSpecificFollowUpModel
       ? formatModelLabelForFollowUp(followUpYear, followUpModel)
       : "";
@@ -30897,7 +30913,9 @@ async function processDueFollowUpsUnlocked() {
           (isEngagedCadence ? engagedNoSlotMap[step] ?? [] : standardNoSlotBank(step))
         );
       }
-      return isEngagedCadence ? engagedNoSlotMap[step] ?? [] : standardNoSlotBank(step);
+      const pool = isEngagedCadence ? engagedNoSlotMap[step] ?? [] : standardNoSlotBank(step);
+      // Drop "want me to keep an eye on the {model}?" when the model is in stock (ruling above).
+      return excludeWatchOfferWhenInStock(pool, followUpModelInStock);
     };
   const leadUnitAvailabilityOverride = await buildCadenceLeadUnitAvailabilityOverride({
     conv,
