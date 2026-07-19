@@ -18,6 +18,7 @@ export {
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
   decideFinanceHardshipTurn,
+  decideIncomingInventoryPurpose,
   decideNonMotorcycleTradeTurn,
   decideServiceAppointmentTurn,
   decideWatchOptOutTurn,

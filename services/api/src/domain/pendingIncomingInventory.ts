@@ -159,18 +159,29 @@ export function formatPendingIncomingInventoryLabel(
 }
 
 /**
- * The KIND of incoming unit — drives the customer/task copy. A NEW unit comes from the factory ON
- * ORDER (a dealer doesn't take a brand-new bike "in on trade"); a used/pre-owned unit coming in is a
- * trade (the historical framing). Keyed on the persisted `condition` (a structured field, not
- * comprehension). FAIL DIRECTION: only an explicit `new` flips to "order" — unknown/used keeps the
- * conservative trade framing, so we never wrongly tell a real trade-in customer their bike is "on order".
- * (Fixes: a factory pre-order — Nicholas Braun, condition "new" — was being called a "trade".)
+ * The KIND of incoming unit — drives the customer/task copy. Three framings:
+ *  - "order":  a NEW bike on order from the factory ("on order").
+ *  - "trade":  the CUSTOMER'S OWN bike being taken in on trade ("on trade").
+ *  - "incoming": a used/other unit the dealer is SOURCING for the customer to BUY, or an unclear
+ *               case — neutral "coming in" copy that is TRUE either way and never wrongly says "trade".
+ * Prefers the COMPREHENDED `purpose` (parseIncomingInventoryPurposeWithLLM, set at creation). Falls back
+ * to the structured `condition` for legacy records with no purpose: new => order, else => the neutral
+ * "incoming" framing (NOT "trade" — a used incoming unit is only a trade when we actually read it as
+ * the customer's own trade-in). Joe, 2026-07-16 (Bill Indelicato +17163591526): a used bike being
+ * sourced for the buyer was being called "the 2015 Road King trade". FAIL DIRECTION: unknown => the
+ * neutral "coming in" copy, never a wrong "trade" claim.
  */
-type IncomingUnitKind = "order" | "trade";
+type IncomingUnitKind = "order" | "trade" | "incoming";
 function incomingUnitKind(
-  pending: Pick<PendingIncomingInventory, "condition"> | null | undefined
+  pending: Pick<PendingIncomingInventory, "condition" | "purpose"> | null | undefined
 ): IncomingUnitKind {
-  return lower(pending?.condition) === "new" ? "order" : "trade";
+  const purpose = lower(pending?.purpose);
+  if (purpose === "factory_order") return "order";
+  if (purpose === "trade_in") return "trade";
+  if (purpose === "sourced_for_purchase") return "incoming";
+  // No comprehended purpose (legacy / parser off): only an explicit `new` condition is an order;
+  // everything else is the neutral "coming in" framing — we do NOT guess "trade" from `used` alone.
+  return lower(pending?.condition) === "new" ? "order" : "incoming";
 }
 
 /**
@@ -195,12 +206,17 @@ export function buildPendingIncomingInventoryCustomerAck(
   pending: PendingIncomingInventory | null | undefined
 ): string {
   const unit = cleanIncomingUnitLabel(pending);
-  if (incomingUnitKind(pending) === "order") {
+  const kind = incomingUnitKind(pending);
+  if (kind === "order") {
     const subject = unit ? `the ${unit} you've got on order` : "the bike you've got on order";
     return `Ok, will do. I'll keep an eye on ${subject} and let you know as soon as it's here and ready to look at.`;
   }
-  const subject = unit ? `the ${unit} trade` : "the incoming trade";
-  return `Ok, will do. I'll keep this tied to ${subject} and let you know as soon as it's here and ready to look at.`;
+  if (kind === "trade") {
+    const subject = unit ? `the ${unit} trade` : "the incoming trade";
+    return `Ok, will do. I'll keep this tied to ${subject} and let you know as soon as it's here and ready to look at.`;
+  }
+  const subject = unit ? `the ${unit}` : "the bike";
+  return `Ok, will do. I'll keep an eye on ${subject} we've got coming in and let you know as soon as it's here and ready to look at.`;
 }
 
 export function buildPendingIncomingInventoryInitialAdfReply(
@@ -208,10 +224,14 @@ export function buildPendingIncomingInventoryInitialAdfReply(
 ): string {
   const unit = cleanIncomingUnitLabel(pending);
   const subject = unit ? `the ${unit}` : "the bike";
-  if (incomingUnitKind(pending) === "order") {
+  const kind = incomingUnitKind(pending);
+  if (kind === "order") {
     return `Thanks — I have you down for ${subject} you've got on order. We'll let you know as soon as it's here and ready to look at.`;
   }
-  return `Thanks — I have you down for ${subject} we're taking in on trade. We'll let you know as soon as it's here and ready to look at.`;
+  if (kind === "trade") {
+    return `Thanks — I have you down for ${subject} we're taking in on trade. We'll let you know as soon as it's here and ready to look at.`;
+  }
+  return `Thanks — I have you down for ${subject} we've got coming in. We'll let you know as soon as it's here and ready to look at.`;
 }
 
 export function buildPendingIncomingInventoryTaskSummary(args: {
@@ -220,11 +240,16 @@ export function buildPendingIncomingInventoryTaskSummary(args: {
 }): string {
   const unit = cleanIncomingUnitLabel(args.pending);
   const customer = compact(args.customerName) || "customer";
-  if (incomingUnitKind(args.pending) === "order") {
+  const kind = incomingUnitKind(args.pending);
+  if (kind === "order") {
     const subject = unit ? `the ${unit} (on order)` : "the ordered bike";
     return `Notify ${customer} when ${subject} arrives or is ready to show.`;
   }
-  const subject = unit ? `the ${unit} trade` : "the incoming trade";
+  if (kind === "trade") {
+    const subject = unit ? `the ${unit} trade` : "the incoming trade";
+    return `Notify ${customer} when ${subject} arrives or is ready to show.`;
+  }
+  const subject = unit ? `the ${unit}` : "the incoming bike";
   return `Notify ${customer} when ${subject} arrives or is ready to show.`;
 }
 

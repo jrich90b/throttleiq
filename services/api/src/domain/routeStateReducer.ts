@@ -1252,6 +1252,47 @@ export function decideFinanceHardshipTurn(
   return { kind: "none" };
 }
 
+// --- Incoming-unit purpose (2026-07-16) ------------------------------------
+//
+// WHY a bike is coming in decides how we describe it to the customer. The old rule guessed from the
+// structured `condition` alone (new => "on order", anything else => "your trade"), which called a used
+// bike the dealer was SOURCING for a buyer "the 2015 Road King trade" (Bill Indelicato +17163591526,
+// Joe 2026-07-16). The comprehended purpose (parseIncomingInventoryPurposeWithLLM) is fed in here.
+//
+// FAIL DIRECTION: no parser / low confidence / unclear => "unclear", which renders the NEUTRAL
+// "coming in" copy — true whether it's a trade-in or a purchase, so we never make a wrong "trade"
+// claim. We only say "trade" on a confident, explicit trade_in read.
+// ---------------------------------------------------------------------------
+export type IncomingInventoryPurpose = "trade_in" | "sourced_for_purchase" | "factory_order" | "unclear";
+
+export type IncomingInventoryPurposeInput = {
+  parserAccepted: boolean;
+  purpose?: string | null;
+  confidence: number;
+  confidenceMin: number;
+  condition?: string | null;
+};
+
+export function decideIncomingInventoryPurpose(
+  input: IncomingInventoryPurposeInput
+): { purpose: IncomingInventoryPurpose } {
+  // A structured `new` condition is a factory order regardless of the parser — a dealer never takes a
+  // brand-new bike in on trade. (Keeps the 2026-06 Nicholas Braun pre-order fix intact.)
+  if (String(input.condition ?? "").trim().toLowerCase() === "new") return { purpose: "factory_order" };
+  if (!input.parserAccepted) return { purpose: "unclear" };
+  if (!Number.isFinite(input.confidence) || input.confidence < input.confidenceMin) {
+    return { purpose: "unclear" };
+  }
+  if (
+    input.purpose === "trade_in" ||
+    input.purpose === "sourced_for_purchase" ||
+    input.purpose === "factory_order"
+  ) {
+    return { purpose: input.purpose };
+  }
+  return { purpose: "unclear" };
+}
+
 // --- Non-motorcycle trade handoff (2026-06-21) -----------------------------
 //
 // A Harley dealer's standard trade flow is for MOTORCYCLES. Every so often a customer wants

@@ -603,6 +603,12 @@ export type PendingIncomingInventory = {
   year?: number;
   make?: string;
   condition?: string;
+  // WHY the unit is coming in — drives the customer copy so we never call a bike the customer is
+  // BUYING a "trade". "trade_in" = the customer's own bike being taken in on trade; "sourced_for_purchase"
+  // = a used/other unit the dealer is bringing in FOR the customer to buy; "factory_order" = a new
+  // bike on order. Unset/"unclear" => neutral "coming in" copy (safe default; never wrongly "trade").
+  // Comprehended by parseIncomingInventoryPurposeWithLLM at creation, not regex.
+  purpose?: "trade_in" | "sourced_for_purchase" | "factory_order" | "unclear";
   label?: string;
   note?: string;
   source?: "adf" | "manual" | "customer" | "system";
