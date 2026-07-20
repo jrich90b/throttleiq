@@ -13,12 +13,14 @@
  *
  * Run: REPORT_ROOT=/path/to/reports npx tsx scripts/anomaly_loop_detect.ts
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const { classifyOutcomeAnomaly, suppressStaleFindings } = await import(
+const { classifyOutcomeAnomaly, suppressStaleFindings, suppressAlreadyShippedEchoes } = await import(
   "../services/api/src/domain/anomalyClassifier.ts"
 );
+type NamingCommit = { hash: string; subject: string; dateMs: number };
 
 // The set of eval scripts wired into ci:eval — a dimension's fix counts as "shipped" (so its stale
 // pre-fix findings can be suppressed) only if its guarding eval is in this chain. Can't read it →
@@ -145,6 +147,61 @@ try {
   /* gh unavailable / any error → keep every finding (fail toward surfacing, never toward hiding) */
 }
 
+// Already-shipped ECHO suppression (the PERMANENT complement to the 14-day PR-ledger window above): the
+// frozen-transcript detectors (human_correction_material, corpus_replay_judge_fail) grade a record that
+// never changes, so once a per-case fix ages past the merged-PR window its ghost re-fires forever. Drop a
+// scoped finding when an origin/main commit NAMES the case (phone digits) and landed AFTER the flagged
+// event — the graded reply is provably pre-fix. A real post-fix regression has a NEW event dated after the
+// commit, so it is never hidden. IO (git grep) is memoized by case token; any git error → [] → keep.
+// Mirror of scripts/already_shipped_guard.ts (the per-item morning-routine tool), applied to the whole feed.
+let suppressedShippedEcho: Array<{ convId: string; dimension: string; reason: string }> = [];
+{
+  const namingCache = new Map<string, NamingCommit[]>();
+  const caseToken = (a: any): string => {
+    const digits = String(a?.convId ?? a?.leadKey ?? "").replace(/\D/g, "");
+    if (digits.length >= 7) return digits.slice(-10); // phone: the last-10 is the stable case key
+    const raw = String(a?.convId ?? a?.leadKey ?? "").trim();
+    return raw.length >= 4 ? raw : ""; // ref/other id; too-short/email → no reliable grep term
+  };
+  const namingCommitsFor = (a: any): NamingCommit[] => {
+    const term = caseToken(a);
+    if (!term) return [];
+    const cached = namingCache.get(term);
+    if (cached) return cached;
+    let commits: NamingCommit[] = [];
+    try {
+      const raw = execFileSync(
+        "git",
+        ["log", "origin/main", "--since=180.days", "-i", `--grep=${term}`, "--format=%H\t%ct\t%s"],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      );
+      commits = raw
+        .split("\n")
+        .map(line => {
+          const [hash, ct, ...rest] = line.split("\t");
+          return hash ? { hash: hash.slice(0, 8), subject: rest.join("\t"), dateMs: Number(ct) * 1000 } : null;
+        })
+        .filter((c): c is NamingCommit => !!c && Number.isFinite(c.dateMs));
+    } catch {
+      commits = []; // no repo / no origin/main / no match → keep the finding (fail-safe)
+    }
+    namingCache.set(term, commits);
+    return commits;
+  };
+  const echo = suppressAlreadyShippedEchoes(anomalies as any, { namingCommitsFor });
+  if (echo.suppressed.length) {
+    anomalies.length = 0;
+    anomalies.push(...echo.kept);
+    suppressedShippedEcho = echo.suppressed.map(s => ({
+      convId: String(s.anomaly.convId ?? ""),
+      dimension: String(s.anomaly.dimension ?? ""),
+      reason: s.reason
+    }));
+    console.log(`Suppressed ${echo.suppressed.length} already-shipped echo(es) — a naming fix commit postdates the flagged event:`);
+    for (const s of echo.suppressed.slice(0, 20)) console.log(`   - ${s.anomaly.convId} ${s.anomaly.dimension} — ${s.reason}`);
+  }
+}
+
 // Persistence: an anomaly seen in the PRIOR run too (same convId+dimension). Used to flag a `healed`
 // dimension that the reconcile tick never actually clears (a heal gap) rather than a one-tick transient.
 const keyOf = (a: any) => `${a?.convId ?? ""}::${a?.dimension ?? ""}`;
@@ -214,6 +271,8 @@ const payload = {
   suppressedStale: suppressed.map(s => ({ convId: s.anomaly.convId, dimension: s.anomaly.dimension, reason: s.reason })),
   suppressedByOpenPrCount: suppressedByOpenPr.length,
   suppressedByOpenPr,
+  suppressedShippedEchoCount: suppressedShippedEcho.length,
+  suppressedShippedEcho,
   workOrderCount: workOrders.length,
   byTier,
   byAction,
