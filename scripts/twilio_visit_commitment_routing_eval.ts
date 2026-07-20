@@ -94,16 +94,18 @@ assert.ok(
 );
 
 // 3) The schedule-status reply confirms the committed day — never the arrival ack
-//    — and recognizes the commitment from the parser, regardless of event name.
+//    — and recognizes the commitment from the parser, regardless of event name. A DAY-ONLY
+//    soft-visit commitment counts in BOTH paths (Joe ruling 2026-07-19, Peter Meredith
+//    +17168303999: "Sounds good see you Monday" must confirm the day, not re-ask a time).
 assert.match(
   apiSource,
-  /parserVisitCommitment: inboundParserScheduleStatusUpdate/,
-  "live schedule-status reply must pass the parser commitment so it confirms the day"
+  /parserVisitCommitment: inboundParserScheduleStatusUpdate \|\| dayOnlySoftVisitCommitment/,
+  "live schedule-status reply must pass the parser commitment (incl. day-only) so it confirms the day"
 );
 assert.match(
   apiSource,
-  /parserVisitCommitment: regenParserScheduleStatusUpdate/,
-  "regen schedule-status reply must pass the parser commitment so it confirms the day"
+  /parserVisitCommitment: regenParserScheduleStatusUpdate \|\| isParserSoftVisitCommitment\(regenAppointmentTimingParse\)/,
+  "regen schedule-status reply must pass the parser commitment (incl. day-only) so it confirms the day"
 );
 assert.match(
   apiSource,

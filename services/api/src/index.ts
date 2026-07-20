@@ -9585,6 +9585,61 @@ function buildSoftVisitCommitmentAck(conv: any, firstName: string): string | nul
   return `${lead}see you ${label}! Want me to have anything specific ready for you when you stop in?`;
 }
 
+/**
+ * Booked-same-day reflection (Joe ruling 2026-07-19, Peter Meredith +17168303999): when an
+ * appointment is ALREADY booked for the day the customer just committed to ("see you
+ * Monday" with an 11:00 AM Monday booking on the calendar), the reply reflects the booked
+ * time — "you're all set" — instead of re-asking for a time or offering to have things
+ * ready. Deterministic display of OUR OWN stored slot (structured state, not comprehension).
+ * Returns null when no booking matches the committed day (callers fall through).
+ */
+function buildBookedSameDayAllSetReply(conv: any, dayLabel: string): string | null {
+  const day = String(dayLabel ?? "").trim();
+  const bookedStartLocal = String(conv?.appointment?.matchedSlot?.startLocal ?? "").trim();
+  if (!conv?.appointment?.bookedEventId || !day || !bookedStartLocal) return null;
+  if (!bookedStartLocal.toLowerCase().startsWith(day.toLowerCase().slice(0, 3))) return null;
+  const bookedAgentFirst = normalizeDisplayCase(
+    String(conv?.appointment?.matchedSlot?.salespersonName ?? "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)[0] ?? ""
+  );
+  const askFor = bookedAgentFirst ? ` — ask for ${bookedAgentFirst}` : "";
+  return `You're all set for ${bookedStartLocal}${askFor}. See you then!`;
+}
+
+/** The committed soft-visit day label stored by applySoftVisitCadenceWindow ("Monday", …). */
+function softVisitWindowLabel(conv: any): string {
+  return String(conv?.scheduleSoft?.windowLabel ?? "").trim();
+}
+
+/**
+ * Dated staff heads-up for a soft appointment (Joe ruling 2026-07-19): a committed visit
+ * day gets a "confirm and prep" task DUE that day, so it surfaces in the morning task
+ * digest instead of floating undated. addTodo's class-keyed merge collapses repeats.
+ */
+function addSoftVisitStaffTask(
+  conv: any,
+  dayLabel: string,
+  sourceMessageId?: string,
+  opts?: { eventCommitted?: boolean }
+): void {
+  const day = String(dayLabel ?? "").trim();
+  if (!day) return;
+  const visitDate = resolveUpcomingDateFromDayLabel(day);
+  addTodo(
+    conv,
+    "note",
+    `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${day}${
+      opts?.eventCommitted ? " for the event" : ""
+    } - soft appointment, confirm and prep.`,
+    sourceMessageId,
+    undefined,
+    visitDate ? { dueAt: visitDate.toISOString() } : undefined,
+    "followup"
+  );
+}
+
 function buildCustomerAckTentativeLockInReply(parsed: CustomerAckActionParse | null): string {
   const phrase = customerAckActionRequestedPhrase(parsed);
   if (phrase) {
@@ -53076,6 +53131,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     // RANGE-CONSTRAINT VETO (Kody 7/16) — same parser-carried bound signal as the live path.
     appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(regenAppointmentTimingParse?.requested),
     parserScheduleStatusUpdate: regenParserScheduleStatusUpdate,
+    // DAY-ONLY visit commitment — same parser signal as the live path (Joe ruling 2026-07-19,
+    // Peter Meredith +17168303999); regen's customer-ack block resolves Block A itself, so only
+    // the appointment-timing soft-visit read feeds this here.
+    dayOnlyVisitCommitment: isParserSoftVisitCommitment(regenAppointmentTimingParse),
     pricingOrPaymentsIntent: false,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(regenLastOutboundForActionText, getDialogState(conv))
@@ -53903,29 +53962,24 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       regenLastOutboundForActionText,
-      { parserVisitCommitment: regenParserScheduleStatusUpdate }
+      { parserVisitCommitment: regenParserScheduleStatusUpdate || isParserSoftVisitCommitment(regenAppointmentTimingParse) }
     );
-    const reply = statusUpdate.reply;
+    // Booked-same-day reflection + dated staff task — regen parity with the live arm
+    // (Joe ruling 2026-07-19, shared helpers so the twins can't drift).
+    const reply = buildBookedSameDayAllSetReply(conv, statusUpdate.dayLabel) ?? statusUpdate.reply;
     setDialogState(conv, "schedule_request");
     if (statusUpdate.dayCommitted) {
       reanchorCadenceForCommittedDay(conv, statusUpdate.dayLabel);
-      addTodo(
-        conv,
-        "note",
-        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${statusUpdate.dayLabel}${
-          statusUpdate.eventCommitted ? " for the event" : ""
-        } - soft appointment, confirm and prep.`,
-        event.providerMessageId,
-        undefined,
-        undefined,
-        "followup"
-      );
+      addSoftVisitStaffTask(conv, statusUpdate.dayLabel, event.providerMessageId, {
+        eventCommitted: statusUpdate.eventCommitted
+      });
     }
     recordRouteOutcome("regen", "schedule_context_status_update_ack", {
       convId: conv.id,
       leadKey: conv.leadKey,
       parserAction: regenInboundReplyActionParse?.action ?? null,
       parserConfidence: regenInboundReplyActionParse?.confidence ?? null,
+      dayOnlyCommitment: isParserSoftVisitCommitment(regenAppointmentTimingParse),
       fallback: !regenParserScheduleStatusUpdate
     });
     return respondWithSmsRegeneratedDraft(reply, undefined, {
@@ -54198,8 +54252,15 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         cfg.timezone
       );
       if (getDialogState(conv) === "none") setDialogState(conv, "schedule_soft");
-      const ack = appliedWindow ? buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName)) : null;
+      // Booked-same-day wins + dated staff task — regen parity with the live pure-soft-visit
+      // branch (Joe ruling 2026-07-19, Peter Meredith +17168303999) via the SHARED helpers
+      // (no hand-mirrored locals; the mirrored-locals ratchet stays flat).
+      const ack = appliedWindow
+        ? buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
+          buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName))
+        : null;
       if (ack) {
+        addSoftVisitStaffTask(conv, softVisitWindowLabel(conv), event.providerMessageId);
         recordRouteOutcome("regen", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
         if (channel === "email") return respondWithEmailRegeneratedDraft(ack);
         return respondWithSmsRegeneratedDraft(ack, undefined, { turnSchedulingIntent: true });
@@ -55022,17 +55083,10 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
         startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
       }
       reanchorCadenceForCommittedDay(conv, regenFutureCommit.dayLabel);
-      addTodo(
-        conv,
-        "note",
-        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${regenFutureCommit.dayLabel}${
-          regenFutureCommit.eventCommitted ? " for the event" : ""
-        } - soft appointment, confirm and prep.`,
-        event.providerMessageId,
-        undefined,
-        undefined,
-        "followup"
-      );
+      // Shared dated soft-appointment task (Joe ruling 2026-07-19) — due the visit day.
+      addSoftVisitStaffTask(conv, regenFutureCommit.dayLabel, event.providerMessageId, {
+        eventCommitted: regenFutureCommit.eventCommitted
+      });
       setDialogState(conv, "schedule_request");
       recordRouteOutcome("regen", "future_timeframe_day_commit_ack", {
         convId: conv.id,
@@ -61521,6 +61575,15 @@ if (authToken && signature) {
   // source of truth instead of implicit block ordering + scattered gates. A recognized
   // future-day visit commitment outranks the arrival-window ack (the Todd rule).
   // AGENTS.md "comprehend, never regex".
+  // DAY-ONLY visit commitment (Joe ruling 2026-07-19, Peter Meredith +17168303999: "Sounds
+  // good see you Monday"): a committed day with NO time — from the appointment-timing parse
+  // (soft-visit commitment) or a day-only arrival-window ack. Routes to the visit_commitment
+  // soft-appointment arm instead of the "I'll check that time" deflection.
+  const dayOnlySoftVisitCommitment =
+    isParserSoftVisitCommitment(appointmentTimingParse) ||
+    (customerAckActionParse?.action === "provide_arrival_window" &&
+      !!String(customerAckActionParse?.requested?.day ?? "").trim() &&
+      !String(customerAckActionParse?.requested?.timeText ?? "").trim());
   const sched = decideSchedulingTurn({
     customerAckActionAccepted,
     customerAckAction: customerAckActionParse?.action,
@@ -61534,6 +61597,7 @@ if (authToken && signature) {
       !!appointmentTimingParse?.requested?.day && !!appointmentTimingParse?.requested?.timeText,
     appointmentTimingOpenEndedBound: isOpenEndedTimeBoundParse(appointmentTimingParse?.requested),
     parserScheduleStatusUpdate: inboundParserScheduleStatusUpdate,
+    dayOnlyVisitCommitment: dayOnlySoftVisitCommitment,
     pricingOrPaymentsIntent,
     scheduleDialogState: isScheduleDialogState(getDialogState(conv)),
     scheduleOfferContext: hasScheduleOfferContext(lastOutboundText, getDialogState(conv))
@@ -62107,8 +62171,13 @@ if (authToken && signature) {
       !llmExplicitScheduleIntent &&
       !llmSchedulingIntent;
     if (pureSoftVisit) {
-      const softVisitAck = buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName));
+      // Booked-same-day wins: "see you Monday" over an existing Monday booking gets "you're
+      // all set for {booked time}", never a fresh prep/time ask (Joe ruling 2026-07-19).
+      const softVisitAck =
+        buildBookedSameDayAllSetReply(conv, softVisitWindowLabel(conv)) ??
+        buildSoftVisitCommitmentAck(conv, normalizeDisplayCase(conv.lead?.firstName));
       if (softVisitAck) {
+        addSoftVisitStaffTask(conv, softVisitWindowLabel(conv), event.providerMessageId);
         recordRouteOutcome("live", "soft_visit_commitment_ack", { convId: conv.id, leadKey: conv.leadKey });
         return publishLiveTwilioReply(softVisitAck, { turnSchedulingIntent: true });
       }
@@ -62270,28 +62339,25 @@ if (authToken && signature) {
     const statusUpdate = buildScheduleContextStatusUpdateReply(
       String(event.body ?? ""),
       lastOutboundText,
-      { parserVisitCommitment: inboundParserScheduleStatusUpdate }
+      { parserVisitCommitment: inboundParserScheduleStatusUpdate || dayOnlySoftVisitCommitment }
     );
-    const reply = statusUpdate.reply;
+    // Booked-same-day reflection (Joe ruling 2026-07-19): "see you Monday" over an existing
+    // Monday booking gets "you're all set for {booked time}", never a fresh time ask.
+    const reply = buildBookedSameDayAllSetReply(conv, statusUpdate.dayLabel) ?? statusUpdate.reply;
     setDialogState(conv, "schedule_request");
     if (statusUpdate.dayCommitted) {
       reanchorCadenceForCommittedDay(conv, statusUpdate.dayLabel);
-      addTodo(
-        conv,
-        "note",
-        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${statusUpdate.dayLabel}${
-          statusUpdate.eventCommitted ? " for the event" : ""
-        } - soft appointment, confirm and prep.`,
-        event.providerMessageId,
-        undefined,
-        undefined,
-        "followup"
-      );
+      // Dated staff heads-up (soft appointment): due the visit day, so it surfaces in the
+      // morning task digest that morning instead of floating undated.
+      addSoftVisitStaffTask(conv, statusUpdate.dayLabel, event.providerMessageId, {
+        eventCommitted: statusUpdate.eventCommitted
+      });
     }
     logRouteOutcome("schedule_context_status_update_ack", {
       turnPrimaryIntent: routeExecutionIntent,
       parserAction: inboundReplyActionParse?.action ?? null,
       parserConfidence: inboundReplyActionParse?.confidence ?? null,
+      dayOnlyCommitment: dayOnlySoftVisitCommitment,
       fallback: !inboundParserScheduleStatusUpdate
     });
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
@@ -63256,17 +63322,10 @@ if (authToken && signature) {
         startFollowUpCadence(conv, new Date().toISOString(), cfg.timezone);
       }
       reanchorCadenceForCommittedDay(conv, futureCommit.dayLabel);
-      addTodo(
-        conv,
-        "note",
-        `${normalizeDisplayCase(conv.lead?.firstName) || "Customer"} plans to come in ${futureCommit.dayLabel}${
-          futureCommit.eventCommitted ? " for the event" : ""
-        } - soft appointment, confirm and prep.`,
-        event.providerMessageId,
-        undefined,
-        undefined,
-        "followup"
-      );
+      // Shared dated soft-appointment task (Joe ruling 2026-07-19) — due the visit day.
+      addSoftVisitStaffTask(conv, futureCommit.dayLabel, event.providerMessageId, {
+        eventCommitted: futureCommit.eventCommitted
+      });
       setDialogState(conv, "schedule_request");
       logRouteOutcome("future_timeframe_day_commit_ack", {
         dayLabel: futureCommit.dayLabel,

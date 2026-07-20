@@ -25,5 +25,9 @@ export function isParserSoftVisitCommitment(parse: AppointmentTimingParse | null
   // way by 5:30") or an availability ask ("what's open Saturday") never reaches here — which
   // is why we can safely broaden past "come in" to the casual ride/drive/head-in phrasings
   // staff kept hand-fixing (Jessica Ornce "riding up there in the morning tomorrow", 2026-07-11).
-  return /\b(?:commit|visit|be there|be in|get there|make it (?:in|out)|stop(?:ping)? (?:by|in)|com(?:e|ing) (?:in|by|out)|rid(?:e|ing) (?:up|in|over)|driv(?:e|ing) (?:up|in|over)|head(?:ing|ed)? (?:up|in|over)|swing(?:ing)? (?:by|in|up)|roll(?:ing)? (?:in|up|by)|pull(?:ing)? (?:in|up)|run(?:ning)? (?:up|in|by))\b/.test(nt);
+  // "see you {day}" / "be back {day}" added 2026-07-19 (Joe ruling, Peter Meredith
+  // +17168303999: "Sounds good see you Monday" fell through every recognizer and drew the
+  // "I'll check that time and follow up" deflection — a day-only commitment is a SOFT
+  // APPOINTMENT, never a time-check).
+  return /\b(?:commit|visit|see (?:you|ya|y'all)|be back|be there|be in|get there|make it (?:in|out)|stop(?:ping)? (?:by|in)|com(?:e|ing) (?:in|by|out)|rid(?:e|ing) (?:up|in|over)|driv(?:e|ing) (?:up|in|over)|head(?:ing|ed)? (?:up|in|over)|swing(?:ing)? (?:by|in|up)|roll(?:ing)? (?:in|up|by)|pull(?:ing)? (?:in|up)|run(?:ning)? (?:up|in|by))\b/.test(nt);
 }

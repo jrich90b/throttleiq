@@ -144,6 +144,23 @@ const rows: Row[] = [
   // --- visit commitment requires parser signal AND active schedule context ---
   { id: "no_context_no_visit", input: { ...base, customerAckActionAccepted: true, customerAckAction: "provide_arrival_window", parserScheduleStatusUpdate: true, scheduleDialogState: false, scheduleOfferContext: false }, kind: "arrival_window", visitCommitment: false },
 
+  // --- DAY-ONLY visit commitment (Joe ruling 2026-07-19, Peter Meredith +17168303999:
+  //     "Sounds good see you Monday") — a parser-read committed day with NO time qualifies
+  //     WITHOUT the dialog/offer context gates (the named day IS the context) and must never
+  //     draw the "I'll check that time" arrival-window deflection. ---
+  { id: "day_only_routes_visit_without_context", input: { ...base, scheduleDialogState: false, scheduleOfferContext: false, dayOnlyVisitCommitment: true }, kind: "visit_commitment", visitCommitment: true },
+  { id: "day_only_beats_ack_arrival_window", input: { ...base, scheduleDialogState: false, scheduleOfferContext: false, customerAckActionAccepted: true, customerAckAction: "provide_arrival_window", dayOnlyVisitCommitment: true }, kind: "visit_commitment", visitCommitment: true },
+  // A concrete confirm/booking signal still outranks a day-only commitment (A over C).
+  { id: "day_only_does_not_beat_confirm_book", input: { ...base, dayOnlyVisitCommitment: true, customerAckActionAccepted: true, customerAckAction: "confirm_proposed_appointment", customerAckShouldBook: true }, kind: "confirm_appointment" },
+  { id: "day_only_does_not_beat_accept_tentative", input: { ...base, dayOnlyVisitCommitment: true, customerAckActionAccepted: true, customerAckAction: "accept_tentative_appointment" }, kind: "accept_tentative" },
+  // Other B arms still win over a day-only commitment (B over C).
+  { id: "day_only_does_not_beat_tentative_timing", input: { ...base, dayOnlyVisitCommitment: true, appointmentTimingAccepted: true, appointmentTimingIntent: "tentative_time_window" }, kind: "tentative_window" },
+  // Recognition off => today's behavior unchanged (the safe fail-direction).
+  { id: "no_day_only_keeps_arrival_window", input: { ...base, scheduleDialogState: false, scheduleOfferContext: false, customerAckActionAccepted: true, customerAckAction: "provide_arrival_window", dayOnlyVisitCommitment: false }, kind: "arrival_window", visitCommitment: false },
+  // Pricing: recognition still surfaces (the handler's routeExec pricing gate suppresses the
+  // arm downstream, same contract as pricing_with_visit_still_recognized).
+  { id: "pricing_with_day_only_still_recognized", input: { ...base, pricingOrPaymentsIntent: true, dayOnlyVisitCommitment: true }, kind: "visit_commitment", visitCommitment: true },
+
   // --- pricing suppresses A and B (visit_commitment recognition still surfaces; the
   //     handler's routeExec pricing gate suppresses the arm downstream) ---
   { id: "pricing_suppresses_ack_arrival", input: { ...base, pricingOrPaymentsIntent: true, customerAckActionAccepted: true, customerAckAction: "provide_arrival_window" }, kind: "none" },
