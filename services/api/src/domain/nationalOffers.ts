@@ -109,15 +109,38 @@ export async function getNationalOffers(opts?: { bypassCache?: boolean }): Promi
  * the feature is off / inputs are thin — in which case the cadence simply has no national-offer value
  * trigger this turn (it stays quiet unless another trigger fires).
  */
-export async function findNationalOfferForVehicle(vehicle: string): Promise<NationalOfferMatch | null> {
+export async function findNationalOfferForVehicle(
+  vehicle: string,
+  opts?: { excludeTitles?: string[]; firstName?: string | null }
+): Promise<NationalOfferMatch | null> {
   if (!isNationalOffersEnabled()) return null;
   const veh = String(vehicle ?? "").trim();
   if (!veh) return null;
-  const offers = await getNationalOffers();
+  const offers = filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []);
   if (offers.length === 0) return null;
-  const match = await matchNationalOfferToLeadWithLLM({ vehicle: veh, offers });
+  const match = await matchNationalOfferToLeadWithLLM({ vehicle: veh, offers, firstName: opts?.firstName });
   if (!match || !match.applies || !match.message) return null;
   return match;
+}
+
+/**
+ * Dedup (Joe 2026-07-20): the SAME promotion is never texted to a lead twice — a DIFFERENT one may
+ * fire. Key = the normalized offer title, so a re-worded page tweak of the same promo still dedups
+ * while a genuinely new offer passes.
+ */
+export function normalizeOfferTitle(title: string): string {
+  return String(title ?? "")
+    .toLowerCase()
+    .replace(/(\d),(\d)/g, "$1$2") // "$1,000" and "$1000" are the same promotion
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function filterOffersForDedup(offers: NationalOffer[], sentTitles: string[]): NationalOffer[] {
+  const sent = new Set(sentTitles.map(normalizeOfferTitle).filter(Boolean));
+  if (sent.size === 0) return offers;
+  return offers.filter(o => !sent.has(normalizeOfferTitle(o.title)));
 }
 
 /** Test seam: reset the module cache (used by the report/eval to force a fresh read). */
@@ -164,17 +187,20 @@ export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: a
 
 export type CadenceValueGateResult =
   | { action: "send"; reason: string }
-  | { action: "replace"; message: string; offerTitle: string; reason: string }
+  | { action: "replace"; kind: "national_offer" | "price_drop"; message: string; offerTitle: string; reason: string }
   | { action: "suppress"; reason: string };
 
 /**
  * Evaluate a due proactive cadence touch against the value gate.
  * - Gate off / early step / an existing value override (lead-unit availability, held-inventory,
  *   manual test-ride) → "send" (unchanged behavior).
- * - Later filler step + a genuine national offer on their bike → "replace" (the offer message).
+ * - Later step with a live test-ride context → "send" (the contextual scheduling invite IS the value).
+ * - Later filler step + a genuine national offer on their bike (not already sent — dedup by title)
+ *   → "replace" with the offer message; + a price drop on their unit → "replace" with the drop.
  * - Later filler step + no value trigger → "suppress" (stay quiet — the anti-spam outcome).
- * The LLM matcher runs ONLY on later filler steps (never per-tick for every follow-up), and only
- * when NATIONAL_OFFERS_ENABLED is also on; with offers dark the gate simply suppresses filler.
+ * Precedence lives in decideProactiveCadenceValue (routeStateReducer): inventory > national offer >
+ * test-ride > price drop. The LLM matcher runs ONLY on later filler steps, and only when
+ * NATIONAL_OFFERS_ENABLED is on; with offers dark the gate suppresses filler with zero LLM calls.
  * Fail direction on any matcher failure: no offer → suppress (silence), never a fabricated offer.
  */
 export async function evaluateProactiveCadenceValueGate(args: {
@@ -182,19 +208,42 @@ export async function evaluateProactiveCadenceValueGate(args: {
   isPostSale: boolean;
   hasValueOverride: boolean;
   vehicleLabel: string;
+  firstName?: string | null;
+  /** Offer titles already texted to this lead (conv.nationalOfferTouches) — same promo never repeats. */
+  alreadySentOfferTitles?: string[];
+  /** Live test-ride context (wants a ride, nothing booked) — the contextual invite is a value touch. */
+  hasTestRideOffer?: boolean;
+  /** A fired price drop on their unit of interest (priceDropWatch.resolveInterestUnitPriceDrop). */
+  priceDropMessage?: string | null;
 }): Promise<CadenceValueGateResult> {
   if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
   if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
   const isLaterStage = Number(args.stepIndex ?? 0) >= cadenceValueGateMinStep();
   if (!isLaterStage) return { action: "send", reason: "early_stage_touch" };
   if (args.hasValueOverride) return { action: "send", reason: "existing_value_override" };
-  const offer = await findNationalOfferForVehicle(args.vehicleLabel);
+  const offer = await findNationalOfferForVehicle(args.vehicleLabel, {
+    excludeTitles: args.alreadySentOfferTitles ?? [],
+    firstName: args.firstName
+  });
   const decision = decideProactiveCadenceValue({
     isLaterStage: true,
-    hasNationalOfferMatch: !!offer
+    hasNationalOfferMatch: !!offer,
+    hasTestRideOffer: !!args.hasTestRideOffer,
+    hasPriceDrop: !!String(args.priceDropMessage ?? "").trim()
   });
-  if (decision.fire && decision.valueKind === "national_offer" && offer) {
-    return { action: "replace", message: offer.message, offerTitle: offer.offerTitle, reason: decision.reason };
+  if (!decision.fire) return { action: "suppress", reason: decision.reason };
+  if (decision.valueKind === "national_offer" && offer) {
+    return { action: "replace", kind: "national_offer", message: offer.message, offerTitle: offer.offerTitle, reason: decision.reason };
   }
-  return { action: "suppress", reason: decision.reason };
+  if (decision.valueKind === "price_drop") {
+    return {
+      action: "replace",
+      kind: "price_drop",
+      message: String(args.priceDropMessage ?? "").trim(),
+      offerTitle: "",
+      reason: decision.reason
+    };
+  }
+  // test_ride (the existing contextual invite is the message) — let the touch through unchanged.
+  return { action: "send", reason: decision.reason };
 }

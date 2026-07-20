@@ -510,6 +510,10 @@ import {
   isCadenceValueGateEnabled,
   vehicleLabelForOfferMatch
 } from "./domain/nationalOffers.js";
+import {
+  resolveInterestUnitPriceDrop,
+  commitInterestUnitPriceDropFire
+} from "./domain/priceDropWatch.js";
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
@@ -13844,11 +13848,23 @@ async function buildCadenceRegeneratedDraft(
   // REPLACES it; no value trigger → return null (keep the prior draft; regenerate never manufactures a
   // filler touch the live tick would have suppressed). Flag-gated, default OFF → inert.
   if (isCadenceValueGateEnabled()) {
+    const regenTestRideValueContext =
+      !String((conv.appointment as any)?.eventId ?? "").trim() &&
+      (conv.classification?.bucket === "test_ride" ||
+        conv.classification?.cta === "schedule_test_ride" ||
+        String(cadence.contextTag ?? "").trim().toLowerCase() === "test_ride");
+    // NOTE: a regen DRAFT must not consume the dedup ledger or the price anchor — only the live tick
+    // records a fired touch. resolveInterestUnitPriceDrop may arm a missing anchor (harmless + idempotent).
+    const regenInterestPriceDrop = await resolveInterestUnitPriceDrop(conv);
     const valueGate = await evaluateProactiveCadenceValueGate({
       stepIndex: lastSentStep,
       isPostSale: false, // post_sale kinds returned above
       hasValueOverride: false, // the overrides above already returned
-      vehicleLabel: vehicleLabelForOfferMatch(conv)
+      vehicleLabel: vehicleLabelForOfferMatch(conv),
+      firstName: conv.lead?.firstName,
+      alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
+      hasTestRideOffer: regenTestRideValueContext,
+      priceDropMessage: regenInterestPriceDrop?.message ?? null
     });
     if (valueGate.action === "replace") {
       return { body: valueGate.message };
@@ -31543,6 +31559,14 @@ async function processDueFollowUpsUnlocked() {
     // email lane (its message is template-built below — follow-up scope) pass through unchanged.
     // Flag-gated: CADENCE_VALUE_GATE_ENABLED default OFF → this block is inert.
     if (!isPostSale && !useEmail && !disengagedCloseoutActive && isCadenceValueGateEnabled()) {
+      // Live test-ride context (wants a ride, nothing booked) = the contextual invite IS the value.
+      const testRideValueContext =
+        !String((conv.appointment as any)?.eventId ?? "").trim() &&
+        (conv.classification?.bucket === "test_ride" ||
+          conv.classification?.cta === "schedule_test_ride" ||
+          String(cadence.contextTag ?? "").trim().toLowerCase() === "test_ride");
+      // Price-drop trigger (deterministic; also ARMS the anchor on first sighting of the unit).
+      const interestPriceDrop = await resolveInterestUnitPriceDrop(conv);
       const valueGate = await evaluateProactiveCadenceValueGate({
         stepIndex: Number(cadence.stepIndex ?? 0),
         isPostSale,
@@ -31551,7 +31575,11 @@ async function processDueFollowUpsUnlocked() {
           heldInventoryOverride ||
           manualTestRideAvailabilityOverride
         ),
-        vehicleLabel: vehicleLabelForOfferMatch(conv)
+        vehicleLabel: vehicleLabelForOfferMatch(conv),
+        firstName: conv.lead?.firstName,
+        alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
+        hasTestRideOffer: testRideValueContext,
+        priceDropMessage: interestPriceDrop?.message ?? null
       });
       if (valueGate.action === "suppress") {
         console.log("[followup][cadence-value-gate] later touch has no value trigger — staying quiet", {
@@ -31563,14 +31591,25 @@ async function processDueFollowUpsUnlocked() {
         continue;
       }
       if (valueGate.action === "replace") {
-        console.log("[followup][cadence-value-gate] filler replaced with national offer", {
+        console.log("[followup][cadence-value-gate] filler replaced with value touch", {
           convId: conv.id,
           stepIndex: cadence.stepIndex,
-          offer: valueGate.offerTitle
+          kind: valueGate.kind,
+          offer: valueGate.offerTitle || undefined
         });
         message = valueGate.message;
         cadenceNoRepeatFallbacks = [];
         mediaUrls = undefined;
+        if (valueGate.kind === "national_offer") {
+          // Dedup ledger: this promotion never fires for this lead again (a DIFFERENT one may).
+          conv.nationalOfferTouches = [
+            ...(conv.nationalOfferTouches ?? []),
+            { title: valueGate.offerTitle, at: new Date().toISOString() }
+          ];
+        } else if (valueGate.kind === "price_drop" && interestPriceDrop) {
+          // Re-anchor at the fired price so only a FURTHER drop can fire again.
+          commitInterestUnitPriceDropFire(conv, interestPriceDrop);
+        }
       }
     }
     const systemMode = effectiveMode(conv);
