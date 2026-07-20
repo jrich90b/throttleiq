@@ -544,7 +544,8 @@ import {
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
-  isResponseControlNoResponseAccepted
+  isResponseControlNoResponseAccepted,
+  shouldSuppressAppointmentConfirmationReminder
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
@@ -31794,6 +31795,17 @@ async function processAppointmentConfirmations() {
     if (isSuppressed(conv.leadKey)) continue;
     if (appt.confirmation?.status === "confirmed" || appt.confirmation?.status === "declined") continue;
     if (appt.confirmation?.sentAt) continue;
+    // Joe ruling 2026-07-20 (+17168303999, the "boomed him" report): no robotic YES/NO
+    // reminder when the customer already confirmed the booking in their own words
+    // (appointment.acknowledged) or a human owns the thread (mode === "human").
+    if (
+      shouldSuppressAppointmentConfirmationReminder({
+        acknowledged: appt.acknowledged,
+        humanMode: conv.mode === "human"
+      })
+    ) {
+      continue;
+    }
 
     const start = new Date(appt.whenIso);
     const diffMs = start.getTime() - now.getTime();
