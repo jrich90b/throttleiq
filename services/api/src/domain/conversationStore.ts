@@ -3576,6 +3576,28 @@ function latestModelInterestLabel(conv: Conversation): string | null {
   return null;
 }
 
+/**
+ * The message an inbox row previews as "the latest" (Joe ruling 2026-07-20; Peter Meredith
+ * +17168303999): a STALE never-sent draft must never be the row preview — it renders like a
+ * real send and inflates the operator's read of the thread ("It said I'll check that time…"
+ * was a thumbs-downed draft that never went out). Voice-call/transcript rows are skipped as
+ * before (calls have their own surface). Fallback order: last non-call non-stale message →
+ * raw last message (so a thread of only calls/stale drafts still shows something) → null.
+ * Pure; pinned by inbox_stale_draft_preview:eval.
+ */
+export function pickInboxPreviewMessage<
+  T extends { provider?: string | null; draftStatus?: string | null }
+>(messages: T[] | undefined | null): T | null {
+  const list = Array.isArray(messages) ? messages : [];
+  const preview = list.filter(
+    m =>
+      m.provider !== "voice_call" &&
+      m.provider !== "voice_transcript" &&
+      m.draftStatus !== "stale"
+  );
+  return preview[preview.length - 1] ?? list[list.length - 1] ?? null;
+}
+
 export function listConversations() {
 
   function pendingDraftInfo(c: Conversation) {
@@ -3592,13 +3614,7 @@ export function listConversations() {
   return Array.from(conversations.values())
     .map(c => {
       const pd = pendingDraftInfo(c);
-      const nonCallMessages = c.messages.filter(
-        m => m.provider !== "voice_call" && m.provider !== "voice_transcript"
-      );
-      const lastNonCall =
-        nonCallMessages[nonCallMessages.length - 1] ??
-        c.messages[c.messages.length - 1] ??
-        null;
+      const lastNonCall = pickInboxPreviewMessage(c.messages);
       const updatedAt = lastNonCall?.at ?? c.updatedAt;
       const leadSource = c.lead?.source ?? null;
       const inferredWalkIn = inferDisplayWalkIn(c);
