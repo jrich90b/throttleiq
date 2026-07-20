@@ -52,6 +52,36 @@ export function hasPendingIncomingInventoryContext(
   return String(conv?.pendingIncomingInventory?.status ?? "").toLowerCase() === "pending";
 }
 
+/**
+ * PREFILTER (LLM gate, not an answer gate — the hasPartsInquirySignal pattern): a staff intake
+ * note that BOTH mentions a unit ARRIVING and says it's ALLOCATED to someone. Only when both cue
+ * families hit do we spend the incoming-inventory purpose parse to comprehend the allocation
+ * (Joe ruling 2026-07-19, Peter Arnoldo +17166887637: "once the next one we have coming in
+ * arrives which is spoken for"). Both-cues-required keeps false positives rare: "keep an eye out
+ * for a used Low Rider S" (no arrival) and "taking his bike in on trade" (no allocation) never
+ * reach the parser. A miss here just means today's behavior (watch + generic ack). Pure.
+ */
+export function hasSpokenForIncomingCue(textRaw: string | null | undefined): boolean {
+  const text = lower(textRaw);
+  if (!text) return false;
+  const arrival =
+    /\b(?:coming in|incoming|in transit|on its way|on the way|arriv(?:e|es|ing|al)|ship date|ships?\b|land(?:s|ing|ed)?\b|gets? here|comes? in)\b/.test(
+      text
+    );
+  const allocated =
+    /\b(?:spoken for|reserved|claimed|allocated|promised|has a deposit|deposit (?:down|on it)|already sold|is sold|sold to)\b/.test(
+      text
+    );
+  return arrival && allocated;
+}
+
+/** Confidence floor for accepting the incoming-inventory purpose/allocation parse
+ *  (INCOMING_INVENTORY_PURPOSE_CONFIDENCE_MIN, default 0.7). */
+export function incomingInventoryPurposeConfidenceFloor(): number {
+  const v = Number(process.env.INCOMING_INVENTORY_PURPOSE_CONFIDENCE_MIN);
+  return Number.isFinite(v) && v > 0 ? v : 0.7;
+}
+
 // A SPECIFIC parts/accessory-inquiry prefilter: a part number, OR an accessory noun paired with an
 // intent verb. Deliberately specific so a bare incoming-inventory ack ("ok, let me know when it's
 // here") never matches — only a real parts ask does. Used to DEFER the pending-incoming handler to the
@@ -107,6 +137,7 @@ export function buildPendingIncomingInventoryFromConversation(args: {
   sourceText?: string | null;
   source?: PendingIncomingInventory["source"];
   sourceMessageId?: string | null;
+  allocation?: PendingIncomingInventory["allocation"];
   nowIso?: string;
 }): PendingIncomingInventory | null {
   const existing = args.conv.pendingIncomingInventory;
@@ -139,6 +170,7 @@ export function buildPendingIncomingInventoryFromConversation(args: {
     note: compact(args.sourceText) || existing?.note,
     source: args.source || existing?.source || "system",
     sourceMessageId: compact(args.sourceMessageId) || existing?.sourceMessageId,
+    allocation: args.allocation || existing?.allocation,
     status: "pending",
     createdAt: existing?.createdAt || nowIso,
     updatedAt: nowIso,
@@ -234,12 +266,35 @@ export function buildPendingIncomingInventoryInitialAdfReply(
   return `Thanks — I have you down for ${subject} we've got coming in. We'll let you know as soon as it's here and ready to look at.`;
 }
 
+/**
+ * Warm customer ack when the incoming unit is SPOKEN FOR by someone else (Joe ruling
+ * 2026-07-19, Peter Arnoldo +17166887637): the customer is on the list for a FUTURE unit, and
+ * STAFF own the pipeline conversation — so the copy promises the team will keep them posted,
+ * never that the agent will "keep an eye out" (that's watch language), and never quotes
+ * pipeline facts (ship dates, allocation details) the agent can't verify.
+ */
+export function buildSpokenForIncomingHandoffAck(
+  pending: Pick<PendingIncomingInventory, "label" | "year" | "model"> | null | undefined
+): string {
+  const unit = cleanIncomingUnitLabel(pending);
+  const subject = unit ? `the next ${unit}` : "the next one coming in";
+  return `You're on the list for ${subject} — we'll keep you posted as soon as we know more.`;
+}
+
 export function buildPendingIncomingInventoryTaskSummary(args: {
   pending: PendingIncomingInventory | null | undefined;
   customerName?: string | null;
 }): string {
   const unit = cleanIncomingUnitLabel(args.pending);
   const customer = compact(args.customerName) || "customer";
+  // Spoken-for allocation outranks the purpose framing: staff must know the in-transit unit is
+  // claimed and confirm this customer's allocation by hand. Keeps the stable "arrives or is
+  // ready to show" tail so isPendingIncomingInventoryNotifyTodoSummary / the dedup planner
+  // still collapse duplicates.
+  if (lower(args.pending?.allocation) === "spoken_for_other") {
+    const subject = unit ? `the next ${unit}` : "the next incoming bike";
+    return `Notify ${customer} when ${subject} arrives or is ready to show — the current incoming unit is spoken for; confirm their allocation.`;
+  }
   const kind = incomingUnitKind(args.pending);
   if (kind === "order") {
     const subject = unit ? `the ${unit} (on order)` : "the ordered bike";

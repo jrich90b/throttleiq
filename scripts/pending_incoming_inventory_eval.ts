@@ -4,8 +4,10 @@ import {
   buildPendingIncomingInventoryFromConversation,
   buildPendingIncomingInventoryInitialAdfReply,
   buildPendingIncomingInventoryTaskSummary,
+  buildSpokenForIncomingHandoffAck,
   hasPendingIncomingInventoryContext,
   hasPendingIncomingInventorySignal,
+  hasSpokenForIncomingCue,
   isPendingIncomingInventoryAcknowledgementText,
   isPendingIncomingInventoryNotifyTodoSummary,
   shouldHandlePendingIncomingInventoryTurn
@@ -181,5 +183,63 @@ assert.match(phTradeAck, /the bike we've got coming in/i);
 const phTradeIn = buildPendingIncomingInventoryCustomerAck({ ...phTrade, purpose: "trade_in" });
 assert.doesNotMatch(phTradeIn, /full\s*line/i);
 assert.match(phTradeIn, /the incoming trade/i);
+
+// --- Spoken-for incoming handoff (Joe ruling 2026-07-19, Peter Arnoldo +17166887637) ---
+const peterNote =
+  "Wants to see new Super Glide and told him we would reach out once the next one we have coming in arrives which is spoken for, projected ship date 7/29.";
+// Prefilter: BOTH an arrival cue and an allocation cue are required (LLM gate, not answer gate).
+assert.equal(hasSpokenForIncomingCue(peterNote), true, "Peter's exact note must hit the prefilter");
+assert.equal(
+  hasSpokenForIncomingCue("Keep an eye out for a used Low Rider S for him"),
+  false,
+  "a plain watch ask (no arrival) must not hit"
+);
+assert.equal(
+  hasSpokenForIncomingCue("Taking his 2016 Freewheeler in on trade next week"),
+  false,
+  "a plain trade note (no allocation cue) must not hit"
+);
+assert.equal(
+  hasSpokenForIncomingCue("We have a Road King coming in for him to look at"),
+  false,
+  "an incoming unit FOR this customer (no allocation cue) must not hit"
+);
+assert.equal(hasSpokenForIncomingCue(""), false);
+
+// The handoff ack: "you're on the list" framing — never watch language, never pipeline facts.
+const spokenForPending = { model: "Super Glide", year: 2026, label: "2026 Super Glide" } as any;
+const spokenForAck = buildSpokenForIncomingHandoffAck(spokenForPending);
+assert.match(spokenForAck, /you'?re on the list/i, "the ack must carry the on-the-list framing");
+assert.match(spokenForAck, /2026 Super Glide/, "the ack names the customer's stated unit");
+assert.match(spokenForAck, /keep you posted/i, "the ack promises the TEAM will follow up");
+assert.doesNotMatch(spokenForAck, /keep an eye/i, "never watch language on a spoken-for unit");
+assert.doesNotMatch(spokenForAck, /7\/29|ship date|in transit/i, "never quote pipeline facts the agent can't verify");
+// Placeholder-safe: no unit label degrades to neutral copy, never a placeholder leak.
+const spokenForAckBare = buildSpokenForIncomingHandoffAck({ model: "Other" } as any);
+assert.match(spokenForAckBare, /the next one coming in/i);
+assert.doesNotMatch(spokenForAckBare, /\bother\b/i);
+
+// The staff task: spoken-for framing, still recognized by the singleton dedup matcher.
+const spokenForTask = buildPendingIncomingInventoryTaskSummary({
+  pending: { ...spokenForPending, allocation: "spoken_for_other", status: "pending" },
+  customerName: "Peter Arnoldo"
+});
+assert.match(spokenForTask, /spoken for/i, "staff must see the current unit is claimed");
+assert.match(spokenForTask, /confirm their allocation/i, "staff must confirm the customer's allocation by hand");
+assert.equal(
+  isPendingIncomingInventoryNotifyTodoSummary(spokenForTask),
+  true,
+  "the spoken-for task must stay in the notify-singleton dedup family"
+);
+
+// buildPendingIncomingInventoryFromConversation persists the allocation.
+const spokenForBuilt = buildPendingIncomingInventoryFromConversation({
+  conv,
+  sourceText: peterNote,
+  source: "adf",
+  allocation: "spoken_for_other",
+  nowIso: now
+});
+assert.equal(spokenForBuilt?.allocation, "spoken_for_other", "allocation must persist on the pending record");
 
 console.log("PASS pending incoming inventory eval");

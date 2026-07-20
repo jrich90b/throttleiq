@@ -609,6 +609,11 @@ export type PendingIncomingInventory = {
   // bike on order. Unset/"unclear" => neutral "coming in" copy (safe default; never wrongly "trade").
   // Comprehended by parseIncomingInventoryPurposeWithLLM at creation, not regex.
   purpose?: "trade_in" | "sourced_for_purchase" | "factory_order" | "unclear";
+  // WHO the incoming unit is allocated to (Joe ruling 2026-07-19, Peter Arnoldo +17166887637):
+  // "spoken_for_other" = the in-transit unit is reserved for a DIFFERENT customer — this customer
+  // waits on a future one, so the thread is a staff handoff (never an availability watch, and the
+  // agent never answers pipeline questions itself). Unset/"unclear" => today's behavior.
+  allocation?: "spoken_for_other" | "for_this_customer" | "unclear";
   label?: string;
   note?: string;
   source?: "adf" | "manual" | "customer" | "system";

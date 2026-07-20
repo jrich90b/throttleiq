@@ -2188,6 +2188,12 @@ export type FinanceHardshipDisclosureParse = {
 //   "unclear"             — can't tell. Fails to neutral "coming in" copy (true either way).
 export type IncomingInventoryPurposeParse = {
   purpose: "trade_in" | "sourced_for_purchase" | "factory_order" | "unclear";
+  // WHO the incoming unit is allocated to (Joe ruling 2026-07-19, Peter Arnoldo +17166887637):
+  //   "spoken_for_other"  — the incoming unit is reserved/claimed by SOMEONE ELSE (deposit down,
+  //                         "spoken for", allocated) — this customer is waiting on a FUTURE one.
+  //   "for_this_customer" — the incoming unit is coming in for THIS customer.
+  //   "unclear"           — can't tell. Fails to today's behavior (watch + generic ack).
+  allocation: "spoken_for_other" | "for_this_customer" | "unclear";
   confidence?: number;
 };
 
@@ -3509,11 +3515,15 @@ const FINANCE_HARDSHIP_DISCLOSURE_PARSER_JSON_SCHEMA: { [key: string]: unknown }
 const INCOMING_INVENTORY_PURPOSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
   type: "object",
   additionalProperties: false,
-  required: ["purpose", "confidence"],
+  required: ["purpose", "allocation", "confidence"],
   properties: {
     purpose: {
       type: "string",
       enum: ["trade_in", "sourced_for_purchase", "factory_order", "unclear"]
+    },
+    allocation: {
+      type: "string",
+      enum: ["spoken_for_other", "for_this_customer", "unclear"]
     },
     confidence: { type: "number" }
   }
@@ -8448,6 +8458,14 @@ export async function parseIncomingInventoryPurposeWithLLM(args: {
     '- "factory_order": a NEW bike ordered from Harley for this customer (a pre-order / build).',
     '- "unclear": you genuinely cannot tell which side the customer is on.',
     "",
+    "allocation — WHO the incoming unit is allocated to:",
+    '- "spoken_for_other": the incoming unit is ALREADY reserved/claimed by a DIFFERENT customer',
+    "  (\"spoken for\", \"sold\", \"has a deposit on it\", \"claimed\", \"allocated\", \"promised to someone\") —",
+    "  THIS customer is waiting on a FUTURE/next one, not the one in transit.",
+    '- "for_this_customer": the incoming unit is coming in for THIS customer (their trade, their order,',
+    "  or a unit being sourced for them to buy).",
+    '- "unclear": the note doesn\'t say who the incoming unit belongs to.',
+    "",
     "Hard rules:",
     "- The KEY question is which SIDE the customer is on: are they HANDING US their bike (trade_in), or",
     "  WAITING TO BUY a bike we're bringing in (sourced_for_purchase)?",
@@ -8457,15 +8475,21 @@ export async function parseIncomingInventoryPurposeWithLLM(args: {
     "  (sourced_for_purchase) unless the text says the bike is theirs.",
     "- When torn between trade_in and sourced_for_purchase, answer 'unclear' — we'd rather say a neutral",
     "  'coming in' than wrongly call a customer's purchase a trade.",
+    '- allocation "spoken_for_other" ONLY when the note explicitly says the incoming unit is reserved/',
+    "  claimed/sold/deposited by someone else. \"Coming in for him to look at\" or \"getting one in for",
+    '  you" is for_this_customer. When torn, answer "unclear" — a wrong spoken_for_other would suppress',
+    "  a legitimate availability watch.",
     "- confidence 0..1; use >= 0.7 only when the side is clear.",
     "",
     "Examples:",
-    '- "Customer is trading in his 2015 Road King, we are taking it in next week" -> {"purpose":"trade_in","confidence":0.95}',
-    '- "We have a 2015 Road King coming in from the auction for him to look at" -> {"purpose":"sourced_for_purchase","confidence":0.93}',
-    '- "Getting a used Street Glide in for this customer to buy, will let him know when it lands" -> {"purpose":"sourced_for_purchase","confidence":0.94}',
-    '- "He wants to be notified when the 2015 Road King gets here so he can see it" -> {"purpose":"sourced_for_purchase","confidence":0.8}',
-    '- "New 2026 Street Glide on order from the factory for this customer" -> {"purpose":"factory_order","confidence":0.95}',
-    '- "2015 Road King" -> {"purpose":"unclear","confidence":0.5}',
+    '- "Customer is trading in his 2015 Road King, we are taking it in next week" -> {"purpose":"trade_in","allocation":"for_this_customer","confidence":0.95}',
+    '- "We have a 2015 Road King coming in from the auction for him to look at" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","confidence":0.93}',
+    '- "Getting a used Street Glide in for this customer to buy, will let him know when it lands" -> {"purpose":"sourced_for_purchase","allocation":"for_this_customer","confidence":0.94}',
+    '- "He wants to be notified when the 2015 Road King gets here so he can see it" -> {"purpose":"sourced_for_purchase","allocation":"unclear","confidence":0.8}',
+    '- "New 2026 Street Glide on order from the factory for this customer" -> {"purpose":"factory_order","allocation":"for_this_customer","confidence":0.95}',
+    '- "Wants to see new Super Glide and told him we would reach out once the next one we have coming in arrives which is spoken for, projected ship date 7/29." -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","confidence":0.9}',
+    '- "Waiting on a Fat Boy — the one in transit is sold, next allocation is his" -> {"purpose":"sourced_for_purchase","allocation":"spoken_for_other","confidence":0.85}',
+    '- "2015 Road King" -> {"purpose":"unclear","allocation":"unclear","confidence":0.5}',
     "",
     condition ? `Unit condition field: ${condition}` : "Unit condition field: (unknown)",
     vehicle ? `Unit: ${vehicle}` : "Unit: (unknown)",
@@ -8492,11 +8516,16 @@ export async function parseIncomingInventoryPurposeWithLLM(args: {
   const raw = String(parsed.purpose ?? "").toLowerCase();
   const purpose: IncomingInventoryPurposeParse["purpose"] =
     raw === "trade_in" || raw === "sourced_for_purchase" || raw === "factory_order" ? raw : "unclear";
+  const allocationRaw = String(parsed.allocation ?? "").toLowerCase();
+  const allocation: IncomingInventoryPurposeParse["allocation"] =
+    allocationRaw === "spoken_for_other" || allocationRaw === "for_this_customer"
+      ? allocationRaw
+      : "unclear";
   const confidence =
     typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
       ? Math.max(0, Math.min(1, parsed.confidence))
       : undefined;
-  return { purpose, confidence };
+  return { purpose, allocation, confidence };
 }
 
 // Detects a customer wanting to trade in / apply a NON-motorcycle item toward the deal —
