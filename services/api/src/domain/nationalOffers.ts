@@ -124,3 +124,77 @@ export async function findNationalOfferForVehicle(vehicle: string): Promise<Nati
 export function __resetNationalOffersCache(): void {
   cache = null;
 }
+
+// === The cadence value gate — the SHARED applier both paths call (route-parity law) ==============
+// decideProactiveCadenceValue (routeStateReducer.ts) is the pure precedence decision; this helper is
+// the single composition both /webhooks/twilio's cadence tick and /conversations/:id/regenerate's
+// cadence builder invoke, so the two paths cannot drift (same pattern as decideFinancePricingTurn).
+import { decideProactiveCadenceValue } from "./routeStateReducer.js";
+
+/** Go-live switch for the anti-spam behavior itself (suppress filler / inject offers). Default OFF. */
+export function isCadenceValueGateEnabled(): boolean {
+  const v = String(process.env.CADENCE_VALUE_GATE_ENABLED ?? "0").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/**
+ * First value-gated step. Steps 0-2 (the day 1/2/3 engagement sequence) always fire; from this step
+ * on (day-5+ in FOLLOW_UP_DAY_OFFSETS) a proactive touch needs a genuine value trigger.
+ */
+export function cadenceValueGateMinStep(): number {
+  const raw = String(process.env.CADENCE_VALUE_GATE_MIN_STEP ?? "").trim();
+  if (!raw) return 3; // Number("") is 0, not NaN — an unset env must fall to the default, never gate step 0
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 3;
+}
+
+/** The lead's bike-of-interest label for offer matching (lead vehicle, else the inventory watch). */
+export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: any }): string {
+  const v = (conv?.lead?.vehicle ?? {}) as any;
+  let label = ["year", "make", "model", "trim"]
+    .map(k => String(v?.[k] ?? "").trim())
+    .join(" ")
+    .trim();
+  if (!label) {
+    const w = (conv?.inventoryWatch ?? {}) as any;
+    label = ["make", "model"].map(k => String(w?.[k] ?? "").trim()).join(" ").trim();
+  }
+  return label.replace(/\s+/g, " ").trim();
+}
+
+export type CadenceValueGateResult =
+  | { action: "send"; reason: string }
+  | { action: "replace"; message: string; offerTitle: string; reason: string }
+  | { action: "suppress"; reason: string };
+
+/**
+ * Evaluate a due proactive cadence touch against the value gate.
+ * - Gate off / early step / an existing value override (lead-unit availability, held-inventory,
+ *   manual test-ride) → "send" (unchanged behavior).
+ * - Later filler step + a genuine national offer on their bike → "replace" (the offer message).
+ * - Later filler step + no value trigger → "suppress" (stay quiet — the anti-spam outcome).
+ * The LLM matcher runs ONLY on later filler steps (never per-tick for every follow-up), and only
+ * when NATIONAL_OFFERS_ENABLED is also on; with offers dark the gate simply suppresses filler.
+ * Fail direction on any matcher failure: no offer → suppress (silence), never a fabricated offer.
+ */
+export async function evaluateProactiveCadenceValueGate(args: {
+  stepIndex: number;
+  isPostSale: boolean;
+  hasValueOverride: boolean;
+  vehicleLabel: string;
+}): Promise<CadenceValueGateResult> {
+  if (!isCadenceValueGateEnabled()) return { action: "send", reason: "gate_disabled" };
+  if (args.isPostSale) return { action: "send", reason: "post_sale_exempt" };
+  const isLaterStage = Number(args.stepIndex ?? 0) >= cadenceValueGateMinStep();
+  if (!isLaterStage) return { action: "send", reason: "early_stage_touch" };
+  if (args.hasValueOverride) return { action: "send", reason: "existing_value_override" };
+  const offer = await findNationalOfferForVehicle(args.vehicleLabel);
+  const decision = decideProactiveCadenceValue({
+    isLaterStage: true,
+    hasNationalOfferMatch: !!offer
+  });
+  if (decision.fire && decision.valueKind === "national_offer" && offer) {
+    return { action: "replace", message: offer.message, offerTitle: offer.offerTitle, reason: decision.reason };
+  }
+  return { action: "suppress", reason: decision.reason };
+}

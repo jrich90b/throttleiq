@@ -500,6 +500,11 @@ import {
   unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import {
+  evaluateProactiveCadenceValueGate,
+  isCadenceValueGateEnabled,
+  vehicleLabelForOfferMatch
+} from "./domain/nationalOffers.js";
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
@@ -13825,6 +13830,26 @@ async function buildCadenceRegeneratedDraft(
       : null;
   if (manualTestRideAvailabilityOverride) {
     return { body: manualTestRideAvailabilityOverride };
+  }
+
+  // Proactive cadence VALUE GATE — regen mirror of the live tick (route-parity law): the SAME shared
+  // applier (evaluateProactiveCadenceValueGate). The three value overrides above already returned, so
+  // reaching here means the redraft would be generic filler. On a later step: a genuine national offer
+  // REPLACES it; no value trigger → return null (keep the prior draft; regenerate never manufactures a
+  // filler touch the live tick would have suppressed). Flag-gated, default OFF → inert.
+  if (isCadenceValueGateEnabled()) {
+    const valueGate = await evaluateProactiveCadenceValueGate({
+      stepIndex: lastSentStep,
+      isPostSale: false, // post_sale kinds returned above
+      hasValueOverride: false, // the overrides above already returned
+      vehicleLabel: vehicleLabelForOfferMatch(conv)
+    });
+    if (valueGate.action === "replace") {
+      return { body: valueGate.message };
+    }
+    if (valueGate.action === "suppress") {
+      return null;
+    }
   }
 
   // Route parity with the live tick: a 4+ month stated timeframe keeps the gentle long_term tempo even
@@ -31504,6 +31529,44 @@ async function processDueFollowUpsUnlocked() {
     const emailTo = conv.lead?.email;
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
+    // Proactive cadence VALUE GATE (Joe 2026-07-20: "no spam — later cadences must be high quality").
+    // Shared applier evaluateProactiveCadenceValueGate (nationalOffers.ts) — the SAME helper the
+    // regenerate cadence builder calls (route-parity law). A later-stage touch with no value trigger
+    // is SUPPRESSED (advance + stay quiet); a genuine national offer on their bike REPLACES the
+    // filler. Early steps, post-sale, existing value overrides, the disengaged closeout, and the
+    // email lane (its message is template-built below — follow-up scope) pass through unchanged.
+    // Flag-gated: CADENCE_VALUE_GATE_ENABLED default OFF → this block is inert.
+    if (!isPostSale && !useEmail && !disengagedCloseoutActive && isCadenceValueGateEnabled()) {
+      const valueGate = await evaluateProactiveCadenceValueGate({
+        stepIndex: Number(cadence.stepIndex ?? 0),
+        isPostSale,
+        hasValueOverride: !!(
+          leadUnitAvailabilityOverride ||
+          heldInventoryOverride ||
+          manualTestRideAvailabilityOverride
+        ),
+        vehicleLabel: vehicleLabelForOfferMatch(conv)
+      });
+      if (valueGate.action === "suppress") {
+        console.log("[followup][cadence-value-gate] later touch has no value trigger — staying quiet", {
+          convId: conv.id,
+          stepIndex: cadence.stepIndex,
+          reason: valueGate.reason
+        });
+        advanceFollowUpCadence(conv, cfg.timezone);
+        continue;
+      }
+      if (valueGate.action === "replace") {
+        console.log("[followup][cadence-value-gate] filler replaced with national offer", {
+          convId: conv.id,
+          stepIndex: cadence.stepIndex,
+          offer: valueGate.offerTitle
+        });
+        message = valueGate.message;
+        cadenceNoRepeatFallbacks = [];
+        mediaUrls = undefined;
+      }
+    }
     const systemMode = effectiveMode(conv);
     const forceAutoSendPostSaleCadence = isPostSale;
     const recentHumanOutboundInLoop = (conv.messages ?? []).some((m: any) => {
