@@ -5334,6 +5334,132 @@ export async function parseTurnUnderstandingWithLLM(args: {
   };
 }
 
+const MANUAL_OUTBOUND_PROMISE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["promise_present", "kind", "action", "due_text", "confidence"],
+  properties: {
+    promise_present: { type: "boolean" },
+    // What the staff member promised to DO. inventory_notify ("I'll text you when
+    // one comes in") and appointment talk are handled by their own dedicated arms
+    // (watch set / appointment parser) — the caller skips those kinds here.
+    kind: {
+      type: "string",
+      enum: ["send_info", "check_and_get_back", "prepare_something", "other", "inventory_notify", "appointment", "none"]
+    },
+    action: { type: "string" },
+    due_text: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export type ManualOutboundPromiseParse = {
+  promisePresent: boolean;
+  kind:
+    | "send_info"
+    | "check_and_get_back"
+    | "prepare_something"
+    | "other"
+    | "inventory_notify"
+    | "appointment"
+    | "none";
+  action: string;
+  dueText: string;
+  confidence: number;
+};
+
+/**
+ * Read a STAFF-typed outbound (SMS/email) for a dealership promise — "I'll send
+ * you numbers Monday", "let me check with my manager and get back to you" — the
+ * text-channel sibling of the voice next-step extraction (Joe, 2026-07-19): the
+ * agent hears the promise, nobody re-keys it. The caller turns an accepted
+ * staff promise into a dated task + a cadence hold (domain/voiceNextStep.ts).
+ */
+export async function parseManualOutboundPromiseWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+}): Promise<ManualOutboundPromiseParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_MANUAL_OUTBOUND_PROMISE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const model =
+    process.env.OPENAI_MANUAL_OUTBOUND_PROMISE_PARSER_MODEL ||
+    process.env.OPENAI_ROUTING_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+  const historyLines = (args.history ?? [])
+    .slice(-6)
+    .map(h => `${h.direction === "in" ? "CUSTOMER" : "DEALER"}: ${String(h.body ?? "").slice(0, 220)}`);
+  const examples = [
+    'EXAMPLE A text: "I\'ll get those payment numbers together and send them over Monday."',
+    'EXAMPLE A output: {"promise_present":true,"kind":"send_info","action":"send payment numbers","due_text":"Monday","confidence":0.95}',
+    'EXAMPLE B text: "Let me check with my manager on that trade value and I\'ll get back to you tomorrow."',
+    'EXAMPLE B output: {"promise_present":true,"kind":"check_and_get_back","action":"check with manager on the trade value and get back","due_text":"tomorrow","confidence":0.94}',
+    'EXAMPLE C text: "I\'ll keep an eye out and text you as soon as a Street Bob comes in."',
+    'EXAMPLE C output: {"promise_present":true,"kind":"inventory_notify","action":"text when a Street Bob arrives","due_text":"","confidence":0.95}',
+    'EXAMPLE D text: "Saturday at 9:30 works — see you then!"',
+    'EXAMPLE D output: {"promise_present":false,"kind":"appointment","action":"","due_text":"","confidence":0.9}',
+    'EXAMPLE E text: "Thanks for stopping in today, it was great meeting you!"',
+    'EXAMPLE E output: {"promise_present":false,"kind":"none","action":"","due_text":"","confidence":0.95}',
+    'EXAMPLE F text: "I\'ll have the bike pulled up front and ready for you."',
+    'EXAMPLE F output: {"promise_present":true,"kind":"prepare_something","action":"have the bike pulled up front and ready","due_text":"","confidence":0.9}'
+  ];
+  const prompt = [
+    "A dealership STAFF member typed this outbound message to a customer. Decide whether the STAFF",
+    "member made a concrete promise the dealership must follow through on. Return only JSON matching the schema.",
+    "",
+    "Guidelines:",
+    "- promise_present: true only for a real dealership commitment (\"I'll send/check/prepare ...\").",
+    "  Pleasantries, answers, and questions are not promises.",
+    "- kind: send_info (numbers/photos/details), check_and_get_back (find out then reply),",
+    "  prepare_something (physical prep), other (any other concrete promise),",
+    "  inventory_notify (\"I'll let you know when one comes in\"), appointment (scheduling talk),",
+    "  none (no promise).",
+    "- action: the promised action in a few words, empty when no promise.",
+    "- due_text: the stated day/date exactly as said (\"Monday\", \"tomorrow\", \"July 25th\"); empty when none stated.",
+    "- confidence 0 to 1.",
+    "",
+    ...examples,
+    "",
+    ...(historyLines.length ? ["Recent thread:", ...historyLines, ""] : []),
+    `Staff message: ${text.slice(0, 900)}`
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "manual_outbound_promise",
+      schema: MANUAL_OUTBOUND_PROMISE_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-manual-outbound-promise"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const kindRaw = String(parsed.kind ?? "none").trim().toLowerCase();
+    const kinds = [
+      "send_info",
+      "check_and_get_back",
+      "prepare_something",
+      "other",
+      "inventory_notify",
+      "appointment",
+      "none"
+    ] as const;
+    return {
+      promisePresent: !!parsed.promise_present,
+      kind: (kinds as readonly string[]).includes(kindRaw) ? (kindRaw as ManualOutboundPromiseParse["kind"]) : "none",
+      action: String(parsed.action ?? "").trim(),
+      dueText: String(parsed.due_text ?? "").trim(),
+      confidence: Number(parsed.confidence ?? 0)
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function parseManualOutboundAppointmentWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

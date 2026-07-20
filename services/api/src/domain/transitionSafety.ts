@@ -1,3 +1,28 @@
+/**
+ * Suppress the automatic 24-hour "Reply YES to confirm or NO to reschedule" appointment
+ * reminder (Joe ruling 2026-07-20; Peter Meredith +17168303999, the "boomed him" report):
+ * the customer had ALREADY re-confirmed the visit in his own words ("Ok probably about 11
+ * o'clock on Monday", "Sounds good see you Monday") and a human was personally working the
+ * thread — and the robotic YES/NO reminder still fired on 7/5.
+ *
+ * Skip the reminder when:
+ *  - `acknowledged` — the customer confirmed the booking since it was made
+ *    (appointment.acknowledged, set by the confirm/visit-commitment arms and RESET on any
+ *    rebooking, so a rescheduled appointment gets its reminder again), or
+ *  - `humanMode` — a human owns the thread (mode === "human"); a robotic blast over a live
+ *    human conversation is the same failure class as the cadence fixes in PR #222/#223.
+ *
+ * Deterministic side-effect/state gate over OUR OWN stored flags (AGENTS.md-allowed — no
+ * customer-text comprehension here). Fail direction: suppression fires only on explicit
+ * state we set ourselves; an unacknowledged, bot-owned booking still gets its reminder.
+ */
+export function shouldSuppressAppointmentConfirmationReminder(args: {
+  acknowledged?: boolean | null;
+  humanMode?: boolean | null;
+}): boolean {
+  return args.acknowledged === true || args.humanMode === true;
+}
+
 export function isLogisticsProgressUpdateText(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;

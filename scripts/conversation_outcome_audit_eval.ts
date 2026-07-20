@@ -126,6 +126,10 @@ eq(dims({ id: "c5c", contextFidelityShadow: { at: "2026-06-25T01:00:00.000Z", se
   eq(a.map(x => x.dimension), ["human_correction_material"], "recent material correction => surfaced");
   eq(a[0].category, "comprehension", "human_correction_material is category=comprehension");
   eq(a[0].severity, "P2", "human_correction_material is P2");
+  // occurredAt = the correction time, so the already-shipped echo suppressor can prove the graded draft
+  // predates a naming fix commit (else these rows carried no event time and re-fired forever after the
+  // 14-day PR-ledger window — +12282200201 poker-chip / #148).
+  eq(a[0].occurredAt, "2026-06-25T01:00:00.000Z", "human_correction_material carries occurredAt = the correction time");
 }
 // Older than the 21-day window => aged out (the loop already had its chance; dedup handles recurrence).
 eq(dims({ id: "c5e", humanCorrection: { at: "2026-05-01T00:00:00.000Z", category: "wrong_fact" } }), [], "material correction older than 21d => not surfaced");

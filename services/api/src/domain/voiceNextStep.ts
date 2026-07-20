@@ -63,6 +63,9 @@ export interface VoiceNextStepInput {
   confidenceMin?: number;
   breatherHours?: number;
   maxHoldDays?: number;
+  /** Task-summary lead-in; defaults to the call phrasing. The text-channel
+   * sibling (manualOutboundPromise.ts) passes "Promised over text:". */
+  summaryLeadIn?: string;
 }
 
 export type VoiceNextStepDecision =
@@ -180,6 +183,7 @@ export function decideVoiceNextStep(input: VoiceNextStepInput): VoiceNextStepDec
     : new Date(input.nowMs + 24 * HOUR_MS).toISOString();
   const holdBase = due ? localMorningIso(input.timeZone, due, 1) : breatherIso;
   const holdUntilIso = Date.parse(holdBase) > Date.parse(breatherIso) ? holdBase : breatherIso;
-  const summary = `Promised on the call: ${action}${dueLabel ? ` — by ${dueLabel}` : ""}`;
+  const leadIn = String(input.summaryLeadIn ?? "").trim() || "Promised on the call:";
+  const summary = `${leadIn} ${action}${dueLabel ? ` — by ${dueLabel}` : ""}`;
   return { kind: "staff_task", taskSummary: summary, taskDueIso, holdUntilIso, dueLabel };
 }

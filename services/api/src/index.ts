@@ -53,6 +53,10 @@ import {
   resolveVoiceLiveCallBreatherHours,
   resolveVoiceNextStepConfidenceMin
 } from "./domain/voiceNextStep.js";
+import {
+  decideManualOutboundPromise,
+  hasManualPromiseHint
+} from "./domain/manualOutboundPromise.js";
 import { applyTradeVehicleRepair, type TradeVehicleRepairRequest } from "./domain/tradeVehicleRepair.js";
 import { buildPipelineSummary } from "./domain/pipelineFunnel.js";
 import {
@@ -271,6 +275,7 @@ import {
   parseCustomerAckActionWithLLM,
   parseTurnUnderstandingWithLLM,
   parseManualOutboundAppointmentWithLLM,
+  parseManualOutboundPromiseWithLLM,
   parseInventoryEntitiesWithLLM,
   parseInventoryStatusWithLLM,
   parseIntentWithLLM,
@@ -544,7 +549,8 @@ import {
   isFirstTimeRiderGuidanceParserAccepted,
   isResponseControlParserAccepted,
   isResponseControlParserConfidentDecision,
-  isResponseControlNoResponseAccepted
+  isResponseControlNoResponseAccepted,
+  shouldSuppressAppointmentConfirmationReminder
 } from "./domain/transitionSafety.js";
 import { pickRegenerateInbound } from "./domain/regenerateSelection.js";
 import { applyDraftStateInvariants, repairLikelyTruncatedDraftText } from "./domain/draftStateInvariants.js";
@@ -31794,6 +31800,17 @@ async function processAppointmentConfirmations() {
     if (isSuppressed(conv.leadKey)) continue;
     if (appt.confirmation?.status === "confirmed" || appt.confirmation?.status === "declined") continue;
     if (appt.confirmation?.sentAt) continue;
+    // Joe ruling 2026-07-20 (+17168303999, the "boomed him" report): no robotic YES/NO
+    // reminder when the customer already confirmed the booking in their own words
+    // (appointment.acknowledged) or a human owns the thread (mode === "human").
+    if (
+      shouldSuppressAppointmentConfirmationReminder({
+        acknowledged: appt.acknowledged,
+        humanMode: conv.mode === "human"
+      })
+    ) {
+      continue;
+    }
 
     const start = new Date(appt.whenIso);
     const diffMs = start.getTime() - now.getTime();
@@ -49744,6 +49761,67 @@ app.post("/conversations/:id/send", async (req, res) => {
       channel: opts?.channel ?? "manual",
       source: "manual_outbound"
     });
+
+    // Staff-text promise → dated task (Joe, 2026-07-19): the TEXT sibling of the
+    // voice next-step plan. "I'll send you numbers Monday" typed by staff becomes
+    // a dated task + a cadence hold past the due day — nobody re-keys it.
+    // Fire-and-forget so the send path never waits on the parser; the parser owns
+    // the verdict (hasManualPromiseHint is only a cost gate), and the decision
+    // skips watch-notify/appointment promises (owned by their dedicated arms
+    // below). Fail direction: uncertainty → nothing changes.
+    if (
+      process.env.MANUAL_PROMISE_NEXT_STEP_ENABLED !== "0" &&
+      process.env.LLM_ENABLED === "1" &&
+      !!process.env.OPENAI_API_KEY &&
+      hasManualPromiseHint(text)
+    ) {
+      const promiseSourceMessageId = opts?.sourceMessageId ? String(opts.sourceMessageId) : undefined;
+      const promiseChannel = opts?.channel ?? null;
+      void (async () => {
+        try {
+          const promiseParse = await safeLlmParse("manual_outbound_promise_parser", () =>
+            parseManualOutboundPromiseWithLLM({ text, history: buildHistory(conv, 6) })
+          );
+          const dueText = String(promiseParse?.dueText ?? "").trim();
+          const promiseDecision = decideManualOutboundPromise({
+            parse: promiseParse,
+            nowMs: Date.now(),
+            timeZone: schedulerTimezone,
+            cadenceKind: conv.followUpCadence?.kind ?? null,
+            followUpMode: conv.followUp?.mode ?? null,
+            conversationStatus: conv.status ?? null,
+            dueDate: dueText ? parseRequestedDateOnly(dueText, schedulerTimezone) : null,
+            confidenceMin: resolveVoiceNextStepConfidenceMin(
+              process.env.VOICE_NEXT_STEP_CONFIDENCE_MIN
+            )
+          });
+          if (promiseDecision.kind !== "staff_task") return;
+          const promiseTask = addTodo(
+            conv,
+            "other",
+            promiseDecision.taskSummary,
+            promiseSourceMessageId,
+            undefined,
+            { dueAt: promiseDecision.taskDueIso },
+            "reminder"
+          );
+          pauseFollowUpCadence(conv, promiseDecision.holdUntilIso, "manual_promise_next_step");
+          recordRouteOutcome("manual", "manual_outbound_promise_task", {
+            convId: conv.id,
+            leadKey: conv.leadKey,
+            channel: promiseChannel,
+            taskCreated: !!promiseTask,
+            taskDueAt: promiseDecision.taskDueIso,
+            holdUntil: promiseDecision.holdUntilIso
+          });
+          saveConversation(conv);
+        } catch (err: any) {
+          console.warn("[manual-outbound-promise] parse failed", {
+            message: err?.message ?? String(err)
+          });
+        }
+      })();
+    }
 
     if (activateManualFinanceNeedsInfoCadence(text, opts)) {
       return;
