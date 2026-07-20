@@ -891,6 +891,51 @@ export function decideInventoryUnitClarificationTurn(
   return !!input.isActiveUnitClarification || !!input.legacyLexicalMatch;
 }
 
+// --- Proactive cadence value gate (2026-07-20, Joe: "no spam — later cadences must be high quality")
+// The LATER proactive cadence must be VALUE-driven, not time-driven filler. Early touches (the initial
+// engagement sequence) still fire. But a LATER touch fires ONLY when a genuine value trigger exists for
+// the lead's bike: matching new inventory (existing watch fire), a real national offer on their model
+// (nationalOffers.ts), a genuine test-ride opportunity, or a price drop on an interested unit (future).
+// Otherwise the cadence STAYS QUIET — that is the anti-spam behavior, not a miss.
+//
+// This is a PURE precedence decision (a deterministic side-effect/state gate, which AGENTS.md allows):
+// the comprehension — "is there really a matching offer / inventory?" — lives upstream in the typed
+// parsers/matchers; this only decides whether/what to fire from the signals they produce. Applied in
+// BOTH /webhooks/twilio and /conversations/:id/regenerate (route-parity law).
+//
+// FAIL DIRECTION: a later touch with no value signal → fire:false (silence). Removing this gate fails
+// toward SENDING (today's filler) — so it is a suppression gate, deliberately fail-toward-quiet here
+// because Joe's directive is explicitly "stop the spam"; early touches are never gated.
+export type ProactiveCadenceValueKind = "new_inventory" | "national_offer" | "test_ride" | "price_drop";
+
+export type ProactiveCadenceValueInput = {
+  /** true for a later-stage proactive step (value-gated); false for early engagement touches (always fire). */
+  isLaterStage: boolean;
+  hasNewInventoryMatch?: boolean | null; // a matching in-stock unit surfaced (existing watch trigger)
+  hasNationalOfferMatch?: boolean | null; // a genuine national offer applies to their bike (new trigger)
+  hasTestRideOffer?: boolean | null; // a real test-ride opportunity to extend
+  hasPriceDrop?: boolean | null; // price cut on an interested unit (future trigger; wire when built)
+};
+
+export type ProactiveCadenceValueDecision =
+  | { fire: true; valueKind: ProactiveCadenceValueKind | null; reason: string }
+  | { fire: false; valueKind: null; reason: string };
+
+export function decideProactiveCadenceValue(
+  input: ProactiveCadenceValueInput
+): ProactiveCadenceValueDecision {
+  // Early-stage touches are the initial engagement sequence — always allowed, not value-gated.
+  if (!input.isLaterStage) return { fire: true, valueKind: null, reason: "early_stage_touch" };
+  // Later stage: fire ONLY on a genuine value trigger. Precedence: concrete inventory news first,
+  // then a real offer, then a test-ride opportunity, then a price drop.
+  if (input.hasNewInventoryMatch) return { fire: true, valueKind: "new_inventory", reason: "matching_inventory" };
+  if (input.hasNationalOfferMatch) return { fire: true, valueKind: "national_offer", reason: "matching_national_offer" };
+  if (input.hasTestRideOffer) return { fire: true, valueKind: "test_ride", reason: "test_ride_opportunity" };
+  if (input.hasPriceDrop) return { fire: true, valueKind: "price_drop", reason: "price_drop" };
+  // No value this cycle → stay quiet (the anti-spam gate).
+  return { fire: false, valueKind: null, reason: "no_value_trigger_stay_quiet" };
+}
+
 // --- Feedback-driven redraft (2026-06-24) -----------------------------------
 // Phase 1 of the closed-loop feedback system: a staff thumbs-DOWN on a still-PENDING AI draft
 // triggers an immediate steered re-draft into the same console box (suggest mode — a human still
