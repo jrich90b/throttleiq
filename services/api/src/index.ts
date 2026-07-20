@@ -505,6 +505,15 @@ import {
   unitIsDistinctModelFromWatch,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
+import {
+  evaluateProactiveCadenceValueGate,
+  isCadenceValueGateEnabled,
+  vehicleLabelForOfferMatch
+} from "./domain/nationalOffers.js";
+import {
+  resolveInterestUnitPriceDrop,
+  commitInterestUnitPriceDropFire
+} from "./domain/priceDropWatch.js";
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
@@ -13831,6 +13840,38 @@ async function buildCadenceRegeneratedDraft(
       : null;
   if (manualTestRideAvailabilityOverride) {
     return { body: manualTestRideAvailabilityOverride };
+  }
+
+  // Proactive cadence VALUE GATE — regen mirror of the live tick (route-parity law): the SAME shared
+  // applier (evaluateProactiveCadenceValueGate). The three value overrides above already returned, so
+  // reaching here means the redraft would be generic filler. On a later step: a genuine national offer
+  // REPLACES it; no value trigger → return null (keep the prior draft; regenerate never manufactures a
+  // filler touch the live tick would have suppressed). Flag-gated, default OFF → inert.
+  if (isCadenceValueGateEnabled()) {
+    const regenTestRideValueContext =
+      !String((conv.appointment as any)?.eventId ?? "").trim() &&
+      (conv.classification?.bucket === "test_ride" ||
+        conv.classification?.cta === "schedule_test_ride" ||
+        String(cadence.contextTag ?? "").trim().toLowerCase() === "test_ride");
+    // NOTE: a regen DRAFT must not consume the dedup ledger or the price anchor — only the live tick
+    // records a fired touch. resolveInterestUnitPriceDrop may arm a missing anchor (harmless + idempotent).
+    const regenInterestPriceDrop = await resolveInterestUnitPriceDrop(conv);
+    const valueGate = await evaluateProactiveCadenceValueGate({
+      stepIndex: lastSentStep,
+      isPostSale: false, // post_sale kinds returned above
+      hasValueOverride: false, // the overrides above already returned
+      vehicleLabel: vehicleLabelForOfferMatch(conv),
+      firstName: conv.lead?.firstName,
+      alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
+      hasTestRideOffer: regenTestRideValueContext,
+      priceDropMessage: regenInterestPriceDrop?.message ?? null
+    });
+    if (valueGate.action === "replace") {
+      return { body: valueGate.message };
+    }
+    if (valueGate.action === "suppress") {
+      return null;
+    }
   }
 
   // Route parity with the live tick: a 4+ month stated timeframe keeps the gentle long_term tempo even
@@ -31510,6 +31551,67 @@ async function processDueFollowUpsUnlocked() {
     const emailTo = conv.lead?.email;
     const useEmail =
       !isPostSale && conv.classification?.channel === "email" && !!emailTo && hasEmailOptIn(conv.lead);
+    // Proactive cadence VALUE GATE (Joe 2026-07-20: "no spam — later cadences must be high quality").
+    // Shared applier evaluateProactiveCadenceValueGate (nationalOffers.ts) — the SAME helper the
+    // regenerate cadence builder calls (route-parity law). A later-stage touch with no value trigger
+    // is SUPPRESSED (advance + stay quiet); a genuine national offer on their bike REPLACES the
+    // filler. Early steps, post-sale, existing value overrides, the disengaged closeout, and the
+    // email lane (its message is template-built below — follow-up scope) pass through unchanged.
+    // Flag-gated: CADENCE_VALUE_GATE_ENABLED default OFF → this block is inert.
+    if (!isPostSale && !useEmail && !disengagedCloseoutActive && isCadenceValueGateEnabled()) {
+      // Live test-ride context (wants a ride, nothing booked) = the contextual invite IS the value.
+      const testRideValueContext =
+        !String((conv.appointment as any)?.eventId ?? "").trim() &&
+        (conv.classification?.bucket === "test_ride" ||
+          conv.classification?.cta === "schedule_test_ride" ||
+          String(cadence.contextTag ?? "").trim().toLowerCase() === "test_ride");
+      // Price-drop trigger (deterministic; also ARMS the anchor on first sighting of the unit).
+      const interestPriceDrop = await resolveInterestUnitPriceDrop(conv);
+      const valueGate = await evaluateProactiveCadenceValueGate({
+        stepIndex: Number(cadence.stepIndex ?? 0),
+        isPostSale,
+        hasValueOverride: !!(
+          leadUnitAvailabilityOverride ||
+          heldInventoryOverride ||
+          manualTestRideAvailabilityOverride
+        ),
+        vehicleLabel: vehicleLabelForOfferMatch(conv),
+        firstName: conv.lead?.firstName,
+        alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
+        hasTestRideOffer: testRideValueContext,
+        priceDropMessage: interestPriceDrop?.message ?? null
+      });
+      if (valueGate.action === "suppress") {
+        console.log("[followup][cadence-value-gate] later touch has no value trigger — staying quiet", {
+          convId: conv.id,
+          stepIndex: cadence.stepIndex,
+          reason: valueGate.reason
+        });
+        advanceFollowUpCadence(conv, cfg.timezone);
+        continue;
+      }
+      if (valueGate.action === "replace") {
+        console.log("[followup][cadence-value-gate] filler replaced with value touch", {
+          convId: conv.id,
+          stepIndex: cadence.stepIndex,
+          kind: valueGate.kind,
+          offer: valueGate.offerTitle || undefined
+        });
+        message = valueGate.message;
+        cadenceNoRepeatFallbacks = [];
+        mediaUrls = undefined;
+        if (valueGate.kind === "national_offer") {
+          // Dedup ledger: this promotion never fires for this lead again (a DIFFERENT one may).
+          conv.nationalOfferTouches = [
+            ...(conv.nationalOfferTouches ?? []),
+            { title: valueGate.offerTitle, at: new Date().toISOString() }
+          ];
+        } else if (valueGate.kind === "price_drop" && interestPriceDrop) {
+          // Re-anchor at the fired price so only a FURTHER drop can fire again.
+          commitInterestUnitPriceDropFire(conv, interestPriceDrop);
+        }
+      }
+    }
     const systemMode = effectiveMode(conv);
     const forceAutoSendPostSaleCadence = isPostSale;
     const recentHumanOutboundInLoop = (conv.messages ?? []).some((m: any) => {

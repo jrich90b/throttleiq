@@ -625,6 +625,7 @@ const NATIONAL_OFFER_MATCH_JSON_SCHEMA: { [key: string]: unknown } = {
 export async function matchNationalOfferToLeadWithLLM(args: {
   vehicle: string;
   offers: NationalOffer[];
+  firstName?: string | null;
 }): Promise<NationalOfferMatch | null> {
   const enabled = String(process.env.NATIONAL_OFFERS_ENABLED ?? "0").trim().toLowerCase();
   if (enabled === "0" || enabled === "false" || enabled === "no") return null;
@@ -633,6 +634,7 @@ export async function matchNationalOfferToLeadWithLLM(args: {
   const vehicle = String(args.vehicle ?? "").trim();
   const offers = Array.isArray(args.offers) ? args.offers : [];
   if (!vehicle || offers.length === 0) return null;
+  const firstName = String(args.firstName ?? "").trim();
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const offerLines = offers
     .map(o => `- ${o.title} | applies_to: ${o.appliesTo} | ${o.terms} | ${o.eligibility} | exp ${o.expiration}`)
@@ -643,15 +645,21 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     "HARD RULES:",
     "- NEVER match a vague or model-less vehicle (e.g. just 'Harley-Davidson' or '2025 Harley-Davidson' with no model). If the model isn't clearly named, applies=false.",
     "- NEVER stretch a family-specific offer onto a different family (a Touring offer does not fit a Sportster/Softail, etc.).",
-    "- If a real match exists, write ONE short, on-voice SMS (like texting a friend) naming the offer for THEIR bike. No fabrication, no invented figures beyond the offer's stated terms, no 'Reply STOP'.",
+    "- If a real match exists, write ONE short SMS that sounds like a real salesperson texting a customer they know — NOT a marketing blast and NOT a bot:",
+    "  * casual and specific, contractions, at most one sentence of offer + one short question;",
+    firstName ? `  * greet them naturally by name (${firstName}) — or weave the name mid-sentence;` : "  * no generic 'Hey!' opener with an exclamation mark;",
+    "  * NEVER open with 'Hey!' alone, never 'Let me know if you're interested!', no exclamation-mark spam, no 'Reply STOP', no corporate phrasing ('take advantage of', 'don't miss out', 'limited time').",
+    "  * no fabrication — only the offer's stated terms; round nothing; invent no dates.",
     "- If nothing genuinely applies, applies=false and message='' (the agent stays quiet — that is correct).",
     "",
     "Examples:",
-    'bike "2026 Low Rider S" with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":true,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Hey! Right now there is $1,000 customer cash on the 2026 Low Rider S — want the details?"}',
+    'bike "2026 Low Rider S" (name Mike) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":true,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Mike, that Low Rider S you were eyeing has $1,000 customer cash on it right now — want me to run what that does to the numbers?"}',
+    'bike "Electra Glide Ultra Classic" (no name) with a "Grand American Touring from $406/mo extended terms" offer -> {"applies":true,"offerTitle":"Select Grand American Touring Models Extended Terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
     'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
     'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
     "",
     `Lead's bike of interest: ${vehicle}`,
+    firstName ? `Lead's first name: ${firstName}` : "Lead's first name: (unknown — do not invent one)",
     "",
     "Current national offers:",
     offerLines,
