@@ -347,6 +347,16 @@ export type SchedulingTurnInput = {
   appointmentTimingOpenEndedBound?: boolean;
   // Block C — inbound_reply_action schedule_context_status_update (accepted).
   parserScheduleStatusUpdate: boolean;
+  // DAY-ONLY visit commitment (Joe ruling 2026-07-19, Peter Meredith +17168303999:
+  // "Sounds good see you Monday"): the parser read a committed DAY with no time
+  // (isParserSoftVisitCommitment over the appointment-timing parse, or a day-only
+  // provide_arrival_window ack). A concrete named day IS the schedule context, so this
+  // routes to the visit_commitment arm (soft appointment: warm confirm + cadence quiet
+  // until the day + dated staff task) WITHOUT the dialog-state/offer-context gates —
+  // and never to the "I'll check that time" arrival-window deflection (there is no time
+  // to check). Recognition miss => today's behavior; over-fire => a warm confirm + task,
+  // never a booking.
+  dayOnlyVisitCommitment?: boolean;
   // Context gates available where the decision is computed.
   pricingOrPaymentsIntent: boolean;
   scheduleDialogState: boolean;
@@ -355,7 +365,7 @@ export type SchedulingTurnInput = {
 
 export type SchedulingTurnDecision = {
   kind: SchedulingTurnKind;
-  /** A recognized future-day visit commitment holds (parser + active schedule context). */
+  /** A recognized future-day visit commitment holds (parser + active schedule context, or a day-only parser commitment). */
   visitCommitment: boolean;
 };
 
@@ -366,6 +376,7 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
     !!input.parserScheduleStatusUpdate &&
     !!input.scheduleDialogState &&
     !!input.scheduleOfferContext;
+  const dayOnlyCommitment = !!input.dayOnlyVisitCommitment;
 
   // Block A — customer-ack actions. Mirrors the live customer-ack block: it only fires
   // for these actions and (once entered) always returns, so it has top precedence.
@@ -390,8 +401,10 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
       case "appointment_status_question":
         return { kind: "appointment_status_question", visitCommitment };
       case "provide_arrival_window":
-        // Visit commitment preempts the vague arrival-window ack (the Todd rule).
-        if (!visitCommitment) return { kind: "arrival_window", visitCommitment };
+        // Visit commitment preempts the vague arrival-window ack (the Todd rule). A DAY-ONLY
+        // commitment counts (Peter Meredith): "see you Monday" must never draw the arrival-window
+        // "I'll check that time and follow up" deflection — there is no time to check.
+        if (!visitCommitment && !dayOnlyCommitment) return { kind: "arrival_window", visitCommitment };
         break;
       case "immediate_arrival_request":
         return { kind: "immediate_arrival", visitCommitment };
@@ -444,8 +457,11 @@ export function decideSchedulingTurn(input: SchedulingTurnInput): SchedulingTurn
 
   // Block C — recognized future-day visit commitment. The handler additionally gates
   // this on the top-level route (no pricing/availability/callback) where routeExec* is
-  // known; this function owns the visit-commitment recognition + precedence.
-  if (visitCommitment) return { kind: "visit_commitment", visitCommitment };
+  // known; this function owns the visit-commitment recognition + precedence. A day-only
+  // parser commitment qualifies without the context gates (the named day IS the context).
+  if (visitCommitment || dayOnlyCommitment) {
+    return { kind: "visit_commitment", visitCommitment: visitCommitment || dayOnlyCommitment };
+  }
 
   return { kind: "none", visitCommitment };
 }

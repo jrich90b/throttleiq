@@ -26,10 +26,18 @@ assert.match(
   /Perfect, you're set for \$\{inboundDay\}!/,
   "event-day commitments get a confirmation, never a re-ask"
 );
+// The soft-appointment todo is consolidated into ONE shared helper (addSoftVisitStaffTask,
+// Joe ruling 2026-07-19: the task is also DATED — due the visit day) called from every arm:
+// status-update live+regen, future-timeframe live+regen, and the pure-soft-visit live+regen
+// branches. One literal in the helper + >=6 call sites replaces the old 4 inline copies.
 assert.equal(
   (apiSource.match(/soft appointment, confirm and prep\./g) ?? []).length,
-  4,
-  "status-update AND future-timeframe paths (live + regen) must create the soft-appointment todo"
+  1,
+  "the soft-appointment todo template must live ONLY in the shared addSoftVisitStaffTask helper"
+);
+assert.ok(
+  (apiSource.match(/addSoftVisitStaffTask\(conv,/g) ?? []).length >= 6,
+  "status-update, future-timeframe, and pure-soft-visit paths (live + regen) must all create the soft-appointment todo via the shared helper"
 );
 
 // Day commitments that arrive via the future-timeframe route get the same
