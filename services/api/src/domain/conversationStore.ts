@@ -867,6 +867,12 @@ export type Conversation = {
     finish?: string;
     updatedAt?: string;
   };
+  // High-quality cadence (Joe 2026-07-20): national offers already texted to this lead — the SAME
+  // promotion is never re-sent; a DIFFERENT one may fire (dedup key = normalized offer title).
+  nationalOfferTouches?: { title: string; at: string }[];
+  // Price-drop trigger anchor: the asking price of the unit of interest when we first armed the
+  // watch; a later feed price below it (by the threshold) fires ONE price-drop touch, then re-anchors.
+  interestUnitPriceAnchor?: { stockId: string; price: number; at: string };
   paymentBudgetContext?: {
     monthlyBudget?: number | null;
     termMonths?: number | null;
