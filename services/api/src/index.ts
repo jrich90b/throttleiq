@@ -329,7 +329,8 @@ import {
   judgeCadenceQualityWithLLM,
   getCachedSelfHealVerdict,
   scoreContextFidelityWithLLM,
-  classifyDraftEditWithLLM
+  classifyDraftEditWithLLM,
+  composeHumanThreadNudgeWithLLM
 } from "./domain/llmDraft.js";
 import {
   decideDraftQualityGate,
@@ -514,6 +515,14 @@ import {
   resolveInterestUnitPriceDrop,
   commitInterestUnitPriceDropFire
 } from "./domain/priceDropWatch.js";
+import {
+  decideHumanThreadNudge,
+  isHumanThreadNudgeEnabled,
+  isHumanThreadNudgeAutosendEnabled,
+  humanThreadNudgeQuietDays,
+  humanThreadNudgeMaxCount,
+  humanThreadNudgeSpacingDays
+} from "./domain/humanThreadNudge.js";
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
@@ -30101,6 +30110,120 @@ async function processDueFollowUpsUnlocked() {
     console.log(
       `[state-reconcile] resumed ${inventoryHoldsExpired} expired inventory-hold cadence(s) (TTL ${holdTtlDays}d)`
     );
+  }
+  // Human-thread quiet nudge (Joe 2026-07-20: "as hands off as possible"): a HUMAN-owned thread
+  // whose customer went quiet after the rep's last message gets ONE short agent-composed bump that
+  // continues the rep's own thread in the rep's voice (composeHumanThreadNudgeWithLLM — no persona
+  // intro, zero new facts). DRAFT-FIRST: it lands in the suggest-mode approval queue (one tap);
+  // HUMAN_THREAD_NUDGE_AUTOSEND (dark) is the zero-touch carve-out. The pure decision
+  // (domain/humanThreadNudge.ts) enumerates every stop-state: unanswered customer message (stays
+  // the owner's "needs YOUR reply" task), dated staff promise, pending draft, opt-out, closed,
+  // call-only, booked appointment, cap + spacing. Capped per tick; every failure path = silence.
+  if (isHumanThreadNudgeEnabled()) {
+    const nudgeQuietDays = humanThreadNudgeQuietDays();
+    const nudgeMaxCount = humanThreadNudgeMaxCount();
+    const nudgeSpacingDays = humanThreadNudgeSpacingDays();
+    let humanNudges = 0;
+    for (const conv of convs) {
+      if (humanNudges >= 10) break;
+      if (String((conv as any).mode ?? "").toLowerCase() !== "human") continue;
+      const delivered = (conv.messages ?? []).filter(
+        (m: any) =>
+          ["twilio", "human", "sendgrid", "web_widget", "sendgrid_adf"].includes(String(m?.provider ?? "")) &&
+          String(m?.body ?? "").trim()
+      );
+      const lastMsg: any = delivered[delivered.length - 1] ?? null;
+      const lastOut: any = [...delivered].reverse().find((m: any) => m?.direction === "out") ?? null;
+      const lastOutboundWasHuman =
+        !!lastOut && (!!lastOut.actorUserId || !!lastOut.actorUserName || lastOut.provider === "human");
+      const openFutureTodo = openTodos.some((t: any) => {
+        if (t?.convId !== conv.id) return false;
+        const dueMs = Date.parse(String(t?.dueAt ?? ""));
+        return Number.isFinite(dueMs) && dueMs > now.getTime();
+      });
+      const nudgeDecision = decideHumanThreadNudge({
+        conversationMode: (conv as any).mode ?? null,
+        suppressed: isSuppressed(conv.leadKey),
+        conversationStatus: conv.status ?? null,
+        closedAt: conv.closedAt ?? null,
+        closedReason: conv.closedReason ?? null,
+        contactPreference: (conv as any).contactPreference ?? null,
+        appointmentBookedEventId: conv.appointment?.bookedEventId ?? null,
+        hasPendingDraft: !!getLatestPendingDraft(conv),
+        lastMessageDirection: lastMsg?.direction ?? null,
+        lastMessageAtMs: Date.parse(String(lastMsg?.at ?? "")),
+        lastOutboundWasHuman,
+        hasOpenFutureDatedTodo: openFutureTodo,
+        nudgeCount: conv.humanThreadNudge?.count ?? 0,
+        lastNudgeAtMs: Date.parse(String(conv.humanThreadNudge?.lastAt ?? "")),
+        nowMs: now.getTime(),
+        quietDays: nudgeQuietDays,
+        maxCount: nudgeMaxCount,
+        spacingDays: nudgeSpacingDays
+      });
+      if (!nudgeDecision.nudge) continue;
+      const nudgeText = await composeHumanThreadNudgeWithLLM({
+        firstName: conv.lead?.firstName,
+        recentMessages: delivered.slice(-8).map((m: any) => ({
+          direction: m.direction === "in" ? ("in" as const) : ("out" as const),
+          body: String(m.body ?? "")
+        }))
+      });
+      if (!nudgeText) continue;
+      const nudgeTo = normalizePhone(conv.lead?.phone ?? conv.leadKey ?? "");
+      if (!nudgeTo.startsWith("+")) continue;
+      const nudgeMessage = ensureInitialSmsOptOutFooter(conv, nudgeText, {
+        provider: "twilio",
+        from: process.env.TWILIO_FROM_NUMBER ?? "salesperson",
+        to: nudgeTo
+      });
+      if (
+        isRecentDuplicateOutbound(conv, nudgeTo, nudgeMessage, {
+          providers: ["twilio", "human", "draft_ai"],
+          windowMs: 24 * 60 * 60 * 1000,
+          nearDuplicate: true
+        })
+      ) {
+        continue;
+      }
+      let nudgeDelivery: "draft" | "sent" = "draft";
+      if (isHumanThreadNudgeAutosendEnabled()) {
+        const accountSid = process.env.TWILIO_ACCOUNT_SID;
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        const fromNumber = process.env.TWILIO_FROM_NUMBER;
+        if (accountSid && authToken && fromNumber) {
+          try {
+            const client = twilio(accountSid, authToken);
+            const sent = await client.messages.create({ from: fromNumber, to: nudgeTo, body: nudgeMessage });
+            appendOutbound(conv, fromNumber, nudgeTo, nudgeMessage, "twilio", sent.sid);
+            nudgeDelivery = "sent";
+          } catch {
+            appendOutbound(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai");
+          }
+        } else {
+          appendOutbound(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai");
+        }
+      } else {
+        appendOutbound(conv, "salesperson", nudgeTo, nudgeMessage, "draft_ai");
+      }
+      conv.humanThreadNudge = {
+        count: (conv.humanThreadNudge?.count ?? 0) + 1,
+        lastAt: nowIso()
+      };
+      conv.updatedAt = nowIso();
+      saveConversation(conv);
+      humanNudges += 1;
+      recordRouteOutcome("manual", "human_thread_nudge", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        delivery: nudgeDelivery,
+        quietDays: nudgeDecision.quietDays,
+        count: conv.humanThreadNudge.count
+      });
+    }
+    if (humanNudges > 0) {
+      console.log(`[human-thread-nudge] composed ${humanNudges} quiet-thread bump(s)`);
+    }
   }
   // Scheduling-leak safety net: a visit time was being arranged but no appointment got booked and it
   // went idle — the agent didn't offer times / confirm / book (Nicholas Braun, 2026-06-25: said he'd
