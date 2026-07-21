@@ -11,6 +11,7 @@ import {
   isLeadIntakeRenotificationOnEngagedThread,
   isNonSalesConversation,
   isOptOutKeywordInbound,
+  isQuotedReactionEchoInbound,
   isShadowReplayMessage,
   isShortAckNoAction,
   isTestLeadEmail
@@ -105,12 +106,6 @@ function computeMedian(values: number[]): number {
   return ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) / 2;
 }
 
-function isReactionToOutboundText(text: string): boolean {
-  const t = String(text ?? "").trim();
-  if (!t) return false;
-  return /to\s+["“][\s\S]+["”]/i.test(t) && /^[\p{Emoji}\p{Extended_Pictographic}\s\W]*to\s+["“]/u.test(t);
-}
-
 function hasActionableCue(text: string): boolean {
   const t = String(text ?? "").toLowerCase();
   if (!t.trim()) return false;
@@ -160,7 +155,7 @@ function getSkipReason(
   if (provider === "voice_transcript") return "provider_voice_transcript";
   if (isTestLeadEmail(leadEmail) || isTestLeadEmail(conv?.id)) return "test_lead_email";
   if (isOptOutKeywordInbound(inboundText)) return "opt_out_no_reply";
-  if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
+  if (isQuotedReactionEchoInbound(inboundText)) return "reaction_to_outbound";
   if (isShortAckNoAction(inboundText)) return "short_ack_no_action";
   if (isClosingAckNoAction(inboundText)) return "closing_ack_no_action";
   if (isEnthusiasmAckNoAction(inboundText)) return "enthusiasm_ack_no_reply";
@@ -169,8 +164,18 @@ function getSkipReason(
   if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(inboundText)) {
     return "manual_handoff_non_actionable";
   }
-  if (convMode === "human" && !hasActionableCue(inboundText)) {
-    return "human_mode_non_actionable";
+  // In Human mode the console blocks the agent from drafting/regenerating
+  // (AGENTS.md: "regenerate blocked in Suggest mode / Human mode"), so staff own
+  // every reply and the agent produces NO customer-facing send. Grading agent
+  // tone here is a phantom regardless of whether the inbound is "actionable":
+  // the graded "outbound" is either a staff-typed message or a transient,
+  // never-sent draft (2026-07-20 release-gate dirt — William Indelicato,
+  // Jaden Capozzi, David Miller: three human-mode threads whose graded outbounds
+  // did not even exist in the live store). Dropped human-mode customer questions
+  // still surface as staff items via the stuck-turn / stale-handoff reports and
+  // the fresh-stuck-actionable gate metric — not as an agent-tone miss.
+  if (convMode === "human") {
+    return "human_mode_agent_silent";
   }
   return null;
 }

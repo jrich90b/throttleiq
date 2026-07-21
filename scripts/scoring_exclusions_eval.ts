@@ -20,6 +20,7 @@ import {
   isNonSalesConversation,
   isOptOutKeywordInbound,
   isEnthusiasmAckNoAction,
+  isQuotedReactionEchoInbound,
   isShadowReplayMessage,
   isShortAckNoAction,
   isTestLeadEmail,
@@ -445,5 +446,29 @@ assert.equal(
   false
 );
 assert.equal(isCampaignBroadcastSend({ at: "", direction: "out" }, broadcastThread), false);
+
+// iOS/Twilio tapback echoes quote a prior outbound and carry no new ask — a pure
+// no-reply signal. The reply-quality scorers' old inline matcher only caught the
+// "<reaction> to \"…\"" shape and missed the leading-verb "Liked \"…\"" form, so
+// Michael Stellar +19198105169 (2026-07-20, `Liked “Gotcha — yes…”`) leaked
+// through as a phantom missing_response and dirtied the release gate.
+assert.equal(
+  isQuotedReactionEchoInbound(
+    "Liked “Gotcha — yes, they are supposed to be coming back out with the Sportster. I’ll hold onto your info and text you when we see one come in.”"
+  ),
+  true
+); // live 7/20 phantom (+19198105169)
+assert.equal(isQuotedReactionEchoInbound('Loved "See you Saturday!"'), true);
+assert.equal(isQuotedReactionEchoInbound('Emphasized “I’ll get those numbers over”'), true);
+assert.equal(isQuotedReactionEchoInbound('Laughed at "that’s a great bike"'), true);
+assert.equal(isQuotedReactionEchoInbound('Reacted ❤️ to "Thanks for coming in"'), true); // emoji reaction
+assert.equal(isQuotedReactionEchoInbound('👍 to "See you then"'), true);
+assert.equal(isQuotedReactionEchoInbound('Le encanta “Hola, gracias por venir”'), true); // Spanish wrapper
+// Fail-direction guards: a quoted echo is REQUIRED. Plain words that merely
+// contain a reaction verb — or a real ask — are never skipped.
+assert.equal(isQuotedReactionEchoInbound("I liked the black one, is it still available?"), false);
+assert.equal(isQuotedReactionEchoInbound("liked"), false);
+assert.equal(isQuotedReactionEchoInbound("Loved meeting you today, can I come Saturday?"), false);
+assert.equal(isQuotedReactionEchoInbound(""), false);
 
 console.log("PASS scoring exclusions eval");

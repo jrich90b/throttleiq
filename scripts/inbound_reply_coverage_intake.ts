@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isEnthusiasmAckNoAction, isShortAckNoAction } from "../services/api/src/domain/scoringExclusions.ts";
+import {
+  isEnthusiasmAckNoAction,
+  isQuotedReactionEchoInbound,
+  isShortAckNoAction
+} from "../services/api/src/domain/scoringExclusions.ts";
 import {
   evaluateTurnToneQuality,
   isAdfInboundText,
@@ -213,12 +217,6 @@ function normalizeProvider(raw: unknown): Provider | null {
   return null;
 }
 
-function isReactionToOutboundText(text: string): boolean {
-  const t = String(text ?? "").trim();
-  if (!t) return false;
-  return /to\s+["“][\s\S]+["”]/i.test(t) && /^[\p{Emoji}\p{Extended_Pictographic}\s\W]*to\s+["“]/u.test(t);
-}
-
 function hasActionableCue(text: string): boolean {
   const t = normalizeText(text).toLowerCase();
   if (!t) return false;
@@ -247,7 +245,7 @@ function skipReasonFor(conv: Conversation, inbound: Message, inboundText: string
   const leadEmail = normalizeText(conv.lead?.email ?? conv.latestLead?.email).toLowerCase();
   if (provider === "voice_transcript") return "provider_voice_transcript";
   if (leadEmail.endsWith("@example.com") || leadEmail.includes("example.com")) return "test_lead_example_email";
-  if (isReactionToOutboundText(inboundText)) return "reaction_to_outbound";
+  if (isQuotedReactionEchoInbound(inboundText)) return "reaction_to_outbound";
   return null;
 }
 
@@ -262,7 +260,10 @@ function expectedNoResponseReason(conv: Conversation, inboundText: string): stri
   if ((followUpMode === "manual_handoff" || followUpMode === "paused_indefinite") && !hasActionableCue(t)) {
     return "manual_handoff_non_actionable";
   }
-  if (convMode === "human" && !hasActionableCue(t)) return "human_mode_non_actionable";
+  // Human mode blocks agent drafting/regenerate (AGENTS.md), so staff own every
+  // reply and there is no agent send to grade — actionable or not. Matches the
+  // tone scorer's human_mode_agent_silent skip.
+  if (convMode === "human") return "human_mode_agent_silent";
   return null;
 }
 

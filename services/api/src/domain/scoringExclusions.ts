@@ -229,6 +229,60 @@ export function isShortAckNoAction(text: string | null | undefined): boolean {
   return SHORT_ACK_PHRASE_RE.test(normalized);
 }
 
+/**
+ * An iOS / Twilio *tapback* echo — "Liked \"…\"", "Loved \"…\"", "Emphasized
+ * \"…\"", "Laughed at \"…\"", the Spanish "Le encanta \"…\"", or "Reacted ❤️ to
+ * \"…\"" — quotes a prior outbound and carries NO new ask. It is a pure
+ * no-reply signal (AGENTS.md "Twilio Reaction No-Reply Guardrail"), so grading
+ * the agent's silence on it as `missing_response` manufactures a phantom miss.
+ *
+ * Both reply-quality scorers (tone QA + inbound-reply-coverage intake) used to
+ * carry their own inline `isReactionToOutboundText` matcher that ONLY caught the
+ * "<reaction> to \"…\"" shape and missed the leading-verb form "Liked \"…\""
+ * (curly-quoted) — so Michael Stellar +19198105169 (2026-07-20, `Liked “Gotcha
+ * — yes…”`) leaked through and dirtied the release gate's toneMissingResponses.
+ * This is the eval-pinned twin of `isQuotedReactionInboundText`
+ * (regenerateSelection.ts, the live drafting guard); the two must stay in
+ * lockstep. Both cover the leading-verb form, the "X to \"…\"" form, the Spanish
+ * wrappers, and emoji reactions.
+ *
+ * Fail-direction: HIDES a turn from scoring, so a quoted body is REQUIRED — a
+ * customer who merely writes the word "liked" (no quoted echo) is never skipped.
+ */
+export function isQuotedReactionEchoInbound(text: string | null | undefined): boolean {
+  const normalized = String(text ?? "")
+    .replace(/[\u2000-\u200F\u202A-\u202E\u2060\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  // Leading-verb form: `Liked "..."` / `Le encanta "..."`.
+  if (
+    /^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|\u00f3)|(?:no )?le gust(?:a|\u00f3)|se ri[o\u00f3] de|enfatiz(?:a|\u00f3)|destac(?:a|\u00f3)|cuestion(?:a|\u00f3))\s+["'\u201c\u201d][\s\S]{1,2000}["'\u201c\u201d]$/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  // Trailing form: `<token> to "..."` (e.g. `Reacted <emoji> to "..."`).
+  const toQuotedMatch = normalized.match(
+    /^(.*?)\s+to\s+["'\u201c\u201d]([\s\S]{1,2000})["'\u201c\u201d]$/i
+  );
+  if (!toQuotedMatch) return false;
+  const reactionToken = String(toQuotedMatch[1] ?? "").trim().toLowerCase();
+  if (!reactionToken) return false;
+  if (
+    /^(liked|loved|disliked|laughed at|emphasized|questioned|le encant(?:a|\u00f3)|(?:no )?le gust(?:a|\u00f3)|se ri[o\u00f3] de|enfatiz(?:a|\u00f3)|destac(?:a|\u00f3)|cuestion(?:a|\u00f3))$/i.test(
+      reactionToken
+    )
+  ) {
+    return true;
+  }
+  if (/^reacted(?:\s+with)?\s*[\p{Extended_Pictographic}\uFE0F\u200D\u{1F3FB}-\u{1F3FF}\s]+$/u.test(reactionToken)) {
+    return true;
+  }
+  return !/[\p{L}\p{N}]/u.test(reactionToken);
+}
+
 export function isNonSalesConversation(conv: {
   followUp?: { reason?: string | null } | null;
 }): boolean {
