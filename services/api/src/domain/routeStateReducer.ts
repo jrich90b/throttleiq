@@ -1292,6 +1292,60 @@ export function decideFinanceProcessQuestionTurn(
   return { kind: "finance_process_handoff" };
 }
 
+// --- Service-scheduling handoff vs sales visit (Justin Alley, 2026-07-21) --
+//
+// A SALES thread got claimed by the service department: the customer asked about a sale
+// bike's maintenance history, OUR OWN replies filled the thread with "service" words
+// ("we're doing the 5,000 mile service on it right now"), and when the customer then named
+// a visit time ("between 5 and 6") the deterministic service-context hint
+// (isServiceDepartmentSchedulingRequest) routed the turn to a SERVICE scheduling handoff —
+// wrong department, wrong reply, and it rewrote the conversation's classification to
+// service. The Bobby Kindred defer (6/25) only covers answers to OUR visit-time question;
+// this covers the customer VOLUNTEERING a time inside an in-flight sales visit plan.
+//
+// The comprehension question ("which department is this visit for?") belongs to a typed
+// parser (parseVisitDepartmentPurposeWithLLM); this pure decision owns the precedence.
+//
+// FAIL DIRECTION: an explicit customer service ask this turn ALWAYS wins (deterministic
+// gate — the parser can never talk us out of an explicit request). Parser null/unknown =>
+// status quo (service_handoff) — behavior-preserving when the LLM is down. We only defer
+// to the sales scheduling cluster on a CONFIDENT parser sales_visit read.
+// ---------------------------------------------------------------------------
+export type ServiceSchedulingHandoffRoute = "service_handoff" | "defer_to_scheduling_cluster";
+
+export type ServiceSchedulingHandoffTurnInput = {
+  serviceContextHint: boolean; // isServiceDepartmentSchedulingRequest fired for this turn
+  customerNamedServiceThisTurn: boolean; // explicit service-department ask in the CUSTOMER's words this turn
+  parserPurpose?: "service_visit" | "sales_visit" | "unknown" | null;
+  parserConfidence?: number | null;
+  confidenceMin: number;
+};
+
+export type ServiceSchedulingHandoffTurnDecision = {
+  route: ServiceSchedulingHandoffRoute;
+  reason:
+    | "no_service_context"
+    | "explicit_service_request"
+    | "parser_sales_visit"
+    | "service_handoff_default";
+};
+
+export function decideServiceSchedulingHandoffTurn(
+  input: ServiceSchedulingHandoffTurnInput
+): ServiceSchedulingHandoffTurnDecision {
+  if (!input.serviceContextHint) {
+    return { route: "defer_to_scheduling_cluster", reason: "no_service_context" };
+  }
+  if (input.customerNamedServiceThisTurn) {
+    return { route: "service_handoff", reason: "explicit_service_request" };
+  }
+  const confidence = typeof input.parserConfidence === "number" ? input.parserConfidence : 0;
+  if (input.parserPurpose === "sales_visit" && confidence >= input.confidenceMin) {
+    return { route: "defer_to_scheduling_cluster", reason: "parser_sales_visit" };
+  }
+  return { route: "service_handoff", reason: "service_handoff_default" };
+}
+
 // --- Finance-hardship turn (2026-07-15, refined 2026-07-16) -----------------
 //
 // A customer who surfaces a personal CREDIT / FINANCING situation gets ONE of two safe replies —

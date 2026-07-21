@@ -11176,6 +11176,121 @@ output: {"action":"pricing_request","explicit_request":true,"item":"sissy bar an
   };
 }
 
+// --- Visit-department purpose parser (Justin Alley, 2026-07-21) -----------------------------
+// A SALES thread can be soaked in "service" words that are ABOUT THE SALE BIKE'S maintenance
+// history (often from OUR OWN messages: "we're doing the 5,000 mile service on it right now").
+// The deterministic service-context hint (isServiceDepartmentSchedulingRequest) reads those words
+// and claims the customer's visit-time turn for the SERVICE department. This parser reads the
+// conversation and answers the comprehension question the regex can't: is this visit about
+// bringing a bike in for service work, or about coming in to see/buy a bike?
+export type VisitDepartmentPurposeParse = {
+  purpose: "service_visit" | "sales_visit" | "unknown";
+  confidence?: number;
+};
+
+const VISIT_DEPARTMENT_PURPOSE_PARSER_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["purpose", "rationale", "confidence"],
+  properties: {
+    purpose: { type: "string", enum: ["service_visit", "sales_visit", "unknown"] },
+    rationale: { type: "string" },
+    confidence: { type: "number" }
+  }
+};
+
+export async function parseVisitDepartmentPurposeWithLLM(args: {
+  text: string;
+  history?: { direction: "in" | "out"; body: string }[];
+  lead?: Conversation["lead"];
+}): Promise<VisitDepartmentPurposeParse | null> {
+  const useLLM =
+    process.env.LLM_ENABLED === "1" &&
+    process.env.LLM_VISIT_DEPARTMENT_PURPOSE_PARSER_ENABLED !== "0" &&
+    !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+
+  const debug = process.env.LLM_VISIT_DEPARTMENT_PURPOSE_PARSER_DEBUG === "1";
+  const primaryModel =
+    process.env.OPENAI_VISIT_DEPARTMENT_PURPOSE_PARSER_MODEL ||
+    process.env.OPENAI_MODEL ||
+    "gpt-5-mini";
+  const fallbackModel =
+    process.env.OPENAI_VISIT_DEPARTMENT_PURPOSE_PARSER_MODEL_FALLBACK ||
+    (primaryModel === "gpt-5-mini" ? "gpt-4o-mini" : "");
+  const text = String(args.text ?? "").trim();
+  if (!text) return null;
+
+  const history = (args.history ?? []).slice(-10).map(h => `${h.direction}: ${h.body}`);
+  const lead = args.lead ?? ({} as any);
+  const leadVehicle = [lead?.vehicle?.year, lead?.vehicle?.make, lead?.vehicle?.model]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+  const examples = [
+    // The Justin Alley miss verbatim (anonymized): the "service" words are the SALE bike's
+    // maintenance history, told by the DEALER; the visit is to see the bike + talk finance.
+    'input: "Customer: Yea it\'ll probably be between 5 and 6 p then" lead_vehicle: "2017 Breakout (used, for sale)" history: "out: it was a two owner bike. The 1,000 mile service was done, we actually have it on the lift doing a 5,000 mile service and a brake fluid flush right now. We did a stage 1 with exhaust at about 2,000 miles. | in: Are you going to be there later today? I\'ll be in that area, so maybe 2 birds one stone type ordeal and talk maybe with finance | out: We will be open til 6." output: {"purpose":"sales_visit","rationale":"The service talk is the sale bike\'s maintenance history from the dealer; the customer is coming to see the bike and talk financing.","confidence":0.95}',
+    'input: "Customer: Can I bring my bike in for an oil change Thursday morning?" output: {"purpose":"service_visit","rationale":"Customer wants to bring their own bike in for maintenance work.","confidence":0.97}',
+    'input: "Customer: My clutch is slipping pretty bad, when can you guys get me in?" output: {"purpose":"service_visit","rationale":"Customer describes a mechanical problem on their bike and asks for a shop slot.","confidence":0.96}',
+    'input: "Customer: probably around 2pm" history: "out: We\'ve received your service request and will have the service department reach out. | in: I need the 10k service done on my Road Glide" output: {"purpose":"service_visit","rationale":"The time answers an in-flight service booking for the customer\'s own bike.","confidence":0.95}',
+    'input: "Customer: What time do you close today? Wanted to swing by and look at the Fat Bob" lead_vehicle: "2023 Fat Bob 114 (used, for sale)" output: {"purpose":"sales_visit","rationale":"Customer is coming to look at a bike that is for sale.","confidence":0.96}',
+    'input: "Customer: I\'ll stop in around 5" output: {"purpose":"unknown","rationale":"A bare visit time with no surrounding context does not say which department the visit is for.","confidence":0.4}',
+    'input: "Customer: Saturday works. Can you also check when the tires were last changed on it?" lead_vehicle: "2019 Street Glide (used, for sale)" history: "out: Want to set up a time to come see it?" output: {"purpose":"sales_visit","rationale":"The tires question is about the SALE bike\'s history; the visit is a sales visit to see it.","confidence":0.93}'
+  ];
+
+  const prompt = [
+    "You classify the PURPOSE of a customer's dealership visit in a text conversation.",
+    "Return only JSON matching the schema.",
+    "",
+    "Purpose mapping:",
+    "- service_visit: the customer is arranging to bring a bike THEY OWN in for maintenance/repair work (oil change, inspection, scheduled service, a mechanical problem), or is answering a service-department booking exchange.",
+    "- sales_visit: the customer is arranging to come in about a bike FOR SALE — to see it, test ride it, talk price/financing/trade, or continue a purchase.",
+    "- unknown: the message plus context genuinely does not say which one.",
+    "",
+    "Rules:",
+    "- Read the RECENT MESSAGES. Mentions of 'service', 'maintenance', or specific work (tires, brake flush, stage 1) that describe the SALE BIKE'S HISTORY OR CONDITION — especially when the DEALER said them — are sales context, NOT a service request.",
+    "- A lead_vehicle marked for sale plus talk of seeing it, financing, trade, or price points to sales_visit.",
+    "- Only classify service_visit when the customer's own bike needs work or a service booking is clearly in flight.",
+    "- When in doubt, prefer unknown over guessing.",
+    "- confidence is 0 to 1.",
+    "",
+    leadVehicle ? `lead_vehicle: ${leadVehicle}` : "lead_vehicle: (none)",
+    history.length ? `Recent messages:\n${history.join("\n")}` : "Recent messages: (none)",
+    "Examples:",
+    ...examples,
+    `Message: ${text}`
+  ].join("\n");
+
+  const runParse = async (model: string): Promise<any | null> =>
+    requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "visit_department_purpose_parser",
+      schema: VISIT_DEPARTMENT_PURPOSE_PARSER_JSON_SCHEMA,
+      maxOutputTokens: 180,
+      debugTag: "llm-visit-department-purpose-parser",
+      debug
+    });
+
+  const parsedPrimary = await runParse(primaryModel);
+  const parsed =
+    parsedPrimary ??
+    (fallbackModel && fallbackModel !== primaryModel ? await runParse(fallbackModel) : null);
+  if (!parsed) return null;
+
+  const purposeRaw = String(parsed.purpose ?? "").toLowerCase();
+  const purpose: VisitDepartmentPurposeParse["purpose"] =
+    purposeRaw === "service_visit" || purposeRaw === "sales_visit" ? purposeRaw : "unknown";
+  const confidence =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : undefined;
+
+  return { purpose, confidence };
+}
+
 export async function parseVehicleFactQuestionWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
