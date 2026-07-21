@@ -688,6 +688,79 @@ export async function matchNationalOfferToLeadWithLLM(args: {
   }
 }
 
+// === Human-thread quiet nudge composer (Joe 2026-07-20) =========================================
+// Continues a HUMAN rep's own SMS thread after the customer goes quiet — in the rep's voice, with
+// zero new facts. See domain/humanThreadNudge.ts for the decision/guardrails; this is generation
+// only. Behind HUMAN_THREAD_NUDGE_ENABLED (default OFF). Returns null on any failure — the thread
+// simply stays quiet (fail direction: never talk over a human deal with a bad bump).
+
+const HUMAN_THREAD_NUDGE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["nudge"],
+  properties: {
+    nudge: { type: "string" }
+  }
+};
+
+export async function composeHumanThreadNudgeWithLLM(args: {
+  firstName?: string | null;
+  /** The last few DELIVERED thread messages, oldest first. */
+  recentMessages: { direction: "in" | "out"; body: string }[];
+}): Promise<string | null> {
+  const enabled = String(process.env.HUMAN_THREAD_NUDGE_ENABLED ?? "0").trim().toLowerCase();
+  if (enabled === "0" || enabled === "false" || enabled === "no") return null;
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const recent = (args.recentMessages ?? []).filter(m => String(m?.body ?? "").trim()).slice(-8);
+  if (recent.length === 0) return null;
+  const firstName = String(args.firstName ?? "").trim();
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const historyLines = recent.map(m => `${m.direction === "in" ? "Customer" : "Rep"}: ${String(m.body).replace(/\s+/g, " ").slice(0, 220)}`);
+  const prompt = [
+    "A dealership REP has been personally texting this customer. The customer went quiet a few days",
+    "ago. Write ONE short bump that CONTINUES the rep's own thread — it must read as the rep circling",
+    "back, picking up exactly where the conversation left off.",
+    "",
+    "HARD RULES:",
+    "- You ARE the rep continuing their own thread. NEVER introduce yourself, NEVER sign a name, no",
+    '  "this is X from the dealership", no persona switch.',
+    "- Anchor on where the conversation actually left off (the last thing discussed or sent).",
+    "- ZERO new facts: no prices, payments, availability, dates, appointment times, or specs the rep",
+    "  did not already state. A bump asks or offers — it never informs.",
+    "- Match the rep's own tone from the thread (casual, contractions). 1-2 short sentences, no",
+    '  exclamation-mark spam, no "just checking in!" filler phrasing, no "Reply STOP".',
+    firstName ? `- The customer's first name is ${firstName}; use it naturally or not at all.` : "- The customer's name is unknown — do not invent one.",
+    "",
+    "Examples:",
+    'thread ends: Rep sent a dyno sheet, customer said "Awesome" then went quiet -> {"nudge":"Any thoughts since you looked over that dyno sheet? Happy to dig up anything else on the Breakout."}',
+    'thread ends: Rep said the trike order timeline, customer went quiet -> {"nudge":"Wanted to circle back on the trike — still want me to keep that build moving for you?"}',
+    'thread ends: Customer asked about trade value, rep answered, quiet since -> {"nudge":"Been thinking it over? If the trade numbers helped, I can line up a time for you to swing in whenever works."}',
+    "",
+    "The thread (oldest first):",
+    ...historyLines,
+    "",
+    'Return only JSON: { "nudge": "<the SMS text>" }'
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "human_thread_nudge",
+      schema: HUMAN_THREAD_NUDGE_JSON_SCHEMA,
+      maxOutputTokens: 220,
+      debugTag: "llm-human-thread-nudge"
+    });
+    const nudge = parsed && typeof parsed === "object" ? String((parsed as any).nudge ?? "").trim() : "";
+    if (!nudge) return null;
+    // Voice-continuity backstop: a persona intro or sign-off means the composer broke character.
+    if (/\b(this is|my name is|i'?m)\s+[A-Z][a-z]+\s+(at|from|with)\b/i.test(nudge)) return null;
+    return nudge;
+  } catch {
+    return null;
+  }
+}
+
 export async function classifySmallTalkWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];

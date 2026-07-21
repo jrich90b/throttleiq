@@ -873,6 +873,9 @@ export type Conversation = {
   // Price-drop trigger anchor: the asking price of the unit of interest when we first armed the
   // watch; a later feed price below it (by the threshold) fires ONE price-drop touch, then re-anchors.
   interestUnitPriceAnchor?: { stockId: string; price: number; at: string };
+  // Human-thread quiet nudge ledger (domain/humanThreadNudge.ts): how many bumps the agent has
+  // composed on this human-owned thread and when the last one fired (cap + spacing enforcement).
+  humanThreadNudge?: { count: number; lastAt: string };
   paymentBudgetContext?: {
     monthlyBudget?: number | null;
     termMonths?: number | null;
