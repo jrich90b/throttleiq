@@ -285,6 +285,7 @@ import {
   parseVoiceDurableFactsWithLLM,
   parseAccessoryRequestWithLLM,
   parseVehicleFactQuestionWithLLM,
+  parseVisitDepartmentPurposeWithLLM,
   parseVehicleInfoRequestWithLLM,
   parseDealershipFaqTopicWithLLM,
   parseDialogActWithLLM,
@@ -593,6 +594,7 @@ import {
   decideDealerLeadSurveyTurn,
   decideFinancePricingTurn,
   decideFinanceProcessQuestionTurn,
+  decideServiceSchedulingHandoffTurn,
   decideFinanceHardshipTurn,
   decideIncomingInventoryPurpose,
   decideNonMotorcycleTradeTurn,
@@ -27799,6 +27801,52 @@ function isServiceDepartmentSchedulingRequest(conv: any, text: string | null | u
   );
 }
 
+// Service-visit vs sales-visit resolver (Justin Alley, 2026-07-21). Shared by BOTH the live
+// and regenerate service-scheduling handoff blocks so the two paths stay in lock-step. The
+// cheap deterministic hint (isServiceDepartmentSchedulingRequest) has already fired when this
+// runs; the typed parser + the pure centralized decision (decideServiceSchedulingHandoffTurn,
+// routeStateReducer) settle whether the visit-time turn actually belongs to the SERVICE
+// department or should fall through to the sales scheduling cluster. An explicit customer
+// service ask this turn skips the LLM entirely (deterministic gate); parser null/unknown
+// keeps the service handoff (behavior-preserving fail direction).
+const SERVICE_VISIT_PURPOSE_CONFIDENCE_MIN = 0.6;
+
+async function resolveServiceSchedulingHandoffDecision(
+  conv: any,
+  text: string | null | undefined
+): Promise<{
+  route: "service_handoff" | "defer_to_scheduling_cluster";
+  reason: string;
+  parserPurpose: string | null;
+  parserConfidence: number | null;
+}> {
+  const raw = String(text ?? "");
+  const customerNamedServiceThisTurn = hasExplicitDepartmentRequestFromText(raw, "service");
+  let parse: Awaited<ReturnType<typeof parseVisitDepartmentPurposeWithLLM>> = null;
+  if (!customerNamedServiceThisTurn) {
+    parse = await safeLlmParse("visit_department_purpose", () =>
+      parseVisitDepartmentPurposeWithLLM({
+        text: raw,
+        history: buildHistory(conv, 10),
+        lead: conv.lead
+      })
+    );
+  }
+  const decision = decideServiceSchedulingHandoffTurn({
+    serviceContextHint: true,
+    customerNamedServiceThisTurn,
+    parserPurpose: parse?.purpose ?? null,
+    parserConfidence: parse?.confidence ?? null,
+    confidenceMin: SERVICE_VISIT_PURPOSE_CONFIDENCE_MIN
+  });
+  return {
+    route: decision.route,
+    reason: decision.reason,
+    parserPurpose: parse?.purpose ?? null,
+    parserConfidence: parse?.confidence ?? null
+  };
+}
+
 function formatServiceScheduleRequestPhrase(text: string | null | undefined): string {
   const source = String(text ?? "").trim();
   if (!source) return "";
@@ -51629,44 +51677,57 @@ app.post("/conversations/:id/regenerate", async (req, res) => {
     );
   }
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
-    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
-    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
-    const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
-      channel: "sms",
-      source: "service_scheduling_inbound"
-    });
-    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
-    if (!hasServiceTodo && resolvedTodoCount === 0) {
-      addTodo(
-        conv,
-        "service",
-        `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
-        event.providerMessageId,
-        serviceTodoOwner
-      );
+    // Parser-first check before the service department claims the turn — MIRROR of the live
+    // path (Justin Alley, 2026-07-21). Shared resolver = two-path parity.
+    const serviceHandoffDecision = await resolveServiceSchedulingHandoffDecision(conv, event.body);
+    if (serviceHandoffDecision.route === "defer_to_scheduling_cluster") {
+      recordRouteOutcome("regen", "service_scheduling_handoff_deferred_sales_visit", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserPurpose: serviceHandoffDecision.parserPurpose,
+        parserConfidence: serviceHandoffDecision.parserConfidence
+      });
+      // fall through — the scheduling cluster below owns this sales visit turn
+    } else {
+      await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+      const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+      const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
+        channel: "sms",
+        source: "service_scheduling_inbound"
+      });
+      const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+      if (!hasServiceTodo && resolvedTodoCount === 0) {
+        addTodo(
+          conv,
+          "service",
+          `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
+          event.providerMessageId,
+          serviceTodoOwner
+        );
+      }
+      conv.classification = {
+        ...(conv.classification ?? {}),
+        bucket: "service",
+        cta: "service_request"
+      };
+      setDialogState(conv, "service_handoff");
+      setFollowUpMode(conv, "manual_handoff", "service_request");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      recordRouteOutcome("regen", "service_scheduling_handoff", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
+      if (channel === "email") {
+        return respondWithEmailRegeneratedDraft(reply);
+      }
+      return respondWithSmsRegeneratedDraft(reply, undefined, {
+        turnSchedulingIntent: false,
+        turnAvailabilityIntent: false,
+        turnFinanceIntent: false
+      });
     }
-    conv.classification = {
-      ...(conv.classification ?? {}),
-      bucket: "service",
-      cta: "service_request"
-    };
-    setDialogState(conv, "service_handoff");
-    setFollowUpMode(conv, "manual_handoff", "service_request");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    recordRouteOutcome("regen", "service_scheduling_handoff", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
-    const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
-    if (channel === "email") {
-      return respondWithEmailRegeneratedDraft(reply);
-    }
-    return respondWithSmsRegeneratedDraft(reply, undefined, {
-      turnSchedulingIntent: false,
-      turnAvailabilityIntent: false,
-      turnFinanceIntent: false
-    });
   }
   const regenCustomerWillProvideTimeFallback =
     event.provider === "twilio" &&
@@ -61830,37 +61891,51 @@ if (authToken && signature) {
     return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && isServiceDepartmentSchedulingRequest(conv, event.body)) {
-    await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
-    const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
-    const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
-      channel: "sms",
-      source: "service_scheduling_inbound"
-    });
-    const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
-    if (!hasServiceTodo && resolvedTodoCount === 0) {
-      addTodo(
-        conv,
-        "service",
-        `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
-        event.providerMessageId,
-        serviceTodoOwner
-      );
+    // Parser-first check before the service department claims the turn: a sales thread soaked
+    // in "service" words about the SALE bike's history must keep its visit-time turn in the
+    // sales scheduling cluster (Justin Alley, 2026-07-21). Shared resolver = regen parity.
+    const serviceHandoffDecision = await resolveServiceSchedulingHandoffDecision(conv, event.body);
+    if (serviceHandoffDecision.route === "defer_to_scheduling_cluster") {
+      recordRouteOutcome("live", "service_scheduling_handoff_deferred_sales_visit", {
+        convId: conv.id,
+        leadKey: conv.leadKey,
+        parserPurpose: serviceHandoffDecision.parserPurpose,
+        parserConfidence: serviceHandoffDecision.parserConfidence
+      });
+      // fall through — the scheduling cluster below owns this sales visit turn
+    } else {
+      await assignDepartmentLeadOwnerIfUnassigned(conv, "service");
+      const serviceTodoOwner = await resolveDepartmentTodoOwner("service", conv.leadOwner?.name);
+      const resolvedTodoCount = markOpenTodosResolvedByCommunication(conv, event.body, {
+        channel: "sms",
+        source: "service_scheduling_inbound"
+      });
+      const hasServiceTodo = listOpenTodos().some(todo => todo.convId === conv.id && todo.reason === "service");
+      if (!hasServiceTodo && resolvedTodoCount === 0) {
+        addTodo(
+          conv,
+          "service",
+          `Service scheduling request: ${event.body ?? "customer requested service availability"}`,
+          event.providerMessageId,
+          serviceTodoOwner
+        );
+      }
+      conv.classification = {
+        ...(conv.classification ?? {}),
+        bucket: "service",
+        cta: "service_request"
+      };
+      setDialogState(conv, "service_handoff");
+      setFollowUpMode(conv, "manual_handoff", "service_request");
+      stopFollowUpCadence(conv, "manual_handoff");
+      stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
+      const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
+      recordRouteOutcome("live", "service_scheduling_handoff", {
+        convId: conv.id,
+        leadKey: conv.leadKey
+      });
+      return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
     }
-    conv.classification = {
-      ...(conv.classification ?? {}),
-      bucket: "service",
-      cta: "service_request"
-    };
-    setDialogState(conv, "service_handoff");
-    setFollowUpMode(conv, "manual_handoff", "service_request");
-    stopFollowUpCadence(conv, "manual_handoff");
-    stopRelatedCadences(conv, "manual_handoff", { setMode: "manual_handoff" });
-    const reply = await resolveServiceDepartmentHandoffReply(conv, event.body);
-    recordRouteOutcome("live", "service_scheduling_handoff", {
-      convId: conv.id,
-      leadKey: conv.leadKey
-    });
-    return publishLiveTwilioReply(reply, { turnSchedulingIntent: true });
   }
   if (event.provider === "twilio" && immediateArrivalRequestFallback && !pricingOrPaymentsIntent) {
     discardPendingDrafts(conv, "immediate_arrival_request");
