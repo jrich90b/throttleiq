@@ -496,6 +496,198 @@ export async function buildDepartmentHandoffAckWithLLM(args: {
   }
 }
 
+// === National Offers (H-D national promotions) — parser-first ingestion + matching ===
+// Reads the H-D national offers page TEXT and matches offers to a lead's bike of interest so the
+// proactive cadence can send a REAL, model-specific offer instead of a generic "just checking in"
+// nudge (Joe 2026-07-20: later cadences must be VALUE-gated, never spam). We comprehend the offers
+// with a typed parser rather than scraping a brittle CMS/JSON blob (AGENTS.md: comprehend, never
+// regex). Both functions return null on ANY failure so the caller falls through to "no offer" (and
+// the cadence simply stays quiet — the safe fail direction; never fabricate an offer).
+
+export type NationalOffer = {
+  title: string;
+  appliesTo: string; // models/families/categories: "Low Rider S, Low Rider ST", "all Sport models", "used motorcycles"
+  offerType: string; // financing_apr | monthly_payment | customer_cash | rebate_credit | discount | other
+  terms: string;
+  eligibility: string;
+  expiration: string;
+};
+
+const NATIONAL_OFFERS_PARSE_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["offers"],
+  properties: {
+    offers: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "appliesTo", "offerType", "terms", "eligibility", "expiration"],
+        properties: {
+          title: { type: "string" },
+          appliesTo: { type: "string" },
+          offerType: {
+            type: "string",
+            enum: ["financing_apr", "monthly_payment", "customer_cash", "rebate_credit", "discount", "other"]
+          },
+          terms: { type: "string" },
+          eligibility: { type: "string" },
+          expiration: { type: "string" }
+        }
+      }
+    }
+  }
+};
+
+/**
+ * Extract every current Harley-Davidson national offer from the offers-page text into structured
+ * form. Behind NATIONAL_OFFERS_ENABLED (default OFF — this feature is dark until cutover). Returns
+ * null on any failure (disabled / no key / empty text / model error) — caller treats as "no offers".
+ */
+export async function parseNationalOffersWithLLM(offersText: string): Promise<NationalOffer[] | null> {
+  const enabled = String(process.env.NATIONAL_OFFERS_ENABLED ?? "0").trim().toLowerCase();
+  if (enabled === "0" || enabled === "false" || enabled === "no") return null;
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const text = String(offersText ?? "").trim();
+  if (text.length < 40) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const prompt = [
+    "Extract every current Harley-Davidson offer, promotion, financing deal, cash incentive, or rebate",
+    "from this offers-page text. One entry per DISTINCT offer. Capture which models/families/categories",
+    "each applies to (verbatim as stated — e.g. 'Low Rider S, Low Rider ST', 'all Sport models',",
+    "'Select Grand American Touring models', 'used motorcycles', 'new motorcycle purchase'), the terms,",
+    "the eligibility, and the expiration. Do not invent offers or terms not present in the text.",
+    "",
+    "Examples:",
+    'text: "New 2026 Low Rider S — Payments from $249/mo for 36 months, no money down. Expires August 31st." -> {"offers":[{"title":"2026 Low Rider S Financing","appliesTo":"New 2026 Low Rider S","offerType":"monthly_payment","terms":"$249/mo for 36 months, no money down","eligibility":"","expiration":"August 31st"}]}',
+    'text: "Rates as low as 6.64% APR on used motorcycles for Riding Academy graduates (apply within 180 days)." -> {"offers":[{"title":"Rider Training Graduate Used APR","appliesTo":"used motorcycles","offerType":"financing_apr","terms":"6.64% APR","eligibility":"Riding Academy graduates, apply within 180 days","expiration":""}]}',
+    "",
+    "Offers-page text:",
+    text.slice(0, 12000),
+    "",
+    'Return only JSON: { "offers": [ { "title", "appliesTo", "offerType", "terms", "eligibility", "expiration" } ] }'
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "national_offers_parse",
+      schema: NATIONAL_OFFERS_PARSE_JSON_SCHEMA,
+      maxOutputTokens: 2000,
+      debugTag: "llm-national-offers-parse"
+    });
+    const offers = parsed && typeof parsed === "object" ? (parsed as any).offers : null;
+    if (!Array.isArray(offers)) return null;
+    return offers
+      .map((o: any) => ({
+        title: String(o?.title ?? "").trim(),
+        appliesTo: String(o?.appliesTo ?? "").trim(),
+        offerType: String(o?.offerType ?? "other").trim(),
+        terms: String(o?.terms ?? "").trim(),
+        eligibility: String(o?.eligibility ?? "").trim(),
+        expiration: String(o?.expiration ?? "").trim()
+      }))
+      .filter((o: NationalOffer) => o.title.length > 0);
+  } catch {
+    return null;
+  }
+}
+
+export type NationalOfferMatch = {
+  applies: boolean;
+  offerTitle: string;
+  why: string;
+  message: string; // on-voice SMS naming the offer for their bike, or "" when applies=false
+};
+
+const NATIONAL_OFFER_MATCH_JSON_SCHEMA: { [key: string]: unknown } = {
+  type: "object",
+  additionalProperties: false,
+  required: ["applies", "offerTitle", "why", "message"],
+  properties: {
+    applies: { type: "boolean" },
+    offerTitle: { type: "string" },
+    why: { type: "string" },
+    message: { type: "string" }
+  }
+};
+
+/**
+ * Decide whether any current national offer GENUINELY applies to a lead's bike of interest, and if
+ * so draft a short on-voice proactive SMS naming the offer for their bike. PRECISION GUARD: never
+ * match a vague/model-less vehicle (e.g. just "2025 Harley-Davidson"), and never stretch a
+ * family-specific offer onto a different family (a Touring offer never fits a Sportster). When
+ * nothing genuinely applies, applies=false — the cadence stays quiet (correct, not a miss).
+ * Behind NATIONAL_OFFERS_ENABLED. Returns null on any failure → caller treats as "no match".
+ */
+export async function matchNationalOfferToLeadWithLLM(args: {
+  vehicle: string;
+  offers: NationalOffer[];
+  firstName?: string | null;
+}): Promise<NationalOfferMatch | null> {
+  const enabled = String(process.env.NATIONAL_OFFERS_ENABLED ?? "0").trim().toLowerCase();
+  if (enabled === "0" || enabled === "false" || enabled === "no") return null;
+  const useLLM = process.env.LLM_ENABLED === "1" && !!process.env.OPENAI_API_KEY;
+  if (!useLLM) return null;
+  const vehicle = String(args.vehicle ?? "").trim();
+  const offers = Array.isArray(args.offers) ? args.offers : [];
+  if (!vehicle || offers.length === 0) return null;
+  const firstName = String(args.firstName ?? "").trim();
+  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const offerLines = offers
+    .map(o => `- ${o.title} | applies_to: ${o.appliesTo} | ${o.terms} | ${o.eligibility} | exp ${o.expiration}`)
+    .join("\n");
+  const prompt = [
+    "Decide whether any current national offer GENUINELY applies to a lead's bike of interest.",
+    "Match by model / family / condition — be precise.",
+    "HARD RULES:",
+    "- NEVER match a vague or model-less vehicle (e.g. just 'Harley-Davidson' or '2025 Harley-Davidson' with no model). If the model isn't clearly named, applies=false.",
+    "- NEVER stretch a family-specific offer onto a different family (a Touring offer does not fit a Sportster/Softail, etc.).",
+    "- If a real match exists, write ONE short SMS that sounds like a real salesperson texting a customer they know — NOT a marketing blast and NOT a bot:",
+    "  * casual and specific, contractions, at most one sentence of offer + one short question;",
+    firstName ? `  * greet them naturally by name (${firstName}) — or weave the name mid-sentence;` : "  * no generic 'Hey!' opener with an exclamation mark;",
+    "  * NEVER open with 'Hey!' alone, never 'Let me know if you're interested!', no exclamation-mark spam, no 'Reply STOP', no corporate phrasing ('take advantage of', 'don't miss out', 'limited time').",
+    "  * no fabrication — only the offer's stated terms; round nothing; invent no dates.",
+    "- If nothing genuinely applies, applies=false and message='' (the agent stays quiet — that is correct).",
+    "",
+    "Examples:",
+    'bike "2026 Low Rider S" (name Mike) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":true,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Mike, that Low Rider S you were eyeing has $1,000 customer cash on it right now — want me to run what that does to the numbers?"}',
+    'bike "Electra Glide Ultra Classic" (no name) with a "Grand American Touring from $406/mo extended terms" offer -> {"applies":true,"offerTitle":"Select Grand American Touring Models Extended Terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
+    'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
+    'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
+    "",
+    `Lead's bike of interest: ${vehicle}`,
+    firstName ? `Lead's first name: ${firstName}` : "Lead's first name: (unknown — do not invent one)",
+    "",
+    "Current national offers:",
+    offerLines,
+    "",
+    'Return only JSON: { "applies": <bool>, "offerTitle": "<title or empty>", "why": "<one phrase>", "message": "<SMS or empty>" }'
+  ].join("\n");
+  try {
+    const parsed = await requestStructuredJson({
+      model,
+      prompt,
+      schemaName: "national_offer_match",
+      schema: NATIONAL_OFFER_MATCH_JSON_SCHEMA,
+      maxOutputTokens: 400,
+      debugTag: "llm-national-offer-match"
+    });
+    if (!parsed || typeof parsed !== "object") return null;
+    const applies = !!(parsed as any).applies;
+    return {
+      applies,
+      offerTitle: String((parsed as any).offerTitle ?? "").trim(),
+      why: String((parsed as any).why ?? "").trim(),
+      message: applies ? String((parsed as any).message ?? "").trim() : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function classifySmallTalkWithLLM(args: {
   text: string;
   history?: { direction: "in" | "out"; body: string }[];
