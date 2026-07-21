@@ -5725,7 +5725,12 @@ export default function Home() {
     setConversations(prev =>
       prev.map(item => {
         if (item.id !== conv.id) return item;
-        const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
+        // Inbox preview: never a STALE never-sent draft (Joe ruling 2026-07-20) — mirrors
+        // the server's pickInboxPreviewMessage so an optimistic update can't re-surface one.
+        const nonStale = Array.isArray(conv.messages)
+          ? conv.messages.filter((m: any) => m?.draftStatus !== "stale")
+          : [];
+        const last = nonStale[nonStale.length - 1] ?? null;
         return {
           ...item,
           status: conv.status ?? item.status,
@@ -5988,7 +5993,12 @@ export default function Home() {
       setConversations(prev =>
         prev.map(c => {
           if (c.id !== conv.id) return c;
-          const last = Array.isArray(conv.messages) ? conv.messages[conv.messages.length - 1] : null;
+          // Inbox preview: never a STALE never-sent draft (Joe ruling 2026-07-20) — mirrors
+          // the server's pickInboxPreviewMessage.
+          const nonStaleMsgs = Array.isArray(conv.messages)
+            ? conv.messages.filter((m: any) => m?.draftStatus !== "stale")
+            : [];
+          const last = nonStaleMsgs[nonStaleMsgs.length - 1] ?? null;
           return {
             ...c,
             status: conv.status ?? "closed",
