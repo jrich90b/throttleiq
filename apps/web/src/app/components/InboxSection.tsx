@@ -3,6 +3,7 @@ import Image from "next/image";
 import { SideNavIcon } from "./UiIcon";
 import { dueBucketFor, relativeDueLabel, taskEffectiveDueMs } from "../lib/taskTriage";
 import { salesCriticalKind, SALES_REASON_META } from "../lib/taskReason";
+import { isCampaignSentTagFresh } from "../lib/campaignTag";
 
 // Turn a stored close reason ("not_interested", "wrong_number", free text) into
 // a short human label for the Closed badge, so "Closed" always says WHY.
@@ -433,12 +434,15 @@ export function InboxSection(props: any) {
                     // In the main Inbox, a thread that was texted by a campaign but hasn't replied yet
                     // gets a quiet "Campaign sent" tag (it no longer jumps to the top — see
                     // inboxActivityAt). Once they reply it becomes the green "Campaign reply" instead.
+                    // The tag fades after 14 days (Joe, 7/21) — a new blast re-stamps lastSentAt
+                    // and re-arms it (isCampaignSentTagFresh, lib/campaignTag.ts).
                     const campaignSent =
                       view === "inbox" &&
                       (campaignThreadStatus === "campaign" ||
                         campaignThreadStatus === "linked_open" ||
                         campaignThreadStatus === "passed") &&
-                      !campaignReply;
+                      !campaignReply &&
+                      isCampaignSentTagFresh(c.campaignThread, nowMs);
                     const needsResponse = needsCustomerResponse(c);
                     const openTasks = openTasksByConv?.get(c.id) ?? [];
                     const primaryOpenTask = openTasks[0] ?? null;
