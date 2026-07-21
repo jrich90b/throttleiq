@@ -67,14 +67,22 @@ load-bearing KEEPs (safety/side-effect/state gates) or structured-extraction hel
 deterministic. Further ratchet reduction now requires real **approve-first** work, NOT auto-merge
 regex-picking: the ~4 "needs-fixtures" MIGRATE candidates (6/17 map) as typed parsers + replay
 fixtures, and trade-cluster route-decision centralization in `routeStateReducer`. The
-parser-consolidation round-trip slice is **IN SHADOW as of 7/2** (`e5cf7068`,
-`UNIFIED_SLOTS_MERGED_SHADOW=1` live on the box): `parseUnifiedSemanticSlotsMergedWithLLM`
-carries the semantic+trade-payoff+trade-target jobs in ONE call, fire-and-forget alongside the
-live semantic parser (both paths + sendgrid); diffs logged as `[unified-slots-shadow]` + JSONL,
-read via `npm run unified_slots_shadow:report`. Prod reality: the unified wrapper itself stays
-DORMANT (`LLM_UNIFIED_SLOT_PARSER_ENABLED` unset — prod runs sub-parsers individually), so the
-cutover is per-call-site, **Tier 2 approve-first** on the shadow data. The merged prompt mirrors
-the legacy rules until cutover (pinned by `unified_slots_merged_shadow:eval`'s tripwire).
+parser-consolidation round-trip slice is **CUT OVER LIVE on the SMS lane as of 7/14** (PR #204
+`a9443b53`, Joe-approved after a 12-day shadow soak: 2,413 records, 99.4% decision-scoped
+agreement): `parseUnifiedSemanticSlotsMergedWithLLM` carries the semantic+trade-payoff+
+trade-target jobs in ONE call inside the shared wrapper `parseUnifiedSemanticSlotsWithLLM`
+(both live + regen paths funnel through it → two-path parity for free), guarded by
+`applyMergedWatchRelevanceGuard` (blanks an over-attached watch model the customer didn't
+name this turn; eval-pinned). Live behind 3 box flags (`LLM_UNIFIED_SLOT_MERGED_LIVE` +
+`LLM_UNIFIED_SLOT_PARSER_ENABLED` + `LLM_UNIFIED_SLOT_ROUTER_ENABLED`); kill switch = zero
+them + `npm run deploy:api`. The live shadow comparison was **deliberately burned 7/15**
+(PR #209 — verdict banked; a quiet shadow log is correct, NOT a bug). Still on legacy:
+the **email/SendGrid lane** (calls `parseSemanticSlotsWithLLM` directly) — its cutover is
+the next milestone (**Tier 2 approve-first**, after ~2 clean canary weeks from 7/14), with
+the kept `diffUnifiedSlotParse` comparator + the banked shadow corpus as the acceptance
+harness. Until then the legacy 3-call path + mirrored legacy prompts + the
+`unified_slots_merged_shadow:eval` tripwire stay — the legacy path IS the kill switch;
+never burn it while it's the revert.
 
 **Consolidation is evidence-scoped, NOT a big-bang rewrite (880-turn judged backfill).**
 The consolidated pass's gross disagreement (~25%) is ~80% LLM *over-attachment* (a thread
