@@ -45580,7 +45580,12 @@ async function generateCampaignImageWithNanoBanana(args: {
 
   const projectId = String(process.env.GOOGLE_CLOUD_PROJECT ?? process.env.VERTEX_SEARCH_PROJECT_ID ?? "").trim();
   const location = String(process.env.CAMPAIGN_NANO_BANANA_LOCATION ?? process.env.GOOGLE_CLOUD_LOCATION ?? "global").trim() || "global";
-  const model = String(process.env.CAMPAIGN_NANO_BANANA_MODEL ?? "gemini-3-pro-image-preview").trim();
+  // Default follows the GA name: Google retired `gemini-3-pro-image-preview` (Vertex started
+  // returning 404 "model not found", first seen 2026-07-22) and the flyer generator refused its
+  // OpenAI fallback by design (strict reference lock), so every reference-anchored flyer failed.
+  // `gemini-3-pro-image` is the same Nano Banana Pro model under its GA id — verified reachable
+  // with the runner service account on the same project + global location.
+  const model = String(process.env.CAMPAIGN_NANO_BANANA_MODEL ?? "gemini-3-pro-image").trim();
   if (!projectId || !model) return null;
 
   const accessToken = await getVertexAccessToken();
