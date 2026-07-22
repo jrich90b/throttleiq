@@ -26,6 +26,7 @@ export type StuckSuppressionReason =
   | "paused_indefinite"
   | "holding_inventory"
   | "human_mode"
+  | "call_only"
   | "aged_out";
 
 export type StuckClassification = {
@@ -37,6 +38,7 @@ export type StuckConvLike = {
   status?: unknown;
   mode?: unknown;
   followUp?: { mode?: unknown } | null;
+  contactPreference?: unknown;
 };
 
 /**
@@ -48,7 +50,7 @@ export const STUCK_MAX_AGE_SEC_DEFAULT = 7 * 24 * 60 * 60; // 7 days
 
 export function classifyStuckTurn(
   conv: StuckConvLike,
-  opts: { ageSec: number; maxAgeSec?: number }
+  opts: { ageSec: number; maxAgeSec?: number; hasOpenCallTask?: boolean }
 ): StuckClassification {
   // A closed conversation can never be a live routing stall (sold / opt-out /
   // not-interested / wrong-number / archived). Most terminal — report first.
@@ -73,6 +75,20 @@ export function classifyStuckTurn(
   // Rep owns the thread directly; the agent is not the responder.
   if (String(conv?.mode ?? "") === "human") {
     return { actionable: false, suppressionReason: "human_mode" };
+  }
+
+  // Call-only lead (Joe ruling, 2026-07-09, +17163804680): a phone-preferred lead
+  // gets a CALL TASK and never an auto SMS/email draft — in every mode. The agent's
+  // silence is the intended behavior, so counting the turn as a routing stall is a
+  // phantom (Kevin Burgess +17165414830, 2026-07-21: correct call-only silence with
+  // an open, already-escalated call task, yet it alone failed the release gate).
+  //
+  // FAIL DIRECTION: we suppress ONLY when a human is demonstrably on the hook — an
+  // OPEN call task exists. A call-only lead with no call task is the failure this
+  // ruling was designed to prevent (silence with nobody told to dial), so it stays
+  // ACTIONABLE and keeps failing the gate.
+  if (String(conv?.contactPreference ?? "") === "call_only" && opts.hasOpenCallTask === true) {
+    return { actionable: false, suppressionReason: "call_only" };
   }
 
   const maxAgeSec = Number.isFinite(opts.maxAgeSec) ? (opts.maxAgeSec as number) : STUCK_MAX_AGE_SEC_DEFAULT;

@@ -46,6 +46,18 @@ assert.ok(
   /--stuck-max-age-sec/.test(watchdog) && /ROUTE_WATCHDOG_STUCK_MAX_AGE_SEC/.test(watchdog),
   "the recency ceiling must be tunable via flag + env"
 );
+// The call-only suppression is only safe because the watchdog proves a human is on
+// the hook. Pin the wiring: it must read OPEN call todos off the store and hand the
+// flag to the classifier, or the fail-direction guard silently becomes a blanket
+// "call-only leads are never stuck".
+assert.ok(
+  /collectOpenCallTaskConvIds/.test(watchdog) && /hasOpenCallTask/.test(watchdog),
+  "the watchdog must derive open call tasks and pass hasOpenCallTask to the classifier"
+);
+assert.ok(
+  /todos/.test(watchdog) && /"open"/.test(watchdog) && /"call"/.test(watchdog),
+  "open call tasks must be read from the store's todos (status open, reason call)"
+);
 
 // --- 2) Decision table (pure). Priority: terminal state wins. ---
 const RECENT = 60 * 60; // 1h — inside the default ceiling
@@ -58,6 +70,7 @@ type Row = {
   actionable: boolean;
   reason: StuckSuppressionReason | null;
   maxAgeSec?: number;
+  hasOpenCallTask?: boolean;
 };
 
 const rows: Row[] = [
@@ -79,6 +92,16 @@ const rows: Row[] = [
   { id: "aged_out", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: OLD, actionable: false, reason: "aged_out" },
   // followUp mode wins over the age ceiling (handoff is reported even when old).
   { id: "handoff_beats_aged_out", conv: { status: null, mode: "suggest", followUp: { mode: "manual_handoff" } }, ageSec: OLD, actionable: false, reason: "manual_handoff" },
+  // Call-only lead WITH an open call task — correct silence (Joe ruling 2026-07-09);
+  // the human is on the hook to dial (Kevin Burgess +17165414830, 2026-07-21).
+  { id: "call_only_with_open_call_task", conv: { status: null, mode: "suggest", followUp: null, contactPreference: "call_only" }, ageSec: RECENT, actionable: false, reason: "call_only", hasOpenCallTask: true },
+  // FAIL DIRECTION: call-only with NO open call task is silence with nobody told to
+  // dial — exactly what the ruling guards against. Stays actionable.
+  { id: "call_only_without_call_task", conv: { status: null, mode: "suggest", followUp: null, contactPreference: "call_only" }, ageSec: RECENT, actionable: true, reason: null, hasOpenCallTask: false },
+  // A terminal state still wins over the call-only suppression (priority order).
+  { id: "closed_beats_call_only", conv: { status: "closed", mode: "suggest", followUp: null, contactPreference: "call_only" }, ageSec: RECENT, actionable: false, reason: "closed", hasOpenCallTask: true },
+  // The suppression is scoped to call-only: a texting lead with a call task stays actionable.
+  { id: "call_task_without_call_only", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null, hasOpenCallTask: true },
   // Missing followUp / mode are tolerated → recent unsuppressed stays actionable.
   { id: "actionable_sparse_conv", conv: { status: null, mode: "suggest", followUp: null }, ageSec: RECENT, actionable: true, reason: null },
   // A custom (smaller) ceiling still suppresses a turn beyond it.
@@ -86,7 +109,11 @@ const rows: Row[] = [
 ];
 
 for (const r of rows) {
-  const got = classifyStuckTurn(r.conv, { ageSec: r.ageSec, maxAgeSec: r.maxAgeSec });
+  const got = classifyStuckTurn(r.conv, {
+    ageSec: r.ageSec,
+    maxAgeSec: r.maxAgeSec,
+    hasOpenCallTask: r.hasOpenCallTask
+  });
   assert.equal(got.actionable, r.actionable, `classify[${r.id}] actionable expected ${r.actionable}, got ${got.actionable}`);
   assert.equal(
     got.suppressionReason,

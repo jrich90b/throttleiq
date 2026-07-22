@@ -137,11 +137,30 @@ function readJsonl(filePath: string): AnyObj[] {
   return rows;
 }
 
+/**
+ * Conversation ids that carry an OPEN call task. Feeds the `call_only`
+ * suppression: a phone-preferred lead is correctly silent ONLY when a human is
+ * on the hook to dial. Todos live at the top level of the store, not on the
+ * conversation record.
+ */
+function collectOpenCallTaskConvIds(raw: AnyObj): Set<string> {
+  const todos: AnyObj[] = Array.isArray((raw as any)?.todos) ? (raw as any).todos : [];
+  const out = new Set<string>();
+  for (const todo of todos) {
+    if (String(todo?.status ?? "").toLowerCase() !== "open") continue;
+    if (String(todo?.reason ?? "").toLowerCase() !== "call") continue;
+    const convId = String(todo?.convId ?? todo?.conversationId ?? "").trim();
+    if (convId) out.add(convId);
+  }
+  return out;
+}
+
 function collectStuckTurns(
   conversations: any[],
   olderThanSec: number,
   maxAgeSec: number,
-  nowMs: number
+  nowMs: number,
+  openCallTaskConvIds: Set<string>
 ) {
   return conversations
     .map(conv => {
@@ -171,7 +190,11 @@ function collectStuckTurns(
       const ageSec = Math.floor((nowMs - inboundAtMs) / 1000);
       if (ageSec < olderThanSec) return null;
 
-      const classification = classifyStuckTurn(conv, { ageSec, maxAgeSec });
+      const classification = classifyStuckTurn(conv, {
+        ageSec,
+        maxAgeSec,
+        hasOpenCallTask: openCallTaskConvIds.has(String(conv?.id ?? ""))
+      });
 
       return {
         convId: String(conv?.id ?? ""),
@@ -211,7 +234,8 @@ function main() {
     conversations,
     parsed.stuckOlderSec,
     parsed.stuckMaxAgeSec,
-    nowMs
+    nowMs,
+    collectOpenCallTaskConvIds(raw)
   );
   // Surface only genuinely-actionable stalls (recent, unsuppressed) as the
   // headline count; keep the benign-suppressed rows for transparency. A closed
