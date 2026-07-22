@@ -5,6 +5,8 @@ import crypto from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
 import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
+import { resolveModelDiscontinuation } from "../domain/modelDiscontinuation.js";
+import { decideWatchYearPin } from "../domain/watchYearPin.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import {
   upsertConversationByLeadKey,
@@ -3719,11 +3721,25 @@ async function buildInitialAdfUnavailableInventoryWatch(args: {
     createdAt: nowIso,
     note: "initial_adf_unavailable_inventory"
   };
-  if (customerYearRange?.min && customerYearRange?.max) {
+  // Never pin a model year the watch could never match — an un-fireable year_model watch reads as
+  // "I'll text you when one lands" and then stays silent forever (+18188420202: a "2027 883" free-text
+  // inquiry pinned a 2027 Iron 883, discontinued after 2020). Only resolve the catalog when a year is
+  // actually on the table; dropping a pin widens to model_only, which fails toward contacting.
+  const requestedYearPin =
+    (customerYearRange?.min && customerYearRange?.max) || customerSingleYear
+      ? decideWatchYearPin({
+          year: customerSingleYear ?? null,
+          yearMin: customerYearRange?.min ?? null,
+          yearMax: customerYearRange?.max ?? null,
+          modelStatus: (await resolveModelDiscontinuation(model)).status,
+          currentYear: new Date().getFullYear()
+        })
+      : { pin: "none" as const, reason: "no_year_requested" };
+  if (requestedYearPin.pin === "range" && customerYearRange?.min && customerYearRange?.max) {
     watch.yearMin = customerYearRange.min;
     watch.yearMax = customerYearRange.max;
     watch.exactness = "model_range";
-  } else if (customerSingleYear) {
+  } else if (requestedYearPin.pin === "year" && customerSingleYear) {
     watch.year = customerSingleYear;
     watch.exactness = "year_model";
   } else {
