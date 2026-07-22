@@ -54,8 +54,8 @@ export function correctPeterSuperGlideWatch(conv: any): number {
   return changed;
 }
 
-// ── self-test (no args) ──
-if (process.argv.length <= 2 || process.argv.includes("--self-test")) {
+// ── self-test (explicit --self-test only, so a no-flag run is the real dry-run) ──
+if (process.argv.includes("--self-test")) {
   // matching conv: both storage slots carry the typo'd Super Glide watch
   const conv = {
     id: TARGET_CONV_ID,
