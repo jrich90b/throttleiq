@@ -255,6 +255,49 @@ export function unitIsDistinctModelFromWatch(unitModelRaw: string | undefined, w
   return unitTokens.some(t => !watchTokens.has(t));
 }
 
+/**
+ * The specific-model name within the Sportster 883 line, or null for a bare/generic "883".
+ * Iron 883, 883 Roadster, Sportster 883 Low, SuperLow, 883 Custom and 883 Hugger are DISTINCT
+ * MODELS, not trims of a shared "883" — a customer who says "Iron 883" does not mean "any 883".
+ * A bare "883" / "XL 883" / "Sportster 883" carries no sub-model token → generic (what someone
+ * means when they just say "an 883"). Runs on `normalizeModel` output (lowercased, punctuation
+ * collapsed), so "SuperLow" -> "superlow" and "Super Low" -> "super low" both resolve.
+ */
+const SPECIFIC_883_MODEL_MATCHERS: ReadonlyArray<readonly [string, RegExp]> = [
+  ["iron", /\biron\b/],
+  ["roadster", /\broadster\b/],
+  ["superlow", /\bsuper\s*low\b|\bsuperlow\b/],
+  ["low", /\blow\b/],
+  ["custom", /\bcustom\b/],
+  ["hugger", /\bhugger\b/]
+];
+export function specific883ModelToken(modelRaw: string | undefined | null): string | null {
+  const t = normalizeModel(String(modelRaw ?? ""));
+  if (!/\b883\b/.test(t)) return null;
+  for (const [token, re] of SPECIFIC_883_MODEL_MATCHERS) {
+    if (re.test(t)) return token;
+  }
+  return null;
+}
+
+/**
+ * True when the WATCH names a specific 883 model and the in-stock UNIT is a DIFFERENT 883 model
+ * (a different sub-model, or a bare "883") — so an "Iron 883" watch must NOT fire on a "Sportster
+ * 883 Low". The `is883ModelToken` family umbrella in the matchers otherwise treats every 883 as one
+ * model, and the trim-token distinct guard above doesn't know the Sportster sub-model words — so one
+ * 2006 Sportster 883 Low notified EVERY Iron 883 watcher (+15164197791, +12399612259, +18728882220).
+ *
+ * Purely SUBTRACTIVE (only ever blocks a fire). Fail direction is safe: the worst case is a missed
+ * fire the watch_fire_miss detector re-surfaces (and the same-family sibling-scope ask can still offer
+ * the 883 Low as a variant) — never a false "your bike came in" for the wrong model. A generic 883
+ * watch (no sub-model token) is unaffected: it stays open to any 883.
+ */
+export function distinct883ModelConflict(unitModelRaw: string | undefined, watchModelRaw: string | undefined): boolean {
+  const watchToken = specific883ModelToken(watchModelRaw);
+  if (!watchToken) return false; // generic/non-specific 883 (or non-883) watch → umbrella is fine
+  return specific883ModelToken(unitModelRaw) !== watchToken;
+}
+
 export function extractImageDate(url: string): Date | null {
   const m = url.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//);
   if (!m) return null;
