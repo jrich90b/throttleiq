@@ -551,6 +551,7 @@ import { referencesPastDatedEvent } from "./domain/pastEventGuard.js";
 import { stripLeadingVinCodes, stripLeadingMakeName, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
+import { applyWatchFieldHygiene } from "./domain/watchFieldHygiene.js";
 import {
   conversationWatchAlertBlocked,
   recordConversationWatchAlert,
@@ -29642,7 +29643,12 @@ async function buildInventoryWatchFromAcknowledgementIntent(args: {
   return watch;
 }
 
-function applyInventoryWatchConfirmation(conv: Conversation, watch: InventoryWatch) {
+function applyInventoryWatchConfirmation(conv: Conversation, watchRaw: InventoryWatch) {
+  // Field hygiene runs HERE, at the shared choke point, because it must land AFTER the callers'
+  // `pref.watch.trim = leadVehicle.trim` copies — that copy is one of the ways a model word
+  // ("Special") or an ADF form fragment reaches the trim/color slot (Joe ruling 2026-07-22 #3,
+  // +17167992882). Every arm that funnels through this function gets the repair for free.
+  const watch = applyWatchFieldHygiene(watchRaw);
   conv.inventoryWatch = watch;
   conv.inventoryWatches = [watch];
   conv.inventoryWatchPending = undefined;
