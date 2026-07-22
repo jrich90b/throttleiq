@@ -45599,7 +45599,14 @@ async function generateCampaignImageWithNanoBanana(args: {
 
   const generationConfig: Record<string, unknown> = {
     responseModalities: ["TEXT", "IMAGE"],
-    maxOutputTokens: Math.max(256, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_OUTPUT_TOKENS ?? 1024))
+    // 16384, not 1024: the GA model (gemini-3-pro-image) spends THINKING tokens before it
+    // draws, and one image alone bills ~1120 output tokens. At 1024 a real flyer request
+    // (long prompt + reference images → longer thinking) hits finishReason=MAX_TOKENS with
+    // ZERO parts — no image, no error, intermittent because thought length varies per
+    // attempt (reproduced 2026-07-22 on Joe's "August 2026 hardtales" flyer: 1024 → empty
+    // MAX_TOKENS; 16384 → STOP with the image). Thought length is the model's choice, so
+    // leave generous headroom; billing is per token USED, not per cap.
+    maxOutputTokens: Math.max(256, Number(process.env.CAMPAIGN_NANO_BANANA_MAX_OUTPUT_TOKENS ?? 16384))
   };
 
   const tempRaw = String(process.env.CAMPAIGN_NANO_BANANA_TEMPERATURE ?? "").trim();
@@ -45686,7 +45693,23 @@ async function generateCampaignImageWithNanoBanana(args: {
       }
       const payload = await resp.json().catch(() => null);
       const inline = extractInlineImageFromVertexResponse(payload);
-      if (!inline?.b64) return null;
+      if (!inline?.b64) {
+        // A 200 with no image was SILENT until 2026-07-22 and cost a debugging round trip:
+        // MAX_TOKENS (thinking ate the budget), safety blocks, and text-only answers all
+        // ended here with no trace. Say why, so the log tells the story next time.
+        const p = payload as any;
+        const candidate = Array.isArray(p?.candidates) ? p.candidates[0] : null;
+        console.warn(
+          "[campaign] nano banana returned 200 but no inline image",
+          JSON.stringify({
+            finishReason: candidate?.finishReason ?? null,
+            partCount: Array.isArray(candidate?.content?.parts) ? candidate.content.parts.length : 0,
+            promptFeedback: p?.promptFeedback ?? null,
+            usage: p?.usageMetadata ?? null
+          }).slice(0, 600)
+        );
+        return null;
+      }
       const rawBuffer = Buffer.from(inline.b64, "base64");
       if (!rawBuffer.length) return null;
       const buffer = rawBuffer;
