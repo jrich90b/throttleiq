@@ -69,13 +69,32 @@ export function buildAgentGreeting(firstName?: string | null): string {
   return name ? `Hey ${name}, ` : "Hey there, ";
 }
 
-/** Full softened intro: "Hey {name}, it's {agent} over at {dealer}. " (trailing space). */
+/**
+ * Full softened intro: "Hey {name}, it's {agent} over at {dealer}. " (trailing space).
+ *
+ * Name-collision guard: when the customer's first name equals the agent's OWN persona
+ * name (case-insensitive), the naive form reads as a bug — a first-touch ADF ack to
+ * customer Alexandra Meinhold went out as "Hey Alexandra, it's Alexandra over at American
+ * Harley-Davidson." because the dealer's configured agentName is itself Alexandra
+ * (open-critic +17162636134, 2026-07-22). Drop the greeting NAME on a collision (keep the
+ * self-intro, which is the whole point of a first-touch line) so it degrades to
+ * "Hey there, it's Alexandra over at American Harley-Davidson." Fail-direction is safe:
+ * fires only on an exact first-name match, and the degraded form is still correct + on-voice.
+ * Pinned by agent_voice:eval.
+ */
 export function buildAgentIntro(
   firstName: string | null | undefined,
   agentName: string,
   dealerName: string
 ): string {
-  return `${buildAgentGreeting(firstName)}${buildAgentIntroPhrase(agentName, dealerName)}`;
+  const firstToken = (v: string | null | undefined): string =>
+    String(v ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+  const customerFirst = firstToken(firstName);
+  const agentFirst = firstToken(agentName);
+  const collides =
+    customerFirst !== "" && agentFirst !== "" && customerFirst.toLowerCase() === agentFirst.toLowerCase();
+  const greetingName = collides ? null : firstName;
+  return `${buildAgentGreeting(greetingName)}${buildAgentIntroPhrase(agentName, dealerName)}`;
 }
 
 /**

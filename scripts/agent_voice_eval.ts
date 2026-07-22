@@ -34,6 +34,38 @@ assert.equal(introPhrase, "it's Alexandra over at American Harley-Davidson. ");
 assert.ok(!/this is /i.test(introPhrase), "intro phrase must not use the old 'This is' phrasing");
 assert.equal(buildAgentGreeting("Nicholas") + introPhrase, intro, "buildAgentIntro = greeting + phrase");
 
+// ── Name-collision guard: the customer's first name == the agent's OWN persona name.
+//    The dealer's configured agentName is "Alexandra", so a customer also named Alexandra got
+//    "Hey Alexandra, it's Alexandra over at American Harley-Davidson." (open-critic +17162636134,
+//    2026-07-22). On a collision, drop the greeting NAME (keep the self-intro) → "Hey there, …".
+const collide = buildAgentIntro("Alexandra", "Alexandra", "American Harley-Davidson");
+assert.equal(collide, "Hey there, it's Alexandra over at American Harley-Davidson. ");
+assert.ok(!/Hey Alexandra, it's Alexandra/i.test(collide), "must not mirror the customer's name as the agent name");
+// Case-insensitive + full-name-in-greeting still collides on the first token.
+assert.equal(
+  buildAgentIntro("alexandra", "Alexandra", "American Harley-Davidson"),
+  "Hey there, it's Alexandra over at American Harley-Davidson. ",
+  "collision is case-insensitive"
+);
+assert.equal(
+  buildAgentIntro("Alexandra Meinhold", "Alexandra", "American Harley-Davidson"),
+  "Hey there, it's Alexandra over at American Harley-Davidson. ",
+  "collision keys off the customer's first token, not the full name"
+);
+// The common, non-colliding case is UNCHANGED (this is the whole point — no personalization lost
+// unless the names actually clash). Nicholas != Alexandra → normal greeting.
+assert.equal(
+  buildAgentIntro("Nicholas", "Alexandra", "American Harley-Davidson"),
+  "Hey Nicholas, it's Alexandra over at American Harley-Davidson. ",
+  "non-colliding intro keeps the personalized greeting"
+);
+// A generic/blank agent name never triggers the guard (blank first token).
+assert.equal(
+  buildAgentIntro("Alexandra", "the team", "American Harley-Davidson"),
+  "Hey Alexandra, it's the team over at American Harley-Davidson. ",
+  "a generic agent name does not collide with the customer's real name"
+);
+
 // Stripper removes BOTH the old and new leading greeting forms before re-prefixing.
 assert.equal(stripLeadingAgentGreeting("Hi Nicholas — thanks for reaching out."), "thanks for reaching out.");
 assert.equal(stripLeadingAgentGreeting("Hey Nicholas, thanks for reaching out."), "thanks for reaching out.");
