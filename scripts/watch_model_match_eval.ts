@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { inventoryItemMatchesWatch } from "../services/api/src/domain/watchFireMiss.ts";
 import { unitIsDistinctModelFromWatch } from "../services/api/src/domain/inventoryFeed.ts";
+import { watchLabelIsBareFamilyUmbrella } from "../services/api/src/domain/watchFamilyScope.ts";
 
 const m = (itemModel: string, watchModel: string) =>
   inventoryItemMatchesWatch({ model: itemModel } as any, { model: watchModel, status: "active", createdAt: "" } as any);
@@ -62,6 +63,38 @@ assert.equal(unitIsDistinctModelFromWatch("Touring", "Street Glide"), false, "a 
 assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide Special"), false, "exact-trim watch → not distinct from itself → still fires");
 assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide Special Black"), false, "a 'Special' watch vs a more-specific COLOR unit → not distinct → still fires");
 assert.equal(unitIsDistinctModelFromWatch("Street Glide", "Street Glide Special"), false, "base watch vs specific unit → forward direction (handled by the other guard), not this one");
+
+// FAMILY-UMBRELLA SCOPE (open-critic cluster, 2026-07-22 — five leads in one sweep).
+// detectGenericWatchFamilyLabel is a CONTAINS matcher for its specific-model branches, so it
+// classified "Sportster S" and "Iron 883" as the `sportster` UMBRELLA. In the engine matcher that
+// both turned familyMatch true against any Sportster-family unit AND switched off the forward
+// distinct-model guard — so a customer who asked for a 2022 Iron 883 was texted about a 2006
+// Sportster 883 Low (+15164197791, +12399612259, +18728882220, +19897006720, +17705967891).
+// These assertions run the REAL predicate the engine now gates on, not a source regex — the
+// detector matcher `m()` above has no family umbrella at all, which is exactly why the previous
+// round of fixtures stayed green while the engine drifted.
+assert.equal(watchLabelIsBareFamilyUmbrella("Sportster", "sportster"), true, "a bare 'Sportster' watch IS the family umbrella — it should still collect Iron 883s");
+assert.equal(watchLabelIsBareFamilyUmbrella("Sportster S", "sportster"), false, "'Sportster S' is a specific model, NOT the Sportster umbrella (+17705967891)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Iron 883", "sportster"), false, "'Iron 883' is a specific model, NOT the Sportster umbrella (+15164197791)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Sportster 883 Low", "sportster"), false, "'Sportster 883 Low' is a specific model, not the umbrella (+12399612259)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Street Glide", "street_glide"), true, "a bare 'Street Glide' watch is the Street Glide umbrella");
+assert.equal(watchLabelIsBareFamilyUmbrella("Street Glide Special", "street_glide"), false, "'Street Glide Special' is a specific model, not the Street Glide umbrella (+17165104578)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Harley-Davidson Street Glide", "street_glide"), true, "make tokens carry no model specificity — still the umbrella (+17165600980)");
+assert.equal(watchLabelIsBareFamilyUmbrella("2024 Street Glide", "street_glide"), true, "a model YEAR carries no model specificity — still the umbrella (the year is matched separately)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Tri Glide", "tri_glide"), true, "a bare 'Tri Glide' watch is the Tri Glide umbrella");
+assert.equal(watchLabelIsBareFamilyUmbrella("Flhtcutg 1mad Tri Glide Ultra", "tri_glide"), false, "a VIN-decoded, trim-bearing label is NOT the umbrella (+17166021492)");
+assert.equal(watchLabelIsBareFamilyUmbrella("Street Glide", null), false, "no detected family → never an umbrella");
+assert.equal(watchLabelIsBareFamilyUmbrella("", "street_glide"), false, "an empty label is never an umbrella");
+
+// Source guard: the engine gates its family umbrella on that predicate, and keeps the 883 arm
+// (which was the same umbrella in disguise) behind the same gate.
+const engineSrc = fs.readFileSync("services/api/src/index.ts", "utf8");
+assert.match(engineSrc, /watchLabelIsBareFamilyUmbrella\(watch\.model, detectedWatchFamily\)/, "engine must gate the family umbrella on a BARE family label");
+assert.match(engineSrc, /return !!genericWatchFamily && is883ModelToken\(itemModel\);/, "the engine's 883 family arm must be gated on the same umbrella check");
+// Creation-side: the customer's own specificity must survive into the stored watch label.
+assert.ok(!/if \(is883ModelToken\(normalized\)\) return "Sportster 883";\n    return "Iron";/.test(engineSrc), "an 'Iron 883' ask must not be rewritten to the generic 'Sportster 883'");
+assert.match(engineSrc, /if \(is883ModelToken\(normalized\)\) return "Iron 883";/, "an 'Iron 883' ask stores 'Iron 883'");
+assert.match(engineSrc, /return canonicalizeWatchModelLabel\(fallback\) \|\| fallback;/, "the lead-vehicle fallback must be canonicalized (strips make prefixes / VIN junk)");
 
 // Source guard: the ENGINE's matcher (index.ts) is directional AND carries BOTH the
 // forward and the reverse distinct-model guards, so it stays in sync with the detector
