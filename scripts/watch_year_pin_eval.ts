@@ -15,7 +15,11 @@
  * Dealer-agnostic.
  */
 import assert from "node:assert/strict";
-import { decideWatchYearPin, MAX_MODEL_YEAR_LOOKAHEAD } from "../services/api/src/domain/watchYearPin.ts";
+import {
+  decideWatchYearPin,
+  decideWatchConditionPin,
+  MAX_MODEL_YEAR_LOOKAHEAD
+} from "../services/api/src/domain/watchYearPin.ts";
 
 const NOW = 2026; // fixed "current year" so the eval is deterministic forever
 
@@ -105,4 +109,41 @@ assert.equal(
   "a single-year request never resolves to a range pin"
 );
 
-console.log("PASS watch year-pin eval — impossible model years drop to model_only; every matchable pin kept");
+// ── CONDITION pin. A `new` watch only fires on a brand-new unit; a model no longer made can
+//    never produce one, so a `new` pin on a confidently-discontinued model is un-fireable and
+//    must widen to any-condition. Production miss +17166887637 (a `new` Super Glide watch).
+const superGlide = decideWatchConditionPin({ condition: "new", modelStatus: "discontinued" });
+assert.equal(superGlide.pin, "none", "a `new` pin on a discontinued model can never fire");
+assert.equal(superGlide.reason, "new_pin_on_discontinued_model");
+
+// KEEP the pin everywhere else — same conservatism as the year guard.
+// `used` on a discontinued model is exactly what we WANT to keep (used units still show up).
+assert.equal(
+  decideWatchConditionPin({ condition: "used", modelStatus: "discontinued" }).pin,
+  "condition",
+  "a used-condition watch on a discontinued model is still matchable"
+);
+// Only a CONFIDENT discontinued may drop a `new` pin.
+for (const status of ["unknown", "current", "available"] as const) {
+  assert.equal(
+    decideWatchConditionPin({ condition: "new", modelStatus: status }).pin,
+    "condition",
+    `status "${status}" must never drop a new-condition pin`
+  );
+}
+// No/blank/junk condition => nothing to pin (never a fabricated condition).
+for (const bad of [null, undefined, "", "  ", "any"] as const) {
+  const d = decideWatchConditionPin({ condition: bad, modelStatus: "discontinued" });
+  assert.equal(d.pin, "none", `junk condition ${JSON.stringify(bad)} produces no pin`);
+  assert.equal(d.reason, "no_condition_requested");
+}
+// Case-insensitive.
+assert.equal(
+  decideWatchConditionPin({ condition: "NEW", modelStatus: "discontinued" }).pin,
+  "none",
+  "condition match is case-insensitive"
+);
+
+console.log(
+  "PASS watch pin eval — impossible model years AND new-on-discontinued conditions widen; every matchable pin kept"
+);
