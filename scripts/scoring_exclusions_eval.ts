@@ -9,6 +9,7 @@ import path from "node:path";
 import {
   isAutomatedSenderInbound,
   isBareEmoticonReaction,
+  isBareReactionOnlyInbound,
   isCadenceHeldByIndefiniteDeferral,
   isCampaignBroadcastSend,
   isClosingAckNoAction,
@@ -230,6 +231,24 @@ assert.equal(
   isShortAckNoAction("thanks for all the info, I really appreciate you taking the time to walk me through the options"),
   false
 ); // over length ceiling
+
+// Pure REACTION turns — the customer pressed a button, not a word (Joe ruling
+// 2026-07-22). NARROWER than isShortAckNoAction on purpose: this one drives the
+// stuck-turn watchdog, which must not stop counting a typed ack as unanswered.
+assert.equal(isBareReactionOnlyInbound("👍👍"), true); // live watchdog row (+17164233848)
+assert.equal(isBareReactionOnlyInbound("👍"), true);
+assert.equal(isBareReactionOnlyInbound("🤙🏽"), true); // skin-tone modifier
+assert.equal(isBareReactionOnlyInbound(":)"), true); // ASCII emoticon
+assert.equal(isBareReactionOnlyInbound('Liked “Gotcha — yes, we have it”'), true); // tapback echo
+assert.equal(isBareReactionOnlyInbound(""), false);
+// The narrowing that matters: typed words are NOT reactions, so a bare "ok" or
+// "thanks" still counts as an inbound the watchdog can flag as unanswered.
+assert.equal(isBareReactionOnlyInbound("ok"), false);
+assert.equal(isBareReactionOnlyInbound("Thanks!"), false);
+assert.equal(isBareReactionOnlyInbound("Awesome 👍"), false); // carries a word
+// Fail-direction guards: this HIDES a turn, so anything with an ask stays visible.
+assert.equal(isBareReactionOnlyInbound("👍 is it still available?"), false);
+assert.equal(isBareReactionOnlyInbound("👍?"), false); // a question, however short
 
 // Forward-looking enthusiasm — no ask, so the agent is correctly silent
 // (Joe ruling 7/17: "stay silent is right"). "Can't wait" to the 7/16 event

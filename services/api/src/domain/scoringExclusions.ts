@@ -213,6 +213,35 @@ export function isBareEmoticonReaction(text: string | null | undefined): boolean
 const SHORT_ACK_PHRASE_RE =
   /^(?:ok(?:ay)?|kk?|got it|sounds (?:good|great)|thanks|thank you|thx|ty|perfect|awesome|cool|great|will do|yep|yup|sure|no problem)[.!\s]*$/i;
 
+/**
+ * A pure REACTION turn — nothing but emoji ("👍👍"), an ASCII emoticon (":)"),
+ * or an iOS/Twilio tapback echo (`Liked "…"`). The customer pressed a button;
+ * they did not write a word. Silence is the correct behavior, so any counter
+ * that reads "customer wrote in and nobody answered" must skip it.
+ *
+ * Deliberately NARROWER than `isShortAckNoAction` below: that one also matches
+ * typed acks ("ok", "thanks", "will do"), which are words and belong to the
+ * scorers that grade replies. This is the subset with NO words at all, which is
+ * what the stuck-turn watchdog needs — a 👍👍 on a sweepstakes blast
+ * (+17164233848, 2026-07-17) was the last row keeping its actionable count
+ * non-zero after the call-only phantom was fixed (Joe ruling, 2026-07-22).
+ *
+ * Fail-direction: this HIDES a turn, so it is composed only from matchers that
+ * already carry their own length ceilings and question guards, and it requires
+ * that NOTHING survives the emoji strip. A turn carrying any real word — an ask,
+ * a model, a question — cannot match.
+ */
+export function isBareReactionOnlyInbound(text: string | null | undefined): boolean {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (/\?/.test(raw)) return false;
+  if (isQuotedReactionEchoInbound(raw)) return true;
+  if (isBareEmoticonReaction(raw)) return true;
+  if (raw.length > 80) return false;
+  // Emoji-only: nothing survives the strip.
+  return stripEmojiDecoration(raw).replace(/\s+/g, "").length === 0;
+}
+
 export function isShortAckNoAction(text: string | null | undefined): boolean {
   const raw = String(text ?? "").trim();
   if (!raw) return false;

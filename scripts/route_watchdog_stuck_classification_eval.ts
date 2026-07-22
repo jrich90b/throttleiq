@@ -58,6 +58,24 @@ assert.ok(
   /todos/.test(watchdog) && /"open"/.test(watchdog) && /"call"/.test(watchdog),
   "open call tasks must be read from the store's todos (status open, reason call)"
 );
+// The reaction matcher must stay in the SHARED exclusions module — the classifier is
+// text-free by contract, so the watchdog reads the text and passes a boolean.
+assert.ok(
+  /isBareReactionOnlyInbound/.test(watchdog) && /scoringExclusions/.test(watchdog),
+  "the watchdog must source the reaction matcher from the shared scoringExclusions module"
+);
+assert.ok(
+  /lastInboundIsReactionOnly/.test(watchdog),
+  "the watchdog must pass lastInboundIsReactionOnly to the classifier"
+);
+const classifier = fs.readFileSync(
+  "services/api/src/domain/routeWatchdogClassification.ts",
+  "utf8"
+);
+assert.ok(
+  !/^\s*import[\s\S]*?from\s+["'][^"']*scoringExclusions/m.test(classifier),
+  "the classifier must stay text-free — it may not import the text matchers itself"
+);
 
 // --- 2) Decision table (pure). Priority: terminal state wins. ---
 const RECENT = 60 * 60; // 1h — inside the default ceiling
@@ -71,6 +89,7 @@ type Row = {
   reason: StuckSuppressionReason | null;
   maxAgeSec?: number;
   hasOpenCallTask?: boolean;
+  lastInboundIsReactionOnly?: boolean;
 };
 
 const rows: Row[] = [
@@ -102,6 +121,14 @@ const rows: Row[] = [
   { id: "closed_beats_call_only", conv: { status: "closed", mode: "suggest", followUp: null, contactPreference: "call_only" }, ageSec: RECENT, actionable: false, reason: "closed", hasOpenCallTask: true },
   // The suppression is scoped to call-only: a texting lead with a call task stays actionable.
   { id: "call_task_without_call_only", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null, hasOpenCallTask: true },
+  // Pure reaction turn (👍👍 on a sweepstakes blast, +17164233848) — the customer
+  // pressed a button, not a word; silence is correct (Joe ruling 2026-07-22).
+  { id: "reaction_only", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: false, reason: "reaction_only", lastInboundIsReactionOnly: true },
+  // FAIL DIRECTION: the caller decides. A turn the shared exclusion did NOT call a
+  // bare reaction stays actionable — the classifier never reads text itself.
+  { id: "reaction_flag_false_stays_actionable", conv: { status: null, mode: "suggest", followUp: { mode: "active" } }, ageSec: RECENT, actionable: true, reason: null, lastInboundIsReactionOnly: false },
+  // A terminal state still outranks the reaction suppression (priority order).
+  { id: "manual_handoff_beats_reaction_only", conv: { status: null, mode: "suggest", followUp: { mode: "manual_handoff" } }, ageSec: RECENT, actionable: false, reason: "manual_handoff", lastInboundIsReactionOnly: true },
   // Missing followUp / mode are tolerated → recent unsuppressed stays actionable.
   { id: "actionable_sparse_conv", conv: { status: null, mode: "suggest", followUp: null }, ageSec: RECENT, actionable: true, reason: null },
   // A custom (smaller) ceiling still suppresses a turn beyond it.
@@ -112,7 +139,8 @@ for (const r of rows) {
   const got = classifyStuckTurn(r.conv, {
     ageSec: r.ageSec,
     maxAgeSec: r.maxAgeSec,
-    hasOpenCallTask: r.hasOpenCallTask
+    hasOpenCallTask: r.hasOpenCallTask,
+    lastInboundIsReactionOnly: r.lastInboundIsReactionOnly
   });
   assert.equal(got.actionable, r.actionable, `classify[${r.id}] actionable expected ${r.actionable}, got ${got.actionable}`);
   assert.equal(

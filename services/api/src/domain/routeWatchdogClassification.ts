@@ -27,6 +27,7 @@ export type StuckSuppressionReason =
   | "holding_inventory"
   | "human_mode"
   | "call_only"
+  | "reaction_only"
   | "aged_out";
 
 export type StuckClassification = {
@@ -50,7 +51,12 @@ export const STUCK_MAX_AGE_SEC_DEFAULT = 7 * 24 * 60 * 60; // 7 days
 
 export function classifyStuckTurn(
   conv: StuckConvLike,
-  opts: { ageSec: number; maxAgeSec?: number; hasOpenCallTask?: boolean }
+  opts: {
+    ageSec: number;
+    maxAgeSec?: number;
+    hasOpenCallTask?: boolean;
+    lastInboundIsReactionOnly?: boolean;
+  }
 ): StuckClassification {
   // A closed conversation can never be a live routing stall (sold / opt-out /
   // not-interested / wrong-number / archived). Most terminal — report first.
@@ -89,6 +95,17 @@ export function classifyStuckTurn(
   // ACTIONABLE and keeps failing the gate.
   if (String(conv?.contactPreference ?? "") === "call_only" && opts.hasOpenCallTask === true) {
     return { actionable: false, suppressionReason: "call_only" };
+  }
+
+  // The customer pressed a button, they did not write a word — a 👍👍, an ASCII
+  // emoticon, or an iOS tapback echo. Silence is correct (Joe ruling, 2026-07-22;
+  // AGENTS.md "Twilio Reaction No-Reply Guardrail"), so it is not a routing stall.
+  //
+  // The caller decides this, not us: the module's no-comprehension rule stands, so
+  // the text matcher stays in the shared, eval-pinned scoringExclusions module
+  // (`isBareReactionOnlyInbound`) and reaches this pure decision as a boolean.
+  if (opts.lastInboundIsReactionOnly === true) {
+    return { actionable: false, suppressionReason: "reaction_only" };
   }
 
   const maxAgeSec = Number.isFinite(opts.maxAgeSec) ? (opts.maxAgeSec as number) : STUCK_MAX_AGE_SEC_DEFAULT;

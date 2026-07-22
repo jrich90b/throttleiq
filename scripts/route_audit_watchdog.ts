@@ -3,6 +3,7 @@ import path from "node:path";
 
 import {
   isAutomatedSenderInbound,
+  isBareReactionOnlyInbound,
   isNonSalesConversation,
   isShadowReplayMessage
 } from "../services/api/src/domain/scoringExclusions.ts";
@@ -193,7 +194,8 @@ function collectStuckTurns(
       const classification = classifyStuckTurn(conv, {
         ageSec,
         maxAgeSec,
-        hasOpenCallTask: openCallTaskConvIds.has(String(conv?.id ?? ""))
+        hasOpenCallTask: openCallTaskConvIds.has(String(conv?.id ?? "")),
+        lastInboundIsReactionOnly: isBareReactionOnlyInbound(lastInbound?.body)
       });
 
       return {
