@@ -6,7 +6,7 @@ import { XMLParser } from "fast-xml-parser";
 import { extractAdfXmlFromEmail, parseAdfXml } from "../domain/adfParser.js";
 import { parsePreferredAdfDate } from "../domain/preferredAdfDate.js";
 import { resolveModelDiscontinuation } from "../domain/modelDiscontinuation.js";
-import { decideWatchYearPin } from "../domain/watchYearPin.js";
+import { decideWatchYearPin, decideWatchConditionPin } from "../domain/watchYearPin.js";
 import { customerVisitConfirmed, phantomVisitGuardEnabled } from "../domain/visitFraming.js";
 import {
   upsertConversationByLeadKey,
@@ -3721,20 +3721,26 @@ async function buildInitialAdfUnavailableInventoryWatch(args: {
     createdAt: nowIso,
     note: "initial_adf_unavailable_inventory"
   };
-  // Never pin a model year the watch could never match — an un-fireable year_model watch reads as
-  // "I'll text you when one lands" and then stays silent forever (+18188420202: a "2027 883" free-text
-  // inquiry pinned a 2027 Iron 883, discontinued after 2020). Only resolve the catalog when a year is
-  // actually on the table; dropping a pin widens to model_only, which fails toward contacting.
-  const requestedYearPin =
-    (customerYearRange?.min && customerYearRange?.max) || customerSingleYear
-      ? decideWatchYearPin({
-          year: customerSingleYear ?? null,
-          yearMin: customerYearRange?.min ?? null,
-          yearMax: customerYearRange?.max ?? null,
-          modelStatus: (await resolveModelDiscontinuation(model)).status,
-          currentYear: new Date().getFullYear()
-        })
-      : { pin: "none" as const, reason: "no_year_requested" };
+  // Never pin an attribute the watch could never match — an un-fireable watch reads as "I'll text you
+  // when one lands" and then stays silent forever. Two such pins: an impossible model YEAR
+  // (+18188420202: a "2027 883" free-text inquiry pinned a 2027 Iron 883, discontinued after 2020) and
+  // a `new` CONDITION on a model no longer made (+17166887637: a `new` Super Glide watch). Resolve the
+  // model's catalog status ONCE and feed both guards; dropping either pin only widens the watch, which
+  // fails toward contacting. Only resolve when there's actually something to guard.
+  const condition = normalizeVehicleCondition(vehicle?.condition);
+  const hasYearRequest =
+    !!(customerYearRange?.min && customerYearRange?.max) || !!customerSingleYear;
+  const modelStatus =
+    hasYearRequest || condition ? (await resolveModelDiscontinuation(model)).status : "unknown";
+  const requestedYearPin = hasYearRequest
+    ? decideWatchYearPin({
+        year: customerSingleYear ?? null,
+        yearMin: customerYearRange?.min ?? null,
+        yearMax: customerYearRange?.max ?? null,
+        modelStatus,
+        currentYear: new Date().getFullYear()
+      })
+    : { pin: "none" as const, reason: "no_year_requested" };
   if (requestedYearPin.pin === "range" && customerYearRange?.min && customerYearRange?.max) {
     watch.yearMin = customerYearRange.min;
     watch.yearMax = customerYearRange.max;
@@ -3745,8 +3751,9 @@ async function buildInitialAdfUnavailableInventoryWatch(args: {
   } else {
     watch.exactness = "model_only";
   }
-  const condition = normalizeVehicleCondition(vehicle?.condition);
-  if (condition) watch.condition = condition;
+  if (condition && decideWatchConditionPin({ condition, modelStatus }).pin === "condition") {
+    watch.condition = condition;
+  }
   return {
     reply: buildInitialUnavailableInventorySmsReply({
       model: modelForReply,
