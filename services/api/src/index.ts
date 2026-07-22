@@ -528,6 +528,7 @@ import {
 import { stripLeadingVinCodes, normalizeWatchModelsVin } from "./domain/watchModelVinCodes.js";
 import { trikeClassConflict, isFamilyOnlyModelLabel, referencesFamilyOnlyInText } from "./domain/modelFamily.js";
 import { decideWatchSiblingScopeAsk } from "./domain/watchSiblingScope.js";
+import { watchLabelIsBareFamilyUmbrella } from "./domain/watchFamilyScope.js";
 import {
   recommendInventory,
   buildVehicleRecommendationReply,
@@ -5878,7 +5879,12 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   if (!item?.model || !watch?.model) return false;
   const itemModel = normalizeModelName(String(item.model));
   const watchModel = normalizeModelName(String(watch.model));
-  const genericWatchFamily = detectGenericWatchFamilyLabel(watch.model);
+  const detectedWatchFamily = detectGenericWatchFamilyLabel(watch.model);
+  // Only a BARE family label gets umbrella treatment (see watchLabelIsBareFamilyUmbrella). A
+  // trim/variant-bearing label is a specific model and keeps BOTH distinct-model guards armed.
+  const genericWatchFamily = watchLabelIsBareFamilyUmbrella(watch.model, detectedWatchFamily)
+    ? detectedWatchFamily
+    : null;
   const watchIsRoadGlide3 = isRoadGlide3Variant(watchModel);
   const itemIsRoadGlide3 = isRoadGlide3Variant(itemModel);
   if (watchIsRoadGlide3 && !itemIsRoadGlide3) return false;
@@ -5901,7 +5907,14 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   const directMatch = itemModel.includes(watchModel);
   const catalogCodeMatch = modelsShareCatalogCodes(itemModel, watchModel);
   const familyMatch = (() => {
-    if (is883ModelToken(watchModel)) return is883ModelToken(itemModel);
+    // The 883 arm is the same umbrella in disguise: it let ANY 883-token watch collect ANY 883-token
+    // unit, which is exactly how an "Iron 883" watch fired on a "Sportster 883 Low" (2026-07-22). It
+    // only applies when the label is a BARE 883/Sportster reference — a named 883 variant ("Iron 883",
+    // "883 Roadster") is a specific model, and `directMatch` already covers the genuine substring case
+    // ("Sportster 883 Low".includes("Sportster 883")).
+    if (is883ModelToken(watchModel)) {
+      return !!genericWatchFamily && is883ModelToken(itemModel);
+    }
     if (genericWatchFamily) {
       return modelBelongsToGenericWatchFamily(itemModel, genericWatchFamily);
     }
@@ -28963,7 +28976,12 @@ async function resolveWatchModelFromText(
     return "Low Rider S";
   }
   if (/\biron\b/.test(normalized)) {
-    if (is883ModelToken(normalized)) return "Sportster 883";
+    // Keep the customer's OWN specificity: "2022 Iron 883" is an Iron 883, not the generic
+    // "Sportster 883". Rewriting it to the family label was half of the 2026-07-22 wrong-model
+    // cluster — the stored label lost the "Iron" and the matcher then had nothing left to
+    // distinguish it from a Sportster 883 Low. "Iron 883" is the label the rest of the codebase
+    // already uses (sendgridInbound model hints), so nothing downstream has to change.
+    if (is883ModelToken(normalized)) return "Iron 883";
     return "Iron";
   }
   if (/\bsportster\b/.test(normalized) && is883ModelToken(normalized)) {
@@ -29004,7 +29022,14 @@ async function resolveWatchModelFromText(
   // the fail direction is ASK, never a guessed watch.
   if (referencesFamilyOnlyInText(textLower)) return null;
   if (!fallback || isFamilyOnlyModelLabel(fallback) || isPlaceholderModel(fallback)) return null;
-  return fallback;
+  // Canonicalize the lead-vehicle fallback the same way every other watch-creation path does.
+  // Raw lead labels carry make prefixes and VIN-decoded junk ("HARLEY-DAVIDSON Street Glide",
+  // "Flhtcutg 1mad Tri Glide Ultra"), and storing them verbatim is what made the directional
+  // matcher look like it regressed — the watch_fired_wrong_model detector normalizes one side
+  // only, so a junk-prefixed watch reads as "trim-specific watch fired on a base unit"
+  // (+17165600980, +17166021492, 2026-07-22). Canonicalizing at creation removes the junk
+  // instead of teaching the detector to tolerate it.
+  return canonicalizeWatchModelLabel(fallback) || fallback;
 }
 
 function isVideoRequest(text: string): boolean {
@@ -39284,7 +39309,9 @@ app.post("/conversations/:id/followup-action", async (req, res) => {
           const minPrice = parseBudgetMoneyInput(item?.minPrice) ?? budgetSeed.minPrice;
           const maxPrice = parseBudgetMoneyInput(item?.maxPrice) ?? budgetSeed.maxPrice;
           const watch: InventoryWatch = {
-            model,
+            // Canonicalize here too — this console/API create was the one remaining path that stored
+            // a raw make-prefixed / VIN-decoded model label (see resolveWatchModelFromText's fallback).
+            model: canonicalizeWatchModelLabel(model) || model,
             year,
             make: String(item?.make ?? "").trim() || undefined,
             trim: String(item?.trim ?? "").trim() || undefined,
