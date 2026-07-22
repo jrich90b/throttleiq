@@ -505,6 +505,7 @@ import {
   hasInventoryForModelYear,
   modelMatches,
   unitIsDistinctModelFromWatch,
+  distinct883ModelConflict,
   type InventoryFeedItem
 } from "./domain/inventoryFeed.js";
 import {
@@ -5892,6 +5893,12 @@ function inventoryItemMatchesWatch(item: any, watch: InventoryWatch): boolean {
   // data-driven from model_codes_by_family.json; an unknown class infers nothing. The
   // RG3/SG3 watch-side guards above stay as belt-and-suspenders.
   if (trikeClassConflict(item.model, watch.model)) return false;
+  // Distinct-883-model guard: a SPECIFIC 883 model watch ("Iron 883") must not fire on a DIFFERENT
+  // 883 model ("Sportster 883 Low") — the is883ModelToken family umbrella below otherwise treats every
+  // 883 as one model, and detectGenericWatchFamilyLabel maps "Iron 883" to the generic "sportster"
+  // family, so one 2006 883 Low notified every Iron 883 watcher (+15164197791, +12399612259,
+  // +18728882220). Subtractive; a generic "883" watch is unaffected.
+  if (distinct883ModelConflict(item.model, watch.model)) return false;
   // DIRECTIONAL: the in-stock UNIT's model must contain the WATCHED model — never the reverse. The old
   // bidirectional `|| watchModel.includes(itemModel)` let a trim-specific watch fire on a base unit
   // (Jason, 6/26: a "Street Glide Special" watch matched a base 2013 "Street Glide"; "Electra Glide Ultra

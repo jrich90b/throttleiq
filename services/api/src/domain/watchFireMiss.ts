@@ -10,7 +10,7 @@
  */
 import type { Conversation, InventoryWatch } from "./conversationStore.js";
 import type { InventoryFeedItem } from "./inventoryFeed.js";
-import { modelMatches, unitIsDistinctModelFromWatch } from "./inventoryFeed.js";
+import { modelMatches, unitIsDistinctModelFromWatch, distinct883ModelConflict } from "./inventoryFeed.js";
 import { trikeClassConflict } from "./modelFamily.js";
 import { inventorySnapshotKey } from "./inventoryWatchSnapshot.js";
 import { unitArrivedAfter, type FirstSeenEntry } from "./inventoryFirstSeen.js";
@@ -40,6 +40,10 @@ export function inventoryItemMatchesWatch(item: InventoryFeedItem, watch: Invent
   // versa) — "Road Glide 3" is not a "Road Glide" — even when openToOtherTrims. Mirrors the
   // live engine's matcher (index.ts) so the detector never flags these as misses.
   if (trikeClassConflict(item.model, watch.model)) return false;
+  // A specific 883 model watch ("Iron 883") is not matched by a different 883 model ("Sportster 883
+  // Low") — mirrors the live engine's guard so the detector never flags the (correctly) un-fired
+  // wrong-model unit as a miss.
+  if (distinct883ModelConflict(item.model, watch.model)) return false;
   // A distinct sibling model ("Road Glide Limited" for a "Road Glide" watch) is a
   // separate model, not a match — unless the watch is explicitly open to other trims.
   if (!watch.openToOtherTrims && unitIsDistinctModelFromWatch(item.model, watch.model)) return false;

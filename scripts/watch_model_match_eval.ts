@@ -15,7 +15,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { inventoryItemMatchesWatch } from "../services/api/src/domain/watchFireMiss.ts";
-import { unitIsDistinctModelFromWatch } from "../services/api/src/domain/inventoryFeed.ts";
+import {
+  unitIsDistinctModelFromWatch,
+  distinct883ModelConflict,
+  specific883ModelToken
+} from "../services/api/src/domain/inventoryFeed.ts";
 
 const m = (itemModel: string, watchModel: string) =>
   inventoryItemMatchesWatch({ model: itemModel } as any, { model: watchModel, status: "active", createdAt: "" } as any);
@@ -63,6 +67,30 @@ assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide 
 assert.equal(unitIsDistinctModelFromWatch("Street Glide Special", "Street Glide Special Black"), false, "a 'Special' watch vs a more-specific COLOR unit → not distinct → still fires");
 assert.equal(unitIsDistinctModelFromWatch("Street Glide", "Street Glide Special"), false, "base watch vs specific unit → forward direction (handled by the other guard), not this one");
 
+// DISTINCT-883-MODEL guard (+15164197791, +12399612259, +18728882220, +19897006720, 2026-07-22):
+// the is883ModelToken family umbrella treated every "883" as one model, and detectGenericWatchFamilyLabel
+// maps "Iron 883" to the generic "sportster" family — so a SINGLE 2006 "Sportster 883 Low" fired EVERY
+// "Iron 883" watch (four+ customers texted that "their" bike came in). Iron 883 and Sportster 883 Low are
+// DISTINCT models, not trims. Both matchers must block it; a generic "883" watcher is still open to any 883.
+assert.equal(m("Sportster 883 Low", "Iron 883"), false, "an 'Iron 883' watch must NOT fire on a 'Sportster 883 Low' (the wrong-model bug)");
+assert.equal(m("2006 Harley-Davidson Sportster 883 Low", "Iron 883"), false, "the exact production unit must NOT fire an Iron 883 watch");
+assert.equal(m("Iron 883", "Iron 883"), true, "a real Iron 883 still fires an Iron 883 watch");
+assert.equal(m("Sportster Iron 883", "Iron 883"), true, "a feed-labeled 'Sportster Iron 883' still matches an Iron 883 watch");
+assert.equal(m("Sportster 883 Low", "883"), true, "a GENERIC '883' watcher is still open to a Sportster 883 Low");
+assert.equal(m("Sportster 883 Low", "Sportster 883 Low"), true, "an exact 883-Low match still fires");
+// The pure guard directly (both directions of specificity).
+assert.equal(distinct883ModelConflict("Sportster 883 Low", "Iron 883"), true, "specific 883 watch vs different 883 unit → block");
+assert.equal(distinct883ModelConflict("Iron 883", "Iron 883"), false, "same specific 883 model → allow");
+assert.equal(distinct883ModelConflict("Sportster 883 Low", "883"), false, "generic 883 watch → never blocks");
+assert.equal(distinct883ModelConflict("Road Glide", "Road Glide"), false, "non-883 models are untouched by this guard");
+assert.equal(specific883ModelToken("Iron 883"), "iron", "Iron 883 resolves to its sub-model token");
+assert.equal(specific883ModelToken("883"), null, "a bare 883 has no sub-model token (generic)");
+assert.equal(specific883ModelToken("Road Glide"), null, "a non-883 model has no 883 sub-model token");
+
+// Source guard: BOTH matchers apply the distinct-883 guard (live engine index.ts + detector watchFireMiss).
+const wfm = fs.readFileSync("services/api/src/domain/watchFireMiss.ts", "utf8");
+assert.match(wfm, /distinct883ModelConflict\(item\.model, watch\.model\)/, "detector matcher must apply the distinct-883 guard");
+
 // Source guard: the ENGINE's matcher (index.ts) is directional AND carries BOTH the
 // forward and the reverse distinct-model guards, so it stays in sync with the detector
 // matcher here — a family-umbrella misclassification can no longer slip a trim-specific
@@ -72,5 +100,6 @@ assert.match(idx, /const directMatch = itemModel\.includes\(watchModel\);/, "eng
 assert.ok(!/itemModel\.includes\(watchModel\) \|\| watchModel\.includes\(itemModel\)/.test(idx), "the bidirectional matcher (the bug) must be gone");
 assert.match(idx, /unitIsDistinctModelFromWatch\(item\.model, watch\.model\)/, "engine matcher must apply the forward distinct-model guard");
 assert.match(idx, /unitIsDistinctModelFromWatch\(watch\.model, item\.model\)/, "engine matcher must apply the REVERSE distinct-model guard (a trim-specific watch must not fire on a base unit)");
+assert.match(idx, /distinct883ModelConflict\(item\.model, watch\.model\)/, "engine matcher must apply the distinct-883-model guard");
 
 console.log("PASS watch model-match eval — directional (unit⊇watch): trim-specific watches no longer fire on base units (forward + reverse guards); base/exact matches preserved; engine matcher guarded.");
