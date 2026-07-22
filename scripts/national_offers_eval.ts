@@ -13,7 +13,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { decideProactiveCadenceValue } from "../services/api/src/domain/routeStateReducer.ts";
-import { stripHtmlToText, isNationalOffersEnabled, DEFAULT_NATIONAL_OFFERS_URL } from "../services/api/src/domain/nationalOffers.ts";
+import {
+  stripHtmlToText,
+  isNationalOffersEnabled,
+  DEFAULT_NATIONAL_OFFERS_URL,
+  leadUnitConditionForOfferMatch,
+  offerExplicitlyCoversUsed,
+  filterOffersForLeadCondition,
+  type NationalOffer
+} from "../services/api/src/domain/nationalOffers.ts";
 
 const failures: string[] = [];
 const eq = (id: string, actual: unknown, expected: unknown) => {
@@ -36,6 +44,43 @@ eq("later_pricedrop_fires", D({ isLaterStage: true, hasPriceDrop: true }), { fir
 eq("precedence_inventory_over_offer", D({ isLaterStage: true, hasNewInventoryMatch: true, hasNationalOfferMatch: true, hasTestRideOffer: true }).valueKind, "new_inventory");
 eq("precedence_offer_over_testride", D({ isLaterStage: true, hasNationalOfferMatch: true, hasTestRideOffer: true, hasPriceDrop: true }).valueKind, "national_offer");
 eq("precedence_testride_over_pricedrop", D({ isLaterStage: true, hasTestRideOffer: true, hasPriceDrop: true }).valueKind, "test_ride");
+
+// --- 1b. NEW-bike promo scope (Joe 2026-07-22): national promo offers only reach a
+//         lead whose unit is NEW; used/unknown-condition leads only see offers that
+//         EXPLICITLY cover used bikes. Pins the miss verbatim: "$406/month with 10%
+//         down" (a new-bike touring promo) was texted onto a USED 2021 Street Glide
+//         Special (+17165104578). ------------------------------------------------
+const C = leadUnitConditionForOfferMatch;
+eq("cond_new", C({ lead: { vehicle: { condition: "new" } } }), "new");
+eq("cond_new_model_interest", C({ lead: { vehicle: { condition: "new_model_interest" } } }), "new");
+eq("cond_used", C({ lead: { vehicle: { condition: "used" } } }), "used");
+// The Joe-ruled miss: lead + inventoryContext both say used (+17165104578).
+eq("cond_used_flagged_lead", C({ lead: { vehicle: { condition: "used" } }, inventoryContext: { condition: "used" } }), "used");
+eq("cond_preowned_variant", C({ lead: { vehicle: { condition: "Pre-Owned" } } }), "used");
+eq("cond_inventory_context_fallback", C({ lead: {}, inventoryContext: { condition: "used" } }), "used");
+eq("cond_missing_is_unknown", C({ lead: { vehicle: {} } }), "unknown");
+eq("cond_empty_conv", C({}), "unknown");
+
+const offer = (over: Partial<NationalOffer>): NationalOffer => ({
+  title: "Offer",
+  appliesTo: "",
+  offerType: "financing_apr",
+  terms: "",
+  eligibility: "",
+  expiration: "",
+  ...over
+} as NationalOffer);
+const newPromo = offer({ title: "Select Grand American Touring Models Extended Terms", appliesTo: "Grand American Touring models", terms: "from $406/mo" });
+const usedPromo = offer({ title: "Rider Training Graduate Used APR", appliesTo: "used motorcycles", terms: "6.64% APR", eligibility: "Riding Academy graduates" });
+eq("offer_used_detected_in_applies_to", offerExplicitlyCoversUsed(usedPromo), true);
+eq("offer_preowned_detected", offerExplicitlyCoversUsed(offer({ appliesTo: "pre-owned Softail models" })), true);
+eq("offer_new_promo_not_used", offerExplicitlyCoversUsed(newPromo), false);
+// The filter: NEW lead sees everything; USED/UNKNOWN lead sees only explicitly-used offers.
+eq("filter_new_lead_sees_all", filterOffersForLeadCondition([newPromo, usedPromo], "new").length, 2);
+eq("filter_used_lead_only_used_offers", filterOffersForLeadCondition([newPromo, usedPromo], "used").map(o => o.title), ["Rider Training Graduate Used APR"]);
+// Fail direction: unknown condition is treated like used — quieter, never a misapplied promo.
+eq("filter_unknown_treated_as_used", filterOffersForLeadCondition([newPromo, usedPromo], "unknown").map(o => o.title), ["Rider Training Graduate Used APR"]);
+eq("filter_used_lead_no_used_offers_empty", filterOffersForLeadCondition([newPromo], "used"), []);
 
 // --- 2. stripHtmlToText ------------------------------------------------------
 eq("strip_removes_tags_and_scripts", stripHtmlToText("<div>Hello <script>var x=1</script>&amp; <b>world</b></div>"), "Hello & world");
@@ -64,10 +109,22 @@ eq("match_parser_default_off", gatedOff("matchNationalOfferToLeadWithLLM"), true
 const mod = fs.readFileSync(path.join(process.cwd(), "services/api/src/domain/nationalOffers.ts"), "utf8");
 eq("module_returns_empty_when_disabled", /if \(!isNationalOffersEnabled\(\)\) return \[\];/.test(mod), true);
 eq("matcher_null_when_no_apply", /if \(!match \|\| !match\.applies \|\| !match\.message\) return null;/.test(mod), true);
+// NEW-bike promo scope wiring (Joe 2026-07-22): the deterministic condition filter must sit
+// in the shared funnel BEFORE the LLM matcher, and BOTH paths (live cadence tick + regen
+// mirror) must pass the lead's condition — two-path parity by construction.
+eq("funnel_filters_by_condition_before_llm", /filterOffersForLeadCondition\(\s*filterOffersForDedup/.test(mod), true);
+eq("matcher_receives_condition", /matchNationalOfferToLeadWithLLM\(\{[\s\S]{0,200}?condition/.test(mod), true);
+eq("prompt_hard_rule_new_bike_scope", /NEW motorcycles unless the offer EXPLICITLY says used\/pre-owned/.test(llm), true);
+const indexSrc = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
+eq(
+  "both_paths_pass_vehicle_condition",
+  (indexSrc.match(/vehicleCondition: leadUnitConditionForOfferMatch\(conv\)/g) ?? []).length,
+  2
+);
 
 if (failures.length) {
   console.error("FAIL national_offers eval:");
   for (const f of failures) console.error(f);
   process.exit(1);
 }
-console.log("PASS national_offers eval — value gate (11 decision cases), HTML strip, dark-by-default flag + parser source guards");
+console.log("PASS national_offers eval — value gate (11 decision cases), NEW-bike promo scope (condition resolver + offer filter + two-path wiring), HTML strip, dark-by-default flag + parser source guards");

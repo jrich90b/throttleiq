@@ -626,6 +626,8 @@ export async function matchNationalOfferToLeadWithLLM(args: {
   vehicle: string;
   offers: NationalOffer[];
   firstName?: string | null;
+  /** Lead unit condition — national promos are NEW-bike offers unless they say otherwise (Joe 2026-07-22). */
+  condition?: "new" | "used" | "unknown";
 }): Promise<NationalOfferMatch | null> {
   const enabled = String(process.env.NATIONAL_OFFERS_ENABLED ?? "0").trim().toLowerCase();
   if (enabled === "0" || enabled === "false" || enabled === "no") return null;
@@ -635,6 +637,7 @@ export async function matchNationalOfferToLeadWithLLM(args: {
   const offers = Array.isArray(args.offers) ? args.offers : [];
   if (!vehicle || offers.length === 0) return null;
   const firstName = String(args.firstName ?? "").trim();
+  const condition = args.condition === "new" || args.condition === "used" ? args.condition : "unknown";
   const model = process.env.OPENAI_MODEL || "gpt-5-mini";
   const offerLines = offers
     .map(o => `- ${o.title} | applies_to: ${o.appliesTo} | ${o.terms} | ${o.eligibility} | exp ${o.expiration}`)
@@ -645,6 +648,7 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     "HARD RULES:",
     "- NEVER match a vague or model-less vehicle (e.g. just 'Harley-Davidson' or '2025 Harley-Davidson' with no model). If the model isn't clearly named, applies=false.",
     "- NEVER stretch a family-specific offer onto a different family (a Touring offer does not fit a Sportster/Softail, etc.).",
+    "- National promotional financing/cash offers are for NEW motorcycles unless the offer EXPLICITLY says used/pre-owned. If the lead's bike is used or its condition is unknown, only an offer that explicitly covers used bikes can apply — everything else is applies=false.",
     "- If a real match exists, write ONE short SMS that sounds like a real salesperson texting a customer they know — NOT a marketing blast and NOT a bot:",
     "  * casual and specific, contractions, at most one sentence of offer + one short question;",
     firstName ? `  * greet them naturally by name (${firstName}) — or weave the name mid-sentence;` : "  * no generic 'Hey!' opener with an exclamation mark;",
@@ -654,11 +658,16 @@ export async function matchNationalOfferToLeadWithLLM(args: {
     "",
     "Examples:",
     'bike "2026 Low Rider S" (name Mike) with a "$1,000 Customer Cash on 2025-2026 Low Rider S/ST" offer -> {"applies":true,"offerTitle":"$1,000 Customer Cash on 2025-2026 Low Rider S/ST","why":"exact model match","message":"Mike, that Low Rider S you were eyeing has $1,000 customer cash on it right now — want me to run what that does to the numbers?"}',
-    'bike "Electra Glide Ultra Classic" (no name) with a "Grand American Touring from $406/mo extended terms" offer -> {"applies":true,"offerTitle":"Select Grand American Touring Models Extended Terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
+    'bike "Electra Glide Ultra Classic" (condition new, no name) with a "Grand American Touring from $406/mo extended terms" offer -> {"applies":true,"offerTitle":"Select Grand American Touring Models Extended Terms","why":"touring family includes the Electra Glide","message":"They just put extended terms on the touring lineup — an Electra Glide like the one you were looking at can go out the door around $406 a month. Want the breakdown?"}',
+    // The Joe-ruled miss verbatim (2026-07-22, +17165104578): new-bike touring promo financing was
+    // texted onto a USED 2021 Street Glide Special. Condition gates the match, not just the family.
+    'bike "2021 Street Glide Special" (condition used) with the same "Grand American Touring from $406/mo extended terms" offer -> {"applies":false,"offerTitle":"","why":"national promo financing is for new bikes; this unit is used and the offer does not say used","message":""}',
+    'bike "2019 Iron 883" (condition used) with a "6.64% APR on used motorcycles for Riding Academy graduates" offer -> {"applies":true,"offerTitle":"Rider Training Graduate Used APR","why":"the offer explicitly covers used motorcycles","message":"If you did the Riding Academy, that Iron 883 qualifies for the grad rate — 6.64% on used bikes right now. Want me to check your dates?"}',
     'bike "2025 Harley-Davidson" (no model named), any offers -> {"applies":false,"offerTitle":"","why":"model not named; never match a vague vehicle","message":""}',
     'bike "2022 Sportster S" when offers are all Touring/Low Rider -> {"applies":false,"offerTitle":"","why":"no offer applies to a Sportster","message":""}',
     "",
     `Lead's bike of interest: ${vehicle}`,
+    `Lead's bike condition: ${condition}${condition === "unknown" ? " (treat as NOT new — only explicitly-used offers can apply)" : ""}`,
     firstName ? `Lead's first name: ${firstName}` : "Lead's first name: (unknown — do not invent one)",
     "",
     "Current national offers:",

@@ -142,7 +142,9 @@ const eq = (id: string, actual: unknown, expected: unknown) => {
   const idx = fs.readFileSync(path.join(process.cwd(), "services/api/src/index.ts"), "utf8");
   eq(
     "index_imports_shared_applier",
-    /import \{\s*evaluateProactiveCadenceValueGate,\s*isCadenceValueGateEnabled,\s*vehicleLabelForOfferMatch\s*\} from "\.\/domain\/nationalOffers\.js"/.test(idx),
+    // Member list may grow (leadUnitConditionForOfferMatch joined 2026-07-22); what this pins
+    // is that the shared applier + flag + label/condition helpers come from the ONE shared module.
+    /import \{[^}]*evaluateProactiveCadenceValueGate,[^}]*isCadenceValueGateEnabled,[^}]*vehicleLabelForOfferMatch[^}]*\} from "\.\/domain\/nationalOffers\.js"/.test(idx),
     true
   );
   const gateCalls = idx.match(/evaluateProactiveCadenceValueGate\(\{/g) ?? [];

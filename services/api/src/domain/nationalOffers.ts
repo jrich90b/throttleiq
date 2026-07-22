@@ -111,14 +111,30 @@ export async function getNationalOffers(opts?: { bypassCache?: boolean }): Promi
  */
 export async function findNationalOfferForVehicle(
   vehicle: string,
-  opts?: { excludeTitles?: string[]; firstName?: string | null }
+  opts?: {
+    excludeTitles?: string[];
+    firstName?: string | null;
+    /** Lead unit condition (leadUnitConditionForOfferMatch). Omitted = "unknown" = treated like used. */
+    condition?: LeadUnitCondition;
+  }
 ): Promise<NationalOfferMatch | null> {
   if (!isNationalOffersEnabled()) return null;
   const veh = String(vehicle ?? "").trim();
   if (!veh) return null;
-  const offers = filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []);
+  const condition: LeadUnitCondition = opts?.condition ?? "unknown";
+  // NEW-bike promo scope (Joe 2026-07-22): deterministic filter BEFORE the LLM sees the
+  // offer list — a used/unknown-condition lead only ever sees explicitly-used offers.
+  const offers = filterOffersForLeadCondition(
+    filterOffersForDedup(await getNationalOffers(), opts?.excludeTitles ?? []),
+    condition
+  );
   if (offers.length === 0) return null;
-  const match = await matchNationalOfferToLeadWithLLM({ vehicle: veh, offers, firstName: opts?.firstName });
+  const match = await matchNationalOfferToLeadWithLLM({
+    vehicle: veh,
+    offers,
+    firstName: opts?.firstName,
+    condition
+  });
   if (!match || !match.applies || !match.message) return null;
   return match;
 }
@@ -171,6 +187,58 @@ export function cadenceValueGateMinStep(): number {
   return Number.isFinite(n) && n >= 0 ? n : 3;
 }
 
+/**
+ * The lead's bike-of-interest CONDITION for offer matching (Joe ruling, 2026-07-22):
+ * H-D national promotional offers are written for NEW motorcycles unless they say otherwise,
+ * and one was texted onto a USED 2021 Street Glide Special (+17165104578, "$406/month with
+ * 10% down"). Structured extraction, not comprehension: reads the lead vehicle's parsed
+ * condition (adfParser normalizeCondition), else the inventory context's.
+ *
+ * "new_model_interest" (a classification the intake writes for new-lineup shoppers) counts
+ * as new. Anything unrecognized — including a missing condition — is "unknown", which the
+ * filter below treats like used (fail toward staying quiet, the same conservative default
+ * as the post-sale cadence's new-vs-preowned rule).
+ */
+export type LeadUnitCondition = "new" | "used" | "unknown";
+
+export function leadUnitConditionForOfferMatch(conv: {
+  lead?: any;
+  inventoryContext?: any;
+}): LeadUnitCondition {
+  const raw =
+    [
+      (conv?.lead?.vehicle as any)?.condition,
+      (conv?.inventoryContext as any)?.condition
+    ]
+      .map(v => String(v ?? "").trim().toLowerCase())
+      .find(Boolean) ?? "";
+  if (raw === "new" || raw === "new_model_interest") return "new";
+  if (/used|pre-?owned/.test(raw)) return "used";
+  return "unknown";
+}
+
+/** Does the offer's own parsed text explicitly say it covers used/pre-owned bikes? */
+export function offerExplicitlyCoversUsed(offer: NationalOffer): boolean {
+  const hay = [offer?.title, offer?.appliesTo, offer?.terms, offer?.eligibility]
+    .map(v => String(v ?? ""))
+    .join(" ");
+  return /\b(used|pre-?owned)\b/i.test(hay);
+}
+
+/**
+ * NEW-bike promo scope (Joe, 2026-07-22): a lead on a NEW unit may see every offer; a lead
+ * on a USED (or unknown-condition) unit may only see offers that EXPLICITLY cover used bikes
+ * (e.g. the Riding Academy graduate used-APR offer). Deterministic pre-filter ahead of the
+ * LLM matcher — the fail direction is "fewer offers → quieter", never a misapplied promo.
+ */
+export function filterOffersForLeadCondition(
+  offers: NationalOffer[],
+  condition: LeadUnitCondition
+): NationalOffer[] {
+  if (condition === "new") return offers;
+  return offers.filter(offerExplicitlyCoversUsed);
+}
+
 /** The lead's bike-of-interest label for offer matching (lead vehicle, else the inventory watch). */
 export function vehicleLabelForOfferMatch(conv: { lead?: any; inventoryWatch?: any }): string {
   const v = (conv?.lead?.vehicle ?? {}) as any;
@@ -208,6 +276,8 @@ export async function evaluateProactiveCadenceValueGate(args: {
   isPostSale: boolean;
   hasValueOverride: boolean;
   vehicleLabel: string;
+  /** Lead unit condition (leadUnitConditionForOfferMatch) — used/unknown leads only see explicitly-used offers. */
+  vehicleCondition?: LeadUnitCondition;
   firstName?: string | null;
   /** Offer titles already texted to this lead (conv.nationalOfferTouches) — same promo never repeats. */
   alreadySentOfferTitles?: string[];
@@ -223,7 +293,8 @@ export async function evaluateProactiveCadenceValueGate(args: {
   if (args.hasValueOverride) return { action: "send", reason: "existing_value_override" };
   const offer = await findNationalOfferForVehicle(args.vehicleLabel, {
     excludeTitles: args.alreadySentOfferTitles ?? [],
-    firstName: args.firstName
+    firstName: args.firstName,
+    condition: args.vehicleCondition ?? "unknown"
   });
   const decision = decideProactiveCadenceValue({
     isLaterStage: true,

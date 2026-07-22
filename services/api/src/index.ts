@@ -510,6 +510,7 @@ import {
 import {
   evaluateProactiveCadenceValueGate,
   isCadenceValueGateEnabled,
+  leadUnitConditionForOfferMatch,
   vehicleLabelForOfferMatch
 } from "./domain/nationalOffers.js";
 import {
@@ -13872,6 +13873,7 @@ async function buildCadenceRegeneratedDraft(
       isPostSale: false, // post_sale kinds returned above
       hasValueOverride: false, // the overrides above already returned
       vehicleLabel: vehicleLabelForOfferMatch(conv),
+      vehicleCondition: leadUnitConditionForOfferMatch(conv),
       firstName: conv.lead?.firstName,
       alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map((t: { title: string }) => t.title),
       hasTestRideOffer: regenTestRideValueContext,
@@ -31747,6 +31749,7 @@ async function processDueFollowUpsUnlocked() {
           manualTestRideAvailabilityOverride
         ),
         vehicleLabel: vehicleLabelForOfferMatch(conv),
+        vehicleCondition: leadUnitConditionForOfferMatch(conv),
         firstName: conv.lead?.firstName,
         alreadySentOfferTitles: (conv.nationalOfferTouches ?? []).map(t => t.title),
         hasTestRideOffer: testRideValueContext,
