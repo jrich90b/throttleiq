@@ -70,30 +70,53 @@ export function buildAgentGreeting(firstName?: string | null): string {
 }
 
 /**
+ * Does the customer's first name collide with the agent's OWN persona name (case-insensitive,
+ * first-token)? When it does, any intro that greets the customer by name AND names the agent
+ * ("Hey Alexandra, it's Alexandra over at …" / "Hi Alexandra — This is Alexandra at …") reads
+ * as a bug on the customer's first contact — a real first-touch ADF ack went out that way to
+ * customer Alexandra Meinhold because the dealer's configured agentName is itself Alexandra
+ * (open-critic +17162636134, 2026-07-22). Callers drop the greeting NAME on a collision and
+ * keep the self-intro (the whole point of a first-touch line). Fail-direction is safe: fires
+ * only on an exact first-name match, and the degraded "Hey there / Hi —" form is still correct.
+ * Shared by buildAgentIntro (SMS chokepoint) AND the sendgrid inline ADF/email intros so both
+ * lanes stay in lock-step. Pinned by agent_voice:eval + email_intro_name_collision:eval.
+ */
+export function firstNameCollidesWithAgentName(
+  firstName: string | null | undefined,
+  agentName: string | null | undefined
+): boolean {
+  const firstToken = (v: string | null | undefined): string =>
+    String(v ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+  const customerFirst = firstToken(firstName);
+  const agentFirst = firstToken(agentName);
+  return customerFirst !== "" && agentFirst !== "" && customerFirst.toLowerCase() === agentFirst.toLowerCase();
+}
+
+/**
+ * The customer first name to use in a GREETING given the agent name: the name itself, or ""
+ * (blank → a name-less greeting) when the two collide. Lets an inline greeting keep its own
+ * "Hi {name} — " / "Hi {name}," / "Hey {name}," shape while still honoring the collision guard:
+ * `const greeting = greetingFirstName(firstName, agentName) ? \`Hi ${...} — \` : "Hi — ";`
+ */
+export function greetingFirstName(
+  firstName: string | null | undefined,
+  agentName: string | null | undefined
+): string {
+  return firstNameCollidesWithAgentName(firstName, agentName) ? "" : String(firstName ?? "").trim();
+}
+
+/**
  * Full softened intro: "Hey {name}, it's {agent} over at {dealer}. " (trailing space).
- *
- * Name-collision guard: when the customer's first name equals the agent's OWN persona
- * name (case-insensitive), the naive form reads as a bug — a first-touch ADF ack to
- * customer Alexandra Meinhold went out as "Hey Alexandra, it's Alexandra over at American
- * Harley-Davidson." because the dealer's configured agentName is itself Alexandra
- * (open-critic +17162636134, 2026-07-22). Drop the greeting NAME on a collision (keep the
- * self-intro, which is the whole point of a first-touch line) so it degrades to
- * "Hey there, it's Alexandra over at American Harley-Davidson." Fail-direction is safe:
- * fires only on an exact first-name match, and the degraded form is still correct + on-voice.
- * Pinned by agent_voice:eval.
+ * On a customer/agent name collision the greeting name is dropped (see
+ * `firstNameCollidesWithAgentName`) → "Hey there, it's Alexandra over at …". Pinned by
+ * agent_voice:eval.
  */
 export function buildAgentIntro(
   firstName: string | null | undefined,
   agentName: string,
   dealerName: string
 ): string {
-  const firstToken = (v: string | null | undefined): string =>
-    String(v ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
-  const customerFirst = firstToken(firstName);
-  const agentFirst = firstToken(agentName);
-  const collides =
-    customerFirst !== "" && agentFirst !== "" && customerFirst.toLowerCase() === agentFirst.toLowerCase();
-  const greetingName = collides ? null : firstName;
+  const greetingName = firstNameCollidesWithAgentName(firstName, agentName) ? null : firstName;
   return `${buildAgentGreeting(greetingName)}${buildAgentIntroPhrase(agentName, dealerName)}`;
 }
 
