@@ -12,7 +12,7 @@ import type { Conversation, InventoryWatch } from "./conversationStore.js";
 import type { InventoryFeedItem } from "./inventoryFeed.js";
 import { modelMatches, unitIsDistinctModelFromWatch, distinct883ModelConflict, distinctSportsterModelConflict } from "./inventoryFeed.js";
 import { trikeClassConflict } from "./modelFamily.js";
-import { inventorySnapshotKey } from "./inventoryWatchSnapshot.js";
+import { inventorySnapshotKey, inventoryWatchGroupMatchesLastNotifiedStock } from "./inventoryWatchSnapshot.js";
 import { unitArrivedAfter, type FirstSeenEntry } from "./inventoryFirstSeen.js";
 
 export type WatchFireMiss = {
@@ -135,9 +135,27 @@ export function findWatchFireMisses(args: {
   const misses: WatchFireMiss[] = [];
   for (const conv of args.conversations ?? []) {
     if (isClosedOrSold(conv)) continue;
+    // Engine-parity GROUP guard (2026-07-23). The live engine skips any unit that ANY of the
+    // conversation's watches already notified (`inventoryWatchGroupAlreadyNotifiedStock` in
+    // index.ts, which delegates to the shared `inventoryWatchGroupMatchesLastNotifiedStock`
+    // imported here — same code, so the two can never drift). Without this, a conversation
+    // carrying duplicate/backfilled sibling watches where only ONE holds the notification stamp
+    // (lastNotifiedStockId) had its UN-stamped siblings flagged as phantom "never notified" highs
+    // every sweep (+19292685345 7/23: duplicate Fat Boy watches, one stamped U600-05, the bare
+    // "Fat Boy" sibling cried wolf on the same already-notified unit). The customer WAS told about
+    // that exact unit, and the engine would never re-fire on it — so it is not a miss. Mirror the
+    // engine's raw group read (array when present, else the singular; paused included — a paused
+    // sibling's stamp still blocks the engine from re-firing).
+    const groupWatches: InventoryWatch[] =
+      Array.isArray((conv as any)?.inventoryWatches) && (conv as any).inventoryWatches.length
+        ? (conv as any).inventoryWatches
+        : (conv as any)?.inventoryWatch
+          ? [(conv as any).inventoryWatch]
+          : [];
     for (const watch of activeWatches(conv)) {
       const matches = feed.filter(item => {
         if (!inventoryItemMatchesWatch(item, watch)) return false;
+        if (inventoryWatchGroupMatchesLastNotifiedStock(groupWatches, item)) return false;
         if (!firstSeen) return true; // legacy: no arrival gate
         const key = inventorySnapshotKey(item);
         return !!key && unitArrivedAfter(firstSeen[key], (watch as any).createdAt);

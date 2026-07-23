@@ -138,6 +138,55 @@ if (process.argv.includes("--self-test")) {
     assert.equal(notifiedGone[0].confidence, "medium");
   }
 
+  // Engine-parity GROUP guard (2026-07-23, +19292685345): duplicate/backfilled sibling watches
+  // where only ONE carries the notification stamp for the available unit. The live engine's
+  // group guard (inventoryWatchGroupAlreadyNotifiedStock) never re-fires on a unit ANY sibling
+  // watch already notified, so the un-stamped duplicate is NOT a miss — it was a persistent
+  // every-sweep phantom high before the detector mirrored the guard.
+  {
+    const feedGroup = [{ stockId: "U600-05", model: "15th Anniversary Fat Boy", year: "2010", condition: "Used" }] as any[];
+    const dupSiblings = findWatchFireMisses({
+      conversations: [
+        {
+          id: "g1",
+          leadKey: "+19292685345",
+          inventoryWatches: [
+            // stamped sibling: the customer WAS notified about U600-05 on this watch
+            { model: "103 Anv Fat Boy Lo Anv", status: "active", createdAt: "2026-07-15", lastNotifiedAt: "2026-07-22", lastNotifiedStockId: "U600-05" },
+            // un-stamped duplicates of the same intent — must NOT cry wolf on the same unit
+            { model: "Anv Fat Boy Lo Anv", status: "active", createdAt: "2026-07-15" },
+            { model: "Fat Boy", status: "active", createdAt: "2026-07-15" }
+          ]
+        }
+      ] as any[],
+      feedItems: feedGroup
+    });
+    assert.equal(
+      dupSiblings.length,
+      0,
+      `+19292685345 shape: a unit any SIBLING watch already notified is not a miss (engine group-guard parity); got ${JSON.stringify(dupSiblings)}`
+    );
+    // The guard must not over-suppress: a sibling's stamp for a DIFFERENT (gone) unit does not
+    // cover a NEW matching unit the customer never heard about — that stays a real high miss.
+    const newUnitStillMiss = findWatchFireMisses({
+      conversations: [
+        {
+          id: "g2",
+          leadKey: "+1555000009",
+          inventoryWatches: [
+            { model: "Road Glide", year: 2024, status: "active", createdAt: "2026-06-01", lastNotifiedAt: "2026-06-02", lastNotifiedStockId: "RG-GONE" },
+            { model: "Street Glide", year: 2024, status: "active", createdAt: "2026-06-01" }
+          ]
+        }
+      ] as any[],
+      feedItems: [{ stockId: "SG-NEW", model: "Street Glide", year: "2024", condition: "New" }] as any[]
+    });
+    assert.ok(
+      newUnitStillMiss.some(m => m.convId === "g2" && m.confidence === "high" && m.matchedStockId === "SG-NEW"),
+      "g2: a sibling stamp for a different, gone unit must NOT suppress a genuine never-notified miss on a new unit"
+    );
+  }
+
   // Price-band parity at the conversation level: a null-price unit against a banded watch is not a
   // miss (mirrors the +17162264009 live case).
   {
@@ -177,7 +226,7 @@ if (process.argv.includes("--self-test")) {
     `c1: a unit first seen before the watch (${watchCreated}) must NOT be flagged`
   );
 
-  console.log("PASS watch fire miss audit (self-test: matcher + dedup + arrival-gate, 8 fixtures)");
+  console.log("PASS watch fire miss audit (self-test: matcher + dedup + group-notified parity + arrival-gate, 10 fixtures)");
   process.exit(0);
 }
 
